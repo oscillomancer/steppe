@@ -1006,6 +1006,12 @@ Toggle::Toggle(std::string id, std::string text, std::string onColor,
     layout.height = SizeRule::fixed(20);
 }
 
+void Toggle::setText(std::string text) {
+    if (text == text_) return;
+    text_ = std::move(text);
+    invalidate();
+}
+
 void Toggle::setOn(bool on) {
     if (on == on_) return;
     on_ = on;
@@ -1013,7 +1019,7 @@ void Toggle::setOn(bool on) {
 }
 
 Size Toggle::measure(const Canvas& canvas, Size) {
-    return {canvas.textWidth(text_, Font::UiBold, canvas.theme().type("caption")) + 10, 20};
+    return {canvas.textWidth(text_, Font::UiBold, canvas.theme().type(textSize)) + 10, 20};
 }
 
 Color drawStateCell(Canvas& c, const Rect& b, Color colour, bool on, bool hot, bool pressed,
@@ -1060,8 +1066,11 @@ void Toggle::paint(Canvas& c) {
                                    : t.color("panel");
     c.fillRound(b, t.radius("s"), face);
     c.strokeRound(b, t.radius("s"), focused() ? t.color("focus") : t.color("rule"));
-    c.text(b, text_, Font::UiBold, t.type("caption"),
-           on_ ? t.color("ground") : t.color("ink-quiet"), kCenter | kMiddle);
+    c.text(b, text_, Font::UiBold, t.type(textSize),
+           !enabled ? t.color("ink-faint")
+           : on_    ? t.color("ground")
+                    : t.color(offInk),
+           kCenter | kMiddle);
 }
 
 bool Toggle::onPointer(const PointerEvent& e) {

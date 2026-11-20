@@ -319,6 +319,105 @@ TEST_CASE("MIDI editor: the strip names the chords; rows outside the key's scale
     CHECK_FALSE(dark(0.6, 71));
 }
 
+TEST_CASE("MIDI editor: the key button makes drags and arrows move by scale degree") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));  // at beat 4: C4 E4 G4 C5, a beat each
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 80;
+    s.scrollBeat = -0.25;
+    s.topPitch = 76;
+    f.frame();
+    ui::Toggle* key = f.editor->keyButton();
+    REQUIRE(key);
+    CHECK(f.root->find("midi.key") == key);
+    // No key holds: the button says so and cannot be turned on.
+    CHECK_FALSE(key->enabled);
+    CHECK(key->valueText() == "off");
+    f.exec("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+    f.exec("key.set", R"({"at":6,"tonic":"A","scale":"major"})");  // the item's beat 2
+    f.frame();
+    CHECK(key->enabled);
+    const ui::Rect box = key->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {box.x + box.w / 2, box.y + box.h / 2});
+    f.pointer(ui::PointerEvent::Type::Up, {box.x + box.w / 2, box.y + box.h / 2});
+    REQUIRE(key->on());
+    CHECK(s.degrees);
+    f.snapshot("midi-key-button.png");
+    auto pitch = [&](int i) { return static_cast<int>(f.notes().at(i).find("pitch")->asInt()); };
+    auto history = [&] { return f.exec("history.list", "{}").find("versions")->size(); };
+    auto n = history();
+    // Up: E4 to F4, one degree of C major, in one step; Down back.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(1.5, 64));
+    f.pointer(ui::PointerEvent::Type::Up, f.at(1.5, 64));
+    REQUIRE(s.selected == std::set<std::size_t>{1});
+    f.root->key(SDLK_UP, 0);
+    f.frame();
+    CHECK(pitch(1) == 65);
+    CHECK(history() == ++n);
+    f.root->key(SDLK_DOWN, 0);
+    f.frame();
+    CHECK(pitch(1) == 64);
+    CHECK(history() == ++n);
+    // A drag three rows up from C4 (to Eb4's row): the nearest scale pitch,
+    // D4, as the preview showed it, one step.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 60));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(0.5, 62));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(0.5, 63));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.5, 63));
+    CHECK(pitch(0) == 62);
+    CHECK(history() == ++n);
+    // G4 at the item's beat 2 is in A major's span, where G is not a scale
+    // pitch: one degree up from it is G#4, in the preview and in the commit.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(2.5, 67));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(2.5, 68));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(2.5, 68));
+    CHECK(pitch(2) == 68);
+    CHECK(history() == ++n);
+    // Moved in time and up together: the degree counts in the key where the
+    // note lands (D4 dragged into A major's span and to E4's row: one degree).
+    // Halfway between two scale pitches, the note stays where it is.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 62));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(1.5, 63));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(2.5, 63));
+    CHECK(s.dDegrees == 0);  // D#: as near D as E
+    f.pointer(ui::PointerEvent::Type::Move, f.at(2.5, 64));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(2.5, 64));
+    // The notes come back in time order: find them by start and pitch.
+    auto index = [&](double start, int p) -> std::optional<std::size_t> {
+        for (std::size_t i = 0; i < s.notes.size(); ++i)
+            if (std::abs(s.notes[i].start - start) < 1e-9 && s.notes[i].pitch == p) return i;
+        return std::nullopt;
+    };
+    CHECK(index(2, 64));  // the dragged note
+    CHECK(index(2, 68));
+    CHECK(index(1, 64));
+    CHECK(history() == ++n);
+    // The degree actions are there to bind; off, the arrows are semitones.
+    REQUIRE(index(1, 64));
+    s.selected = {*index(1, 64)};
+    REQUIRE(f.actions->run("ui.midi.notes.degree_up"));
+    f.frame();
+    REQUIRE(index(1, 65));
+    f.pointer(ui::PointerEvent::Type::Down, {box.x + box.w / 2, box.y + box.h / 2});
+    f.pointer(ui::PointerEvent::Type::Up, {box.x + box.w / 2, box.y + box.h / 2});
+    CHECK_FALSE(s.degrees);
+    s.selected = {*index(1, 65)};
+    f.root->focus(f.editor->roll());
+    f.root->key(SDLK_UP, 0);
+    f.frame();
+    CHECK(index(1, 66));
+    // Without a key the button goes dark and off.
+    f.exec("key.remove", R"({"at":0})");
+    f.exec("key.remove", R"({"at":6})");
+    f.frame();
+    CHECK_FALSE(key->enabled);
+    CHECK_FALSE(s.degrees);
+}
+
 TEST_CASE("MIDI editor: Alt+E shows and hides it on the item it had last") {
     Fixture f;
     if (!f.ok) return;

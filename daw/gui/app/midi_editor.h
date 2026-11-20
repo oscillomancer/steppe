@@ -24,6 +24,7 @@
 
 namespace supple::ui {
 class Button;
+class Toggle;
 class Label;
 class TextBlock;
 }  // namespace supple::ui
@@ -101,10 +102,16 @@ struct RollState {
     };
     std::vector<ChordMark> chords;
     std::optional<harmony::Key> keyAt(double projectBeat) const;
+    // The key button (gui.md §4.7): a pitch drag and the arrow keys move the
+    // selected notes by scale degrees of the key at each note's beat
+    // (harmony::transposeDegrees, as midi.edit's transpose_degrees does).
+    bool degrees = false;
+    int dDegrees = 0;  // a degree drag's preview
     void cancelGesture() {
         drag = Drag::None;
         dBeats = dLength = dStart = 0;
         dPitch = dVelocity = 0;
+        dDegrees = 0;
         velocityNote.reset();
         ccDraft.clear();
         ccErasing = false;
@@ -168,6 +175,8 @@ class MidiEditor {
     void selectNone();
     void quantize();
     void transpose(int semitones);
+    void transposeDegrees(int degrees);  // midi.edit transpose_degrees on the selection
+    ui::Toggle* keyButton() const { return keyButton_; }
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.
     void removeSelected();
@@ -220,6 +229,9 @@ class MidiEditor {
     ui::Node* velocity_ = nullptr;
     ui::Node* ccLane_ = nullptr;
     ui::Button* ccButton_ = nullptr;
+    ui::Toggle* keyButton_ = nullptr;
+    std::string keyText_ = "No key";  // the key button's words (its width follows them)
+    void refreshKeyButton();
     ui::Node* notationPane_ = nullptr;
     ui::Label* title_ = nullptr;
     ui::TextArea* text_ = nullptr;

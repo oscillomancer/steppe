@@ -132,8 +132,14 @@ instructions are in `docs/guides/installing.md`.
   `key.set`/`chord.set`/remove steps it resolved to) and the `midi.edit` ops
   `transpose_degrees`, `snap_to_scale` and `fit_to_chord` (key and chord from the
   context at each note's beat, or given; `midi.context_varies` over a loop or a
-  pooled sharer in another key) are in. Not yet: the GUI lane and the roll's
-  degree actions (C3), a launcher clip's key.
+  pooled sharer in another key) are in; on a launcher clip they, and
+  `midi.get`, read the key at the project's start and no chord. In the app
+  (C3): key changes in the ruler's meter half and a chord row (shown with the
+  first chord, or by View > Chord row), both edited there; the piano roll's
+  strip names the chords, its rows outside the key's scale are shaded, and its
+  key button moves notes by scale degree (drags and arrows). The roll does not
+  open launcher clips yet, so a clip's opening-key shading waits for that.
+  Native macOS and Windows CI has not run on C3.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
   through `project.set`/`project.get` and Project > Timecode….

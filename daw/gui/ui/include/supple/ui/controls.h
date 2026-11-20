@@ -256,6 +256,7 @@ class Toggle : public Node {
     std::function<void(bool)> onToggle;
     void setOn(bool on);
     bool on() const { return on_; }
+    void setText(std::string text);  // a button whose words follow a state (the roll's key)
     Size measure(const Canvas& canvas, Size available) override;
     void paint(Canvas& canvas) override;
     bool onPointer(const PointerEvent& e) override;
@@ -264,6 +265,9 @@ class Toggle : public Node {
     // A strip's state button (mute, solo, polarity, mono): the cell every
     // strip button shares (drawStateCell), filled with the "on" colour when on.
     bool cell = false;
+    // Its text's size token and colour when off: a toggle among Buttons (the
+    // piano roll's key button) takes theirs, "small" and "ink".
+    std::string textSize = "caption", offInk = "ink-quiet";
 
   protected:
     bool pressed() const { return pressed_; }

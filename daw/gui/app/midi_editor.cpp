@@ -13,6 +13,7 @@
 
 #include "supple/model/context.h"
 #include "supple/notation/notation.h"
+#include "supple/ui/controls.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
@@ -50,6 +51,22 @@ std::uint16_t scaleMask(const std::optional<harmony::Key>& key) {
 }
 
 constexpr float kChordRowHeight = 18;  // the strip's chord row, under the bar numbers
+
+// The scale degrees that take `pitch` nearest to `pitch + semitones` (the
+// row under the pointer): what a degree drag previews and commits. Ties go to
+// fewer degrees; none nearer than staying put: 0.
+int nearestDegrees(int pitch, const harmony::Key& key, int semitones) {
+    const int target = pitch + semitones;
+    int best = 0, distance = std::abs(semitones);
+    for (int d = 1; d <= 84 && distance > 0; ++d)
+        for (int step : {d, -d})
+            if (const auto moved = harmony::transposeDegrees(pitch, key, step);
+                moved && std::abs(*moved - target) < distance) {
+                best = step;
+                distance = std::abs(*moved - target);
+            }
+    return best;
+}
 
 }  // namespace
 
@@ -95,7 +112,13 @@ struct Geometry {
         switch (s.drag) {
             case RollState::Drag::Move:
                 n.start += s.dBeats;
-                n.pitch = std::clamp(n.pitch + s.dPitch, 0, 127);
+                if (!s.degrees) {
+                    n.pitch = std::clamp(n.pitch + s.dPitch, 0, 127);
+                } else if (s.dDegrees != 0) {  // by the key where the note lands
+                    if (const auto key = s.keyAt(s.itemPosition + n.start))
+                        n.pitch =
+                            harmony::transposeDegrees(n.pitch, *key, s.dDegrees).value_or(n.pitch);
+                }
                 break;
             case RollState::Drag::ResizeEnd:
                 n.length = std::max(1.0 / 64, n.length + s.dLength);
@@ -411,10 +434,19 @@ class Roll : public ui::Node {
                 return s_.snapBeat(anchorBeat + raw) - anchorBeat;
             };
             switch (s_.drag) {
-                case RollState::Drag::Move:
+                case RollState::Drag::Move: {
                     s_.dBeats = snapped(s_.notes[anchor_].start);
                     s_.dPitch = static_cast<int>(std::lround((press_.y - e.pos.y) / s_.rowHeight));
+                    // Degrees: the note in hand goes to the scale pitch nearest the
+                    // pointer's row, in the key where it lands; the others move as
+                    // many degrees.
+                    s_.dDegrees = 0;
+                    const RollNote& anchor = s_.notes[anchor_];
+                    if (s_.degrees && s_.dPitch != 0)
+                        if (const auto key = s_.keyAt(s_.itemPosition + anchor.start + s_.dBeats))
+                            s_.dDegrees = nearestDegrees(anchor.pitch, *key, s_.dPitch);
                     break;
+                }
                 case RollState::Drag::ResizeEnd:
                     s_.dLength = snapped(s_.notes[anchor_].start + s_.notes[anchor_].length);
                     break;
@@ -448,11 +480,21 @@ class Roll : public ui::Node {
             for (std::size_t i : s_.selected) sel.push_back(static_cast<std::int64_t>(i));
             json::Value op = json::Value::object();
             op["notes"] = sel;
-            if (drag == RollState::Drag::Move && moved_ && (s_.dBeats != 0 || s_.dPitch != 0)) {
-                op["op"] = "move";
-                if (s_.dBeats != 0) op["beats"] = s_.dBeats;
-                if (s_.dPitch != 0) op["semitones"] = s_.dPitch;
-                ops.push_back(std::move(op));
+            const int pitchMove = s_.degrees ? s_.dDegrees : s_.dPitch;
+            if (drag == RollState::Drag::Move && moved_ && (s_.dBeats != 0 || pitchMove != 0)) {
+                // In time first: a degree op reads the key where the move left the note.
+                if (s_.dBeats != 0 || !s_.degrees) {
+                    json::Value move = op;
+                    move["op"] = "move";
+                    if (s_.dBeats != 0) move["beats"] = s_.dBeats;
+                    if (!s_.degrees && s_.dPitch != 0) move["semitones"] = s_.dPitch;
+                    ops.push_back(std::move(move));
+                }
+                if (s_.degrees && s_.dDegrees != 0) {
+                    op["op"] = "transpose_degrees";
+                    op["degrees"] = s_.dDegrees;
+                    ops.push_back(std::move(op));
+                }
             } else if (drag == RollState::Drag::ResizeEnd && moved_ && s_.dLength != 0) {
                 op["op"] = "resize";
                 op["length_delta"] = s_.dLength;
@@ -466,7 +508,7 @@ class Roll : public ui::Node {
                 s_.selected = {anchor_};  // a click on a selected note selects just it
             }
             s_.dBeats = s_.dLength = s_.dStart = 0;
-            s_.dPitch = 0;
+            s_.dPitch = s_.dDegrees = 0;
             if (ops.size() > 0) (void)editor_.edit(std::move(ops), s_.gestureVersion);
             repaintAll();
             return true;
@@ -970,10 +1012,18 @@ MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dis
                    [this] { quantize(); });
     actions_.addUi("ui.midi.notes.delete", "MIDI: delete selected notes (or the event list's)",
                    [this] { removeSelected(); });
-    actions_.addUi("ui.midi.notes.up", "MIDI: transpose selected notes up a semitone",
-                   [this] { transpose(1); });
-    actions_.addUi("ui.midi.notes.down", "MIDI: transpose selected notes down a semitone",
-                   [this] { transpose(-1); });
+    // The arrows: a semitone, or a scale degree while the key button is on.
+    actions_.addUi("ui.midi.notes.up",
+                   "MIDI: transpose selected notes up a semitone (a degree with the key button on)",
+                   [this] { state_.degrees ? transposeDegrees(1) : transpose(1); });
+    actions_.addUi(
+        "ui.midi.notes.down",
+        "MIDI: transpose selected notes down a semitone (a degree with the key button on)",
+        [this] { state_.degrees ? transposeDegrees(-1) : transpose(-1); });
+    actions_.addUi("ui.midi.notes.degree_up", "MIDI: move selected notes up a scale degree",
+                   [this] { transposeDegrees(1); });
+    actions_.addUi("ui.midi.notes.degree_down", "MIDI: move selected notes down a scale degree",
+                   [this] { transposeDegrees(-1); });
     actions_.addUi("ui.midi.notes.octave_up", "MIDI: transpose selected notes up an octave",
                    [this] { transpose(12); });
     actions_.addUi("ui.midi.notes.octave_down", "MIDI: transpose selected notes down an octave",
@@ -1030,6 +1080,13 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
         refreshTitle();
     });
     header.emplace<ui::Button>("midi.quantize", "Quantize", [this] { quantize(); });
+    // The key at the item's start; lit, pitch drags and arrows go by degrees.
+    keyButton_ = &header.emplace<ui::Toggle>("midi.key", "No key", "accent",
+                                             [this](bool on) { state_.degrees = on; });
+    keyButton_->layout.width = ui::SizeRule::content();
+    keyButton_->textSize = "small";  // as the header's buttons
+    keyButton_->offInk = "ink";
+    keyButton_->enabled = false;
     ccButton_ = &header.emplace<ui::Button>("midi.cc.number", "CC 1 mod", [this] {
         // The common controllers in turn: mod wheel, volume, pan, expression, sustain.
         static constexpr std::pair<int, const char*> kCcs[] = {
@@ -1300,6 +1357,7 @@ Status MidiEditor::reload() {
             state_.chords.push_back({k.beat, p->symbol + (known ? "" : "?"), known});
         }
     }
+    refreshKeyButton();
     if (bars_) {
         const float h = static_cast<BarStrip*>(bars_)->wanted();
         if (bars_->layout.height.value != h) {
@@ -1519,6 +1577,35 @@ void MidiEditor::transpose(int semitones) {
     json::Value ops = json::Value::array();
     ops.push_back(std::move(op));
     (void)edit(std::move(ops));
+}
+
+void MidiEditor::transposeDegrees(int degrees) {
+    if (!isOpen() || state_.selected.empty()) return;
+    json::Value op = json::Value::object();
+    op["op"] = "transpose_degrees";
+    op["notes"] = selectionOf(state_);
+    op["degrees"] = degrees;
+    json::Value ops = json::Value::array();
+    ops.push_back(std::move(op));
+    (void)edit(std::move(ops));
+}
+
+void MidiEditor::refreshKeyButton() {
+    if (!keyButton_) return;
+    const model::Session& head = app_.head();
+    const auto id = model::keyPointAt(head, state_.itemPosition);
+    const model::ContextPoint* point = id ? head.context.find(*id) : nullptr;
+    const bool known = point && model::parseKey(*point);
+    std::string text = point ? model::keyWords(*point) : "No key";
+    keyButton_->enabled = known;
+    if (!known && state_.degrees) {  // nothing to count degrees in
+        state_.degrees = false;
+        keyButton_->setOn(false);
+    }
+    if (text == keyText_) return;
+    keyText_ = text;
+    keyButton_->setText(std::move(text));
+    root_.relayout();
 }
 
 void MidiEditor::nudge(int steps) {

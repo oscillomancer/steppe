@@ -547,6 +547,12 @@ has a key, the rows of the notes outside its scale are drawn darker, and
 note names are spelled for the key (B-flat, not A-sharp, in F major). With
 no key the rows follow the black keys, as on a piano.
 
+The button in the header after **Quantize** names the key where the part
+starts. Click it to light it: dragging notes up and down then moves them
+along the scale, a step at a time, and so do the `Up` and `Down` keys. A
+note you drag goes to the scale note nearest the pointer, in the key that
+holds where you drop it. Click the button again to move by semitones.
+
 ### Notes
 
 - **Add:** double-click empty space. The note is as long as the last one you
@@ -561,7 +567,7 @@ no key the rows follow the black keys, as on a piano.
 
 | Key | What it does to the selected notes |
 | --- | --- |
-| `Up`, `Down` | Moves them a semitone (with Shift, an octave) |
+| `Up`, `Down` | Moves them a semitone (with Shift, an octave); a step of the scale while the key button is lit |
 | `Left`, `Right` | Moves them a grid step earlier or later |
 | `Q` | Quantizes them to the grid (every note when none is selected) |
 | `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | Copies, cuts, and pastes at the cursor |

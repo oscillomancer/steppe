@@ -1603,7 +1603,21 @@ window the strip grows by an 18-unit chord row under the numbers: each chord
 a cell to the next chord point, in the ruler's cell and letters ("?" after a
 symbol this build cannot read), a "no chord" point a short faint tick, and a
 cell that starts left of the roll keeps its name at the roll's edge. The row
-only shows the chords; they are edited in the ruler. The title names
+only shows the chords; they are edited in the ruler.
+
+**The key button** (`midi.key`, in the header after Quantize, with the
+header buttons' size and ink) names the key at the item's start ("C minor";
+"No key", disabled, where none holds or its scale is one this build cannot
+read). Lit (accent), a vertical drag and the arrow keys move the selected
+notes by scale degrees: the note in hand goes to the scale pitch nearest the
+pointer's row in the key where it lands (halfway between two, it stays), the
+others as many degrees, each in the key at its own start, previewed with
+`harmony::transposeDegrees` and committed as one `midi.edit`: a `move` in time
+first, then `transpose_degrees`, so preview and result agree. `ui.midi.notes.up`
+and `.down` (Up, Down) go a degree while it is lit and a semitone otherwise;
+`ui.midi.notes.degree_up` and `.degree_down` always go a degree (unbound);
+Shift+Up and Shift+Down stay octaves. The button turns off when the key at the
+item goes. The title names
 the track and the item as the arrangement labels it ("MIDI · Rhodes —
 Chords · 4 notes · grid 1/16"), with the item's id only while it has no
 name.
