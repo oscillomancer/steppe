@@ -2369,8 +2369,9 @@ that starts the app (ADR-0091).*
 lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
 same heights, scroll and colours.
 - **Shown.** It is shown by View > Clip launcher (`ui.clips`) and saved in
-  the UI sidecar (`clips: {shown, width}`). A project with scenes opens with it
-  shown, and a new project hides it.
+  the UI sidecar (`clips: {shown, width}`). The sidecar's entry wins. Only
+  when there is none does the project decide: one with scenes opens with it
+  shown, and one without (a new project too) hides it.
 - **Width.** Dragging the rule between the pane and the lanes sets its width.
   Dragged all the way, the clip launcher fills the view and the lanes hide; a
   drag back brings them.
@@ -2398,26 +2399,33 @@ same heights, scroll and colours.
 **Cells.**
 - **Where.** Only a channel's row has cells. Busses, masters and automation
   lanes show ground across the scene columns. Clips are on channels only.
-- **An empty cell** shows a small square in quiet ink. A click stops the
-  track (`launch.stop {track}`); a double-click makes an empty one-bar MIDI
-  clip there (`clip.add`). No text is drawn in it.
+- **An empty cell** shows a small square in quiet ink, its stop zone. A
+  click on the square stops the track (`launch.stop {track}`); a click
+  elsewhere in the cell only clears the selection; a double-click makes an
+  empty one-bar MIDI clip there (`clip.add`). No text is drawn in it.
 - **A clip** is a small item: a name bar in its colour (the track's when it
   has none) and its content drawn by the shared item-body functions
   (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
   muted clip is dimmed, as a muted item is.
-  - **Playing:** a ▶ before the name, an outline, and a progress line along
-    the bottom edge, all in `playing` (telemetry, `launch.state`).
+  - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
+    name bar's ink while idle).
+  - **Playing:** the ▶, an outline, and a progress line along the bottom
+    edge, all in `playing` (telemetry, `launch.state`).
   - **Queued:** a dashed outline in `playing` until the boundary.
-  - **Held silent** (a `once` clip that ended): the outline without the ▶.
+  - **Held silent** (a `once` clip that ended): the outline in `playing`,
+    the ▶ in the name bar's ink.
 - **While a clip holds a track,** the track's lanes and items dim (ink at
   0.45) and its Arr dot is unlit.
 
 **Gestures.**
-- **Click** a clip: launch it (`launch.clip`). A click selects it too; a
-  click on the lanes clears that selection.
-- **Double-click** a clip: open it in the piano roll (MIDI) or the
+- **Click the ▶** of a clip: launch it (`launch.clip`). It does not change
+  the selection.
+- **Click the body** of a clip: select it (Ctrl adds to the selection). It
+  never launches. A click on the lanes clears that selection.
+- **Double-click the body**: open it in the piano roll (MIDI) or the
   inspector (audio). The editors and content commands take the clip as
   they take an item (ADR-0097, "The take owner").
+- No click both selects and launches.
 - **Drag** a clip to another cell to move it (`clip.move`), or with Ctrl to
   copy it (`clip.duplicate`). An occupied cell refuses the drop (the
   pointer says so).
@@ -2443,6 +2451,9 @@ same heights, scroll and colours.
   themes.
 - Every gesture above, through the dispatcher, with fixtures built from
   files until `launch.*` lands.
+- The click zones: a click on a clip's ▶ launches and keeps the selection, a
+  click on its body selects and never launches, and a click beside an empty
+  cell's square stops nothing.
 - `arrange-items.png` stays byte-identical with the pane hidden.
 
 ## 5. Agent panel (removed)

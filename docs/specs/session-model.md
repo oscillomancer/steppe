@@ -1606,6 +1606,7 @@ present, and the project field `launch_quantize`, written only when not
 |---|---|
 | `track` | A channel (required). |
 | `scene` | Its scene (required). |
+| `kind` | `midi` or `audio` (required), fixed at `clip.add`. |
 | `takes`, `active_take` | Ordinary takes, as an item's. A clip with takes has an active take. |
 | `length` | The period, > 0, in the clip's unit (required). |
 | `loop` | `{on, start, length}`: the content window that repeats inside the clip, from the take's start offset; default off. |
@@ -1613,15 +1614,18 @@ present, and the project field `launch_quantize`, written only when not
 | `quantize` | Overrides `launch_quantize` for this clip: `bar`, `beat`, `1/2` … `1/32`, `none`. |
 | `name`, `color`, `mute`, `gain_db` | As an item's. |
 
-**The clip's unit.** `length`, `loop` and the clip's take envelopes are in
-beats for a MIDI clip and in seconds of take time for an audio clip. An
-audio clip plays at its take's own rate; it does not follow the tempo. A clip
-with no source is in beats.
+**The clip's kind and unit.** A clip's `kind` is set when it is made and
+never changes. `length`, `loop` and the clip's take envelopes are in beats
+for a MIDI clip and in seconds of played take time (source time divided by
+the take's playrate) for an audio clip. An audio clip plays at its take's
+own rate; it does not follow the tempo. A take whose source does not match
+the kind is refused (`clip.mixed`), so no take edit changes what the
+numbers mean. Takes without a source fit either kind.
 
 ```json
 "scenes": {"sc_1": {"name": "Verse", "order": 0}},
 "clips": {
-  "cl_1": {"track": "tr_2", "scene": "sc_1", "takes": ["tk_9"],
+  "cl_1": {"track": "tr_2", "scene": "sc_1", "kind": "midi", "takes": ["tk_9"],
            "active_take": "tk_9", "length": 8.0,
            "loop": {"on": true, "start": 0.0, "length": 4.0}, "name": "Bass line"}
 }
@@ -1632,15 +1636,35 @@ with no source is in beats.
 between an item and a clip copies its takes. An unpooled MIDI source is
 copied with its take unless `pooled` is asked. Audio media are shared.
 
-**Invariants.** Violations are `model.invariant` at the object's path.
-- A clip's track exists and is a channel.
+**Converting between an item and a clip** (`clip.add {item}`, `item.add
+{clip}`, `take.extract` from a clip) goes through the tempo map at the
+item's span, where it sits or lands (ADR-0097, "Converting between an item
+and a clip"):
+- a MIDI clip's length is the item's length in beats, an audio clip's its
+  length in seconds; the new item spans the clip's length from its position;
+- notes, audio, playrate, pitch, start offset, take FX and fades copy as
+  they are;
+- an item's `loop` becomes a clip loop on, from 0, one content length long;
+  back on the timeline only that loop, or none, converts (other windows:
+  `clip.unsupported`);
+- take envelope points keep their beats on a MIDI clip and convert point by
+  point to seconds from the start on an audio clip, and back;
+- the round trip at one position is exact; across a tempo change inside the
+  span, the shape between two points may differ slightly.
+
+**Invariants.** The commands refuse these first with their own errors; on
+commit a violation is `model.invariant` at the object's path.
+- A clip's track exists and is a channel (`clip.track` at `clip.add` and
+  `clip.move`; `track.set {type}` on a channel holding clips is
+  `track.strip_type`, hint: move or remove its clips first).
 - A clip's scene exists.
 - At most one clip per (track, scene).
 - `length` is finite and > 0. `loop.start` ≥ 0, and `loop.length` > 0 when
   `loop.on`.
 - A clip's takes exist and belong to no other item or clip, and the active
   take is one of them.
-- A clip's sources are all MIDI or all audio (`clip.mixed` at the command).
+- Each take's source matches the clip's `kind` (`clip.mixed` at the
+  command).
 - Scene orders are distinct integers.
 - At most 1024 scenes and 16384 clips.
 
@@ -1648,26 +1672,33 @@ Removing a track or a scene removes its clips. Removing a clip removes its
 takes, and their unpooled sources, as `item.remove` does. The command warns
 `clip.removed` naming the clips. Clips are outside a frozen track's freeze
 hash (the print is the arrangement). They can be edited on a frozen track
-but not launched.
+but not launched; freezing returns the track to the arrangement first.
 
 **Older builds (amendment G-c).**
-- A pre-2.18 build keeps `scenes` and `clips` as unknown sections. Clip
-  takes then belong to no item there, so it refuses to open a file whose
-  clips hold takes, at the take's path, as a 2.6 build refuses a 2.7 file's
-  module routes.
-- A file that comes back through one anyway opens:
-  - a missing or low `sc` or `cl` counter is derived from the highest id;
-  - a clip whose track or scene is gone, whose track is not a channel, or
-    whose takes are gone or owned by an item is dropped with a
-    `project.clip_dropped` warning at its path naming it and why;
-  - of two clips on one (track, scene), the lower id is kept.
+- A project that holds clips does not open in a build older than 2.18, and
+  there is no backward path. (Such a build keeps `scenes` and `clips` as
+  unknown sections, so a clip's takes belong to no item there; it checks
+  every saved version, so a clip with takes anywhere in the history is
+  enough.)
+- A file that comes back through one anyway opens for what it can leave
+  behind:
+  - a missing or low `sc` or `cl` counter is derived from the highest id
+    (`project.counter_derived`);
+  - a clip that refers to something gone (its track, its scene, a take or
+    its active take) is dropped with its remaining takes, by a
+    `project.clip_dropped` warning at its path naming it and why.
+- Any other fault in a clip fails the open with `model.invariant`.
 
 **Commands.**
 - The content commands accept a clip wherever they take an item. The
   `item` field's ID pattern becomes `^(it|cl)_[0-9]+$`, so merges remap it:
   - `midi.get/write/edit/notes`, `item.export`;
   - `take.list/add/activate/set/remove/extract` and `take.hits.*`;
-  - `fx.add {take}` and `env.add {take}` on a clip's take.
+    `take.extract` from a clip needs `position` (beats), and its `track`
+    defaults to the clip's;
+  - `fx.add {take}` and `env.add {take}` on a clip's take, whose points
+    give `beat` on a MIDI clip or `seconds` on an audio clip, from the
+    clip's start (`bar` and the other unit: `clip.unsupported`).
 - Refused on a clip's take with `clip.unsupported`:
   `take.stretch.add/move/remove`.
 - Timeline commands refuse a clip with `item.kind`, whose hint names the
@@ -1678,13 +1709,20 @@ but not launched.
   - `group.targets` and `record.commit`.
 - Clips never count toward the project length, render bounds, analysis ends
   or freeze length.
-- `clip.add`, `clip.duplicate`, `take.add` and `take.activate` on a clip, and
-  `take.set` on a clip's source window refuse what would put the resident
-  audio over the in-memory budget (`clip.memory`).
+- The in-memory budget is ordered: arrangement items first, then clips in
+  scene order and track order (the track tree's display order). Clips that
+  do not fit are not loaded and are named in a `launch.memory` warning, at
+  every load. Timeline commands are never refused because of clips.
+  `clip.add`, `clip.duplicate`, `take.add` and `take.activate` on a clip,
+  and `take.set` on a clip's source window refuse what would leave a clip
+  out (`clip.memory`).
+- `clip.add`'s length: the notation's or MIDI file's rounded up to whole
+  bars, the audio file's played seconds, or one bar without a source (a bar
+  of the first meter).
 - Errors: `clip.track`, `clip.scene`, `clip.occupied`, `clip.mixed`,
   `clip.length`, `clip.memory`, `clip.unsupported`, `clip.limit`,
-  `scene.limit` and `item.kind`. Each carries `code`, `message`, `path` and a
-  `hint`.
+  `scene.limit` and `item.kind`, and `track.strip_type`. Each carries
+  `code`, `message`, `path` and a `hint`.
 - Launches (`launch.*`) change transport state only. They are logged for
   `launch.commit` while capture is on, and they are never in history.
 

@@ -428,8 +428,16 @@ the loop range: it is not in the plan or the model, and never in history.
   pitch and channel mode as the timeline does, without warp. A clip whose
   audio does not fit the tempo gets a plan warning (`launch.tempo`).
 - **Memory (L-e).** Clip audio is resident inside the prepared-source budget
-  (2^28 samples). A project over budget plays what fits, in scene order then
-  track order, and the plan warns (`launch.memory`) naming the silent clips.
+  (2^28 samples), which becomes ordered and replaces today's all-or-nothing
+  `media.budget` check: arrangement items first, then clips in scene order
+  and track order (the track tree's display order). Clips that do not fit
+  are not loaded, cannot be launched, and are named in a `launch.memory`
+  warning. The rule runs at every load and recompile; an arrangement alone
+  past the budget still fails as today.
+- **Frozen tracks.** Freezing a track returns it to the arrangement and
+  drops its queued launch. `launch.clip` on a frozen track fails with
+  `track.frozen`; `launch.scene` skips it with a `track.frozen` warning;
+  `launch.stop` and `launch.arrangement` change nothing on it.
 - **Renders** play the arrangement only (§3).
 - **Open for the lead:** the take `pitch` envelope that is stored but never
   played, for clips and items alike (core §4.5): refuse it or play it.

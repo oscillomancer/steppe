@@ -1,6 +1,8 @@
 # ADR-0097: Clip launcher: scenes and clips beside the arrangement
 
 **Status:** Proposed, 2026-11-19, for review by opus-reviewer and the lead.
+Revised the same day after review round 55 (F1 to F9), with the
+co-director's rulings.
 It extends ADR-0057 (master items) and ADR-0093 (values on a running plan),
 and touches ADR-0013 (bridge deadlines) only through the executors it
 shares. It is built in steps L1 to L4 (below). The engine's "Playing"
@@ -51,6 +53,7 @@ material for one scene.
 |---|---|
 | `track` | A channel (required). |
 | `scene` | Its scene (required). |
+| `kind` | `midi` or `audio` (required), fixed when the clip is made. |
 | `takes`, `active_take` | Ordinary takes (`tk_*`), as an item's are. A clip with takes has an active take. |
 | `length` | The clip's period, > 0. It is in the clip's unit (below). |
 | `loop` | `{on, start, length}`: the content window that repeats inside the clip, measured from the take's start offset. Default off. |
@@ -58,13 +61,15 @@ material for one scene.
 | `quantize` | Optional override of the project's `launch_quantize` (below). |
 | `name`, `color`, `mute`, `gain_db` | As an item's. |
 
-- **The clip's unit.** A clip's `length`, `loop` and take envelopes are in
-  the unit its content plays in. That is beats for a MIDI clip, which
-  follows the song's tempo, and seconds of take time for an audio clip,
-  which plays at the take's own rate (L-c). A clip's takes are therefore all
-  MIDI or all audio; takes without a source are allowed in either kind. A
-  clip with no source decides by its first source, and an empty clip is in
-  beats.
+- **The clip's kind and unit.** A clip stores its `kind`, `midi` or
+  `audio`, chosen by `clip.add` and never changed after. Its `length`,
+  `loop` and take envelopes are in the kind's unit: beats for a MIDI clip,
+  which follows the song's tempo, and seconds of played take time for an
+  audio clip, which plays at the take's own rate (L-c). Played time is
+  source time divided by the take's playrate. A take whose source does not
+  match the kind is refused (`clip.mixed`); takes without a source are
+  allowed in either kind. So the unit never changes under a clip: no take
+  edit rereads its numbers. `clip.add` with no source makes a MIDI clip.
 - **The project** gains `launch_quantize`: `bar` (default), `beat`, `1/2`,
   `1/4`, `1/8`, `1/16`, `1/32` or `none`.
 - **A clip is not an `Item`.** Timeline code stays correct by construction;
@@ -83,11 +88,13 @@ material for one scene.
 
 A take belongs to exactly one **owner**, an item or a clip. One
 abstraction, `model::takeOwner(session, take) → it_* | cl_*` with
-`model::ownerTakes(session, owner)`, replaces the three scans that find a
-take's item today:
-- `takeOwners` (prepared_sources.cpp:25-30);
-- `itemOfTake` (take_commands.cpp:34);
-- `owner` (audio_commands.cpp:47).
+`model::ownerTakes(session, owner)` and `model::TakeOwners` (one scan for
+many lookups), replaces the five scans that found a take's item (L1a):
+- `takeOwners` (prepared_sources.cpp);
+- `itemOfTake` (take_commands.cpp);
+- `owner` (audio_commands.cpp);
+- `checkUnlockedTake` (command_validation.h);
+- the warp-peer check in `validateAudioWarp` (audio_warp.cpp).
 
 The orphan-take invariant (session.cpp:403) counts both owners. Moving
 material between an item and a clip **copies** takes, never shares them. A
@@ -104,11 +111,16 @@ take:
 - `item.export`: the clip's raw audio or its MIDI.
 - `take.list`, `take.add`, `take.activate`, `take.set` and `take.remove`.
   A clip goes with its last take, as an item does.
-- `take.extract`: the take leaves the clip for a new item on the timeline.
+- `take.extract {take, position, track?}`: the take leaves the clip for a
+  new item at `position` (beats, required for a clip's take, since a clip
+  has no place in time) on `track` (default: the clip's track). Its length,
+  loop and envelopes convert as below. A clip goes with its last take.
 - `take.hits.detect` and `take.hits.set`.
 - `fx.add {take}`, `env.add {take}`, and the `fx.*` and `env.*` commands on
   a clip take's FX and envelopes. A take envelope on a clip is in the
-  clip's unit.
+  clip's unit from the clip's start: its points give `beat` on a MIDI clip
+  and `seconds` on an audio clip. `bar`, and the other unit, are refused
+  (`clip.unsupported`), since a clip has no place in time.
 - The editors: the piano roll, the inspector and the take FX window. They
   open a clip as they open an item. A clip in the piano roll uses the
   project's first key (an addition to §5 of the core design).
@@ -117,6 +129,44 @@ take:
 hint to lay the clip on the timeline first): `take.stretch.add/move/remove`,
 because the clip player does not warp. A clip whose take has stretch
 markers cannot be made (`clip.add {item}` refuses it, L-g).
+
+**Converting between an item and a clip.** `clip.add {item}` copies an
+item's takes into a clip; `item.add {clip}` and `take.extract` copy or move
+a clip's takes onto the timeline. One rule covers all three. It converts
+through the tempo map at the item's span: where the item sits, or where the
+new item lands (`itemSpan`, so the item's timebase is resolved first).
+- **Kind.** The clip's kind is its takes' content: `midi` for MIDI sources,
+  `audio` for media. An item whose takes have no source makes a MIDI clip.
+- **Length.** A MIDI clip's length is the item's length in beats (its end
+  beat minus its start beat). An audio clip's is the item's length in
+  seconds (end second minus start second). Back on the timeline, the new
+  item spans the clip's length from its position, in beats or in seconds.
+- **Notes and audio** do not convert: a MIDI source is in beats, and an
+  audio take plays its source at its own playrate in both places. The
+  playrate, pitch, start offset, take FX and fades are copied as they are.
+- **Loop.** An item's `loop` repeats its take's content from the start
+  offset. It becomes a clip loop that is on, from 0, one content length
+  long (the source's length in beats for MIDI, its played seconds for
+  audio). Back on the timeline, a clip loop converts only in that form, or
+  when it is off; any other loop window has no item equivalent and is
+  refused (`clip.unsupported`, hint: set the loop off or to the whole
+  content first).
+- **Take envelopes.** An item's are in beats from its start. On a MIDI clip
+  the points keep their numbers. On an audio clip each point converts
+  through the tempo map at the item's span: seconds from the item's start
+  second to the point's beat. Back on the timeline the same conversion runs
+  the other way at the landing position.
+- **Exactness.** The conversion is exact at the tempo where the item sits
+  or lands: an item → clip → item round trip at the same position gives the
+  same length and points (up to rounding), and each case has a test.
+- **What a tempo change inside the span loses.** Points convert one by one,
+  so the points land exactly, but the segment between two points is
+  straight in the new unit. Across a tempo change (a step or a ramp) inside
+  the span, the shape between those points differs slightly from the
+  original. An audio clip then keeps its seconds whatever the tempo map
+  does later; a MIDI clip keeps its beats.
+- **Refused:** a warped take (above), and a loop window an item cannot
+  express. Nothing else is guessed.
 
 **Timeline only; these refuse a clip** (`item.kind`, with a hint naming the
 clip command). They place material in time:
@@ -129,16 +179,21 @@ clip command). They place material in time:
 
 ### Invariants
 
-Violations are `model.invariant` at the object's path.
+The commands check these first and refuse with their own errors and hints;
+the model checks them again on every commit, where a violation is
+`model.invariant` at the object's path (a bug, session-model §3).
 
 - A clip's track exists and is a **channel**. Clips are not allowed on
   busses or masters; a master may hold audio items (ADR-0057), but not
-  clips, in this ADR.
+  clips, in this ADR. The commands check it as they check items' strip
+  rules: `clip.add` and `clip.move` with `clip.track`, and `track.set
+  {type}` on a channel that holds clips with `track.strip_type` (hint: move
+  or remove its clips first).
 - A clip's scene exists. There is at most one clip per (track, scene).
 - `length > 0` and finite. `loop.start ≥ 0`, and `loop.length > 0` when
   `loop.on`.
 - A clip's takes exist and belong to no other owner. The active take is one
-  of them. Its sources are all MIDI or all audio.
+  of them. Each take's source matches the clip's `kind`.
 - Scene `order` values are distinct integers. `scene.move` keeps them
   0 .. n−1.
 - At most 1024 scenes and 16384 clips per project (`scene.limit`,
@@ -151,7 +206,14 @@ as with `item.remove`. Each command reports the clips it removed in a
 
 **Freeze.** Clips are not part of a frozen track's print or its freeze hash,
 since the print is the arrangement. They can be edited while the track is
-frozen, but not launched (`launch.clip` fails with `track.frozen`).
+frozen, but not launched:
+- freezing a track returns it to the arrangement first, and drops its
+  queued launch;
+- `launch.clip` on a frozen track fails with `track.frozen`;
+- `launch.scene` launches the scene's other clips and skips each frozen
+  track with a `track.frozen` warning naming it;
+- `launch.stop` and `launch.arrangement` on a frozen track change nothing,
+  since it already follows the arrangement.
 
 ### Older builds (G-c, G-d)
 
@@ -159,32 +221,47 @@ The schema is **2.18**, by order of landing (G-d). The collections `scenes`
 and `clips` are written only when present, and the project's
 `launch_quantize` only when it is not `bar`.
 
-- **A pre-2.18 build refuses a file whose clips hold takes.** It keeps
-  `scenes` and `clips` as unknown sections, so to it the clips' takes
-  belong to no item, and its invariant (session.cpp:403) refuses the open
-  with a path. This follows the precedent of racks (schema 2.7, whose
-  module-end routes older builds refuse). A file with scenes and no clip
-  takes opens there.
-- **A file that comes back from an older build opens.** A missing or low
-  `sc` or `cl` counter is derived from the highest id. A clip whose track
-  or scene is gone, whose track is no longer a channel, or whose takes are
-  gone or claimed by an item is dropped with a `project.clip_dropped`
-  warning naming it and why. Two clips on one (track, scene) keep the lower
-  id. The open never fails for these, and each case has a test with a
-  hand-edited file.
+- **A project that holds clips does not open in a build older than
+  2.18.** There is no backward path, and none is planned. (An older build
+  keeps `scenes` and `clips` as unknown sections, so to it a clip's takes
+  belong to no item, and it refuses the open; it loads every saved version,
+  so a clip with takes anywhere in the history is enough. Nothing is done to
+  make the other cases open there.)
+- **A file that comes back through an older build anyway opens,** for the
+  two things such a build can leave behind. A missing or low `sc` or `cl`
+  counter is derived from the highest id (`project.counter_derived`). A
+  clip that refers to something gone (its track, its scene, a take or its
+  active take) is dropped, with its remaining takes, by a
+  `project.clip_dropped` warning naming it and why. Each case has a test
+  with a hand-edited file. Any other fault in a clip fails the open with
+  `model.invariant`, as for every kind.
 
 ### Memory (L-e)
 
-Every clip's audio is resident, inside the existing in-memory budget of
-2^28 samples (prepared_sources.cpp:120-122).
-
-- `clip.add`, `clip.duplicate`, `take.add` and `take.activate` on a clip,
-  and `take.set` changing a clip take's source window refuse a set that
-  would go over budget (`clip.memory`). The error names the budget and
-  what the clips hold now.
-- A project already over budget on load plays what fits, in scene order
-  then track order. The plan warns (`launch.memory`) naming the clips left
-  silent, and the open never fails for it.
+Every clip's audio is resident, inside the in-memory budget of 2^28
+samples (prepared_sources.cpp). Today that budget is all or nothing: past
+it, the whole preparation fails with `media.budget` and nothing plays.
+Clips replace that with an **ordered budget**:
+- **The order.** Arrangement items are budgeted first, since the
+  arrangement is what renders. Then clips, in scene order, and within a
+  scene in track order: the track tree's display order (the masters list,
+  each track followed depth-first by its children).
+- **What does not fit.** Clips past the budget are not loaded. They stay in
+  the project, cannot be launched, and are reported by a `launch.memory`
+  warning naming them. The arrangement alone past the budget still fails
+  as today.
+- **When.** The rule applies at every load and every recompile, not only on
+  open, since an arrangement edit can push clips out.
+- **Timeline commands are never refused because of clips.** `item.add`, a
+  longer take or a playrate change may leave fewer clips loaded; the
+  warning says which.
+- **Clip commands check.** `clip.add`, `clip.duplicate`, `take.add` and
+  `take.activate` on a clip, and `take.set` changing a clip take's source
+  window, refuse a set whose clips would not all fit beside the arrangement
+  (`clip.memory`). The error names the budget and what the arrangement and
+  the clips hold now.
+- **Who.** The ordered budget is the engine's (L2, the lead). L1 states it
+  and adds the `clip.memory` checks.
 - The disk-backed cache (route E) is separate work that the launcher will
   want at scale.
 
@@ -194,8 +271,11 @@ Every clip's audio is resident, inside the existing in-memory budget of
   - `scene.add {name?, color?, at?}`, `scene.set {scene, …}`,
     `scene.remove {scene}`, `scene.move {scene, to}` and `scene.list` (q).
   - `clip.add {track, scene, …}`, taking one source: `notation`,
-    `audio_file`, `midi_file`, or `item` (a copy of an item's takes), with
-    `pooled?`. Without a source it makes an empty MIDI clip of one bar.
+    `audio_file`, `midi_file`, or `item` (a copy of an item's takes, as
+    above), with `pooled?`. Without a source it makes an empty MIDI clip of
+    one bar. Its length: the notation's or MIDI file's length rounded up to
+    whole bars, the audio file's played seconds, or one bar; a bar is the
+    first meter's.
   - `clip.set {clip, name?, color?, mute?, gain_db?, length?, loop?, mode?,
     quantize?}`, where `quantize: null` clears the override.
   - `clip.remove {clip}`.
@@ -205,9 +285,11 @@ Every clip's audio is resident, inside the existing in-memory budget of
     clip's takes. This is how a clip is dragged onto the timeline.
   - The content commands above accept clips.
   - Errors: `clip.track`, `clip.scene`, `clip.occupied`, `clip.mixed`
-    (audio and MIDI takes in one clip), `clip.length`, `clip.memory`,
-    `clip.unsupported`, `clip.limit`, `scene.limit` and `item.kind`. Each
-    has `code`, `message`, `path` and a `hint`.
+    (a take whose source does not match the clip's kind), `clip.length`,
+    `clip.memory`,
+    `clip.unsupported`, `clip.limit`, `scene.limit` and `item.kind`, and
+    `track.strip_type` from `track.set`. Each has `code`, `message`, `path`
+    and a `hint`.
 - **L2, lead.** `launch.clip {clip}`, `launch.scene {scene}`,
   `launch.stop {track?}`, `launch.arrangement {track?}`, and
   `launch.state` (q): what each track plays (`arrangement`, a clip, held
@@ -312,6 +394,9 @@ A scene is a section you can play before it has a place in the song.
 - A narrow last column per track is lit while it follows the arrangement.
   A track's lanes dim while a clip holds it.
 - Clips drag to and from the timeline.
+- A clip launches from its launch zone, the ▶ at the left of its name bar.
+  A click on its body selects it, and a double-click opens its editor; no
+  click does both.
 - Dragging the pane's edge all the way makes the launcher the whole view.
 - The pane takes a cell in the arrange header row (L-h).
 
@@ -323,10 +408,16 @@ A scene is a section you can play before it has a place in the song.
   `entryInfo`/`objectJson`/`objectSchema`; both section lists (schemas.cpp
   load, and project_file.cpp `objectDepth`). The collections join
   `mixOnly`, `patchOnly` and `scalarOnly` (as edits that compile).
+- **Lists no guard covers** (round 53 G4; a member missing from them
+  compiles and silently loses data): `EditTxn::preview` and so `commit`
+  (`apply<T>`: a missing one drops the collection's edits); `shareRevisions`
+  in project_file.cpp; `RetainedSize` in versions.cpp; `Checker::counters`
+  (the clip kinds check theirs in `checkLauncher`); the branch counter
+  derivation in `VersionStore::restore`.
 - **Commands.** The ID patterns in every argument schema that takes a
   scene, a clip, or an `item` that may be a clip.
 - **Migration and tests.** Migration for older files; the round trip for
-  every field (save and reopen); and the take-owner abstraction at the three
+  every field (save and reopen); and the take-owner abstraction at the five
   sites above, with the orphan invariant.
 
 ### Steps
@@ -341,14 +432,18 @@ A scene is a section you can play before it has a place in the song.
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take
-  owner, at three sites and one invariant, plus the content commands'
+  owner, at five sites and one invariant, plus the content commands'
   argument patterns.
-- **Older builds.** A pre-2.18 build cannot open a project whose clips hold
-  takes. Saving such a project for an older build means laying the clips on
-  the timeline first, or removing them.
+- **Older builds.** A project that holds clips does not open in a build
+  older than 2.18, and there is no way back.
 - **Memory.** Every clip's audio is resident, so a launcher set of long
   audio reaches the budget sooner than an arrangement does, until the disk
-  cache exists.
+  cache exists. The budget becomes ordered: the arrangement first, then
+  clips, and clips that do not fit are left out and reported, never the
+  arrangement.
+- **Conversion.** Moving material between an item and a clip is exact at
+  the tempo where the item sits; across a tempo change inside its span, the
+  envelope shape between points may differ slightly.
 - **Latency.** Unquantized launches on rendered tracks start about 0.2 s
   after the click.
 - **Not saved.** What is playing is not saved with the project. A
