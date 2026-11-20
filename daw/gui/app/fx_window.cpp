@@ -27,7 +27,8 @@ namespace {
 const cmd::Origin kUiOrigin{cmd::Origin::Type::Ui, "gui", {}};
 
 bool draggingSlider(const ui::Node& node) {
-    if (const auto* slider = dynamic_cast<const ui::Slider*>(&node); slider && slider->dragging())
+    if (const auto* slider = dynamic_cast<const ui::Slider*>(&node);
+        slider && (slider->dragging() || slider->depthDragging()))
         return true;
     for (const auto& child : node.children())
         if (draggingSlider(*child)) return true;

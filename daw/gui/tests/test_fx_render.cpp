@@ -890,11 +890,39 @@ TEST_CASE(
     REQUIRE(s.modulations.size() == 1);
     CHECK(s.modulations.begin()->value->target == model::EnvTarget{fx, modulatable});
     // The route holds the lane: the menu offers to hide it, not to add one.
+    f.fx->tick();
     f.frame();
     menu = menuFor(modulatable);
     REQUIRE(menu);
     CHECK(row(menu, "Hide lane: ").enabled);
     f.uiRoot().closePopup();
+    // Its slider shows the route on its travel (an LFO at a quarter of the
+    // range: ±0.25), and a drag on the bar under the track sets the depth in
+    // one undo step while the panel holds still.
+    auto* slider = dynamic_cast<ui::Slider*>(f.uiRoot().find("fx.param." + modulatable));
+    REQUIRE(slider);
+    REQUIRE(slider->modulation());
+    CHECK(slider->modulation()->low == doctest::Approx(-0.25));
+    CHECK(slider->modulation()->high == doctest::Approx(0.25));
+    const model::Id route = s.modulations.begin()->id;
+    const ui::Rect b = slider->bounds();
+    const bool left = slider->value() > 0.5;  // away from the cap
+    const ui::Point p{left ? b.x + ui::Slider::kInset + 6 : b.right() - ui::Slider::kInset - 6,
+                      b.y + b.h / 2 + 4.5f};
+    const std::size_t steps = f.historyCount();
+    f.uiRoot().pointer({ui::PointerEvent::Type::Down, p, 1});
+    for (int i = 1; i <= 10; ++i) {
+        f.uiRoot().pointer(
+            {ui::PointerEvent::Type::Move, {p.x + (left ? 1 : -1) * i * 4.0f, p.y}, 0});
+        f.fx->tick();
+        f.frame();
+    }
+    CHECK(f.uiRoot().find("fx.param." + modulatable) == slider);  // not rebuilt mid-drag
+    f.uiRoot().pointer({ui::PointerEvent::Type::Up, {p.x + (left ? 40.0f : -40.0f), p.y}, 1});
+    f.fx->tick();
+    f.frame();
+    CHECK(f.historyCount() == steps + 1);
+    CHECK(f.app->head().modulations.find(route)->depth != doctest::Approx(0.25));
 }
 
 TEST_CASE("a knob bound to the last touched parameter follows the panel's last edit") {

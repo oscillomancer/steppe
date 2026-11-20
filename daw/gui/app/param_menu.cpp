@@ -85,7 +85,7 @@ struct Builder {
             root, actions.dispatcher(), [a] { return a->app().head(); }, stripControlLabel(param),
             std::move(target),
             object.kind == model::Kind::Track ? std::optional(object) : std::nullopt,
-            stripModulatable(s, object, param), anchor,
+            views::stripModulatable(s, object, param), anchor,
             [a](const std::string& message) {
                 if (a->onError) a->onError(message);
             }));
@@ -199,16 +199,6 @@ double envelopeStartValue(const model::Session& s, const model::Id& object,
            : param == "pan_right" ? tr->panRight
            : param == "pan_boost" ? (model::panLawOf(*s.project, *tr).boost ? 1.0 : 0.0)
                                   : (tr->mute ? 1.0 : 0.0);
-}
-
-bool stripModulatable(const model::Session& s, const model::Id& object, std::string_view param) {
-    const model::Track* t = s.tracks.find(object);
-    if (!t || t->freeze) return false;
-    const bool master = t->type == model::StripType::Master;
-    if (param == "volume") return true;
-    if (param == "pan") return master || t->panMode != model::PanMode::Dual;
-    if (param == "width") return !master && t->panMode == model::PanMode::Width;
-    return false;
 }
 
 void openModulateMenu(ui::Root& root, cmd::Dispatcher& dispatcher, const model::Session& s,

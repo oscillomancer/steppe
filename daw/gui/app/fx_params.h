@@ -12,10 +12,12 @@
 #include <cstddef>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 
 #include "learn_dialog.h"
 #include "supple/engine/app.h"
+#include "supple/ui/controls.h"
 #include "supple/ui/node.h"
 
 namespace supple::ui {
@@ -46,6 +48,10 @@ class ParamPanel {
     // Shows the parameter's automation lane, creating the envelope (flat at
     // the current value) when it has none (P5.14).
     Status automate(const std::string& key, double physical);
+    // A modulatable slider's routes (ADR-0096), and a depth drag on its bar
+    // (modulation.set; a drag is one undo step).
+    std::optional<ui::ModulationView> modulationView(const std::string& key);
+    void setDepth(const std::string& key, double depth, ui::Gesture g);
     // A row's right-click menu at `at` (window coordinates).
     void openMenu(const std::string& key, const std::string& name, bool learnable, bool modulatable,
                   double physical, ui::Point at);
@@ -54,7 +60,7 @@ class ParamPanel {
     cmd::Dispatcher& dispatcher_;
     ui::Root& root_;
     model::Id fx_;
-    std::string gesture_;
+    std::string gesture_, depthGesture_;
     std::uint64_t gestureSerial_ = 0;
 };
 

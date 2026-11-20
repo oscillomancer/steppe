@@ -107,7 +107,8 @@ class Slider : public Node {
     void setDefault(double value) { defaultValue_ = std::clamp(value, 0.0, 1.0); }
     double defaultValue() const { return defaultValue_; }
     bool dragging() const { return dragging_; }
-    static constexpr float kInset = 10;  // knob travel inset per side
+    bool depthDragging() const { return depthDrag_; }  // a drag on the modulation bar
+    static constexpr float kInset = 10;                // knob travel inset per side
     // Modulation on the 0..1 travel (depth -1..1); unset: none drawn.
     void setModulation(std::optional<ModulationView> m);
     const std::optional<ModulationView>& modulation() const { return mod_; }

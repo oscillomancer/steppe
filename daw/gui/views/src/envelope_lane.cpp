@@ -293,6 +293,36 @@ std::optional<ui::ModulationView> modulationBand(const model::Session& session,
     return ui::modulationSpan(routes);
 }
 
+bool stripModulatable(const model::Session& s, const model::Id& object, std::string_view param) {
+    const model::Track* t = s.tracks.find(object);
+    if (!t || t->freeze) return false;
+    const bool master = t->type == model::StripType::Master;
+    if (param == "volume") return true;
+    if (param == "pan") return master || t->panMode != model::PanMode::Dual;
+    if (param == "width") return !master && t->panMode == model::PanMode::Width;
+    return false;
+}
+
+std::optional<ControlModulation> controlModulation(const model::Session& session,
+                                                   const model::EnvTarget& target,
+                                                   const UnipolarSource& unipolar) {
+    std::vector<ui::ModulationRoute> routes;
+    std::optional<model::Id> first;
+    double depth = 0;
+    for (const auto& m : session.modulations) {
+        if (!m.value->enabled || !(m.value->target == target)) continue;
+        routes.push_back({m.value->depth, unipolar && unipolar(session, m.value->source)});
+        if (!first) {
+            first = m.id;
+            depth = m.value->depth;
+        }
+    }
+    if (!first) return std::nullopt;
+    ControlModulation out{ui::modulationSpan(routes), *first};
+    out.view.depth = depth;
+    return out;
+}
+
 double targetValue(const model::Session& session, const model::EnvTarget& target,
                    const EnvScale& scale) {
     const std::string& p = target.param;

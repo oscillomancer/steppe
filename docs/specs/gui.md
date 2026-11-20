@@ -274,7 +274,17 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   per fader length, the full 0..1 on a slider or 150 units on a knob, and 200%
   per pan bar. Shift is fine, and the depth clamps to ADR-0096's ranges
   (±48 dB, ±1, ±200%). Alt keeps its meaning on a modulated fader or pan:
-  "this member alone" (§ Track groups). No view sets modulation yet.
+  "this member alone" (§ Track groups). The views that set it:
+  - the mixer's and the track panel's fader (a track's volume) and pan bars
+    (pan, and width in width mode; a dual pan's bars take none);
+  - the FX window's slider for a parameter `fx.describe` marks
+    `modulatable`, whose travel is its CLAP range for a float, so a depth (a
+    fraction of that range) is a share of the travel.
+  Each shows the enabled routes on its target (`views::controlModulation`),
+  and a drag on its bar edits the depth of the first enabled one through
+  `modulation.set`, one undo step per drag (Origin gesture). The FX window
+  holds its rows still while a bar is dragged (`Slider::depthDragging`) and
+  redraws that slider's bar from each new depth.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved

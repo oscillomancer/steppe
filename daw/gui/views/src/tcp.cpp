@@ -319,6 +319,28 @@ TcpPanel::Row::Row(TcpPanel& panel, std::size_t slot)
     };
     pan_->onChange = panBar(0);
     pan_->onSecondChange = panBar(1);
+    // A drag on a modulated bar edits its first enabled route's depth
+    // (ADR-0096, modulation.set); a drag is one undo step.
+    auto depth = [this](const char* param, double value, ui::Gesture g) {
+        if (g == ui::Gesture::Begin) ++panel_.gestureSerial_;
+        if (g == ui::Gesture::Begin || g == ui::Gesture::End) return;
+        if (!track_ || !panel_.cb_.commit) return;
+        const auto mod = controlModulation(panel_.layout_.session(), {*track_, param},
+                                           panel_.layout_.unipolarSource);
+        if (!mod) return;
+        json::Value args = json::Value::object();
+        args["modulation"] = mod->route.str();
+        args["depth"] = value;
+        panel_.cb_.commit("modulation.set", std::move(args),
+                          g == ui::Gesture::Move
+                              ? gestureFor("tcp.depth", mod->route, panel_.gestureSerial_)
+                              : std::string{});
+    };
+    fader_->onDepth = [depth](double value, ui::Gesture g) { depth("volume", value, g); };
+    pan_->onDepth = [this, depth](int part, double value, ui::Gesture g) {
+        depth(part == 1 && pan_->split() == ui::PanControl::Split::Width ? "width" : "pan", value,
+              g);
+    };
     // The wheel scrolls the track list, never a strip's level or pan.
     fader_->wheel = false;
     pan_->wheel = false;
@@ -409,6 +431,18 @@ void TcpPanel::Row::refresh(const model::Session& session) {
     pan_->setSplit(split);
     pan_->setValue(split == ui::PanControl::Split::Dual ? tr->panLeft : tr->pan);
     pan_->setSecond(split == ui::PanControl::Split::Dual ? tr->panRight : tr->width);
+    // Modulation (ADR-0096): a bar beside the fader and each pan bar that a
+    // route moves; a dual pan's bars take none.
+    auto modulation = [&](const char* param) -> std::optional<ui::ModulationView> {
+        if (!stripModulatable(session, *track_, param)) return std::nullopt;
+        const auto mod =
+            controlModulation(session, {*track_, param}, panel_.layout_.unipolarSource);
+        return mod ? std::optional(mod->view) : std::nullopt;
+    };
+    fader_->setModulation(modulation("volume"));
+    pan_->setModulation(0, split == ui::PanControl::Split::Dual ? std::nullopt : modulation("pan"));
+    pan_->setModulation(1,
+                        split == ui::PanControl::Split::Width ? modulation("width") : std::nullopt);
     // The record input: the view knows the channels, the app knows the device's
     // port names (engine.inputs), so the app writes the label.
     std::string channels;

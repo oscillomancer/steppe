@@ -3120,6 +3120,51 @@ TEST_CASE("mixer: Modulate… on a fader opens the sources, and one makes the ro
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: a modulated fader and pan bar show their routes; a bar drag sets the depth") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    f.refresh();
+    CHECK_FALSE(f.strip(a).fader->modulation());
+    CHECK_FALSE(f.strip(a).pan->modulation(0));
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    const auto route = *model::Id::parse(made["modulation"].asString());
+    f.exec("modulate", R"({"target":{"track":")" + a + R"(","param":"pan"},"source":"lfo"})");
+    f.refresh();
+    // An LFO is -1..1: ±6 dB on the fader, ±50 % on the pan bar.
+    const auto& fader = f.strip(a).fader->modulation();
+    REQUIRE(fader);
+    CHECK(fader->low == -6);
+    CHECK(fader->high == 6);
+    CHECK(fader->depth == 6);
+    REQUIRE(f.strip(a).pan->modulation(0));
+    CHECK(f.strip(a).pan->modulation(0)->high == 50);
+    CHECK_FALSE(f.strip(a).pan->modulation(1));  // no width in pan mode
+    f.snapshot("mixer-modulated-strip.png");
+    // A drag that starts on the fader's bar moves the depth, not the level:
+    // one modulation.set per move, one undo step for the drag.
+    const ui::Rect zone = f.strip(a).fader->depthZone();
+    REQUIRE(zone.w > 0);
+    const ui::Point p{zone.x + zone.w / 2, zone.y + zone.h / 2};
+    const auto before = f.steps();
+    const double volume = f.track(a).volumeDb;
+    f.pointer(ui::PointerEvent::Type::Down, p);
+    for (int i = 1; i <= 10; ++i) {
+        f.pointer(ui::PointerEvent::Type::Move, {p.x, p.y - i * 3.0f});
+        f.refresh();
+    }
+    f.pointer(ui::PointerEvent::Type::Up, {p.x, p.y - 30.0f});
+    f.refresh();
+    CHECK(f.steps() == before + 1);
+    CHECK(f.track(a).volumeDb == volume);
+    const double depth = f.app->head().modulations.find(route)->depth;
+    CHECK(depth > 6);
+    REQUIRE(f.strip(a).fader->modulation());
+    CHECK(f.strip(a).fader->modulation()->depth == doctest::Approx(depth));
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere the group menu") {
     Fixture f;
     if (!f.ok) return;

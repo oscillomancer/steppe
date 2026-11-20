@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "supple/model/session.h"
 #include "supple/params/params.h"
@@ -70,6 +71,25 @@ std::optional<ui::ModulationView> modulationBand(const model::Session& session,
                                                  const model::EnvTarget& target,
                                                  const EnvScale& scale,
                                                  const UnipolarSource& unipolar);
+// Whether a strip's control takes modulation (ADR-0096, step M2): a
+// track's volume and pan, and a channel's or buss's width in width mode,
+// while it is not frozen. A dual pan's bars, switches and a VCA's controls
+// do not.
+bool stripModulatable(const model::Session& s, const model::Id& object, std::string_view param);
+
+// A modulated control (gui.md §2): the span the enabled routes on `target`
+// can add, in the route's depth unit (dB on a fader, percent on a pan bar, a
+// fraction of the CLAP range, which is the travel, on a plug-in's slider),
+// and the route a drag on the control's bar edits, the first enabled one,
+// with its depth. nullopt when no enabled route moves it.
+struct ControlModulation {
+    ui::ModulationView view;
+    model::Id route;
+};
+std::optional<ControlModulation> controlModulation(const model::Session& session,
+                                                   const model::EnvTarget& target,
+                                                   const UnipolarSource& unipolar);
+
 // A parameter's value without automation: a strip's volume, pan, width or
 // pan bar, a send's level; the scale's reference for the rest.
 double targetValue(const model::Session& session, const model::EnvTarget& target,

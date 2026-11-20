@@ -15,6 +15,7 @@
 #include "panel_height.h"
 #include "param_menu.h"
 #include "rack_controls.h"
+#include "rack_engine.h"
 #include "strip_learn.h"
 #include "supple/model/groups.h"
 #include "supple/ui/controls.h"
@@ -1425,6 +1426,13 @@ void Mixer::rebuild(bool keepLists) {
         };
         st.pan->onChange = panBar(0);
         st.pan->onSecondChange = panBar(1);
+        // A drag on a modulated bar edits its route's depth (ADR-0096).
+        st.pan->onDepth = [this, id](int part, double depth, ui::Gesture g) {
+            const model::Track* now = app_.head().tracks.find(id);
+            if (!now) return;
+            const char* field = panField(*now, part);
+            setDepth({id, field}, depth, g);
+        };
         showPan(*st.pan, t);
         // The state row, over the fader: arm, monitor, mute, solo, one cell
         // each and always in that place. A buss has no arm or monitor and a
@@ -1495,6 +1503,9 @@ void Mixer::rebuild(bool keepLists) {
                           ? "mixer.volume:" + tid + ":" + std::to_string(gesture_)
                           : "",
                       bool(control->gestureModifiers() & ui::kAlt));
+        };
+        st.fader->onDepth = [this, id](double depth, ui::Gesture g) {
+            setDepth({id, "volume"}, depth, g);
         };
         // Under the fader its value; under the meter the highest peak shown.
         auto& values = frame->emplace<ui::Node>("mixer.values." + tid);
@@ -2094,6 +2105,48 @@ void Mixer::endDrag(bool commit) {
         actions_.onError(std::string("mixer: ") + r.error().message);
 }
 
+std::optional<views::ControlModulation> Mixer::modulationOf(const model::Session& s,
+                                                            const model::EnvTarget& target) {
+    const auto catalog = racks::catalog(app_);
+    return views::controlModulation(
+        s, target, [&catalog](const model::Session& at, const model::ModSource& source) {
+            return catalog && racks::unipolarSource(at, *catalog, source);
+        });
+}
+
+void Mixer::setDepth(const model::EnvTarget& target, double depth, ui::Gesture g) {
+    if (g == ui::Gesture::Begin) ++gesture_;
+    if (g == ui::Gesture::Begin || g == ui::Gesture::End) return;
+    const auto mod = modulationOf(app_.head(), target);
+    if (!mod) return;
+    json::Value args = json::Value::object();
+    args["modulation"] = mod->route.str();
+    args["depth"] = depth;
+    cmd::Origin origin = kOrigin;
+    if (g == ui::Gesture::Move)
+        origin.gesture = "mixer.depth:" + mod->route.str() + ":" + std::to_string(gesture_);
+    if (auto r = dispatcher_.execute({"modulation.set", std::move(args), origin});
+        !r && actions_.onError)
+        actions_.onError(std::string("mixer: ") + r.error().message);
+}
+
+// The fader's and each pan bar's modulation: a bar beside it, and a drag on
+// the bar for depth (ui::ModulationView). A dual pan's bars take none.
+void Mixer::showModulation(Strip& st, const model::Track& t) {
+    const model::Session& s = app_.head();
+    const model::Id id = *model::Id::parse(st.track);
+    auto view = [&](const char* param) -> std::optional<ui::ModulationView> {
+        if (!views::stripModulatable(s, id, param)) return std::nullopt;
+        const auto mod = modulationOf(s, {id, param});
+        return mod ? std::optional(mod->view) : std::nullopt;
+    };
+    st.fader->setModulation(view("volume"));
+    const bool dual = t.type != model::StripType::Master && t.panMode == model::PanMode::Dual;
+    st.pan->setModulation(0, dual ? std::nullopt : view("pan"));
+    st.pan->setModulation(
+        1, !dual && t.type != model::StripType::Master ? view("width") : std::nullopt);
+}
+
 void Mixer::update() {
     const model::Session& s = app_.head();
     if (console9_) console9_->setOn(s.project->console9);
@@ -2123,6 +2176,7 @@ void Mixer::update() {
             row->setText(sendText(s, *route.value));
         }
         showPan(*st.pan, *t);
+        showModulation(st, *t);
         st.mute->setOn(t->mute);
         st.solo->setOn(t->solo != model::Solo::Off);
         st.polarity->enabled = st.mono->enabled = !t->freeze;

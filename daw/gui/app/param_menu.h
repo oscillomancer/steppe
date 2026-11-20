@@ -48,11 +48,6 @@ bool laneShown(const model::Session& s, const model::EnvTarget& target);
 // sets them on the envelope and routes there are; with neither it adds an
 // envelope flat at `startValue` (`envArgs`: env.add's target fields, such
 // as {"track": "tr_1"} or {"fx": "fx_1"}).
-// Whether a strip's control takes modulation (ADR-0096, step M2): a
-// track's volume and pan, and a channel's or buss's width, while it is not
-// frozen. A dual pan's bars, switches and a VCA's controls do not.
-bool stripModulatable(const model::Session& s, const model::Id& object, std::string_view param);
-
 // Modulate…: a menu at `anchor` of the sources `modulate` makes for
 // `target` (its {"track" | "fx" | "route", "param"}): LFO, Random, Macro,
 // then "Follower: <name>" for each channel and buss but `ownTrack` (a

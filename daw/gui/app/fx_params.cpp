@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "param_menu.h"
+#include "rack_controls.h"
+#include "rack_engine.h"
 #include "supple/engine/midi_control.h"
 #include "supple/json/parse.h"
 #include "supple/model/schemas.h"
@@ -16,6 +18,7 @@
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
 
 namespace supple::gui {
 namespace {
@@ -252,6 +255,15 @@ Result<std::size_t> ParamPanel::build(ui::Node& parent, model::Id fx) {
             slider->setValue(params::toNormalized(spec, physical));
             slider->setDefault(params::toNormalized(spec, spec.def));
             slider->enabled = writable;
+            // Modulation (ADR-0096): its routes' span on the travel, which
+            // is a float's CLAP range, so depth (a fraction of that range)
+            // is the travel's share; a drag on the bar edits the depth.
+            if (d.modulatable) {
+                slider->setModulation(modulationView(key));
+                slider->onDepth = [this, key](double depth, ui::Gesture g) {
+                    setDepth(key, depth, g);
+                };
+            }
         }
         auto& field =
             row.emplace<ui::TextField>("fx.param.text." + d.key, params::format(spec, physical));
@@ -301,6 +313,44 @@ Status ParamPanel::automate(const std::string& key, double physical) {
     auto added = dispatcher_.execute({"env.add", std::move(args), kUiOrigin});
     if (!added) return std::move(added).error();
     return {};
+}
+
+std::optional<ui::ModulationView> ParamPanel::modulationView(const std::string& key) {
+    const auto catalog = racks::catalog(app_);
+    const auto mod = views::controlModulation(
+        app_.head(), {fx_, key}, [&catalog](const model::Session& s, const model::ModSource& src) {
+            return catalog && racks::unipolarSource(s, *catalog, src);
+        });
+    return mod ? std::optional(mod->view) : std::nullopt;
+}
+
+void ParamPanel::setDepth(const std::string& key, double depth, ui::Gesture g) {
+    if (g == ui::Gesture::Begin) {
+        depthGesture_ =
+            "fx.depth:" + idText(fx_) + ":" + key + ":" + std::to_string(++gestureSerial_);
+        return;
+    }
+    if (g == ui::Gesture::End) {
+        depthGesture_.clear();
+        return;
+    }
+    const auto catalog = racks::catalog(app_);
+    const auto mod = views::controlModulation(
+        app_.head(), {fx_, key}, [&catalog](const model::Session& s, const model::ModSource& src) {
+            return catalog && racks::unipolarSource(s, *catalog, src);
+        });
+    if (!mod) return;
+    json::Value args = json::Value::object();
+    args["modulation"] = mod->route.str();
+    args["depth"] = depth;
+    const cmd::Origin origin{
+        cmd::Origin::Type::Ui, "gui", {}, g == ui::Gesture::Move ? depthGesture_ : std::string{}};
+    auto r = dispatcher_.execute({"modulation.set", std::move(args), origin});
+    if (!r && onError) onError(r.error().message);
+    // The window holds its rows still while a bar is dragged: the bar shows
+    // the new depth from here.
+    if (auto* slider = dynamic_cast<ui::Slider*>(root_.find("fx.param." + key)))
+        slider->setModulation(modulationView(key));
 }
 
 void ParamPanel::openMenu(const std::string& key, const std::string& name, bool learnable,

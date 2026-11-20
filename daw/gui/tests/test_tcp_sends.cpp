@@ -990,6 +990,41 @@ TEST_CASE("a strip's envelope menu automates its sends; their lanes sit under th
     CHECK(*lane == *strip + 1);
 }
 
+TEST_CASE("TCP: a modulated fader shows its route, and a drag on its bar sets the depth") {
+    SendsFixture f;
+    auto* fader = dynamic_cast<ui::Fader*>(f.view().tcpPanel().controlNode(f.a, "fader"));
+    REQUIRE(fader);
+    CHECK_FALSE(fader->modulation());
+    json::Value target = json::Value::object(), args = json::Value::object();
+    target["track"] = f.a.str();
+    target["param"] = "volume";
+    args["target"] = target;
+    args["source"] = "lfo";
+    const auto route = *model::Id::parse(f.exec("modulate", args)["modulation"].asString());
+    f.sync();
+    fader = dynamic_cast<ui::Fader*>(f.view().tcpPanel().controlNode(f.a, "fader"));
+    REQUIRE(fader);
+    REQUIRE(fader->modulation());
+    CHECK(fader->modulation()->low == -6);
+    CHECK(fader->modulation()->high == 6);
+    // The horizontal fader's bar is under it: a drag there is the depth.
+    const ui::Rect zone = fader->depthZone();
+    REQUIRE(zone.w > 0);
+    const ui::Point p{zone.x + zone.w / 2, zone.y + zone.h / 2};
+    const auto before = f.history();
+    f.pointer(Pointer::Down, p);
+    for (int i = 1; i <= 10; ++i) {
+        f.pointer(Pointer::Move, {p.x + i * 4.0f, p.y});
+        f.sync();
+    }
+    f.pointer(Pointer::Up, {p.x + 40.0f, p.y});
+    f.sync();
+    CHECK(f.history() == before + 1);
+    const model::Session s = f.app->head();
+    CHECK(s.modulations.find(route)->depth > 6);
+    CHECK(s.tracks.find(f.a)->volumeDb == 0);
+}
+
 TEST_CASE("TCP: a right-click on a strip's fader or button opens its parameter menu") {
     SendsFixture f;
     auto rightClick = [&](const char* what) {
