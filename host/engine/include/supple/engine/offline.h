@@ -338,6 +338,7 @@ struct LaunchLogEntry {
     model::Id clip;
     std::int64_t anchorSample = 0;
     double anchorBeat = 0;
+    std::uint64_t epoch = 0;  // the transport epoch it applied in (the replay ignores it)
     bool operator==(const LaunchLogEntry&) const = default;
 };
 

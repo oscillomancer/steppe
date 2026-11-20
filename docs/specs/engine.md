@@ -559,7 +559,13 @@ the same.*
   compiles no players (`Plan::clipPlayers`) and prepares no clip audio:
   renders play the arrangement only, so a clip's warnings never reach a
   render or block a freeze. A clip past the memory budget gets no player
-  either (a launch of it is refused with `launch.memory`).
+  either (`Engine::clipsSkipped()` names them; `launch.memory`).
+- **What a track plays, for the GUI and `launch.state`.**
+  `Engine::launchState()` answers, on the main thread, from the log and
+  the running plan. It reports each track's newest heard entry, where an
+  entry not yet reached by the played stream is still queued, along with
+  its pending slot. A track whose clip a later plan lacks is back on the
+  arrangement from then on.
 - **Plan swaps.** `carryMix` carries `Node::launch` by clip id
   (`carryLaunch`). A clip the new plan lacks, or a node with no players
   (a frozen track), returns its track to the arrangement at once, and its

@@ -1105,9 +1105,14 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `scene.list` (q); `clip.add {track, scene, notation? | audio_file? |
   midi_file? | item?, pooled?}`, `clip.set`, `clip.remove`, `clip.move`,
   `clip.duplicate`; `item.add {clip, …}` lays a copy on the timeline; launches
-  (transport state, never history): `launch.clip`, `launch.scene`,
-  `launch.stop {track?}`, `launch.arrangement {track?}` (a), `launch.state`
-  (q), `launch.capture {on}` (a), `launch.commit`; `scene.insert`,
+  (transport state, never history): `launch.clip {clip}`, `launch.scene
+  {scene}`, `launch.stop {track?}`, `launch.arrangement {track?}` (a, each
+  answering `{action, tracks, beat?, seconds?, started}`: where they apply,
+  and whether a clip launched while stopped started the transport),
+  `launch.state` (q: each track with clips, what it `plays` as heard,
+  `arrangement`, `clip`, `held` or `stopped`, the clip's `position` in its
+  period, and what it has `queued`), `launch.capture {on}` (a, L4),
+  `launch.commit` (L4); `scene.insert`,
   `scene.capture {region}`, `arrangement.build {sequence}`.
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,

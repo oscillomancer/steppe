@@ -603,6 +603,66 @@ TEST_CASE("a queued launch whose clip an edit removes is dropped, not played lat
     }
 }
 
+TEST_CASE("the launch commands: state, stop, refusals and a scene that skips a frozen track") {
+    Project p;
+    twoTracks(p);
+    p.run("track.add", R"({"name": "Pad"})");  // tr_3: no clips
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
+    const auto fails = [&](const char* name, std::string_view args) {
+        auto r = p.bus->execute({name, j(args), kOrigin});
+        REQUIRE_FALSE(r);
+        return r.error().code;
+    };
+    const auto plays = [&](const json::Value& state, const char* track) {
+        for (const json::Value& t : state.find("tracks")->asArray())
+            if (t.find("track")->asString() == track) return t;
+        FAIL("no " << track);
+        return json::Value();
+    };
+    json::Value state = p.run("launch.state", "{}");
+    CHECK(state["playing"].asBool() == false);
+    CHECK(state["tracks"].size() == 2);  // tr_3 has no clips
+    CHECK(plays(state, "tr_1")["plays"].asString() == "arrangement");
+
+    CHECK(fails("launch.stop", R"({"track": "tr_3"})") == "launch.track");
+    CHECK(p.run("launch.arrangement", R"({"track": "tr_3"})")["tracks"].size() == 0);
+
+    json::Value done = p.run("launch.clip", R"({"clip": "cl_1"})");  // stopped: starts
+    CHECK(done["started"].asBool());
+    CHECK(done["beat"].asDouble() == 0);
+    backend.run(4);
+    p.app->tick();
+    state = p.run("launch.state", "{}");
+    CHECK(state["playing"].asBool());
+    CHECK(plays(state, "tr_1")["plays"].asString() == "clip");
+    CHECK(plays(state, "tr_1")["clip"].asString() == "cl_1");
+    CHECK(plays(state, "tr_1")["position"].asDouble() >= 0);
+
+    done = p.run("launch.stop", "{}");  // every track a clip holds: tr_1
+    REQUIRE(done["tracks"].size() == 1);
+    CHECK(done["tracks"].at(0).find("track")->asString() == "tr_1");
+    CHECK(done["beat"].asDouble() == 4);  // bar 2
+    CHECK(done["started"].asBool() == false);
+    state = p.run("launch.state", "{}");
+    CHECK(plays(state, "tr_1")["queued"]["action"].asString() == "stop");
+    backend.run(96000 / 128 + 2);
+    p.app->tick();
+    state = p.run("launch.state", "{}");
+    CHECK(plays(state, "tr_1")["plays"].asString() == "stopped");
+    CHECK(plays(state, "tr_1").find("queued") == nullptr);
+
+    p.run("track.freeze", R"({"track": "tr_2"})");
+    CHECK(fails("launch.clip", R"({"clip": "cl_2"})") == "track.frozen");
+    done = p.run("launch.scene", R"({"scene": "sc_1"})");
+    REQUIRE(done["tracks"].size() == 1);
+    CHECK(done["tracks"].at(0).find("track")->asString() == "tr_1");
+    REQUIRE(done.find("warnings"));
+    CHECK(done["warnings"].at(0).find("code")->asString() == "track.frozen");
+    CHECK(p.run("launch.stop", R"({"track": "tr_2"})")["tracks"].size() == 0);  // frozen
+    p.app->stopEngine();
+}
+
 TEST_CASE("a render without a launch log plays the arrangement, with no clip warnings") {
     // twoTracks' audio clip is 1.5 beats long: a live plan warns
     // launch.tempo; a render never compiles clips, so it neither warns nor
@@ -623,4 +683,16 @@ TEST_CASE("a render without a launch log plays the arrangement, with no clip war
     CHECK(std::any_of(
         replayed->warnings.begin(), replayed->warnings.end(),
         [](const std::string& w) { return w.find("launch.tempo") != std::string::npos; }));
+}
+
+TEST_CASE("launches are refused while a master playrate is active") {
+    Project p;
+    twoTracks(p);
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
+    p.run("transport.playrate.set", R"({"rate": 0.5})");
+    auto r = p.bus->execute({"launch.clip", j(R"({"clip": "cl_1"})"), kOrigin});
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "launch.playrate");
+    p.app->stopEngine();
 }

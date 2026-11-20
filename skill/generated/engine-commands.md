@@ -9810,6 +9810,507 @@ Result:
 
 ```
 
+## `launch.arrangement@1`
+
+Return a track, or every track, to the arrangement at the boundary.
+
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Returning does not chase notes: an arrangement note already under way stays silent until its next start. Without track: every track not following the arrangement, or queued to leave it. A frozen track already follows the arrangement: nothing changes.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_done",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_target",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          }
+        },
+        "required": ["track"],
+        "additionalProperties": false
+      }
+    },
+    "beat": {
+      "type": "number"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["action", "tracks", "started"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
+- `launch.queue`: too many launches are waiting Hint: wait for them to play
+- `launch.later`: the transport is relocating Hint: launch again in a moment
+
+### Examples
+
+**Nothing left the arrangement** (`song_with_clip_running`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "action": "arrangement",
+  "tracks": [],
+  "started": false
+}
+
+```
+
+## `launch.clip@1`
+
+Play a clip on its track from the next quantize boundary.
+
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `clip` | string |  |  |  | Clip id, e.g. "cl_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_done",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_target",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          }
+        },
+        "required": ["track"],
+        "additionalProperties": false
+      }
+    },
+    "beat": {
+      "type": "number"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["action", "tracks", "started"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
+- `launch.queue`: too many launches are waiting Hint: wait for them to play
+- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `track.frozen`: the clip's track is frozen Hint: track.unfreeze first
+- `launch.memory`: the clip's audio did not fit the budget Hint: use shorter audio or fewer files in clips
+
+### Examples
+
+**While stopped** (`song_with_clip_running`)
+
+```json
+{
+  "clip": "cl_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "action": "clip",
+  "tracks": [
+    {
+      "track": "tr_1",
+      "clip": "cl_1"
+    }
+  ],
+  "beat": 0,
+  "seconds": 0,
+  "started": true
+}
+
+```
+
+## `launch.scene@1`
+
+Play every clip of a scene together, one target for all tracks.
+
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning, a clip past the memory budget with a launch.memory warning.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `scene` | string |  |  |  | Scene id, e.g. "sc_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_done",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_target",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          }
+        },
+        "required": ["track"],
+        "additionalProperties": false
+      }
+    },
+    "beat": {
+      "type": "number"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["action", "tracks", "started"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
+- `launch.queue`: too many launches are waiting Hint: wait for them to play
+- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.scene`: the scene has no clip that can play Hint: add clips to the scene, or unfreeze their tracks
+
+### Examples
+
+**While stopped** (`song_with_clip_running`)
+
+```json
+{
+  "scene": "sc_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "action": "clip",
+  "tracks": [
+    {
+      "track": "tr_1",
+      "clip": "cl_1"
+    }
+  ],
+  "beat": 0,
+  "seconds": 0,
+  "started": true
+}
+
+```
+
+## `launch.state@1`
+
+What each track with clips plays, and what it has queued.
+
+plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. Tracks without clips always follow the arrangement and are not listed.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_state",
+  "properties": {
+    "playing": {
+      "type": "boolean"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_track_state",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "plays": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          },
+          "position": {
+            "type": "number"
+          },
+          "queued": {
+            "type": "object",
+            "title": "launch_queued",
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "clip": {
+                "type": "string"
+              },
+              "beat": {
+                "type": "number"
+              },
+              "seconds": {
+                "type": "number"
+              }
+            },
+            "required": ["action", "beat", "seconds"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["track", "plays"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["playing", "tracks"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+
+### Examples
+
+**Before any launch** (`song_with_clip_running`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "playing": false,
+  "tracks": [
+    {
+      "track": "tr_1",
+      "plays": "arrangement"
+    }
+  ]
+}
+
+```
+
+## `launch.stop@1`
+
+Silence a track's clip, or every playing clip, at the next boundary.
+
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. A stopped track is silent until a clip is launched or it returns to the arrangement. Without track: every track a clip holds or is queued to hold. A frozen track already follows the arrangement: nothing changes.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `track` | string |  |  |  | Track id, e.g. "tr_1". |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_done",
+  "properties": {
+    "action": {
+      "type": "string"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "launch_target",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "clip": {
+            "type": "string"
+          }
+        },
+        "required": ["track"],
+        "additionalProperties": false
+      }
+    },
+    "beat": {
+      "type": "number"
+    },
+    "seconds": {
+      "type": "number"
+    },
+    "started": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["action", "tracks", "started"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
+- `launch.queue`: too many launches are waiting Hint: wait for them to play
+- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.track`: the track has no clips in the running plan Hint: mute the track to silence it
+
+### Examples
+
+**One track, while stopped** (`song_with_clip_running`)
+
+```json
+{
+  "track": "tr_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "action": "stop",
+  "tracks": [
+    {
+      "track": "tr_1"
+    }
+  ],
+  "beat": 0,
+  "seconds": 0,
+  "started": false
+}
+
+```
+
 ## `log.list@1`
 
 Recent commands with origin, arguments and outcome (the command log).

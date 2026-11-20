@@ -7,6 +7,7 @@
 #include <supple/base/files.h>
 #include <supple/engine/app.h>
 #include <supple/engine/offline.h>
+#include <supple/engine/realtime.h>
 #include <supple/json/write.h>
 #include <supple/midi/midi.h>
 #include <supple/model/launcher.h>
@@ -769,6 +770,19 @@ TEST_CASE("clip audio is prepared after the arrangement, in launch order, as far
     CHECK((*prepared)->takes.contains(takeOf("cl_3")));
     CHECK((*prepared)->takes.contains(takeOf("cl_4")));
     CHECK_FALSE((*prepared)->takes.contains(takeOf("cl_2")));
+    {
+        // The running plan skips it too: it cannot be launched, and a scene
+        // launch leaves it out with a warning.
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(l.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
+                                   EngineOptions{.anticipative = false, .workers = 0}));
+        CHECK(l.fails("launch.clip", R"({"clip": "cl_2"})").code == "launch.memory");
+        auto scene = l.run("launch.scene", R"({"scene": "sc_2"})");
+        REQUIRE(scene["tracks"].size() == 1);
+        CHECK(scene["tracks"].at(0).find("clip")->asString() == "cl_4");
+        CHECK(scene["warnings"].at(0).find("code")->asString() == "launch.memory");
+        l.app->stopEngine();
+    }
     // Moving cl_2 to the first column puts it before cl_1: now cl_1 is skipped.
     l.run("scene.move", R"({"scene": "sc_2", "to": 0})");
     CHECK(residentSamples(l.head(), l.app->projectDir(), 48000).clipsSkipped ==

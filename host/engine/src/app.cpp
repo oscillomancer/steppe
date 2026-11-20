@@ -5009,6 +5009,13 @@ void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
         (void)st;
         return;
     }
+    if (fixture == "song_with_clip_running") {  // song_with_clip, then the engine (dummy)
+        setupFixture(d, "song_with_clip");
+        auto st = startEngine("dummy", 256);
+        assert(st && "fixture engine failed");
+        (void)st;
+        return;
+    }
     if (fixture == "audition_file") {  // + media/tone.wav: two seconds of stereo at 48 kHz
         auto st = startEngine("dummy", 256);
         assert(st && "fixture engine failed");

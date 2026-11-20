@@ -1025,6 +1025,55 @@ q = nil
 ---@field job string
 ---@field timeout_s? number Seconds to block (default 30). A larger value is clamped to 30 and reported as timeout_clamped_s.
 
+---@class Steppe.launch_arrangement_args
+---@field track? string Track id, e.g. "tr_1".
+
+---@class Steppe.launch_arrangement_result
+---@field action string
+---@field tracks table[]
+---@field beat? number
+---@field seconds? number
+---@field started boolean
+---@field warnings? table[]
+
+---@class Steppe.launch_clip_args
+---@field clip string Clip id, e.g. "cl_1".
+
+---@class Steppe.launch_clip_result
+---@field action string
+---@field tracks table[]
+---@field beat? number
+---@field seconds? number
+---@field started boolean
+---@field warnings? table[]
+
+---@class Steppe.launch_scene_args
+---@field scene string Scene id, e.g. "sc_1".
+
+---@class Steppe.launch_scene_result
+---@field action string
+---@field tracks table[]
+---@field beat? number
+---@field seconds? number
+---@field started boolean
+---@field warnings? table[]
+
+---@class Steppe.launch_state_result
+---@field playing boolean
+---@field tracks table[]
+---@field warnings? table[]
+
+---@class Steppe.launch_stop_args
+---@field track? string Track id, e.g. "tr_1".
+
+---@class Steppe.launch_stop_result
+---@field action string
+---@field tracks table[]
+---@field beat? number
+---@field seconds? number
+---@field started boolean
+---@field warnings? table[]
+
 ---@class Steppe.log_list_args
 ---@field limit? integer
 ---@field since? integer
@@ -2561,6 +2610,13 @@ q = nil
 ---@field status fun(args: Steppe.job_status_args): table Get a job's status.
 ---@field wait fun(args: Steppe.job_wait_args): table Wait for a job.
 
+---@class Steppe.launch
+---@field arrangement fun(args?: Steppe.launch_arrangement_args): Steppe.launch_arrangement_result Return a track, or every track, to the arrangement at the boundary.
+---@field clip fun(args: Steppe.launch_clip_args): Steppe.launch_clip_result Play a clip on its track from the next quantize boundary.
+---@field scene fun(args: Steppe.launch_scene_args): Steppe.launch_scene_result Play every clip of a scene together, one target for all tracks.
+---@field state fun(): Steppe.launch_state_result What each track with clips plays, and what it has queued.
+---@field stop fun(args?: Steppe.launch_stop_args): Steppe.launch_stop_result Silence a track's clip, or every playing clip, at the next boundary.
+
 ---@class Steppe.log
 ---@field list fun(args?: Steppe.log_list_args): table Recent commands with origin, arguments and outcome (the command log).
 
@@ -2817,6 +2873,7 @@ q = nil
 ---@field history Steppe.history Commands named history.*
 ---@field item Steppe.item Commands named item.*
 ---@field job Steppe.job Commands named job.*
+---@field launch Steppe.launch Commands named launch.*
 ---@field log Steppe.log Commands named log.*
 ---@field marker Steppe.marker Commands named marker.*
 ---@field midi Steppe.midi Commands named midi.*

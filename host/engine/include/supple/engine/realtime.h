@@ -811,15 +811,30 @@ class Engine {
     // launch.clip when a track's node has no player for the clip.
     Result<LaunchPlaced> launch(std::span<const LaunchRequest> requests,
                                 model::LaunchQuantize quantize);
-    // Main thread: the launches applied since the engine started or the log
-    // was cleared, in order (service() collects them), and the pending ones.
+    // Main thread: the launches applied since the engine started, in order
+    // of epoch and running frame (service() collects them), and the pending
+    // ones.
     const std::vector<LaunchLogEntry>& launchLog() const { return launchLog_; }
-    void clearLaunchLog() { launchLog_.clear(); }
     struct LaunchPending {
         LaunchRequest request;
         LaunchPlaced placed;
     };
     std::vector<LaunchPending> launchesPending() const;
+    // Main thread: what each track with clips in the running plan plays as
+    // heard (an applied launch not yet heard is still queued), and its
+    // queued launch. The GUI's telemetry and launch.state read it.
+    struct TrackLaunch {
+        enum class Plays : std::uint8_t { Arrangement, Clip, Held, Stopped };
+        model::Id track;
+        Plays plays = Plays::Arrangement;
+        model::Id clip;                  // Clip and Held
+        std::optional<double> position;  // Clip: in its period, in the clip's unit
+        std::optional<LaunchPending> queued;
+    };
+    std::vector<TrackLaunch> launchState() const;
+    // Main thread: the clips the running plan left out of the memory
+    // budget (they cannot be launched; launch.memory).
+    std::vector<model::Id> clipsSkipped() const;
     static constexpr std::size_t kLaunchSlots = 256;
 
     std::uint32_t outputLatency() const;
@@ -1139,6 +1154,11 @@ class Engine {
     std::unique_ptr<SpscRing<LaunchAck, 1024>> callbackLaunchAcks_ =
         std::make_unique<SpscRing<LaunchAck, 1024>>();
     std::vector<LaunchLogEntry> launchLog_;
+    // Main thread: by track, the log's length when a plan without its clip
+    // returned it to the arrangement (carryLaunch); older entries no longer
+    // say what it plays.
+    std::map<model::Id, std::size_t> launchReset_;
+    std::uint64_t launchCheckedGen_ = UINT64_MAX;  // the plan generation last checked
     // Executors: applies the launches due at `stream` to this class's nodes
     // of `p`, marks those already past as missed, and returns the frames
     // until the next one (at most `k`).
