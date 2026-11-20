@@ -857,6 +857,7 @@ class Engine {
     // Main thread: the running capture, else the last one; none before the
     // first. Collects the executors' acknowledgements first.
     std::optional<LaunchCapture> launchCapture();
+    bool launchCapturing() const { return capture_.on; }  // main thread
 
     std::uint32_t outputLatency() const;
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);

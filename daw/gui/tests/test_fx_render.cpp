@@ -356,6 +356,21 @@ TEST_CASE("the render dialog says renders leave out the clips playing now") {
     f.frame();
     CHECK(f.uiRoot().find("render.clips.note"));
     f.snapshot("render-clips-note.png");
+    // While it stays open, the line follows the launches.
+    CHECK(f.app->launchState().size() == 1);
+    run("launch.arrangement", "{}");
+    backend.run(96000 / 256 + 4);
+    f.app->tick();
+    f.render->tick();  // the app's frame pass
+    f.frame();
+    CHECK(f.app->launchState().at(0).plays == engine::Engine::TrackLaunch::Plays::Arrangement);
+    CHECK_FALSE(f.uiRoot().find("render.clips.note"));
+    run("launch.clip", R"({"clip": "cl_1"})");
+    backend.run(96000 / 256 + 4);
+    f.app->tick();
+    f.render->tick();  // the app's frame pass
+    f.frame();
+    CHECK(f.uiRoot().find("render.clips.note"));
     f.render->close();
 }
 

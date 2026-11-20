@@ -1573,10 +1573,12 @@ project is drawn in the quiet ink, with "from your default" on hover.
   loaded into the dialog only, written to the project only on Render),
   **Save preset…** (asks for a name), **Delete preset**, Close.
 - **Source:** a segmented control: Master mix | Stems | Regions.
-  - While a clip holds any track (`launch.state` says a track plays
-    something other than the arrangement), a quiet caption under it says
-    "Renders play the arrangement: the clips playing now are not in them."
-    (ADR-0097; `render.clips.note`, read when the dialog builds).
+  - While a clip holds any track (`EngineApp::launchState()` says a track
+    plays something other than the arrangement), a quiet caption under it
+    says "Renders play the arrangement: the clips playing now are not in
+    them." (ADR-0097; `render.clips.note`). The dialog's frame pass reads
+    the launch state, so the caption comes and goes with launches while
+    the dialog is open.
   - Master mix, when the project has more than one master, shows a checklist
     of the masters (All / None; the main master alone by default) that edits
     `masters`: each checked master renders its own file (ADR-0056). Unchecking

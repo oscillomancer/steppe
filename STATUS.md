@@ -188,7 +188,8 @@ instructions are in `docs/guides/installing.md`.
     offline and match live output bit for bit, in both executors, at two
     block sizes and through the bridge.
   - Renders play the arrangement only. The render dialog says so while a
-    clip holds a track.
+    clip holds a track, following launches while it is open.
+    `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - a master playrate refuses launches (`launch.playrate`);
     - a clip take's FX and envelopes do not play (`launch.take_chain`
