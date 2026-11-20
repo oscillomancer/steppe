@@ -1172,7 +1172,7 @@ TEST_CASE("modulation: a stem of a modulated track carries it, its source rack k
     // B's gain is modulated from a second rack on its own channel C, which
     // feeds nothing B plays. A render of B alone (a stem, a track analysis)
     // keeps that rack as a dependency and applies the modulation exactly as
-    // the mix does; C is not heard in it.
+    // the mix does; C is not heard in it, though the mix hears C.
     Emit emit("playing", std::nullopt);
     model::EditTxn t(emit.s, 2);
     const Id c = addChannel(t);
@@ -1181,16 +1181,32 @@ TEST_CASE("modulation: a stem of a modulated track carries it, its source rack k
     const Id modOut = addModule(t, rack, model::kModOutModule);
     cable(t, transport, "beat_phase", modOut, "in_1");
     modulate(t, modOut, emit.gain, "gain", 0.2);
-    const model::Session s = commit(t);
+    const model::Session silent = commit(t);
+    // The same with C audible: its rack's Out plays the transport's gate.
+    model::EditTxn u(silent, 3);
+    const Id out = addModule(u, rack, model::kOutModule);
+    cable(u, transport, "playing", out, "l");
+    model::Route heard;
+    heard.from.module = out;
+    heard.to.track = c;
+    const Id input = u.create(heard);
+    u.modify<model::Track>(c, [&](model::Track& tr) { tr.record.input = input; });
+    const model::Session s = commit(u);
     InstancePool pool = makePool();
     OfflineSettings settings;
     settings.endSeconds = 1.0;
     auto mix = renderOffline(s, pool, settings);
     REQUIRE_MESSAGE(mix, (mix ? std::string() : mix.error().toString()));
+    auto quiet = renderOffline(silent, pool, settings);
+    REQUIRE_MESSAGE(quiet, (quiet ? std::string() : quiet.error().toString()));
+    const bool hearsC = mix->audio.channels[0] != quiet->audio.channels[0];
+    CHECK(hearsC);
     settings.track = emit.b;
     auto stem = renderOffline(s, pool, settings);
     REQUIRE_MESSAGE(stem, (stem ? std::string() : stem.error().toString()));
-    CHECK(stem->audio.channels[0] == mix->audio.channels[0]);
+    // B alone, modulated as in the mix, and nothing of C.
+    const bool alone = stem->audio.channels[0] == quiet->audio.channels[0];
+    CHECK(alone);
     // The modulation moved it: equality says something.
     CHECK(stem->audio.channels[0] != render(emit.s, 1.0).left);
 }
