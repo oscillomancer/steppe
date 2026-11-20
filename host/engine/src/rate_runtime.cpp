@@ -83,8 +83,8 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
        // (ADR-0095), so an edit of the context rides along with any of these.
         [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
                                       takes, media, midi, fx, routes, envelopes, autoItems, markers,
-                                      regions, racks, modules, cables, context, contextView, blobs,
-                                      extraSections, version] = a;
+                                      regions, racks, modules, cables, modulations, context,
+                                      contextView, blobs, extraSections, version] = a;
     }
     model::Project x = *a.project;
     x.playrate.rate = b.project->playrate.rate;
@@ -96,7 +96,8 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
            a.autoItems.sameStorage(b.autoItems) && a.markers.sameStorage(b.markers) &&
            a.regions.sameStorage(b.regions) && a.racks.sameStorage(b.racks) &&
            a.modules.sameStorage(b.modules) && a.cables.sameStorage(b.cables) &&
-           a.blobs == b.blobs && a.extraSections == b.extraSections;
+           a.modulations.sameStorage(b.modulations) && a.blobs == b.blobs &&
+           a.extraSections == b.extraSections;
 }
 }  // namespace
 

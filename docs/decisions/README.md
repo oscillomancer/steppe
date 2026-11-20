@@ -114,3 +114,4 @@ current state.
 | [0093](0093-wet-bypass-mute-solo-on-a-running-plan.md) | FX wet and bypass, strip mute and solo reach a running plan | Accepted |
 | [0094](0094-file-audition-outside-the-project.md) | A file audition plays outside the project graph | Accepted |
 | [0095](0095-context-track.md) | The context track: sections, key and chords on the timeline | Proposed |
+| [0096](0096-modulation.md) | Modulation: racks drive parameters through modulation routes | Accepted |

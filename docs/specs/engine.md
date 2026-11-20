@@ -236,10 +236,11 @@ at compile time). Per block, each automated target evaluates its segments:
   recomputes only on a setting change. Following sends, keys and rack inputs
   use private copies with their own cursors, timeline shifts and write holds;
   positioned sends also inherit automated compensation under the source law;
-- plugin parameters receive CLAP param-value events at segment points and
-  every `automation_resolution` samples inside curved/linear segments
-  (default 32; always at exact point positions), in the parameter's CLAP
-  domain (normalized for stock plugins, ADR-0010);
+- plugin parameters receive CLAP param-value events at each envelope point
+  and at every point of the absolute 32-sample timeline grid
+  (`kAutomationStep`) inside curved/linear segments, when the value changed
+  since the last one sent, in the parameter's CLAP domain (normalized for
+  stock plugins, ADR-0010). The step is fixed; there is no setting for it;
 - write/touch/latch modes record from GUI/control input into the model on
   the main thread (reliable coalescing channel, ARCHITECTURE §3), creating
   one version per gesture. Capture timestamps are seconds; evaluation, entry
@@ -263,6 +264,135 @@ at compile time). Per block, each automated target evaluates its segments:
   abandoned writes neither stay held nor get a latch tail at stop. A halt
   ends the pass that was playing. Mute, plug-in parameters and the master
   playrate are not held: their writes compile as before.
+
+### 1.4.1 Modulation (ADR-0096)
+
+A modulation route (`mr_*`, session-model "Modulation") moves a target
+parameter by a rack's Mod Out signal × its `depth`, as an offset on top of
+the base: the static value, the envelope or a write hold's hand. It never
+writes the base, the model or an envelope, and write modes record the base
+only.
+
+- **Edges.** Every route, enabled or not, is an edge from its source rack's
+  node to the node that applies its target; `enabled` only zeroes its
+  contribution (ADR-0096, amendment M-l). That is the track for an FX in a chain
+  and for a track's mixer targets; for a send's level it is the node that
+  applies the level (the source strip, or the rack for a rack send). The
+  edge orders the source first in `topoOrder`, is a dependency in both
+  executors' schedules, and joins the latency solve (§1.3) as a sidechain
+  into the target stage:
+  - its tap latency is the Mod Out's latency inside the rack (computed as
+    an Out's, rack.md §6);
+  - its `before` is the chain latency ahead of the target stage: 0 for an
+    input-chain stage, which is outside compensation; for a mixer target
+    the whole chain less one grid interval (32 frames), since it reads one
+    interval ahead;
+  - it carries a delay line of held values sized by that compensation, so
+    the value the rack computed for timeline sample t reaches the target as
+    the target plays t;
+  - under a master playrate the delay, the rack grid Mod Out samples on and
+    the target's 32-frame grid are in device frames, the graph's domain
+    (ADR-0045), as a sidechain's delay and the `Param` grid are.
+  A late source path delays the target as a sidechain does. Cycles are
+  refused at edit time (`modulation.cycle`); self-modulation is not
+  supported.
+- **Liveness.** A modulation edge propagates liveness both ways, like a MIDI
+  edge (§2.1): a live source makes its target live, and a live target pulls
+  its source live. A route's source and target therefore always share an
+  executor and nothing crosses the frontier rings. A route that moves a
+  node into the live region adds a `modulation.live` plan warning.
+- **Plug-in targets** (CLAP parameters flagged modulatable). At each point
+  of the target stage's absolute 32-sample automation grid, the stage sends
+  one `PARAM_MOD` event per modulated parameter, after any `Param` event at
+  the same frame: the sum of its routes' signal × depth × the parameter's
+  CLAP range, a disabled route adding 0. An event is sent only when the
+  value differs from the memo of the last one sent.
+  - The memo is carried across compiles by (fx, param), like `carryMix`
+    (§1.6): a stage's slots are matched by instance and CLAP id. A
+    parameter that the new plan no longer modulates is sent one 0 at its
+    first grid point and leaves the memo. So that a carried memo always
+    fits, each stage keeps a slot for every parameter any plan has
+    modulated on its FX (`InstancePool::modulatedParams`, main thread), and
+    a stage with no route left keeps its slots until their 0s are sent. The
+    memo follows its instance between the track's input chain and main
+    chain. It is not carried to another node: an FX moved to another track
+    starts with every slot stale, so the first grid point resends what is
+    modulated there, but a parameter the new plan no longer modulates (a
+    route removed in the same edit as the move) keeps its last offset until
+    the instance's next epoch (activation, reset, patch or state).
+  - It goes stale (it is never emptied) on the instance's activation, a
+    reset (a seek, a play start), a changed instance, and a patch or state
+    applied to the instance: `host::Instance::modulationEpoch()` counts
+    `activate()`, `reset()`, `setPatch()` and `loadState()` (`resets()`
+    keeps counting `reset()` alone). The next grid point then sends the
+    current sum of every modulated parameter and 0 to every other parameter
+    the memo lists, and drops those. A stage that does not process this
+    block (a compensated bypass, not owned, not processing) is sent nothing
+    and its memo goes stale.
+  - The route's delay runs every block at the target node, and a locate
+    clears it unless a swap just carried it (by route id, at the same
+    length), as an edge's delay.
+  - A patch edit to a modulated FX compiles instead of taking the patch path
+    (ADR-0092).
+  - Each stage reserves `block / 32 + 2` events per modulated parameter and
+    one for each other slot. An event that finds the block full, or a
+    bridged block at the bridge's cut (`host::Instance::kBridgeBlockEvents`,
+    2048), waits for the next grid point, which sends the then-current sum.
+    Each wait is counted (`Stage::modDeferred`): an offline render warns per
+    FX, and the real-time engine adds the count to
+    `Engine::modulationDeferred()` (`engine.status` `modulation_deferred`)
+    and warns once per rise (`modulation.events`). Input-chain stages reserve their
+    automation and modulation events as chain stages do.
+  - Bridged plug-ins receive the same events through the bridge; a late
+    block's coalescing keeps the latest value per target (§5).
+- **Inert routes.** A route is inert, with a plan warning, when binding finds
+  that its target cannot take it: the parameter is gone, not flagged
+  modulatable, read-only or bypass, or the plug-in is missing or VST3
+  (`modulation.target`), or for a mixer target when its node applies no
+  such level (a send that is not an encoded edge of its source). A route
+  into a frozen track is inert silently: the print plays. It is also inert
+  after its target reported a
+  latency change while modulated (`modulation.latency`): the engine then
+  keeps every route into that FX's modulated parameters disabled until one
+  of them is edited, the FX is replaced, or the project is reopened.
+- **Telemetry (M2).** Prepare gives each bound target a slot in
+  `Plan::modOffsets` and each route its target's (`modOffsetOf`). The
+  executor that runs a target stores its offset with a relaxed store: a
+  plug-in's sum at every grid point, sent or not, as a fraction of its CLAP
+  range; a mixer target's last frame of each block, in dB or percent.
+  `Engine::modulationOffsets()` (main thread) reads the newest plan's, by
+  route; `modulation.telemetry` adds each route's span (depth × its signal
+  range).
+- **Rack handover.** While a rack's modules are still owned by the other
+  executor (rack.md §6, "State"), its Mod Outs hold their last values and
+  the emitters they feed send nothing for that block.
+- **Depth and `enabled`** are values published without compiling (M-h): one
+  mix slot per route (`MixSlots::modulations`), copied at block start by the
+  executor of the route's target, which runs its source too (§1.6,
+  ADR-0093). A route's source, target and `lane` compile. An edit to a route
+  into an FX whose routes a latency change turned off compiles, since that
+  edit turns them back on.
+- **Mixer targets** (M-i: track volume, pan, width; the level of an audio
+  send between strips or a rack send). Prepare binds each to its node's
+  `mixMods` (`Node::modVolume`, `modPan`, `modWidth`, `Edge::modVolume` on
+  the node that applies the send's level: its source, or the rack for a rack
+  send); routes on one target sum. At each point of the absolute 32-frame
+  grid the interval's end becomes the sum of the route values read there,
+  which the one-interval lookahead above delivers early, and the offset at
+  each frame is linear between the interval's start and end. A rack the
+  other executor still owns holds the end. The interpolation is carried by
+  target across plan swaps and starts at 0 after a locate, with the delays.
+  The base (automation, else the fader's value) plus the offset is clamped
+  per sample to the target's range (volume up to 12 dB, a level at −inf
+  stays −inf; pan and width −100..100), before VCAs and the gain ramps; a
+  modulated level is computed per sample. A modulated send is encoded.
+  Volume and send level offsets are in dB, pan and width in percent.
+
+Renders stay deterministic and real time equals offline at any block size,
+in both executors and through the bridge: every grid point and delay is a
+function of the stage's absolute position, a reset makes the memo stale so
+the first grid point after it sends every modulated parameter, and racks
+restart their modules at every locate (rack.md §6).
 
 ### 1.5 Transport and time
 
@@ -290,7 +420,8 @@ FX's instance while its plug-in and isolation stay the same, and applies a
 changed patch or state to it on the main thread during the compile
 (`InstancePool::get`). State crosses the swap when the executor adopts the
 new plan, matching nodes by id: fader, wet and Console 9 ramps
-(`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), and delay
+(`carryMix`), held notes (`carryLiveNotes`, `carryRackMidi`), each
+modulated parameter's last sent `PARAM_MOD` value (§1.4.1), and delay
 histories, a rack's plug-in stages' (wet ramp, dry delay, oversampling
 filters) as a chain's. Held timeline notes carry only when the receiving instrument
 instance is retained. Route and parent edge delay histories carry when
@@ -477,7 +608,8 @@ earlier collection does not imply that collection already freed its old plan.
 `Engine::load` took only in strip `volume_db`/`pan`/`width`/`pan_left`/`pan_right`,
 send `volume_db`/`pan`, VCA `volume_db`, and since ADR-0093 FX `wet`/`bypass`
 (not `offline`, which decides whether an instance exists), track `mute` and
-`solo`, VCA `mute` and `solo`, and route `mute` where the send is encoded
+`solo`, VCA `mute` and `solo`, a modulation route's `depth` and `enabled`
+(ADR-0096), and route `mute` where the send is encoded
 anyway (a tap before the fader, a level other than 0 dB, its own pan, mono
 or polarity; MIDI routes and rack sends are never encoded) (and in the
 points of envelopes a write pass holds, including the new pan targets,
@@ -603,7 +735,9 @@ one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
 
 A node is **live** when it consumes monitored hardware audio/MIDI or armed
 audio input (including an input FX chain). Live classification propagates
-downstream, including sends and the master. All other nodes are anticipative.
+downstream, including sends and the master. A MIDI edge, an auxiliary link
+and a modulation route (§1.4.1) also pull their source live when their
+destination is live, since the frontier rings carry only main pairs. All other nodes are anticipative.
 Opening a plug-in GUI or MIDI editor does not currently change classification;
 editor/automation eligibility preferences remain planned (ADR-0014).
 
@@ -1696,7 +1830,7 @@ bus and exposes it through the control protocol (Unix socket), Lua and MCP (prox
 `bridge_late`, the callback cycles a bridged plug-in made late, ADR-0081),
 `bridge_timing` (the live bridged calls' waits and why cycles overran, §5),
 anticipation misses, meter drops), `engine.settings.set {render_ahead_ms,
-worker_threads, automation_resolution, …}`.
+worker_threads, …}`.
 `audition.play {path}` (a WAV, FLAC or MP3, absolute or a name in the
 project's media folder; returns `path`, `seconds`, `sample_rate`,
 `channels`, `truncated`), `audition.stop` and `audition.get` (q: `playing`,

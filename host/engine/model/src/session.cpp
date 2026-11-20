@@ -12,6 +12,7 @@
 #include <functional>
 #include <limits>
 #include <set>
+#include <tuple>
 
 #include "supple/model/env_shape.h"
 #include "supple/model/freeze.h"
@@ -54,7 +55,7 @@ const Route* midiInputRoute(const Session& s, Id track) {
 namespace {
 constexpr std::string_view kPrefixes[kKindCount] = {"tr", "it", "tk", "md", "mi", "fx", "sd",
                                                     "en", "ai", "mk", "rg", "tp", "ts", "gr",
-                                                    "ln", "rj", "rk", "mo", "cb", "cx"};
+                                                    "ln", "rj", "rk", "mo", "cb", "mr", "cx"};
 
 // Ids parse by prefix, so every kind needs one and no two may share it. A
 // kind added without a prefix leaves an empty one at the end of the array
@@ -166,7 +167,7 @@ void apply(IdMap<T>& map, const std::optional<typename IdMap<T>::Builder>& slot)
 // one added there is a build error here until it is applied below.
 void applyAll(Session& s, TxnBuilders& b) {
     const auto& [tempo, meters, tracks, groups, items, takes, media, midi, fx, routes, envelopes,
-                 autoItems, markers, regions, racks, modules, cables, context] = b;
+                 autoItems, markers, regions, racks, modules, cables, modulations, context] = b;
     apply(s.tempo, tempo);
     apply(s.meters, meters);
     apply(s.tracks, tracks);
@@ -184,6 +185,7 @@ void applyAll(Session& s, TxnBuilders& b) {
     apply(s.racks, racks);
     apply(s.modules, modules);
     apply(s.cables, cables);
+    apply(s.modulations, modulations);
     apply(s.context, context);
 }
 
@@ -205,6 +207,21 @@ void EditTxn::removeItemsOn(Id envelope) {
             if (const AutomationItem* ai = get<AutomationItem>(id); ai && ai->envelope == envelope)
                 on.push_back(id);
     for (Id id : on) remove<AutomationItem>(id);
+}
+
+void EditTxn::removeModulationsOn(Id object) {
+    auto uses = [&](Id id) {
+        const Modulation* m = get<Modulation>(id);
+        return m && (m->source.module == object || m->target.object == object);
+    };
+    std::vector<Id> on;
+    for (const auto& e : base_.modulations)
+        if (uses(e.id)) on.push_back(e.id);
+    for (Id id : created_)
+        if (id.kind == Kind::Modulation && uses(id) &&
+            std::find(on.begin(), on.end(), id) == on.end())
+            on.push_back(id);
+    for (Id id : on) remove<Modulation>(id);
 }
 
 Session EditTxn::preview() const {
@@ -275,6 +292,28 @@ namespace {
 struct Checker {
     const Session& s;
     std::vector<Error> errors;
+    // Each FX in a track's chain or input chain, to its track: built once per
+    // check, on the first modulation route that asks (trackOfChainFx scans
+    // every track's chains).
+    std::optional<std::map<Id, Id>> chainFx;
+
+    std::optional<Id> trackOfChainFx(Id fx) {
+        if (!chainFx) {
+            chainFx.emplace();
+            for (const auto& e : s.tracks) {
+                for (Id id : e.value->chain) chainFx->emplace(id, e.id);
+                for (Id id : e.value->inputChain) chainFx->emplace(id, e.id);
+            }
+        }
+        const auto found = chainFx->find(fx);
+        if (found == chainFx->end()) return std::nullopt;
+        return found->second;
+    }
+    // modulationTargetNode, through the map.
+    std::optional<Id> targetNode(const EnvTarget& target) {
+        if (target.object.kind == Kind::Fx) return trackOfChainFx(target.object);
+        return modulationTargetNode(s, target);
+    }
 
     void fail(std::string path, std::string message) {
         if (errors.size() < 50)
@@ -514,6 +553,16 @@ struct Checker {
                     midiEdges.emplace(*source, rack);
                 }
         }
+        // A modulation route is an edge from its source's rack to the node
+        // that applies its target (ADR-0096).
+        std::map<std::pair<Id, Id>, Id> modEdges;
+        for (const auto& e : s.modulations) {
+            const RackModule* m = s.modules.find(e.value->source.module);
+            const auto target = targetNode(e.value->target);
+            if (!m || !target) continue;  // reported by modulations()
+            edges[m->rack].push_back(*target);
+            modEdges.emplace(std::pair{m->rack, *target}, e.id);
+        }
         // Cycle detection (iterative DFS with colours).
         std::map<Id, int> colour;
         for (const auto& [start, unused] : edges) {
@@ -535,11 +584,30 @@ struct Checker {
                         std::find_if(stack.begin(), stack.end(),
                                      [&](const auto& frame) { return frame.first == next; });
                     bool midi = false;
+                    std::optional<Id> modulation;
                     std::string path;
                     for (auto at = first; at != stack.end(); ++at) {
                         const Id to = at + 1 == stack.end() ? next : (at + 1)->first;
                         midi = midi || midiEdges.contains({at->first, to});
+                        if (const auto m = modEdges.find({at->first, to});
+                            m != modEdges.end() && !modulation)
+                            modulation = m->second;
                         path += (path.empty() ? "" : " -> ") + at->first.str();
+                    }
+                    if (modulation) {
+                        // A rack's own rack send has its level applied at
+                        // the rack: a cycle of one node.
+                        const bool self = first + 1 == stack.end() && first->first == next;
+                        errors.emplace_back(
+                            "modulation.cycle",
+                            "modulation " + modulation->str() + " closes a cycle: " + path +
+                                " -> " + next.str(),
+                            "/modulations/" + modulation->str(),
+                            self ? "a rack cannot modulate its own rack send's level, which "
+                                   "it applies itself: modulate the destination's volume instead"
+                                 : "a rack cannot modulate what it hears: modulate another "
+                                   "track, or remove the send into the rack's In module");
+                        return;
                     }
                     if (midi) {
                         errors.emplace_back("route.cycle",
@@ -583,7 +651,7 @@ struct Checker {
         if (s.racks.size() > kMaxRacks)
             fail("/racks", "more than " + std::to_string(kMaxRacks) + " racks");
         struct Count {
-            std::size_t modules = 0, cables = 0, outs = 0, ins = 0;
+            std::size_t modules = 0, cables = 0, outs = 0, ins = 0, modOuts = 0;
         };
         std::map<Id, Count> counts;
         for (const auto& e : s.racks) {
@@ -620,6 +688,7 @@ struct Checker {
             ++c.modules;
             if (m.type == kOutModule) ++c.outs;
             if (m.type == kInModule) ++c.ins;
+            if (m.type == kModOutModule) ++c.modOuts;
         }
         std::set<std::pair<std::string, std::string>> joined;
         for (const auto& e : s.cables) {
@@ -653,7 +722,62 @@ struct Checker {
                 fail(p, "more than " + std::to_string(kMaxRackOuts) + " Out modules");
             if (c.ins > kMaxRackIns)
                 fail(p, "more than " + std::to_string(kMaxRackIns) + " In modules");
+            if (c.modOuts > kMaxRackModOuts)
+                fail(p, "more than " + std::to_string(kMaxRackModOuts) + " Mod Out modules");
         }
+    }
+
+    // Modulation routes (ADR-0096, session-model "Modulation"). Cycles are
+    // found with the routes.
+    void modulations() {
+        if (s.modulations.size() > kMaxModulations)
+            fail("/modulations",
+                 "more than " + std::to_string(kMaxModulations) + " modulation routes");
+        std::set<std::tuple<Id, std::string, Id, std::string>> seen;
+        for (const auto& e : s.modulations) {
+            const Modulation& m = *e.value;
+            const RackModule* source = s.modules.find(m.source.module);
+            if (!source || source->type != kModOutModule)
+                fail(at("modulations", e.id, "source"),
+                     m.source.module.str() + " is not a Mod Out module");
+            else if (!modOutInput(m.source.input))
+                fail(at("modulations", e.id, "source"),
+                     "\"" + m.source.input + "\" is not a Mod Out input (in_1 .. in_" +
+                         std::to_string(kModOutInputs) + ")");
+            const Id o = m.target.object;
+            const std::string& param = m.target.param;
+            double range = 0;  // the depth's bound; 0: not a target
+            if (o.kind == Kind::Fx && trackOfChainFx(o)) {
+                range = 1;
+            } else if (const Track* t = o.kind == Kind::Track ? s.tracks.find(o) : nullptr) {
+                if (param == "volume") range = 48;
+                if (param == "pan") range = 200;
+                if (param == "width" && t->type != StripType::Master) range = 200;
+            } else if (const Route* r = o.kind == Kind::Route ? s.routes.find(o) : nullptr) {
+                const bool send =
+                    !r->midi && ((r->from.track && r->to.track) || rackSendHome(s, *r).has_value());
+                if (send && param == "volume") range = 48;
+            }
+            if (range == 0) {
+                fail(at("modulations", e.id, "target"),
+                     o.str() + " " + param +
+                         " cannot be modulated (a plug-in parameter in a track's chain or input "
+                         "chain; a track's volume, pan or width; a send's volume)");
+                continue;
+            }
+            if (!std::isfinite(m.depth) || std::abs(m.depth) > range)
+                fail(at("modulations", e.id, "depth"),
+                     "depth must be within ±" + std::to_string(static_cast<int>(range)));
+            if (!seen.emplace(m.source.module, m.source.input, o, param).second)
+                fail(at("modulations", e.id), "another route joins " + m.source.module.str() + "." +
+                                                  m.source.input + " and " + o.str() + " " + param);
+        }
+    }
+
+    static bool modOutInput(const std::string& key) {
+        for (int i = 1; i <= kModOutInputs; ++i)
+            if (key == "in_" + std::to_string(i)) return true;
+        return false;
     }
 
     void envelopes() {
@@ -949,7 +1073,7 @@ Status validateNumeric(const Session& s) {
 Status checkInvariants(const Session& s) {
     SUPPLE_TRY(validateAudioWarp(s));
     SUPPLE_TRY(validateNumeric(s));
-    Checker c{s, {}};
+    Checker c{s, {}, {}};
     if (!(s.project->sampleRate >= 8000 && s.project->sampleRate <= 384000))
         c.fail("/project/sample_rate", "sample rate out of range");
     if (auto strips = validateStripRules(s); !strips) {
@@ -964,6 +1088,7 @@ Status checkInvariants(const Session& s) {
     c.fx();
     c.routes();
     c.racks();
+    c.modulations();
     c.context();
     c.envelopes();
     if (c.errors.empty()) return validateFrozenState(s);
@@ -1050,13 +1175,15 @@ int diffRank(Kind k) {
             return 16;
         case Kind::Cable:
             return 17;
-        case Kind::Context:
+        case Kind::Modulation:
             return 18;
+        case Kind::Context:
+            return 19;
         case Kind::Lane:
         case Kind::RenderJob:
-            return 19;  // not objects of a session's collections
+            return 20;  // not objects of a session's collections
     }
-    return 19;
+    return 20;
 }
 
 }  // namespace
@@ -1082,6 +1209,72 @@ std::vector<ObjectDiff> diff(const Session& a, const Session& b) {
                          return diffRank(x.id.kind) < diffRank(y.id.kind);
                      });
     return out;
+}
+
+std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s) {
+    std::vector<std::pair<Id, std::string>> dropped;
+    const std::string prefix = "/modulations/mr_";
+    while (!s.modulations.empty()) {
+        Checker c{s, {}, {}};
+        c.modulations();  // gone or unfit referents first, then cycles
+        if (c.errors.empty()) c.routes();
+        std::optional<Id> id;
+        std::string why;
+        for (const Error& e : c.errors) {
+            if (e.path.compare(0, prefix.size(), prefix) != 0) continue;
+            const auto end = e.path.find('/', prefix.size());
+            id = Id::parse(e.path.substr(1 + std::string("modulations/").size(),
+                                         end == std::string::npos
+                                             ? std::string::npos
+                                             : end - 1 - std::string("modulations/").size()));
+            why = e.message;
+            break;
+        }
+        if (!id) break;
+        IdMap<Modulation>::Builder b(s.modulations);
+        b.erase(*id);
+        s.modulations = b.build();
+        dropped.emplace_back(*id, why);
+    }
+    return dropped;
+}
+
+std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s) {
+    std::vector<std::pair<Id, std::string>> out;
+    Checker c{s, {}, {}};
+    c.modulations();
+    const std::string prefix = "/modulations/";
+    for (const Error& e : c.errors) {
+        if (e.path.compare(0, prefix.size(), prefix) != 0) continue;
+        const auto slash = e.path.find('/', prefix.size());
+        if (slash == std::string::npos) continue;
+        const std::string field = e.path.substr(slash + 1);
+        if (field != "source" && field != "target") continue;
+        const auto id = Id::parse(e.path.substr(prefix.size(), slash - prefix.size()));
+        if (id && (out.empty() || out.back().first != *id)) out.emplace_back(*id, e.message);
+    }
+    return out;
+}
+
+std::optional<Id> trackOfChainFx(const Session& s, Id fx) {
+    for (const auto& e : s.tracks)
+        if (std::find(e.value->chain.begin(), e.value->chain.end(), fx) != e.value->chain.end() ||
+            std::find(e.value->inputChain.begin(), e.value->inputChain.end(), fx) !=
+                e.value->inputChain.end())
+            return e.id;
+    return std::nullopt;
+}
+
+std::optional<Id> modulationTargetNode(const Session& s, const EnvTarget& target) {
+    const Id o = target.object;
+    if (o.kind == Kind::Fx) return trackOfChainFx(s, o);
+    if (o.kind == Kind::Track && s.tracks.contains(o)) return o;
+    if (const Route* r = o.kind == Kind::Route ? s.routes.find(o) : nullptr) {
+        if (r->from.track) return r->from.track;
+        if (r->from.module)
+            if (const RackModule* m = s.modules.find(*r->from.module)) return m->rack;
+    }
+    return std::nullopt;
 }
 
 std::optional<Id> trackOfFx(const Session& s, Id fx) {

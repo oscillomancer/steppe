@@ -35,6 +35,8 @@ Session
 ├── groups         gr_*  track edit groups and optional VCA controls (ADR-0052)
 ├── racks          rk_*  modular racks on channels, with modules mo_* and
 │                        cables cb_* (ADR-0062, rack.md §2)
+├── modulations    mr_*  modulation routes: a rack's Mod Out input → a
+│                        parameter, with a depth (ADR-0096, "Modulation")
 └── blobs          content-addressed opaque data (plugin states, large arrays)
 ```
 
@@ -50,10 +52,11 @@ reused within a lineage: `tr` track, `it` item, `tk` take, `md` media
 source, `mi` MIDI source, `fx` plugin instance, `sd` route, `en` envelope,
 `ai` automation item, `mk` marker, `rg` region, `tp` tempo point, `ts` meter
 change, `gr` group, `ln` lane, `rj` render job, `rk` rack, `mo` module, `cb`
-cable, `cx` context point. `tr_0` is the main master. The rack kinds' and the
-context kind's counters are written once they pass 1 (a project without racks
-keeps its 2.6 `next_ids`). Every prefix is distinct and non-empty; the build
-checks it.
+cable, `mr` modulation route, `cx` context point. `tr_0` is the main master. The
+rack kinds', `mr` and `cx` counters are written once they pass 1 (a project
+without racks keeps its 2.6 `next_ids`; one without modulation routes or
+context points its earlier ones). Every prefix is distinct and non-empty; the
+build checks it.
 
 Adding a kind or a `Session` collection leaves no list to forget: the build
 fails until each hand-kept one names it. `forEachCollection` (one binding of
@@ -549,9 +552,12 @@ exist (or are marked missing); no route cycles (including parent sends);
 envelope targets exist (a module's knob among them); points sorted; every fx
 belongs to exactly one chain or one plugin module; racks obey rack.md §2.5
 (homes are channels, cables within one rack, Out modules feed channels as
-their record inputs, no cycle through a rack, the limits); context points
-have finite beats ≥ 0, at most one point of a type at a beat and at most 4096
-of a type (that a symbol parses is not an invariant: it is data, ADR-0095); counters exceed every used ID; tempo map has a point at
+their record inputs, no cycle through a rack, the limits); modulation
+routes obey "Modulation" (a Mod Out source, an existing target, no cycle
+through their edges, no duplicates); context points have finite beats ≥ 0, at
+most one point of a type at a beat and at most 4096 of a type (that a symbol
+parses is not an invariant: it is data, ADR-0095); counters exceed every used
+ID; tempo map has a point at
 beat 0 and meters at bar starts. A violation is a bug (`model.invariant`),
 never a user error — user errors are caught by command validation first.
 
@@ -606,7 +612,8 @@ that order.
 Canonical JSON (ADR-0009) with members in this order: `schema`, `project`,
 `tempo` (`points`, `meters`), `rulers` (`markers`, `regions`), `tracks`,
 `items`, `takes`, `fx`, `sources` (`media`, `midi`), `routes`, `envelopes`,
-`automation_items`, `groups`, `racks`, `modules` and `cables` (when present), `blobs`, then preserved unknown top-level
+`automation_items`, `groups`, `racks`, `modules` and `cables` (when present),
+`modulations` (when present), `blobs`, then preserved unknown top-level
 sections and `extensions`, and last `branches` (§5.4) when the project has
 more than main to keep. The document is always main's head. `groups` / `gr_*` are typed track groups since 2.2 (ADR-0052);
 older opaque groups are preserved in extensions with a warning. `ui` belongs to the sidecar. *(Amended 2026-09-26: `fx` — plugin instances are
@@ -1074,7 +1081,7 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `fx.param.get` (q), `fx.meters {fx, from: live|render}` (q: the read-only
   values of the playing instance, or as the last `render.mix` ended),
   `fx.patch.get` (q), `fx.patch.set`, `fx.patch.merge`,
-  `fx.describe` (q), a plugin's presets `fx.preset.list` (q),
+  `fx.describe` (q; each parameter's `modulatable`, ADR-0096), a plugin's presets `fx.preset.list` (q),
   `fx.preset.load`, `fx.preset.save` (a), `fx.preset.delete` (a), chain presets
   `fx.chain.save` (a), `fx.chain.load`, `fx.chain.list` (q),
   `fx.chain.delete` (a), MIDI learn `fx.learn.set {fx, param, midi, mode?,
@@ -1092,6 +1099,18 @@ and naming. All `edit` unless marked (q) query or (a) action.
   {track, param}` / `route.learn.remove {route, param}` (a),
   `track.learn.list {track?}` / `route.learn.list {route?}` (q); a VCA's
   are `vca.learn.*` (Track groups and VCA controls, below).
+- **modulation** (ADR-0096): `modulation.add {source, target, depth,
+  enabled?, lane?}`, `modulation.set {modulation, …}`, `modulation.remove
+  {modulation}`, `modulation.list {track?, fx?, rack?}` (q),
+  `modulation.telemetry {track?}` (q: each route's live target offset and
+  its span, M2), `modulate {target, source: lfo|follower|random|macro|
+  {module, input}, depth?, from?, rack?}` (M2: one undo step. Rack: `rack`,
+  else the first homed on the target's track with a Mod Out, else the
+  first named Modulators with one, else a new one on a new channel named
+  Modulators. It cables the module's first output into the first Mod Out
+  input with no cable or route, adding a Mod Out when none is free. A
+  follower gets an In module and a send from `from`. `modulation.cycle`
+  at `/from` when the follower would hear its own target.)
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
   …}`, `env.points.set {env, points, range?}`, `env.points.add`,
   `env.points.remove {range}`, `env.add {take, param}` (take envelopes),
@@ -1606,3 +1625,90 @@ The 2.7 change added the `racks`, `modules` and
 `cables` collections, written only when present, and a route end `module` (rack.md §2).
 A 2.6 file loads unchanged; an older application opening a 2.7 file keeps the
 collections as unknown sections and refuses routes with a module end.
+
+### Modulation (schema 2.16, ADR-0096)
+
+Schema numbers follow the order in which branches land on integration
+(amendment G-d). The change adds the top-level `modulations` collection,
+written only when present. Earlier files load unchanged and nothing
+migrates.
+
+An older build keeps the collection as an unknown section, so its routes do
+nothing there, but it drops the `mr` counter and may delete what a route
+points at (amendment G-c). A file that comes back from one opens anyway: a
+missing or low `mr` counter is derived from the highest `mr` id with a
+`project.counter_derived` warning at `/project/next_ids/mr` (the code
+ADR-0095 uses for `cx`); a saved branch's `next_ids` are raised, for every
+kind, to the counters of each version its lineage reaches (its head's history
+and the steps waiting in redo), so an id one of them holds is not given out
+again when the file lacks the counter (`VersionStore::restore`, one rule for
+every kind; a counter that is present and not behind them is kept); and a
+route whose source or target is gone or no longer fits the invariants
+below, or that closes a cycle, is dropped with a `project.modulation_dropped`
+warning at its path that names it and says why.
+
+| Field | Meaning |
+|---|---|
+| `source` | `{module, input}` (required): a Mod Out module (`com.suppleaudio.rack.mod-out`, rack.md §5) and one of its inputs, `in_1` .. `in_16`. |
+| `target` | `{object, param}` as an envelope's target is stored (required): an `fx_*` with `param` a key, name or decimal CLAP id; a `tr_*` with `volume`, `pan` or `width` (`width`: not on a master); an `sd_*` with `volume`, for an audio send between strips or a rack send. |
+| `depth` | The offset at a signal of 1 (required). Plug-in parameter: a fraction of its CLAP range, −1..1. Volume and send level: dB, −48..48. Pan and width: percent, −200..200. |
+| `enabled` | Default true. |
+| `lane` | The target's lane is shown, default true. Undoable like an envelope's `visible`. It never changes the sound, but changing it compiles, as an envelope's `visible` does. |
+
+The offset (signal × depth, where signal is −1..1 or 0..1) adds to the base,
+whatever plays without modulation. Routes on one target sum. Modulation
+never writes the base, an envelope or the model, and touch, latch and write
+record the base only.
+
+```json
+"modulations": {
+  "mr_1": {"source": {"module": "mo_7", "input": "in_1"},
+           "target": {"object": "fx_3", "param": "cutoff"}, "depth": 0.25}
+}
+```
+
+**Invariants.** Violations are `model.invariant`, except a cycle, which is
+`modulation.cycle` at the route's path with a hint.
+- The source module exists, is a Mod Out, and `input` is one of its inputs.
+- The target object exists.
+- An FX target is in a track's chain or input chain (not a take's chain or
+  a plugin module).
+- A track target is a channel or buss for `width`.
+- A route target carries audio between strips or is a rack send.
+- No two routes share both source input and target.
+- No cycle: each route is an edge from its source's rack to the node that
+  applies its target (the target FX's track, the track, or the node that
+  applies a send's level), counted with the routes, parent sends and racks
+  of §3.
+- At most 4096 routes per project.
+
+Removing the source module, or the target's FX, track or route, removes its
+modulation routes, and the command warns with `modulation.removed` naming
+them, at `/modulations/<id>`. A route whose target stops fitting (a
+modulated send turned MIDI or moved to other ends by `route.set`) is
+removed the same way, with the same warning. Routes whose target is in a frozen track belong to its freeze hash.
+Editing or removing them fails with `track.frozen`. Their source lies
+outside the print, as a sidechain's does: removing the source module (or
+its rack or home track) still removes such a route, and the frozen track
+keeps playing its print.
+
+**Commands.**
+- `modulation.add` and `modulation.set` also check what the model cannot
+  know, from the instance's parameter list (`fx.describe`): the parameter
+  must be flagged modulatable and not read-only or bypass. VST3 parameters
+  never are.
+- Mixer targets (step M2): the target track or send must exist and fit the
+  invariants above (`modulation.target` at `/target/track`,
+  `/target/route` or `/target/param` otherwise), and a target in a frozen
+  track fails with `track.frozen`. The depth bound is the target's
+  (`modulation.depth`): ±1 for a plug-in parameter, ±48 dB for a volume,
+  ±200 % for pan and width.
+- Errors: `modulation.source`, `modulation.target`, `modulation.duplicate`,
+  `modulation.cycle` (naming the route that closes it), `modulation.depth`,
+  `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
+- `modulation.list` reports each route's signal range (`bipolar` −1..1 or
+  `unipolar` 0..1, from the Mod Out input) and `inert` with its reason when
+  the plan cannot apply it (`target`, `latency`).
+- `session.describe` lists the routes under their target's track.
+- A file whose target lost its modulatable flag loads. The engine treats
+  that route as inert (engine.md §1.4.1).

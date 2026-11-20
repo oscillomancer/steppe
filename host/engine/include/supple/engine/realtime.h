@@ -781,6 +781,14 @@ class Engine {
     // the in-callback executor). False when stopped.
     bool bridgedLive() const { return bridgedLive_; }
     std::uint64_t pluginOutputDrops() const { return outputDrops_.load() + idleOutputDrops_; }
+    // Modulation events that waited past their grid point for room (a full
+    // block or a bridged block's cut, ADR-0096): cumulative, any thread.
+    std::uint64_t modulationDeferred() const { return modDeferred_.load(); }
+    // Telemetry (ADR-0096, M2), main thread: each bound modulation route's
+    // target's last offset in the newest plan (a plug-in's as a fraction of
+    // its CLAP range, a mixer target's in dB or percent). An inert route,
+    // or one no plan binds yet, is absent.
+    std::map<model::Id, double> modulationOffsets() const;
 
     std::uint32_t outputLatency() const;
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
@@ -997,6 +1005,8 @@ class Engine {
     std::unique_ptr<OutputQueue> rendererOutputs_, callbackOutputs_;
     std::vector<PluginOutput> idleOutputs_;  // bounded main-thread queue
     std::atomic<std::uint64_t> outputDrops_{0}, voiceDrops_{0};
+    std::atomic<std::uint64_t> modDeferred_{0};
+    std::uint64_t modDeferredWarned_ = 0;  // main thread: what service() has reported
     // FX whose plug-in outputs were dropped, written on the audio thread:
     // slots hold (kind + 1) << 32 | n; more than fit set droppedFxAll_.
     static constexpr std::size_t kDroppedFx = 512;

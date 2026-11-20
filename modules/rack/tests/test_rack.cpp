@@ -4,6 +4,7 @@
 // grid's invariance to the host's block, and the host modules.
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -431,4 +432,122 @@ TEST_CASE("rack: Notes source off releases the track while preserving route inpu
             gates += schedule->output(0, 1)[voice * kGrid + 5];
         CHECK(gates == 0);
     }
+}
+
+namespace {
+// Transport's beat phase into Mod Out's third input; renders the values the
+// host reads, block by block.
+struct ModRig {
+    std::unique_ptr<Instance> transport, mod;
+    std::unique_ptr<Schedule> schedule;
+    ModRig() {
+        Instance::Setup setup;
+        transport = host::make(host::transportType(), setup);
+        mod = host::make(host::modOutType(), setup);
+        REQUIRE(mod);
+        Patch p;
+        p.modules = {{1, transport.get(), false, {}}, {2, mod.get(), false, {}}};
+        p.cables = {{0, 6, 1, false, 2, 1.0}};  // beat phase -> in_3
+        std::string error;
+        schedule = Schedule::build(p, &error);
+        REQUIRE_MESSAGE(schedule, error);
+    }
+    std::vector<double> render(int frames, int block, FixedClock& clock, std::int64_t origin) {
+        std::vector<double> v(static_cast<std::size_t>(frames), -9.0);
+        auto* m = static_cast<host::ModOut*>(mod->host());
+        for (int at = 0; at < frames; at += block) {
+            const int n = std::min(block, frames - at);
+            host::ModOut::Buffers buffers{};
+            buffers[2] = v.data() + at;
+            m->bind(buffers);
+            schedule->process(origin + at, n, clock);
+        }
+        return v;
+    }
+};
+}  // namespace
+
+TEST_CASE("rack: Mod Out holds each input's value from grid point to grid point" *
+          doctest::description("rt")) {
+    for (std::int64_t origin : {std::int64_t{0}, std::int64_t{5}, std::int64_t{-37}}) {
+        CAPTURE(origin);
+        FixedClock clock;
+        clock.t.playing = true;
+        clock.t.tempo = 97;
+        clock.origin = origin;
+        ModRig a, b, c;
+        const auto x = a.render(9000, 1024, clock, origin);
+        const auto y = b.render(9000, 7, clock, origin);
+        const auto z = c.render(9000, 333, clock, origin);
+        CHECK(x == y);  // the same whatever the host's block
+        CHECK(x == z);
+        // Constant inside each grid interval of the timeline, and the beat
+        // phase at the interval's first frame.
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            const std::int64_t position = origin + static_cast<std::int64_t>(i);
+            const std::int64_t grid = position - (((position % kGrid) + kGrid) % kGrid);
+            const std::size_t first =
+                static_cast<std::size_t>(std::max<std::int64_t>(grid - origin, 0));
+            if (grid < origin) continue;  // the first interval began before the render
+            if (first != i) REQUIRE(x[i] == x[first]);
+        }
+        CHECK(std::any_of(x.begin(), x.end(), [](double v) { return v > 0.25; }));  // 0.3 of a beat
+        CHECK(std::all_of(x.begin(), x.end(), [](double v) { return v >= 0.0 && v <= 1.0; }));
+    }
+}
+
+namespace {
+class Constant final : public HostModule {
+  public:
+    double value = 0;
+    void process(const HostContext& ctx) SUPPLE_RT override {
+        auto& out = ctx.instance->outputMember(0);
+        out.setChannels(1);
+        for (int f = 0; f < ctx.frames; ++f) out[0][f] = value;
+    }
+};
+}  // namespace
+
+TEST_CASE("rack: Mod Out clamps to -1..1, reads NaN as 0 and restarts at 0" *
+          doctest::description("rt")) {
+    Instance::Setup setup;
+    sd::ModuleInfoModel info;
+    info.id = "test.constant";
+    info.name = "Constant";
+    auto constantType = ModuleType::host(info, {}, {[] {
+                                             sd::PortModel p;
+                                             p.key = p.member = "out";
+                                             p.name = "Out";
+                                             p.signal = sd::PortModel::Signal::Cv;
+                                             p.output = true;
+                                             return p;
+                                         }()});
+    auto source = Instance::make(constantType, std::make_unique<Constant>(), setup);
+    auto mod = host::make(host::modOutType(), setup);
+    Patch p;
+    p.modules = {{1, source.get(), false, {}}, {2, mod.get(), false, {}}};
+    p.cables = {{0, 0, 1, false, 0, 1.0}};
+    auto s = Schedule::build(p);
+    REQUIRE(s);
+    auto* constant = static_cast<Constant*>(source->host());
+    auto* m = static_cast<host::ModOut*>(mod->host());
+    FixedClock clock;
+    std::vector<double> v(kGrid);
+    host::ModOut::Buffers buffers{};
+    buffers[0] = v.data();
+    auto run = [&](double value, std::int64_t at) {
+        constant->value = value;
+        m->bind(buffers);
+        s->process(at, kGrid, clock);
+        return v[kGrid - 1];
+    };
+    CHECK(run(3.0, 0) == 1.0);
+    CHECK(run(-2.5, kGrid) == -1.0);
+    CHECK(run(0.25, 2 * kGrid) == 0.25);
+    CHECK(m->held(0) == 0.25);
+    CHECK(run(std::nan(""), 3 * kGrid) == 0.0);
+    CHECK(run(0.5, 4 * kGrid) == 0.5);
+    mod->restart();
+    CHECK(m->held(0) == 0.0);
+    CHECK(m->held(5) == 0.0);  // an unpatched input reads its normal, 0
 }

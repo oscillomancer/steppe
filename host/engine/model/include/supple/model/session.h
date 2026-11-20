@@ -44,6 +44,7 @@ struct Session {
     IdMap<Rack> racks;
     IdMap<RackModule> modules;
     IdMap<Cable> cables;
+    IdMap<Modulation> modulations;  // mr_* (ADR-0096)
     IdMap<ContextPoint> context;
     // Derived from `context`: rebuilt when its storage changes (EditTxn).
     std::shared_ptr<const ContextView> contextView = std::make_shared<const ContextView>();
@@ -67,8 +68,8 @@ struct Session {
 template <class S, class F>
 void forEachCollection(S& s, F&& f) {
     auto& [project, next, tempo, meters, timeMap, tracks, groups, items, takes, media, midi, fx,
-           routes, envelopes, autoItems, markers, regions, racks, modules, cables, context,
-           contextView, blobs, extraSections, version] = s;
+           routes, envelopes, autoItems, markers, regions, racks, modules, cables, modulations,
+           context, contextView, blobs, extraSections, version] = s;
     (void)project, (void)next, (void)timeMap, (void)contextView, (void)blobs, (void)extraSections,
         (void)version;
     f(tempo);
@@ -88,6 +89,7 @@ void forEachCollection(S& s, F&& f) {
     f(racks);
     f(modules);
     f(cables);
+    f(modulations);
     f(context);
 }
 
@@ -110,6 +112,7 @@ struct TxnBuilders {
     std::optional<IdMap<Rack>::Builder> racks;
     std::optional<IdMap<RackModule>::Builder> modules;
     std::optional<IdMap<Cable>::Builder> cables;
+    std::optional<IdMap<Modulation>::Builder> modulations;
     std::optional<IdMap<ContextPoint>::Builder> context;
 };
 
@@ -141,6 +144,7 @@ SUPPLE_MODEL_TRAITS(Region, Region, regions)
 SUPPLE_MODEL_TRAITS(Rack, Rack, racks)
 SUPPLE_MODEL_TRAITS(RackModule, Module, modules)
 SUPPLE_MODEL_TRAITS(Cable, Cable, cables)
+SUPPLE_MODEL_TRAITS(Modulation, Modulation, modulations)
 SUPPLE_MODEL_TRAITS(ContextPoint, Context, context)
 #undef SUPPLE_MODEL_TRAITS
 
@@ -215,6 +219,10 @@ class EditTxn {
         if (!builder<T>().erase(id)) return false;
         record(Change::Op::Remove, id);
         if constexpr (std::is_same_v<T, Envelope>) removeItemsOn(id);  // its automation items
+        // A modulation route goes with its source module or its target (ADR-0096).
+        if constexpr (std::is_same_v<T, RackModule> || std::is_same_v<T, FxInstance> ||
+                      std::is_same_v<T, Track> || std::is_same_v<T, Route>)
+            removeModulationsOn(id);
         return true;
     }
 
@@ -237,6 +245,7 @@ class EditTxn {
 
   private:
     void removeItemsOn(Id envelope);
+    void removeModulationsOn(Id object);
     template <class T>
     typename IdMap<T>::Builder& builder() const {
         auto& slot = Traits<T>::slot(builders_);
@@ -272,6 +281,22 @@ Status validateStripRules(const Session& s);
 
 // The track whose FX chain holds `fx` (not input chains or take FX), if any.
 std::optional<Id> trackOfFx(const Session& s, Id fx);
+// The track whose FX chain or input chain holds `fx`, if any.
+std::optional<Id> trackOfChainFx(const Session& s, Id fx);
+// The plan node that applies a modulation route's target (ADR-0096): the
+// track of an FX in a chain or input chain, the track of a mixer target, or
+// for a send's level the node that applies it (its source strip, or the
+// rack of a rack send). nullopt for a target no route may have.
+std::optional<Id> modulationTargetNode(const Session& s, const EnvTarget& target);
+// Removes the modulation routes whose source or target is gone or no longer
+// fits the invariants, or that close a cycle: a file that went through an
+// older build (ADR-0096, amendment G-c). Returns each with the reason, in
+// the order removed.
+std::vector<std::pair<Id, std::string>> dropUnplayableModulations(Session& s);
+// The modulation routes whose source or target an edit took away or made
+// unfit (a removed module, FX, track or route; a send turned MIDI), with the
+// reason, in id order. Commands remove them and warn modulation.removed.
+std::vector<std::pair<Id, std::string>> strandedModulations(const Session& s);
 // The plugin module that holds `fx` (ADR-0062), if any.
 std::optional<Id> moduleOfFx(const Session& s, Id fx);
 // The rack a cable end is in: its module's, or for a plug-in's parameter its

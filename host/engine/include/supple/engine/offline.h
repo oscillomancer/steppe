@@ -23,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -159,6 +160,20 @@ class InstancePool {
     bool automationCleared(model::Id id) const;  // for any of its parameters
     bool anyAutomationCleared() const;           // for any instance
     void resetAutomation(model::Id id);          // explicit model reload
+    // Main thread, from a plan's prepare: the CLAP parameters of `id` any plan
+    // has modulated, `now` added, sorted (ADR-0096). A plan keeps a memo slot
+    // for each, so one carried from an earlier plan always fits, and a
+    // parameter no longer modulated can still be sent its 0.
+    std::vector<std::uint32_t> modulatedParams(model::Id id, std::span<const std::uint32_t> now);
+    // A modulated FX whose latency moved (ADR-0096, amendment M-d): service()
+    // marks an FX that the last prepared plan modulated (`now` not empty)
+    // when its latency changes. A prepare then asks with `routes`, the text
+    // of the routes into it: the first ask after the mark keeps that text and
+    // says disabled; later asks say disabled while the text is the same. A
+    // route edit or a replaced instance ends it; so does reopening the
+    // project, which makes a new pool.
+    bool modulationDisabled(model::Id id, const std::string& routes);
+    bool modulationDisabled(model::Id id) const;  // for reports
     // Main thread, only after applying plug-in-originated values to its model
     // patch: acknowledge that patch without sending it back on the next get().
     void acknowledgeOutputPatch(model::Id id, const json::Value& patch);
@@ -187,7 +202,11 @@ class InstancePool {
         std::filesystem::file_time_type activatedAt;  // when that was first seen
         std::optional<Error> failure;
         std::vector<std::uint32_t> clearedAutomation;
-        std::string appliedState;  // canonical patch text or blob hash last applied
+        std::vector<std::uint32_t> modulated;      // modulatedParams(), sorted
+        bool modulatedNow = false;                 // the last prepare bound a route
+        bool latencyHit = false;                   // its latency moved meanwhile
+        std::optional<std::string> modulationOff;  // the routes disabled for it
+        std::string appliedState;                  // canonical patch text or blob hash last applied
         // The model's object it was applied from, while that is the
         // session's own (kept, so its address cannot be reused).
         std::shared_ptr<const model::FxInstance> appliedFx;

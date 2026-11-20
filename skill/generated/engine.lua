@@ -434,6 +434,7 @@ q = nil
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
+---@field modulation_deferred integer Modulation events that waited past their grid point for room in a block (ADR-0096)
 ---@field failed_errors any
 ---@field sync table
 
@@ -481,6 +482,7 @@ q = nil
 ---@field bridge_threads_refused string[]
 ---@field dropped integer
 ---@field voice_dropped integer
+---@field modulation_deferred integer Modulation events that waited past their grid point for room in a block (ADR-0096)
 ---@field failed_errors any
 ---@field sync table
 
@@ -611,7 +613,7 @@ q = nil
 ---@field plugin string
 ---@field name string
 ---@field description string
----@field params? any
+---@field params? any With full: each parameter; modulatable: true when a modulation route can take it (modulation.add)
 ---@field patch? any
 ---@field status_available boolean A live instance supplied its current problems
 ---@field problems? any Current plugin problems: code, message, scope, line when known, hint, silent; scope host when unreadable
@@ -1103,6 +1105,67 @@ q = nil
 ---@field notation string
 
 ---@class Steppe.midi_write_result
+---@field warnings? table[]
+
+---@class Steppe.modulate_args
+---@field target table
+---@field source string|table
+---@field depth? number
+---@field from? string The track a follower listens to.
+---@field rack? string Rack id, e.g. "rk_1".
+
+---@class Steppe.modulate_result
+---@field modulation string
+---@field rack? string
+---@field module? string
+---@field mod_out? string
+---@field input? string
+---@field send? string
+---@field channel? string The channel made for a new rack.
+---@field warnings? table[]
+
+---@class Steppe.modulation_add_args
+---@field source table
+---@field target table
+---@field depth number
+---@field enabled? boolean
+---@field lane? boolean Show the target's lane (default true).
+
+---@class Steppe.modulation_add_result
+---@field modulation string
+---@field warnings? table[]
+
+---@class Steppe.modulation_list_args
+---@field track? string Target track id, e.g. "tr_1".
+---@field fx? string Target plug-in instance id, e.g. "fx_1".
+---@field rack? string Source rack id, e.g. "rk_1".
+
+---@class Steppe.modulation_list_result
+---@field modulations table[]
+---@field warnings? table[]
+
+---@class Steppe.modulation_remove_args
+---@field modulation string Modulation route id, e.g. "mr_1".
+
+---@class Steppe.modulation_remove_result
+---@field warnings? table[]
+
+---@class Steppe.modulation_set_args
+---@field modulation string Modulation route id, e.g. "mr_1".
+---@field source? table
+---@field target? table
+---@field depth? number
+---@field enabled? boolean
+---@field lane? boolean
+
+---@class Steppe.modulation_set_result
+---@field warnings? table[]
+
+---@class Steppe.modulation_telemetry_args
+---@field track? string Target track id, e.g. "tr_1".
+
+---@class Steppe.modulation_telemetry_result
+---@field modulations table[]
 ---@field warnings? table[]
 
 ---@class Steppe.module_add_args
@@ -2506,6 +2569,13 @@ q = nil
 ---@field get fun(): table Hardware MIDI outputs: settings, clock/MTC, timing, loss, warnings.
 ---@field set fun(args: Steppe.midi_outputs_set_args): table Change one MIDI output: enabled, offset, reset, clock, SPP, MTC.
 
+---@class Steppe.modulation
+---@field add fun(args: Steppe.modulation_add_args): Steppe.modulation_add_result Route a rack's Mod Out input to a plug-in parameter or a mixer level.
+---@field list fun(args?: Steppe.modulation_list_args): Steppe.modulation_list_result List modulation routes, by target track, FX or source rack.
+---@field remove fun(args: Steppe.modulation_remove_args): Steppe.modulation_remove_result Remove a modulation route.
+---@field set fun(args: Steppe.modulation_set_args): Steppe.modulation_set_result Change a modulation route's source, target, depth, enabled or lane.
+---@field telemetry fun(args?: Steppe.modulation_telemetry_args): Steppe.modulation_telemetry_result Read each modulation route's live target offset and its span.
+
 ---@class Steppe.module
 ---@field add fun(args: Steppe.module_add_args): table Add a module to a rack: a type with knob values.
 ---@field check fun(args?: Steppe.module_check_args): table Compile a module without saving it; return its diagnostics and description.
@@ -2730,6 +2800,7 @@ q = nil
 ---@field log Steppe.log Commands named log.*
 ---@field marker Steppe.marker Commands named marker.*
 ---@field midi Steppe.midi Commands named midi.*
+---@field modulation Steppe.modulation Commands named modulation.*
 ---@field module Steppe.module Commands named module.*
 ---@field plugin Steppe.plugin Commands named plugin.*
 ---@field project Steppe.project Commands named project.*
@@ -2749,6 +2820,7 @@ q = nil
 ---@field track Steppe.track Commands named track.*
 ---@field transport Steppe.transport Commands named transport.*
 ---@field vca Steppe.vca Commands named vca.*
+---@field modulate fun(args: Steppe.modulate_args): Steppe.modulate_result Modulate a parameter or mixer level with an LFO, follower, random or macro.
 ---@field run fun(name: string, args?: table): any Run any registered command by name, e.g. the ones whose names are not Lua identifiers.
 ---@field batch fun(label: string, body: fun()) Run the calls inside body as one transaction: one undo step, rolled back when one of them fails.
 ---@field on fun(topic: string, handler: fun(payload: table, topic: string), filter?: table): integer Subscribe to bus events; returns a handle for q.off.

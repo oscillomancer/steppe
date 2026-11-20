@@ -1289,6 +1289,13 @@ void Engine::service() {
         const auto dir = rateDeferredDir_;
         loadScalarRate(*session, dir);
     }
+    // ADR-0096: modulation events that had to wait are reported, not lost.
+    if (const auto deferred = modDeferred_.load(); deferred != modDeferredWarned_) {
+        warnings_.push_back("modulation: " + std::to_string(deferred - modDeferredWarned_) +
+                            " events waited past their grid point for room in a block "
+                            "(modulation.events)");
+        modDeferredWarned_ = deferred;
+    }
     const auto reseek = rateReseekGeneration_.load(std::memory_order_acquire);
     if (reseek != 0 && reseek != rateReseekServiced_) {
         rateReseekServiced_ = reseek;
@@ -1473,6 +1480,8 @@ void Engine::publishPluginOutputs(detail::Plan& p, bool renderer, std::uint64_t 
             changed |= st.voiceDropped != 0 || st.outEvents.dropped != 0;
             voiceDrops_.fetch_add(st.voiceDropped, std::memory_order_relaxed);
             st.voiceDropped = 0;
+            modDeferred_.fetch_add(st.modDeferred, std::memory_order_relaxed);
+            st.modDeferred = 0;
             // The FX before its count, so a drain that sees the count can name it.
             if (st.outEvents.dropped != 0) noteDroppedFx(st.fx);
             outputDrops_.fetch_add(st.outEvents.dropped, std::memory_order_release);

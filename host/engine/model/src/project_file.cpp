@@ -230,6 +230,8 @@ Result<Counters> countersAt(const json::Value* v, const std::string& path) {
                          "the branches section is damaged; main still opens without it");
         c[*kind] = static_cast<std::uint32_t>(*n);
     }
+    // A missing mr counter (a file from before 2.16, or one that went
+    // through an older build) stays 0: VersionStore::restore derives it.
     return c;
 }
 
@@ -493,8 +495,8 @@ Result<VersionStore> restoreBranches(const json::Value& mainDoc, const json::Val
 
 int objectDepth(std::string_view section) {
     static const std::set<std::string_view> keyed{
-        "tracks",           "items",  "takes", "fx",    "routes",  "envelopes",
-        "automation_items", "groups", "racks", "blobs", "modules", "cables"};
+        "tracks", "items", "takes", "fx",      "routes", "envelopes",  "automation_items",
+        "groups", "racks", "blobs", "modules", "cables", "modulations"};
     static const std::set<std::string_view> nested{"tempo", "rulers", "sources", "context"};
     if (keyed.contains(section)) return 1;
     if (nested.contains(section)) return 2;

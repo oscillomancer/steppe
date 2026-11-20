@@ -128,6 +128,34 @@ void addChecked(cmd::Registry& registry, cmd::Command<Args, Output> command) {
             }
             auto result = original(a, ctx);
             if (!result) return result.error();
+            // Routes whose source or target this edit took away go with it,
+            // each named in a warning (ADR-0096, "Cascades"); a route's own
+            // commands refuse instead.
+            // The transaction removes those whose object it removes; a route
+            // whose target stopped fitting (a send turned MIDI) goes here.
+            if (edit && app.inTransaction() && !name.starts_with("modulation.")) {
+                const auto removed = [&](model::Id route, const model::Modulation& m,
+                                         const std::string& why) {
+                    ctx.warn("modulation.removed",
+                             route.str() + " (" + m.source.module.str() + "." + m.source.input +
+                                 " to " + m.target.object.str() + " " + m.target.param +
+                                 ") was removed: " + why,
+                             "/modulations/" + route.str());
+                };
+                const model::Session after = app.view();
+                for (const auto& e : before.modulations) {
+                    if (after.modulations.contains(e.id)) continue;
+                    const model::Modulation& m = *e.value;
+                    removed(e.id, m,
+                            after.modules.contains(m.source.module)
+                                ? "its target " + m.target.object.str() + " was removed"
+                                : "its source " + m.source.module.str() + " was removed");
+                }
+                for (const auto& [route, why] : model::strandedModulations(after)) {
+                    removed(route, *after.modulations.find(route), why);
+                    app.txn().remove<model::Modulation>(route);
+                }
+            }
             if (edit) SUPPLE_TRY(model::validateFrozenTransition(before, app.view()));
             return result;
         };

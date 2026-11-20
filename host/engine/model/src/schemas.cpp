@@ -1221,6 +1221,31 @@ const Schema<Cable>& schemaOf<Cable>() {
 }
 
 template <>
+const Schema<Modulation>& schemaOf<Modulation>() {
+    static const Schema<Modulation> s = [] {
+        const Modulation d;
+        auto source = schema::object<ModSource>("mod_source")
+                          .field("module", &ModSource::module, idSchema())
+                          .field("input", &ModSource::input, str().minLength(1))
+                          .build();
+        auto target = schema::object<EnvTarget>("env_target")
+                          .field("object", &EnvTarget::object, idSchema())
+                          .field("param", &EnvTarget::param, str().minLength(1))
+                          .build();
+        ObjectBuilder<Modulation> b = schema::object<Modulation>("modulation");
+        b.field("source", &Modulation::source, source);
+        b.field("target", &Modulation::target, target);
+        b.field("depth", &Modulation::depth, num());
+        b.field("enabled", &Modulation::enabled, boolean());
+        dflt(b, d.enabled);
+        b.field("lane", &Modulation::lane, boolean());
+        dflt(b, d.lane);
+        return b.build();
+    }();
+    return s;
+}
+
+template <>
 const Schema<Marker>& schemaOf<Marker>() {
     static const Schema<Marker> s = [] {
         const Marker d;
@@ -1369,11 +1394,11 @@ json::Value projectToJson(const Session& s) {
     json::Value next = json::Value::object();
     for (std::size_t k = 0; k < kKindCount; ++k) {
         const auto kind = static_cast<Kind>(k);
-        // The rack kinds (2.7) are written once used: older projects stay
-        // byte-identical but for the schema.
-        // The context kind (2.17, ADR-0095) is too.
+        // The rack kinds (2.7), modulation routes (2.16) and context points (2.17,
+        // ADR-0095) are written once used: older projects stay byte-identical but
+        // for the schema.
         const bool once = kind == Kind::Rack || kind == Kind::Module || kind == Kind::Cable ||
-                          kind == Kind::Context;
+                          kind == Kind::Modulation || kind == Kind::Context;
         if (once && s.next.next[k] <= 1) continue;
         next[std::string(prefix(kind))] = s.next.next[k];
     }
@@ -1405,6 +1430,7 @@ json::Value projectToJson(const Session& s) {
     if (!s.racks.empty()) doc["racks"] = mapToJson(s.racks);
     if (!s.modules.empty()) doc["modules"] = mapToJson(s.modules);
     if (!s.cables.empty()) doc["cables"] = mapToJson(s.cables);
+    if (!s.modulations.empty()) doc["modulations"] = mapToJson(s.modulations);
     json::Value blobs = json::Value::object();
     for (const auto& [hash, blob] : s.blobs) {
         json::Value b = json::Value::object();
@@ -1467,9 +1493,9 @@ void migrateChainMidi(json::Value& doc) {
 
 bool isKnownProjectSection(std::string_view section) {
     static const std::set<std::string_view> known{
-        "schema", "project", "tempo",  "rulers",    "tracks",           "items", "takes",
-        "fx",     "sources", "routes", "envelopes", "automation_items", "blobs", "groups",
-        "racks",  "modules", "cables", "branches",  "context"};
+        "schema", "project", "tempo",  "rulers",      "tracks",           "items",  "takes",
+        "fx",     "sources", "routes", "envelopes",   "automation_items", "blobs",  "groups",
+        "racks",  "modules", "cables", "modulations", "branches",         "context"};
     return known.contains(section);
 }
 
@@ -1659,9 +1685,10 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                 }
         }
     }
-    // The rack kinds' counters are written once used (2.7); before, they
-    // start where a new session's do.
-    for (Kind k : {Kind::Rack, Kind::Module, Kind::Cable, Kind::Context})
+    // The rack kinds' counters are written once used (2.7), as are modulation
+    // routes' (2.16) and context points' (2.17); before, they start where a new
+    // session's do.
+    for (Kind k : {Kind::Rack, Kind::Module, Kind::Cable, Kind::Modulation, Kind::Context})
         if (s.next[k] == 0) s.next[k] = 1;
     auto sub = [&](const char* a, const char* b) -> const json::Value* {
         const json::Value* x = doc.find(a);
@@ -1683,6 +1710,7 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     IdMap<Rack>::Builder racks(s.racks);
     IdMap<RackModule>::Builder modules(s.modules);
     IdMap<Cable>::Builder cables(s.cables);
+    IdMap<Modulation>::Builder modulations(s.modulations);
     IdMap<ContextPoint>::Builder context(s.context);
     mapFromJson<TempoPointObj>(sub("tempo", "points"), "/tempo/points", Kind::TempoPoint, tempo,
                                errors, options, warnings);
@@ -1716,6 +1744,8 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
                             options, warnings);
     mapFromJson<Cable>(sub("cables", nullptr), "/cables", Kind::Cable, cables, errors, options,
                        warnings);
+    mapFromJson<Modulation>(sub("modulations", nullptr), "/modulations", Kind::Modulation,
+                            modulations, errors, options, warnings);
     mapFromJson<ContextPoint>(sub("context", "points"), "/context/points", Kind::Context, context,
                               errors, options, warnings);
     // fx live under "fx" (a top-level collection keyed by fx id).
@@ -1782,6 +1812,23 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     s.racks = racks.build();
     s.modules = modules.build();
     s.cables = cables.build();
+    s.modulations = modulations.build();
+    // A file that went through an older build (amendment G-c): it kept the
+    // routes as an unknown section but not their counter, and may have
+    // deleted what they point at. Never fail the open for that.
+    {
+        const auto saved = s.next[Kind::Modulation];
+        for (const auto& e : s.modulations)
+            s.next[Kind::Modulation] = std::max(s.next[Kind::Modulation], e.id.n + 1);
+        if (s.next[Kind::Modulation] != saved)
+            warn("project.counter_derived",
+                 "next_ids.mr was " + std::to_string(saved) + "; raised to " +
+                     std::to_string(s.next[Kind::Modulation]) + ", past the highest mr id",
+                 "/project/next_ids/mr");
+    }
+    for (const auto& [id, why] : dropUnplayableModulations(s))
+        warn("project.modulation_dropped", "dropped modulation " + id.str() + ": " + why,
+             "/modulations/" + id.str());
     repairContext(s, context, warnings);
     if (warnings)
         for (const auto& [envelope, given] : derivedItems) {

@@ -85,6 +85,8 @@ EntryInfo entryInfo(const Session& s, Id id) {
             return info(s.modules, id);
         case Kind::Cable:
             return info(s.cables, id);
+        case Kind::Modulation:
+            return info(s.modulations, id);
         case Kind::Context:
             return info(s.context, id);
         // Kinds with no Session collection. No `default`: a new kind must be
@@ -139,6 +141,8 @@ json::Value objectJson(const Session& s, Id id) {
             return enc(s.modules);
         case Kind::Cable:
             return enc(s.cables);
+        case Kind::Modulation:
+            return enc(s.modulations);
         case Kind::Context:
             return enc(s.context);
         case Kind::Lane:
@@ -194,6 +198,8 @@ const json::Value* objectSchema(const Session& s, Id id) {
             return &schemaFor(s.modules);
         case Kind::Cable:
             return &schemaFor(s.cables);
+        case Kind::Modulation:
+            return &schemaFor(s.modulations);
         case Kind::Context:
             return &schemaFor(s.context);
         case Kind::Lane:

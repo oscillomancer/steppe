@@ -211,9 +211,9 @@ void CaptureModule::process(const rack::HostContext& ctx) SUPPLE_RT {
 std::shared_ptr<const rack::Catalog> builtinModuleCatalog() {
     static const std::shared_ptr<const rack::Catalog> catalog = [] {
         auto c = std::make_shared<rack::Catalog>();
-        for (auto type :
-             {rack::host::outType(), rack::host::inType(), rack::host::notesType(),
-              rack::host::transportType(), rack::host::notesOutType(), pluginModuleType()})
+        for (auto type : {rack::host::outType(), rack::host::inType(), rack::host::notesType(),
+                          rack::host::transportType(), rack::host::notesOutType(),
+                          rack::host::modOutType(), pluginModuleType()})
             c->add(std::move(type));
         for (const rack::StockModule* m : rack::stockModules())
             c->add(
@@ -512,10 +512,15 @@ RackLatencies rackLatencies(const Session& session, Id rackId,
              (route.value->midi && route.value->to.module &&
               session.modules.contains(*route.value->to.module))))
             routed.insert(*route.value->from.module);
+    // A Mod Out with a modulation route, enabled or not, is a way out too
+    // (ADR-0096).
+    for (const auto& m : session.modulations) routed.insert(m.value->source.module);
     RackLatencies result;
     for (std::size_t at = 0; at < count; ++at) {
         const auto* module = session.modules.find(ids[at]);
-        if (module->type != model::kOutModule && module->type != model::kNotesOutModule) continue;
+        if (module->type != model::kOutModule && module->type != model::kNotesOutModule &&
+            module->type != model::kModOutModule)
+            continue;
         const auto latency = arrival[at];
         result.outputs[ids[at]] = latency;
         if (routed.contains(ids[at])) result.latency = std::max(result.latency, latency);
@@ -537,6 +542,8 @@ void prepareRackLatencies(Node& node, const Session& session) {
     rack.outLatencies.clear();
     for (Id id : rack.outIds) rack.outLatencies.push_back(result.outputs.at(id));
     for (auto& out : rack.notesOut) out.latency = result.outputs.at(out.id);
+    rack.modOutLatencies.clear();
+    for (Id id : rack.modOutIds) rack.modOutLatencies.push_back(result.outputs.at(id));
 }
 
 Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& plugins) {
@@ -613,6 +620,9 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
                 feed.sourceAuto = notesInput->tapeAuto;
             }
             r->notes.push_back(std::move(feed));
+        } else if (auto* modOut = dynamic_cast<rack::host::ModOut*>(in->host())) {
+            r->modOuts.push_back(modOut);
+            r->modOutIds.push_back(e.id);
         } else if (auto* notesOut = dynamic_cast<rack::host::NotesOut*>(in->host())) {
             NotesOutBinding output;
             output.module = notesOut;
@@ -785,6 +795,13 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
         st.blockEvents.reserve(need);
     }
     for (PluginBinding& b : r.plugins) b.io.init(p.block);
+    // The Mod Out inputs a modulation route reads (ADR-0096).
+    r.modValues.assign(r.modOuts.size() * rack::host::kModOutInputs, {});
+    r.modHeld.assign(r.modValues.size(), 0.0);
+    for (const ModEdge& me : p.modEdges)
+        if (p.nodes[me.from].rack.get() == &r && me.modOut >= 0)
+            r.modValues[static_cast<std::size_t>(me.modOut * rack::host::kModOutInputs + me.input)]
+                .assign(p.block, 0.0);
     for (Stereo& out : n.rackOuts) out.init(p.block);
     for (Stereo& in : n.rackIns) in.init(p.block);
     r.live = n.live;
@@ -888,8 +905,13 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
         }
         for (auto ei : n.out)
             if (p.edges[ei].rackSend) p.edges[ei].encoded.clear(frames);
+        // Mod Outs hold rather than fall silent (ADR-0096, M-f).
+        for (std::size_t i = 0; i < r.modValues.size(); ++i)
+            if (!r.modValues[i].empty()) std::fill_n(r.modValues[i].data(), frames, r.modHeld[i]);
+        r.modStale = true;
         return true;
     }
+    r.modStale = false;
     if (r.resetModules) {
         // A locate's fresh start, as the plug-ins' reset (ADR-0062 §5): what
         // follows is the offline render's, whatever the modules played.
@@ -995,6 +1017,17 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
         n.rackOuts[k].clear(frames);
         r.outs[k]->bind(n.rackOuts[k].l.data(), n.rackOuts[k].r.data());
     }
+    // A bypassed Mod Out does not run: its routed inputs read 0.
+    for (std::size_t k = 0; k < r.modOuts.size(); ++k) {
+        rack::host::ModOut::Buffers buffers{};
+        for (int i = 0; i < rack::host::kModOutInputs; ++i) {
+            auto& v = r.modValues[k * rack::host::kModOutInputs + static_cast<std::size_t>(i)];
+            if (v.empty()) continue;
+            std::fill_n(v.data(), frames, 0.0);
+            buffers[static_cast<std::size_t>(i)] = v.data();
+        }
+        r.modOuts[k]->bind(buffers);
+    }
     // The rack's grid follows the timeline at its input while playing; while
     // stopped it runs on from where it was, its clock and curves reading
     // where the transport stands.
@@ -1004,6 +1037,9 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     r.playing = playing;
     r.schedule->process(r.own, static_cast<int>(frames), r.clock);
     r.own += frames;
+    if (frames > 0)
+        for (std::size_t i = 0; i < r.modValues.size(); ++i)
+            if (!r.modValues[i].empty()) r.modHeld[i] = r.modValues[i][frames - 1];
     for (const PluginBinding& b : r.plugins)
         if (b.module->failed) return false;
     // Rack sends (ADR-0075): each Out's signal at its route's level and mute,
@@ -1013,7 +1049,7 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
         Edge& e = p.edges[ei];
         if (!e.rackSend || static_cast<std::size_t>(e.rackOut) >= n.rackOuts.size()) continue;
         const Stereo& out = n.rackOuts[static_cast<std::size_t>(e.rackOut)];
-        const bool volumeCurve = e.volumeCurve();
+        const bool volumeCurve = e.volumeCurve(), modulated = e.modVolume >= 0;
         for (std::uint32_t i = 0; i < frames; ++i) {
             const auto at = pos + i;
             bool homeMute = e.stripMute.active() ? e.stripMute.at(at) >= .5 : e.homeMute;
@@ -1022,11 +1058,14 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
             const bool muted = e.homeSilenced || homeMute ||
                                (e.autoMute.active() ? e.autoMute.at(at) >= .5 : e.muted);
             double g = e.staticGain;
-            if (volumeCurve) {
-                const double db = e.autoVolume.at(at);
+            if (volumeCurve || modulated) {
+                double db = volumeCurve ? e.autoVolume.at(at) : e.volumeDb;
+                // Modulation after automation, kept in range (ADR-0096, M-i).
+                if (modulated && db > model::kSilenceDb)
+                    db = std::clamp(db + n.modOffset(e.modVolume, i), model::kSilenceDb, kMixMaxDb);
                 g = db <= model::kSilenceDb ? 0.0 : console9::faderGain(db);
             }
-            e.fader.set(g, PanMatrix{}, muted, volumeCurve, p.smoothFrames);
+            e.fader.set(g, PanMatrix{}, muted, volumeCurve || modulated, p.smoothFrames);
             const double level = e.fader.gain.next() * e.fader.gate.next();
             const float l = out.l[i], rr = out.r[i];
             e.encoded.l[i] = std::isfinite(l) ? static_cast<float>(double(l) * level) : 0.0f;
