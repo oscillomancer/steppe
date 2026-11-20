@@ -74,4 +74,8 @@ Result<Session> projectFromJson(const json::Value& doc,
 Result<Session> parseProject(std::string_view text,
                              std::vector<schema::Warning>* warnings = nullptr);
 
+// Whether the loader reads a top-level section itself; any other is kept as an extra
+// section. The sections projectToJson writes must all be known (a test checks it).
+bool isKnownProjectSection(std::string_view section);
+
 }  // namespace supple::model

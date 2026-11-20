@@ -385,6 +385,58 @@ TEST_CASE("a playrate edit together with a rack edit compiles (not scalar-only)"
     engine.stop();
 }
 
+// ADR-0095: the plan does not read the context track, so an edit of only its points
+// compiles nothing; any other change with it compiles as that change does, and the
+// same session again is still a maintenance reload that compiles (the shortcut needs
+// the cx storage to differ). This pins those outcomes. It does not exercise the
+// deferral guards of loadContextOnly, which are redundant by construction (every path
+// they protect reloads latest_ itself, and the storage rule refuses a session equal to
+// the running one): they are kept to match the other shortcuts. See engine.md, "Context
+// edits".
+TEST_CASE("a context-only edit compiles nothing and the same session again does") {
+    Mix m = mixSession();
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(m.session));
+    engine.play();
+    backend.run(8);
+    std::uint64_t version = 10;
+    auto point = [](double beat, const char* symbol) {
+        model::ContextPoint p;
+        p.type = model::ContextType::Chord;
+        p.beat = beat;
+        p.symbol = symbol;
+        return p;
+    };
+    const auto before = engine.planGeneration();
+    model::EditTxn chord(m.session, version++);
+    chord.create(point(0, "Cm7"));
+    const auto withChord = chord.commit().value();
+    REQUIRE(engine.load(withChord));
+    CHECK(engine.planGeneration() == before);  // no compile
+    model::EditTxn more(withChord, version++);
+    more.create(point(4, "Fm7"));
+    more.modify<model::ContextPoint>({model::Kind::Context, 1},
+                                     [](model::ContextPoint& p) { p.symbol = "Cmaj7"; });
+    const auto edited = more.commit().value();
+    REQUIRE(engine.load(edited));
+    CHECK(engine.planGeneration() == before);
+    // The same session again is a maintenance reload, never skipped as a context edit.
+    REQUIRE(engine.load(edited));
+    CHECK(engine.planGeneration() == before + 1);
+    // A context edit with a change the plan reads compiles that change.
+    model::EditTxn both(edited, version++);
+    both.create(point(8, "G7"));
+    both.modify<model::Track>(m.a, [](model::Track& t) { t.name = "renamed"; });
+    const auto generation = engine.planGeneration();
+    REQUIRE(engine.load(both.commit().value()));
+    CHECK(engine.planGeneration() > generation);
+    engine.stop();
+}
+
 TEST_CASE("a write hold plays the static level over the curve until it is released" *
           doctest::description("rt")) {
     Mix m = mixSession();

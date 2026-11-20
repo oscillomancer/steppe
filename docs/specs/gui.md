@@ -2966,7 +2966,11 @@ cache thread (`LIBGL_ALWAYS_SOFTWARE=1`, `LP_NUM_THREADS=0`,
 driver, and ThreadSanitizer sees no driver threads, which are not built
 with it. The `tsan` test preset sets the same three for every other test
 that draws an editor, and leaves out the stock plugins' on-screen
-embedding probes (`plugin.<name>.embedding`, labelled `tsan-skip`).
+embedding probes (`plugin.<name>.embedding`, labelled `tsan-skip`). Those
+probes open a window on the screen, so outside native CI (which sets
+`SUPPLE_EDITOR_PROBE_TEST=1`) they report as skipped unless that variable is
+exactly `1`; `SUPPLE_GUI_DISPLAY_TEST` is a different switch and CI leaves it
+off.
 `tools/ci/tsan-gui.supp` suppresses the lock-order reports of libdbus,
 which SDL opens. The variables mean nothing on macOS and Windows. `rtsan`
 builds without the GUI, which adds nothing to the audio path. Plugin GUI

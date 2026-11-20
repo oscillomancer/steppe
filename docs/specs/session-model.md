@@ -22,7 +22,8 @@ by track order, receives by track index), Steppe makes it explicit.
 Session
 ├── project        settings, notes, render settings, next-id counters
 ├── tempo          tempo points + meter changes (the time map)
-├── rulers         markers mk_*, regions rg_*, ruler lanes
+├── rulers         markers mk_*, regions rg_*
+├── context        key and chord points cx_* (ADR-0095)
 ├── tracks         tr_*  typed strips: channel | buss | master (ADR-0019);
 │                        a forest rooted at the masters, tr_0 the main master
 │   ├── chain      fx_* (ordered; containers nest), input chain
@@ -53,11 +54,22 @@ reused within a lineage: `tr` track, `it` item, `tk` take, `md` media
 source, `mi` MIDI source, `fx` plugin instance, `sd` route, `en` envelope,
 `ai` automation item, `mk` marker, `rg` region, `tp` tempo point, `ts` meter
 change, `gr` group, `ln` lane, `rj` render job, `rk` rack, `mo` module, `cb`
-cable, `mr` modulation route, `sc` scene, `cl` clip. `tr_0` is the main
-master. The rack kinds' and
-`mr` counters are written once they pass 1 (a project without racks keeps
-its 2.6 `next_ids`; one without modulation routes its earlier ones; the
-`sc` and `cl` counters likewise).
+cable, `mr` modulation route, `cx` context point, `sc` scene, `cl` clip.
+`tr_0` is the main master. The rack kinds', `mr`, `cx`, `sc` and `cl`
+counters are written once they pass 1 (a project without racks keeps its 2.6
+`next_ids`; one without modulation routes, context points, scenes or clips
+its earlier ones). Every prefix is distinct and non-empty; the
+build checks it.
+
+Adding a kind or a `Session` collection leaves no list to forget: the build
+fails until each hand-kept one names it. `forEachCollection` (one binding of
+every `Session` member) drives the counters check, `diff`, revision sharing on
+load and retained-size accounting; the `Kind` switches and `diffRank` name
+every kind (`-Wswitch`, checked under Clang and GCC); the scalar, mix and
+patch comparisons and the transaction builders bind every member. The
+file-section lists, which a compiler cannot see, are checked by a test that
+writes one object per collection: the loader's known sections and
+`objectDepth` (what a saved branch's state names) must agree with the document.
 Events inside containers (MIDI notes, envelope points, stretch markers) are
 not objects (ADR-0008).
 
@@ -97,8 +109,8 @@ MIDI and automation follow the same fractional clock (engine.md, ADR-0045).
   **beats** (double, quarter-note beats from project start). Every
   positioned object stores the domain its timebase implies. Conversion to
   samples happens only when compiling a render plan: `sample = round_half_even(seconds × sample_rate)`.
-- **Tempo points** `tp_*`: `{beat, bpm, shape}` with `shape` `step` (tempo
-  holds until the next point) or `ramp` (BPM changes linearly **in beats**
+- **Tempo points** `tp_*`: `{beat, bpm, ramp}` with `ramp` false (a step: tempo
+  holds until the next point) or true (BPM changes linearly **in beats**
   to the next point). Seconds for a ramp segment from beat b0 (bpm v0) to b1
   (v1): `t(b) = t0 + (60 · (b1 − b0) / (v1 − v0)) · ln(v(b) / v0)` with
   `v(b) = v0 + (v1 − v0)(b − b0)/(b1 − b0)`; step segments are linear. The
@@ -410,8 +422,10 @@ and retain the segment shape on both sides. MIDI overdub uses the take's play ra
 
 ### 1.10 Rulers and render settings
 
-Markers `mk_*` `{pos, timebase, name, color, lane}`; regions `rg_*` `{start, end,
-timebase, name, color, lane}`; ruler lanes `{id, name}`.
+Markers `mk_*` `{pos, timebase, name, color}`; regions `rg_*` `{start, end,
+timebase, name, color, section}` (`section`, default true, says the region is a
+section of the song: "Context track" below). There are no ruler lanes: the ruler's rows are
+fixed by the GUI.
 
 Render settings `render` (ADR-0055): the project's one set of settings for
 `render.*`, versioned like every other field. Every member is optional. A
@@ -543,8 +557,10 @@ belongs to exactly one chain or one plugin module; racks obey rack.md §2.5
 (homes are channels, cables within one rack, Out modules feed channels as
 their record inputs, no cycle through a rack, the limits); modulation
 routes obey "Modulation" (a Mod Out source, an existing target, no cycle
-through their edges, no duplicates); counters exceed
-every used ID; tempo map has a point at
+through their edges, no duplicates); context points have finite beats ≥ 0, at
+most one point of a type at a beat and at most 4096 of a type (that a symbol
+parses is not an invariant: it is data, ADR-0095); counters exceed every used
+ID; tempo map has a point at
 beat 0 and meters at bar starts. A violation is a bug (`model.invariant`),
 never a user error — user errors are caught by command validation first.
 
@@ -584,8 +600,8 @@ Schema 2.4 adds masters' `hw_output` and the render setting `masters`
 and audio items on masters (ADR-0057). Before 2.4, a route from a master to `hw_channels` (which never
 played) becomes that master's `hw_output` (its first such route) and the
 route is dropped, with a `project.hw_output_route` warning.
-Schema 2.16 adds modulation routes (ADR-0096); 2.17 is the context
-track's, landing on its own branch; 2.18 adds scenes, clips and
+Schema 2.16 adds modulation routes (ADR-0096); 2.17 adds the context
+track's points (ADR-0095); 2.18 adds scenes, clips and
 `launch_quantize` (ADR-0097, "Scenes and clips").
 
 The loader accepts 1.x and 2.x documents and saves the current schema (2.18,
@@ -1048,7 +1064,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   new muted channel; engine.md).
 - **MIDI**: `midi.write {item | {track, at}, notation, replace: bool}`,
   `midi.get {item, format: notation|events}` (q), `midi.edit {item, ops:
-  [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`,
+  [{select: {pitch, range, channel}, set|shift|transpose|quantize|velocity}]}`
+  (with the scale ops `transpose_degrees`, `snap_to_scale` and `fit_to_chord`: see
+  the context track),
   `midi.quantize`, `midi.humanize {seed}`; Standard MIDI Files are read by
   `item.add {midi_file}` (notes keep their beats and follow the project's
   tempo) and written by `item.export`. `midi.edit` note indices are a set per operation: repeated
@@ -1119,7 +1137,12 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `autoitem.set` (points and source_length reach the pool),
   `autoitem.duplicate {pooled}`, `autoitem.unpool`, `autoitem.remove`,
   `autoitem.list` (q).
-- **rulers**: `marker.add/remove/set`, `region.add/remove/set`.
+- **rulers**: `marker.add/remove/set`, `region.add/remove/set` (with
+  `section`).
+- **context** (ADR-0095): `key.set {at, tonic, scale, to?}`, `key.remove
+  {at}`, `chord.set {at, symbol, to?}`, `chord.remove {at}`, `context.at
+  {at | bar}` (q), `context.get {from?, to?}` (q; it also returns the lead sheet as
+  `text`), `context.write {text}` (see "Lead sheet" in the context track).
 - **transport** (a): `transport.play`, `transport.stop`, `transport.pause`,
   `transport.record`, `transport.seek {pos}`, `transport.loop {range | clear}`,
   `transport.punch {start, end | clear}` (`clear` removes the range and turns
@@ -1440,6 +1463,103 @@ routes (§1.8) and VCAs. A 2.5 file loads unchanged; an older application openin
 file ignores `learn` with a warning, and its controllers move nothing on strips, sends or
 VCAs.
 
+### Context track (schema 2.17, ADR-0095)
+
+Writers emit `supple.project/2.17` (2.16 is modulation,
+ADR-0096). The session gains
+the `cx` collection and `Region` gains `section`.
+
+**Context point** `cx_*`: `{beat, type, …}`, beats only, positions rounded
+to 1/960 beat.
+
+| `type` | fields | meaning |
+|---|---|---|
+| `key` | `tonic` (letter, then at most one `#` or `b`), `scale` (name, `harmony.md` §1) | the key from `beat` until the next key point |
+| `chord` | `symbol` (canonical chord grammar; empty: no chord) | the chord from `beat` until the next chord point |
+
+At most one point of a type at a beat, at most 4096 of a type. Before the
+first key point no key holds; before the first chord point no chord.
+`context.at` and the library's index answer "key and chord at beat t". A
+**section** is a region with `section` true; the one at a beat is the covering
+section that starts latest (ties: the shorter, then the lower id), found at
+query time through the current time map. Every region, section or not, is
+still a render-matrix row.
+
+**File.** A top-level `context` section, after `rulers`:
+`{"points": {"cx_1": {"beat": 0, "type": "key", "tonic": "Eb", "scale":
+"major"}, …}}`, keyed by id in id order, defaults omitted, written only when
+there are points. `next_ids.cx` is written once used. A build that does not
+know the section keeps it as an unknown top-level section; a file that
+passed through one comes back with the points and without the counter, and a
+region marked `section: false` comes back as a section (an older build drops
+the member).
+
+**Load.** A missing or low `cx` counter is raised to the highest `cx` id plus
+one (`project.counter_derived` warning). Of two points of one type at one
+beat the lowest id is kept and the rest dropped with a warning naming them.
+An unknown scale name and a chord symbol the parser does not take (`Cm11`
+from a later build) are kept as data; only the commands refuse them, and
+readers treat the symbol as an unknown chord. The open never fails for any of
+this.
+
+**Commands** (§7). Errors: `key.unsupported` (the tonic and scale need a
+double accidental; hint: the enharmonic key), `chord.unknown_quality` (the
+quality list), `scale.unknown` (the scale list), `context.occupied` (a move
+onto a beat that holds a point of the type), `context.limit`. A context edit
+compiles no plan (engine.md, "Context edits").
+
+**Describe.** `session.describe` gains the key in its header line (`· C major`
+when a key holds at bar 1), and a `context:` block after `regions:`: the key
+changes and the chord runs by project bar, and it now lists the tempo and
+meter changes after the first, which it omitted. `midi.get` gains a `context`
+field: the key and chords over the item's span, with item bars and project bars
+both named.
+
+**Lead sheet.** `context.get`'s `text` and `context.write {text}` use one line per
+project bar: `N: ` then items. `{SYMBOL}:DUR` is a chord point at the cursor,
+`r:DUR` a chord point with an empty symbol, `~:DUR` a hold (no point) and
+`key TONIC SCALE` a key point at the cursor that takes no time; `DUR` is the
+notation's duration (`notation::parseDuration`, at 960 ppq) and a bar's durations
+fill it exactly, against the meters in force. A `#` starts a comment only where a
+word starts (`F#` is a sharp). Bars run in order without gaps, at most 4096 to a
+write and 1 MiB of text. Printing is canonical (the shortest duration token; a
+bar's points split it where they fall) and parses back to the same points.
+A bar that holds a point this build cannot read prints it as stored, and writing
+that text back is refused (`context.syntax`) until it is changed.
+**A write is a diff** over `[start of the first bar, end of the last)`, for keys
+and chords both: a point equal in beat, type and content is left alone (its id
+stays), a point of the span the text omits is removed, any other is added, or
+replaced when one of the type is at its beat (the id stays). Nothing changes on an
+error, and a write that resolves to nothing records no step. History records the
+steps it resolved to, removes first and then the sets in beat order, as
+`chord.remove`, `key.remove`, `chord.set {at, symbol}` and `key.set {at, tonic,
+scale}`, never the text (`EngineApp::recordInvocation`; `invoked` skips
+`context.write` itself), so two branches that write different bars merge, and a
+replay on another branch makes the same points. Errors: `context.syntax`,
+`context.bar_order`, `context.bar_length`, `context.empty`, `context.too_long`,
+`context.limit` (the write would leave more than 4096 points of a type) and the
+chord and key errors above, each naming the bar.
+
+**Scale ops** (`midi.edit`). `transpose_degrees {notes, degrees, key?}`,
+`snap_to_scale {notes?, mode?, key?}` and `fit_to_chord {notes?, chord?}` read the
+key (the first two) or the chord (the last) at each note's project beat, as the
+ops before it in the same `midi.edit` left the note; `key` (`"Eb major"`) and
+`chord` (`"Cm7"`) replace the reading. `degrees` is `harmony::transposeDegrees`.
+`mode` is `nearest` (default; a tie goes down), `down` or `up`: a note whose
+class is in the scale stays, any other moves to the nearest, the nearest below or
+the nearest above scale pitch. `fit_to_chord` moves each note to the nearest tone
+of the chord (a tie goes down; a slash bass is a tone; a note on a tone stays).
+`notes` is required for `transpose_degrees` and defaults to every note for the
+other two. A note is read at every project beat where its start sounds: once for
+each item whose active take plays the source (pooled sharers too) and once per
+loop pass. When those beats do not agree on the part asked for, the op is refused
+with `midi.context_varies`; no key or chord holding (or a point this build cannot
+read) is `midi.no_key` or `midi.no_chord`; a result outside 0..127, or no scale
+pitch in the direction asked, is `midi.pitch_range`; arguments the op does not
+take are `midi.args`. Only the notes an op actually moved are returned as changed.
+A launcher clip is not built yet: the rule for it (the key at the project's
+start, no chords) waits for it.
+
 ### Rack sends (schema 2.13, ADR-0075)
 
 Writers emit `supple.project/2.13`. A route from a rack's Out module may end
@@ -1534,9 +1654,11 @@ nothing there, but it drops the `mr` counter and may delete what a route
 points at (amendment G-c). A file that comes back from one opens anyway: a
 missing or low `mr` counter is derived from the highest `mr` id with a
 `project.counter_derived` warning at `/project/next_ids/mr` (the code
-ADR-0095 uses for `cx`); a saved branch whose `next_ids` lacks `mr`
-allocates past the highest `mr` id of every saved version, so an id one
-branch removed is not given out while another holds it; and a
+ADR-0095 uses for `cx`); a saved branch's `next_ids` are raised, for every
+kind, to the counters of each version its lineage reaches (its head's history
+and the steps waiting in redo), so an id one of them holds is not given out
+again when the file lacks the counter (`VersionStore::restore`, one rule for
+every kind; a counter that is present and not behind them is kept); and a
 route whose source or target is gone or no longer fits the invariants
 below, or that closes a cycle, is dropped with a `project.modulation_dropped`
 warning at its path that names it and says why.
@@ -1703,7 +1825,8 @@ but not launched; freezing returns the track to the arrangement first.
 - A file that comes back through one anyway opens for what it can leave
   behind:
   - a missing or low `sc` or `cl` counter is derived from the highest id
-    (`project.counter_derived`);
+    (`project.counter_derived`), and a saved branch's from the versions its
+    lineage reaches, by the rule for every kind ("Modulation");
   - a clip that refers to something gone (its track, its scene, a take or
     its active take) is dropped with its remaining takes, by a
     `project.clip_dropped` warning at its path naming it and why.

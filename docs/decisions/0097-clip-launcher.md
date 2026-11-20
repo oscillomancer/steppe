@@ -242,6 +242,14 @@ and `clips` are written only when present, and the project's
   with a hand-edited file. Any other fault in a clip fails the open with
   `model.invariant`, as for every kind.
 
+*Note (2026-11-20, on merging the context track):* a saved branch's `sc`
+and `cl` counters follow the one lineage rule ADR-0096's note of 2026-11-19
+describes, not the raise past every saved version that L1 (e4e5f841) first
+built: `VersionStore::restore` raises a branch's counters, for every kind, to
+those of each version its lineage reaches (its head's history and the steps
+waiting in redo). The checklist's "branch counter derivation" is that one
+loop now, which needs no per-kind list.
+
 ### Memory (L-e)
 
 Every clip's audio is resident, inside the in-memory budget of 2^28

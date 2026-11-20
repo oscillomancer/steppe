@@ -17,19 +17,6 @@ namespace {
 
 constexpr std::string_view kSection = "branches";
 
-// How deep a section's objects sit: members of these are objects by ID (or
-// blobs by hash), of these one level further down; anything else is one value.
-int objectDepth(std::string_view section) {
-    static const std::set<std::string_view> keyed{
-        "tracks",           "items",  "takes", "fx",    "routes",  "envelopes",
-        "automation_items", "groups", "racks", "blobs", "modules", "cables",
-        "modulations",      "scenes", "clips"};
-    static const std::set<std::string_view> nested{"tempo", "rulers", "sources"};
-    if (keyed.contains(section)) return 1;
-    if (nested.contains(section)) return 2;
-    return 0;
-}
-
 void diffAt(const std::string& path, const json::Value* main, const json::Value* doc, int depth,
             json::Value& set, json::Value& remove) {
     if (!doc) {
@@ -270,33 +257,13 @@ void shareRevisions(IdMap<T>& map, const IdMap<T>* parent, std::uint64_t rev) {
 
 void shareRevisions(Session& s, const Session* p) {
     const auto rev = s.version;
-    auto each = [&](auto member) {
-        auto& map = s.*member;
-        shareRevisions(map, p ? &(p->*member) : nullptr, rev);
-    };
-    each(&Session::tempo);
-    each(&Session::meters);
-    each(&Session::tracks);
-    each(&Session::groups);
-    each(&Session::items);
-    each(&Session::takes);
-    each(&Session::media);
-    each(&Session::midi);
-    each(&Session::fx);
-    each(&Session::routes);
-    each(&Session::envelopes);
-    each(&Session::autoItems);
-    each(&Session::markers);
-    each(&Session::regions);
-    each(&Session::racks);
-    each(&Session::modules);
-    each(&Session::cables);
-    each(&Session::modulations);
-    each(&Session::scenes);
-    each(&Session::clips);
+    forEachCollection(s, [&]<class T>(IdMap<T>& map) {
+        shareRevisions(map, p ? &Traits<T>::map(*p) : nullptr, rev);
+    });
     if (!p) return;
     if (toJson(*s.project) == toJson(*p->project)) s.project = p->project;
     if (s.tempo.sameStorage(p->tempo) && s.meters.sameStorage(p->meters)) s.timeMap = p->timeMap;
+    if (s.context.sameStorage(p->context)) s.contextView = p->contextView;
     for (auto& [hash, blob] : s.blobs)
         if (const auto found = p->blobs.find(hash); found != p->blobs.end()) blob = found->second;
 }
@@ -526,6 +493,17 @@ Result<VersionStore> restoreBranches(const json::Value& mainDoc, const json::Val
 }
 
 }  // namespace
+
+int objectDepth(std::string_view section) {
+    static const std::set<std::string_view> keyed{
+        "tracks",           "items",  "takes", "fx",    "routes",  "envelopes",
+        "automation_items", "groups", "racks", "blobs", "modules", "cables",
+        "modulations",      "scenes", "clips"};
+    static const std::set<std::string_view> nested{"tempo", "rulers", "sources", "context"};
+    if (keyed.contains(section)) return 1;
+    if (nested.contains(section)) return 2;
+    return 0;
+}
 
 namespace {
 constexpr std::string_view kAutosavedThrough = "autosaved_through";

@@ -1547,6 +1547,117 @@ Result:
 
 ```
 
+## `chord.remove@1`
+
+Remove the chord point at a beat: the chord before it continues.
+
+
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `at` | number |  | 0.0.. |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Remove the chord at the start** (`song_with_context`)
+
+```json
+{
+  "at": 0
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `chord.set@1`
+
+Set the chord from a beat, until the next chord point; "" ends it.
+
+Adds a chord point at `at` (project beats, rounded to 1/960) or changes the one there. `to` moves the point at `at` to another beat and keeps its id. symbol is the notation's chord grammar: a root, a quality and an optional /bass (Cm7, Bb, F#7#9, C/E); an empty symbol means no chord from here. The symbol is stored in canonical form (Cmin7 becomes Cm7).
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `at` | number |  | 0.0.. |  |  |
+| `symbol` | string |  |  |  |  |
+| `to` | number |  | 0.0.. |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "created_id",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**C minor seventh at bar 2** (`empty`)
+
+```json
+{
+  "at": 4,
+  "symbol": "Cm7"
+}
+
+```
+
+Result:
+
+```json
+{
+  "id": "cx_1"
+}
+
+```
+
 ## `clip.add@1`
 
 Add a clip to a channel's cell in a scene, from notation, a file or an item.
@@ -1888,6 +1999,362 @@ Result:
 
 ```json
 {}
+
+```
+
+## `context.at@1`
+
+What key, chord and section hold at a beat or bar.
+
+Give `at` (project beats) or `bar` (1-based). The key and chord are the last points at or before it; a section is a region with section true that covers it (the latest start wins). known false means the point is there but its scale or chord symbol is not one this build reads.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `at` | number |  | 0.0.. |  |  |
+| `bar` | integer |  | 1.0.. |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "context_at",
+  "properties": {
+    "beat": {
+      "type": "number"
+    },
+    "bar": {
+      "type": "integer"
+    },
+    "beat_in_bar": {
+      "type": "number"
+    },
+    "key": {
+      "type": "object",
+      "title": "context_key",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tonic": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "string"
+        },
+        "from_beat": {
+          "type": "number"
+        },
+        "known": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "tonic", "scale", "from_beat", "known"],
+      "additionalProperties": false
+    },
+    "chord": {
+      "type": "object",
+      "title": "context_chord",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "from_beat": {
+          "type": "number"
+        },
+        "known": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "symbol", "from_beat", "known"],
+      "additionalProperties": false
+    },
+    "section": {
+      "type": "object",
+      "title": "context_section",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "start": {
+          "type": "number"
+        },
+        "end": {
+          "type": "number"
+        }
+      },
+      "required": ["id", "name", "start", "end"],
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["beat", "bar", "beat_in_bar"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**At bar 2** (`song_with_context`)
+
+```json
+{
+  "bar": 2
+}
+
+```
+
+Result:
+
+```json
+{
+  "beat": 4,
+  "bar": 2,
+  "beat_in_bar": 1,
+  "key": {
+    "id": "cx_1",
+    "tonic": "Eb",
+    "scale": "major",
+    "from_beat": 0,
+    "known": true
+  },
+  "chord": {
+    "id": "cx_3",
+    "symbol": "Cm7",
+    "from_beat": 4,
+    "known": true
+  },
+  "section": {
+    "id": "rg_1",
+    "name": "Verse",
+    "start": 0,
+    "end": 8
+  }
+}
+
+```
+
+## `context.get@1`
+
+List the key and chord points in a range of beats.
+
+Points from `from` (default 0) to `to` (default: the end), by beat, with the key and chord that hold at `from`, and `text`: the same as a lead sheet in project bars, one line per bar, for context.write. In it `{Cm7}:h` is a chord point at the cursor, `r:h` a chord point with no chord, `~:h` a hold (no point), `key Eb major` a key point at the cursor; a bar's durations fill the bar. The bars run from the one holding `from` to the one holding `to` (exclusive when `to` is a bar line), or to the last point.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `from` | number |  | 0.0.. |  |  |
+| `to` | number |  | 0.0.. |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "context_get",
+  "properties": {
+    "text": {
+      "type": "string"
+    },
+    "points": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "context_point_row",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "beat": {
+            "type": "number"
+          },
+          "bar": {
+            "type": "integer"
+          },
+          "tonic": {
+            "type": "string"
+          },
+          "scale": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "type", "beat", "bar"],
+        "additionalProperties": false
+      }
+    },
+    "key": {
+      "type": "object",
+      "title": "context_key",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tonic": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "string"
+        },
+        "from_beat": {
+          "type": "number"
+        },
+        "known": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "tonic", "scale", "from_beat", "known"],
+      "additionalProperties": false
+    },
+    "chord": {
+      "type": "object",
+      "title": "context_chord",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "from_beat": {
+          "type": "number"
+        },
+        "known": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "symbol", "from_beat", "known"],
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["points"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Nothing yet** (`empty`)
+
+```json
+{}
+
+```
+
+Result:
+
+```json
+{
+  "points": []
+}
+
+```
+
+## `context.write@1`
+
+Write key and chord points from a lead sheet over the bars it names.
+
+text is context.get's lead sheet: one line per project bar, 'N: ' then {SYMBOL}:DUR (a chord point at the cursor), r:DUR (a chord point with no chord), ~:DUR (hold: no point) and 'key TONIC SCALE' (a key point at the cursor, no time), where DUR is the notation's duration (q, h., h+q, 480t) and a bar's durations must fill it. Bars run in order from the first named to the last. The write is a diff over that span: points equal in beat and content are left alone (ids kept), points in the span the text omits are removed, the rest are added or replaced. History records the key.set, chord.set and remove operations it came to, so branches that write different bars merge. Keys and chords both follow the text: to leave the key alone, include it. Errors name the bar; nothing is changed when one occurs.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `text` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "context_write",
+  "properties": {
+    "first_bar": {
+      "type": "integer"
+    },
+    "last_bar": {
+      "type": "integer"
+    },
+    "added": {
+      "type": "integer"
+    },
+    "replaced": {
+      "type": "integer"
+    },
+    "removed": {
+      "type": "integer"
+    },
+    "unchanged": {
+      "type": "integer"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["first_bar", "last_bar", "added", "replaced", "removed", "unchanged"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Two bars of changes** (`empty`)
+
+```json
+{
+  "text": "1: key Eb major {Ebmaj7}:w\n2: {Cm7}:h {Fm7}:h\n"
+}
+
+```
+
+Result:
+
+```json
+{
+  "first_bar": 1,
+  "last_bar": 2,
+  "added": 4,
+  "replaced": 0,
+  "removed": 0,
+  "unchanged": 0
+}
 
 ```
 
@@ -9810,6 +10277,119 @@ Result:
 
 ```
 
+## `key.remove@1`
+
+Remove the key point at a beat: the key before it continues.
+
+
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `at` | number |  | 0.0.. |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "empty",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Remove the key at the start** (`song_with_context`)
+
+```json
+{
+  "at": 0
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+## `key.set@1`
+
+Set the key from a beat: tonic and scale, until the next key point.
+
+Adds a key point at `at` (project beats, rounded to 1/960) or changes the one there. `to` moves the point at `at` to another beat and keeps its id. tonic is a letter and at most one # or b (Eb, F#); scale is one of: major, minor, harmonic_minor, melodic_minor, dorian, phrygian, lydian, mixolydian, locrian, major_pentatonic, minor_pentatonic, blues, chromatic. A key that needs a double accidental (G# major) is refused: use the enharmonic one (Ab major). Notation, the piano roll and midi.edit read it.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `at` | number |  | 0.0.. |  |  |
+| `tonic` | string |  |  |  |  |
+| `scale` | string |  |  |  |  |
+| `to` | number |  | 0.0.. |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "created_id",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**E-flat major from the start** (`empty`)
+
+```json
+{
+  "at": 0,
+  "tonic": "Eb",
+  "scale": "major"
+}
+
+```
+
+Result:
+
+```json
+{
+  "id": "cx_1"
+}
+
+```
+
 ## `log.list@1`
 
 Recent commands with origin, arguments and outcome (the command log).
@@ -9962,6 +10542,9 @@ Kind: `query`. Exposure: `mcp-exec`.
           },
           "end": {
             "type": "number"
+          },
+          "section": {
+            "type": "boolean"
           }
         },
         "required": ["id", "timebase", "name", "color"],
@@ -10109,7 +10692,7 @@ Result:
 
 Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
 
-ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Returns the new indices of the notes the ops added or changed (to keep a selection).
+ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Scale ops read the context track (key.set, chord.set) at the project beat each note starts, in the order of the ops: transpose_degrees {notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale first goes down to the scale); snap_to_scale {notes? (all), mode? nearest|down|up, key?} moves notes outside the scale to it (nearest: a tie goes down); fit_to_chord {notes? (all), chord?} moves each note to the nearest tone of the chord (a tie goes down; a slash bass counts). key is "Eb major", chord is "Cm7"; given, they replace the context. A note that is looped or shared by another item in a different key or chord is refused with midi.context_varies; none holding is midi.no_key or midi.no_chord. Returns the new indices of the notes the ops added or changed (to keep a selection).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -10160,11 +10743,37 @@ Result:
 
 ```
 
+**Move the first note up two degrees of C major** (`song_with_item`)
+
+```json
+{
+  "item": "it_1",
+  "ops": [
+    {
+      "op": "transpose_degrees",
+      "notes": [0],
+      "degrees": 2,
+      "key": "C major"
+    }
+  ]
+}
+
+```
+
+Result:
+
+```json
+{
+  "notes": "<any>"
+}
+
+```
+
 ## `midi.get@1`
 
-Read an item's or clip's MIDI as notation.
+Read an item's or clip's MIDI as notation, with its key and chords.
 
-
+Pitch names follow the key that holds at the item's start (none: the default spelling). context lists the key and the chords over the item's span, each from the bar of the item (item_bar, the notation's) and of the project (project_bar) where it starts; the first of each is the one already holding at the item's start. Omitted when the project has no key or chords there. A clip has no place in time: its pitch names follow the key at the project's start, and it has no context.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -10179,10 +10788,58 @@ Kind: `query`. Exposure: `mcp-tool`.
 ```json
 {
   "type": "object",
-  "title": "text",
+  "title": "midi_get",
   "properties": {
     "text": {
       "type": "string"
+    },
+    "context": {
+      "type": "object",
+      "title": "midi_context",
+      "properties": {
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "context_run",
+            "properties": {
+              "item_bar": {
+                "type": "integer"
+              },
+              "project_bar": {
+                "type": "integer"
+              },
+              "what": {
+                "type": "string"
+              }
+            },
+            "required": ["item_bar", "project_bar", "what"],
+            "additionalProperties": false
+          }
+        },
+        "chords": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "context_run",
+            "properties": {
+              "item_bar": {
+                "type": "integer"
+              },
+              "project_bar": {
+                "type": "integer"
+              },
+              "what": {
+                "type": "string"
+              }
+            },
+            "required": ["item_bar", "project_bar", "what"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["keys", "chords"],
+      "additionalProperties": false
     },
     "warnings": {
       "type": "array",
@@ -14625,6 +15282,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `end` | number |  | 0.0.. |  |  |
 | `name` | string |  |  |  |  |
 | `color` | string |  |  |  |  |
+| `section` | boolean |  |  |  | Whether the region is a section of the song, which context.at and session.describe report [true] |
 
 ### Result
 
@@ -14718,6 +15376,9 @@ Kind: `query`. Exposure: `mcp-exec`.
           },
           "end": {
             "type": "number"
+          },
+          "section": {
+            "type": "boolean"
           }
         },
         "required": ["id", "timebase", "name", "color"],
@@ -14823,6 +15484,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `end` | number |  | 0.0.. |  |  |
 | `name` | string |  |  |  |  |
 | `color` | string |  |  |  |  |
+| `section` | boolean |  |  |  | Whether the region is a section of the song, which context.at and session.describe report [true] |
 
 ### Result
 
@@ -16896,7 +17558,7 @@ Result:
 
 ## `session.describe@1`
 
-Describe the whole session in compact text (tracks, items, fx, routes).
+Describe the whole session in compact text (tracks, items, fx, routes, key).
 
 The quickest way to see where things are; use the IDs it shows with other commands.
 

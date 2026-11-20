@@ -119,6 +119,21 @@ instructions are in `docs/guides/installing.md`.
   playrate with relocation and lock. Unit-tested under RealtimeSanitizer;
   the engine uses it for sync input, LTC output and MIDI clock and MTC
   output (below).
+- **Context track** (ADR-0095, `specs/harmony.md`, schema 2.17): the project's
+  key and chord points (`cx_*`, beats only) with `key.set`/`key.remove`,
+  `chord.set`/`chord.remove`, `context.at` and `context.get`; regions are
+  sections unless `section` is false; `session.describe` shows the key, the
+  context and the later tempo and meter changes; `midi.get` returns the context
+  over an item and, with the piano roll, the event list, `midi.edit` readbacks
+  and `rack.probe`, spells notes by the key at the item's start (`libs/harmony`).
+  A file with a missing or low counter, a duplicate beat, an unknown scale or an
+  unparsable chord symbol opens with a warning and keeps the point as data. The
+  lead sheet (`context.get`'s `text`, `context.write` as a diff recorded as the
+  `key.set`/`chord.set`/remove steps it resolved to) and the `midi.edit` ops
+  `transpose_degrees`, `snap_to_scale` and `fit_to_chord` (key and chord from the
+  context at each note's beat, or given; `midi.context_varies` over a loop or a
+  pooled sharer in another key) are in. Not yet: the GUI lane and the roll's
+  degree actions (C3), a launcher clip's key.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
   through `project.set`/`project.get` and Project > Timecode….
@@ -1549,7 +1564,10 @@ GUI:
   (`plugin.<name>.embedding`, labelled `tsan-skip`): one at a time, on the
   software renderer the `tsan` preset draws with, they take twelve minutes.
   They run in every other preset that builds the GUI, and the DAW's own GUI
-  tests run under `tsan`.
+  tests run under `tsan`. They open a window on the screen, so they run only
+  when `SUPPLE_EDITOR_PROBE_TEST=1` (set by native CI) and show as skipped on
+  a developer's machine otherwise; the macOS probe (`mac-embedding`) is not
+  gated and still opens its own Cocoa window locally.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.
 - Plan compilation (including media decoding/resampling), Lua execution and

@@ -362,3 +362,5 @@ inert.
   goes stale with the plug-in, and source and target share an executor.
 - **Platforms.** No platform-specific code is added. Native CI must pass on
   Linux, macOS and Windows before each step merges.
+
+*Note (2026-11-19, on merging the context track):* the saved-branch counter rule is now one rule for every kind, not `mr` alone: `VersionStore::restore` raises a branch's counters to those of every version its lineage reaches (head history and redo steps), which covers the case above (session-model, "Modulation"). An id a branch removed after a fork is still held by its own earlier versions, so the raise covers it.

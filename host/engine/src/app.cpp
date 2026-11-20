@@ -4992,8 +4992,13 @@ std::uint64_t EngineApp::clockMs() const {
 }
 
 void EngineApp::invoked(std::string_view command, int, const json::Value& args, cmd::Kind kind) {
-    if (txn_ && kind == cmd::Kind::Edit)
+    // context.write records the points it resolved to (recordInvocation), not its text.
+    if (txn_ && kind == cmd::Kind::Edit && command != "context.write")
         record_.invocations.push_back({std::string(command), args});
+}
+
+void EngineApp::recordInvocation(std::string command, json::Value args) {
+    if (txn_) record_.invocations.push_back({std::move(command), std::move(args)});
 }
 
 void EngineApp::setupFixture(cmd::Dispatcher& d, std::string_view fixture) {
@@ -5297,6 +5302,14 @@ struct Gain : Effect {
     }
     if (fixture == "song_with_region") {
         run("region.add", R"({"start":0,"end":4,"name":"Verse"})");
+        return;
+    }
+    if (fixture ==
+        "song_with_context") {  // cx_1 Eb major, cx_2 Ebmaj7 and cx_3 Cm7 (bar 2), rg_1 Verse
+        run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+        run("chord.set", R"({"at":0,"symbol":"Ebmaj7"})");
+        run("chord.set", R"({"at":4,"symbol":"Cm7"})");
+        run("region.add", R"({"start":0,"end":8,"name":"Verse"})");
         return;
     }
     run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");

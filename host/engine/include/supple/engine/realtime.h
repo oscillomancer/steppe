@@ -1183,6 +1183,8 @@ class Engine {
     std::array<std::uint64_t, 13> readRateClock() const;
     Status prepareRatePlan(detail::Plan& plan);
     bool loadScalarRate(const model::Session& session, const std::filesystem::path& projectDir);
+    // ADR-0095 (main thread): an edit of only the context points compiles nothing.
+    bool loadContextOnly(const model::Session& session, const std::filesystem::path& projectDir);
     // ADR-0060/0061 (main thread): the mix-only edit path of load(), the
     // write holds, and the held targets whose compiled curves are stale.
     bool loadMixValues(const model::Session& session, const std::filesystem::path& projectDir);

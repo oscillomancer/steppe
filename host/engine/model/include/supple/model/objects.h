@@ -608,6 +608,20 @@ struct Region {
     double start = 0.0, end = 0.0;
     Timebase timebase = Timebase::Beats;
     std::string name, color;
+    bool section = true;  // a section of the song (ADR-0095); false: a plain range
+};
+
+// A point of the project's context track (ADR-0095): a key or a chord that holds
+// from `beat` until the next point of its type. The strings are data: a later
+// build may write a scale or a chord quality this one lacks, so the model keeps
+// them and only the commands (and the harmony library) judge them.
+enum class ContextType : std::uint8_t { Key, Chord };
+inline constexpr std::size_t kMaxContextPoints = 4096;  // per type
+struct ContextPoint {
+    double beat = 0.0;  // beats from project start
+    ContextType type = ContextType::Key;
+    std::string tonic, scale;  // Key: a spelled pitch class and a scale name
+    std::string symbol;        // Chord: "" is "no chord from here"
 };
 
 }  // namespace supple::model

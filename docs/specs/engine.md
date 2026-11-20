@@ -539,6 +539,8 @@ specified here as it lands); so far:
   the instance.
 - **A patch-only edit publishes no plan** (stage 3, ADR-0092): see
   "Patch-only FX edits" below.
+- **A context-only edit publishes no plan** (ADR-0095): see "Context edits"
+  below.
 - **A plan has a canonical dump** (stage 5; `plan_dump.h`). `dumpPlan`
   (main thread, before publication) writes every field of a prepared plan
   that compile and prepare decide, one per line in plan order: nodes and
@@ -745,6 +747,45 @@ positions, and in between would play neither session's mix, such as silence
 when solo moves from a monitored track to a rendered one, in one edit or
 two. ADR-0060's level and pan edits and ADR-0092's patch edits are not
 gated.
+
+**Context edits (ADR-0095).** The plan does not read the context track (the
+`cx` collection), so a session that differs from the last one `Engine::load`
+took only in that collection is not compiled: the `cx` storage differs, every
+other collection, the project, the blobs and the unknown sections have the
+same storage, and `latest_` takes the new session. It is a shortcut of its
+own and, like the others, runs only when nothing forces a compile, and never
+while an edit is deferred or for the reload that ends a deferral (the guards
+of `loadScalarRate`; there `latest_` is the deferred session, and a session
+identical to it is not a context edit). It is tried before the scalar, mix and
+patch ones, and its list of `Session` members is bound in the code as theirs
+are; the three equivalence checks do not list the
+context, because each of them qualifies a fast path only when something it
+handles changed, so an edit that changes nothing they handle falls through
+them to a compile. A context edit that comes with any other change compiles
+as that change does. When something in the plan reads the context (a note
+source, a rack module), an edit compiles only if the plan reads it.
+
+What the tests pin, and what they do not (the reader of `loadContextOnly`'s guards
+should know which is which). `a context-only edit compiles nothing and the same
+session again does` (`test_mix_edits.cpp`) pins: a chord edit, and an edit of a
+point's content and a new point together, compile no plan; the same session again is
+a maintenance reload that compiles (the shortcut never takes it: the `cx` storage
+does not differ); a context edit together with a track edit compiles as the track
+edit does. `a context edit made while a structural edit is deferred does not swallow
+it` (`test_module_library.cpp`) pins the outcome: with a future non-unity plan and an
+FX removal waiting, a chord edit compiles nothing, and the removal still compiles and
+plays once its span has passed, with no engine error. **It does not pin the deferral
+guards.** The test also passes with the guards removed: the shortcut adopts the whole
+new session as `latest_`, which holds the waiting edit, and the deferral's own retry
+compiles it either way. Both tests fail when the "`cx` storage differs" check is
+removed. No test makes the guards alone matter. They are kept so the shortcut has the
+same guards as the three it sits beside. They are redundant by construction (round 57
+review: removing every one leaves the whole `engine.tests` suite passing, and the argument
+holds): every path they protect reloads `latest_` itself, the reload that ends a deferral,
+a rate seek or loop and the recovery seek each load `*latest_`, and a session whose `cx`
+storage is the running one's is refused by the storage rule, so the rule does what the
+guards were first thought to do. A later change that made adopting `latest_` insufficient
+would have to revisit them; no test stands behind them.
 
 **Patch-only FX edits (ADR-0092).** A session that differs from the last one
 `Engine::load` took only in FX `patch` values, each of those FX having a

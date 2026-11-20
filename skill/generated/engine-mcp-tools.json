@@ -788,8 +788,8 @@
   },
   {
     "name": "midi_get",
-    "title": "Read an item's or clip's MIDI as notation.",
-    "description": "Read an item's or clip's MIDI as notation. See describe for errors and examples.",
+    "title": "Read an item's or clip's MIDI as notation, with its key and chords.",
+    "description": "Pitch names follow the key that holds at the item's start (none: the default spelling). context lists the key and the chords over the item's span, each from the bar of the item (item_bar, the notation's) and of the project (project_bar) where it starts; the first of each is the one already holding at the item's start. Omitted when the project has no key or chords there. A clip has no place in time: its pitch names follow the key at the project's start, and it has no context. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_get_args",
@@ -1600,7 +1600,7 @@
   },
   {
     "name": "session_describe",
-    "title": "Describe the whole session in compact text (tracks, items, fx, routes).",
+    "title": "Describe the whole session in compact text (tracks, items, fx, routes, key).",
     "description": "The quickest way to see where things are; use the IDs it shows with other commands. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",

@@ -87,6 +87,8 @@ EntryInfo entryInfo(const Session& s, Id id) {
             return info(s.cables, id);
         case Kind::Modulation:
             return info(s.modulations, id);
+        case Kind::Context:
+            return info(s.context, id);
         case Kind::Scene:
             return info(s.scenes, id);
         case Kind::Clip:
@@ -145,6 +147,8 @@ json::Value objectJson(const Session& s, Id id) {
             return enc(s.cables);
         case Kind::Modulation:
             return enc(s.modulations);
+        case Kind::Context:
+            return enc(s.context);
         case Kind::Scene:
             return enc(s.scenes);
         case Kind::Clip:
@@ -204,6 +208,8 @@ const json::Value* objectSchema(const Session& s, Id id) {
             return &schemaFor(s.cables);
         case Kind::Modulation:
             return &schemaFor(s.modulations);
+        case Kind::Context:
+            return &schemaFor(s.context);
         case Kind::Scene:
             return &schemaFor(s.scenes);
         case Kind::Clip:
@@ -613,26 +619,7 @@ struct VersionStore::RetainedSize {
         metadataBytes.emplace(v.id, metadata);
         bytes += metadata;
         add(v.id, s.project.get(), measured(s.project));
-        map(v.id, s.tempo);
-        map(v.id, s.meters);
-        map(v.id, s.tracks);
-        map(v.id, s.items);
-        map(v.id, s.takes);
-        map(v.id, s.media);
-        map(v.id, s.midi);
-        map(v.id, s.fx);
-        map(v.id, s.routes);
-        map(v.id, s.envelopes);
-        map(v.id, s.autoItems);
-        map(v.id, s.markers);
-        map(v.id, s.regions);
-        map(v.id, s.groups);
-        map(v.id, s.racks);
-        map(v.id, s.modules);
-        map(v.id, s.cables);
-        map(v.id, s.modulations);
-        map(v.id, s.scenes);
-        map(v.id, s.clips);
+        forEachCollection(s, [&](const auto& objects) { map(v.id, objects); });
         for (const auto& [hash, blob] : s.blobs)
             add(v.id, blob.get(), sizeof(Blob) + blob->data.size());
     }
@@ -1366,16 +1353,6 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
     VersionStore store;
     store.versions_ = std::move(saved.versions);
     store.next_ = saved.next;
-    // A branch whose saved mr, sc or cl counter is missing (0: a file from
-    // before 2.16 or 2.18, or one that went through an older build, G-c)
-    // allocates past every saved state's: each state derived its own from
-    // its objects, but an id one lineage removed may live on in another
-    // branch.
-    constexpr Kind kLate[] = {Kind::Modulation, Kind::Scene, Kind::Clip};
-    Counters highest;
-    for (Kind k : kLate) highest[k] = 1;
-    for (const auto& [unused, v] : store.versions_)
-        for (Kind k : kLate) highest[k] = std::max(highest[k], v.session->next[k]);
     for (auto& sb : saved.branches) {
         const std::string path = json::pointerJoin("/branches/refs", sb.name);
         if (store.branches_.contains(sb.name)) return bad("branch listed twice", path);
@@ -1401,14 +1378,28 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
                            path + "/redo");
             below = *it;
         }
+        // The mark is the file's, raised to the counters of every version this branch
+        // can reach: its head's history and the steps waiting in redo. A file an older
+        // build rewrote has no counter for a kind it does not know, and each version
+        // then holds a counter derived from its own highest id; without this the branch
+        // could be handed an id that its redo steps or a fork of it still hold.
         Counters allocated = sb.allocated;
-        Counters lost;
-        for (Kind k : kLate) lost[k] = allocated[k] == 0 ? 1 : 0;
-        const auto& counters = store.versions_.at(sb.head).session->next;
-        for (std::size_t k = 0; k < kKindCount; ++k)
-            allocated.next[k] = std::max(allocated.next[k], counters.next[k]);
-        for (Kind k : kLate)
-            if (lost[k]) allocated[k] = std::max(allocated[k], highest[k]);
+        {
+            std::vector<std::uint64_t> pending{sb.head};
+            pending.insert(pending.end(), sb.redo.begin(), sb.redo.end());
+            std::set<std::uint64_t> seen;
+            while (!pending.empty()) {
+                const std::uint64_t at = pending.back();
+                pending.pop_back();
+                if (!seen.insert(at).second) continue;
+                const auto found = store.versions_.find(at);
+                if (found == store.versions_.end()) continue;
+                const auto& counters = found->second.session->next;
+                for (std::size_t k = 0; k < kKindCount; ++k)
+                    allocated.next[k] = std::max(allocated.next[k], counters.next[k]);
+                for (const auto parent : found->second.parents) pending.push_back(parent);
+            }
+        }
         store.branches_.emplace(sb.name, Branch{sb.head, sb.base, std::move(sb.redo), allocated});
     }
     if (!store.branches_.contains("main")) return bad("there is no main branch", "/branches/refs");

@@ -629,6 +629,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
     // Neither shortcut may release a hold whose compiled curve is stale; the
     // scalar one publishes no mix values, so it carries pending holds after.
     const bool compile = midiSettingsDirty_ || releasesStaleCurve();
+    if (!compile && loadContextOnly(session, projectDir)) return {};
     if (!compile && loadScalarRate(session, projectDir)) {
         applyPendingHolds();
         return {};

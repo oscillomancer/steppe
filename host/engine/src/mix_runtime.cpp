@@ -49,10 +49,13 @@ bool mixOnly(const model::Session& a, const model::Session& b,
              std::vector<model::EnvTarget>& stale) {
     {  // This list names every Session member: one added to Session is a build
        // error here until mixOnly says how it is compared.
+       // `context` and `contextView` are not compared: the plan does not read them
+       // (ADR-0095), so an edit of the context rides along with any of these.
         [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
                                       takes, media, midi, fx, routes, envelopes, autoItems, markers,
-                                      regions, racks, modules, cables, modulations, scenes, clips,
-                                      blobs, extraSections, version] = a;
+                                      regions, racks, modules, cables, modulations, context,
+                                      contextView, scenes, clips, blobs, extraSections, version] =
+            a;
     }
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
@@ -187,10 +190,13 @@ bool mixOnly(const model::Session& a, const model::Session& b,
 bool patchOnly(const model::Session& a, const model::Session& b, std::vector<model::Id>& changed) {
     {  // This list names every Session member: one added to Session is a build
        // error here until patchOnly says how it is compared.
+       // `context` and `contextView` are not compared: the plan does not read them
+       // (ADR-0095), so an edit of the context rides along with any of these.
         [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
                                       takes, media, midi, fx, routes, envelopes, autoItems, markers,
-                                      regions, racks, modules, cables, modulations, scenes, clips,
-                                      blobs, extraSections, version] = a;
+                                      regions, racks, modules, cables, modulations, context,
+                                      contextView, scenes, clips, blobs, extraSections, version] =
+            a;
     }
     if (!(a.project == b.project || *a.project == *b.project)) return false;
     if (!a.tempo.sameStorage(b.tempo) || !a.meters.sameStorage(b.meters) ||
@@ -322,6 +328,49 @@ bool Engine::loadMixValues(const model::Session& session, const std::filesystem:
     staleCurves_ = std::move(stale);
     latest_ = std::make_shared<const model::Session>(session);
     ++mixEdits_;
+    return true;
+}
+
+namespace {
+// Whether `b` differs from `a` in the context points and nothing else: the plan does
+// not read them (ADR-0095). The points' storage must really differ: a session equal
+// to the last one is no context edit (the reload that ends a deferral compares a
+// session with itself). Every other member has the same storage, so a field added
+// to Session can never pass as a context edit.
+bool contextOnly(const model::Session& a, const model::Session& b) {
+    {  // This list names every Session member: one added to Session is a build
+       // error here until contextOnly says how it is compared.
+        [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
+                                      takes, media, midi, fx, routes, envelopes, autoItems, markers,
+                                      regions, racks, modules, cables, modulations, context,
+                                      contextView, scenes, clips, blobs, extraSections, version] =
+            a;
+    }
+    if (a.context.sameStorage(b.context)) return false;
+    return (a.project == b.project || *a.project == *b.project) && a.tempo.sameStorage(b.tempo) &&
+           a.meters.sameStorage(b.meters) && a.tracks.sameStorage(b.tracks) &&
+           a.groups.sameStorage(b.groups) && a.items.sameStorage(b.items) &&
+           a.takes.sameStorage(b.takes) && a.media.sameStorage(b.media) &&
+           a.midi.sameStorage(b.midi) && a.fx.sameStorage(b.fx) && a.routes.sameStorage(b.routes) &&
+           a.envelopes.sameStorage(b.envelopes) && a.autoItems.sameStorage(b.autoItems) &&
+           a.markers.sameStorage(b.markers) && a.regions.sameStorage(b.regions) &&
+           a.racks.sameStorage(b.racks) && a.modules.sameStorage(b.modules) &&
+           a.cables.sameStorage(b.cables) && a.modulations.sameStorage(b.modulations) &&
+           a.scenes.sameStorage(b.scenes) && a.clips.sameStorage(b.clips) && a.blobs == b.blobs &&
+           a.extraSections == b.extraSections;
+}
+}  // namespace
+
+bool Engine::loadContextOnly(const model::Session& session, const std::filesystem::path& dir) {
+    auto* p = latestPlan_.load(std::memory_order_acquire);
+    // As loadScalarRate and loadMixValues: never while an edit is deferred or for the
+    // reload that ends the deferral, where latest_ is the deferred session itself and a
+    // deferred playrate move must reach the compile (review 37b F1, round 53 F2).
+    if (!backend_ || !latest_ || !p || rateSeekTarget_ || rateLoopTarget_ || notificationReload_ ||
+        rateDeferred_ || rateDeferredFrom_ || scalarPending_ || dir != p->projectDir)
+        return false;
+    if (!contextOnly(*latest_, session)) return false;
+    latest_ = std::make_shared<const model::Session>(session);
     return true;
 }
 

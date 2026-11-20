@@ -191,6 +191,21 @@ q = nil
 ---@field amount? number
 ---@field color? string
 
+---@class Steppe.chord_remove_args
+---@field at number
+
+---@class Steppe.chord_remove_result
+---@field warnings? table[]
+
+---@class Steppe.chord_set_args
+---@field at number
+---@field symbol? string
+---@field to? number
+
+---@class Steppe.chord_set_result
+---@field id string
+---@field warnings? table[]
+
 ---@class Steppe.clip_add_args
 ---@field track string Track id, e.g. "tr_1".
 ---@field scene string Scene id, e.g. "sc_1".
@@ -245,6 +260,42 @@ q = nil
 ---@field quantize? any
 
 ---@class Steppe.clip_set_result
+---@field warnings? table[]
+
+---@class Steppe.context_at_args
+---@field at? number
+---@field bar? integer
+
+---@class Steppe.context_at_result
+---@field beat number
+---@field bar integer
+---@field beat_in_bar number
+---@field key? table
+---@field chord? table
+---@field section? table
+---@field warnings? table[]
+
+---@class Steppe.context_get_args
+---@field from? number
+---@field to? number
+
+---@class Steppe.context_get_result
+---@field text? string
+---@field points table[]
+---@field key? table
+---@field chord? table
+---@field warnings? table[]
+
+---@class Steppe.context_write_args
+---@field text string
+
+---@class Steppe.context_write_result
+---@field first_bar integer
+---@field last_bar integer
+---@field added integer
+---@field replaced integer
+---@field removed integer
+---@field unchanged integer
 ---@field warnings? table[]
 
 ---@class Steppe.crash_acknowledge_args
@@ -1025,6 +1076,22 @@ q = nil
 ---@field job string
 ---@field timeout_s? number Seconds to block (default 30). A larger value is clamped to 30 and reported as timeout_clamped_s.
 
+---@class Steppe.key_remove_args
+---@field at number
+
+---@class Steppe.key_remove_result
+---@field warnings? table[]
+
+---@class Steppe.key_set_args
+---@field at number
+---@field tonic? string
+---@field scale? string
+---@field to? number
+
+---@class Steppe.key_set_result
+---@field id string
+---@field warnings? table[]
+
 ---@class Steppe.log_list_args
 ---@field limit? integer
 ---@field since? integer
@@ -1068,6 +1135,7 @@ q = nil
 
 ---@class Steppe.midi_get_result
 ---@field text string
+---@field context? table
 ---@field warnings? table[]
 
 ---@class Steppe.midi_inputs_set_args
@@ -1511,6 +1579,7 @@ q = nil
 ---@field end? number
 ---@field name? string
 ---@field color? string
+---@field section? boolean Whether the region is a section of the song, which context.at and session.describe report [true]
 
 ---@class Steppe.region_add_result
 ---@field id string
@@ -1532,6 +1601,7 @@ q = nil
 ---@field end? number
 ---@field name? string
 ---@field color? string
+---@field section? boolean Whether the region is a section of the song, which context.at and session.describe report [true]
 
 ---@class Steppe.region_set_result
 ---@field warnings? table[]
@@ -2433,12 +2503,21 @@ q = nil
 ---@field remove fun(args?: Steppe.cable_remove_args): table Remove a cable, by id or by its two ends.
 ---@field set fun(args: Steppe.cable_set_args): table Set a modulation cable's amount or a cable's colour.
 
+---@class Steppe.chord
+---@field remove fun(args: Steppe.chord_remove_args): Steppe.chord_remove_result Remove the chord point at a beat: the chord before it continues.
+---@field set fun(args: Steppe.chord_set_args): Steppe.chord_set_result Set the chord from a beat, until the next chord point; "" ends it.
+
 ---@class Steppe.clip
 ---@field add fun(args: Steppe.clip_add_args): Steppe.clip_add_result Add a clip to a channel's cell in a scene, from notation, a file or an item.
 ---@field duplicate fun(args: Steppe.clip_duplicate_args): Steppe.clip_duplicate_result Copy a clip and its takes to an empty cell.
 ---@field move fun(args: Steppe.clip_move_args): Steppe.clip_move_result Move a clip to an empty cell: another scene, another channel, or both.
 ---@field remove fun(args: Steppe.clip_remove_args): Steppe.clip_remove_result Remove a clip with its takes (unpooled sources go too).
 ---@field set fun(args: Steppe.clip_set_args): Steppe.clip_set_result Set a clip's name, colour, mute, gain, length, loop, mode or quantize.
+
+---@class Steppe.context
+---@field at fun(args?: Steppe.context_at_args): Steppe.context_at_result What key, chord and section hold at a beat or bar.
+---@field get fun(args?: Steppe.context_get_args): Steppe.context_get_result List the key and chord points in a range of beats.
+---@field write fun(args: Steppe.context_write_args): Steppe.context_write_result Write key and chord points from a lead sheet over the bars it names.
 
 ---@class Steppe.crash
 ---@field acknowledge fun(args: Steppe.crash_acknowledge_args): table Mark a crash report, or a run that left none, as seen.
@@ -2561,6 +2640,10 @@ q = nil
 ---@field status fun(args: Steppe.job_status_args): table Get a job's status.
 ---@field wait fun(args: Steppe.job_wait_args): table Wait for a job.
 
+---@class Steppe.key
+---@field remove fun(args: Steppe.key_remove_args): Steppe.key_remove_result Remove the key point at a beat: the key before it continues.
+---@field set fun(args: Steppe.key_set_args): Steppe.key_set_result Set the key from a beat: tonic and scale, until the next key point.
+
 ---@class Steppe.log
 ---@field list fun(args?: Steppe.log_list_args): table Recent commands with origin, arguments and outcome (the command log).
 
@@ -2572,7 +2655,7 @@ q = nil
 
 ---@class Steppe.midi
 ---@field edit fun(args: Steppe.midi_edit_args): table Edit a MIDI item's notes and CCs: add, remove, move, resize, velocity, quantize.
----@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's or clip's MIDI as notation.
+---@field get fun(args: Steppe.midi_get_args): Steppe.midi_get_result Read an item's or clip's MIDI as notation, with its key and chords.
 ---@field notes fun(args: Steppe.midi_notes_args): table List a MIDI item's or clip's notes and CC points (beats from its start).
 ---@field write fun(args: Steppe.midi_write_args): Steppe.midi_write_result Replace an item's or clip's MIDI with notation (keeping its place and length).
 
@@ -2713,7 +2796,7 @@ q = nil
 ---@field run fun(args: Steppe.script_run_args): Steppe.script_run_result Run a Lua script on the command bus.
 
 ---@class Steppe.session
----@field describe fun(): Steppe.session_describe_result Describe the whole session in compact text (tracks, items, fx, routes).
+---@field describe fun(): Steppe.session_describe_result Describe the whole session in compact text (tracks, items, fx, routes, key).
 
 ---@class Steppe.sync
 ---@field get fun(): Steppe.sync_get_result Show external sync settings and what the engine hears from the master.
@@ -2807,7 +2890,9 @@ q = nil
 ---@field autoitem Steppe.autoitem Commands named autoitem.*
 ---@field branch Steppe.branch Commands named branch.*
 ---@field cable Steppe.cable Commands named cable.*
+---@field chord Steppe.chord Commands named chord.*
 ---@field clip Steppe.clip Commands named clip.*
+---@field context Steppe.context Commands named context.*
 ---@field crash Steppe.crash Commands named crash.*
 ---@field dsp Steppe.dsp Commands named dsp.*
 ---@field engine Steppe.engine Commands named engine.*
@@ -2817,6 +2902,7 @@ q = nil
 ---@field history Steppe.history Commands named history.*
 ---@field item Steppe.item Commands named item.*
 ---@field job Steppe.job Commands named job.*
+---@field key Steppe.key Commands named key.*
 ---@field log Steppe.log Commands named log.*
 ---@field marker Steppe.marker Commands named marker.*
 ---@field midi Steppe.midi Commands named midi.*
