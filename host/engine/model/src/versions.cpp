@@ -601,24 +601,7 @@ struct VersionStore::RetainedSize {
         metadataBytes.emplace(v.id, metadata);
         bytes += metadata;
         add(v.id, s.project.get(), measured(s.project));
-        map(v.id, s.tempo);
-        map(v.id, s.meters);
-        map(v.id, s.tracks);
-        map(v.id, s.items);
-        map(v.id, s.takes);
-        map(v.id, s.media);
-        map(v.id, s.midi);
-        map(v.id, s.fx);
-        map(v.id, s.routes);
-        map(v.id, s.envelopes);
-        map(v.id, s.autoItems);
-        map(v.id, s.markers);
-        map(v.id, s.regions);
-        map(v.id, s.groups);
-        map(v.id, s.racks);
-        map(v.id, s.modules);
-        map(v.id, s.cables);
-        map(v.id, s.context);
+        forEachCollection(s, [&](const auto& objects) { map(v.id, objects); });
         for (const auto& [hash, blob] : s.blobs)
             add(v.id, blob.get(), sizeof(Blob) + blob->data.size());
     }

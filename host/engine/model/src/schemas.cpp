@@ -1465,6 +1465,14 @@ void migrateChainMidi(json::Value& doc) {
 }
 }  // namespace
 
+bool isKnownProjectSection(std::string_view section) {
+    static const std::set<std::string_view> known{
+        "schema", "project", "tempo",  "rulers",    "tracks",           "items", "takes",
+        "fx",     "sources", "routes", "envelopes", "automation_items", "blobs", "groups",
+        "racks",  "modules", "cables", "branches",  "context"};
+    return known.contains(section);
+}
+
 Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Warning>* warnings) {
     json::Value doc = input;
     if (!doc.isObject()) return Error("project.type", "a project is a JSON object");
@@ -1576,15 +1584,11 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     auto warn = [&](std::string code, std::string message, std::string path) {
         if (warnings) warnings->push_back({std::move(code), std::move(message), std::move(path)});
     };
-    const std::set<std::string_view> known{
-        "schema", "project", "tempo",  "rulers",    "tracks",           "items", "takes",
-        "fx",     "sources", "routes", "envelopes", "automation_items", "blobs", "groups",
-        "racks",  "modules", "cables", "branches",  "context"};
     for (const auto& section : doc.asObject()) {
         const auto path = json::pointerJoin("", section.key);
         if (section.key == "ui") {
             warn("project.ui_sidecar", "ignored UI state; it lives in <name>.ui.json", path);
-        } else if (!known.count(section.key)) {
+        } else if (!isKnownProjectSection(section.key)) {
             if (section.key == "extensions" && !section.value.isObject())
                 errors.emplace_back("schema.type", "expected an extensions object", path);
             else {

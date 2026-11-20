@@ -287,30 +287,13 @@ struct Checker {
     }
 
     void counters() {
-        auto check = [&](auto& map, Kind k) {
+        forEachCollection(s, [&]<class T>(const IdMap<T>& map) {
+            const Kind k = Traits<T>::kind;
             for (const auto& e : map)
                 if (e.id.n >= s.next[k])
                     fail("/project/next_ids/" + std::string(prefix(k)),
                          "counter " + std::to_string(s.next[k]) + " is not past " + e.id.str());
-        };
-        check(s.tempo, Kind::TempoPoint);
-        check(s.meters, Kind::Meter);
-        check(s.tracks, Kind::Track);
-        check(s.groups, Kind::Group);
-        check(s.items, Kind::Item);
-        check(s.takes, Kind::Take);
-        check(s.media, Kind::Media);
-        check(s.midi, Kind::Midi);
-        check(s.fx, Kind::Fx);
-        check(s.routes, Kind::Route);
-        check(s.envelopes, Kind::Envelope);
-        check(s.autoItems, Kind::AutoItem);
-        check(s.markers, Kind::Marker);
-        check(s.regions, Kind::Region);
-        check(s.racks, Kind::Rack);
-        check(s.modules, Kind::Module);
-        check(s.cables, Kind::Cable);
-        check(s.context, Kind::Context);
+        });
     }
 
     void tracks() {
@@ -1027,6 +1010,55 @@ void diffMap(const IdMap<T>& a, const IdMap<T>& b, std::vector<ObjectDiff>& out)
     }
 }
 
+// Where a kind's objects sit in a diff (the spec's "kind order as in section 1"). Every
+// kind is named, so one added to Kind is a -Wswitch error here.
+int diffRank(Kind k) {
+    switch (k) {
+        case Kind::Project:
+            return 0;
+        case Kind::TempoPoint:
+            return 1;
+        case Kind::Meter:
+            return 2;
+        case Kind::Marker:
+            return 3;
+        case Kind::Region:
+            return 4;
+        case Kind::Track:
+            return 5;
+        case Kind::Group:
+            return 6;
+        case Kind::Item:
+            return 7;
+        case Kind::Take:
+            return 8;
+        case Kind::Fx:
+            return 9;
+        case Kind::Media:
+            return 10;
+        case Kind::Midi:
+            return 11;
+        case Kind::Route:
+            return 12;
+        case Kind::Envelope:
+            return 13;
+        case Kind::AutoItem:
+            return 14;
+        case Kind::Rack:
+            return 15;
+        case Kind::Module:
+            return 16;
+        case Kind::Cable:
+            return 17;
+        case Kind::Context:
+            return 18;
+        case Kind::Lane:
+        case Kind::RenderJob:
+            return 19;  // not objects of a session's collections
+    }
+    return 19;
+}
+
 }  // namespace
 
 std::vector<ObjectDiff> diff(const Session& a, const Session& b) {
@@ -1040,25 +1072,15 @@ std::vector<ObjectDiff> diff(const Session& a, const Session& b) {
     for (const auto& member : to.asObject())
         if (!from.find(member.key)) fields.push_back(member.key);
     if (!fields.empty()) out.push_back({Change::Op::Update, kProject, std::move(fields)});
-    // Kind order as in session-model §1 (tempo, rulers, tracks, items, …).
-    diffMap(a.tempo, b.tempo, out);
-    diffMap(a.meters, b.meters, out);
-    diffMap(a.markers, b.markers, out);
-    diffMap(a.regions, b.regions, out);
-    diffMap(a.tracks, b.tracks, out);
-    diffMap(a.groups, b.groups, out);
-    diffMap(a.items, b.items, out);
-    diffMap(a.takes, b.takes, out);
-    diffMap(a.fx, b.fx, out);
-    diffMap(a.media, b.media, out);
-    diffMap(a.midi, b.midi, out);
-    diffMap(a.routes, b.routes, out);
-    diffMap(a.envelopes, b.envelopes, out);
-    diffMap(a.autoItems, b.autoItems, out);
-    diffMap(a.racks, b.racks, out);
-    diffMap(a.modules, b.modules, out);
-    diffMap(a.cables, b.cables, out);
-    diffMap(a.context, b.context, out);
+    // Every collection (forEachCollection lists them all), then in the spec's kind order;
+    // the sort is stable, so objects of one kind stay in ID order.
+    const auto objects = static_cast<std::ptrdiff_t>(out.size());
+    forEachCollection(
+        a, [&]<class T>(const IdMap<T>& before) { diffMap(before, Traits<T>::map(b), out); });
+    std::stable_sort(out.begin() + objects, out.end(),
+                     [](const ObjectDiff& x, const ObjectDiff& y) {
+                         return diffRank(x.id.kind) < diffRank(y.id.kind);
+                     });
     return out;
 }
 

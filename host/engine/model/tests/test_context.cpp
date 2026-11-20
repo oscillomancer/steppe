@@ -362,3 +362,28 @@ TEST_CASE("a saved branch without the cx counter is not handed an id its lineage
     EditTxn u(*back.head("other"), back.nextVersion());
     CHECK(u.create(chord(8, "G")) == Id{Kind::Context, 3});
 }
+
+// A branch's saved state is the objects that differ from main, by pointer. The depth of
+// each section is a hand-kept list (objectDepth): a section it does not know is saved
+// whole, which is correct but is not the object-level delta the file promises.
+TEST_CASE("a saved branch records a changed context point, not the whole section") {
+    VersionStore vs(Session::create());
+    addPoint(vs, chord(0, "C"));
+    addPoint(vs, chord(4, "F"));  // cx_2
+    REQUIRE(vs.createBranch("other", "main"));
+    REQUIRE(vs.undo());  // main is back at cx_1; "other" still holds cx_2
+    const json::Value doc = projectFileToJson(vs, true);
+    const auto* versions = doc.find("branches") ? doc.find("branches")->find("versions") : nullptr;
+    REQUIRE(versions);
+    bool found = false;
+    for (const auto& v : versions->asObject()) {
+        const auto* state = v.value.find("state");
+        const auto* set = state ? state->find("set") : nullptr;
+        if (!set) continue;
+        for (const auto& m : set->asObject()) {
+            CHECK(m.key != "/context");  // not the whole section
+            if (m.key == "/context/points/cx_2") found = true;
+        }
+    }
+    CHECK(found);
+}

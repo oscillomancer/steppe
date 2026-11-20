@@ -54,6 +54,16 @@ cable, `cx` context point. `tr_0` is the main master. The rack kinds' and the
 context kind's counters are written once they pass 1 (a project without racks
 keeps its 2.6 `next_ids`). Every prefix is distinct and non-empty; the build
 checks it.
+
+Adding a kind or a `Session` collection leaves no list to forget: the build
+fails until each hand-kept one names it. `forEachCollection` (one binding of
+every `Session` member) drives the counters check, `diff`, revision sharing on
+load and retained-size accounting; the `Kind` switches and `diffRank` name
+every kind (`-Wswitch`, checked under Clang and GCC); the scalar, mix and
+patch comparisons and the transaction builders bind every member. The
+file-section lists, which a compiler cannot see, are checked by a test that
+writes one object per collection: the loader's known sections and
+`objectDepth` (what a saved branch's state names) must agree with the document.
 Events inside containers (MIDI notes, envelope points, stretch markers) are
 not objects (ADR-0008).
 

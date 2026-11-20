@@ -58,6 +58,39 @@ struct Session {
     static Session create(Project project = {});
 };
 
+// Calls f(map) with each of the Session's object collections (IdMap<T>), in member order.
+// Every per-collection loop goes through here (counters check, diff, revision sharing,
+// retained-size accounting), so a collection left out of one cannot happen. The binding
+// names every Session member: one added to Session is a build error here until it is
+// listed, and then a collection is visited by all of those loops at once. The derived
+// view, the blobs and the sections are not collections.
+template <class S, class F>
+void forEachCollection(S& s, F&& f) {
+    auto& [project, next, tempo, meters, timeMap, tracks, groups, items, takes, media, midi, fx,
+           routes, envelopes, autoItems, markers, regions, racks, modules, cables, context,
+           contextView, blobs, extraSections, version] = s;
+    (void)project, (void)next, (void)timeMap, (void)contextView, (void)blobs, (void)extraSections,
+        (void)version;
+    f(tempo);
+    f(meters);
+    f(tracks);
+    f(groups);
+    f(items);
+    f(takes);
+    f(media);
+    f(midi);
+    f(fx);
+    f(routes);
+    f(envelopes);
+    f(autoItems);
+    f(markers);
+    f(regions);
+    f(racks);
+    f(modules);
+    f(cables);
+    f(context);
+}
+
 // An EditTxn's per-collection builders (created on first touch).
 struct TxnBuilders {
     std::optional<IdMap<TempoPointObj>::Builder> tempo;
