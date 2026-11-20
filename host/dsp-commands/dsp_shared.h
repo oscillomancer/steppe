@@ -489,7 +489,7 @@ void registerDspCommands(cmd::Registry& registry, cmd::Exposure exposure = cmd::
         c.name = "dsp.edit";
         c.kind = Kind::Action;
         c.exposure = exposure;
-        c.summary = "Change part of a library script by replacing text; compile it, as dsp.write.";
+        c.summary = "Replace text in a library script and compile it, as dsp.write.";
         c.description =
             "For a change to part of a script, instead of sending all of it to dsp.write. Each "
             "edit replaces old, which must be in the script exactly once, with new (empty "

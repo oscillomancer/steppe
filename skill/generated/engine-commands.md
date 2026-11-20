@@ -116,7 +116,7 @@ Result:
 
 ## `analyze.render@1`
 
-Analyze a render id or audio path: loudness, spectrum, envelope and stereo.
+Analyze a render or audio file: loudness, spectrum, envelope, stereo.
 
 
 
@@ -199,7 +199,7 @@ Result:
 
 ## `arrangement.build@1`
 
-Lay a song out from scenes: each for some bars, one after the other.
+Lay a song out from scenes, each for some bars, in order.
 
 scene.insert for each entry of sequence in turn, each starting where the last ended, from bar or at (default bar 1), with a section for each. A scene may appear more than once. Every entry's refusal (scene.empty, scene.insert.period, scene.insert.occupied) names its index in path, and changes nothing; an empty sequence or one of more than 256 entries is scene.sequence. One undo step.
 
@@ -479,7 +479,7 @@ Result:
 
 ## `audition.get@1`
 
-Whether a file audition plays: its path, length and position (seconds).
+Whether an audition plays: path, length, position (seconds).
 
 
 
@@ -1071,7 +1071,7 @@ Result:
 
 ## `branch.create@1`
 
-Start a branch from a branch's head or an earlier version, and switch to it.
+Start a branch from a head or an earlier version and switch to it.
 
 Agents: work on agent/<you>/<topic> branches, then branch.diff and branch.merge into main. Merging replays your edits onto main even if main moved; conflicting edits are reported.
 
@@ -1186,7 +1186,7 @@ Result:
 
 ## `branch.diff@1`
 
-What differs between two branch heads: objects added, removed, changed (fields).
+What differs between two branch heads: added, removed, changed objects.
 
 
 
@@ -1677,7 +1677,7 @@ Result:
 
 ## `chord.remove@1`
 
-Remove the chord point at a beat: the chord before it continues.
+Remove the chord point at a beat.
 
 
 
@@ -1728,7 +1728,7 @@ Result:
 
 ## `chord.set@1`
 
-Set the chord from a beat, until the next chord point; "" ends it.
+Set the chord from a beat; "" ends it.
 
 Adds a chord point at `at` (project beats, rounded to 1/960) or changes the one there. `to` moves the point at `at` to another beat and keeps its id. symbol is the notation's chord grammar: a root, a quality and an optional /bass (Cm7, Bb, F#7#9, C/E); an empty symbol means no chord from here. The symbol is stored in canonical form (Cmin7 becomes Cm7).
 
@@ -2414,7 +2414,7 @@ Result:
 
 ## `context.write@1`
 
-Write key and chord points from a lead sheet over the bars it names.
+Write key and chord points from a lead sheet.
 
 text is context.get's lead sheet: one line per project bar, 'N: ' then {SYMBOL}:DUR (a chord point at the cursor), r:DUR (a chord point with no chord), ~:DUR (hold: no point) and 'key TONIC SCALE' (a key point at the cursor, no time), where DUR is the notation's duration (q, h., h+q, 480t) and a bar's durations must fill it. Bars run in order from the first named to the last. The write is a diff over that span: points equal in beat and content are left alone (ids kept), points in the span the text omits are removed, the rest are added or replaced. History records the key.set, chord.set and remove operations it came to, so branches that write different bars merge. Keys and chords both follow the text: to leave the key alone, include it. Errors name the bar; nothing is changed when one occurs.
 
@@ -2963,7 +2963,7 @@ Result:
 
 ## `dsp.edit@1`
 
-Change part of a library script by replacing text; compile it, as dsp.write.
+Replace text in a library script and compile it, as dsp.write.
 
 For a change to part of a script, instead of sending all of it to dsp.write. Each edit replaces old, which must be in the script exactly once, with new (empty deletes it). The edits apply in order, each to the script as the ones before left it, and all or none: when one fails, nothing is saved and the error says where old and the script part. Then as dsp.write: it saves the script, compiles it and returns the diagnostics; instances playing it follow within half a second.
 
@@ -3173,7 +3173,7 @@ Result:
 
 ## `dsp.export@1`
 
-Export a DSP script as a plugin for other DAWs: a CLAP file, or C++ source.
+Export a DSP script as a plugin: a CLAP file, or C++ source.
 
 format clap (the default): copies the platform's script player and embeds the script in its trailer (Linux/Windows) or bundle resource (macOS, re-signed ad hoc with the system codesign tool). The copy is a plugin of its own, under the script's id and name, that plays this version of the script in any CLAP host (it reads no library), written to <folder>/<plugin name>.clap (default: the script's folder, under export/) with the licenses to ship beside it (notices). It runs on this platform, as fast as the player it copies (a debug build's is slow). format source: a C++ project of the plugin template that builds the same plugin (same id, parameters and state) as CLAP and VST3, plus AU on macOS, with the script compiled as C++, written to the empty <folder> (default: the script's folder, under export/<script>-source); its README says how to build it, and license (MIT unless GPL-3.0-or-later) is the license of its own files. Export again after changing the script; an export does not follow the library.
 
@@ -3608,7 +3608,7 @@ Result:
 
 ## `dsp.test@1`
 
-Play test signals or notes through a plugin and measure it: levels, THD, pitch.
+Play test signals or notes through a plugin; measure levels, THD, pitch.
 
 Give plugin (an id: a script's, or any effect's or instrument's) or script (a name in the library). A fresh instance, set by patch (a merge patch) when given, plays each signal. An effect: sine (frequency_hz; gain_db and thd_percent), sweep (20 Hz to 20 kHz), impulse (response_db at octave centres), pink noise and silence, each peaking at level_db; and file, audio_file played as it is (resampled to the render's rate, mono on both channels, at most 60 s), the only signal when signals is not given. An instrument, at velocity 0.8: notes (a note, then a chord), note (A4; pitch_hz, the pitch heard), and silence (no notes); release_ms is how long the sound lasts after the last release. Each reports peak and RMS in dBFS, DC, samples beyond 0 dBFS and denormals; problems says in words what looks wrong (clipping, DC, sound from silence, no output, a note out of tune, sound that never dies away, non-finite samples the framework silenced, a script stopped by its loop budget or indexing outside an array). cpu_percent is measured, so it varies between runs. save: true keeps each output as a WAV (path) for analyze and compare. automation is a list of {param, at_s, value}: semantic patch keys and physical values, as discrete sample-accurate changes applied to every signal (no implicit ramps). automation.max_step is the largest adjacent-sample change in full-scale amplitude; baseline_max_step uses the same render without automation; excess_step is their positive difference. A step above both four times baseline and 0.05 suggests clicks or zipper noise: a screening heuristic, not proof of an artifact or of inaudibility. sidechain supplies a timed key; its middle half is measured against a connected silent key with identical automation: gain_change_db is negative for ducking, null if either output is below -120 dBFS. Slow attack may not settle in that window. Each pass has a fresh instance and initial patch. THD and impulse response are omitted during automation or a non-silent key; gain_db then describes the changing render, not static gain. notes supplies an instrument's sequence ({key, velocity, start_s, length_s}), replacing the notes signal; defaults become notes and silence. Do not combine it with the A4 note signal or select only silence. release_ms starts at its last note-off. Times round to samples at the render rate; spans must fit within seconds. sample_rate renders at that rate instead of the session's (sandbox) or the project's (DAW); latency is in samples at the rate used, which sample_rate in the result reports. meters gives a semantic plugin's read-only parameters (its meters and readouts) by patch key in physical units, as they stood when the signal ended (the tail after it does not move them). traces gives what a script's trace(name, value) calls recorded over the signal, in trace_points intervals of trace_interval_s: for each name, the last value in each interval and the lowest and highest, null where none was given.
 
@@ -4210,7 +4210,7 @@ Result:
 
 ## `engine.devices@1`
 
-List native audio device names, host APIs, rates and channel capacities.
+List audio devices: names, host APIs, rates, channel counts.
 
 Enumerates PortAudio devices on macOS/Windows without opening a stream. backend defaults to portaudio; dummy returns an empty list without initializing hardware. Use exact host_api and name values with engine.start. Linux uses JACK ports and returns backend.unsupported; engine.inputs lists running JACK inputs.
 
@@ -4308,7 +4308,7 @@ Result:
 
 ## `engine.inputs@1`
 
-The device's audio inputs, MIDI devices and the outputs masters play to.
+The device's audio inputs, MIDI devices and master outputs.
 
 audio: one entry per input channel (channel, the 1-based number track.set record_input takes, and the device port it is connected to). midi: the MIDI devices (names track.set record_midi matches; JACK ports or native CoreMIDI/WinMM inputs, fixed until restart). midi_outputs: destination names for the hardware output API (routing and clock generation are separate). outputs: one entry per output channel (channel, the number track.set hw_output takes for a master, and the port it is connected to). While the engine is stopped: running false and empty lists (engine.start opens the device).
 
@@ -5144,7 +5144,7 @@ Result:
 
 ## `engine.status@1`
 
-Real-time engine state: backend, rate, block, device period, latency, xruns.
+Engine state: backend, rate, block, device period, latency, xruns.
 
 preparing_audio: source preparation is pending; the previous ready plan stays audible. prepared_version is the last compiled version, preparation_version the pending target (zero when idle); preparation_error explains a failed preparation. plan_latency: plugin delay plus prepared MIDI audio lead in frames; midi_lead_frames reports the latter. midi_inputs/midi_outputs give per-port enabled/timing/loss/warnings, and for outputs what each sends (clock, transport, spp, mtc), as midi.inputs.get/midi.outputs.get. device_latency: frames from the engine's outputs to the device. restart_needed: the device changed rate or went away; engine.stop and engine.start again. midi_devices_changed is advisory: MIDI topology changed but audio keeps running. midi_devices_message asks for an explicit engine restart to pick up the new set; existing port names stay fixed. midi_out_dropped counts hardware output rejections, queue/device loss and pending events discarded at shutdown. midi_output_warnings lists outputs skipped at start; midi_output_latency is signed audio-minus-MIDI latency per output, in frames. sync: external sync (sync.get has the same status with the settings). midi_dropped: MIDI input messages/packets rejected or lost to bounded queues (JACK and native; zero for the dummy backend). midi_warnings lists inputs skipped at start, with device, numeric os_error, message and corrective hint. meter_drops: entries a full ring dropped (the renderer's, the audio callback's) — a track's peak/RMS missed a block, never audio. dropped/voice_dropped count lost plug-in output/voice records. memory_lock reports requested/active and an optional OS error with errno and a corrective hint, including while stopped. Bridges are excluded. cpu_idle_latency reports the owned 20 microsecond request with the same status/error fields, and automatic: held without the option because a bridged plug-in plays live (Linux; an automatic failure is no warning). It affects system idle while held and leaves CPU frequency policy unchanged. thp_opt_out: active, advised_only, inherited (the process was already kept out when the engine started; left as it was, not undone at stop) and an optional error, Linux only (khugepaged collapsing memory would stall audio threads). audio_page_faults: page faults since the engine started; scope audio_threads counts the callback's and live helpers' (Linux), process the whole process's (macOS, Windows, where major is omitted), none while stopped; saturated: the platform's counter stopped at its limit (macOS 32-bit counts), so minor is 0 and major omitted, not counts. live_helpers is the enabled live helper capacity. scheduling: each thread class's policy (none, normal, fifo, rr, high) and priority as applied at start: the device callback, live helpers, renderer and background helpers (real-time below a real-time callback when permitted). workgroup: whether the live helpers joined the device's audio workgroup (macOS CoreAudio; state none, ready, joined, partial or failed, with the helper counts and the last refusal's OS error, message and hint). warnings includes scheduling fallbacks and plan warnings with corrective actions. failed_errors adds structured code, message, path and hint to each failure, and `incident`, the id of the local crash report the bridge's death may have caused (crash.read; the report may not exist), when it died of a signal or an exception. failed_fx: isolated plugins whose process crashed or hung (silent now; fx.restart re-creates them). bridge_late: callback cycles in which a bridged plugin had not answered by the cycle's bridge deadline (its period or 2 ms, whichever is larger); its output was silent for that cycle, and xruns counts each of these cycles too. bridge_threads_refused: isolated plugins whose bridge audio thread was refused the scheduling it asked for (it runs at what it had and can fall behind under load; grant real-time scheduling to the user and restart the engine).
 
@@ -6412,7 +6412,7 @@ Result:
 
 ## `env.set@1`
 
-Set an envelope's options: active (heard), mode (read, touch, latch, write).
+Set an envelope's active flag and mode (read, touch, latch, write).
 
 visible shows or hides the envelope's lane in the arrange view (a hidden envelope still plays while active).
 
@@ -9429,7 +9429,7 @@ Kind: `edit`. Exposure: `internal`.
 
 ## `item.duplicate@1`
 
-Copy an item and its takes to a new beat position (default: immediately after).
+Copy an item and its takes to a new position (default: right after).
 
 
 
@@ -9495,7 +9495,7 @@ Result:
 
 ## `item.explode-takes@1`
 
-Spread an item's takes onto new tracks, or one after another on its track.
+Spread an item's takes onto new tracks, or in turn on its track.
 
 In recording order. mode tracks: the first take stays on the item's track and each other take gets a new channel right below it (named after the take) at the same time. mode serial: the takes follow each other on the item's own track, each as long as the item. Every take becomes a one-take item with its FX and envelopes.
 
@@ -9878,7 +9878,7 @@ Result:
 
 ## `item.paste@1`
 
-Copy items as they were in a version (a clipboard) to tracks and beats.
+Copy items as they were in a version to tracks and beats.
 
 version: where the items are read (default: now) — a GUI copy or cut remembers the version, so a paste reproduces the items as copied even after they were removed or edited. items: [{item, track, position}] (beats; channels only). Takes, fades, take FX and MIDI are copied; an audio source the project no longer has is restored.
 
@@ -10465,7 +10465,7 @@ Result:
 
 ## `key.remove@1`
 
-Remove the key point at a beat: the key before it continues.
+Remove the key point at a beat.
 
 
 
@@ -10516,7 +10516,7 @@ Result:
 
 ## `key.set@1`
 
-Set the key from a beat: tonic and scale, until the next key point.
+Set the key from a beat: tonic and scale.
 
 Adds a key point at `at` (project beats, rounded to 1/960) or changes the one there. `to` moves the point at `at` to another beat and keeps its id. tonic is a letter and at most one # or b (Eb, F#); scale is one of: major, minor, harmonic_minor, melodic_minor, dorian, phrygian, lydian, mixolydian, locrian, major_pentatonic, minor_pentatonic, blues, chromatic. A key that needs a double accidental (G# major) is refused: use the enharmonic one (Ab major). Notation, the piano roll and midi.edit read it.
 
@@ -10578,7 +10578,7 @@ Result:
 
 ## `launch.arrangement@1`
 
-Return a track, or every track, to the arrangement at the boundary.
+Return tracks to the arrangement at the next boundary.
 
 It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Returning does not chase notes: an arrangement note already under way stays silent until its next start. Without track: every track not following the arrangement, or queued to leave it. A frozen track already follows the arrangement: nothing changes.
 
@@ -10669,7 +10669,7 @@ Result:
 
 ## `launch.capture@1`
 
-Start or end capturing launches, to write them onto the timeline.
+Start or end capturing launches for the timeline.
 
 While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time.
 
@@ -10852,6 +10852,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | --- | --- | --- | --- | --- | --- |
 | `pooled` | boolean |  |  | false | Share the clips' MIDI with the items (pooled) instead of copying it |
 | `performance` | object |  |  |  | What history records; launch.commit fills it from the capture |
+| `performance.sample_rate` | number |  | ..1536000.0 |  |  |
+| `performance.start` | integer |  | 0.0..140737488355328.0 |  |  |
+| `performance.frames` | integer |  | 0.0..140737488355328.0 |  |  |
+| `performance.loop` | object |  |  |  |  |
+| `performance.launches` | array |  |  |  |  |
 
 ### Result
 
@@ -10938,7 +10943,7 @@ Result:
 
 ## `launch.scene@1`
 
-Play every clip of a scene together, one target for all tracks.
+Play every clip of a scene together at one boundary.
 
 It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning, a clip past the memory budget with a launch.memory warning.
 
@@ -11150,7 +11155,7 @@ Result:
 
 ## `launch.stop@1`
 
-Silence a track's clip, or every playing clip, at the next boundary.
+Stop a track's clip, or all clips, at the next boundary.
 
 It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. A stopped track is silent until a clip is launched or it returns to the arrangement. Without track: every track a clip holds or is queued to hold. A frozen track already follows the arrangement: nothing changes.
 
@@ -12026,7 +12031,7 @@ Result:
 
 ## `modulate@1`
 
-Modulate a parameter or mixer level with an LFO, follower, random or macro.
+Modulate a parameter or mixer level: LFO, follower, random, macro.
 
 The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A parameter reached through its envelope (fx.describe: modulatable_by_envelope) gets a one-point envelope at its current value first when it has none. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set.
 
@@ -12128,7 +12133,7 @@ Result:
 
 ## `modulation.add@1`
 
-Route a rack's Mod Out input to a plug-in parameter or a mixer level.
+Route a rack's Mod Out to a plug-in parameter or mixer level.
 
 depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset directly; one marked modulatable_by_envelope (automatable, continuous, not modulatable, or any VST3's) takes it through its active envelope, which must exist (modulation.envelope; modulate adds one), and for a VST3 depth is a fraction of its normalized range; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range.
 
@@ -12203,7 +12208,7 @@ Result:
 
 ## `modulation.list@1`
 
-List modulation routes, by target track, FX or source rack.
+List modulation routes by target or source rack.
 
 Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase), fed_by (each cable into that input: its module, output and module type) and, when the plan cannot apply it, inert: source (nothing is cabled into the input), target (the parameter cannot take it, or the target's track is frozen and its level is outside the print), envelope (a parameter reached through its envelope, which is gone or off) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
 
@@ -12493,7 +12498,7 @@ Result:
 
 ## `modulation.telemetry@1`
 
-Read each modulation route's live target offset and its span.
+Read each modulation route's live offset and span.
 
 offset: the route's target's current offset, the sum of every route on it, as the engine last applied it (a plug-in parameter's as a fraction of its range, a volume's in dB, a pan's or width's in percent); absent while no running plan applies the route. low and high: what this route alone can add, depth times its signal range (bipolar -1..1, unipolar 0..1), in the same unit; absent while nothing is cabled into its Mod Out input.
 
@@ -12669,7 +12674,7 @@ Result:
 
 ## `module.check@1`
 
-Compile a module without saving it; return its diagnostics and description.
+Compile a module without saving; return diagnostics and description.
 
 source (a whole module) or name (one in the library). ok is true when it compiles; type then describes it as module.describe would.
 
@@ -14392,7 +14397,7 @@ Result:
 
 ## `project.plugins@1`
 
-The plug-ins a project, or a recovery, names, and any a crash report suspects.
+Plug-ins a project or recovery names, and any a crash report suspects.
 
 Reads the file as project.open would and loads nothing: no plug-in, no probe. Every branch's head is read, not the history steps behind them. plugins lists each (format, id) once with the name, vendor and version the file saves, uses (its fx in the saved branch), branches, mode (this run's plugin.override), stock and bridgeable, and resolved: the installed plug-in (id, name, vendor, version, path) from the catalogue as it stands, or null (not installed, or the catalogue is empty: catalogue_empty says it is, and no scan was started; plugin.scan first). suspect is null, or says that a crash report points at it and the installed file is that build (build same), that version when the report names no build (version), or could not be checked against it (unreadable): attribution (fault_in_image or active_token) and the incidents, newest first. A plug-in is never loaded to find out. hash is the SHA-256 of the file's bytes: pass it to project.open as expect_hash so the check and the load read the same file. template: true reads a project template (a folder or file) instead. Recovery is checked the same way, before it opens anything: session reads the autosave project.recover {session} would open, autosave: true the one project.recover {autosave: true} would (autosave_file names one, as there). The result's source says which, and autosave names the file read: pass it to project.recover as autosave_file so the check and the load read one file. Give exactly one of path, session and autosave. project.open and project.recover also warn (project.suspect_plugin) of a plug-in still on the normal load.
 
@@ -16781,7 +16786,7 @@ Result:
 
 ## `render.mix@1`
 
-Render the mix offline with the project's render settings (default: whole song).
+Render the mix offline with the project's settings (default: whole song).
 
 Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name.
 
@@ -16943,7 +16948,7 @@ Result:
 
 ## `render.preset.list@1`
 
-Render presets: the factory ones, then the user's, with their settings.
+Render presets, factory then user's, with settings.
 
 default: the user's render default, or null. Presets live in the user's data folder (render-presets/), shared by every project.
 
@@ -17028,7 +17033,7 @@ Result:
 
 ## `render.preset.save@1`
 
-Save render settings as a named preset, or as the user's render default.
+Save render settings as a named preset or the user's default.
 
 settings: what to save (default: the effective settings now). Never saved: stems.tracks, matrix and custom bounds, which belong to one project. A file per preset in the user's data folder; factory presets cannot be overwritten.
 
@@ -17103,7 +17108,7 @@ Result:
 
 ## `render.queue.add@1`
 
-Queue a render (mix, stems or regions) to run later with render.queue.run.
+Queue a render (mix, stems, regions) for render.queue.run.
 
 args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session and settings as they are now (its version, a branch's head when branch is given, and the effective render settings, a loop range as beats), so later edits do not change it; a dry run lists its files now. The queue is transport-like state: not an undo step, not saved with the project.
 
@@ -17243,7 +17248,7 @@ Result:
 
 ## `render.queue.run@1`
 
-Run every queued render in order; each one leaves the queue when it is done.
+Run every queued render in order, removing each when done.
 
 Each render renders the version it was queued at. job: true runs them as one job (job.get for progress). The result lists each render's files under its id.
 
@@ -18328,7 +18333,7 @@ Result:
 
 ## `scene.add@1`
 
-Add a scene (a launcher column) at the end or at an index.
+Add a scene (launcher column) at the end or an index.
 
 at is the column (0-based, default: after the last); the scenes from there on move one column right. A project holds at most 1024 scenes.
 
@@ -18392,7 +18397,7 @@ Result:
 
 ## `scene.capture@1`
 
-Make a scene from the items inside a section: one clip per track.
+Make a scene from a section's items, one clip per track.
 
 For each channel the items overlapping the region must be one item lying wholly inside it: several are scene.capture.items, one that starts before or ends after it scene.capture.edge, one that starts after its start scene.capture.offset (a clip begins at its own start); a region holding no item is scene.capture.empty. Items on a master are skipped with a warning. Each item becomes a clip as clip.add {item} makes it (MIDI copied unless pooled; a warped take is clip.unsupported): loop mode when it fills the region, once when it is shorter. The scene is added after the last, named after the region unless name is given, with its colour. The region and the items are unchanged. One undo step.
 
@@ -18482,7 +18487,7 @@ Result:
 
 ## `scene.insert@1`
 
-Lay a scene's clips on the timeline as items, and mark the span a section.
+Lay a scene's clips on the timeline as items and a section.
 
 The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole bars. Each clip becomes an item on its track at the start, as item.add {clip} makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts the span, as one looping item when it repeats within it, which needs its period to be its content: loop off with its length (as clip.add makes it), or loop on over the whole content with a length of whole repeats (scene.insert.period otherwise). Takes are copied, MIDI with them unless pooled. An item already in the span on a track that receives a clip is refused (scene.insert.occupied), and an empty scene (scene.empty). A section named after the scene (name overrides) is added over the span. One undo step.
 
@@ -18585,7 +18590,7 @@ Result:
 
 ## `scene.list@1`
 
-List the scenes in column order with their clip counts.
+List scenes in column order with clip counts.
 
 
 
@@ -18932,7 +18937,7 @@ Result:
 
 ## `session.describe@1`
 
-Describe the whole session in compact text (tracks, items, fx, routes, key).
+Describe the session in compact text: tracks, items, fx, routes, key.
 
 The quickest way to see where things are; use the IDs it shows with other commands.
 
@@ -19756,7 +19761,7 @@ Result:
 
 ## `take.set@1`
 
-Set take gain, pan, channel mode, name, source offset, or playrate and pitch.
+Set a take's gain, pan, channel mode, name, offset, playrate or pitch.
 
 
 
@@ -20035,7 +20040,7 @@ Result:
 
 ## `tempo.set@1`
 
-Replace the tempo map: points {beat, bpm, ramp?}; the first must be at beat 0.
+Replace the tempo map: points {beat, bpm, ramp?}, the first at beat 0.
 
 ramp: true changes the tempo linearly (in beats) to the next point; otherwise it steps.
 
@@ -22490,7 +22495,7 @@ Result:
 
 ## `transport.playrate.apply-to-tempo@1`
 
-Scale every tempo-point BPM by master playrate, then reset the rate to 1.
+Scale every tempo BPM by the master playrate, then reset it to 1.
 
 One version: multiply every BPM by the saved scalar rate, preserving beat positions, ramp flags and meter changes, and reset rate to 1. Require stopped transport, no recording and no active nonempty master playrate envelope. Reject resulting BPM outside 1..1000 before mutation. Existing item timebases still apply; time-locked audio is not made sound-equivalent by this tempo edit.
 

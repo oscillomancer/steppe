@@ -27,8 +27,8 @@
   },
   {
     "name": "analyze_render",
-    "title": "Analyze a render id or audio path: loudness, spectrum, envelope and stereo.",
-    "description": "Analyze a render id or audio path: loudness, spectrum, envelope and stereo. See describe for errors and examples.",
+    "title": "Analyze a render or audio file: loudness, spectrum, envelope, stereo.",
+    "description": "Analyze a render or audio file: loudness, spectrum, envelope, stereo. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "analyze_render_args",
@@ -136,7 +136,7 @@
   },
   {
     "name": "branch_create",
-    "title": "Start a branch from a branch's head or an earlier version, and switch to it.",
+    "title": "Start a branch from a head or an earlier version and switch to it.",
     "description": "Agents: work on agent/<you>/<topic> branches, then branch.diff and branch.merge into main. Merging replays your edits onto main even if main moved; conflicting edits are reported. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
@@ -171,8 +171,8 @@
   },
   {
     "name": "branch_diff",
-    "title": "What differs between two branch heads: objects added, removed, changed (fields).",
-    "description": "What differs between two branch heads: objects added, removed, changed (fields). See describe for errors and examples.",
+    "title": "What differs between two branch heads: added, removed, changed objects.",
+    "description": "What differs between two branch heads: added, removed, changed objects. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "branch_diff_args",
@@ -837,7 +837,7 @@
   },
   {
     "name": "modulate",
-    "title": "Modulate a parameter or mixer level with an LFO, follower, random or macro.",
+    "title": "Modulate a parameter or mixer level: LFO, follower, random, macro.",
     "description": "The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A parameter reached through its envelope (fx.describe: modulatable_by_envelope) gets a one-point envelope at its current value first when it has none. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
@@ -1004,7 +1004,7 @@
   },
   {
     "name": "render_mix",
-    "title": "Render the mix offline with the project's render settings (default: whole song).",
+    "title": "Render the mix offline with the project's settings (default: whole song).",
     "description": "Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
@@ -1600,7 +1600,7 @@
   },
   {
     "name": "session_describe",
-    "title": "Describe the whole session in compact text (tracks, items, fx, routes, key).",
+    "title": "Describe the session in compact text: tracks, items, fx, routes, key.",
     "description": "The quickest way to see where things are; use the IDs it shows with other commands. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
@@ -1616,7 +1616,7 @@
   },
   {
     "name": "tempo_set",
-    "title": "Replace the tempo map: points {beat, bpm, ramp?}; the first must be at beat 0.",
+    "title": "Replace the tempo map: points {beat, bpm, ramp?}, the first at beat 0.",
     "description": "ramp: true changes the tempo linearly (in beats) to the next point; otherwise it steps. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",

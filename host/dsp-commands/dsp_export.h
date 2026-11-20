@@ -325,7 +325,7 @@ void registerDspExport(cmd::Registry& registry, cmd::Exposure exposure = cmd::Ex
     c.name = "dsp.export";
     c.kind = Kind::Action;
     c.exposure = exposure;
-    c.summary = "Export a DSP script as a plugin for other DAWs: a CLAP file, or C++ source.";
+    c.summary = "Export a DSP script as a plugin: a CLAP file, or C++ source.";
     c.description =
         "format clap (the default): copies the platform's script player and embeds the script "
         "in its trailer (Linux/Windows) or bundle resource (macOS, re-signed ad hoc with the "

@@ -404,7 +404,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
         c.name = "env.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set an envelope's options: active (heard), mode (read, touch, latch, write).";
+        c.summary = "Set an envelope's active flag and mode (read, touch, latch, write).";
         c.description =
             "visible shows or hides the envelope's lane in the arrange view (a hidden envelope "
             "still plays while active).";

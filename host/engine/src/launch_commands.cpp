@@ -274,7 +274,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.name = "launch.scene";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Play every clip of a scene together, one target for all tracks.";
+        c.summary = "Play every clip of a scene together at one boundary.";
         c.description =
             std::string(kWhen) +
             " All the scene's tracks switch at the same boundary, the project's launch_quantize. "
@@ -332,8 +332,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.name = stop ? "launch.stop" : "launch.arrangement";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = stop ? "Silence a track's clip, or every playing clip, at the next boundary."
-                         : "Return a track, or every track, to the arrangement at the boundary.";
+        c.summary = stop ? "Stop a track's clip, or all clips, at the next boundary."
+                         : "Return tracks to the arrangement at the next boundary.";
         c.description =
             std::string(kWhen) +
             (stop ? " A stopped track is silent until a clip is launched or it returns to the "
@@ -441,7 +441,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.name = "launch.capture";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Start or end capturing launches, to write them onto the timeline.";
+        c.summary = "Start or end capturing launches for the timeline.";
         c.description =
             "While on, every applied launch is kept with the running time it applied at, and "
             "what each track played when the capture began. on: true begins at the position "

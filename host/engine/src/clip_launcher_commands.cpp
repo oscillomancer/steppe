@@ -523,7 +523,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a scene (a launcher column) at the end or at an index.";
+        c.summary = "Add a scene (launcher column) at the end or an index.";
         c.description =
             "at is the column (0-based, default: after the last); the scenes from there on "
             "move one column right. A project holds at most 1024 scenes.";
@@ -663,7 +663,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.list";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "List the scenes in column order with their clip counts.";
+        c.summary = "List scenes in column order with clip counts.";
         c.tags = {"clip launcher", "scene"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto entry = schema::object<SceneEntry>("scene_entry")

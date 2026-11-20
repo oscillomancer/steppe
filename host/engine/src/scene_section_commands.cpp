@@ -186,7 +186,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
         c.name = "scene.insert";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Lay a scene's clips on the timeline as items, and mark the span a section.";
+        c.summary = "Lay a scene's clips on the timeline as items and a section.";
         c.description =
             "The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole "
             "bars. Each clip becomes an item on its track at the start, as item.add {clip} "
@@ -255,7 +255,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
         c.name = "scene.capture";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Make a scene from the items inside a section: one clip per track.";
+        c.summary = "Make a scene from a section's items, one clip per track.";
         c.description =
             "For each channel the items overlapping the region must be one item lying wholly "
             "inside it: several are scene.capture.items, one that starts before or ends after "
@@ -409,7 +409,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
         c.name = "arrangement.build";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Lay a song out from scenes: each for some bars, one after the other.";
+        c.summary = "Lay a song out from scenes, each for some bars, in order.";
         c.description =
             "scene.insert for each entry of sequence in turn, each starting where the last ended, "
             "from bar or at (default bar 1), with a section for each. A scene may appear more "

@@ -860,8 +860,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.name = "item.duplicate";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary =
-            "Copy an item and its takes to a new beat position (default: immediately after).";
+        c.summary = "Copy an item and its takes to a new position (default: right after).";
         c.tags = {"item"};
         c.args = schema::object<ItemDuplicateArgs>("item_duplicate_args")
                      .field("bypass_groups", &ItemDuplicateArgs::bypassGroups, schema::boolean())
@@ -909,7 +908,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.name = "item.paste";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Copy items as they were in a version (a clipboard) to tracks and beats.";
+        c.summary = "Copy items as they were in a version to tracks and beats.";
         c.description =
             "version: where the items are read (default: now) — a GUI copy or cut remembers the "
             "version, so a paste reproduces the items as copied even after they were removed or "
