@@ -9901,6 +9901,75 @@ Result:
 
 ```
 
+## `launch.capture@1`
+
+Start or end capturing launches, to write them onto the timeline.
+
+While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time.
+
+Kind: `action`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `on` | boolean |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_capture",
+  "properties": {
+    "on": {
+      "type": "boolean"
+    },
+    "from": {
+      "type": "number"
+    },
+    "to": {
+      "type": "number"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["on"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+
+### Examples
+
+**While stopped** (`song_with_clip_running`)
+
+```json
+{
+  "on": true
+}
+
+```
+
+Result:
+
+```json
+{
+  "on": true,
+  "from": 0,
+  "to": 0
+}
+
+```
+
 ## `launch.clip@1`
 
 Play a clip on its track from the next quantize boundary.
@@ -9999,6 +10068,104 @@ Result:
   "beat": 0,
   "seconds": 0,
   "started": true
+}
+
+```
+
+## `launch.commit@1`
+
+Write the captured performance onto the timeline as items.
+
+One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start. On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A running capture ends first; the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `pooled` | boolean |  |  | false | Share the clips' MIDI with the items (pooled) instead of copying it |
+| `performance` | object |  |  |  | What history records; launch.commit fills it from the capture |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "launch_commit",
+  "properties": {
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "from": {
+      "type": "number"
+    },
+    "to": {
+      "type": "number"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["tracks", "items", "from", "to"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.capture`: nothing has been captured Hint: launch.capture {on: true}, play and launch clips, then launch.commit
+- `launch.commit`: a captured track or clip is gone Hint: undo the change, or capture the performance again
+- `item.locked`: a locked item is in the way Hint: unlock it with item.set first
+- `clip.unsupported`: a clip's loop window has no item equivalent Hint: set its loop to the whole content, or off
+
+### Examples
+
+**A captured bar of cl_1** (`song_with_clip`)
+
+```json
+{
+  "performance": {
+    "sample_rate": 48000,
+    "start": 0,
+    "frames": 96000,
+    "launches": [
+      {
+        "frame": 0,
+        "track": "tr_1",
+        "action": "clip",
+        "clip": "cl_1",
+        "anchor": 0,
+        "anchor_beat": 0
+      }
+    ]
+  }
+}
+
+```
+
+Result:
+
+```json
+{
+  "tracks": ["tr_1"],
+  "items": ["<any>"],
+  "from": 0,
+  "to": 4
 }
 
 ```
@@ -10108,7 +10275,7 @@ Result:
 
 What each track with clips plays, and what it has queued.
 
-plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. Tracks without clips always follow the arrangement and are not listed.
+plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -10125,6 +10292,9 @@ Kind: `query`. Exposure: `mcp-exec`.
   "title": "launch_state",
   "properties": {
     "playing": {
+      "type": "boolean"
+    },
+    "capturing": {
       "type": "boolean"
     },
     "tracks": {
@@ -10177,7 +10347,7 @@ Kind: `query`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["playing", "tracks"],
+  "required": ["playing", "capturing", "tracks"],
   "additionalProperties": false
 }
 
@@ -10201,6 +10371,7 @@ Result:
 ```json
 {
   "playing": false,
+  "capturing": false,
   "tracks": [
     {
       "track": "tr_1",

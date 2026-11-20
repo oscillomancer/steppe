@@ -199,9 +199,23 @@ instructions are in `docs/guides/installing.md`.
       arrangement without the switch fade;
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one;
-    - the offline replay does not yet take seeks or transport wraps (L4,
-      with capture);
+    - the engine logs no seeks or transport wraps, so the offline
+      replay plays one linear run and a capture ends at a relocation;
     - the pane is L3.
+- **Clip launcher, capture** (ADR-0097, step L4's engine half; engine.md
+  §1.4.2): `launch.capture` keeps a performance and `launch.commit` writes
+  it onto the timeline in one undo step, laid out linearly by running time
+  (L-f), each clip as copies of its takes at the phase heard, replacing the
+  arrangement where a track left it, the switch crossfades as item fades.
+  The tests capture live in both executors at two block sizes, over a loop
+  wrap too, and render the committed arrangement offline: it matches what
+  played exactly away from the switches and to 1e-6 through the fades.
+  History records the performance, so merges replay it. A stop, seek or
+  loop change ends a capture; the arrangement a loop repeated is not
+  copied; under a tempo change a MIDI piece laid where the loop repeated
+  plays at the tempo where it lands. `scene.insert`, `scene.capture` and
+  `arrangement.build` are the builder's (model). Native macOS and Windows
+  CI has not run on it.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained

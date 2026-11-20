@@ -836,6 +836,27 @@ class Engine {
     // budget (they cannot be launched; launch.memory).
     std::vector<model::Id> clipsSkipped() const;
     static constexpr std::size_t kLaunchSlots = 256;
+    // Capturing a performance (ADR-0097 L4, engine.md §1.4.2). A capture
+    // runs from the song sample where it began for `frames` of running
+    // time, under the transport loop it ran with. `launches` holds first,
+    // at running frame 0, what each track that was not following the
+    // arrangement played as it began (its own anchor kept), then each
+    // launch applied within it, its runningFrame counted from the start.
+    struct LaunchCapture {
+        bool on = false;  // still capturing: frames grows
+        std::int64_t startSample = 0, frames = 0;
+        LoopRange loop;
+        std::vector<LaunchLogEntry> launches;
+    };
+    // Main thread: starts a capture at the heard position (stopped: the
+    // play position, where playing starts), or ends the running one at the
+    // heard position. A relocation (a seek, a stop, a loop change) ends a
+    // capture that has run any frames; one that has not starts again where
+    // the transport goes.
+    void captureLaunches(bool on);
+    // Main thread: the running capture, else the last one; none before the
+    // first. Collects the executors' acknowledgements first.
+    std::optional<LaunchCapture> launchCapture();
 
     std::uint32_t outputLatency() const;
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
@@ -1169,6 +1190,18 @@ class Engine {
     void serviceLaunches();
     struct LaunchClock;
     bool launchClock(LaunchClock& out) const;
+    // Main thread: the capture (captureLaunches). `pending`: its start is
+    // not placed yet (relocating, or a relocation before it ran).
+    struct CaptureState {
+        bool on = false, any = false, pending = false;
+        std::uint64_t epoch = 0;
+        std::int64_t startFrame = 0, endFrame = 0, startSample = 0;
+        LoopRange loop;
+    };
+    CaptureState capture_;
+    void placeCapture();                // a pending start, once the clock reads
+    void captureRelocating();           // writeTransport: a relocation is coming
+    std::int64_t captureHeard() const;  // the capture epoch's heard stream
     Result<LaunchPlaced> placeLaunch(std::span<const LaunchRequest> requests,
                                      model::LaunchQuantize quantize) const;
     std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
