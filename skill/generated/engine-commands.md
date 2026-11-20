@@ -10145,7 +10145,7 @@ Result:
 
 Modulate a parameter or mixer level with an LFO, follower, random or macro.
 
-The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A follower cannot listen to the track it modulates (modulation.cycle).
+The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -10203,7 +10203,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 
 ### Errors
 
-- `modulation.cycle`: a follower on the track it modulates Hint: listen to another track, or modulate a buss it feeds
+- `modulation.cycle`: a follower on a track the target feeds Hint: listen to another track, or modulate a buss it feeds
 
 ### Examples
 

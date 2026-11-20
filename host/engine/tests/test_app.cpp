@@ -4291,6 +4291,54 @@ TEST_CASE("modulate: the whole gesture in one undo step, reusing the rack it mad
     CHECK(app->view().modules.size() == modules);
 }
 
+TEST_CASE("modulate: a shared rack that would close a loop is passed over for another") {
+    // ADR-0096 (2026-11-20): modulate refuses only a real cycle. The
+    // Modulators rack drives Drums, so a follower on Drums cannot live in
+    // it; nor can an LFO on Keys once that rack hears Keys. Each takes
+    // another rack, and the session stays acyclic.
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("track.add", R"({"name": "Drums"})");  // tr_2
+    run("track.add", R"({"name": "Keys"})");   // tr_3
+    auto shared = run("modulate", R"({"target": {"track": "tr_2", "param": "volume"},
+        "source": "lfo"})");
+    const std::string modulators = shared["rack"].asString();
+    // Following Drums from the rack that drives Drums would be a loop.
+    auto f = run("modulate", R"({"target": {"track": "tr_3", "param": "pan"},
+        "source": "follower", "from": "tr_2"})");
+    CHECK(f["rack"].asString() != modulators);
+    CHECK(f.find("channel"));
+    const model::Session s = app->view();
+    CHECK(s.racks.find(*model::Id::parse(f["rack"].asString()))->name == "Modulators");
+    CHECK(model::checkInvariants(s));
+    // That second rack now hears Drums; an LFO on Drums' volume goes back to
+    // the first, which hears nothing.
+    auto back = run("modulate", R"({"target": {"track": "tr_2", "param": "pan"},
+        "source": "lfo"})");
+    CHECK(back["rack"].asString() == modulators);
+    CHECK_FALSE(back.find("channel"));
+    // A follower on Keys: the first rack reaches Keys (through Drums and
+    // the second rack), and the second drives Keys, so a third is made.
+    auto keys = run("modulate", R"({"target": {"track": "tr_1", "param": "volume"},
+        "source": "follower", "from": "tr_3"})");
+    CHECK(keys["rack"].asString() != modulators);
+    CHECK(keys["rack"].asString() != f["rack"].asString());
+    // An LFO on Keys: Keys feeds only the third rack, so the first fits.
+    auto lfo = run("modulate", R"({"target": {"track": "tr_3", "param": "volume"},
+        "source": "lfo"})");
+    CHECK(lfo["rack"].asString() == modulators);
+    CHECK(model::checkInvariants(app->view()));
+}
+
 TEST_CASE("modulate: a follower listens through a send, and not to the track it modulates") {
     Root root;
     auto app = makeApp(root.path);
