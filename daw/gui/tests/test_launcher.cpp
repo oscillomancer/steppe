@@ -475,9 +475,8 @@ TEST_CASE("launcher: the header's buttons, scene ▶, rename, move, + and the sc
     REQUIRE(menu);
     std::vector<std::string> rows;
     for (const auto& item : ui::menuItems(*menu)) rows.push_back(item.label);
-    CHECK(rows == std::vector<std::string>{"Rename…", "Colour…",
-                                           "Insert into arrangement at playhead", "", "Delete"});
-    CHECK_FALSE(ui::menuItems(*menu)[2].enabled);  // L4
+    CHECK(rows == std::vector<std::string>{"Rename…", "Colour…", "Insert at playhead",
+                                           "Insert at end", "", "Delete"});
     f.root->closePopups();
     // The clip menu: its rows, and Mode sets the clip's.
     const std::size_t drums = f.row("tr_1");
@@ -644,4 +643,86 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     CHECK(f.app->head().version == before + 1);
     f.exec("engine.stop", "{}");
     CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inserts it") {
+    LauncherFixture f;
+    f.song();
+    f.view->installOverlay(*f.root);  // the ghost layer draws the drop marker
+    views::LauncherHeader& header = f.view->launcherHeader();
+    const model::Session* s = &f.app->head();
+    // Verse's longest clip, two bars on the Keys, sets its span; Intro's takes one.
+    f.exec("clip.add", R"({"track":"tr_3","scene":"sc_2","notation":"voice k; 1: C4:w; 2: E4:w"})");
+    s = &f.app->head();
+    CHECK(views::sceneBars(*s, *model::Id::parse("sc_2"), 1) == 2);
+    CHECK(views::sceneBars(*s, *model::Id::parse("sc_1"), 1) == 1);
+    CHECK(views::barAtOrAfter(*s->timeMap, 0) == 1);
+    CHECK(views::barAtOrAfter(*s->timeMap, 4) == 2);
+    CHECK(views::barAtOrAfter(*s->timeMap, 4.5) == 3);
+    CHECK(views::barAfterArrangement(*s) == 1);
+    auto beatX = [&](double beat) { return f.view->xAt(f.app->head().timeMap->secondsAt(beat)); };
+    // Verse onto the lanes in bar 3: a drop marker and its span while held.
+    const ui::Rect verse = header.sceneRect(1);
+    const ui::Point from{verse.x + 40, verse.y + verse.h / 2};
+    const ui::Rect lane = f.view->rowRect(f.row("tr_3"));
+    const ui::Point to{beatX(9.5), lane.y + lane.h / 2};
+    REQUIRE(f.view->lanesRect().contains(to));
+    f.pointer(Pointer::Down, from);
+    f.pointer(Pointer::Move, {from.x, from.y + 20});
+    f.pointer(Pointer::Move, to);
+    const auto& ghost = f.view->gestures().sceneGhost();
+    REQUIRE(ghost);
+    CHECK(ghost->start == doctest::Approx(8));
+    CHECK(ghost->end == doctest::Approx(16));
+    CHECK(ghost->tracks.size() == 3);
+    f.snapshot("launcher-scene-drop.png");
+    f.pointer(Pointer::Up, to);
+    f.sync();
+    CHECK_FALSE(f.view->gestures().sceneGhost());
+    CHECK(f.commands == std::vector<std::string>{"scene.insert"});
+    s = &f.app->head();
+    REQUIRE(s->regions.size() == 1);
+    CHECK(s->regions.begin()->value->name == "Verse");
+    CHECK(s->regions.begin()->value->start == doctest::Approx(8));
+    CHECK(s->regions.begin()->value->end == doctest::Approx(16));
+    CHECK(s->items.size() == 3);
+    CHECK(views::launcherColumns(*s).scenes[1] == model::Id::parse("sc_2"));  // not moved
+    CHECK(views::barAfterArrangement(*s) == 5);
+    // Again on the same bars: refused, and the reason reaches onError.
+    f.drag(from, to);
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "scene.insert.occupied");
+    f.errors.clear();
+    // The menu: Insert at playhead (the next bar line), Insert at end.
+    auto menuRun = [&](std::size_t column, std::size_t row) {
+        f.click({header.sceneRect(column).x + 40, verse.y + 8}, 0, 1, 3);
+        ui::Node* menu = f.root->find("launcher.scene.menu");
+        REQUIRE(menu);
+        const auto run = ui::menuItems(*menu)[row].run;
+        f.root->closePopups();
+        run();
+        f.sync();
+    };
+    f.click({header.sceneRect(0).x + 40, verse.y + 8}, 0, 1, 3);
+    ui::Node* menu = f.root->find("launcher.scene.menu");
+    REQUIRE(menu);
+    std::vector<std::string> rows;
+    for (const auto& item : ui::menuItems(*menu)) rows.push_back(item.label);
+    CHECK(rows == std::vector<std::string>{"Rename…", "Colour…", "Insert at playhead",
+                                           "Insert at end", "", "Delete"});
+    f.root->closePopups();
+    menuRun(0, 3);  // Intro at the end: bar 5
+    f.view->setPlayhead(f.app->head().timeMap->secondsAt(30.5));
+    menuRun(0, 2);  // Intro at the playhead: bar 9
+    std::vector<std::pair<double, double>> spans;
+    for (const auto& e : f.app->head().regions) spans.push_back({e.value->start, e.value->end});
+    std::sort(spans.begin(), spans.end());
+    CHECK(spans == std::vector<std::pair<double, double>>{{8, 16}, {16, 20}, {32, 36}});
+    // An empty scene refuses: Chorus has no clips.
+    menuRun(2, 3);
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "scene.empty");
+    // A length between bar lines rounds up: five beats take two bars.
+    f.exec("clip.set", R"({"clip":"cl_1","length":5})");
+    CHECK(views::sceneBars(f.app->head(), *model::Id::parse("sc_1"), 3) == 2);
 }

@@ -38,6 +38,41 @@ LauncherColumns launcherColumns(const model::Session& session) {
     return out;
 }
 
+int barAtOrAfter(const time::TimeMap& map, double beat) {
+    const time::BarBeat at = map.barBeat(std::max(0.0, beat));
+    return map.beatOfBar(at.bar) < beat - 1e-9 ? at.bar + 1 : at.bar;
+}
+
+int barAfterArrangement(const model::Session& s) {
+    double end = 0;
+    for (const auto& e : s.items) end = std::max(end, model::itemEndBeat(s, *e.value));
+    for (const auto& e : s.regions) {
+        const model::Region& rg = *e.value;
+        if (!rg.section) continue;
+        end = std::max(end,
+                       rg.timebase == model::Timebase::Time ? s.timeMap->beatAt(rg.end) : rg.end);
+    }
+    return barAtOrAfter(*s.timeMap, end);
+}
+
+std::int64_t sceneBars(const model::Session& s, model::Id scene, int bar) {
+    constexpr std::int64_t kMost = 100000;  // scene.insert's bars
+    const time::TimeMap& map = *s.timeMap;
+    const double start = map.beatOfBar(bar);
+    double end = start;
+    for (const auto& e : s.clips) {
+        const model::Clip& clip = *e.value;
+        if (clip.scene != scene) continue;
+        // A MIDI clip's length is in beats, an audio clip's in seconds.
+        end = std::max(end, clip.kind == model::ClipKind::Midi
+                                ? start + clip.length
+                                : map.beatAt(map.secondsAt(start) + clip.length));
+    }
+    std::int64_t bars = 1;
+    while (bars < kMost && map.beatOfBar(bar + static_cast<int>(bars)) < end - 1e-9) ++bars;
+    return bars;
+}
+
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene) {
     for (const auto& e : session.clips)
         if (e.value->track == track && e.value->scene == scene) return e.id;
@@ -844,13 +879,35 @@ bool LauncherHeader::onPointer(const ui::PointerEvent& e) {
         return c;
     }();
     if (drag_) {
-        if (e.type == T::Move && !drag_->moving && std::abs(e.pos.x - drag_->press.x) > 4)
+        if (e.type == T::Move && !drag_->moving &&
+            std::hypot(e.pos.x - drag_->press.x, e.pos.y - drag_->press.y) > 4)
             drag_->moving = true;
+        if (e.type == T::Move && drag_->moving) {
+            // Over the lanes: where the scene would lie, from the bar under
+            // the pointer for its longest clip's whole bars.
+            std::optional<ItemGestures::SceneGhost> ghost;
+            if (const auto bar = dropBar(e.pos)) {
+                const model::Session& s = view_.session();
+                ItemGestures::SceneGhost g;
+                g.start = s.timeMap->beatOfBar(*bar);
+                g.end =
+                    s.timeMap->beatOfBar(*bar + static_cast<int>(sceneBars(s, drag_->scene, *bar)));
+                for (const auto& entry : s.clips)
+                    if (entry.value->scene == drag_->scene) g.tracks.push_back(entry.value->track);
+                ghost = std::move(g);
+            }
+            view_.gestures().showSceneGhost(std::move(ghost));
+        }
         if (e.type == T::Up) {
             const Drag d = *drag_;
             drag_.reset();
             if (root()) root()->capture(nullptr);
+            view_.gestures().showSceneGhost(std::nullopt);
             if (d.moving) {
+                if (const auto bar = dropBar(e.pos)) {  // onto the timeline
+                    (void)insertScene(d.scene, *bar);
+                    return true;
+                }
                 // The column it is dropped on; past the last, the end.
                 const float offset = e.pos.x - cols.x + cols.scroll;
                 const auto to = static_cast<std::int64_t>(
@@ -907,6 +964,21 @@ bool LauncherHeader::onPointer(const ui::PointerEvent& e) {
     return true;
 }
 
+std::optional<int> LauncherHeader::dropBar(ui::Point p) const {
+    if (!view_.lanesRect().contains(p) || view_.launcherFull()) return std::nullopt;
+    const model::Session& s = view_.session();
+    const double beat = s.timeMap->beatAt(std::max(0.0, view_.timeAt(p.x)));
+    return s.timeMap->barBeat(beat).bar;
+}
+
+bool LauncherHeader::insertScene(model::Id scene, int bar) {
+    json::Value args = json::Value::object();
+    args["scene"] = scene.str();
+    args["bar"] = static_cast<std::int64_t>(bar);
+    args["bars"] = sceneBars(view_.session(), scene, bar);
+    return static_cast<bool>(view_.runLauncher("scene.insert", std::move(args)));
+}
+
 void LauncherHeader::renameScene(model::Id scene, ui::Point at) {
     const model::Scene* sc = view_.session().scenes.find(scene);
     if (!root() || !sc) return;
@@ -941,11 +1013,16 @@ void LauncherHeader::openSceneMenu(model::Id scene, ui::Point at) {
                                                    [r] { r->closePopup(); }),
                                       anchor, ui::Placement::Center);
                      }});
-    // L4 lays a scene on the timeline; until then the row is greyed.
-    ui::MenuItem insert;
-    insert.label = "Insert into arrangement at playhead";
-    insert.enabled = false;
-    items.push_back(std::move(insert));
+    // Laid on the timeline for its longest clip's whole bars: from the
+    // first bar line at or after the playhead, or after the arrangement.
+    items.push_back({"Insert at playhead", "", [this, scene] {
+                         const model::Session& s = view_.session();
+                         (void)insertScene(
+                             scene, barAtOrAfter(*s.timeMap, s.timeMap->beatAt(view_.playhead())));
+                     }});
+    items.push_back({"Insert at end", "", [this, scene] {
+                         (void)insertScene(scene, barAfterArrangement(view_.session()));
+                     }});
     items.push_back({"", "", {}, true, true});
     items.push_back({"Delete", "", [this, scene] {
                          json::Value args = json::Value::object();

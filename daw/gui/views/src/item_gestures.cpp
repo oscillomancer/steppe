@@ -208,6 +208,22 @@ class Ghost : public ui::Node {
                 c.fillRect(ghost, t.color("focus").withAlpha(0.25f));
                 c.strokeRect(ghost, t.color("focus"), 1.5f);
             }
+        // A launcher scene in hand over the lanes: a drop marker at the bar it
+        // lands on, the span it covers, and each clip's copy on its track.
+        if (const auto& sg = g.sceneGhost()) {
+            const float x0 = v.xAt(s.timeMap->secondsAt(sg->start)),
+                        x1 = v.xAt(s.timeMap->secondsAt(sg->end));
+            c.fillRect({x0, lanes.y, std::max(2.0f, x1 - x0), lanes.h},
+                       t.color("focus").withAlpha(0.08f));
+            for (model::Id track : sg->tracks)
+                if (const auto row = v.trackLayout().indexOf(track)) {
+                    const ui::Rect r = v.rowRect(*row);
+                    const ui::Rect ghost{x0, r.y + 1, std::max(2.0f, x1 - x0), r.h - 2};
+                    c.fillRect(ghost, t.color("focus").withAlpha(0.25f));
+                    c.strokeRect(ghost, t.color("focus"), 1.5f);
+                }
+            c.fillRect({x0 - 1, lanes.y, 2, lanes.h}, t.color("focus"));
+        }
         // The drag's ghost.
         const model::Item* anchor =
             st.anchor.kind == model::Kind::Item ? itemOf(s, st.anchor) : nullptr;
@@ -405,6 +421,12 @@ ItemGestures::~ItemGestures() { *alive_ = nullptr; }
 void ItemGestures::installOverlay(ui::Root& root) {
     root_ = &root;
     if (!overlay_) overlay_ = root.addOverlay(std::make_unique<Ghost>(alive_));
+}
+
+void ItemGestures::showSceneGhost(std::optional<SceneGhost> ghost) {
+    if (ghost == sceneGhost_) return;
+    sceneGhost_ = std::move(ghost);
+    if (root_) root_->requestAnimationFrame();
 }
 
 void ItemGestures::showClipGhost(std::optional<ClipGhost> ghost) {

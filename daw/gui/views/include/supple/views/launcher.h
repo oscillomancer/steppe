@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -20,6 +21,7 @@
 #include "supple/json/value.h"
 #include "supple/model/session.h"
 #include "supple/peaks/peaks.h"
+#include "supple/time/timeline.h"
 #include "supple/ui/geometry.h"
 #include "supple/ui/gl.h"
 #include "supple/ui/node.h"
@@ -91,6 +93,16 @@ bool scenePlaying(const model::Session& session, const LaunchViews& views, model
 
 // Whether a track has any clip (an empty cell's stop square shows only then).
 bool hasClips(const model::Session& session, model::Id track);
+
+// The whole bars a scene laid on the timeline from `bar` (1-based) lasts:
+// its longest clip's length rounded up to whole bars there, at least one
+// (scene.insert's bars).
+std::int64_t sceneBars(const model::Session& session, model::Id scene, int bar);
+// The first bar line at or after a beat, as a 1-based bar.
+int barAtOrAfter(const time::TimeMap& map, double beat);
+// The bar after the arrangement: the first bar line at or after the end of
+// its last item or section (bar 1 when it is empty).
+int barAfterArrangement(const model::Session& session);
 
 // The clip in a channel's cell of a scene.
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);
@@ -193,9 +205,14 @@ class LauncherHeader : public ui::Node {
     // The scene column under x in the headers' row, and its ▶.
     std::optional<std::size_t> sceneAt(ui::Point p) const;
     ui::Rect sceneRect(std::size_t column) const;
+    // A scene laid on the timeline (scene.insert) from `bar`, for its
+    // longest clip's whole bars; a refusal goes to onError.
+    bool insertScene(model::Id scene, int bar);
 
   private:
     void openSceneMenu(model::Id scene, ui::Point at);
+    // The bar a scene dragged onto the lanes lands on: the bar under `p`.
+    std::optional<int> dropBar(ui::Point p) const;
     void renameScene(model::Id scene, ui::Point at);
     ArrangeView& view_;
     // A scene header held by the pointer: dragged sideways it moves its column.
