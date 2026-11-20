@@ -749,6 +749,14 @@ class Ruler : public ui::Node {
                 add("Rename region\u2026",
                     [this, id = entry.id, name = rg.name, at] { rename("region", id, name, at); });
                 add("Delete region", [this, id = entry.id] { remove("region", id); });
+                // A section's items as a new launcher scene (scene.capture);
+                // a refusal names what is in the way.
+                if (rg.section)
+                    add("Capture as scene", [this, id = entry.id] {
+                        json::Value args = json::Value::object();
+                        args["region"] = id.str();
+                        execute("scene.capture", std::move(args));
+                    });
                 break;
             }
         } else if (y >= rows.markerTop()) {

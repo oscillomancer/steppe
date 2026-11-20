@@ -916,8 +916,9 @@ int frontendMain(int argc, char** argv) {
              return dispatcher.execute(
                  {command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
          },
-         [](const Error& e) {
-             std::fprintf(stderr, "ruler edit refused: %s\n", e.toString().c_str());
+         // A refusal (a tempo, a section captured as a scene) in the status line.
+         [&appActions](const Error& e) {
+             if (appActions.onError) appActions.onError("Ruler: " + e.message);
          }});
     // A new, empty MIDI item on the selected channel (else the first), over the
     // loop range when it is on, else one bar at the playhead; opened.

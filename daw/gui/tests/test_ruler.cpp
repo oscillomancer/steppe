@@ -873,3 +873,61 @@ TEST_CASE("ruler: an edge dragged onto the other removes a range; the menu delet
     CHECK_FALSE(f.app->punch().end > f.app->punch().start);
     CHECK(f.errors.empty());
 }
+
+TEST_CASE("ruler: a section's menu captures it as a launcher scene; a refusal says why") {
+    RulerFixture f;
+    auto rightClick = [&](ui::Point p) {
+        ui::PointerEvent e;
+        e.type = Pointer::Down;
+        e.pos = p;
+        e.button = 3;
+        f.root->pointer(e);
+        e.type = Pointer::Up;
+        f.root->pointer(e);
+        f.root->frame(false);
+    };
+    auto menuRows = [&] {
+        std::vector<std::string> rows;
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        for (const ui::MenuItem& m : ui::menuItems(*menu)) rows.push_back(m.label);
+        return rows;
+    };
+    auto pick = [&](int row) {  // menu rows are 26 px
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        const ui::Point p{menu->bounds().x + 30,
+                          menu->bounds().y + static_cast<float>(row) * 26 + 13};
+        f.pointer(Pointer::Move, p);
+        f.pointer(Pointer::Down, p);
+        f.pointer(Pointer::Up, p);
+        f.sync();
+    };
+    f.exec("track.add", json::parse(R"({"type": "channel", "name": "Bass"})").value());
+    f.exec("region.add", json::parse(R"({"start": 0, "end": 4, "name": "Verse"})").value());
+    f.exec("region.add", json::parse(R"({"start": 8, "end": 12, "name": "Gap"})").value());
+    // An empty section refuses, and says so.
+    rightClick(f.at(10, 64));
+    CHECK(menuRows() ==
+          std::vector<std::string>{"Rename region…", "Delete region", "Capture as scene"});
+    pick(2);
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "scene.capture.empty");
+    f.errors.clear();
+    CHECK(f.app->head().scenes.size() == 0);
+    // With an item filling it: a scene named after it, one clip.
+    std::string track;
+    for (const auto& e : f.app->head().tracks)
+        if (e.value->type == model::StripType::Channel) track = e.id.str();
+    f.exec("item.add", json::parse(R"({"track": ")" + track +
+                                   R"(", "position": 0, "notation": "voice b; 1: C2:w"})")
+                           .value());
+    const auto n = f.history();
+    rightClick(f.at(2, 64));
+    pick(2);
+    REQUIRE(f.app->head().scenes.size() == 1);
+    CHECK(f.app->head().scenes.begin()->value->name == "Verse");
+    CHECK(f.app->head().clips.size() == 1);
+    CHECK(f.history() == n + 1);
+    CHECK(f.errors.empty());
+}
