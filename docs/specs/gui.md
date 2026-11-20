@@ -2400,9 +2400,12 @@ same heights, scroll and colours.
 - **Where.** Only a channel's row has cells. Busses, masters and automation
   lanes show ground across the scene columns. Clips are on channels only.
 - **An empty cell** shows a small square in quiet ink, its stop zone. A
-  click on the square stops the track (`launch.stop {track}`); a click
-  elsewhere in the cell only clears the selection; a double-click makes an
-  empty one-bar MIDI clip there (`clip.add`). No text is drawn in it.
+  click on the square stops the track (`launch.stop {track}`) and changes
+  nothing else. A click elsewhere in the cell selects the cell (drawn as
+  a selected clip's outline), so that a clip can be created or pasted
+  there; it stops nothing. A double-click makes an empty one-bar MIDI clip
+  there (`clip.add`) and opens it in the piano roll, one undo step. No
+  text is drawn in it.
 - **A clip** is a small item: a name bar in its colour (the track's when it
   has none) and its content drawn by the shared item-body functions
   (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
@@ -2425,7 +2428,9 @@ same heights, scroll and colours.
 - **Double-click the body**: open it in the piano roll (MIDI) or the
   inspector (audio). The editors and content commands take the clip as
   they take an item (ADR-0097, "The take owner").
-- No click both selects and launches.
+- No click does two things: a clip's ▶ only launches and its body only
+  selects; an empty cell's square only stops and the rest of the cell
+  only selects.
 - **Drag** a clip to another cell to move it (`clip.move`), or with Ctrl to
   copy it (`clip.duplicate`). An occupied cell refuses the drop (the
   pointer says so).
@@ -2438,7 +2443,8 @@ same heights, scroll and colours.
   playhead, Delete.
 - **Delete** removes the selected clips (`clip.remove`), one undo step,
   while a cell was clicked last, as Delete takes points after a lane click
-  (§4.3). Copy and paste of clips is later.
+  (§4.3). Copy and paste of clips is later; a paste will land in the
+  selected cell.
 
 **Elsewhere.**
 - **Render dialog.** While any track is held by a clip, it says in one line
@@ -2452,8 +2458,9 @@ same heights, scroll and colours.
 - Every gesture above, through the dispatcher, with fixtures built from
   files until `launch.*` lands.
 - The click zones: a click on a clip's ▶ launches and keeps the selection, a
-  click on its body selects and never launches, and a click beside an empty
-  cell's square stops nothing.
+  click on its body selects and never launches, a click on an empty cell's
+  square stops and selects nothing, and a click beside the square selects
+  the cell and stops nothing.
 - `arrange-items.png` stays byte-identical with the pane hidden.
 
 ## 5. Agent panel (removed)
