@@ -1514,6 +1514,12 @@ Status prepare(Plan& p, const Session& s) {
                                          " cannot be automated by this plugin");
                     continue;
                 }
+                resolved->lane.envelope = entry.id;
+                resolved->lane.writes =
+                    p.gestureHolds &&
+                    (env.mode == model::EnvMode::Touch || env.mode == model::EnvMode::Latch ||
+                     env.mode == model::EnvMode::LatchPreview || env.mode == model::EnvMode::Write);
+                resolved->lane.latches = env.mode != model::EnvMode::Touch;
                 st.lanes.push_back(std::move(resolved->lane));
             }
         });
@@ -2103,6 +2109,14 @@ Status prepare(Plan& p, const Session& s) {
         forEachStage(n, [&](const Stage& st) { mix.stageFx.push_back(st.fx); });
     }
     mix.stages = std::make_unique<MixSlots::StageValue[]>(mix.stageFx.size());
+    // Lane holds (ADR-0061, amended): none until a write pass publishes them.
+    mix.laneEnvelopes.clear();
+    for (Node& n : p.nodes)
+        forEachStage(n, [&](Stage& st) {
+            st.laneSlot = static_cast<std::uint32_t>(mix.laneEnvelopes.size());
+            for (const ParamLane& ln : st.lanes) mix.laneEnvelopes.push_back(ln.envelope);
+        });
+    mix.lanes = std::make_unique<std::atomic<bool>[]>(mix.laneEnvelopes.size());
     for (const Node& n : p.nodes) {
         std::size_t k = n.stageSlot;
         forEachStage(n, [&](const Stage& st) {
@@ -2394,6 +2408,12 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
         return std::clamp(base + sum, ln.lo, ln.hi);
     };
     for (ParamLane& ln : st.lanes) {
+        // Held by a write pass (ADR-0061, amended): the plug-in keeps the
+        // hand's value. Released, the lane sends its value at once.
+        if (ln.holding()) {
+            ln.lastSent = std::numeric_limits<double>::quiet_NaN();
+            continue;
+        }
         if (ln.curve.timeline) {
             const auto& pts = ln.curve.points;
             const auto& timeline = *ln.curve.timeline;
@@ -2725,6 +2745,29 @@ void leaveGroup(std::vector<Stage>& chain, Stage& st, Stereo& sum, std::uint32_t
     if (st.groupEnd) sum.copyFrom(first.groupOut, n);
 }
 
+// Write holds (ADR-0061, amended 2026-11-20): the plug-in's own gesture on
+// a writing lane holds it from the next block, until the gesture ends or,
+// latching, until the transport stops. A stop ends every hold of the pass.
+void holdGestures(Stage& st, bool playing) SUPPLE_RT {
+    for (ParamLane& ln : st.lanes) {
+        if (!ln.writes) continue;
+        if (!playing) {
+            ln.gesture = ln.latched = false;
+            continue;
+        }
+        for (std::size_t k = 0; k < st.outEvents.count; ++k) {
+            const host::OutputEvent& e = st.outEvents.storage[k];
+            if (e.paramId != ln.clapId) continue;
+            if (e.kind == host::OutputEvent::Kind::GestureBegin) {
+                ln.gesture = true;
+            } else if (e.kind == host::OutputEvent::Kind::GestureEnd && ln.gesture) {
+                ln.gesture = false;
+                ln.latched = ln.latches;
+            }
+        }
+    }
+}
+
 // Clears what a stage carries from block to block outside its plug-in.
 void clearStageDelays(Stage& st) SUPPLE_RT {
     st.dry.clear();
@@ -2738,6 +2781,7 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
               std::int64_t pos, const void* self) SUPPLE_RT {
     st.outEvents.clear();
     st.auxWritten = false;
+    holdGestures(st, transport.playing);  // a stop ends holds even where the plug-in idles
     // A stage whose plugin is not processing (start_processing failed)
     // passes audio through, delay-compensated, like a bypass.
     if (st.callbackBypass || !st.instance || (self && st.instance->owner() != self) ||
@@ -2838,6 +2882,7 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
                            c == 0 ? st.out.l.data() : st.out.r.data(), n, os);
         }
     }
+    holdGestures(st, transport.playing);
     if (!processed) return false;
     st.processed = true;
     st.auxWritten = true;
@@ -3901,6 +3946,7 @@ void locateTake(Node& n, TakeChain& tc, std::int64_t pos, bool wrap, bool keepPl
         for (ParamLane& ln : st.lanes) {
             ln.curve.cursor = 0;
             ln.lastSent = std::numeric_limits<double>::quiet_NaN();
+            if (!wrap && !keepPlaying) ln.gesture = ln.latched = false;  // see locateNode
         }
     }
     if (wrap) {
@@ -3974,6 +4020,10 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
         for (ParamLane& ln : st.lanes) {
             ln.curve.cursor = 0;
             ln.lastSent = std::numeric_limits<double>::quiet_NaN();
+            // A start or a seek ends this executor's own write holds (ADR-0061,
+            // amended): a stopped renderer never ran the stage to see the stop.
+            // The main thread's hold (`held`) stands until it lets go.
+            if (restartConsole) ln.gesture = ln.latched = false;
         }
     }
     // Modulation delays, as an edge's: fresh unless a swap just carried them,
@@ -4059,6 +4109,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
             for (ParamLane& ln : st.lanes) {
                 ln.curve.cursor = 0;
                 ln.lastSent = std::numeric_limits<double>::quiet_NaN();  // resend at once
+                if (restartConsole) ln.gesture = ln.latched = false;     // as locateNode
             }
         }
     }
@@ -4330,7 +4381,7 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         }
         n.releaseLive = n.releaseLive || old.releaseLive;
         // The modulation memo, by instance and CLAP id (ADR-0096).
-        auto carryMemo = [](Stage& st, const Stage& os) {
+        auto carryMemo = [&to](Stage& st, const Stage& os) {
             st.modHeard = os.modHeard;
             st.modEpoch = os.modEpoch;
             for (ModParam& m : st.mods)
@@ -4349,6 +4400,21 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                         ln.modSum = ol.modSum;
                         break;
                     }
+            // Its write hold (ADR-0061, amended), by CLAP id: a gesture still
+            // open, and a latch the main thread has not let go of. The new
+            // plan's slots are published before any executor adopts it.
+            for (std::size_t j = 0; j < st.lanes.size(); ++j) {
+                ParamLane& ln = st.lanes[j];
+                const bool slotHeld =
+                    to.mix->lanes[st.laneSlot + j].load(std::memory_order_relaxed);
+                for (const ParamLane& ol : os.lanes)
+                    if (ol.clapId == ln.clapId) {
+                        ln.gesture = ln.writes && ol.gesture;
+                        ln.latched =
+                            ln.writes && ln.latches && ol.latched && !(ol.held && !slotHeld);
+                        break;
+                    }
+            }
         };
         auto carryStages = [&](std::vector<Stage>& chain, std::vector<Stage>& oldChain) {
             for (Stage& st : chain)
@@ -4548,6 +4614,10 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
             mix.modulations[i].depth.store(m->depth, relaxed);
             mix.modulations[i].enabled.store(m->enabled, relaxed);
         }
+    for (std::size_t k = 0; k < mix.laneEnvelopes.size(); ++k) {
+        const model::Envelope* env = s.envelopes.find(mix.laneEnvelopes[k]);
+        mix.lanes[k].store(env && held(holds, env->target.object, env->target.param), relaxed);
+    }
     mix.sequence.store(sequence + 2, std::memory_order_release);
 }
 
@@ -4659,6 +4729,13 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
             st.wet = mix.stages[k].wet.load(relaxed);
             st.bypass = mix.stages[k].bypass.load(relaxed);
             ++k;
+            for (std::size_t j = 0; j < st.lanes.size(); ++j) {
+                ParamLane& ln = st.lanes[j];
+                const bool slotHeld = mix.lanes[st.laneSlot + j].load(relaxed);
+                // The main thread let go (the pass started again): so does a latch.
+                if (ln.held && !slotHeld) ln.latched = false;
+                ln.held = slotHeld;
+            }
         });
     }
     // An edge belongs to whoever reads it: a key route to its destination

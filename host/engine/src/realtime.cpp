@@ -700,6 +700,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         built->rateBackendLatency = backend_->status().outputLatency;
         built->rateEnabled |= rateScheduling_.load(std::memory_order_acquire);
         built->buffers = bufferPool_.get();
+        built->gestureHolds = true;  // ADR-0061, amended: the hand holds its lanes
         auto sources = media_.prepareSources(session, projectDir, config_.sampleRate);
         if (!sources) return sources.error();
         built->preparedSources = *sources;

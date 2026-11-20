@@ -262,8 +262,26 @@ at compile time). Per block, each automated target evaluates its segments:
   compiles. Holds exist only while the transport plays; undo, redo and a
   branch switch mid-pass start the pass again at that point, so the
   abandoned writes neither stay held nor get a latch tail at stop. A halt
-  ends the pass that was playing. Mute, plug-in parameters and the master
-  playrate are not held: their writes compile as before.
+  ends the pass that was playing. Mute and the master playrate are not
+  held: their writes compile as before.
+- plug-in parameter holds (ADR-0061, amendment 2026-11-20): a held lane
+  sends nothing, so the plug-in keeps what the hand set. Two things hold it:
+  - **the executor** (`ParamLane::gesture`, `latched`), on a real-time plan
+    (`Plan::gestureHolds`) for a lane whose envelope is in a writing mode.
+    It holds from the block after the plug-in reports `GestureBegin` while
+    playing (`holdGestures`, after each process call). Touch holds to the
+    block with `GestureEnd`; a latching mode holds on until a start or seek
+    (`locate` with a console restart) or a stopped block. A plan swap
+    carries an open gesture, and a latch whose main-thread hold has not
+    fallen;
+  - **`EngineApp`'s hold** (`ParamLane::held`, a `MixSlots::lanes` flag per
+    lane by envelope), from the touched envelopes as for a level. When it
+    falls, the executor's latch goes too.
+
+  Released, the lane sends its value at once (`lastSent` is cleared while
+  held), then on its grid. The first block of a gesture is not held. Points
+  written into a plug-in envelope compile, since they change the FX's
+  values too.
 
 ### 1.4.1 Modulation (ADR-0096)
 
@@ -271,7 +289,8 @@ A modulation route (`mr_*`, session-model "Modulation") moves a target
 parameter by a rack's Mod Out signal × its `depth`, as an offset on top of
 the base: the static value, the envelope or a write hold's hand. It never
 writes the base, the model or an envelope, and write modes record the base
-only.
+only. A held plug-in lane (§1.4) carries no modulation through its envelope
+until it is released.
 
 - **Edges.** Every route, enabled or not, is an edge from its source rack's
   node to the node that applies its target; `enabled` only zeroes its
@@ -357,9 +376,11 @@ only.
   executor, the last sum holds. The lane has a telemetry slot of its own,
   stored as a fraction of its range. Without an active envelope on the
   parameter, the route is inert (`modulation.target`, "has no active
-  envelope to carry it"). When a write mode records a plug-in output for
-  such a parameter, the route's current offset is taken off first
-  (`commitOutputGesture`), so the envelope keeps the base.
+  envelope to carry it"). In a write pass the lane is held from the
+  plug-in's gesture (§1.4), so what the plug-in reports is the hand's value,
+  recorded as it is. Outside a held pass (stopped, or a reading mode) the
+  route's current offset is taken off what the plug-in reports
+  (`commitOutputGesture`), so the static value keeps the base.
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
   that its target cannot take it: the parameter is gone, read-only, bypass,
   neither modulatable nor reachable through an active envelope, or the

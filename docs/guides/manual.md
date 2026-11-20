@@ -1043,8 +1043,15 @@ level), you hear the control as you move it rather than the envelope's older
 points. In latch and write mode it keeps the last value until you stop or
 pause, which is also what the envelope stores. In touch mode the envelope
 takes over again half a second after your last move; holding the control
-still for longer than that hands back to the old automation. Mute and
-plug-in parameters play from their envelopes while you write them.
+still for longer than that hands back to the old automation. Mute plays
+from its envelope while you write it.
+
+A plug-in's knob works the same way: while you hold it in the plug-in's
+own window, the envelope stops moving it, and what you set is what is
+recorded. In touch mode the envelope takes over when you let go; in latch
+and write mode the last value holds until you stop or pause. A modulation
+that reaches that parameter through its envelope pauses while you hold it
+and resumes on top of what you recorded.
 
 Undo, redo or switching branches while playing starts a fresh automation
 pass at the current position. Earlier moves no longer override the envelope

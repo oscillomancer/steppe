@@ -213,18 +213,18 @@ void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& even
 
 void dumpStage(Dump& d, std::string_view a, const Stage& st) {
     [[maybe_unused]] const auto& [rackMidiBase, busPart, busMerge, busLive, midiOnly, busBase,
-                                  busHeld, busControllers, instance, fx, lanes, laneModRoutes, mods,
-                                  modRoutes, modEvents, modHeard, modEpoch, bypass, instrument,
-                                  autoBypassOnSilence, sleeping, processed, inputLatency, rateLive,
-                                  callbackBypass, wet, appliedWet, rampFromWet, rampToWet,
-                                  wetRampLeft, preserveDryOnLocate, latency, dry, out, dryBuf,
-                                  keyed, keyChannels, key, inPin, outPin, keyPins, pinned,
-                                  chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr, auxWritten,
-                                  blockEvents, voices, pendingVoices, noteSources, noteSourceIndex,
-                                  sourceIds, nextNoteId, releases, voiceDropped, modDeferred,
-                                  outStorage, outEvents, pdcIgnore, parallel, group, groupEnd,
-                                  before, align, groupIn, groupOut, os, osFilters, osIn, osOut,
-                                  osKey, osPad] = st;
+                                  busHeld, busControllers, instance, fx, lanes, laneModRoutes,
+                                  laneSlot, mods, modRoutes, modEvents, modHeard, modEpoch, bypass,
+                                  instrument, autoBypassOnSilence, sleeping, processed,
+                                  inputLatency, rateLive, callbackBypass, wet, appliedWet,
+                                  rampFromWet, rampToWet, wetRampLeft, preserveDryOnLocate, latency,
+                                  dry, out, dryBuf, keyed, keyChannels, key, inPin, outPin, keyPins,
+                                  pinned, chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr,
+                                  auxWritten, blockEvents, voices, pendingVoices, noteSources,
+                                  noteSourceIndex, sourceIds, nextNoteId, releases, voiceDropped,
+                                  modDeferred, outStorage, outEvents, pdcIgnore, parallel, group,
+                                  groupEnd, before, align, groupIn, groupOut, os, osFilters, osIn,
+                                  osOut, osKey, osPad] = st;
     d.put(a, "fx", st.fx);
     d.put(a, "instance", st.instance != nullptr);
     d.put(a, "rackMidiBase", st.rackMidiBase);
@@ -247,8 +247,12 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
             d.put(la, "range", std::array{lane.lo, lane.hi});
             d.put(la, "telemetry", lane.telemetry);
         }
+        // Its write hold's inputs (ADR-0061, amended); the hold is runtime state.
+        d.put(la, "envelope", lane.envelope);
+        d.put(la, "writes", std::array{lane.writes, lane.latches});
     }
     d.size(a, "laneModRoutes", st.laneModRoutes);
+    d.put(a, "laneSlot", st.laneSlot);
     // Modulation slots; the memo in them is runtime state.
     d.put(a, "mods", static_cast<std::uint64_t>(st.mods.size()));
     for (std::size_t i = 0; i < st.mods.size(); ++i) {
@@ -727,13 +731,13 @@ std::string dumpPlan(const Plan& p) {
                                   rateSafeDevice, rateControlsChanged, scalarPublication,
                                   scalarHistory, requestedScalar, rate, smoothFrames, mix,
                                   startSeconds, outputLatency, block, timeMap, warnings,
-                                  clipPlayers, projectDir, preparedSources, media, instances, graph,
-                                  anyLive, heldLive, rendererNodes, liveNodes, rendererGraph,
-                                  liveGraph, rendererInstances, liveInstances, modules,
-                                  rendererModules, liveModules, rendererMeterNodes, liveMeterNodes,
-                                  meterNodes, frontier, rateOutput, frontierRings, recordTaps,
-                                  recordRings, handAt, handEpoch, handContinuable, split, deviceIn,
-                                  deviceInChannels, deviceRecording, hardwareMidi,
+                                  clipPlayers, gestureHolds, projectDir, preparedSources, media,
+                                  instances, graph, anyLive, heldLive, rendererNodes, liveNodes,
+                                  rendererGraph, liveGraph, rendererInstances, liveInstances,
+                                  modules, rendererModules, liveModules, rendererMeterNodes,
+                                  liveMeterNodes, meterNodes, frontier, rateOutput, frontierRings,
+                                  recordTaps, recordRings, handAt, handEpoch, handContinuable,
+                                  split, deviceIn, deviceInChannels, deviceRecording, hardwareMidi,
                                   midiInputsSettings, midiOutputsSettings, hardwareLead,
                                   hardwareLeadBase, deviceMidi, deviceMidiOffset, processedInputs] =
         p;
@@ -767,6 +771,7 @@ std::string dumpPlan(const Plan& p) {
     d.put(a, "timeMap", p.timeMap != nullptr);
     d.put(a, "warnings", p.warnings);
     d.put(a, "clipPlayers", p.clipPlayers);
+    d.put(a, "gestureHolds", p.gestureHolds);
     d.put(a, "projectDir", p.projectDir.generic_string());
     d.put(a, "preparedSources", p.preparedSources != nullptr);
     d.put(a, "mainMaster", static_cast<std::uint64_t>(p.mainMaster));
@@ -858,6 +863,9 @@ std::string dumpPlan(const Plan& p) {
             d.put(at("slot", "stage", i), "wet",
                   std::array{m.stages[i].wet.load(std::memory_order_relaxed),
                              double(m.stages[i].bypass.load(std::memory_order_relaxed))});
+        d.put("slot", "laneEnvelopes", m.laneEnvelopes);
+        for (std::size_t i = 0; m.lanes && i < m.laneEnvelopes.size(); ++i)
+            d.put(at("slot", "lane", i), "held", m.lanes[i].load(std::memory_order_relaxed));
     }
     return std::move(d.text);
 }

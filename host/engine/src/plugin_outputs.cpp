@@ -91,11 +91,30 @@ Status EngineApp::commitOutputGesture(const OutputKey& key, const OutputGesture&
     std::string paramKey = semantic ? semantic->key : std::to_string(key.second);
     // A route reaching this parameter through its envelope (ADR-0096 step
     // M4: a VST3's, or one not modulatable) makes the lane send base plus
-    // the modulation, so the plug-in reports that and a drag from it. Write
-    // modes record the base: the current offset comes off, as the lane last
-    // applied it (a fraction of the range; of the normalized one for a VST3).
+    // the modulation, so the plug-in reports that and a drag from it: the
+    // current offset comes off, as the lane last applied it (a fraction of
+    // the range; of the normalized one for a VST3). Not in a write pass that
+    // holds the lane (ADR-0061, amended 2026-11-20): the lane sent nothing,
+    // so what the plug-in reports is the hand's value, recorded as it is.
+    const bool records =
+        std::any_of(head().envelopes.begin(), head().envelopes.end(), [&](const auto& env) {
+            const auto& e = *env.value;
+            return e.active && e.target.object == key.first &&
+                   (e.target.param == paramKey || (!semantic && e.target.param == param->name)) &&
+                   (e.mode == model::EnvMode::Touch || e.mode == model::EnvMode::Latch ||
+                    e.mode == model::EnvMode::LatchPreview || e.mode == model::EnvMode::Write);
+        });
+    const bool heldPass = [&] {
+        if (!records || !engine_ || !engine_->transport().playing) return false;
+        if (gesture.begun) return true;  // the engine held the lane from its begin
+        const auto& holds = engine_->writeHolds();
+        return std::any_of(holds.begin(), holds.end(), [&](const model::EnvTarget& t) {
+            return t.object == key.first &&
+                   (t.param == paramKey || (!semantic && t.param == param->name));
+        });
+    }();
     double offset = 0.0;
-    if (fx->plugin.format == "vst3" || !(param->flags & CLAP_PARAM_IS_MODULATABLE)) {
+    if (!heldPass && (fx->plugin.format == "vst3" || !(param->flags & CLAP_PARAM_IS_MODULATABLE))) {
         const auto offsets = modulationOffsets();
         for (const auto& m : head().modulations) {
             const model::Modulation& route = *m.value;
@@ -137,14 +156,6 @@ Status EngineApp::commitOutputGesture(const OutputKey& key, const OutputGesture&
     // edit (each parameter, at each overflow recovery).
     bool changed =
         semantic ? fx->patch != next.patch : fx->params != next.params || fx->patch != next.patch;
-    const bool records =
-        std::any_of(before.envelopes.begin(), before.envelopes.end(), [&](const auto& env) {
-            const auto& e = *env.value;
-            return e.active && e.target.object == key.first &&
-                   (e.target.param == paramKey || (!semantic && e.target.param == param->name)) &&
-                   (e.mode == model::EnvMode::Touch || e.mode == model::EnvMode::Latch ||
-                    e.mode == model::EnvMode::LatchPreview || e.mode == model::EnvMode::Write);
-        });
     // A repeated processor output is not another user edit.
     if (!changed && (!records || gesture.recording.empty())) return {};
     if (!committingLearn_) touchParam(key.first, paramKey);
@@ -399,7 +410,7 @@ void EngineApp::consumePluginOutputs() {
                 outputGestures_.erase(found);
             }
             if (outputGestures_.size() < kGestures)
-                outputGestures_.emplace(key, OutputGesture{});
+                outputGestures_.emplace(key, OutputGesture{.begun = true});
             else {
                 ++consumerDrops_;
                 outputOverflow_ = overflowAll_ = true;  // names no FX

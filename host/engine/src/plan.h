@@ -535,6 +535,16 @@ struct ParamLane {
     double modRange = 0, lo = 0, hi = 0;
     double modSum = 0;   // the last sum, held while a source rack's modules are elsewhere
     int telemetry = -1;  // its Plan::modOffsets slot
+    // Write holds (ADR-0061, amended 2026-11-20). `writes`: its envelope is
+    // in a writing mode on a real-time plan (`latches`: not touch). From the
+    // plug-in's own gesture begin while playing, `gesture`, to its end, or for
+    // a latching mode to the pass's end, `latched`; `held`, the main thread's
+    // hold (MixSlots::lanes). While any is set the lane sends nothing, so the
+    // plug-in keeps the hand's value.
+    Id envelope;
+    bool writes = false, latches = false;
+    bool gesture = false, latched = false, held = false;
+    bool holding() const { return gesture || latched || held; }
     double clapAt(std::int64_t sample) SUPPLE_RT {
         const double v = curve.at(sample);
         return spec ? params::toClap(spec->spec, params::fromNormalized(spec->spec, v)) : v;
@@ -672,6 +682,7 @@ struct Stage {
     Id fx;
     std::vector<ParamLane> lanes;
     std::vector<std::uint32_t> laneModRoutes;  // Plan::modEdges indices, by lane (M4)
+    std::uint32_t laneSlot = 0;  // its first lane's MixSlots::lanes entry (forEachStage order)
     // Modulation (ADR-0096): a slot per parameter any plan has modulated on
     // this FX (InstancePool::modulatedParams), sorted by id, and each slot's
     // routes (Plan::modEdges indices). `modEvents` are reserved per block.
@@ -1127,6 +1138,11 @@ struct MixSlots {
     };
     std::unique_ptr<StageValue[]> stages;
     std::vector<Id> stageFx;
+    // Plug-in parameter lanes held by a write pass (ADR-0061, amended
+    // 2026-11-20), node by node in forEachStage order from Stage::laneSlot;
+    // laneEnvelopes is each slot's envelope (main thread).
+    std::unique_ptr<std::atomic<bool>[]> lanes;
+    std::vector<Id> laneEnvelopes;
     // A modulation route's depth and enabled (ADR-0096, M-h), per
     // Plan::modEdges entry, read by the executor of the route's target.
     struct ModValue {
@@ -1225,6 +1241,9 @@ struct Plan {
     // Channels compile their clips' players (ADR-0097). Off for an offline
     // render with no launch log: renders play the arrangement only.
     bool clipPlayers = true;
+    // A real-time plan: a plug-in's own gesture holds its writing lanes
+    // (ADR-0061, amended 2026-11-20). Offline renders have no hand.
+    bool gestureHolds = false;
     std::filesystem::path projectDir;
     std::shared_ptr<const PreparedSources> preparedSources;
     MediaCache* media = nullptr;

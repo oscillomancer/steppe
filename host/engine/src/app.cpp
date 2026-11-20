@@ -2773,11 +2773,13 @@ std::vector<model::EnvTarget> EngineApp::writeHolds() const {
         if (env->mode == model::EnvMode::Touch && now >= w.lastMs + kTouchReleaseMs) continue;
         const auto kind = env->target.object.kind;
         const std::string& param = env->target.param;
+        // A plug-in parameter's lane is held too (ADR-0061, amended
+        // 2026-11-20); the plug-in's own gesture holds it in the engine.
         if ((kind == model::Kind::Track || kind == model::Kind::Route)
                 ? param == "volume" || param == "pan" ||
                       (kind == model::Kind::Track && (param == "width" || param == "pan_left" ||
                                                       param == "pan_right" || param == "pan_boost"))
-                : kind == model::Kind::Group && param == "volume")
+                : (kind == model::Kind::Group && param == "volume") || kind == model::Kind::Fx)
             holds.push_back(env->target);
     }
     return holds;

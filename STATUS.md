@@ -456,7 +456,9 @@ instructions are in `docs/guides/installing.md`.
 - **Automation**: envelopes on strip, route and plugin parameters,
   automation items with pools, take envelopes, touch/latch/write recording
   (a written level or pan is heard as the hand moves it, held over its curve
-  until the pass ends, or for touch 500 ms after the last move: ADR-0061);
+  until the pass ends, or for touch 500 ms after the last move: ADR-0061; a
+  plug-in parameter is held from its editor's grab, for touch until the
+  release, and records the hand's values);
   automation points selected (click, Ctrl+click, or the arrange marquee,
   which takes items and points on any track at once) and moved, deleted,
   copied, pasted and reshaped together, across lanes, from the lane's menu or
@@ -656,8 +658,9 @@ instructions are in `docs/guides/installing.md`.
   clamped to the fader's range. A VST3 or unmarked CLAP parameter that is
   automatable and continuous is modulated through its envelope (M4): its
   lane sends the base plus the offset, clamped, on the same grid; it needs
-  an active envelope (`modulate` adds a one-point one), and write modes
-  record the base. Depth and enabled are mix values (no
+  an active envelope (`modulate` adds a one-point one). A write pass holds
+  the lane, so it records the hand's values and the modulation pauses on
+  that parameter until release (ADR-0061, amended). Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
@@ -1320,12 +1323,6 @@ Engine and hosting:
   (`modulation.target`), and one modulatable by default but read-only in the
   loaded state is accepted and listed as playable while the engine leaves it
   unmodulated.
-- Modulation through an envelope (ADR-0096 step M4) under a write pass: the
-  lane goes on sending curve plus modulation while the hand drags the
-  parameter (plug-in parameters are not held, ADR-0061), and the commit
-  takes the offset as it stands at the gesture's end off every recorded
-  point. With a moving source each stored base is off by how far the
-  offset moved since that point, up to the source's swing x depth x range.
 - A take whose FX report latency runs its input ahead and, looping, wraps
   that much early (engine.md, PDC). At unity a loop no longer than that
   look-ahead has no early wrap: on every pass after the first the notes
@@ -1371,6 +1368,10 @@ Engine and hosting:
 - A touch-mode write hold ends 500 ms after the last move, not when the
   control is let go (ADR-0061): nothing reports a strip control's release to
   the engine, so a fader held still longer than that hears its old curve.
+  (A plug-in parameter's hold follows the plug-in's own gesture instead.)
+- A plug-in parameter's write hold starts in the block after the plug-in
+  reports the grab; in that first block the lane's events can still move the
+  knob (ADR-0061, amended 2026-11-20).
 - REAPER's default anticipative FX sustains about 10 % more tracks than
   Steppe with anticipation on B1's session (82 to 83 against 75, B2). The
   anticipative renderer is the limit: it ran at 78 % of real time at 64
@@ -1543,7 +1544,8 @@ Session and editing:
   trimmed media (tape conversion: only near its edges); renders from builds
   before that change do not null against new ones. Non-unity audio/MIDI
   recording is refused, including queued transitions. Writing the playrate
-  holds nothing over its curve (strip levels and pans do, ADR-0061). Compatible scalar-only live edits publish bounded clock
+  holds nothing over its curve (strip levels, pans and plug-in parameters
+  do, ADR-0061). Compatible scalar-only live edits publish bounded clock
   controls, retain source/converter state and glide over the time between
   moves through a 150 ms low-pass (one smooth pitch glide for a mouse drag or
   MIDI knob, at the cost of some extra lag) without graph
