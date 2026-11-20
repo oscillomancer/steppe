@@ -1843,7 +1843,9 @@ but not launched; freezing returns the track to the arrangement first.
     give `beat` on a MIDI clip or `seconds` on an audio clip, from the
     clip's start (`bar` and the other unit: `clip.unsupported`).
 - Refused on a clip's take with `clip.unsupported`:
-  `take.stretch.add/move/remove`.
+  `take.stretch.add/move/remove`; and `env.add {fx}` on an FX in a clip
+  take's chain (the chain plays, its envelopes are not played yet; hint:
+  clip FX envelopes are not played yet).
 - Timeline commands refuse a clip with `item.kind`, whose hint names the
   clip command:
   - `item.move/set/split/duplicate/remove/paste`;

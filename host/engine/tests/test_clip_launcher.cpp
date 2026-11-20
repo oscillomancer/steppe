@@ -630,6 +630,16 @@ TEST_CASE("env.add on a clip's take measures in the clip's unit; fx.add works") 
                                        R"(", "param": "pan", "points": [{"bar": 1, "value": 0}]})")
                                .value()));
     CHECK(bar.code == "clip.unsupported");
+    // The take's FX play, but their envelopes would not: refused (L2 settles it).
+    const model::Id takeFx = l.head().takes.find(midiTake)->chain.at(0);
+    const Error fxEnv = l.fails(
+        "env.add", json::writeCompact(
+                       json::parse(R"({"fx": ")" + takeFx.str() +
+                                   R"(", "param": "gain", "points": [{"beat": 0, "value": 0}]})")
+                           .value()));
+    CHECK(fxEnv.code == "clip.unsupported");
+    CHECK(fxEnv.path == "/args/fx");
+    CHECK(fxEnv.hint.find("not played yet") != std::string::npos);
     auto args = j(R"({"track": "tr_1", "scene": "sc_2"})");
     args["audio_file"] = l.wav("pad.wav").string();
     l.runArgs("clip.add", args);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Automation commands: env.* and autoitem.* (session-model §7).
+#include <algorithm>
+
 #include "clip_launcher.h"
 #include "command_helpers.h"
 
@@ -260,6 +262,17 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             } else if (a.fx) {
                 auto id = existing<model::FxInstance>(s, *a.fx, "/fx");
                 if (!id) return std::move(id).error();
+                // A clip take's FX chain plays, but nothing plays its envelopes yet
+                // (ADR-0097): refused rather than written to do nothing.
+                for (const auto& t : s.takes)
+                    if (std::find(t.value->chain.begin(), t.value->chain.end(), *id) !=
+                            t.value->chain.end() &&
+                        clipKindOfTake(s, t.id))
+                        return Error("clip.unsupported",
+                                     id->str() + " is in the FX of clip take " + t.id.str(), "/fx",
+                                     "clip FX envelopes are not played yet; automate the "
+                                     "clip take's volume, pan or mute with env.add {take}, or "
+                                     "the track's FX");
                 env.target.object = *id;
             } else if (a.module) {
                 auto id = existing<model::RackModule>(s, *a.module, "/module");
