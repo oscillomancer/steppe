@@ -1565,9 +1565,12 @@ keeps playing its print.
   know, from the instance's parameter list (`fx.describe`): the parameter
   must be flagged modulatable and not read-only or bypass. VST3 parameters
   never are.
-- Mixer targets are refused until step M2 (`modulation.target`, with a hint
-  naming the step). A file's mixer-target route loads and is inert until
-  then (engine.md §1.4.1).
+- Mixer targets (step M2): the target track or send must exist and fit the
+  invariants above (`modulation.target` at `/target/track`,
+  `/target/route` or `/target/param` otherwise), and a target in a frozen
+  track fails with `track.frozen`. The depth bound is the target's
+  (`modulation.depth`): ±1 for a plug-in parameter, ±48 dB for a volume,
+  ±200 % for pan and width.
 - Errors: `modulation.source`, `modulation.target`, `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.

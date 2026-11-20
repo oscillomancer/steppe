@@ -337,8 +337,10 @@ only.
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
   that its target cannot take it: the parameter is gone, not flagged
   modulatable, read-only or bypass, or the plug-in is missing or VST3
-  (`modulation.target`). Until step M2 a route to a mixer target is inert
-  the same way, reported as `target`. It is also inert after its target reported a
+  (`modulation.target`), or for a mixer target when its node applies no
+  such level (a send that is not an encoded edge of its source). A route
+  into a frozen track is inert silently: the print plays. It is also inert
+  after its target reported a
   latency change while modulated (`modulation.latency`): the engine then
   keeps every route into that FX's modulated parameters disabled until one
   of them is edited, the FX is replaced, or the project is reopened.
@@ -351,13 +353,21 @@ only.
   ADR-0093). A route's source, target and `lane` compile. An edit to a route
   into an FX whose routes a latency change turned off compiles, since that
   edit turns them back on.
-- **Mixer targets** (track volume, pan, width; a send's level). *Not yet
-  built (step M2).* The offset at a frame is linear between the values at
-  the target grid points either side of it. The one-interval lookahead
-  above makes the later value available in time. The
-  base plus the offset is clamped to the target's range per sample, before
-  the gain ramps. Volume and send level offsets are in dB, pan and width in
-  percent.
+- **Mixer targets** (M-i: track volume, pan, width; the level of an audio
+  send between strips or a rack send). Prepare binds each to its node's
+  `mixMods` (`Node::modVolume`, `modPan`, `modWidth`, `Edge::modVolume` on
+  the node that applies the send's level: its source, or the rack for a rack
+  send); routes on one target sum. At each point of the absolute 32-frame
+  grid the interval's end becomes the sum of the route values read there,
+  which the one-interval lookahead above delivers early, and the offset at
+  each frame is linear between the interval's start and end. A rack the
+  other executor still owns holds the end. The interpolation is carried by
+  target across plan swaps and starts at 0 after a locate, with the delays.
+  The base (automation, else the fader's value) plus the offset is clamped
+  per sample to the target's range (volume up to 12 dB, a level at −inf
+  stays −inf; pan and width −100..100), before VCAs and the gain ramps; a
+  modulated level is computed per sample. A modulated send is encoded.
+  Volume and send level offsets are in dB, pan and width in percent.
 
 Renders stay deterministic and real time equals offline at any block size,
 in both executors and through the bridge: every grid point and delay is a

@@ -446,6 +446,9 @@ struct Edge {
     // its mix slot, `stripMute` its mute curve, `vcas` its VCAs' mutes.
     bool rackSend = false, homeMute = false, homeSilenced = false;
     int rackHome = -1;
+    // Its level's modulation (ADR-0096, M-i): an index into its source
+    // node's `mixMods`, the node that applies the level; -1: none.
+    int modVolume = -1;
     // A MIDI send (ADR-0067): from a channel's MIDI stream or a Note Out
     // (`rackNotes`), to a channel or a Notes module (`midiNotes`). Queues and
     // voices belong to the destination, and stay on its executor; delay
@@ -513,6 +516,9 @@ struct ModEdge {
 // points; plain CLAP parameters in their CLAP value. Values reach the plugin
 // as param events at every point and every kAutomationStep samples.
 inline constexpr std::uint32_t kAutomationStep = 32;
+// The top of a strip's or send's volume_db (the model's range): a modulated
+// level is clamped to it (ADR-0096, M-i).
+inline constexpr double kMixMaxDb = 12.0;
 struct ParamLane {
     std::uint32_t clapId = 0;
     Automation curve;
@@ -877,6 +883,25 @@ struct Node {
     std::vector<std::size_t> in;     // incoming edges, in summation order
     std::vector<std::size_t> out;    // source-owned send encoders
     std::vector<std::size_t> modIn;  // incoming modulation edges (Plan::modEdges)
+    // Mixer targets of modulation routes (ADR-0096, M-i), bound by prepare:
+    // the node's volume, pan and width (indices into `mixMods`, -1: none),
+    // and its sends' levels (Edge::modVolume).
+    struct MixMod {
+        std::vector<std::uint32_t> routes;  // Plan::modEdges indices, summed
+        Id object{};                        // the track or route
+        std::string param;                  // volume, pan, width
+        // The sum at the current grid interval's start and end: a route
+        // delivers each value one interval early (`before` less 32), so the
+        // end is known when the interval plays.
+        double prev = 0, next = 0;
+        bool preserveOnLocate = false;  // a swap just carried it
+        std::vector<double> offsets;    // this block's, per frame
+    };
+    std::vector<MixMod> mixMods;
+    int modVolume = -1, modPan = -1, modWidth = -1;
+    double modOffset(int mod, std::uint32_t i) const SUPPLE_RT {
+        return mod < 0 ? 0.0 : mixMods[static_cast<std::size_t>(mod)].offsets[i];
+    }
     std::vector<Stage> chain;
     // Input FX (a channel's input_chain): they process its record input, which
     // is then monitored and recorded, whenever the track is armed with an

@@ -10131,9 +10131,9 @@ Result:
 
 ## `modulation.add@1`
 
-Route a rack's Mod Out input to a plug-in parameter.
+Route a rack's Mod Out input to a plug-in parameter or a mixer level.
 
-depth is the offset at a signal of 1, a fraction of the parameter's CLAP range (-1..1). The parameter must be marked modulatable in fx.describe. Mixer targets (a track's volume, pan or width; a send's volume) arrive with step M2.
+depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1), and the parameter must be marked modulatable in fx.describe; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -10202,7 +10202,7 @@ Result:
 
 List modulation routes, by target track, FX or source rack.
 
-Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase) and, when the plan cannot apply it, inert: target (the parameter cannot take it, or a mixer target before step M2) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
+Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when every cable into the Mod Out input is unipolar, a gate or a phase) and, when the plan cannot apply it, inert: target (the parameter cannot take it, or the target's track is frozen and its level is outside the print) or latency (its plug-in changed latency while modulated; editing a route into it turns them back on).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -10260,12 +10260,12 @@ Kind: `query`. Exposure: `mcp-exec`.
               "track": {
                 "type": "string",
                 "pattern": "^tr_[0-9]+$",
-                "description": "A track's volume, pan or width (step M2)."
+                "description": "A track's volume, pan or width."
               },
               "route": {
                 "type": "string",
                 "pattern": "^sd_[0-9]+$",
-                "description": "A send's volume (step M2)."
+                "description": "A send's volume."
               },
               "param": {
                 "type": "string",

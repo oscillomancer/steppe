@@ -2461,7 +2461,7 @@ q = nil
 ---@field set fun(args: Steppe.midi_outputs_set_args): table Change one MIDI output: enabled, offset, reset, clock, SPP, MTC.
 
 ---@class Steppe.modulation
----@field add fun(args: Steppe.modulation_add_args): Steppe.modulation_add_result Route a rack's Mod Out input to a plug-in parameter.
+---@field add fun(args: Steppe.modulation_add_args): Steppe.modulation_add_result Route a rack's Mod Out input to a plug-in parameter or a mixer level.
 ---@field list fun(args?: Steppe.modulation_list_args): Steppe.modulation_list_result List modulation routes, by target track, FX or source rack.
 ---@field remove fun(args: Steppe.modulation_remove_args): Steppe.modulation_remove_result Remove a modulation route.
 ---@field set fun(args: Steppe.modulation_set_args): Steppe.modulation_set_result Change a modulation route's source, target, depth, enabled or lane.

@@ -7,15 +7,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <string>
 
 #include <supple/engine/offline.h>
 #include <supple/engine/realtime.h>
 
+#include "bridge_patience.h"
 #include "plan.h"
 #include "plan_dump.h"
 #include "rack_runtime.h"
 #include "realtime_common.h"
+#include "supple/console9/console9.h"
 #include "supple/model/freeze.h"
 #include "supple/model/schemas.h"
 #include "supple/params/params.h"
@@ -163,7 +166,7 @@ TEST_CASE("modulation: the source rack runs before its target") {
     CHECK(rack.modValues[1].empty());                    // nothing reads in_2
 }
 
-TEST_CASE("modulation: a disabled route is still an edge, a mixer target is inert until M2") {
+TEST_CASE("modulation: a disabled route is still an edge, a mixer target binds to its node") {
     Patch patch;
     model::EditTxn t(patch.s, 2);
     const Id off = modulate(t, patch.modOut, patch.plain, "gain");
@@ -175,10 +178,12 @@ TEST_CASE("modulation: a disabled route is still an edge, a mixer target is iner
     CHECK_FALSE(p.plan.modEdges[0].enabled);
     CHECK_FALSE(p.plan.modEdges[0].inert);
     CHECK(p.plan.modEdges[1].route == fader);
-    CHECK(p.plan.modEdges[1].inert);
-    CHECK(std::any_of(p.plan.warnings.begin(), p.plan.warnings.end(), [&](const std::string& w) {
-        return w.find(fader.str()) != std::string::npos && w.find("M2") != std::string::npos;
-    }));
+    CHECK_FALSE(p.plan.modEdges[1].inert);
+    const d::Node& b = p.plan.nodes[p.node(patch.b)];
+    REQUIRE(b.modVolume == 0);
+    CHECK(b.modPan == -1);
+    CHECK(b.mixMods.at(0).routes == std::vector<std::uint32_t>{1});
+    CHECK(b.mixMods.at(0).offsets.size() == 128);
     CHECK(p.node(patch.rack) < p.node(patch.b));
 }
 
@@ -584,6 +589,7 @@ namespace {
 // Emit with the beat phase, and a latent gain ahead of the modulated one,
 // modulated too from the same input: its route's delay is the latent stage's
 // own compensation, the plain one's is shifted by it. `isolation` for both.
+// B's volume and pan are modulated too, after the whole chain.
 model::Session latentPair(model::Isolation isolation) {
     const Emit emit("beat_phase", 0.2);
     model::EditTxn t(emit.s, 2);
@@ -598,6 +604,9 @@ model::Session latentPair(model::Isolation isolation) {
                            [&](model::Track& tr) { tr.chain.insert(tr.chain.begin(), latent); });
     t.modify<model::FxInstance>(emit.gain, [&](model::FxInstance& f) { f.isolation = isolation; });
     modulate(t, emit.modOut, latent, "gain", -0.1);
+    // And B's volume and pan, interpolated between grid points (M-i).
+    modulate(t, emit.modOut, emit.b, "volume", -9.0);
+    modulate(t, emit.modOut, emit.b, "pan", 40.0);
     return commit(t);
 }
 
@@ -621,6 +630,7 @@ Live playLive(const model::Session& s, const EngineOptions& options, std::uint32
     else
         backend.run(cycles);
     CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.bridgeLateCycles() == 0);  // a late live block is silent by design
     engine.stop();
     CHECK(engine.processErrors() == 0);
     return {backend.capture().channels[0], engine.outputLatency()};
@@ -660,7 +670,8 @@ TEST_CASE("modulation: through the bridge, real-time output equals the in-proces
         CHECK(render(s, double(seconds), 128).left == reference.left);
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("anticipative " << options.anticipative);
-            const Live live = playLive(s, options, 128, frames);
+            // A deadline no healthy plug-in misses under load (bridge_patience.h).
+            const Live live = playLive(s, test::patient(options), 128, frames);
             CHECK(maxDiff(live.left, live.latency, reference.left, 48000 * seconds) == 0.0);
         }
     }
@@ -815,4 +826,148 @@ TEST_CASE("modulation: depth and enabled reach a running plan without a compile"
         CHECK(double(cap[28500]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
         CHECK(double(cap[38000]) == doctest::Approx(gainAt(0)).epsilon(1e-4));
     }
+}
+
+namespace {
+
+// Emit without a plug-in route, plus mixer routes added by `edit`; B's
+// level reaches the master (the rack's Out is 1.0 while playing).
+model::Session mixed(const Emit& emit, const std::function<void(model::EditTxn&)>& edit) {
+    model::EditTxn t(emit.s, 2);
+    edit(t);
+    return commit(t);
+}
+
+double ratio(const std::vector<float>& a, const std::vector<float>& b, std::size_t at) {
+    return double(a[at]) / double(b[at]);
+}
+
+}  // namespace
+
+TEST_CASE("modulation: a track's volume moves by signal x depth in dB, clamped to its range" *
+          doctest::description("rt")) {
+    const Emit emit("playing", std::nullopt);
+    const auto plain = render(emit.s, 0.5);
+    const auto down = render(
+        mixed(emit, [&](model::EditTxn& t) { modulate(t, emit.modOut, emit.b, "volume", -6.0); }),
+        0.5);
+    CHECK(ratio(down.left, plain.left, 12000) ==
+          doctest::Approx(console9::faderGain(-6) / console9::faderGain(0)).epsilon(1e-6));
+    // Base +10 dB and +6 dB of modulation: the sum stops at the top, 12 dB.
+    const auto loud = [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.volumeDb = 10; });
+    };
+    const auto base = render(mixed(emit, loud), 0.5);
+    const auto top = render(mixed(emit,
+                                  [&](model::EditTxn& t) {
+                                      loud(t);
+                                      modulate(t, emit.modOut, emit.b, "volume", 6.0);
+                                  }),
+                            0.5);
+    CHECK(ratio(top.left, base.left, 12000) ==
+          doctest::Approx(console9::faderGain(12) / console9::faderGain(10)).epsilon(1e-6));
+    // A disabled route adds 0.
+    const auto off = render(mixed(emit,
+                                  [&](model::EditTxn& t) {
+                                      const Id r = modulate(t, emit.modOut, emit.b, "volume", -6.0);
+                                      t.modify<model::Modulation>(
+                                          r, [](model::Modulation& m) { m.enabled = false; });
+                                  }),
+                            0.5);
+    CHECK(off.left == plain.left);
+}
+
+TEST_CASE("modulation: pan and width move by signal x depth in percent" *
+          doctest::description("rt")) {
+    const Emit emit("playing", std::nullopt);
+    InstancePool pool = makePool();
+    const auto stereo = [&](const model::Session& s) {
+        OfflineSettings settings;
+        settings.endSeconds = 0.5;
+        auto r = renderOffline(s, pool, settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return std::array{double(r->audio.channels[0][12000]), double(r->audio.channels[1][12000])};
+    };
+    const auto panned = stereo(
+        mixed(emit, [&](model::EditTxn& t) { modulate(t, emit.modOut, emit.b, "pan", 50.0); }));
+    const auto fixed = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.pan = 50; });
+    }));
+    CHECK(panned[0] == doctest::Approx(fixed[0]).epsilon(1e-6));
+    CHECK(panned[1] == doctest::Approx(fixed[1]).epsilon(1e-6));
+    CHECK(panned[1] > panned[0]);
+    // Clamped at 100.
+    const auto hard = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.pan = 80; });
+        modulate(t, emit.modOut, emit.b, "pan", 60.0);
+    }));
+    const auto right = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.pan = 100; });
+    }));
+    CHECK(hard[0] == doctest::Approx(right[0]).epsilon(1e-6));
+    CHECK(hard[1] == doctest::Approx(right[1]).epsilon(1e-6));
+    const auto narrow = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.pan = 50; });
+        modulate(t, emit.modOut, emit.b, "width", -60.0);
+    }));
+    const auto narrowFixed = stereo(mixed(emit, [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) {
+            tr.pan = 50;
+            tr.width = 40;
+        });
+    }));
+    CHECK(narrow[0] == doctest::Approx(narrowFixed[0]).epsilon(1e-6));
+    CHECK(narrow[1] == doctest::Approx(narrowFixed[1]).epsilon(1e-6));
+}
+
+TEST_CASE("modulation: a send's level moves by signal x depth, and the send is encoded for it" *
+          doctest::description("rt")) {
+    // B is silent at its fader; a pre-fader send carries it to a buss.
+    const Emit emit("playing", std::nullopt);
+    Id send;
+    const auto sending = [&](model::EditTxn& t) {
+        t.modify<model::Track>(emit.b, [](model::Track& tr) { tr.volumeDb = model::kSilenceDb; });
+        model::Track buss;
+        buss.type = model::StripType::Buss;
+        buss.parent = kMaster;
+        const Id verb = t.create(buss);
+        t.modify<model::Track>(kMaster, [&](model::Track& m) { m.children.push_back(verb); });
+        model::Route r;
+        r.from.track = emit.b;
+        r.to.track = verb;
+        r.tap = model::Tap::PreFader;
+        send = t.create(r);
+    };
+    const auto plain = render(mixed(emit, sending), 0.5);
+    const auto down = render(mixed(emit,
+                                   [&](model::EditTxn& t) {
+                                       sending(t);
+                                       modulate(t, emit.modOut, send, "volume", -6.0);
+                                   }),
+                             0.5);
+    REQUIRE(std::abs(plain.left[12000]) > 0.01f);
+    CHECK(ratio(down.left, plain.left, 12000) ==
+          doctest::Approx(console9::faderGain(-6) / console9::faderGain(0)).epsilon(1e-5));
+}
+
+TEST_CASE("modulation: a mixer target is linear between grid points, a plug-in steps on them" *
+          doctest::description("rt")) {
+    const Emit emit("beat_phase", std::nullopt);
+    const auto level =
+        render(mixed(emit,
+                     [&](model::EditTxn& t) { modulate(t, emit.modOut, emit.b, "volume", -12.0); }),
+               1.0)
+            .left;
+    // Over a beat the phase ramps, so the level changes at almost every
+    // frame (not only every 32), and the same at any block size.
+    std::size_t changes = 0;
+    for (std::size_t i = 4800; i < 24000; ++i) changes += level[i] != level[i - 1];
+    CHECK(changes > 19000 * 9 / 10);
+    for (const std::uint32_t block : {37u, 128u})
+        CHECK(render(mixed(emit,
+                           [&](model::EditTxn& t) {
+                               modulate(t, emit.modOut, emit.b, "volume", -12.0);
+                           }),
+                     1.0, block)
+                  .left == level);
 }

@@ -1049,7 +1049,7 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
         Edge& e = p.edges[ei];
         if (!e.rackSend || static_cast<std::size_t>(e.rackOut) >= n.rackOuts.size()) continue;
         const Stereo& out = n.rackOuts[static_cast<std::size_t>(e.rackOut)];
-        const bool volumeCurve = e.volumeCurve();
+        const bool volumeCurve = e.volumeCurve(), modulated = e.modVolume >= 0;
         for (std::uint32_t i = 0; i < frames; ++i) {
             const auto at = pos + i;
             bool homeMute = e.stripMute.active() ? e.stripMute.at(at) >= .5 : e.homeMute;
@@ -1058,11 +1058,14 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
             const bool muted = e.homeSilenced || homeMute ||
                                (e.autoMute.active() ? e.autoMute.at(at) >= .5 : e.muted);
             double g = e.staticGain;
-            if (volumeCurve) {
-                const double db = e.autoVolume.at(at);
+            if (volumeCurve || modulated) {
+                double db = volumeCurve ? e.autoVolume.at(at) : e.volumeDb;
+                // Modulation after automation, kept in range (ADR-0096, M-i).
+                if (modulated && db > model::kSilenceDb)
+                    db = std::clamp(db + n.modOffset(e.modVolume, i), model::kSilenceDb, kMixMaxDb);
                 g = db <= model::kSilenceDb ? 0.0 : console9::faderGain(db);
             }
-            e.fader.set(g, PanMatrix{}, muted, volumeCurve, p.smoothFrames);
+            e.fader.set(g, PanMatrix{}, muted, volumeCurve || modulated, p.smoothFrames);
             const double level = e.fader.gain.next() * e.fader.gate.next();
             const float l = out.l[i], rr = out.r[i];
             e.encoded.l[i] = std::isfinite(l) ? static_cast<float>(double(l) * level) : 0.0f;

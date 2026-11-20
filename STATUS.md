@@ -588,17 +588,20 @@ instructions are in `docs/guides/installing.md`.
   not requested.
   Modulation routes (ADR-0096, schema 2.16): a Mod Out module's inputs
   drive plug-in parameters outside the rack (`modulation.add/set/remove/
-  list`; `fx.describe` marks the parameters a route can take). The offset
-  is signal × depth × range, held on the absolute 32-frame grid and sent
-  as CLAP PARAM_MOD events that never touch the base value or automation;
+  list`; `fx.describe` marks the parameters a route can take), a track's
+  volume, pan and width, and a send's level. A plug-in's offset is signal
+  × depth × range, held on the absolute 32-frame grid and sent as CLAP
+  PARAM_MOD events that never touch the base value or automation; a mixer
+  target's is linear between grid points, added after automation and
+  clamped to the fader's range. Depth and enabled are mix values (no
+  compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
   executors, bridged, at seeks and over loop wraps. Removing a route's
   source or target removes it with a `modulation.removed` warning. A
   plug-in whose latency moves while modulated turns its routes off until
-  one of them is edited (`modulation.latency`). Mixer targets (track
-  volume, pan and width; send levels) and telemetry of live offsets come
-  with step M2. An FX moved to another track keeps the last offset of a
+  one of them is edited (`modulation.latency`). Telemetry of live offsets
+  comes with step M2. An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
   resets. Native macOS and Windows CI has not run on it.
   Agents patch with `rack.patch` (named

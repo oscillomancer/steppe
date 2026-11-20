@@ -910,8 +910,14 @@ automation. `modulation.set` changes a route (a drag that sends one
 gesture is one undo step), `modulation.remove` removes it, and
 `modulation.list` shows each route's signal range and, when it cannot
 play, why. Removing the Mod Out or the plug-in removes its routes with a
-`modulation.removed` warning. Track volume, pan and width and send levels
-come later.
+`modulation.removed` warning.
+
+A route can also take a track's volume (`{track, param: "volume"}`, depth
+in dB, −48 to 48), pan or width (percent, −200 to 200), or the level of an
+audio send to a buss or master (`{route, param: "volume"}`). The offset
+adds to what the fader or its automation gives and the sum stays in the
+fader's range; between the 32-sample steps it moves in a straight line,
+so a fast modulator sounds smooth.
 
 Rack plug-in latency is compensated against the song, including oversampling.
 The rack's longest routed audio or Note Out path sets its clock; shorter

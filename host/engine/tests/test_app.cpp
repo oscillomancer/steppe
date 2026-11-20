@@ -4063,8 +4063,17 @@ TEST_CASE("modulation commands refuse what cannot be modulated, with a hint") {
         R"({"source": {"module": "mo_1", "input": "in_1"}, "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.1})",
         "modulation.source", "/source/module");
     refused("modulation.add",
-            "{" + from + R"(, "target": {"track": "tr_1", "param": "volume"}, "depth": 3})",
-            "modulation.target", "/target");
+            "{" + from + R"(, "target": {"track": "tr_1", "param": "solo"}, "depth": 1})",
+            "modulation.target", "/target/param");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"track": "tr_1", "param": "volume"}, "depth": 60})",
+            "modulation.depth", "/depth");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"track": "tr_0", "param": "width"}, "depth": 10})",
+            "modulation.target", "/target/param");
+    refused("modulation.add",
+            "{" + from + R"(, "target": {"track": "tr_9", "param": "pan"}, "depth": 10})",
+            "modulation.target", "/target/track");
     refused("modulation.add",
             "{" + from + R"(, "target": {"fx": "fx_1", "param": "latency"}, "depth": 0.1})",
             "modulation.target", "/target/param");
@@ -4176,4 +4185,51 @@ TEST_CASE("modulation commands: a modulated send turned MIDI loses its route, wi
     CHECK(w["code"].asString() == "modulation.removed");
     CHECK(w["path"].asString() == "/modulations/mr_1");
     CHECK(w["message"].asString().find(sendId + " volume") != std::string::npos);
+}
+
+TEST_CASE("modulation commands: a track's volume, pan and width, and a send's level") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_mod_out");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_1"},
+        "target": {"track": "tr_1", "param": "volume"}, "depth": -6})");
+    run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_1"},
+        "target": {"track": "tr_1", "param": "pan"}, "depth": 150})");
+    run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_2"},
+        "target": {"track": "tr_1", "param": "width"}, "depth": -40})");
+    run("track.add", R"({"name": "Verb", "type": "buss"})");
+    run("track.add", R"({"name": "Keys"})");
+    const auto send = run("route.add", R"({"from": "tr_3", "to": "tr_2"})")["id"].asString();
+    json::Value args = j(R"({"source": {"module": "mo_2", "input": "in_3"}, "depth": 3})");
+    args["target"] = json::Value::object();
+    args["target"]["route"] = send;
+    args["target"]["param"] = "volume";
+    auto added = d.execute({"modulation.add", std::move(args), kTest});
+    REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+    CHECK(app->view().modulations.size() == 4);
+    auto listed = run("modulation.list", "{}");
+    REQUIRE(listed["modulations"].size() == 4);
+    for (std::size_t i = 0; i < 4; ++i) CHECK_FALSE(listed["modulations"].at(i).find("inert"));
+    auto last = listed["modulations"].at(3);
+    CHECK(last["target"]["route"].asString() == send);
+    CHECK(run("modulation.list", R"({"track": "tr_3"})")["modulations"].size() == 1);
+    // A send turned MIDI cannot take it.
+    json::Value midi = j(R"({"source": {"module": "mo_2", "input": "in_4"}, "depth": 3})");
+    run("track.add", R"({"name": "Synth"})");
+    const auto notes = run("route.add", R"({"from": "tr_3", "to": "tr_4", "midi": {}})")["id"];
+    midi["target"] = json::Value::object();
+    midi["target"]["route"] = notes;
+    midi["target"]["param"] = "volume";
+    auto refused = d.execute({"modulation.add", std::move(midi), kTest});
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "modulation.target");
+    CHECK(refused.error().path == "/args/target/route");
 }

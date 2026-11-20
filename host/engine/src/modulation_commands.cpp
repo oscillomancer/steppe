@@ -2,8 +2,9 @@
 // Copyright (c) 2026 Supple Audio
 // Modulation routes (ADR-0096, session-model "Modulation"): modulation.add,
 // .set, .remove and .list. A route takes a rack's Mod Out input to a
-// parameter outside the rack; until step M2 that is a CLAP parameter flagged
-// modulatable, of an FX in a track's chain or input chain.
+// parameter outside the rack: a CLAP parameter flagged modulatable, of an FX
+// in a track's chain or input chain; a track's volume, pan or width; or the
+// level of an audio send between strips or a rack send (M2).
 #include "command_helpers.h"
 #include "rack_runtime.h"
 #include "supple/model/freeze.h"
@@ -76,8 +77,8 @@ schema::Schema<TargetArg> targetSchema() {
     return schema::object<TargetArg>("modulation_target")
         .field("fx", &TargetArg::fx, idArg("fx", "Plugin instance"))
         .field("track", &TargetArg::track,
-               idArg("tr", "Track").doc("A track's volume, pan or width (step M2)."))
-        .field("route", &TargetArg::route, idArg("sd", "Route").doc("A send's volume (step M2)."))
+               idArg("tr", "Track").doc("A track's volume, pan or width."))
+        .field("route", &TargetArg::route, idArg("sd", "Route").doc("A send's volume."))
         .field("param", &TargetArg::param,
                schema::string().minLength(1).doc(
                    "A plug-in parameter's key, name or decimal CLAP id (fx.describe marks "
@@ -137,32 +138,70 @@ Status checkRoute(EngineApp& app, const model::Session& s, const model::Modulati
                        "add one with module.add {rack, type: \"mod_out\"}, or use rack.get to "
                        "find a rack's Mod Out");
     const Id target = m.target.object;
-    if (target.kind == model::Kind::Track || target.kind == model::Kind::Route)
-        return refused(
-            "modulation.target",
-            "modulating " + target.str() + " " + m.target.param + " arrives with step M2",
-            "/target",
-            "modulate a plug-in parameter: {fx, param}, with a parameter "
-            "fx.describe marks modulatable");
-    const model::FxInstance* fx = s.fx.find(target);
-    if (!fx)
-        return refused("modulation.target", "no " + target.str(), "/target/fx",
-                       "fx.list names the plug-ins on each track");
-    if (!model::trackOfChainFx(s, target))
-        return refused("modulation.target",
-                       target.str() + " is not in a track's chain or input chain", "/target/fx",
-                       "modulate an FX on a track; take FX and a rack's plug-ins come later");
-    if (auto owner = model::frozenOwner(s, target)) return model::frozenError(s, *owner, "/target");
-    if (auto param = modulatableParam(app, *fx, m.target.param); !param) {
-        Error e = std::move(param).error();
-        e.code = "modulation.target";
-        e.path = "/target/param";
-        return e;
+    const std::string& param = m.target.param;
+    // Mixer targets (M2): a track's volume, pan or width; a send's volume.
+    if (target.kind == model::Kind::Track) {
+        const model::Track* track = s.tracks.find(target);
+        if (!track)
+            return refused("modulation.target", "no " + target.str(), "/target/track",
+                           "track.list names the tracks");
+        if (param != "volume" && param != "pan" && param != "width")
+            return refused("modulation.target", "a track's " + param + " cannot be modulated",
+                           "/target/param",
+                           "modulate volume, pan or width; switches such as mute and solo "
+                           "cannot be modulated");
+        if (param == "width" && track->type == model::StripType::Master)
+            return refused("modulation.target", "a master has no width", "/target/param",
+                           "modulate the master's volume or pan");
+        if (track->freeze) return model::frozenError(s, target, "/target");
+    } else if (target.kind == model::Kind::Route) {
+        const model::Route* route = s.routes.find(target);
+        if (!route)
+            return refused("modulation.target", "no " + target.str(), "/target/route",
+                           "route.list names the routes");
+        const bool send = !route->midi && ((route->from.track && route->to.track) ||
+                                           model::rackSendHome(s, *route).has_value());
+        if (!send)
+            return refused("modulation.target",
+                           target.str() + " is not an audio send between strips or a rack send",
+                           "/target/route",
+                           "modulate the level of an audio send to a buss or master");
+        if (param != "volume")
+            return refused("modulation.target", "a send's " + param + " cannot be modulated",
+                           "/target/param", "modulate the send's volume");
+        if (auto owner = model::frozenOwner(s, target))
+            return model::frozenError(s, *owner, "/target");
+    } else {
+        const model::FxInstance* fx = s.fx.find(target);
+        if (!fx)
+            return refused("modulation.target", "no " + target.str(), "/target/fx",
+                           "fx.list names the plug-ins on each track");
+        if (!model::trackOfChainFx(s, target))
+            return refused("modulation.target",
+                           target.str() + " is not in a track's chain or input chain", "/target/fx",
+                           "modulate an FX on a track; take FX and a rack's plug-ins come later");
+        if (auto owner = model::frozenOwner(s, target))
+            return model::frozenError(s, *owner, "/target");
+        if (auto found = modulatableParam(app, *fx, param); !found) {
+            Error e = std::move(found).error();
+            e.code = "modulation.target";
+            e.path = "/target/param";
+            return e;
+        }
     }
-    if (!std::isfinite(m.depth) || std::abs(m.depth) > 1.0)
-        return refused("modulation.depth", "a plug-in parameter's depth is -1..1", "/depth",
-                       "give the offset at a signal of 1 as a fraction of the "
-                       "parameter's range, -1..1");
+    // The depth is the offset at a signal of 1, in the target's unit.
+    const bool fxTarget = target.kind == model::Kind::Fx;
+    const double bound = fxTarget ? 1.0 : param == "volume" ? 48.0 : 200.0;
+    if (!std::isfinite(m.depth) || std::abs(m.depth) > bound)
+        return refused("modulation.depth",
+                       fxTarget            ? "a plug-in parameter's depth is -1..1"
+                       : param == "volume" ? "a volume's depth is -48..48 dB"
+                                           : "a pan or width's depth is -200..200 percent",
+                       "/depth",
+                       fxTarget ? "give the offset at a signal of 1 as a fraction of the "
+                                  "parameter's range, -1..1"
+                                : "give the offset at a signal of 1 in the target's unit (dB "
+                                  "for volume, percent for pan and width)");
     for (const auto& e : s.modulations)
         if (e.id != self && e.value->source == m.source && e.value->target == m.target)
             return refused("modulation.duplicate",
@@ -213,11 +252,13 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.name = "modulation.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Route a rack's Mod Out input to a plug-in parameter.";
+        c.summary = "Route a rack's Mod Out input to a plug-in parameter or a mixer level.";
         c.description =
-            "depth is the offset at a signal of 1, a fraction of the parameter's CLAP range "
-            "(-1..1). The parameter must be marked modulatable in fx.describe. Mixer targets "
-            "(a track's volume, pan or width; a send's volume) arrive with step M2.";
+            "depth is the offset at a signal of 1: for a plug-in parameter a fraction of its "
+            "CLAP range (-1..1), and the parameter must be marked modulatable in fx.describe; "
+            "for a track's or send's volume in dB (-48..48); for a track's pan or width in "
+            "percent (-200..200). The offset adds to the value automation or the fader gives, "
+            "and the sum stays in the target's range.";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModAddArgs>("modulation_add_args")
                      .field("source", &ModAddArgs::source, sourceSchema())
@@ -337,9 +378,10 @@ void registerModulationCommands(cmd::Registry& registry) {
         c.description =
             "Each route with its source signal's range (bipolar -1..1, or unipolar 0..1 when "
             "every cable into the Mod Out input is unipolar, a gate or a phase) and, when the "
-            "plan cannot apply it, inert: target (the parameter cannot take it, or a mixer "
-            "target before step M2) or latency (its plug-in changed latency while modulated; "
-            "editing a route into it turns them back on).";
+            "plan cannot apply it, inert: target (the parameter cannot take it, or the "
+            "target's track is frozen and its level is outside the print) or latency (its "
+            "plug-in changed latency while modulated; editing a route into it turns them back "
+            "on).";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModListArgs>("modulation_list_args")
                      .field("track", &ModListArgs::track, idArg("tr", "Target track"))
@@ -412,7 +454,9 @@ void registerModulationCommands(cmd::Registry& registry) {
                 row.lane = m.lane;
                 row.range = rangeOf(app, s, m.source);
                 if (m.target.object.kind != model::Kind::Fx) {
-                    row.inert = "target";
+                    const auto node = model::modulationTargetNode(s, m.target);
+                    const model::Track* t = node ? s.tracks.find(*node) : nullptr;
+                    if (t && t->freeze) row.inert = "target";  // ADR-0096 "Freeze"
                 } else if (app.instances().modulationDisabled(m.target.object)) {
                     row.inert = "latency";
                 } else if (!playable(m.target)) {

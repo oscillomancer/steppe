@@ -277,6 +277,11 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
             }
         return text;
     };
+    for (Node& n : p.nodes) {
+        n.mixMods.clear();
+        n.modVolume = n.modPan = n.modWidth = -1;
+    }
+    for (Edge& e : p.edges) e.modVolume = -1;
     for (std::size_t mi = 0; mi < p.modEdges.size(); ++mi) {
         ModEdge& me = p.modEdges[mi];
         me.values.clear();
@@ -284,6 +289,39 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
         Node& n = p.nodes[me.to];
         if (n.freeze) {  // the print plays (ADR-0096 "Freeze")
             me.inert = true;
+            continue;
+        }
+        // A mixer target (M-i): the node's volume, pan or width, or the
+        // level of one of its sends; routes on one target sum.
+        if (me.target.object.kind != Kind::Fx) {
+            const std::string& param = me.target.param;
+            int* slot = nullptr;
+            if (me.target.object.kind == Kind::Track)
+                slot = param == "volume"  ? &n.modVolume
+                       : param == "pan"   ? &n.modPan
+                       : param == "width" ? &n.modWidth
+                                          : nullptr;
+            else if (param == "volume")
+                for (std::size_t ei : n.out)
+                    if (p.edges[ei].route == me.target.object) slot = &p.edges[ei].modVolume;
+            if (!slot) {
+                me.inert = true;
+                p.warnings.push_back(me.route.str() + ": " + me.target.object.str() + " " + param +
+                                     ": the plan applies no such level; the modulation is "
+                                     "inert (modulation.target)");
+                continue;
+            }
+            if (*slot < 0) {
+                *slot = static_cast<int>(n.mixMods.size());
+                Node::MixMod mm;
+                mm.object = me.target.object;
+                mm.param = param;
+                mm.offsets.assign(p.block, 0.0);
+                n.mixMods.push_back(std::move(mm));
+            }
+            n.mixMods[static_cast<std::size_t>(*slot)].routes.push_back(
+                static_cast<std::uint32_t>(mi));
+            me.values.assign(p.block, 0.0);
             continue;
         }
         Stage* st = nullptr;
@@ -837,10 +875,8 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
                 me.inputStage = static_cast<int>(
                     std::find(owner.inputChain.begin(), owner.inputChain.end(), m.target.object) -
                     owner.inputChain.begin());
-        } else if (!me.inert) {
-            me.inert = true;  // ADR-0096: mixer targets arrive in step M2
-            p.warnings.push_back(e.id.str() + ": modulating " + m.target.object.str() + " " +
-                                 m.target.param + " is not built yet (step M2); it is inert");
+        } else if (s.tracks.contains(*target) && s.tracks.find(*target)->freeze) {
+            me.inert = true;  // a frozen track's routes are inert (ADR-0096 "Freeze")
         }
         p.nodes[me.to].modIn.push_back(p.modEdges.size());
         p.modEdges.push_back(std::move(me));
@@ -1128,9 +1164,14 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             continue;
         }
         if (e.rackOut >= 0) continue;  // a rack's Out: its audio as is
+        // A modulated level moves, so it takes the encoder (ADR-0096, M-i).
+        const bool modulated =
+            e.route && std::any_of(s.modulations.begin(), s.modulations.end(), [&](const auto& m) {
+                return m.value->target.object == *e.route && m.value->target.param == "volume";
+            });
         e.encode = e.rackIn >= 0 || e.tap != model::Tap::PostFader || e.volumeDb != 0 ||
                    !e.followPan || e.mono || e.invert || e.mapped || e.muted ||
-                   e.autoVolume.active() || e.autoPan.active() || e.autoMute.active();
+                   e.autoVolume.active() || e.autoPan.active() || e.autoMute.active() || modulated;
         if (!e.encode) continue;
         Node& source = p.nodes[e.from];
         source.out.push_back(static_cast<std::size_t>(&e - p.edges.data()));
@@ -3103,6 +3144,35 @@ void rackTimelineEvents(Plan& p, Node& node, NotesFeed& feed, std::int64_t pos,
     }
 }
 
+// A node's mixer targets (ADR-0096, M-i): at each grid point of the
+// absolute 32-frame grid the interval's end becomes the route values read
+// there (delivered one interval early), and each frame's offset is linear
+// between the interval's start and end. A rack the other executor still owns
+// holds: the end stays.
+void fillMixMods(Plan& p, Node& node, std::int64_t pos, std::uint32_t n,
+                 std::int64_t origin) SUPPLE_RT {
+    if (node.mixMods.empty()) return;
+    const auto phase = static_cast<std::uint32_t>(
+        ((pos % kAutomationStep + origin % kAutomationStep) % kAutomationStep + kAutomationStep) %
+        kAutomationStep);
+    for (Node::MixMod& mm : node.mixMods)
+        for (std::uint32_t i = 0; i < n; ++i) {
+            const std::uint32_t k = (phase + i) % kAutomationStep;
+            if (k == 0) {
+                bool held = false;
+                double sum = 0.0;
+                for (const std::uint32_t mi : mm.routes) {
+                    const ModEdge& me = p.modEdges[mi];
+                    held = held || p.nodes[me.from].rack->modStale;
+                    if (me.enabled) sum += me.values[i] * me.depth;
+                }
+                mm.prev = mm.next;
+                if (!held) mm.next = sum;
+            }
+            mm.offsets[i] = mm.prev + (mm.next - mm.prev) * double(k) / double(kAutomationStep);
+        }
+}
+
 // One block of every node, in order. Returns false on a plugin error.
 bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                  const host::Transport& transport, const void* self,
@@ -3111,15 +3181,9 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
     // thread's own MXCSR is back when the node returns.
     dsp::DenormalGuard denormals;
     Node& node = p.nodes[index];
-    if (node.rack) return processRack(p, node, pos, n, transport, self);
-    forEachStage(node, [](Stage& st) {
-        st.outEvents.clear();
-        st.sourceIds.clear();
-        st.releases = 0;
-        st.processed = false;
-    });
     // 0. Modulation routes in: this block's source values, delayed, every
-    // block (a key edge's delay keeps time the same way).
+    // block (a key edge's delay keeps time the same way); then the mixer
+    // targets' offsets. A rack is a target too: its sends' levels.
     for (std::size_t mi : node.modIn) {
         ModEdge& me = p.modEdges[mi];
         if (me.values.empty()) continue;  // inert
@@ -3128,6 +3192,14 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
             me.modOut * rack::host::kModOutInputs + me.input)];
         me.delay.process(source.data(), me.values.data(), n);
     }
+    fillMixMods(p, node, pos, n, time::samplesAt(p.startSeconds, p.rate));
+    if (node.rack) return processRack(p, node, pos, n, transport, self);
+    forEachStage(node, [](Stage& st) {
+        st.outEvents.clear();
+        st.sourceIds.clear();
+        st.releases = 0;
+        st.processed = false;
+    });
     // 1. Sum the inputs (fixed order), each through its compensation delay.
     node.sum.clear(n);
     for (std::size_t ei : node.in)
@@ -3398,9 +3470,18 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         const auto at = pos + i;
         const bool volumeCurve = node.volumeCurve(), panCurve = node.panCurve();
         double db = volumeCurve ? node.autoVolume.at(at) : node.volumeDb;
+        // Modulation adds after automation; the sum stays in range (M-i).
+        if (node.modVolume >= 0 && db > model::kSilenceDb)
+            db = std::clamp(db + node.modOffset(node.modVolume, i), model::kSilenceDb, kMixMaxDb);
         PanSettings panSettings = node.panSettings;
         panSettings.pan = panCurve ? node.autoPan.at(at) : node.pan;
+        if (node.modPan >= 0)
+            panSettings.pan =
+                std::clamp(panSettings.pan + node.modOffset(node.modPan, i), -100., 100.);
         if (node.autoWidth.active() && !node.holdWidth) panSettings.width = node.autoWidth.at(at);
+        if (node.modWidth >= 0)
+            panSettings.width =
+                std::clamp(panSettings.width + node.modOffset(node.modWidth, i), -100., 100.);
         if (node.autoPanLeft.active() && !node.holdPanLeft)
             panSettings.left = node.autoPanLeft.at(at);
         if (node.autoPanRight.active() && !node.holdPanRight)
@@ -3412,10 +3493,11 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         node.vcas.evaluate(at, db, ownMuted);
         if (!node.vcas.empty()) db = std::min(db, model::kFaderCeilingDb);
         const bool muted = node.soloSilenced || ownMuted;
-        const double g =
-            volumeCurve || !node.vcas.empty() ? stripGain(node.master, db) : node.staticGain;
-        const bool automated =
-            volumeCurve || node.vcas.automated() || panCurve || node.extraPanCurve();
+        const double g = volumeCurve || node.modVolume >= 0 || !node.vcas.empty()
+                             ? stripGain(node.master, db)
+                             : node.staticGain;
+        const bool automated = volumeCurve || node.vcas.automated() || panCurve ||
+                               node.extraPanCurve() || !node.mixMods.empty();
         node.fader.set(g, panTarget, muted, automated, p.smoothFrames);
         const double gate = node.fader.gate.next();
         const double gain = node.fader.gain.next() * gate;
@@ -3497,7 +3579,10 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                 // attenuation cannot recover gain beyond the member's ceiling.
                 if (!e.vcas.empty()) sourceDb = std::min(sourceDb, model::kFaderCeilingDb);
             }
-            const double routeDb = volumeCurve ? e.autoVolume.at(at) : e.volumeDb;
+            double routeDb = volumeCurve ? e.autoVolume.at(at) : e.volumeDb;
+            if (e.modVolume >= 0 && routeDb > model::kSilenceDb)
+                routeDb = std::clamp(routeDb + node.modOffset(e.modVolume, i), model::kSilenceDb,
+                                     kMixMaxDb);
             const double sourcePan = stripPanCurve ? e.stripPan.at(at) : node.pan;
             const double pan = panCurve ? e.autoPan.at(at) : e.followPan ? sourcePan : e.pan;
             const bool muted = node.soloSilenced || (post && sourceMute) ||
@@ -3507,13 +3592,14 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                 (routeDb <= model::kSilenceDb || (post && sourceDb <= model::kSilenceDb))
                     ? model::kSilenceDb
                     : routeDb + (post ? sourceDb : 0);
-            const double g = volumeCurve || (post && (stripVolumeCurve || !e.vcas.empty()))
-                                 ? db <= model::kSilenceDb ? 0.0 : console9::faderGain(db)
-                                 : e.staticGain;
+            const double g =
+                volumeCurve || e.modVolume >= 0 || (post && (stripVolumeCurve || !e.vcas.empty()))
+                    ? db <= model::kSilenceDb ? 0.0 : console9::faderGain(db)
+                    : e.staticGain;
             // A following send takes the strip's mode, positions and law (ADR-0066).
             const PanMatrix& panTarget = e.panCache.at(e.panSettings(pan, at));
             e.fader.set(g, panTarget, muted,
-                        volumeCurve || panCurve ||
+                        volumeCurve || panCurve || e.modVolume >= 0 ||
                             (post && (stripVolumeCurve || e.vcas.automated())) ||
                             (e.followPan && stripPanCurve) || e.extraPanCurve(),
                         p.smoothFrames);
@@ -3721,11 +3807,16 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
             ln.lastSent = std::numeric_limits<double>::quiet_NaN();
         }
     }
-    // Modulation delays, as an edge's: fresh unless a swap just carried them.
+    // Modulation delays, as an edge's: fresh unless a swap just carried them,
+    // and the mixer targets' interpolation with them.
     for (std::size_t mi : n.modIn) {
         ModEdge& me = p.modEdges[mi];
         if (restartConsole || !me.preserveDelayOnLocate) me.delay.clear();
         me.preserveDelayOnLocate = false;
+    }
+    for (Node::MixMod& mm : n.mixMods) {
+        if (restartConsole || !mm.preserveOnLocate) mm.prev = mm.next = 0.0;
+        mm.preserveOnLocate = false;
     }
     for (std::size_t ei : n.in) {
         Edge& e = p.edges[ei];
@@ -4009,6 +4100,15 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                 break;
             }
         }
+        // A mixer target's interpolation by object and parameter (M-i).
+        for (Node::MixMod& mm : n.mixMods)
+            for (const Node::MixMod& was : old.mixMods)
+                if (was.object == mm.object && was.param == mm.param) {
+                    mm.prev = was.prev;
+                    mm.next = was.next;
+                    mm.preserveOnLocate = true;
+                    break;
+                }
         // Each in-edge's predecessor among the old node's in-edges from
         // the same source (matchInEdge).
         for (std::size_t ei : n.in) {
