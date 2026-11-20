@@ -54,7 +54,7 @@ const Route* midiInputRoute(const Session& s, Id track) {
 namespace {
 constexpr std::string_view kPrefixes[kKindCount] = {"tr", "it", "tk", "md", "mi", "fx", "sd",
                                                     "en", "ai", "mk", "rg", "tp", "ts", "gr",
-                                                    "ln", "rj", "rk", "mo", "cb"};
+                                                    "ln", "rj", "rk", "mo", "cb", "cx"};
 
 // Ids parse by prefix, so every kind needs one and no two may share it. A
 // kind added without a prefix leaves an empty one at the end of the array
@@ -158,9 +158,40 @@ std::vector<Change> EditTxn::changes() const {
 
 namespace {
 template <class T>
-void apply(Session& s, TxnBuilders& b) {
-    auto& slot = Traits<T>::slot(b);
-    if (slot && slot->touched()) Traits<T>::map(s) = slot->build();
+void apply(IdMap<T>& map, const std::optional<typename IdMap<T>::Builder>& slot) {
+    if (slot && slot->touched()) map = slot->build();
+}
+
+// Applies every collection's builder. The binding names every TxnBuilders member:
+// one added there is a build error here until it is applied below.
+void applyAll(Session& s, TxnBuilders& b) {
+    const auto& [tempo, meters, tracks, groups, items, takes, media, midi, fx, routes, envelopes,
+                 autoItems, markers, regions, racks, modules, cables, context] = b;
+    apply(s.tempo, tempo);
+    apply(s.meters, meters);
+    apply(s.tracks, tracks);
+    apply(s.groups, groups);
+    apply(s.items, items);
+    apply(s.takes, takes);
+    apply(s.media, media);
+    apply(s.midi, midi);
+    apply(s.fx, fx);
+    apply(s.routes, routes);
+    apply(s.envelopes, envelopes);
+    apply(s.autoItems, autoItems);
+    apply(s.markers, markers);
+    apply(s.regions, regions);
+    apply(s.racks, racks);
+    apply(s.modules, modules);
+    apply(s.cables, cables);
+    apply(s.context, context);
+}
+
+// The context view follows the points: rebuilt only when their storage is not the
+// storage the view was built from (a load builds the points before any view).
+void refreshContextView(Session& s) {
+    if (!s.context.sameStorage(s.contextView->source))
+        s.contextView = std::make_shared<const ContextView>(buildContextView(s.context));
 }
 }  // namespace
 
@@ -178,23 +209,8 @@ void EditTxn::removeItemsOn(Id envelope) {
 
 Session EditTxn::preview() const {
     Session s = base_;
-    apply<TempoPointObj>(s, builders_);
-    apply<MeterObj>(s, builders_);
-    apply<Track>(s, builders_);
-    apply<TrackGroup>(s, builders_);
-    apply<Item>(s, builders_);
-    apply<Take>(s, builders_);
-    apply<MediaSource>(s, builders_);
-    apply<MidiSource>(s, builders_);
-    apply<FxInstance>(s, builders_);
-    apply<Route>(s, builders_);
-    apply<Envelope>(s, builders_);
-    apply<AutomationItem>(s, builders_);
-    apply<Marker>(s, builders_);
-    apply<Region>(s, builders_);
-    apply<Rack>(s, builders_);
-    apply<RackModule>(s, builders_);
-    apply<Cable>(s, builders_);
+    applyAll(s, builders_);
+    refreshContextView(s);
     s.project = project_;
     s.blobs = blobs_;
     s.next = next_;
@@ -222,23 +238,8 @@ Result<Session> EditTxn::commit() {
     if (committed_) return Error("model.txn", "transaction already committed");
     committed_ = true;
     Session s = base_;
-    apply<TempoPointObj>(s, builders_);
-    apply<MeterObj>(s, builders_);
-    apply<Track>(s, builders_);
-    apply<TrackGroup>(s, builders_);
-    apply<Item>(s, builders_);
-    apply<Take>(s, builders_);
-    apply<MediaSource>(s, builders_);
-    apply<MidiSource>(s, builders_);
-    apply<FxInstance>(s, builders_);
-    apply<Route>(s, builders_);
-    apply<Envelope>(s, builders_);
-    apply<AutomationItem>(s, builders_);
-    apply<Marker>(s, builders_);
-    apply<Region>(s, builders_);
-    apply<Rack>(s, builders_);
-    apply<RackModule>(s, builders_);
-    apply<Cable>(s, builders_);
+    applyAll(s, builders_);
+    refreshContextView(s);
     s.project = project_;
     s.blobs = blobs_;
     s.next = next_;
@@ -309,6 +310,7 @@ struct Checker {
         check(s.racks, Kind::Rack);
         check(s.modules, Kind::Module);
         check(s.cables, Kind::Cable);
+        check(s.context, Kind::Context);
     }
 
     void tracks() {
@@ -576,6 +578,22 @@ struct Checker {
                 }
             }
         }
+    }
+
+    void context() {
+        std::set<std::pair<ContextType, double>> seen;
+        std::size_t keys = 0, chords = 0;
+        for (const auto& e : s.context) {
+            const ContextPoint& p = *e.value;
+            (p.type == ContextType::Key ? keys : chords)++;
+            if (!seen.insert({p.type, p.beat}).second)
+                fail(at("context/points", e.id, "beat"),
+                     std::string("two ") + (p.type == ContextType::Key ? "key" : "chord") +
+                         " points at beat " + std::to_string(p.beat));
+        }
+        if (keys > kMaxContextPoints || chords > kMaxContextPoints)
+            fail("/context/points",
+                 "more than " + std::to_string(kMaxContextPoints) + " context points of one type");
     }
 
     void racks() {
@@ -939,6 +957,9 @@ Status validateNumeric(const Session& s) {
         SUPPLE_TRY(position(r.start, r.timebase, "/rulers/regions/" + e.id.str() + "/start"));
         SUPPLE_TRY(position(r.end, r.timebase, "/rulers/regions/" + e.id.str() + "/end"));
     }
+    for (const auto& e : s.context)
+        SUPPLE_TRY(
+            position(e.value->beat, Timebase::Beats, "/context/points/" + e.id.str() + "/beat"));
     return automationExpansionBudget(s);
 }
 
@@ -960,6 +981,7 @@ Status checkInvariants(const Session& s) {
     c.fx();
     c.routes();
     c.racks();
+    c.context();
     c.envelopes();
     if (c.errors.empty()) return validateFrozenState(s);
     if (c.errors.size() == 1) return c.errors.front();
@@ -1036,6 +1058,7 @@ std::vector<ObjectDiff> diff(const Session& a, const Session& b) {
     diffMap(a.racks, b.racks, out);
     diffMap(a.modules, b.modules, out);
     diffMap(a.cables, b.cables, out);
+    diffMap(a.context, b.context, out);
     return out;
 }
 

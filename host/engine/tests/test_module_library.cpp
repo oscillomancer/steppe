@@ -2090,6 +2090,56 @@ TEST_CASE("a deferred structural edit compiles even while a playrate move waits 
     }
 }
 
+TEST_CASE("a context edit made while a structural edit is deferred does not swallow it") {
+    // ADR-0095, review round 53 F2. A structural edit deferred past a future non-unity
+    // plan waits as `latest_`. A chord edit then reloads and differs from `latest_` in
+    // the context alone; the context shortcut must not take it in a way that loses the
+    // waiting edit. (loadContextOnly also carries loadScalarRate's deferral guards; this
+    // test pins the outcome, that the removal still compiles and plays, not the guards
+    // themselves: the shortcut adopts the whole new session, which holds the removal.)
+    Fixture f;
+    f.run("transport.playrate.set", R"({"rate":0.8})");
+    const auto track = f.run("track.add", R"({"name":"Src"})")["track"].asString();
+    const auto fxText = f.run("fx.add", "{\"track\":\"" + track +
+                                            "\",\"plugin\":\"com.suppleaudio.test.gain\"}")["fx"]
+                            .asString();
+    const auto fx = *model::Id::parse(fxText);
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 8000, .blockSize = 128},
+                               {.anticipative = false, .workers = 0}));
+    auto& engine = *f.app->engine();
+    const auto cycle = [&] {
+        backend.run(1);
+        f.app->tick();
+    };
+    engine.play();
+    for (int i = 0; i < 32; ++i) cycle();
+    // Before anything is deferred, a chord edit compiles nothing.
+    const auto first = engine.planGeneration();
+    f.run("chord.set", R"({"at":0,"symbol":"Cm7"})");
+    REQUIRE(engine.planGeneration() == first);
+    // A future non-unity plan: structural edits inside its span are deferred.
+    f.run("env.add", R"({"track":"tr_0","param":"playrate",
+                         "points":[{"seconds":0,"value":1.25}]})");
+    const auto generation = engine.planGeneration();
+    f.run("fx.remove", "{\"fx\":\"" + fxText + "\"}");  // deferred: the gain leaves
+    REQUIRE(engine.planGeneration() == generation);
+    f.run("chord.set", R"({"at":4,"symbol":"Fm7"})");  // while it waits
+    REQUIRE(engine.planGeneration() == generation);
+    const auto removed = f.app->head().version;
+    (void)f.app->takeEvents();
+    const auto errors = engine.processErrors();
+    for (int i = 0; i < 400 && f.app->instances().find(fx) != nullptr; ++i) {
+        cycle();
+        REQUIRE(engine.processErrors() == errors);
+    }
+    CHECK(engine.planGeneration() > generation);
+    CHECK(f.app->instances().find(fx) == nullptr);
+    CHECK(f.app->engineStatus().preparedVersion == removed);
+    for (const auto& [topic, value] : f.app->takeEvents()) CHECK(topic != "engine.error");
+    f.app->stopEngine();
+}
+
 TEST_CASE("a playrate move a full queue refused still plays after a deferred edit fails") {
     // Review 37c F1. A refused move (full scalar queue) stays pending. A
     // structural edit deferred meanwhile clears that when its reload starts

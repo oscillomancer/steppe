@@ -4,6 +4,7 @@
 #include "midi_event_list.h"
 #include "panel_grip.h"
 #include "panel_height.h"
+#include "supple/harmony/harmony.h"
 #include "supple/ui/shortcut.h"
 
 #include <algorithm>
@@ -32,10 +33,7 @@ bool blackKey(int pitch) {
     return pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
 }
 
-std::string pitchName(int pitch) {
-    static const char* names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-    return std::string(names[((pitch % 12) + 12) % 12]) + std::to_string(pitch / 12 - 1);
-}
+std::string pitchName(int pitch) { return harmony::spell(pitch); }
 
 }  // namespace
 

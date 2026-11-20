@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "supple/base/result.h"
+#include "supple/model/context.h"
 #include "supple/model/idmap.h"
 #include "supple/model/objects.h"
 #include "supple/time/timeline.h"
@@ -43,6 +44,9 @@ struct Session {
     IdMap<Rack> racks;
     IdMap<RackModule> modules;
     IdMap<Cable> cables;
+    IdMap<ContextPoint> context;
+    // Derived from `context`: rebuilt when its storage changes (EditTxn).
+    std::shared_ptr<const ContextView> contextView = std::make_shared<const ContextView>();
     std::map<std::string, std::shared_ptr<const Blob>> blobs;  // "sha256:<hex>"
     // Unknown top-level project sections (including extensions) survive
     // load/save; UI state belongs to the separate .ui.json sidecar.
@@ -73,6 +77,7 @@ struct TxnBuilders {
     std::optional<IdMap<Rack>::Builder> racks;
     std::optional<IdMap<RackModule>::Builder> modules;
     std::optional<IdMap<Cable>::Builder> cables;
+    std::optional<IdMap<ContextPoint>::Builder> context;
 };
 
 // Which map of the Session holds objects of type T, and their ID kind.
@@ -103,6 +108,7 @@ SUPPLE_MODEL_TRAITS(Region, Region, regions)
 SUPPLE_MODEL_TRAITS(Rack, Rack, racks)
 SUPPLE_MODEL_TRAITS(RackModule, Module, modules)
 SUPPLE_MODEL_TRAITS(Cable, Cable, cables)
+SUPPLE_MODEL_TRAITS(ContextPoint, Context, context)
 #undef SUPPLE_MODEL_TRAITS
 
 // One object-level change made by a transaction.

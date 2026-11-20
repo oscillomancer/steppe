@@ -287,9 +287,11 @@ void shareRevisions(Session& s, const Session* p) {
     each(&Session::racks);
     each(&Session::modules);
     each(&Session::cables);
+    each(&Session::context);
     if (!p) return;
     if (toJson(*s.project) == toJson(*p->project)) s.project = p->project;
     if (s.tempo.sameStorage(p->tempo) && s.meters.sameStorage(p->meters)) s.timeMap = p->timeMap;
+    if (s.context.sameStorage(p->context)) s.contextView = p->contextView;
     for (auto& [hash, blob] : s.blobs)
         if (const auto found = p->blobs.find(hash); found != p->blobs.end()) blob = found->second;
 }

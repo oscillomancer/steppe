@@ -85,6 +85,8 @@ EntryInfo entryInfo(const Session& s, Id id) {
             return info(s.modules, id);
         case Kind::Cable:
             return info(s.cables, id);
+        case Kind::Context:
+            return info(s.context, id);
         // Kinds with no Session collection. No `default`: a new kind must be
         // placed here or above, or the build fails (-Wswitch).
         case Kind::Lane:
@@ -137,6 +139,8 @@ json::Value objectJson(const Session& s, Id id) {
             return enc(s.modules);
         case Kind::Cable:
             return enc(s.cables);
+        case Kind::Context:
+            return enc(s.context);
         case Kind::Lane:
         case Kind::RenderJob:
             return {};
@@ -190,6 +194,8 @@ const json::Value* objectSchema(const Session& s, Id id) {
             return &schemaFor(s.modules);
         case Kind::Cable:
             return &schemaFor(s.cables);
+        case Kind::Context:
+            return &schemaFor(s.context);
         case Kind::Lane:
         case Kind::RenderJob:
             return nullptr;
@@ -612,6 +618,7 @@ struct VersionStore::RetainedSize {
         map(v.id, s.racks);
         map(v.id, s.modules);
         map(v.id, s.cables);
+        map(v.id, s.context);
         for (const auto& [hash, blob] : s.blobs)
             add(v.id, blob.get(), sizeof(Blob) + blob->data.size());
     }
@@ -1370,10 +1377,28 @@ Result<VersionStore> VersionStore::restore(SavedHistory saved) {
                            path + "/redo");
             below = *it;
         }
+        // The mark is the file's, raised to the counters of every version this branch
+        // can reach: its head's history and the steps waiting in redo. A file an older
+        // build rewrote has no counter for a kind it does not know, and each version
+        // then holds a counter derived from its own highest id; without this the branch
+        // could be handed an id that its redo steps or a fork of it still hold.
         Counters allocated = sb.allocated;
-        const auto& counters = store.versions_.at(sb.head).session->next;
-        for (std::size_t k = 0; k < kKindCount; ++k)
-            allocated.next[k] = std::max(allocated.next[k], counters.next[k]);
+        {
+            std::vector<std::uint64_t> pending{sb.head};
+            pending.insert(pending.end(), sb.redo.begin(), sb.redo.end());
+            std::set<std::uint64_t> seen;
+            while (!pending.empty()) {
+                const std::uint64_t at = pending.back();
+                pending.pop_back();
+                if (!seen.insert(at).second) continue;
+                const auto found = store.versions_.find(at);
+                if (found == store.versions_.end()) continue;
+                const auto& counters = found->second.session->next;
+                for (std::size_t k = 0; k < kKindCount; ++k)
+                    allocated.next[k] = std::max(allocated.next[k], counters.next[k]);
+                for (const auto parent : found->second.parents) pending.push_back(parent);
+            }
+        }
         store.branches_.emplace(sb.name, Branch{sb.head, sb.base, std::move(sb.redo), allocated});
     }
     if (!store.branches_.contains("main")) return bad("there is no main branch", "/branches/refs");

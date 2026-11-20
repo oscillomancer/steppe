@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "midi_event_list.h"
+#include "supple/harmony/harmony.h"
 
 #include <algorithm>
 #include <charconv>
@@ -35,11 +36,7 @@ bool parts(std::string_view text, std::vector<int>& out, std::size_t count) {
     return out.size() == count;
 }
 
-std::string pitchName(int pitch) {
-    static constexpr const char* names[] = {"C",  "C#", "D",  "D#", "E",  "F",
-                                            "F#", "G",  "G#", "A",  "A#", "B"};
-    return std::string(names[pitch % 12]) + std::to_string(pitch / 12 - 1);
-}
+std::string pitchName(int pitch) { return harmony::spell(pitch); }
 
 bool pitchNumber(std::string_view text, int& value) {
     if (integer(text, value)) return value >= 0 && value <= 127;
@@ -47,9 +44,9 @@ bool pitchNumber(std::string_view text, int& value) {
     const auto note = std::string_view("C D EF G A B").find(text.front());
     if (note == std::string_view::npos || text.front() == ' ') return false;
     text.remove_prefix(1);
-    int sharp = 0;
-    if (text.front() == '#') {
-        sharp = 1;
+    int sharp = 0;  // a sharp is +1, a flat -1: the names shown are the default spelling (Bb)
+    if (text.front() == '#' || text.front() == 'b') {
+        sharp = text.front() == '#' ? 1 : -1;
         text.remove_prefix(1);
     }
     int octave = 0;

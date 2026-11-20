@@ -5280,6 +5280,14 @@ struct Gain : Effect {
         run("region.add", R"({"start":0,"end":4,"name":"Verse"})");
         return;
     }
+    if (fixture ==
+        "song_with_context") {  // cx_1 Eb major, cx_2 Ebmaj7 and cx_3 Cm7 (bar 2), rg_1 Verse
+        run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+        run("chord.set", R"({"at":0,"symbol":"Ebmaj7"})");
+        run("chord.set", R"({"at":4,"symbol":"Cm7"})");
+        run("region.add", R"({"start":0,"end":8,"name":"Verse"})");
+        return;
+    }
     run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
     run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
     if (fixture == "song_with_learn")  // + fx_2 gain on CC 21, channel 1

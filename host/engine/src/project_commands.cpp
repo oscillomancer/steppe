@@ -836,7 +836,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.name = "session.describe";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Describe the whole session in compact text (tracks, items, fx, routes).";
+        c.summary = "Describe the whole session in compact text (tracks, items, fx, routes, key).";
         c.description =
             "The quickest way to see where things are; use the IDs it shows with other commands.";
         c.tags = {"session"};

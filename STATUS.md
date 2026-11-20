@@ -119,6 +119,16 @@ instructions are in `docs/guides/installing.md`.
   playrate with relocation and lock. Unit-tested under RealtimeSanitizer;
   the engine uses it for sync input, LTC output and MIDI clock and MTC
   output (below).
+- **Context track** (ADR-0095, `specs/harmony.md`, schema 2.17): the project's
+  key and chord points (`cx_*`, beats only) with `key.set`/`key.remove`,
+  `chord.set`/`chord.remove`, `context.at` and `context.get`; regions are
+  sections unless `section` is false; `session.describe` shows the key, the
+  context and the later tempo and meter changes; `midi.get` returns the context
+  over an item and, with the piano roll, the event list, `midi.edit` readbacks
+  and `rack.probe`, spells notes by the key at the item's start (`libs/harmony`).
+  A file with a missing or low counter, a duplicate beat, an unknown scale or an
+  unparsable chord symbol opens with a warning and keeps the point as data. Not
+  yet: the lead-sheet text, `midi.edit` scale operations and the GUI lane (C2).
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
   through `project.set`/`project.get` and Project > Timecode….
@@ -150,7 +160,7 @@ instructions are in `docs/guides/installing.md`.
   the oldest steps. Incremental unique-payload accounting measures only new or
   changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.15` with migration from
+  Project format `supple.project/2.17` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
   work… or at start, ADR-0078), crash recovery of recordings, a per-project
   UI sidecar.

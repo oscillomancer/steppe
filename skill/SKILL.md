@@ -74,6 +74,7 @@ tool (or as `args` through `exec`).
 | Task | Read |
 |---|---|
 | Writing melodies, chords, drums, bass lines, controller moves | `guides/notation.md` |
+| The project's key, chords and sections: reading and setting them, how notes are spelled | `guides/harmony.md` |
 | The sandbox loop: load a plugin, program it, render, analyze, iterate | `guides/sandbox-loop.md` |
 | EQ: rumble, masking, harshness, de-essing, dynamic and mid/side bands (Yarrow) | `guides/eq.md` |
 | A real room or hall: its size, materials, where the sound and the listener stand, decay, clarity, held ambience (Ghyll) | `guides/reverb.md` |
