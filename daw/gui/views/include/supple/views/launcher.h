@@ -53,6 +53,9 @@ struct LauncherCallbacks {
     std::function<void(model::Id clip)> open;
     // The selected clips changed (the app's selection and Delete follow).
     std::function<void(const std::vector<model::Id>& clips)> onSelection;
+    // Removes clips in one undo step (the menu's Delete); unset: one
+    // clip.remove each.
+    std::function<void(const std::vector<model::Id>& clips)> remove;
 };
 
 // The pane's geometry, shared by its body and its header cell: one column
@@ -81,6 +84,9 @@ LauncherColumns launcherColumns(const model::Session& session);
 // Whether every clip of a scene plays now (its header is outlined).
 bool scenePlaying(const model::Session& session, const LaunchViews& views, model::Id scene);
 
+// Whether a track has any clip (an empty cell's stop square shows only then).
+bool hasClips(const model::Session& session, model::Id track);
+
 // The clip in a channel's cell of a scene.
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);
 
@@ -102,19 +108,33 @@ class LauncherPane : public ui::Node {
     ui::Cursor cursorAt(ui::Point p) const override;
     // A row's cell in a scene column (window coordinates).
     ui::Rect cellRect(std::size_t row, std::size_t column) const;
+    // A clip's launch zone (the ▶ in its name bar) and an empty cell's stop
+    // square, as a press finds them.
+    static ui::Rect playZone(const ui::Rect& cell);
+    static ui::Rect stopZone(const ui::Rect& cell);
+    // A clip's content area: its cell under the name bar.
+    static ui::Rect bodyRect(const ui::Rect& cell);
+    // What a press at `p` lands on: a clip's ▶ or body, an empty cell's stop
+    // square or the rest of it, a row's Arr dot.
+    struct Hit {
+        enum class Kind { None, Play, Body, Stop, Cell, Arr };
+        Kind kind = Kind::None;
+        std::size_t row = 0;
+        model::Id track;
+        std::optional<model::Id> scene, clip;
+    };
+    Hit hitAt(ui::Point p) const;
     ui::Rect arrRect(std::size_t row) const;
     LauncherColumns columns() const;
     // What the last paint drew (tests).
     struct Stats {
         std::size_t cells = 0, clips = 0, empty = 0;
         std::vector<std::string> names;  // the clips' names as drawn
-        std::size_t playing = 0, held = 0, queued = 0, arrLit = 0;
+        std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0;
         std::size_t notes = 0, columns = 0, pending = 0;  // the last paintGl's
     } stats;
 
   private:
-    // A clip's content area: its cell under the name bar.
-    static ui::Rect bodyRect(const ui::Rect& cell);
     ArrangeView& view_;
     peaks::PeakService& peaks_;
     Resolve resolve_;
@@ -124,6 +144,18 @@ class LauncherPane : public ui::Node {
     const ui::Theme* theme_ = nullptr;  // from the last paint (paintGl has no canvas)
     bool resizing_ = false;
     float pressX_ = 0, pressWidth_ = 0;
+    // A clip held by the pointer: dragged to another cell it moves there
+    // (with Ctrl a copy); an occupied cell refuses it.
+    struct Drag {
+        model::Id clip;
+        ui::Point press;
+        bool moving = false;
+        Hit over;
+    };
+    std::optional<Drag> drag_;
+    bool dropAllowed(const Hit& over) const;
+    void openClipMenu(model::Id clip, ui::Point at);
+    void renameClip(model::Id clip, ui::Point at);
 };
 
 // The pane's cell in the arrange header row: stop and arrangement for every
@@ -138,9 +170,21 @@ class LauncherHeader : public ui::Node {
     ui::Rect arrangementRect() const;
     ui::Rect scenesRow() const;
     ui::Rect addRect() const;  // the + cell after the last scene
+    // The scene column under x in the headers' row, and its ▶.
+    std::optional<std::size_t> sceneAt(ui::Point p) const;
+    ui::Rect sceneRect(std::size_t column) const;
 
   private:
+    void openSceneMenu(model::Id scene, ui::Point at);
+    void renameScene(model::Id scene, ui::Point at);
     ArrangeView& view_;
+    // A scene header held by the pointer: dragged sideways it moves its column.
+    struct Drag {
+        model::Id scene;
+        ui::Point press;
+        bool moving = false;
+    };
+    std::optional<Drag> drag_;
 };
 
 }  // namespace supple::views

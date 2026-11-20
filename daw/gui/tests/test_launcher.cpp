@@ -20,6 +20,7 @@
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
 #include "supple/peaks/peaks.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/views/arrange.h"
 
@@ -46,7 +47,7 @@ struct LauncherFixture {
     views::ArrangeView* view = nullptr;
     std::vector<std::string> commands;
     std::vector<Error> errors;
-    std::vector<model::Id> opened;
+    std::vector<model::Id> opened, selected;
 
     LauncherFixture() {
         dir = std::filesystem::temp_directory_path() /
@@ -74,14 +75,15 @@ struct LauncherFixture {
             *peaks, [](const model::MediaSource& s) { return std::filesystem::path(s.path); });
         view = arrange.get();
         root->setContent(std::move(arrange));
-        view->setLauncherCallbacks({[this](const std::string& command, json::Value args) {
-                                        commands.push_back(command);
-                                        return dispatcher->execute(
-                                            {command, std::move(args), kLauncherUi});
-                                    },
-                                    [this](const Error& error) { errors.push_back(error); },
-                                    [this](model::Id clip) { opened.push_back(clip); },
-                                    {}});
+        view->setLauncherCallbacks(
+            {[this](const std::string& command, json::Value args) {
+                 commands.push_back(command);
+                 return dispatcher->execute({command, std::move(args), kLauncherUi});
+             },
+             [this](const Error& error) { errors.push_back(error); },
+             [this](model::Id clip) { opened.push_back(clip); },
+             [this](const std::vector<model::Id>& clips) { selected = clips; },
+             {}});
         sync();
     }
     ~LauncherFixture() {
@@ -296,4 +298,168 @@ TEST_CASE("launcher: the engine's launch state reaches the pane (launch.clip, du
     REQUIRE(it != state.end());
     CHECK(it->second.clip == model::Id::parse("cl_1"));
     f.exec("engine.stop", "{}");
+}
+
+namespace {
+ui::Point centre(const ui::Rect& r) { return {r.x + r.w / 2, r.y + r.h / 2}; }
+}  // namespace
+
+TEST_CASE("launcher: click zones: a clip's ▶ launches, its body selects, the square stops") {
+    LauncherFixture f;
+    f.song();
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    views::LauncherPane& pane = f.view->launcherPane();
+    const std::size_t drums = f.row("tr_1"), bass = f.row("tr_2"), keys = f.row("tr_3");
+    const model::Id kitA = *model::Id::parse("cl_1"), kitB = *model::Id::parse("cl_2");
+    // Empty cells show the stop square only on tracks with clips: one on the
+    // Drums, two on the Bass; the Keys have no clips, so nothing to stop.
+    CHECK(pane.stats.squares == 3);
+    // A click on a body selects it and launches nothing.
+    f.click(centre(views::LauncherPane::bodyRect(pane.cellRect(drums, 1))));
+    CHECK(f.view->selectedClips() == std::vector<model::Id>{kitB});
+    CHECK(f.selected == std::vector<model::Id>{kitB});
+    CHECK(f.commands.empty());
+    // Ctrl adds one.
+    f.click(centre(views::LauncherPane::bodyRect(pane.cellRect(drums, 0))), ui::kCtrl);
+    CHECK(f.view->selectedClips() == std::vector<model::Id>{kitB, kitA});
+    CHECK(pane.stats.selected == 2);
+    f.snapshot("launcher-selected.png");
+    // A click on a ▶ launches and keeps the selection.
+    f.click(centre(views::LauncherPane::playZone(pane.cellRect(drums, 0))));
+    CHECK(f.commands == std::vector<std::string>{"launch.clip"});
+    CHECK(f.view->selectedClips() == std::vector<model::Id>{kitB, kitA});
+    // An empty cell's square stops the track and selects nothing.
+    f.commands.clear();
+    f.click(centre(views::LauncherPane::stopZone(pane.cellRect(bass, 0))));
+    CHECK(f.commands == std::vector<std::string>{"launch.stop"});
+    CHECK(f.view->selectedClips() == std::vector<model::Id>{kitB, kitA});
+    CHECK_FALSE(f.view->selectedCell());
+    // Beside the square, a click selects the cell and stops nothing; so does
+    // the middle of a cell on a track without clips.
+    f.commands.clear();
+    f.click({pane.cellRect(bass, 2).x + 8, pane.cellRect(bass, 2).bottom() - 8});
+    CHECK(f.commands.empty());
+    CHECK(f.view->selectedCell()->scene == model::Id::parse("sc_3"));
+    const ui::Rect cell = pane.cellRect(keys, 0);
+    f.click(centre(views::LauncherPane::stopZone(cell)));
+    CHECK(f.commands.empty());
+    REQUIRE(f.view->selectedCell());
+    CHECK(f.view->selectedCell()->scene == model::Id::parse("sc_1"));
+    CHECK(f.view->selectedClips().empty());
+    CHECK(pane.stats.selected == 1);
+    // A press on the lanes clears it.
+    f.click({f.view->lanesRect().x + 300, f.view->lanesRect().y + 400});
+    CHECK_FALSE(f.view->selectedCell());
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: a double-click opens a clip, or makes a one-bar MIDI clip and opens it") {
+    LauncherFixture f;
+    f.song();
+    views::LauncherPane& pane = f.view->launcherPane();
+    const std::size_t drums = f.row("tr_1"), keys = f.row("tr_3");
+    f.click(centre(views::LauncherPane::bodyRect(pane.cellRect(drums, 0))), 0, 2);
+    CHECK(f.opened == std::vector<model::Id>{*model::Id::parse("cl_1")});
+    const ui::Rect cell = pane.cellRect(keys, 2);
+    f.click({cell.x + 8, cell.bottom() - 8}, 0, 2);
+    const auto made =
+        views::clipIn(f.app->head(), *model::Id::parse("tr_3"), *model::Id::parse("sc_3"));
+    REQUIRE(made);
+    const model::Clip* clip = f.app->head().clips.find(*made);
+    CHECK(clip->kind == model::ClipKind::Midi);
+    CHECK(clip->length == doctest::Approx(4));  // one 4/4 bar
+    CHECK(f.opened.back() == *made);
+    CHECK(f.view->selectedClips() == std::vector<model::Id>{*made});
+    CHECK(f.commands == std::vector<std::string>{"clip.add"});
+}
+
+TEST_CASE("launcher: a clip drags to an empty cell (Ctrl copies); an occupied one refuses it") {
+    LauncherFixture f;
+    f.song();
+    views::LauncherPane& pane = f.view->launcherPane();
+    const std::size_t drums = f.row("tr_1"), bass = f.row("tr_2"), keys = f.row("tr_3");
+    const ui::Point kitA = centre(views::LauncherPane::bodyRect(pane.cellRect(drums, 0)));
+    // Onto Root's cell: refused, nothing changes.
+    f.drag(kitA, centre(pane.cellRect(bass, 1)));
+    CHECK(f.commands.empty());
+    // Onto the Keys' empty Chorus cell: moved.
+    const ui::Rect target = pane.cellRect(keys, 2);
+    f.drag(kitA, {target.x + 8, target.bottom() - 8});
+    CHECK(f.commands == std::vector<std::string>{"clip.move"});
+    const model::Clip* moved = f.app->head().clips.find(*model::Id::parse("cl_1"));
+    CHECK(moved->track == model::Id::parse("tr_3"));
+    CHECK(moved->scene == model::Id::parse("sc_3"));
+    // With Ctrl, Kit B is copied into the Drums' Chorus cell and the copy selected.
+    f.commands.clear();
+    const ui::Rect empty = pane.cellRect(drums, 2);
+    f.drag(centre(views::LauncherPane::bodyRect(pane.cellRect(drums, 1))),
+           {empty.x + 8, empty.bottom() - 8}, ui::kCtrl);
+    CHECK(f.commands == std::vector<std::string>{"clip.duplicate"});
+    const auto copy =
+        views::clipIn(f.app->head(), *model::Id::parse("tr_1"), *model::Id::parse("sc_3"));
+    REQUIRE(copy);
+    CHECK(f.view->selectedClips() == std::vector<model::Id>{*copy});
+    CHECK(f.app->head().clips.find(*model::Id::parse("cl_2")));  // the original stays
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: the header's buttons, scene ▶, rename, move, + and the scene and clip menus") {
+    LauncherFixture f;
+    f.song();
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    views::LauncherHeader& header = f.view->launcherHeader();
+    views::LauncherPane& pane = f.view->launcherPane();
+    f.click(centre(header.stopRect()));
+    f.click(centre(header.arrangementRect()));
+    const ui::Rect verse = header.sceneRect(1);
+    f.click({verse.x + 8, verse.y + verse.h / 2});
+    CHECK(f.commands ==
+          std::vector<std::string>{"launch.stop", "launch.arrangement", "launch.scene"});
+    // A double-click on a name renames the scene.
+    f.commands.clear();
+    f.click({verse.x + 40, verse.y + verse.h / 2}, 0, 2);
+    REQUIRE(f.root->find("launcher-name"));
+    f.root->frame(false);
+    f.root->text("Hook");
+    f.root->key(SDLK_RETURN);
+    f.sync();
+    CHECK(f.app->head().scenes.find(*model::Id::parse("sc_2"))->name == "Hook");
+    // A drag moves the column: Intro to the end.
+    const ui::Rect intro = header.sceneRect(0);
+    f.drag({intro.x + 40, intro.y + 8}, {header.sceneRect(2).x + 40, intro.y + 8});
+    CHECK(views::launcherColumns(f.app->head()).scenes.back() == model::Id::parse("sc_1"));
+    // + adds a scene at the end.
+    f.click(centre(header.addRect()));
+    CHECK(f.app->head().scenes.size() == 4);
+    // The scene menu.
+    f.click({header.sceneRect(0).x + 40, intro.y + 8}, 0, 1, 3);
+    ui::Node* menu = f.root->find("launcher.scene.menu");
+    REQUIRE(menu);
+    std::vector<std::string> rows;
+    for (const auto& item : ui::menuItems(*menu)) rows.push_back(item.label);
+    CHECK(rows == std::vector<std::string>{"Rename…", "Colour…",
+                                           "Insert into arrangement at playhead", "", "Delete"});
+    CHECK_FALSE(ui::menuItems(*menu)[2].enabled);  // L4
+    f.root->closePopups();
+    // The clip menu: its rows, and Mode sets the clip's.
+    const std::size_t drums = f.row("tr_1");
+    f.click(centre(views::LauncherPane::bodyRect(pane.cellRect(drums, 2))), 0, 1, 3);
+    menu = f.root->find("launcher.clip.menu");
+    REQUIRE(menu);
+    rows.clear();
+    for (const auto& item : ui::menuItems(*menu)) rows.push_back(item.label);
+    CHECK(rows == std::vector<std::string>{"Rename…", "Colour…", "", "Mode: Loop", "Mode: Once",
+                                           "Quantize…", "", "Duplicate",
+                                           "Lay on timeline at playhead", "Delete"});
+    const auto once = ui::menuItems(*menu)[4].run;
+    f.root->closePopups();
+    once();
+    f.sync();
+    const auto clip = views::clipIn(f.app->head(), *model::Id::parse("tr_1"),
+                                    views::launcherColumns(f.app->head()).scenes[2]);
+    REQUIRE(clip);
+    CHECK(f.app->head().clips.find(*clip)->mode == model::ClipMode::Once);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
 }

@@ -1740,6 +1740,31 @@ void ArrangeView::syncLauncher() {
         launcherHeader_->invalidate();
     }
 }
+void ArrangeView::selectClips(std::vector<model::Id> clips) {
+    selectedCell_.reset();
+    if (clips != selectedClips_) {
+        selectedClips_ = std::move(clips);
+        if (launcherCallbacks_.onSelection) launcherCallbacks_.onSelection(selectedClips_);
+    }
+    if (launcherPane_) launcherPane_->invalidate();
+}
+void ArrangeView::selectCell(std::optional<Cell> cell) {
+    selectClips({});
+    selectedCell_ = cell;
+    if (launcherPane_) launcherPane_->invalidate();
+}
+void ArrangeView::clearLauncherSelection() {
+    if (selectedClips_.empty() && !selectedCell_) return;
+    selectCell(std::nullopt);
+}
+Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::Value args) {
+    if (!launcherCallbacks_.run)
+        return Error("gui.launcher", "the clip launcher has no command path", {},
+                     "wire ArrangeView::setLauncherCallbacks");
+    auto r = launcherCallbacks_.run(command, std::move(args));
+    if (!r && launcherCallbacks_.onError) launcherCallbacks_.onError(r.error());
+    return r;
+}
 void ArrangeView::setLaunchState(LaunchViews views) {
     if (views == launchViews_) return;
     std::set<model::Id> held;
@@ -1893,6 +1918,9 @@ bool ArrangeView::autoScroll(double seconds) {
 }
 
 bool ArrangeView::onPointer(const ui::PointerEvent& e) {
+    // A press on the lanes clears the launcher's selection (gui.md §4.15).
+    if (e.type == ui::PointerEvent::Type::Down && lanes_ && lanes_->bounds().contains(e.pos))
+        clearLauncherSelection();
     if (e.type != ui::PointerEvent::Type::Wheel) {
         const bool handled = gestures_->pointer(e);
         noteDrag(e, false);

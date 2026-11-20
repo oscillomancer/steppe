@@ -199,6 +199,20 @@ class ArrangeView : public ui::Node {
     // tracks' dimmed lanes. Redraws only when it changes.
     void setLaunchState(LaunchViews views);
     const LaunchViews& launchState() const { return launchViews_; }
+    // The launcher's selection (gui.md §4.15): clips (a click on a body; Ctrl
+    // adds), or one empty cell (a click beside its square) where a clip can
+    // be made or pasted. A click on the lanes clears it.
+    const std::vector<model::Id>& selectedClips() const { return selectedClips_; }
+    void selectClips(std::vector<model::Id> clips);
+    struct Cell {
+        model::Id track, scene;
+        bool operator==(const Cell&) const = default;
+    };
+    const std::optional<Cell>& selectedCell() const { return selectedCell_; }
+    void selectCell(std::optional<Cell> cell);
+    void clearLauncherSelection();
+    // Runs a launcher command through its callbacks; a failure goes to onError.
+    Result<json::Value> runLauncher(const std::string& command, json::Value args);
     LauncherPane& launcherPane() { return *launcherPane_; }
     LauncherHeader& launcherHeader() { return *launcherHeader_; }
     void addMarker();  // at the playhead, through marker.add
@@ -276,6 +290,8 @@ class ArrangeView : public ui::Node {
     float launcherScroll_ = 0;
     LauncherCallbacks launcherCallbacks_;
     LaunchViews launchViews_;
+    std::vector<model::Id> selectedClips_;
+    std::optional<Cell> selectedCell_;
     float launcherRoom() const;  // the widest the pane is before it fills the view
     void syncLauncher();
     std::unique_ptr<ItemGestures> gestures_;

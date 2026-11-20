@@ -22,11 +22,29 @@
 
 namespace supple::gui {
 
+Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips) {
+    if (clips.empty()) return {};
+    const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
+    auto r = dispatcher.transact(
+        clips.size() == 1 ? "Delete clip" : "Delete clips", origin, [&]() -> Result<json::Value> {
+            for (const std::string& id : clips) {
+                json::Value args = json::Value::object();
+                args["clip"] = id;
+                auto one = dispatcher.execute({"clip.remove", std::move(args), origin});
+                if (!one) return one;
+            }
+            return json::Value::object();
+        });
+    if (!r) return std::move(r).error();
+    return {};
+}
+
 void selectTrack(UiState& ui, const std::string& track, unsigned mods,
                  const std::vector<std::string>& order) {
     auto& sel = ui.selectedTracks;
     ui.tracksFocused = true;
     ui.envelopeFocused = false;
+    ui.clipsFocused = false;
     if ((mods & views::kSelectKeep) && std::find(sel.begin(), sel.end(), track) != sel.end()) {
         ui.trackAnchor = track;      // a press that may drag the selection: it stays
     } else if (mods & ui::kShift) {  // extend from the anchor, in the view's order
@@ -305,10 +323,15 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
     remove.name = "Edit: delete the selection";
     remove.description =
         "Remove the selected automation points when an automation lane was "
-        "clicked last, the selected tracks when tracks were selected last, else "
-        "the selected items.";
+        "clicked last, the selected clips when a launcher cell was, the selected "
+        "tracks when tracks were selected last, else the selected items.";
     remove.builtin = [this](const actions::Context&) -> Result<json::Value> {
         if (ui_.envelopeFocused) return run("ui.env.points.delete");
+        if (ui_.clipsFocused && !ui_.selectedClips.empty()) {
+            const std::vector<std::string> clips = std::exchange(ui_.selectedClips, {});
+            if (auto r = removeClips(dispatcher_, clips); !r) return std::move(r).error();
+            return json::Value::object();
+        }
         return run(ui_.tracksFocused && !ui_.selectedTracks.empty() ? "track.remove:selected"
                                                                     : "item.remove:selected");
     };

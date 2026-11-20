@@ -2519,13 +2519,15 @@ same heights, scroll and colours.
 - **Scenes.** There is one column per scene in `order`, 64 units wide. Its
   header, in the ruler band's lowest row (the marker row's height), shows a
   ▶ and the scene's name.
-  - A click on the ▶ launches the scene (`launch.scene`). A scene whose
+  - A click on the ▶ (the header's first 16 units) launches the scene
+    (`launch.scene`). A scene whose
     every clip plays now has its header outlined, and its ▶, in `playing`.
   - A double-click on the name renames it in place (`scene.set`).
-  - A drag on the header moves the column (`scene.move`).
+  - A drag on the header moves the column to the one it is dropped on
+    (`scene.move`; past the last, the end).
   - A right-click offers Rename, Colour, Insert into arrangement at the
-    playhead (`scene.insert`, L4) and Delete (`scene.remove`, with its
-    clips).
+    playhead (`scene.insert`, L4; greyed until then) and Delete
+    (`scene.remove`, with its clips).
   - A last header cell, **+**, adds a scene (`scene.add`).
 - **Arr.** A narrow last column, 22 units, holds per track a dot that is lit
   in `playing` while the track follows the arrangement. A click on an unlit
@@ -2534,9 +2536,11 @@ same heights, scroll and colours.
 **Cells.**
 - **Where.** Only a channel's row has cells. Busses, masters and automation
   lanes show ground across the scene columns. Clips are on channels only.
-- **An empty cell** shows a small square in quiet ink, its stop zone. A
-  click on the square stops the track (`launch.stop {track}`) and changes
-  nothing else. A click elsewhere in the cell selects the cell (drawn as
+- **An empty cell** shows a small square in quiet ink, its stop zone, on a
+  track that has clips (a track without any always follows the
+  arrangement, so it has nothing to stop and its cells are all select
+  zone). A click on the square stops the track (`launch.stop {track}`) and
+  changes nothing else. A click elsewhere in the cell selects the cell (drawn as
   a selected clip's outline), so that a clip can be created or pasted
   there; it stops nothing. A double-click makes an empty one-bar MIDI clip
   there (`clip.add`) and opens it in the piano roll, one undo step. No
@@ -2572,18 +2576,22 @@ same heights, scroll and colours.
   selects; an empty cell's square only stops and the rest of the cell
   only selects.
 - **Drag** a clip to another cell to move it (`clip.move`), or with Ctrl to
-  copy it (`clip.duplicate`). An occupied cell refuses the drop (the
-  pointer says so).
+  copy it (`clip.duplicate`; the copy becomes the selection). An occupied
+  cell refuses the drop: the pointer says so and the cell is outlined in
+  `meter-clip` (a cell that takes it, in `focus`).
 - **Drag a clip onto the timeline** to lay a copy there (`item.add {clip}`),
   snapped as an item drag. **Drag an item into a cell** to make a clip from
   a copy of its takes (`clip.add {item}`). A refused drop shows the error's
   message in the status line (a warped take, `clip.unsupported`).
-- **Right-click** a clip: Rename, Colour, Mode (Loop / Once), Quantize ▸
-  (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate, Lay on timeline at
-  playhead, Delete.
+- **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
+  Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
+  empty cell to its right; none left is an error in the status line), Lay on
+  timeline at playhead (`item.add {clip}`), Delete (the selection, one undo
+  step). A right-click on an unselected clip selects it first. A row that
+  opens a second menu ends in "…", as elsewhere.
 - **Delete** removes the selected clips (`clip.remove`), one undo step,
   while a cell was clicked last, as Delete takes points after a lane click
-  (§4.3). Copy and paste of clips is later; a paste will land in the
+  (§4.3; `UiState::clipsFocused`, cleared by a track, item or lane click). Copy and paste of clips is later; a paste will land in the
   selected cell.
 
 **Elsewhere.**

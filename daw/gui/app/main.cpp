@@ -832,11 +832,17 @@ int frontendMain(int argc, char** argv) {
         g.onSelection = [&](const std::vector<model::Id>& items) {
             uiState.selectedItems.clear();
             for (model::Id id : items) uiState.selectedItems.push_back(id.str());
-            if (!items.empty()) uiState.tracksFocused = false;  // Delete takes the items now
+            if (!items.empty()) {  // Delete takes the items now
+                uiState.tracksFocused = false;
+                uiState.clipsFocused = false;
+            }
         };
         g.onEnvelopeFocus = [&](bool lane) {
             uiState.envelopeFocused = lane;
-            if (lane) uiState.tracksFocused = false;
+            if (lane) {
+                uiState.tracksFocused = false;
+                uiState.clipsFocused = false;
+            }
         };
         g.onOpenMidi = [&](model::Id item) {
             if (auto r = midiEditor.open(item.str()); !r)
@@ -861,6 +867,41 @@ int frontendMain(int argc, char** argv) {
             (void)dispatcher.execute({"transport.seek", std::move(args), ui});
         };
     }
+    // The clip launcher (gui.md §4.15): its commands, its errors in the status
+    // line, its editors and its selection (Delete takes the clips).
+    shell.arrange()->setLauncherCallbacks(
+        {[&dispatcher](const std::string& command, json::Value args) {
+             return dispatcher.execute(
+                 {command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+         },
+         [&appActions](const Error& e) {
+             if (appActions.onError) appActions.onError("Clip launcher: " + e.message);
+         },
+         [&](model::Id clip) {
+             const model::Clip* c = (*app)->head().clips.find(clip);
+             if (!c) return;
+             if (c->kind == model::ClipKind::Midi) {
+                 if (auto r = midiEditor.open(clip.str()); !r && appActions.onError)
+                     appActions.onError("MIDI: " + r.error().message);
+             } else {
+                 appActions.invoke("ui.inspector");
+             }
+         },
+         [&](const std::vector<model::Id>& clips) {
+             uiState.selectedClips.clear();
+             for (model::Id id : clips) uiState.selectedClips.push_back(id.str());
+             if (!clips.empty()) {
+                 uiState.clipsFocused = true;
+                 uiState.tracksFocused = false;
+                 uiState.envelopeFocused = false;
+             }
+         },
+         [&](const std::vector<model::Id>& clips) {
+             std::vector<std::string> ids;
+             for (model::Id id : clips) ids.push_back(id.str());
+             if (auto r = gui::removeClips(dispatcher, ids); !r && appActions.onError)
+                 appActions.onError("Clip launcher: " + r.error().message);
+         }});
     shell.arrange()->setRulerCallbacks(
         {[&dispatcher](const std::string& command, json::Value args) {
              return dispatcher.execute(

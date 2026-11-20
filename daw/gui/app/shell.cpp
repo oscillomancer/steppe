@@ -662,6 +662,7 @@ void Shell::addStrip(std::string_view type) {
     ui_.trackAnchor = created;
     ui_.tracksFocused = true;
     ui_.envelopeFocused = false;
+    ui_.clipsFocused = false;
 }
 
 Status Shell::openColorMenu(const model::Id& track, const ui::Rect& anchor) {

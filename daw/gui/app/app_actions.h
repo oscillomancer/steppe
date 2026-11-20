@@ -34,7 +34,14 @@ struct UiState {
     // An automation lane was pressed last: Delete and the clipboard keys take
     // its selected points.
     bool envelopeFocused = false;
+    // The clip launcher's selected clips (gui.md §4.15); a launcher cell was
+    // clicked last, so Delete removes them.
+    std::vector<std::string> selectedClips;
+    bool clipsFocused = false;
 };
+
+// Removes clips in one undo step (the launcher's Delete).
+Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips);
 
 // A click on a track in a view that lists `order` (its row or strip order):
 // plain selects it alone, Ctrl toggles it, Shift extends from the anchor
