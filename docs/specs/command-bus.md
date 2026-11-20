@@ -397,14 +397,14 @@ unknown values fail startup with `mcp.registry` at `/commands` and a hint to
 update the running application and proxy to matching versions, rather than
 silently fetching every description. Older proxies can ignore the added field.
 
-The engine core is exactly these 37 commands, plus `describe`, `exec`, `query`:
+The engine core is exactly these 38 commands, plus `describe`, `exec`, `query`:
 
 ```
 project.get project.open project.save session.describe
 track.add track.set track.list track.remove
 item.add item.set item.remove midi.write midi.get
 fx.add fx.describe fx.patch.get fx.patch.merge fx.remove plugin.list
-route.add env.add env.points.set tempo.set
+route.add env.add env.points.set tempo.set modulate
 transport.play transport.stop transport.seek
 render.mix analyze.track analyze.render analyze.compare
 branch.create branch.switch branch.diff branch.merge history.undo batch engine.start

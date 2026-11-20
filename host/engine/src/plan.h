@@ -1084,6 +1084,7 @@ struct Plan {
     // percent. modOffsetOf maps each modEdges entry to its target's slot
     // (-1: inert).
     std::unique_ptr<std::atomic<double>[]> modOffsets;
+    static_assert(std::atomic<double>::is_always_lock_free, "the executors store offsets");
     std::vector<int> modOffsetOf;
     // Every node by id, sorted (indexForCarry): an adoption finds a node's
     // counterpart in log n steps, whichever earlier plan it carries from.
