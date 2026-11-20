@@ -418,12 +418,15 @@ undo step, and a refusal changes nothing. The contract is in
   track at the span's start, converted as `item.add {clip}` converts it:
   - `once`: one item as long as the clip, or as the span if that is shorter.
     The rest of the span is silent on that track.
-  - `loop`, clip no longer than the span: if the clip's loop is on, starts at 0
-    and covers its whole content, and the clip's length is that content or a
-    whole number of times it, the item loops its content over the span (the
-    same sound as the clip repeating). Any other repeating clip cannot be one
-    item without a guess about the gap or the partial window, and is refused
-    (`scene.insert.period`, hint: set the clip's loop to its whole content,
+  - `loop`, clip no longer than the span: the item loops its content over the
+    span (the same sound as the clip repeating) when the clip's period is the
+    content: its loop off and its length the content, or its loop on over the
+    whole content (start 0) with a length of whole repeats of it. A loop window
+    that is not the whole content cannot be an item and is `clip.unsupported`,
+    as `item.add {clip}` refuses it. A clip whose period is anything else (a gap
+    after the content, a length shorter than the content) cannot be one item
+    without a guess about the gap, and is refused (`scene.insert.period`, hint:
+    set the clip's length to its content or its loop on over the whole content,
     clip.set, or ask for no more bars than the clip is long).
   - `loop`, clip at least as long as the span: one item for the span, the first
     part of the clip.
@@ -443,10 +446,10 @@ undo step, and a refusal changes nothing. The contract is in
 - **Capture is one clip per track, with nothing guessed.** `scene.capture
   {region, name?}` reads the items of each channel that lie wholly inside the
   region:
-  - more than one item of one track inside it: `scene.capture.items`;
   - an item that starts before the region or ends after it:
-    `scene.capture.edge`;
-  - an item that starts after the region's start: `scene.capture.offset` (a
+    `scene.capture.edge` (checked first);
+  - more than one item of one track inside it: `scene.capture.items`;
+  - the one item starting after the region's start: `scene.capture.offset` (a
     clip begins at its own start, so the entry point would be lost);
   - a warped take: `clip.unsupported`, as `clip.add {item}`;
   - items on a master (they belong to no channel) are skipped, and a warning

@@ -194,6 +194,16 @@ instructions are in `docs/guides/installing.md`.
   take an item; timeline commands refuse one with `item.kind`; `env.add`
   refuses an FX in a clip take's chain (`clip.unsupported`) until L2 decides
   how a clip's FX automation plays.
+- **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
+  `scene.insert` lays a scene's clips on the timeline as items over whole
+  bars and adds a section, `scene.capture` makes a scene from the items of a
+  section, `arrangement.build` lays scenes out one after the other. Model
+  only, one undo step each. They refuse rather than guess: an item in the
+  span, an empty scene, a repeating clip no single item reproduces, several
+  items of a track, an item across or after the section's start, a warped
+  take. MIDI is copied unless `pooled`. Limits: capture reads whole items
+  only (it never splits or trims), a master's items are skipped with a
+  warning, and fades are not kept (as in the item and clip conversion).
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained

@@ -5287,6 +5287,10 @@ struct Gain : Effect {
     run("item.add",
         R"({"track": "tr_1", "bar": 1, "notation": "voice bass; 1: C2:q r:q C2:q r:q"})");
     if (fixture == "song_with_item") return;
+    if (fixture == "song_with_section") {  // it_1 on tr_1 over bar 1, and rg_1 Verse over it
+        run("region.add", R"({"start":0,"end":4,"name":"Verse"})");
+        return;
+    }
     if (fixture == "song_with_takes") {  // it_1 with three takes, tk_1..tk_3 (tk_3 heard)
         run("take.add", R"({"item":"it_1","from":"tk_1"})");
         run("take.add", R"({"item":"it_1","from":"tk_1"})");

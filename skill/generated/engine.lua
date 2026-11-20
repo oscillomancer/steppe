@@ -37,6 +37,16 @@ q = nil
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx" (default: "post_fader")
 ---@field detail? "summary"|"standard"|"full" summary: key scalars; standard: + percentiles and spectrum; full: + time series. (default: "summary")
 
+---@class Steppe.arrangement_build_args
+---@field sequence table[]
+---@field at? number Start in beats, on a bar line.
+---@field bar? integer Start bar, 1-based [1].
+---@field pooled? boolean (default: false)
+
+---@class Steppe.arrangement_build_result
+---@field segments table[]
+---@field warnings? table[]
+
 ---@class Steppe.audio_quantize_args
 ---@field items string[]
 ---@field grid number
@@ -1913,6 +1923,31 @@ q = nil
 ---@field id string
 ---@field warnings? table[]
 
+---@class Steppe.scene_capture_args
+---@field region string Region id, e.g. "rg_1".
+---@field name? string
+---@field pooled? boolean (default: false)
+
+---@class Steppe.scene_capture_result
+---@field scene string
+---@field clips table[]
+---@field warnings? table[]
+
+---@class Steppe.scene_insert_args
+---@field scene string Scene id, e.g. "sc_1".
+---@field at? number Start in beats, on a bar line.
+---@field bar? integer Start bar, 1-based.
+---@field bars integer
+---@field name? string
+---@field pooled? boolean (default: false)
+
+---@class Steppe.scene_insert_result
+---@field items table[]
+---@field region string
+---@field start number The span's start, in beats.
+---@field end number The span's end, in beats.
+---@field warnings? table[]
+
 ---@class Steppe.scene_list_result
 ---@field scenes table[]
 ---@field warnings? table[]
@@ -2469,6 +2504,9 @@ q = nil
 ---@field render fun(args: Steppe.analyze_render_args): table Analyze a render id or audio path: loudness, spectrum, envelope and stereo.
 ---@field track fun(args: Steppe.analyze_track_args): table Render one track's output offline and analyze it.
 
+---@class Steppe.arrangement
+---@field build fun(args: Steppe.arrangement_build_args): Steppe.arrangement_build_result Lay a song out from scenes: each for some bars, one after the other.
+
 ---@class Steppe.audio
 ---@field quantize fun(args: Steppe.audio_quantize_args): table Quantize detected audio hits together using stretch markers or slices.
 
@@ -2787,6 +2825,8 @@ q = nil
 
 ---@class Steppe.scene
 ---@field add fun(args?: Steppe.scene_add_args): Steppe.scene_add_result Add a scene, a column of the clip launcher, at the end or at an index.
+---@field capture fun(args: Steppe.scene_capture_args): Steppe.scene_capture_result Make a scene from the items inside a section: one clip per track.
+---@field insert fun(args: Steppe.scene_insert_args): Steppe.scene_insert_result Lay a scene's clips on the timeline as items, and mark the span a section.
 ---@field list fun(): Steppe.scene_list_result List the scenes in column order with their clip counts.
 ---@field move fun(args: Steppe.scene_move_args): Steppe.scene_move_result Move a scene to another column.
 ---@field remove fun(args: Steppe.scene_remove_args): Steppe.scene_remove_result Remove a scene with its clips and their takes.
@@ -2885,6 +2925,7 @@ q = nil
 
 ---@class Steppe
 ---@field analyze Steppe.analyze Commands named analyze.*
+---@field arrangement Steppe.arrangement Commands named arrangement.*
 ---@field audio Steppe.audio Commands named audio.*
 ---@field audition Steppe.audition Commands named audition.*
 ---@field autoitem Steppe.autoitem Commands named autoitem.*

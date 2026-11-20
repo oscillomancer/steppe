@@ -123,6 +123,23 @@ double contentLength(const model::Session& s, const model::Take& take);
 // (clip.unsupported).
 Status checkClipTakeUnwarped(const model::Session& s, model::Id take, const std::string& path);
 
+// The clip an item makes (clip.add {item}, scene.capture): its kind, length,
+// loop, takes (copied; a MIDI source with them unless `pooled`), gain, mute and
+// colour. The track, scene, mode and name are the caller's. A warped take is
+// clip.unsupported and takes of both kinds clip.mixed; errors point at `path`.
+Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, model::Id item,
+                                 bool pooled, const std::string& path);
+
+// A clip laid on the timeline as an item over [startBeat, endBeat) on the
+// clip's own track (scene.insert; ADR-0097 "Scene <-> section: the rules"):
+// a `once` clip lasts its length or the span if shorter; a `loop` clip the
+// span, as one looping item when it repeats within the span, which only a
+// loop over the whole content with a length of whole repeats allows
+// (scene.insert.period otherwise). Takes are copied as for item.add {clip}.
+Result<model::Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s,
+                                    const model::Clip& clip, double startBeat, double endBeat,
+                                    bool pooled, const std::string& path);
+
 // session.describe's scene section (session-model "Scenes and clips"), or
 // nothing when there are no scenes.
 std::string describeScenes(const model::Session& s);

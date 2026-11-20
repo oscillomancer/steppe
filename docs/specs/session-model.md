@@ -1892,10 +1892,13 @@ nothing.
     as in "Converting between an item and a clip"), with its length set by the
     clip's mode:
     - `once`: the clip's length, or the span's if shorter;
-    - `loop` and the clip no longer than the span: if its loop is on, starts at
-      0 and covers the whole content, and its length is the content or a whole
-      number of times it, one looping item for the whole span; any other
-      repeating clip is `scene.insert.period`;
+    - `loop` and the clip no longer than the span: one looping item for the
+      whole span when the clip's period is its content (loop off with the
+      length the content, or loop on over the whole content from 0 with a
+      length of whole repeats of it). A loop window that is not the whole
+      content is `clip.unsupported`, as for `item.add {clip}`; any other
+      period (a gap after the content, a length shorter than it) is
+      `scene.insert.period`;
     - `loop` and the clip at least as long as the span: one item for the span.
   - The takes are copied, and a MIDI source with them unless `pooled`.
   - An item already on a track that receives a clip and overlapping the span
@@ -1909,10 +1912,10 @@ nothing.
 - `scene.capture {region, name?, pooled?}` (edit): makes a scene from the items
   of a section.
   - For each channel, the items overlapping the region must be one item
-    wholly inside it: several is `scene.capture.items`, one that starts
-    before or ends after the region is `scene.capture.edge`, one that starts
-    after the region's start is `scene.capture.offset`. A region with no
-    item is `scene.capture.empty`. Items on masters are skipped with a
+    wholly inside it. Checked in this order: one that starts before or ends
+    after the region is `scene.capture.edge`; several is
+    `scene.capture.items`; the one that starts after the region's start is
+    `scene.capture.offset`. A region with no item is `scene.capture.empty`. Items on masters are skipped with a
     `scene.capture.skipped` warning.
   - Each item becomes a clip as `clip.add {item}` makes it (a warped take is
     `clip.unsupported`; a MIDI source is copied unless `pooled`), `loop` mode
@@ -1923,12 +1926,12 @@ nothing.
     read through the tempo map. The region and the items are not changed.
   - Errors beside the above: `scene.limit`, `clip.limit`, `clip.memory`
     (audio), as `scene.add` and `clip.add`.
-  - Result: `{scene, clips: [{clip, item, track}]}`.
+  - Result: `{scene, clips: [{clip, source_item, track}]}`.
 - `arrangement.build {sequence: [{scene, bars}…], at | bar?, pooled?}` (edit):
   `scene.insert` for each entry in turn, each starting where the last ended,
   from `bar` or `at` (default bar 1), and a region for each. Every entry is
   checked before anything changes. An empty sequence, one of more than 256
-  entries (`scene.sequence`), `bars` < 1 and an entry's own errors
+  entries (`scene.sequence`), `bars` < 1 (`scene.bars`) and an entry's own errors
   (`scene.empty`, `scene.insert.period`, `scene.insert.occupied`) are refused
   with the entry's index in `path` (`/sequence/2/scene`). A scene may appear
   more than once.

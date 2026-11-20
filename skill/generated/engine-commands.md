@@ -195,6 +195,118 @@ Result:
 
 ```
 
+## `arrangement.build@1`
+
+Lay a song out from scenes: each for some bars, one after the other.
+
+scene.insert for each entry of sequence in turn, each starting where the last ended, from bar or at (default bar 1), with a section for each. A scene may appear more than once. Every entry's refusal (scene.empty, scene.insert.period, scene.insert.occupied) names its index in path, and changes nothing; an empty sequence or one of more than 256 entries is scene.sequence. One undo step.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `sequence` | array |  |  |  |  |
+| `at` | number |  | 0.0.. |  | Start in beats, on a bar line. |
+| `bar` | integer |  | 1.0..1e+05 |  | Start bar, 1-based [1]. |
+| `pooled` | boolean |  |  | false |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "arrangement_build",
+  "properties": {
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "arrangement_segment",
+        "properties": {
+          "scene": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "start": {
+            "type": "number"
+          },
+          "end": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "laid_clip",
+              "properties": {
+                "clip": {
+                  "type": "string"
+                },
+                "item": {
+                  "type": "string"
+                },
+                "track": {
+                  "type": "string"
+                }
+              },
+              "required": ["clip", "item", "track"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["scene", "region", "start", "end", "items"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["segments"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `scene.sequence`: the sequence is empty or longer than 256 entries Hint: give 1 to 256 entries of {scene, bars}
+- `scene.empty`: a scene in the sequence has no clips Hint: add clips with clip.add
+- `scene.insert.occupied`: items are already in an entry's span Hint: move or remove them, or start at another bar
+- `scene.insert.period`: a repeating clip no single looping item reproduces Hint: loop the clip over its whole content, or ask for fewer bars
+
+### Examples
+
+**Verse, chorus** (`song_with_clip`)
+
+```json
+{
+  "sequence": [
+    {
+      "scene": "sc_1",
+      "bars": 4
+    }
+  ]
+}
+
+```
+
+Result:
+
+```json
+{
+  "segments": "<any>"
+}
+
+```
+
 ## `audio.quantize@1`
 
 Quantize detected audio hits together using stretch markers or slices.
@@ -17205,6 +17317,199 @@ Result:
 ```json
 {
   "id": "sc_1"
+}
+
+```
+
+## `scene.capture@1`
+
+Make a scene from the items inside a section: one clip per track.
+
+For each channel the items overlapping the region must be one item lying wholly inside it: several are scene.capture.items, one that starts before or ends after it scene.capture.edge, one that starts after its start scene.capture.offset (a clip begins at its own start); a region holding no item is scene.capture.empty. Items on a master are skipped with a warning. Each item becomes a clip as clip.add {item} makes it (MIDI copied unless pooled; a warped take is clip.unsupported): loop mode when it fills the region, once when it is shorter. The scene is added after the last, named after the region unless name is given, with its colour. The region and the items are unchanged. One undo step.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `region` | string |  |  |  | Region id, e.g. "rg_1". |
+| `name` | string |  |  |  |  |
+| `pooled` | boolean |  |  | false |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "scene_capture",
+  "properties": {
+    "scene": {
+      "type": "string"
+    },
+    "clips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "laid_clip",
+        "properties": {
+          "clip": {
+            "type": "string"
+          },
+          "source_item": {
+            "type": "string"
+          },
+          "track": {
+            "type": "string"
+          }
+        },
+        "required": ["clip", "source_item", "track"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["scene", "clips"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `scene.capture.empty`: the region holds no item Hint: choose a section with items
+- `scene.capture.items`: several items of one track inside the region Hint: consolidate them (item.consolidate) or capture a smaller region
+- `scene.capture.edge`: an item starts before or ends after the region Hint: split it at the region's edge (item.split) or widen the region
+- `scene.capture.offset`: an item starts after the region's start Hint: move it to the start of the region (item.move)
+- `clip.unsupported`: a warped take Hint: reset its warp first
+- `scene.limit`: the project has 1024 scenes Hint: remove a scene first
+- `clip.limit`: the project has 16384 clips Hint: remove clips first
+
+### Examples
+
+**Capture the verse** (`song_with_section`)
+
+```json
+{
+  "region": "rg_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "scene": "<any>",
+  "clips": "<any>"
+}
+
+```
+
+## `scene.insert@1`
+
+Lay a scene's clips on the timeline as items, and mark the span a section.
+
+The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole bars. Each clip becomes an item on its track at the start, as item.add {clip} makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts the span, as one looping item when it repeats within it, which needs its loop on over its whole content with a length of whole repeats (scene.insert.period otherwise). Takes are copied, MIDI with them unless pooled. An item already in the span on a track that receives a clip is refused (scene.insert.occupied), and an empty scene (scene.empty). A section named after the scene (name overrides) is added over the span. One undo step.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `scene` | string |  |  |  | Scene id, e.g. "sc_1". |
+| `at` | number |  | 0.0.. |  | Start in beats, on a bar line. |
+| `bar` | integer |  | 1.0..1e+05 |  | Start bar, 1-based. |
+| `bars` | integer |  | 1.0.. |  |  |
+| `name` | string |  |  |  |  |
+| `pooled` | boolean |  |  | false |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "scene_insert",
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "laid_clip",
+        "properties": {
+          "clip": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "track": {
+            "type": "string"
+          }
+        },
+        "required": ["clip", "item", "track"],
+        "additionalProperties": false
+      }
+    },
+    "region": {
+      "type": "string"
+    },
+    "start": {
+      "type": "number",
+      "description": "The span's start, in beats."
+    },
+    "end": {
+      "type": "number",
+      "description": "The span's end, in beats."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["items", "region", "start", "end"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `scene.at`: at is not on a bar line, or neither or both of at and bar Hint: give bar, or an at on a bar line
+- `scene.bars`: bars is out of range Hint: give a whole number of bars from 1
+- `scene.empty`: the scene has no clips Hint: add clips with clip.add
+- `scene.insert.occupied`: an item is already in the span on a track that gets a clip Hint: move or remove it, or choose another bar
+- `scene.insert.period`: a repeating clip no single looping item reproduces Hint: loop the clip over its whole content, or ask for no more bars than it is long
+
+### Examples
+
+**A verse at bar 5** (`song_with_clip`)
+
+```json
+{
+  "scene": "sc_1",
+  "bar": 5,
+  "bars": 4
+}
+
+```
+
+Result:
+
+```json
+{
+  "items": "<any>",
+  "region": "<any>",
+  "start": 16.0,
+  "end": 32.0
 }
 
 ```
