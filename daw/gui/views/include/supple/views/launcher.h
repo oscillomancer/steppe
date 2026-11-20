@@ -52,7 +52,8 @@ struct LauncherCallbacks {
     // A double-click on a clip: open its editor (MIDI: the piano roll; audio:
     // the inspector).
     std::function<void(model::Id clip)> open;
-    // The selected clips changed (the app's selection and Delete follow).
+    // The selected clips changed, or a cell was selected (selectedCell set
+    // then): the app's selection and Delete follow.
     std::function<void(const std::vector<model::Id>& clips)> onSelection;
     // Removes clips in one undo step (the menu's Delete); unset: one
     // clip.remove each.

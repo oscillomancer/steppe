@@ -2608,7 +2608,9 @@ same heights, scroll and colours.
   opens a second menu ends in "…", as elsewhere.
 - **Delete** removes the selected clips (`clip.remove`), one undo step,
   while a cell was clicked last, as Delete takes points after a lane click
-  (§4.3; `UiState::clipsFocused`, cleared by a track, item or lane click).
+  (§4.3; `UiState::clipsFocused`, set by a clip or cell click and cleared
+  by a track, item or lane click). With only a cell selected it removes
+  nothing: never the timeline items selected before.
   Copy and paste of clips is later; a paste will land in the selected cell.
 
 **Elsewhere.**

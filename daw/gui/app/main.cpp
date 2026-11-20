@@ -890,7 +890,8 @@ int frontendMain(int argc, char** argv) {
          [&](const std::vector<model::Id>& clips) {
              uiState.selectedClips.clear();
              for (model::Id id : clips) uiState.selectedClips.push_back(id.str());
-             if (!clips.empty()) {
+             // A clip or a cell picked: the launcher has the keys now.
+             if (!clips.empty() || shell.arrange()->selectedCell()) {
                  uiState.clipsFocused = true;
                  uiState.tracksFocused = false;
                  uiState.envelopeFocused = false;

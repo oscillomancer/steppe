@@ -1749,8 +1749,11 @@ void ArrangeView::selectClips(std::vector<model::Id> clips) {
     if (launcherPane_) launcherPane_->invalidate();
 }
 void ArrangeView::selectCell(std::optional<Cell> cell) {
-    selectClips({});
+    // Always told, cell or none: with a cell, a launcher cell was clicked last
+    // (the app's Delete then takes clips only, and there are none).
+    selectedClips_.clear();
     selectedCell_ = cell;
+    if (launcherCallbacks_.onSelection) launcherCallbacks_.onSelection(selectedClips_);
     if (launcherPane_) launcherPane_->invalidate();
 }
 void ArrangeView::clearLauncherSelection() {

@@ -5625,4 +5625,13 @@ TEST_CASE("edit.delete removes the launcher's selected clips in one undo step") 
     CHECK(a.ui.selectedClips.empty());
     run("history.undo", "{}");
     CHECK(a.app->head().clips.size() == 2);  // both back in one step
+    // A launcher click that left no clip selected (an empty cell): Delete
+    // removes nothing, not the items selected before on the timeline.
+    run("item.add", R"({"track":"tr_1","position":0,"notation":"voice v; 1: c4:q r:*"})");
+    a.ui.selectedItems = {"it_1"};
+    a.ui.selectedClips.clear();
+    a.ui.clipsFocused = true;
+    (void)a.actions->run("edit.delete");
+    CHECK(a.app->head().items.size() == 1);
+    CHECK(a.app->head().clips.size() == 2);
 }

@@ -323,11 +323,11 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
     remove.name = "Edit: delete the selection";
     remove.description =
         "Remove the selected automation points when an automation lane was "
-        "clicked last, the selected clips when a launcher cell was, the selected "
-        "tracks when tracks were selected last, else the selected items.";
+        "clicked last, the selected clips (or nothing) when a launcher cell was, "
+        "the selected tracks when tracks were selected last, else the selected items.";
     remove.builtin = [this](const actions::Context&) -> Result<json::Value> {
         if (ui_.envelopeFocused) return run("ui.env.points.delete");
-        if (ui_.clipsFocused && !ui_.selectedClips.empty()) {
+        if (ui_.clipsFocused) {  // a launcher cell was clicked last: clips or nothing
             const std::vector<std::string> clips = std::exchange(ui_.selectedClips, {});
             if (auto r = removeClips(dispatcher_, clips); !r) return std::move(r).error();
             return json::Value::object();

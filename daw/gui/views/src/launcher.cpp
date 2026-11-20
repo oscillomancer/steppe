@@ -834,6 +834,9 @@ bool LauncherHeader::onPointer(const ui::PointerEvent& e) {
                 const auto to = static_cast<std::int64_t>(
                     std::clamp(offset / LauncherColumns::kColumn, 0.0f,
                                static_cast<float>(cols.scenes.size()) - 1.0f));
+                const auto from = std::find(cols.scenes.begin(), cols.scenes.end(), d.scene);
+                if (from != cols.scenes.end() && from - cols.scenes.begin() == to)
+                    return true;  // back on its own column: nothing to move
                 json::Value args = json::Value::object();
                 args["scene"] = d.scene.str();
                 args["to"] = to;
