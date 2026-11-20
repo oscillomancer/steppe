@@ -894,3 +894,27 @@ TEST_CASE("launcher: copied clips paste from the selected cell, in their layout,
     CHECK(*moved == std::vector<std::string>{"cl_1"});
     CHECK(f.app->head().clips.find(*model::Id::parse("cl_1"))->track == model::Id::parse("tr_3"));
 }
+
+TEST_CASE("launcher: the clip clipboard holds only for the project it was filled in") {
+    LauncherFixture f;
+    f.song();
+    gui::ClipClipboard board;
+    board.fill({"cl_1"}, true, f.app->projectGeneration());
+    CHECK(board.in(f.app->projectGeneration()) == std::vector<std::string>{"cl_1"});
+    CHECK(board.cut);
+    // Another project with the same ids: cl_1 there is not the clip cut here,
+    // so the clipboard empties and the paste refuses, moving nothing.
+    f.exec("project.new", "{}");
+    f.song();
+    REQUIRE(f.app->head().clips.find(*model::Id::parse("cl_1")));
+    const std::vector<std::string> clips = board.in(f.app->projectGeneration());
+    CHECK(clips.empty());
+    CHECK_FALSE(board.cut);
+    const std::uint64_t before = f.app->head().version;
+    auto pasted = gui::pasteClips(*f.dispatcher, f.app->head(), clips, "tr_3", "sc_1",
+                                  {"tr_1", "tr_2", "tr_3"}, board.cut);
+    REQUIRE_FALSE(pasted);
+    CHECK(pasted.error().code == "clip.paste");
+    CHECK(f.app->head().version == before);
+    CHECK(f.app->head().clips.find(*model::Id::parse("cl_1"))->track == model::Id::parse("tr_1"));
+}

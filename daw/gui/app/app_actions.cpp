@@ -41,6 +41,18 @@ Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& 
     return {};
 }
 
+void ClipClipboard::fill(std::vector<std::string> ids, bool cutting,
+                         std::uint64_t projectGeneration) {
+    clips = std::move(ids);
+    cut = cutting;
+    generation = projectGeneration;
+}
+
+const std::vector<std::string>& ClipClipboard::in(std::uint64_t projectGeneration) {
+    if (projectGeneration != generation) *this = {};
+    return clips;
+}
+
 Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const model::Session& s,
                                             const std::vector<std::string>& clips,
                                             const std::string& track, const std::string& scene,
