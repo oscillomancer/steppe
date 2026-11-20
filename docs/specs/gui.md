@@ -1575,6 +1575,17 @@ Commands: `route.*`, `track.set {record_input}`.
 
 ### 4.7 MIDI editor
 
+**Launcher clips** (ADR-0097) open here as items do (a double-click on a
+clip, Alt+E with a clip selected after a launcher click, or the first MIDI
+clip when the project has no MIDI item). A clip has no place in time: the
+roll places it at beat 0 with its own length, so its bars count from its
+start; it reads the key at the project's start for shading, spelling and
+the key button (as `midi.edit` does) and shows no chords; its notes take
+its launcher colour; the title ends in "· clip"; and the playhead is where
+the launcher plays it, hidden while it does not play. Edits go to the
+clip's take through the same `midi.edit` and `midi.write` calls, and the
+editor closes when the clip is removed (`gui::midiOwner`).
+
 Piano roll (instanced notes; draw, select, move, resize, velocity drag,
 quantize, transpose), velocity and CC lanes, and a **notation panel**: the
 item's notation text (`libs/notation`) beside the roll, editable with live

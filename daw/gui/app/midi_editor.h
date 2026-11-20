@@ -37,6 +37,18 @@ namespace supple::gui {
 
 class MidiEventList;
 
+// The MIDI take an editor opens (ADR-0097 "The take owner"): an item's active
+// take, or a launcher clip's. A clip has no place in time: its beats count
+// from its own start.
+struct MidiOwner {
+    const model::Take* take = nullptr;
+    const model::MidiSource* source = nullptr;
+    const model::Item* item = nullptr;  // set for an item
+    const model::Clip* clip = nullptr;  // set for a clip
+    model::Id track;
+};
+std::optional<MidiOwner> midiOwner(const model::Session& session, const std::string& id);
+
 struct RollNote {
     int pitch = 60;
     double start = 0, length = 1;  // beats from the item's start
@@ -51,7 +63,8 @@ struct CcPoint {
 
 struct RollState {
     std::uint64_t gestureVersion = 0;
-    std::string item;         // "it_3"; empty: closed
+    std::string item;         // "it_3", or a launcher clip "cl_2"; empty: closed
+    bool clip = false;        // the owner is a clip: it sits at beat 0, no chords
     double itemPosition = 0;  // project beats
     double itemLength = 4;    // beats
     std::vector<RollNote> notes;

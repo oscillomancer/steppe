@@ -195,10 +195,9 @@ void MidiEventList::sync() {
     rows_.clear();
     selectedCc_.clear();
     anchor_.reset();
-    const auto id = model::Id::parse(item_);
-    const auto* item = id ? s.items.find(*id) : nullptr;
-    const auto* take = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
-    const auto* source = take && take->source ? s.midi.find(*take->source) : nullptr;
+    const auto owner = midiOwner(s, item_);
+    const model::Take* take = owner ? owner->take : nullptr;
+    const model::MidiSource* source = owner ? owner->source : nullptr;
     if (source) {
         const auto& seq = source->sequence;
         const double rate = take->playrate > 0 ? take->playrate : 1;
