@@ -3936,6 +3936,7 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
                                [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
     n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
     n.rateEventFresh = restartConsole;
+    if (restartConsole) launchRelocated(n);  // not a handoff, which continues in place
     if (restartConsole) {
         resetTrackMidi(n);
         n.encoder.reset();

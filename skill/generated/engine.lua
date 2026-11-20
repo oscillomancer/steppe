@@ -1103,6 +1103,15 @@ q = nil
 ---@field started boolean
 ---@field warnings? table[]
 
+---@class Steppe.launch_capture_args
+---@field on boolean
+
+---@class Steppe.launch_capture_result
+---@field on boolean
+---@field from? number
+---@field to? number
+---@field warnings? table[]
+
 ---@class Steppe.launch_clip_args
 ---@field clip string Clip id, e.g. "cl_1".
 
@@ -1112,6 +1121,17 @@ q = nil
 ---@field beat? number
 ---@field seconds? number
 ---@field started boolean
+---@field warnings? table[]
+
+---@class Steppe.launch_commit_args
+---@field pooled? boolean Share the clips' MIDI with the items (pooled) instead of copying it (default: false)
+---@field performance? table What history records; launch.commit fills it from the capture
+
+---@class Steppe.launch_commit_result
+---@field tracks string[]
+---@field items string[]
+---@field from number
+---@field to number
 ---@field warnings? table[]
 
 ---@class Steppe.launch_scene_args
@@ -1127,6 +1147,7 @@ q = nil
 
 ---@class Steppe.launch_state_result
 ---@field playing boolean
+---@field capturing boolean
 ---@field tracks table[]
 ---@field warnings? table[]
 
@@ -2558,10 +2579,10 @@ q = nil
 ---@field set fun(args: Steppe.chord_set_args): Steppe.chord_set_result Set the chord from a beat, until the next chord point; "" ends it.
 
 ---@class Steppe.clip
----@field add fun(args: Steppe.clip_add_args): Steppe.clip_add_result Add a clip to a scene's cell: from notation, a file or an item.
----@field duplicate fun(args: Steppe.clip_duplicate_args): Steppe.clip_duplicate_result Copy a clip and its takes to an empty cell.
----@field move fun(args: Steppe.clip_move_args): Steppe.clip_move_result Move a clip to an empty cell in another scene, channel or both.
----@field remove fun(args: Steppe.clip_remove_args): Steppe.clip_remove_result Remove a clip with its takes (unpooled sources go too).
+---@field add fun(args: Steppe.clip_add_args): Steppe.clip_add_result Add a clip from notation, a file or an item.
+---@field duplicate fun(args: Steppe.clip_duplicate_args): Steppe.clip_duplicate_result Copy a clip to an empty cell.
+---@field move fun(args: Steppe.clip_move_args): Steppe.clip_move_result Move a clip to an empty cell.
+---@field remove fun(args: Steppe.clip_remove_args): Steppe.clip_remove_result Remove a clip and its takes.
 ---@field set fun(args: Steppe.clip_set_args): Steppe.clip_set_result Set a clip's name, colour, mute, gain, length, loop, mode or quantize.
 
 ---@class Steppe.context
@@ -2695,11 +2716,13 @@ q = nil
 ---@field set fun(args: Steppe.key_set_args): Steppe.key_set_result Set the key from a beat: tonic and scale, until the next key point.
 
 ---@class Steppe.launch
----@field arrangement fun(args?: Steppe.launch_arrangement_args): Steppe.launch_arrangement_result Return a track, or every track, to the arrangement at the boundary.
+---@field arrangement fun(args?: Steppe.launch_arrangement_args): Steppe.launch_arrangement_result Return a track, or all, to the arrangement at the boundary.
+---@field capture fun(args: Steppe.launch_capture_args): Steppe.launch_capture_result Start or end a capture of launches for launch.commit.
 ---@field clip fun(args: Steppe.launch_clip_args): Steppe.launch_clip_result Play a clip on its track from the next quantize boundary.
+---@field commit fun(args?: Steppe.launch_commit_args): Steppe.launch_commit_result Write the captured performance onto the timeline as items.
 ---@field scene fun(args: Steppe.launch_scene_args): Steppe.launch_scene_result Play every clip of a scene together, one target for all tracks.
 ---@field state fun(): Steppe.launch_state_result What each track with clips plays, and what it has queued.
----@field stop fun(args?: Steppe.launch_stop_args): Steppe.launch_stop_result Silence a track's clip, or every playing clip, at the next boundary.
+---@field stop fun(args?: Steppe.launch_stop_args): Steppe.launch_stop_result Stop a track's clip, or all clips, at the next boundary.
 
 ---@class Steppe.log
 ---@field list fun(args?: Steppe.log_list_args): table Recent commands with origin, arguments and outcome (the command log).
@@ -2843,10 +2866,10 @@ q = nil
 ---@field set fun(args: Steppe.route_learn_set_args): Steppe.route_learn_set_result Let a MIDI controller move a send's level, pan, mute or tap.
 
 ---@class Steppe.scene
----@field add fun(args?: Steppe.scene_add_args): Steppe.scene_add_result Add a scene (a launcher column) at the end or at an index.
----@field list fun(): Steppe.scene_list_result List the scenes in column order with their clip counts.
+---@field add fun(args?: Steppe.scene_add_args): Steppe.scene_add_result Add a scene at the end or at an index.
+---@field list fun(): Steppe.scene_list_result List the scenes in order, with clip counts.
 ---@field move fun(args: Steppe.scene_move_args): Steppe.scene_move_result Move a scene to another column.
----@field remove fun(args: Steppe.scene_remove_args): Steppe.scene_remove_result Remove a scene with its clips and their takes.
+---@field remove fun(args: Steppe.scene_remove_args): Steppe.scene_remove_result Remove a scene with its clips.
 ---@field set fun(args: Steppe.scene_set_args): Steppe.scene_set_result Rename or recolour a scene.
 
 ---@class Steppe.script

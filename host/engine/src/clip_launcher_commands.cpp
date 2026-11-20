@@ -414,7 +414,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a scene (a launcher column) at the end or at an index.";
+        c.summary = "Add a scene at the end or at an index.";
         c.description =
             "at is the column (0-based, default: after the last); the scenes from there on "
             "move one column right. A project holds at most 1024 scenes.";
@@ -487,7 +487,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Remove a scene with its clips and their takes.";
+        c.summary = "Remove a scene with its clips.";
         c.description =
             "The scenes after it move one column left. A clip.removed warning names the clips "
             "removed with it.";
@@ -554,7 +554,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.list";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "List the scenes in column order with their clip counts.";
+        c.summary = "List the scenes in order, with clip counts.";
         c.tags = {"clip launcher", "scene"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto entry = schema::object<SceneEntry>("scene_entry")
@@ -594,7 +594,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a clip to a scene's cell: from notation, a file or an item.";
+        c.summary = "Add a clip from notation, a file or an item.";
         c.description =
             "One source at most: notation (as item.add's), midi_file, audio_file, or item (a "
             "copy of that item's takes; pooled shares its MIDI instead). Without one, an empty "
@@ -836,7 +836,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Remove a clip with its takes (unpooled sources go too).";
+        c.summary = "Remove a clip and its takes.";
         c.tags = {"clip launcher", "clip"};
         c.args =
             schema::object<ClipRef>("clip_ref").field("clip", &ClipRef::clip, clipIdArg()).build();
@@ -857,7 +857,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.move";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Move a clip to an empty cell in another scene, channel or both.";
+        c.summary = "Move a clip to an empty cell.";
         c.tags = {"clip launcher", "clip"};
         c.args = schema::object<ClipMoveArgs>("clip_move_args")
                      .field("clip", &ClipMoveArgs::clip, clipIdArg())
@@ -901,7 +901,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.duplicate";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Copy a clip and its takes to an empty cell.";
+        c.summary = "Copy a clip to an empty cell.";
         c.description =
             "The copy's MIDI is its own unless pooled, which shares it (both clips then edit "
             "the same notes).";

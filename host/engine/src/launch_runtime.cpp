@@ -445,6 +445,86 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
     return out;
 }
 
+// --- Capturing a performance (ADR-0097 L4) -------------------------------------
+
+std::int64_t Engine::captureHeard() const {
+    if (rtPosEpoch_.load(std::memory_order_acquire) != capture_.epoch) return capture_.startFrame;
+    return std::max(capture_.startFrame, rtStream_.load());
+}
+
+void Engine::placeCapture() {
+    if (!capture_.on || !capture_.pending) return;
+    LaunchClock clock;
+    if (!launchClock(clock)) return;  // relocating: the next service
+    capture_.pending = false;
+    capture_.epoch = clock.epoch;
+    capture_.startFrame = clock.stream;
+    capture_.startSample = clock.pos;
+    capture_.loop = clock.loop;
+}
+
+void Engine::captureRelocating() {
+    if (!capture_.on || capture_.pending) return;
+    const std::int64_t heard = captureHeard();
+    if (heard > capture_.startFrame) {  // it ran: running time ends here
+        capture_.endFrame = heard;
+        capture_.on = false;
+    } else {
+        capture_.pending = true;  // nothing ran yet: it begins where the transport goes
+    }
+}
+
+void Engine::captureLaunches(bool on) {
+    if (on == capture_.on) return;
+    if (on) {
+        capture_ = {};
+        capture_.on = capture_.any = capture_.pending = true;
+        placeCapture();
+        return;
+    }
+    capture_.endFrame = capture_.pending ? capture_.startFrame : captureHeard();
+    capture_.pending = false;
+    capture_.on = false;
+}
+
+std::optional<Engine::LaunchCapture> Engine::launchCapture() {
+    if (!capture_.any) return std::nullopt;
+    serviceLaunches();  // what has applied so far is in the log
+    placeCapture();
+    LaunchCapture out;
+    out.on = capture_.on;
+    out.startSample = capture_.startSample;
+    out.loop = capture_.loop;
+    if (capture_.pending) return out;
+    const std::int64_t start = capture_.startFrame;
+    const std::int64_t end = capture_.on ? captureHeard() : capture_.endFrame;
+    out.frames = end - start;
+    // What each track played as the capture began: its newest entry by
+    // then, unless a plan has since returned it to the arrangement.
+    std::map<model::Id, std::size_t> before;
+    for (std::size_t i = 0; i < launchLog_.size(); ++i) {
+        const LaunchLogEntry& e = launchLog_[i];
+        if (e.epoch < capture_.epoch || (e.epoch == capture_.epoch && e.runningFrame <= start))
+            before[e.track] = i;
+    }
+    for (const auto& [track, i] : before) {
+        const auto reset = launchReset_.find(track);
+        if (reset != launchReset_.end() && reset->second > i) continue;
+        LaunchLogEntry first = launchLog_[i];
+        if (first.action == LaunchLogEntry::Action::Arrangement) continue;
+        first.runningFrame = 0;
+        first.epoch = capture_.epoch;
+        out.launches.push_back(first);
+    }
+    for (const LaunchLogEntry& e : launchLog_)
+        if (e.epoch == capture_.epoch && e.runningFrame > start && e.runningFrame < end) {
+            LaunchLogEntry within = e;
+            within.runningFrame -= start;
+            out.launches.push_back(within);
+        }
+    return out;
+}
+
 std::vector<model::Id> Engine::clipsSkipped() const {
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     if (!plan || !plan->preparedSources) return {};

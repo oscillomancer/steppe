@@ -688,6 +688,8 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
                                                "item.split",
                                                "key.remove",
                                                "key.set",
+                                               // its recorded performance: no engine
+                                               "launch.commit",
                                                "marker.add",
                                                "marker.remove",
                                                "marker.set",

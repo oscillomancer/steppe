@@ -496,6 +496,14 @@ class EngineApp : public cmd::Host {
     std::map<model::Id, double> modulationOffsets() const {
         return engine_ ? engine_->modulationOffsets() : std::map<model::Id, double>{};
     }
+    // What each track with clips plays as heard and what it has queued
+    // (ADR-0097; Engine::launchState), for the launcher pane and the render
+    // dialog: empty without a running engine. Model thread.
+    std::vector<Engine::TrackLaunch> launchState() const {
+        return engine_ ? engine_->launchState() : std::vector<Engine::TrackLaunch>{};
+    }
+    // Whether launch.capture is on (L4).
+    bool launchCapturing() const { return engine_ && engine_->launchCapturing(); }
     MediaCache& media() { return media_; }
     // The plugin's semantic schema (null for plugins without the extension).
     Result<json::Value> fxSchema(const model::FxInstance& fx);

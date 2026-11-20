@@ -1605,6 +1605,21 @@ phase.
 clip that has finished, silent until the next launch) or `stopped`. It
 also shows what each track has queued.
 
+### Capturing a performance
+
+`launch.capture {on: true}` starts keeping what you launch; `launch.capture
+{on: false}` stops. `launch.commit` then writes the performance onto the
+timeline as ordinary items, in one undo step. It is laid out as it ran:
+from where the capture began, each launch as many seconds later as it was
+heard, even if the transport loop jumped back meanwhile. On each track that
+played a clip or was stopped, those stretches replace what the timeline had
+there; tracks that stayed on the arrangement are left alone. Each clip
+becomes copies of its takes, starting where the clip was in its loop, with
+the 5 ms switch crossfades as item fades. MIDI is copied, so editing the
+items leaves the clips alone; `launch.commit {pooled: true}` shares it
+instead. Stopping, seeking or changing the loop ends a capture, and
+committing again writes the same performance over itself.
+
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
 - launching while a master playrate is active (`launch.playrate`);

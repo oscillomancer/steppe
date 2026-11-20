@@ -161,6 +161,7 @@ class RenderDialog {
     void openExisting(const json::Value& existing);
     void chooseVersion();
     void openResultMenu(std::size_t index, const ui::Rect& anchor);
+    bool clipsHeld() const;  // a track plays a clip, held or stopped: not the arrangement
 
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
@@ -173,6 +174,7 @@ class RenderDialog {
     std::size_t tab_ = 0;
     bool ask_ = false;                       // if_exists "Ask" (never written)
     std::string versionChoice_ = "current";  // "current", "branch:<name>", "version:<n>"
+    bool clipsHeld_ = false;                 // what the Source section's clips line says
     // The checked regions when not all are (a one-off selector, never written).
     std::optional<std::vector<std::string>> regions_;
     std::string presetName_;

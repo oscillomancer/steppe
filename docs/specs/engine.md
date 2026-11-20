@@ -474,6 +474,9 @@ the same.*
   - A `once` clip sounds while its position is within its length after
     the anchor. It is silent before the anchor, and silent after a
     transport wrap until it is launched again.
+  - A loop clip plays nothing before its anchor until a wrap or a seek
+    takes the song there; from then on it plays by its phase wherever the
+    song is. A wrap or a seek also ends a switch's crossfade.
   - Seeks and wraps use the same formulas, so clips stay on the grid and
     a performance replays exactly from its log.
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
@@ -483,11 +486,38 @@ the same.*
   source like an item's fade, in both executors and offline.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
-  the epoch's terms) and its song position, and logs seeks and transport
-  wraps beside them. Renders and the render dialog play the arrangement
-  only, and the dialog says so in one line while any track is held by a
-  clip. An internal offline replay applies a log at its logged running
-  frames. The tests use it, and L4's capture will.
+  the epoch's terms) and its song position. Seeks and transport wraps
+  are not logged yet (staged, STATUS): the replay plays one linear run.
+  Renders and the render dialog play the arrangement only, and the dialog
+  says so in one line while any track is held by a clip, following
+  launches while it is open. An internal offline replay applies a log at
+  its logged running frames; the tests use it.
+- **Capturing a performance (L4, L-f).** While `launch.capture` is on, the
+  engine keeps the song sample where the capture began, the transport
+  loop it runs under, what each track that was not following the
+  arrangement played then (its launch, anchor kept), and every launch
+  applied after it, by running frame from the start
+  (`Engine::launchCapture`). It begins at the heard position (stopped:
+  where playing starts). A relocation (a seek, a stop, a loop change) ends
+  a capture that has run any frames, where it was heard; one that has not
+  begins again where the transport goes. A capture lives in one transport
+  epoch.
+- **Committing it.** `launch.commit` lays the capture out linearly: a
+  launch at running frame f lands at the capture's start plus f, whatever
+  the loop did. On each track that left the arrangement, the stretches
+  where it played a clip, was stopped or held replace the arrangement:
+  its items there are split, trimmed or removed (audio from 5 ms after a
+  switch away, with a 5 ms fade out, and a 5 ms fade in where a clip
+  returned it to the arrangement; MIDI at the switch itself). Each clip
+  stretch becomes copies of the clip's takes, split where a loop wrap
+  moved the song, each piece starting at the phase the song gave it (the
+  take's start offset): one looped item when the clip's period is its
+  content's whole pass, else one item per period. An audio piece starting
+  at a switch from the arrangement or a clip fades in over 5 ms; one
+  ending at a switch runs 5 ms on and fades out, the crossfade as items.
+  The arrangement a loop repeated is not copied. What it writes plays as
+  the capture was heard: exactly away from the switches, and to rounding
+  through the fades.
 - **Memory (L-e).** The prepared-source budget counts sample values
   across channels: the decoded source plus each converted variant, with
   a source or variant shared by several takes counted once. A clip on
