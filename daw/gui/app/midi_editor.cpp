@@ -18,6 +18,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
 #include "supple/views/mouse_map.h"
 
@@ -573,9 +574,36 @@ class Keys : public ui::Node {
 class BarStrip : public ui::Node {
   public:
     static constexpr float kHeight = 16, kGap = 12;
-    BarStrip(const RollState& s, std::vector<int>& labelled, std::vector<std::string>& chords)
-        : Node("midi.bars"), s_(s), labelled_(labelled), chordLabels_(chords) {
+    BarStrip(const RollState& s, MidiEditor& editor, std::vector<int>& labelled,
+             std::vector<std::string>& chords)
+        : Node("midi.bars"), s_(s), editor_(editor), labelled_(labelled), chordLabels_(chords) {
+        interactive = true;
         layout.height = ui::SizeRule::fixed(kHeight);
+    }
+    // The chord row's window x of a project beat.
+    float chordX(double beat) const {
+        const ui::Rect b = bounds();
+        return Geometry{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}}.xOf(beat -
+                                                                                s_.itemPosition);
+    }
+    // A double-click on the chord row edits the chord whose start or name is
+    // under it, as the ruler's chord row does; elsewhere it starts a chord at
+    // the grid beat there.
+    bool onPointer(const ui::PointerEvent& e) override {
+        const ui::Rect b = bounds();
+        if (e.type != ui::PointerEvent::Type::Down || e.button != 1 || e.clicks != 2 ||
+            e.pos.y < b.y + kHeight || e.pos.x < b.x + kKeysWidth || s_.chords.empty())
+            return false;
+        std::optional<double> beat;
+        for (const ChordHit& hit : chordHits_)
+            if (hit.label.contains(e.pos)) beat = hit.beat;
+        if (!beat) {
+            const Geometry g{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}};
+            const double at = std::max(0.0, s_.itemPosition + g.beatOf(e.pos.x));
+            beat = s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
+        }
+        editor_.editChord(*beat, e.pos);
+        return true;
     }
     // The strip's height: the bar numbers, and the chord row while chords
     // hold over the roll (ADR-0095).
@@ -588,6 +616,7 @@ class BarStrip : public ui::Node {
         const Geometry g{s_, area};
         labelled_.clear();
         chordLabels_.clear();
+        chordHits_.clear();
         c.fillRect(whole, t.color("raised"));
         c.fillRect({whole.x, whole.bottom() - 1, whole.w, 1}, t.color("rule"));
         c.fillRect({area.x - 1, whole.y, 1, whole.h}, t.color("rule"));
@@ -645,6 +674,7 @@ class BarStrip : public ui::Node {
             if (end < row.x) continue;
             if (m.text.empty()) {
                 c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint"));
+                chordHits_.push_back({m.beat, {x - 4, row.y, 8, row.h}});
                 continue;
             }
             const ui::Rect cell{x + 1, row.y + 2, std::max(0.0f, end - x - 2), row.h - 5};
@@ -657,6 +687,9 @@ class BarStrip : public ui::Node {
             // A name too long for its cell ends in an ellipsis, or goes.
             const float shown = std::min(room, cell.right() - 4 - textX);
             const std::string fit = c.elide(m.text, ui::Font::Ui, size, std::max(0.0f, shown));
+            const float fitW = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
+            chordHits_.push_back(
+                {m.beat, {x - 4, row.y, std::max(8.0f, textX + fitW + 8 - (x - 4)), row.h}});
             if (fit.empty()) continue;
             c.text({textX, row.y, shown + 4, row.h - 1}, fit, ui::Font::Ui, size,
                    t.color(m.known ? "ink" : "ink-quiet"), ui::kLeft | ui::kMiddle);
@@ -664,9 +697,15 @@ class BarStrip : public ui::Node {
         }
         c.restore();
     }
+    struct ChordHit {
+        double beat = 0;  // the chord point's project beat
+        ui::Rect label;   // its start and name, as the last paint drew them
+    };
     const RollState& s_;
+    MidiEditor& editor_;
     std::vector<int>& labelled_;
     std::vector<std::string>& chordLabels_;
+    std::vector<ChordHit> chordHits_;
 };
 
 // ----------------------------------------------------------------- velocity lane
@@ -1122,7 +1161,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     rollPane_ = &left;
     left.layout.dir = ui::Layout::Dir::Column;
     left.layout.width = ui::SizeRule::fraction();
-    bars_ = &left.emplace<BarStrip>(state_, barLabels_, chordLabels_);
+    bars_ = &left.emplace<BarStrip>(state_, *this, barLabels_, chordLabels_);
     auto& rollRow = left.emplace<ui::Node>("midi.rollrow");
     rollRow.layout.dir = ui::Layout::Dir::Row;
     rollRow.layout.height = ui::SizeRule::fraction();
@@ -1532,6 +1571,19 @@ Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVe
             state_.selected.insert(static_cast<std::size_t>(i.asInt()));
     if (!text_ || !text_->focused()) reloadText();
     return {};
+}
+
+void MidiEditor::editChord(double beat, ui::Point at) {
+    views::openChordField(
+        root_,
+        {[this]() -> const model::Session& { return app_.head(); },
+         [this](const std::string& command, json::Value args) {
+             auto r = dispatcher_.execute({command, std::move(args), kOrigin});
+             if (!r && actions_.onError) actions_.onError("Chord: " + r.error().message);
+             return static_cast<bool>(r);
+         },
+         [this](double b) { return bars_ ? static_cast<BarStrip*>(bars_)->chordX(b) : 0.0f; }},
+        beat, at);
 }
 
 namespace {

@@ -1605,8 +1605,11 @@ window the strip grows by an 18-unit chord row under the numbers: each chord
 a cell to the next chord point, in the ruler's cell and letters ("?" after a
 symbol this build cannot read), a "no chord" point a short faint tick, and a
 cell that starts left of the roll keeps its name at the roll's edge; names
-that do not fit end in an ellipsis, or go, as in the ruler. The row
-only shows the chords; they are edited in the ruler.
+that do not fit end in an ellipsis, or go, as in the ruler. A double-click
+on a chord's start or name opens the ruler's chord field
+(`views::openChordField`) with its symbol, and elsewhere in the row an empty
+one at the grid beat under the pointer; Enter and Tab work as in the ruler.
+Chords are moved and deleted in the ruler.
 
 **The key button** (`midi.key`, in the header after Quantize, with the
 header buttons' size and ink) names the key at the item's start ("C minor";

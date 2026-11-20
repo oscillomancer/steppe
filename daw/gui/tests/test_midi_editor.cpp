@@ -28,6 +28,7 @@
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
 #include "supple/views/mouse_map.h"
 
@@ -258,6 +259,49 @@ TEST_CASE("MIDI editor: the strip over the roll numbers the project's bars, spar
     CHECK(bars.front() == 1);
     for (std::size_t i = 1; i < bars.size(); ++i) CHECK(bars[i] == bars[i - 1] + 2);
     f.snapshot("midi-bar-strip.png");
+}
+
+TEST_CASE("MIDI editor: a double-click on the strip's chords edits them with the chord field") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));  // the item starts at beat 4
+    f.editor->state().pixelsPerBeat = 80;
+    f.editor->state().scrollBeat = -0.25;
+    f.exec("chord.set", R"({"at":4,"symbol":"Cmaj7"})");
+    f.frame();
+    const ui::Rect strip = f.root->find("midi.bars")->bounds();
+    const float row = strip.y + 16 + 9;  // the chord row, under the bar numbers
+    auto x = [&](double projectBeat) { return f.at(projectBeat - 4, 60).x; };
+    auto chord = [&](double beat) { return views::chordSymbolAt(f.app->head(), beat); };
+    auto type = [&](const char* text, int key) {
+        f.root->frame(false);
+        f.root->text(text);
+        f.root->key(key);
+        f.frame();
+    };
+    // On a chord's name: the ruler's chord field, holding it.
+    f.pointer(ui::PointerEvent::Type::Down, {x(4.1), row}, 2);
+    f.pointer(ui::PointerEvent::Type::Up, {x(4.1), row}, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText() == "Cmaj7");
+    type("Dmin7", SDLK_RETURN);
+    CHECK_FALSE(f.root->popupOpen());
+    CHECK(chord(4) == "Dm7");
+    // Away from a name: a chord at the grid beat there; Tab writes it and
+    // moves on to the next bar.
+    const double grid = f.editor->state().grid;
+    REQUIRE(grid > 0);
+    const double at = std::round(6.6 / grid) * grid;
+    f.pointer(ui::PointerEvent::Type::Down, {x(6.6), row}, 2);
+    f.pointer(ui::PointerEvent::Type::Up, {x(6.6), row}, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText().empty());
+    type("G7", SDLK_TAB);
+    CHECK(chord(at) == "G7");
+    REQUIRE(f.root->find("chord-field"));
+    type("C", SDLK_RETURN);
+    CHECK(chord(8) == "C");  // bar 3
+    CHECK(f.editor->chordLabels() == std::vector<std::string>{"Dm7", "G7", "C"});
 }
 
 TEST_CASE("MIDI editor: a chord name too long for its cell in the strip ends in an ellipsis") {
