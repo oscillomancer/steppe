@@ -7,7 +7,9 @@ using only the public commands and what their descriptions say. Scenes and clips
 are made with scene.* and clip.*, MIDI is written into clips in notation and edited
 with the content commands, and the scenes are launched on the dummy audio backend:
 a quantized launch, a stop, a `once` clip ending, a return to the arrangement,
-read back with launch.state. Then the scenes become a song (scene.insert,
+read back with launch.state. A performance is captured (launch.capture) and committed
+to the timeline (launch.commit), and the committed timeline renders as what was
+launched. Then the scenes become a song (scene.insert,
 scene.capture, arrangement.build), chords are written over it, and offline renders
 of the arrangement are measured against what the scenes hold: the same song laid by
 hand renders bit-identically, a clip playing live changes nothing in a render, and
@@ -24,8 +26,10 @@ commands report, which depend on the tempo map and not on the clock.
 
 import argparse
 import json
+import struct
 import tempfile
 import time
+from array import array
 from pathlib import Path
 
 from mcp_arrangement import Client
@@ -95,12 +99,15 @@ TIMEOUT = 120.0
 
 
 class Launcher(Journey):
-    def state(self):
+    def state_result(self):
         """launch.state without a transcript line: it is polled."""
         response = self.c.send("tools/call", {"name": "exec", "arguments": {
             "command": "launch.state", "args": {}}})["result"]
         assert not response.get("isError"), response
-        return {row["track"]: row for row in response["structuredContent"]["tracks"]}
+        return response["structuredContent"]
+
+    def state(self):
+        return {row["track"]: row for row in self.state_result()["tracks"]}
 
     def wait(self, what, condition):
         """Poll launch.state until `condition(state)`; the timeout only ends a hang."""
@@ -111,6 +118,34 @@ class Launcher(Journey):
                 return state
             assert time.monotonic() < deadline, f"never saw: {what}: {state}"
             time.sleep(0.02)
+
+    def beat(self):
+        """The transport's song position, without a transcript line: it is polled."""
+        response = self.c.send("tools/call", {"name": "exec", "arguments": {
+            "command": "transport.get", "args": {}}})["result"]
+        assert not response.get("isError"), response
+        return response["structuredContent"]["beat"]
+
+    def launch_when_ready(self, command, args, note):
+        """A launch right after the transport started is refused with launch.later: the
+        transport is still relocating, and the hint says to launch again in a moment."""
+        deadline = time.monotonic() + TIMEOUT
+        refused = False
+        while True:
+            response = self.c.send("tools/call", {"name": "exec", "arguments": {
+                "command": command, "args": args}})["result"]
+            result = response["structuredContent"]
+            if not response.get("isError"):
+                self.c.transcript.append((note, "exec", {"command": command, "args": args},
+                                          result))
+                return result
+            assert result["code"] == "launch.later" and result["hint"], result
+            if not refused:
+                refused = True
+                self.c.transcript.append((note + " (refused while the transport relocated)",
+                                          "exec", {"command": command, "args": args}, result))
+            assert time.monotonic() < deadline, f"still relocating: {result}"
+            time.sleep(0.05)
 
     def described(self):
         return self.exec("session.describe", {}, "Read the session.")["text"]
@@ -125,6 +160,52 @@ class Launcher(Journey):
 
     def lead_points(self):
         return self.exec("context.get", {"from": 0, "to": 400}, "Read the lead sheet.")["points"]
+
+
+def samples(result):
+    """The interleaved samples of a rendered WAV (float32 or 16, 24 or 32-bit integer)."""
+    data = Path(result["path"]).read_bytes()
+    assert data[:4] == b"RIFF" and data[8:12] == b"WAVE", "a WAV file"
+    at, fmt, body, sub = 12, None, None, None
+    while at + 8 <= len(data):
+        name, size = data[at:at + 4], struct.unpack("<I", data[at + 4:at + 8])[0]
+        if name == b"fmt ":
+            fmt = struct.unpack("<HHIIHH", data[at + 8:at + 24])
+            if fmt[0] == 0xFFFE:  # extensible: the sample format is the GUID's first field
+                sub = struct.unpack("<H", data[at + 8 + 24:at + 8 + 26])[0]
+        elif name == b"data":
+            body = data[at + 8:at + 8 + size]
+        at += 8 + size + (size & 1)
+    tag, channels, rate, _, _, bits = fmt
+    tag = sub or tag
+    if tag == 3 and bits == 32:
+        values = array("f")
+        values.frombytes(body[:len(body) // 4 * 4])
+        return list(values), channels, rate
+    step = bits // 8
+    scale = float(1 << (bits - 1))
+    out = [int.from_bytes(body[i:i + step], "little", signed=True) / scale
+           for i in range(0, len(body) - step + 1, step)]
+    return out, channels, rate
+
+
+def difference(a, b, spans):
+    """The largest sample difference between two renders inside the given spans (seconds)."""
+    (xs, channels, rate), (ys, other, _) = samples(a), samples(b)
+    assert channels == other, (channels, other)
+    worst = 0.0
+    for start, end in spans:
+        first, last = int(start * rate) * channels, min(int(end * rate) * channels, len(xs), len(ys))
+        assert last > first, (start, end, len(xs), len(ys))
+        worst = max(worst, max(abs(x - y) for x, y in zip(xs[first:last], ys[first:last])))
+    return worst
+
+
+def energy(result, start, end):
+    """The root mean square of a span (seconds) of a render."""
+    values, channels, rate = samples(result)
+    part = values[int(start * rate) * channels:int(end * rate) * channels]
+    return (sum(v * v for v in part) / max(len(part), 1)) ** 0.5
 
 
 def bar_aligned(beat, bars=1):
@@ -257,6 +338,91 @@ def live(j, ids):
     state = j.wait("every track follows the arrangement",
                    lambda s: all(r["plays"] == "arrangement" for r in s.values()))
     assert all("queued" not in r and "clip" not in r for r in state.values()), state
+
+
+def performance(j, ids):
+    """Capture a performance and commit it to the timeline: it renders as what was launched."""
+    before = j.described()
+    j.refused("launch.commit", {}, "launch.capture", "Committing before anything is captured.")
+
+    # Play from the start: stop, seek to the first bar, then keep what is launched.
+    j.exec("transport.stop", {}, "Stop, and go back to the start.")
+    j.exec("transport.seek", {"beat": 0}, "Seek to the first bar.")
+    assert not j.state_result()["capturing"]
+    began = j.exec("launch.capture", {"on": True}, "Start capturing the launches.")
+    assert began["on"] and began["from"] == 0.0, began
+    assert j.state_result()["capturing"], "launch.state says a capture is on"
+    first = j.launch_when_ready("launch.scene", {"scene": "sc_1"}, "Launch the Verse.")
+    assert first["started"] and first["beat"] == 0.0, first
+    j.wait("the Verse plays", lambda s: all(r["plays"] == "clip" for r in s.values()))
+    second = j.launch_when_ready("launch.scene", {"scene": "sc_2"}, "Launch the Chorus.")
+    switch = second["beat"]
+    assert not second["started"] and bar_aligned(switch) and switch > 0.0, second
+    # Let the Chorus play a bar, then stop capturing.
+    deadline = time.monotonic() + TIMEOUT
+    while j.beat() < switch + 4.0:
+        assert time.monotonic() < deadline, "the Chorus never played a bar"
+        time.sleep(0.02)
+    ended = j.exec("launch.capture", {"on": False}, "Stop capturing.")
+    assert not ended["on"] and ended["from"] == 0.0 and ended["to"] >= switch + 4.0, ended
+    assert not j.state_result()["capturing"]
+    # Back to the arrangement while the transport runs: a launch given while it is stopped
+    # would stay queued. The capture has ended, so this is not kept.
+    j.exec("launch.arrangement", {}, "Everything back to the arrangement.")
+    j.wait("every track follows the arrangement",
+           lambda s: all(r["plays"] == "arrangement" for r in s.values()))
+    j.exec("transport.stop", {}, "Stop the transport.")
+    verse_bars = int(switch // 4)
+    chorus_bars = int((ended["to"] - switch + 1e-6) // 4)
+    end_beat = switch + 4.0 * chorus_bars
+    assert verse_bars >= 1 and chorus_bars >= 1, (switch, ended)
+
+    # Commit: ordinary items, one undo step, laid out by running time.
+    committed = j.exec("launch.commit", {}, "Write the performance onto the timeline.")
+    assert committed["tracks"] == ["tr_1", "tr_2", "tr_3"] and len(committed["items"]) == 6, \
+        committed
+    assert committed["from"] == 0.0 and committed["to"] == ended["to"], committed
+    after = j.described()
+    assert after != before
+    # Each track switches at the launch: a Verse item up to the switch bar, a Chorus item from it.
+    bar = f"bar {int(switch // 4) + 1}"
+    lines = after.splitlines()
+    for track in ("tr_1", "tr_2", "tr_3"):
+        head = next(i for i, line in enumerate(lines) if line.startswith(f"  {track} "))
+        spans = [line.strip().split(" (")[0].split(" ", 1)[1] for line in lines[head + 1:head + 3]]
+        assert len(spans) == 2 and spans[0].split("–")[1] == bar and \
+            spans[1].split("–")[0] == bar, (track, spans, bar)
+
+    # It renders as what was launched: the Verse, then the Chorus.
+    heard = j.render(end_beat=end_beat)
+    seconds = end_beat * 60.0 / BPM
+    switch_seconds = switch * 60.0 / BPM
+    assert energy(heard, 0.0, switch_seconds) > 0.01, "the Verse is heard"
+    assert energy(heard, switch_seconds, seconds) > energy(heard, 0.0, switch_seconds), \
+        "the Chorus is louder than the Verse"
+    # Committing again writes the same performance over itself.
+    j.exec("launch.commit", {}, "Commit again: it writes the same performance over itself.")
+    assert digest(j.render(end_beat=end_beat)) == digest(heard), "committing twice changes nothing"
+    # One undo step each; redo restores them.
+    j.undo()
+    j.undo()
+    assert j.described() == before, "launch.commit is one undo step"
+    j.redo()
+    assert j.described() == after
+    assert digest(j.render(end_beat=end_beat)) == digest(heard), "redo restores the render"
+    j.undo()
+    assert j.described() == before
+
+    # The same song laid out by the scenes renders the same away from the switch.
+    j.exec("arrangement.build", {"sequence": [{"scene": "sc_1", "bars": verse_bars},
+                                               {"scene": "sc_2", "bars": chorus_bars}]},
+           "The scenes laid out for the bars that were launched.")
+    laid = j.render(end_beat=end_beat)
+    margin = 0.02  # the switch crossfades are 5 ms
+    worst = difference(heard, laid, [(margin, switch_seconds - margin),
+                                     (switch_seconds + margin, seconds - margin)])
+    assert worst < 1e-6, f"the committed performance differs from the scenes by {worst}"
+    j.undo_to(before)
 
 
 def song(j, ids):
@@ -423,6 +589,7 @@ def main():
             ids = scenes(j)
             refusals_before(j, ids)
             live(j, ids)
+            performance(j, ids)
             first, built, mix = song(j, ids)
             by_hand(j, first, built, mix)
             round_trip(j, first, ids)
