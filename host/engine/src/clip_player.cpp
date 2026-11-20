@@ -288,6 +288,15 @@ void applyLaunch(Plan&, Node& n, const LaunchAction& a) SUPPLE_RT {
 
 void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     LaunchState L = old.launch;
+    // A retiring player belongs to the plan that kept it.
+    if (L.fadeFrom == -3) L.fadeFrom = -2;
+    // The playing audio clip, if the new plan keeps it only to fade out.
+    int retiring = -1;
+    if (L.kind == LaunchState::Kind::Clip && L.player >= 0)
+        for (std::size_t k = 0; k < n.retiring.size(); ++k)
+            if (n.retiring[k].clip == old.players[static_cast<std::size_t>(L.player)].clip)
+                retiring = static_cast<int>(k);
+    const LaunchState before = L;
     const auto remap = [&](int player) {
         return player < 0 ? player
                           : playerOf(n, old.players[static_cast<std::size_t>(player)].clip);
@@ -302,6 +311,13 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     if (lost) {
         L = LaunchState{};
         n.releaseHeld = true;  // the clip's notes end
+        if (retiring >= 0) {   // its audio crossfades into the arrangement
+            L.fadeFrom = -3;
+            L.fadeRetiring = retiring;
+            L.fadeStart = kFadeAtNext;
+            L.fadeAnchorSample = before.anchorSample;
+            L.fadeUnanchored = before.unanchored;
+        }
     }
     n.launch = L;
     // A launch reaching it early (prelaunch), by clip id too.
@@ -406,9 +422,11 @@ void playerFrame(const ClipPlayer& pl, std::int64_t anchor, bool unanchored, std
 
 void launchAudio(Plan&, Node& n, Stereo& into, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
     n.arrangementGain = nullptr;
-    if (n.players.empty()) return;
-    const LaunchState& L = n.launch;
     const std::int64_t song0 = pos - n.timelineShift;
+    if (n.launch.fadeFrom == -3 && n.launch.fadeStart == kFadeAtNext) n.launch.fadeStart = song0;
+    // A frozen node fades its print in after writing it (retiringIntoPrint).
+    if (n.players.empty() && (n.launch.fadeFrom != -3 || n.frozenAudio)) return;
+    const LaunchState& L = n.launch;
     const std::int64_t F = n.launchFadeFrames;
     const bool fading = L.fadeFrom != -2 && song0 < L.fadeStart + F;
     const bool arrangement = L.kind == LaunchState::Kind::Arrangement;
@@ -437,6 +455,62 @@ void launchAudio(Plan&, Node& n, Stereo& into, std::int64_t pos, std::uint32_t f
         if (!pl.midi && pl.chain < 0)
             for (std::uint32_t i = 0; i < frames; ++i)
                 playerFrame(pl, L.fadeAnchorSample, false, song0 + i, 1.0 - x(i), into, i);
+    }
+    if (fading && L.fadeFrom == -3) {
+        const ClipPlayer& pl = n.retiring[static_cast<std::size_t>(L.fadeRetiring)];
+        for (std::uint32_t i = 0; i < frames; ++i)
+            playerFrame(pl, L.fadeAnchorSample, L.fadeUnanchored, song0 + i, 1.0 - x(i), into, i);
+    }
+}
+
+void retiringIntoPrint(Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
+    const LaunchState& L = n.launch;
+    if (L.fadeFrom != -3 || L.fadeStart == kFadeAtNext) return;
+    const std::int64_t song0 = pos - n.timelineShift;
+    const std::int64_t F = n.launchFadeFrames;
+    if (F <= 0 || song0 >= L.fadeStart + F) return;
+    const ClipPlayer& pl = n.retiring[static_cast<std::size_t>(L.fadeRetiring)];
+    for (std::uint32_t i = 0; i < frames; ++i) {
+        const double x = std::clamp(double(song0 + i - L.fadeStart) / double(F), 0.0, 1.0);
+        n.sum.l[i] = static_cast<float>(double(n.sum.l[i]) * x);
+        n.sum.r[i] = static_cast<float>(double(n.sum.r[i]) * x);
+        // Where the clip was heard: through the chain the print replaces.
+        playerFrame(pl, L.fadeAnchorSample, L.fadeUnanchored, song0 + i - n.latChain, 1.0 - x,
+                    n.sum, i);
+    }
+}
+
+void addRetiring(Plan& to, const Plan& from) {
+    for (Node& n : to.nodes) {
+        const Node* old = nullptr;
+        for (const Node& o : from.nodes)
+            if (o.id == n.id) old = &o;
+        if (!old) continue;
+        for (const ClipPlayer& pl : old->players) {
+            if (pl.midi || pl.chain >= 0 || !pl.audio.data || playerOf(n, pl.clip) >= 0) continue;
+            ClipPlayer r;
+            r.clip = pl.clip;
+            r.midi = false;
+            r.once = pl.once;
+            r.muted = pl.muted;
+            r.audio.data = pl.audio.data;
+            r.audio.offset = pl.audio.offset;
+            r.audio.mode = pl.audio.mode;
+            r.audio.gainL = pl.audio.gainL;
+            r.audio.gainR = pl.audio.gainR;
+            r.periodFrames = pl.periodFrames;
+            r.loopStartFrames = pl.loopStartFrames;
+            r.loopFrames = pl.loopFrames;
+            r.loopOn = pl.loopOn;
+            n.retiring.push_back(std::move(r));
+        }
+        // A node left without players has no launch buffers of its own.
+        if (!n.retiring.empty() && n.players.empty()) {
+            n.launchFadeFrames =
+                std::max<std::int64_t>(1, time::samplesAt(kLaunchFadeSeconds, to.rate));
+            n.arrangementGains.assign(to.block, 1.0f);
+            n.launchBuf.init(to.block);
+        }
     }
 }
 

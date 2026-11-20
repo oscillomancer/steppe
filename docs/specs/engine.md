@@ -446,8 +446,14 @@ the same.*
   `once` clip past its length) or `stopped`. Plans carry it across swaps
   by node id and clip id (§1.6 of engine.md). A clip the new plan no
   longer has (removed, or now past the memory budget) ends at that swap
-  and its track returns to the arrangement, without the switch fade: the
-  new plan holds no player to fade out.
+  and its track returns to the arrangement. An audio clip without a take
+  chain crossfades out over the switch fade: before publishing a plan,
+  `Engine::load` copies into each node the previous plan's audio players
+  whose clip it lacks (`Node::retiring`, `addRetiring`; main thread, never
+  launched or listed), and the carry fades from that copy
+  (`LaunchState::fadeFrom` −3), starting at the first block the node
+  plays after adoption. A clip with a take chain stops at the swap (its
+  chain's instances leave with the plan), and a MIDI clip's notes end.
 - **A launch is a timed message (L-a, B1).** Its target is `{epoch,
   stream sample}`, the coordinate plan handoffs use (`handAt`,
   `handEpoch`). A scene launch has one target for all its tracks: the
@@ -549,9 +555,10 @@ the same.*
   and names the skipped clips in a `launch.memory` warning. A launch of a
   skipped clip is refused with `launch.memory`.
 - **Frozen tracks.** Freezing returns the track to the arrangement at the
-  swap that adopts the frozen plan, in both executors (no switch fade:
-  the frozen node has no players to fade out), and drops its queued
-  launch. `launch.clip` on a frozen track
+  swap that adopts the frozen plan, in both executors, and drops its
+  queued launch. An audio clip it played crossfades into the print as a
+  removed one does into the arrangement (`retiringIntoPrint`, at the
+  print's chain delay). `launch.clip` on a frozen track
   fails with `track.frozen`, and `launch.scene` skips it with a
   `track.frozen` warning.
 - **Audio clips play at the take's own rate,** with its playrate, pitch

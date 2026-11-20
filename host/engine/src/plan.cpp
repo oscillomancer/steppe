@@ -3873,6 +3873,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                         ? node.frozenAudio->channels[c][static_cast<std::size_t>(frame)]
                         : 0.f;
         }
+        if (transport.playing) retiringIntoPrint(node, pos, n);  // after a freeze (ADR-0097)
     } else {
         node.utility.set(node.phaseInvert, node.mono, p.smoothFrames);
         if (!node.utility.transparent())

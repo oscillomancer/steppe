@@ -890,6 +890,8 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
         }
         rateScheduling_.store(true, std::memory_order_release);
     }
+    // The playing clips this plan lacks fade out from copies (ADR-0097).
+    if (!plans_.empty()) detail::addRetiring(*plan, *plans_.back());
     latest_ = std::make_shared<const model::Session>(session);
     compiled_ = latest_;
     rateDeferredFrom_.reset();  // the deferred edit compiled with this one

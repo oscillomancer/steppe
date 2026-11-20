@@ -581,6 +581,48 @@ TEST_CASE("a plan swap keeps what a track plays, and a clip removed returns it t
     }
 }
 
+TEST_CASE("removing the playing clip, or freezing its track, crossfades to the arrangement" *
+          doctest::description("rt")) {
+    // A ramp clip on a track whose arrangement is silent: from the block the
+    // edit is adopted, the clip fades out over the 5 ms switch fade, by the
+    // fade weight, instead of stopping dead.
+    for (const char* edit : {"clip.remove", "track.freeze"})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO(std::string(edit) << ", anticipative " << options.anticipative);
+            Project p;
+            // An item far past the test, so the track can freeze.
+            auto item = j(R"({"track": "tr_1", "bar": 20})");
+            item["audio_file"] = p.ramp("late.wav", 4800).string();
+            p.runArgs("item.add", item);
+            auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+            args["audio_file"] = p.ramp("ramp.wav", 48000).string();
+            p.runArgs("clip.add", args);
+            p.run("clip.set", R"({"clip": "cl_1", "length": 0.25})");  // 12000 frames
+            const model::Session s = p.app->head();
+            p.run(edit, std::string(edit) == "clip.remove" ? R"({"clip": "cl_1"})"
+                                                           : R"({"track": "tr_1"})");
+            const model::Session edited = p.app->head();
+            const std::int64_t frames = 48000 * 4;
+            const std::int64_t at = (96000 + 20000) / 128;  // the edit's cycle
+            const Live live = playLive(s, p.app->projectDir(), options, 128, frames,
+                                       {{20, {request("tr_1", "cl_1")}}, {at, {}, {}, &edited}});
+            const auto out = [&](std::int64_t t) {
+                return double(live.left[std::size_t(t + std::int64_t(live.latency))]);
+            };
+            const auto ratio = [&](std::int64_t t) {
+                return out(t) / double(rampAt((t - 96000) % 12000));
+            };
+            // The fade's end: the first silent frame after the edit.
+            std::int64_t z = at * 128;
+            while (z < frames - 48000 && out(z) != 0.0) ++z;
+            REQUIRE(z < frames - 48000);
+            CHECK(ratio(z - 241) == doctest::Approx(1.0).epsilon(1e-4));
+            CHECK(ratio(z - 120) == doctest::Approx(0.5).epsilon(0.01));
+            CHECK(ratio(z - 1) == doctest::Approx(1.0 / 240).epsilon(0.05));
+            for (std::int64_t t = z; t < z + 24000; ++t) REQUIRE(out(t) == 0.0);
+        }
+}
+
 TEST_CASE("a launch while stopped applies at the play start" * doctest::description("rt")) {
     Project p;
     twoTracks(p);

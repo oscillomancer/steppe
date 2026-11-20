@@ -330,7 +330,9 @@ Clips replace that with an **ordered budget**:
   by node id and clip id (§1.6 of engine.md). A clip the new plan no
   longer has (removed, or now past the memory budget) ends at that swap
   and its track returns to the arrangement, without the switch fade: the
-  new plan holds no player to fade out.
+  new plan holds no player to fade out. (Amended 2026-11-20: an audio
+  clip without a take chain now fades out from a copy the new plan keeps;
+  see engine.md §1.4.2.)
 - **A launch is a timed message (L-a, B1).** Its target is `{epoch,
   stream sample}`, the coordinate plan handoffs use (`handAt`,
   `handEpoch`). A scene launch has one target for all its tracks: the

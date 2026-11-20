@@ -852,11 +852,16 @@ struct LaunchState {
     // the anchor, and a loop clip plays there by its phase (L-c).
     bool unanchored = false;
     // The switch's crossfade: what was left (-1 the arrangement, a player,
-    // -2 nothing) and the song sample where the switch began.
+    // -2 nothing, -3 the retiring player `fadeRetiring`) and the song sample
+    // where the switch began (kFadeAtNext: the next block the node plays).
     int fadeFrom = -2;
     std::int64_t fadeStart = 0, fadeAnchorSample = 0;  // the left player's anchor
     double fadeAnchorBeat = 0;
+    int fadeRetiring = -1;        // fadeFrom -3: its Node::retiring entry
+    bool fadeUnanchored = false;  // and whether it played unanchored
 };
+// LaunchState::fadeStart: the crossfade begins at the next block played.
+inline constexpr std::int64_t kFadeAtNext = INT64_MIN;
 // What a launch does to one channel, at the block boundary where the
 // channel's song position reaches `anchorSample` (engine.md §1.4.2).
 struct LaunchAction {
@@ -1032,6 +1037,10 @@ struct Node {
     // The clip launcher (ADR-0097): the channel's clips, what it plays, and
     // this block's arrangement gain (null: 1 throughout) with its buffers.
     std::vector<ClipPlayer> players;
+    // Audio players this plan keeps only to fade out: the previous plan's
+    // whose clip this one lacks (a removal, or a freeze), without their take
+    // chain (addRetiring; never launched, listed or fed).
+    std::vector<ClipPlayer> retiring;
     LaunchState launch;
     // Clip chains (ADR-0097, amended 2026-11-20): the most latency among its
     // clips' chains. A launch reaches the node that much early as well
@@ -1580,6 +1589,12 @@ bool clipLanePosition(const ClipLaneSource& c, std::uint32_t frame, std::int64_t
 // A render without launches plays the arrangement only: its plan keeps no
 // clip chain (plan.cpp; before prepare).
 void dropClipChains(Plan& p);
+// Main thread, before `to` is published: each channel's audio players in
+// `from` whose clip `to` lacks, kept in `to` to fade out (Node::retiring).
+void addRetiring(Plan& to, const Plan& from);
+// A frozen node's print, written over its sum: crossfaded in from a
+// retiring player while the switch fade runs (`pos`: the block's sample).
+void retiringIntoPrint(Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT;
 // One stage's modulation events for a block (ADR-0096, plan.cpp): after its
 // automation, at each point of the absolute grid; `origin` is the plan's
 // first sample. Exposed for tests.

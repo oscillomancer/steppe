@@ -473,7 +473,7 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   recordInputs, recordRack, inputLatency, inputBuf, latIn, latChain,
                                   timelineShift, sum, preFx, preFader, post, postKey, events,
                                   nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
-                                  takeChains, players, launch, launchLead, launchNext,
+                                  takeChains, players, retiring, launch, launchLead, launchNext,
                                   launchNextValid, launchFadeFrames, arrangementGain,
                                   arrangementGains, launchBuf, clipVoices, clipWindow, postItems,
                                   itemShift, items, mix, silentFrom, silentTo, dropItems,
@@ -502,6 +502,7 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
     d.put(a, "midiBases", std::array{n.midiLiveBase, n.midiRoutedBase});
     // The clip launcher (ADR-0097): the compiled players; what plays is state.
     d.put(a, "players", static_cast<std::uint64_t>(n.players.size()));
+    d.put(a, "retiring", static_cast<std::uint64_t>(n.retiring.size()));
     for (std::size_t k = 0; k < n.players.size(); ++k) {
         const ClipPlayer& pl = n.players[k];
         const auto pa = at(a, "player" + std::to_string(k));

@@ -203,8 +203,10 @@ instructions are in `docs/guides/installing.md`.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - a master playrate refuses launches (`launch.playrate`);
-    - freezing, or removing the playing clip, returns the track to the
-      arrangement without the switch fade;
+    - freezing, or removing the playing clip, crossfades an audio clip
+      out, but a clip with a take chain stops dead (its chain leaves with
+      the plan), and so does one removed by an edit that comes before the
+      previous edit's plan is adopted;
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
