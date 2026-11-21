@@ -421,12 +421,17 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 // The notes are copied as they were played (a launched clip is not followed
                 // until X4): say when the clip's key is not the project's under the item, once
                 // for the stretch however many periods (items) it is laid as.
-                if (midi && !mismatchGiven)
+                if (midi && !mismatchGiven) {
+                    detail::KeyMismatch what;
                     if (auto note = detail::mismatchNote(now, clipId, clip, beat0, beat1 - beat0,
-                                                         phase, path)) {
+                                                         phase, path, &what)) {
                         ctx.warn(note->code, note->message, note->path);
+                        if (!done.mismatches) done.mismatches.emplace();
+                        done.mismatches->push_back(
+                            {clipId.str(), std::move(what.clipKey), std::move(what.key), what.bar});
                         mismatchGiven = true;
                     }
+                }
                 done.items.push_back(t.create(std::move(item)).str());
                 return {};
             };

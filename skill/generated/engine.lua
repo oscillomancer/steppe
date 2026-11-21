@@ -1153,6 +1153,7 @@ q = nil
 ---@field tracks string[]
 ---@field items string[]
 ---@field sections table[]
+---@field mismatches? table[] Each launched stretch of a MIDI clip copied under a key that is not the clip's, as its context.mismatch warning says it.
 ---@field from number
 ---@field to number
 ---@field warnings? table[]

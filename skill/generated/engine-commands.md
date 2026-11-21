@@ -11124,6 +11124,33 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "additionalProperties": false
       }
     },
+    "mismatches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "committed_mismatch",
+        "properties": {
+          "clip": {
+            "type": "string"
+          },
+          "clip_key": {
+            "type": "string",
+            "description": "The clip's key."
+          },
+          "key": {
+            "type": "string",
+            "description": "The project's key there, which differs."
+          },
+          "bar": {
+            "type": "integer",
+            "description": "The first project bar where they differ."
+          }
+        },
+        "required": ["clip", "clip_key", "key", "bar"],
+        "additionalProperties": false
+      },
+      "description": "Each launched stretch of a MIDI clip copied under a key that is not the clip's, as its context.mismatch warning says it."
+    },
     "from": {
       "type": "number"
     },

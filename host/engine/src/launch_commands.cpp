@@ -535,10 +535,24 @@ void registerLaunchCommands(cmd::Registry& registry) {
                            .field("start", &CommittedSection::start, schema::number())
                            .field("end", &CommittedSection::end, schema::number())
                            .build();
+        auto mismatch =
+            schema::object<CommittedMismatch>("committed_mismatch")
+                .field("clip", &CommittedMismatch::clip, schema::string())
+                .field("clip_key", &CommittedMismatch::clipKey,
+                       schema::string().doc("The clip's key."))
+                .field("key", &CommittedMismatch::key,
+                       schema::string().doc("The project's key there, which differs."))
+                .field("bar", &CommittedMismatch::bar,
+                       schema::integer().doc("The first project bar where they differ."))
+                .build();
         c.result = schema::object<CommitDone>("launch_commit")
                        .field("tracks", &CommitDone::tracks, schema::arrayOf(schema::string()))
                        .field("items", &CommitDone::items, schema::arrayOf(schema::string()))
                        .field("sections", &CommitDone::sections, schema::arrayOf(section))
+                       .field("mismatches", &CommitDone::mismatches,
+                              schema::arrayOf(mismatch).doc(
+                                  "Each launched stretch of a MIDI clip copied under a key that "
+                                  "is not the clip's, as its context.mismatch warning says it."))
                        .field("from", &CommitDone::from, schema::number())
                        .field("to", &CommitDone::to, schema::number())
                        .build();

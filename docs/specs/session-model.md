@@ -1231,7 +1231,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   one of its tracks is launched again or the capture ends, in the same
   undo step; a clip launched alone, or some of a scene's, writes none, and
   committing again keeps a section already there; answers `{tracks, items,
-  sections: [{scene, region, start, end}], from, to}`. `performance` is filled from the
+  sections: [{scene, region, start, end}], mismatches?: [{clip, clip_key,
+  key, bar}], from, to}`, where `mismatches` lists each stretch that gave
+  `context.mismatch`, as the warning words it. `performance` is filled from the
   capture and recorded in history: `{sample_rate, start, frames, loop?,
   launches: [{frame, track, action, clip?, scene?, anchor, anchor_beat}]}`;
   `scene` names the scene when `launch.scene` launched it (none for a
