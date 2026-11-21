@@ -19957,7 +19957,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `take` | string |  |  |  | Take id, e.g. "tk_1". |
-| `pitches` | array |  |  |  |  |
+| `pitches` | array |  |  |  | Recorded by history, not given: each heard note's written pitch, where it is heard and the pitch it sounded as, so a replay writes what was heard. A replay that finds other notes is take.bake_replay. |
+| `pitches[].was` | integer |  | 0.0..127.0 |  |  |
+| `pitches[].at` | integer |  |  |  |  |
+| `pitches[].pitch` | integer |  | 0.0..127.0 |  |  |
 
 ### Result
 

@@ -436,7 +436,9 @@ std::vector<midi::Note> soundingNoteList(const Session& s, Id itemId, int ppq,
     if (!src) return out;
     const double itemStart = itemSpan(s, *item).startBeat;
     const auto heard = soundingNotes(s, itemId, -1e18, 1e18);
-    const auto tick = [&](double beat) { return static_cast<std::int64_t>(std::llround(beat * ppq)); };
+    const auto tick = [&](double beat) {
+        return static_cast<std::int64_t>(std::llround(beat * ppq));
+    };
     for (std::size_t k = 0; k < heard.size(); ++k) {
         const SoundingNote& h = heard[k];
         midi::Note note = src->sequence.notes[h.note];

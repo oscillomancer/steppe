@@ -1564,7 +1564,8 @@ TEST_CASE("laying a clip copies its notes and warns when its key is not the proj
     // The followed block says the same for a program: the two keys and the bar.
     const json::Value* mismatch = laid.find("followed")->find("mismatch");
     REQUIRE(mismatch);
-    CHECK(json::writeCompact(*mismatch) == R"({"kind":"key","clip_key":"D minor","key":"C minor","bar":5})");
+    CHECK(json::writeCompact(*mismatch) ==
+          R"({"kind":"key","clip_key":"D minor","key":"C minor","bar":5})");
     // The clip's own follow is the default: a clip that follows the key is mapped, with no
     // mismatch warning (the notes were moved), and follow: none overrides it.
     l.run("clip.set", R"({"clip": "cl_1", "follow": "key"})");
@@ -2146,6 +2147,54 @@ TEST_CASE("take.bake unrolls a looped item whose passes sound differently") {
     CHECK(pitchesOf(l, item) == "31@0");
 }
 
+TEST_CASE("take.bake unrolls when a note held into the item's start sounds other than its passes") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("key.set", R"({"at": 15, "tonic": "F", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const std::string item = laid["items"].at(0).find("item")->asString();
+    const model::Id take = *l.head().items.find(id(item.c_str()))->activeTake;
+    // Two beats into the note: it is held in at the item's start, heard from beat 14 under C
+    // minor, while every whole pass (from beat 18) is under F minor.
+    l.run("take.set", R"({"take": ")" + take.str() + R"(", "start_offset": 2})");
+    const std::string before = soundsOf(l, item);
+    auto baked = l.run("take.bake", R"({"take": ")" + take.str() + R"("})");
+    CHECK(baked["unrolled"].asBool());
+    CHECK_FALSE(l.head().items.find(id(item.c_str()))->loop);
+    // The held-in fragment keeps its pitch (C minor's, 31) and now starts at the item's start;
+    // the passes keep F minor's 36. Written as one pitch per note it would sound 36 first.
+    CHECK(before == "31@-2 36@2 36@6 36@10 36@14");
+    CHECK(soundsOf(l, item) == "31@0 36@2 36@6 36@10 36@14");
+    l.run("history.undo", "{}");
+    CHECK(soundsOf(l, item) == before);
+}
+
+TEST_CASE("take.bake refuses a replay over other notes than it was recorded over") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    // The recorded pitches are positional: each names the written pitch and the place it was
+    // heard at. Four notes sound here (36@0 40@1 43@2 48@3); these name other ones.
+    const std::string wrongCount =
+        R"({"take": "tk_1", "pitches": [{"was": 36, "at": 0, "pitch": 39}]})";
+    CHECK(l.fails("take.bake", wrongCount).code == "take.bake_replay");
+    const std::string wrongNotes =
+        R"({"take": "tk_1", "pitches": [{"was": 37, "at": 0, "pitch": 40},
+            {"was": 40, "at": 960, "pitch": 43}, {"was": 43, "at": 1920, "pitch": 46},
+            {"was": 48, "at": 2880, "pitch": 51}]})";
+    CHECK(l.fails("take.bake", wrongNotes).code == "take.bake_replay");
+    CHECK(l.head().takes.find(id("tk_1"))->follow == model::ClipFollow::Key);
+    // The record history keeps replays.
+    const std::string right =
+        R"({"take": "tk_1", "pitches": [{"was": 36, "at": 0, "pitch": 39},
+            {"was": 40, "at": 960, "pitch": 43}, {"was": 43, "at": 1920, "pitch": 46},
+            {"was": 48, "at": 2880, "pitch": 51}]})";
+    l.run("take.bake", right);
+    CHECK(pitchesOf(l, "it_1") == "39@0 43@1 46@2 51@3");
+}
+
 TEST_CASE("take.bake makes a pooled source the take's own copy") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
@@ -2163,6 +2212,31 @@ TEST_CASE("take.bake makes a pooled source the take's own copy") {
     CHECK(pitchesOf(l, a) == "39@0");  // written now
     CHECK(pitchesOf(l, b) == "36@0");  // the other item's notes are untouched
     CHECK(soundsOf(l, b) == "39@0");   // and still follow
+}
+
+TEST_CASE("take.bake of an unrolled pooled item leaves no unused source behind") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("key.set", R"({"at": 24, "tonic": "F", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    auto one = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4, "pooled": true})");
+    auto two = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 4, "pooled": true})");
+    const auto takeOf = [&](const json::Value& laid) {
+        return *l.head()
+                    .items.find(id(laid.find("items")->at(0).find("item")->asString().c_str()))
+                    ->activeTake;
+    };
+    const model::Id shared = *l.head().takes.find(takeOf(one))->source;
+    REQUIRE(l.head().takes.find(takeOf(two))->source == shared);
+    // The clip's take shares the source too; with the clip gone only the two items read it.
+    l.run("clip.remove", R"({"clip": "cl_1"})");
+    REQUIRE(l.head().midi.find(shared) != nullptr);
+    auto baked = l.run("take.bake", R"({"take": ")" + takeOf(one).str() + R"("})");
+    CHECK(baked.find("unrolled")->asBool());
+    CHECK(l.head().midi.find(shared) != nullptr);  // the other item still reads it
+    l.run("take.bake", R"({"take": ")" + takeOf(two).str() + R"("})");
+    CHECK(l.head().midi.find(shared) == nullptr);  // nothing reads it now
 }
 
 TEST_CASE("midi.edit acts on written notes, reading a following take's own context") {

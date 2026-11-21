@@ -1230,3 +1230,50 @@ TEST_CASE(
         }
     }
 }
+
+TEST_CASE("take context: a period under 1/960 or a huge phase cannot hang a reader (round 85)") {
+    const Rig r = rig(varied());
+    const auto set = [&](std::optional<double> period, double phase) {
+        return edit<Take>(r.s, r.take, [&](Take& t) {
+            t.context = {keyPt(0, "C", "major"), chordPt(0, "C")};
+            t.contextPeriod = period;
+            t.contextPhase = phase;
+        });
+    };
+    CHECK(set(8.0, 0));
+    CHECK(says(set(1e-12, 0), "at least 1/960"));
+    CHECK(says(set(0.0005, 0), "at least 1/960"));
+    CHECK(says(set(1.0 / 960.0 * 1.5, 0), "1/960 grid"));
+    CHECK(says(set(8.0, 1e18), "within a billion beats"));
+    CHECK(set(1.0 / 960.0, 0));
+
+    SUBCASE("the load fit drops them, with a note") {
+        Take take;
+        take.source = Id{Kind::Midi, 1};
+        take.context = {keyPt(0, "C", "major")};
+        take.contextPeriod = 1e-12;
+        take.contextPhase = 1e18;
+        const auto notes = fitTakeContext(take, TakeHome::Item);
+        CHECK(notes.size() == 2);
+        CHECK_FALSE(take.contextPeriod);
+        CHECK(take.contextPhase == 0);
+    }
+    SUBCASE("contextOver is bounded whatever a take holds") {
+        Take take;
+        take.context = {keyPt(0, "C", "major"), chordPt(0, "C")};
+        take.contextPeriod = 1e-12;  // never read as a period
+        bool truncated = false;
+        CHECK_FALSE(contextOver(take, 0, 64, &truncated).empty());
+        take.contextPeriod = 1.0 / 960.0;
+        take.context = {keyPt(0, "C", "major")};
+        // 64 beats of 1/960-beat repeats is 61440 of them: walked, and the points merge on the
+        // grid, so the answer stays small.
+        CHECK(contextOver(take, 0, 64, &truncated).size() <= kMaxContextPoints * 2);
+        // A span past any double's step stops with truncated set instead of walking on.
+        contextOver(take, 0, 1e18, &truncated);
+        CHECK(truncated);
+        take.contextPeriod = 8.0;
+        contextOver(take, 1e18, 1e18 + 1e6, &truncated);
+        CHECK(truncated);
+    }
+}

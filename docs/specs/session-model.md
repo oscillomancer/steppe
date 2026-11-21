@@ -2516,7 +2516,8 @@ harmony::Followed soundingKey(std::span<const ContextPoint> context, ClipFollow 
                               double songBeat, int channel, int key);
 // The take's context over context beats [u0, u1), repeats unrolled, re-based to
 // start at 0, with the key and the chord in force at u0 carried in at 0.
-std::vector<ContextPoint> contextOver(const Take& take, double u0, double u1);
+std::vector<ContextPoint> contextOver(const Take& take, double u0, double u1,
+                                      bool* truncated = nullptr);
 ```
 
 - Every caller takes places and sounding keys from `soundingNotes`: the engine's
@@ -2539,7 +2540,9 @@ std::vector<ContextPoint> contextOver(const Take& take, double u0, double u1);
 **Invariants (checked at commit).**
 - **Points.** At most one point of a type at a beat, and at most 4096 of a
   type. With `context_period`, each lies in `[0, context_period)`.
-- **`context_period`** is finite and positive; `context_phase` is finite.
+- **`context_period`** is finite, on the 1/960 grid and at least 1/960 of a beat; `context_phase`
+  is finite and within a billion beats. (`contextOver` walks at most a million repeats and sets
+  `truncated` past them, so no value in a file can send a reader round a loop without end.)
 - **`follow` other than `none`** needs a readable key in the context (its first
   key holds before it). A clip keeps its own rule, a readable key at 0
   (`clip.no_key`).
@@ -2551,9 +2554,9 @@ what changed; undo restores it. A context edit that leaves no readable key reset
 `follow` to `none`, with `take.follow_reset` naming the take.
 
 **Load.** A point against the rules is dropped with `take.context_dropped`; a
-`context_period` that is not finite and positive is dropped (the context then
-does not repeat) and a `context_phase` that is not finite reads as 0, each with
-`take.context_dropped`; a `follow` that is unknown, on a non-MIDI take, or with
+`context_period` that is not finite or under 1/960 of a beat is dropped (the context then
+does not repeat; one off the grid is rounded onto it) and a `context_phase` that is not
+finite or beyond a billion beats reads as 0, each with `take.context_dropped`; a `follow` that is unknown, on a non-MIDI take, or with
 no readable key reads as `none` with `take.follow_reset`. The open never fails
 for any of this.
 
@@ -2634,7 +2637,8 @@ the notes as written. History records the text.
 its `follow` to `none`; its context stays, for display.
 - A pooled source is first made the take's own copy.
 - Every heard note, chased and crossing fragments included, is counted. When
-  every pass of a looped item sounds alike, the loop stays; otherwise the item
+  every pass of a looped item sounds alike, and every fragment held into the item's
+  start sounds as the pass that follows it, the loop stays; otherwise the item
   is unrolled (loop off, its passes written out, each at its place), its other
   takes repeated alike, as X2 laid items; the answer says `unrolled: true`. So a
   render after the bake equals the render before it.
@@ -2642,9 +2646,13 @@ its `follow` to `none`; its context stays, for display.
   `follow` is `none`: `take.not_following`. On a take that is not its item's
   active take (what sounds is the active take's): `take.not_active`, hint:
   `take.activate` it first.
+- A pooled source no take reads any more is removed (the bake's own copy replaces it).
 - One undo step, with the copy and the unroll. Its history step records the
-  notes it wrote (resolved), so a replay on another branch writes what the user
-  heard.
+  notes it wrote over (resolved: `pitches`, one `{was, at, pitch}` per heard note, in
+  `soundingNotes` order: the pitch written, where it is heard in 1/960 beats, and the
+  pitch it sounded as), so a replay on another branch writes what the user heard. A replay
+  that finds other notes there (a count or a `was` or `at` that differs) is refused,
+  `take.bake_replay`; `pitches` is for history, a caller leaves it out.
 
 **`midi.get`** answers written notes by default.
 - `sounding: true` answers what sounds, in item time. On a looped item whose

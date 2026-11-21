@@ -155,11 +155,17 @@ struct TakeSetArgs {
     std::optional<model::ClipFollow> follow;  // none | key | chords
 };
 
+// One heard note as a bake wrote it: the pitch it was written as, where it is heard (in 1/960
+// beats of the song) and the pitch it sounded as.
+struct BakedPitch {
+    std::int64_t was = 0, at = 0, pitch = 0;
+};
 struct TakeBakeArgs {
     std::string take;
-    // What history records: the pitch each heard note sounded as, in `soundingNotes` order, so a
-    // replay on another branch writes what the user heard. Leave it out: the command reads it.
-    std::optional<std::vector<std::int64_t>> pitches;
+    // What history records, so a replay on another branch writes what the user heard: each heard
+    // note, in `soundingNotes` order, with the note it was written as and where. A replay that
+    // finds other notes there is refused (take.bake_replay). Leave it out: the command reads it.
+    std::optional<std::vector<BakedPitch>> pitches;
 };
 struct TakeBakeResult {
     detail::FollowedInfo followed;
@@ -169,7 +175,16 @@ struct TakeBakeResult {
 schema::Schema<TakeBakeArgs> takeBakeArgsSchema() {
     return schema::object<TakeBakeArgs>("take_bake_args")
         .field("take", &TakeBakeArgs::take, idArg("tk", "Take"))
-        .field("pitches", &TakeBakeArgs::pitches, schema::arrayOf(schema::integer().range(0, 127)))
+        .field(
+            "pitches", &TakeBakeArgs::pitches,
+            schema::arrayOf(schema::object<BakedPitch>("baked_pitch")
+                                .field("was", &BakedPitch::was, schema::integer().range(0, 127))
+                                .field("at", &BakedPitch::at, schema::integer())
+                                .field("pitch", &BakedPitch::pitch, schema::integer().range(0, 127))
+                                .build())
+                .doc("Recorded by history, not given: each heard note's written pitch, where "
+                     "it is heard and the pitch it sounded as, so a replay writes what was "
+                     "heard. A replay that finds other notes is take.bake_replay."))
         .build();
 }
 
@@ -674,37 +689,47 @@ void registerTakeCommands(cmd::Registry& registry) {
             std::vector<detail::ClipNote> notes;
             TakeBakeResult result;
             result.followed = detail::followedBlock(s, *owner, "/take", notes);
-            std::vector<std::int64_t> sounded;
-            sounded.reserve(heard.size());
+            std::vector<BakedPitch> baked;
+            baked.reserve(heard.size());
             for (const auto& h : heard)
-                sounded.push_back(h.channel == 9 ? h.written : h.sounds.pitch);
+                baked.push_back({h.written, std::llround(std::max(h.songBeat, itemStart) * 960.0),
+                                 h.channel == 9 ? h.written : h.sounds.pitch});
             if (a.pitches) {
-                if (a.pitches->size() != heard.size())
+                // A replay writes what the user heard, if these are the notes it heard.
+                bool same = a.pitches->size() == heard.size();
+                for (std::size_t k = 0; same && k < heard.size(); ++k)
+                    same = (*a.pitches)[k].was == baked[k].was && (*a.pitches)[k].at == baked[k].at;
+                if (!same)
                     return Error("take.bake_replay",
-                                 "the recorded pitches name " + std::to_string(a.pitches->size()) +
-                                     " heard notes where " + std::to_string(heard.size()) +
-                                     " sound here",
+                                 "the notes heard here are not the notes the bake was recorded "
+                                 "over (" +
+                                     std::to_string(a.pitches->size()) + " recorded, " +
+                                     std::to_string(heard.size()) + " sound here)",
                                  "/pitches", "run take.bake without pitches");
-                sounded = *a.pitches;
+                baked = *a.pitches;
             }
-            // The pitch each note keeps, and whether the passes of a looped item sound alike.
+            std::vector<std::int64_t> sounded;
+            sounded.reserve(baked.size());
+            for (const BakedPitch& b : baked) sounded.push_back(b.pitch);
+            // The pitch each note keeps, and whether every pass and every fragment held into
+            // the item's start sounds as the note keeps (else the item is written out).
             const model::LeadPitches lead =
                 model::leadPitches(heard, sounded, itemStart, seq.notes.size());
             const auto& keep = lead.keep;
-            const bool alike = lead.alike;
+            const bool alike = lead.alike && lead.fragmentsAlike;
             auto& txn = engine.txn();
-            // The take's own copy of a pooled source.
+            // The take's own copy of a pooled source; the pooled original goes when no take
+            // reads it any more (checked at the end).
+            std::vector<Id> replaced;
             Id sourceId = *tk->source;
             if (source->pooled) {
                 model::MidiSource own = *source;
                 own.pooled = false;
                 sourceId = txn.create(std::move(own));
                 txn.modify<model::Take>(*id, [&](model::Take& k) { k.source = sourceId; });
-                bool shared = false;
-                for (const auto& other : s.takes)
-                    if (other.id != *id && other.value->source == tk->source) shared = true;
-                if (!shared) txn.remove<model::MidiSource>(*tk->source);
+                replaced.push_back(*tk->source);
             }
+            std::vector<model::ClipContextNote> fitNotes;
             if (alike) {
                 txn.modify<model::MidiSource>(sourceId, [&](model::MidiSource& m) {
                     for (std::size_t i = 0; i < m.sequence.notes.size() && i < keep.size(); ++i)
@@ -713,24 +738,14 @@ void registerTakeCommands(cmd::Registry& registry) {
                     m.sequence.canonicalize();
                 });
             } else {
-                // A pass sounds differently from another: the item is written out pass by pass,
-                // each note at its place, with the loop off (a render after equals before).
-                const auto tick = [&](double beat) { return std::llround(beat * seq.ppq); };
+                // A pass or a fragment sounds differently from another: the item is written out
+                // note by note, each at its place, with the loop off (a render after equals
+                // the render before).
                 midi::Sequence out;
                 out.ppq = seq.ppq;
                 out.length = std::llround(itemBeats * seq.ppq);
                 detail::heardMidi(s, item, *tk, seq, 0.0, out);  // controls and sysex, placed
-                out.notes.clear();
-                for (std::size_t k = 0; k < heard.size(); ++k) {
-                    const auto& h = heard[k];
-                    midi::Note note = seq.notes[h.note];
-                    if (note.channel != 9) note.pitch = static_cast<std::uint8_t>(sounded[k]);
-                    const double on = std::max(h.songBeat, itemStart) - itemStart;
-                    note.start = tick(on);
-                    note.length =
-                        std::max<std::int64_t>(0, tick(h.endBeat - itemStart) - note.start);
-                    out.notes.push_back(note);
-                }
+                out.notes = model::soundingNoteList(s, *owner, seq.ppq, &sounded);
                 out.canonicalize();
                 txn.modify<model::MidiSource>(
                     sourceId, [&](model::MidiSource& m) { m.sequence = std::move(out); });
@@ -755,13 +770,14 @@ void registerTakeCommands(cmd::Registry& registry) {
                         own.pooled = false;
                         target = txn.create(std::move(own));
                         txn.modify<model::Take>(other, [&](model::Take& k) { k.source = target; });
+                        replaced.push_back(*ot->source);
                     }
                     txn.modify<model::MidiSource>(
                         target, [&](model::MidiSource& m) { m.sequence = std::move(plain); });
                 }
                 // Each take's offset and rate go back to 0 and 1 with the context rescaled to
                 // match, so every written note keeps its context beat (display, and any follow
-                // that is turned on again).
+                // that is turned on again); the rescaled context is made fit (on the grid).
                 for (const Id takeId : item.takes) {
                     const model::Take* t0 = s.takes.find(takeId);
                     if (!t0 || !model::takeIsMidi(*t0)) continue;
@@ -772,17 +788,27 @@ void registerTakeCommands(cmd::Registry& registry) {
                         k.contextPhase = (k.contextPhase + k.startOffset) / rate;
                         k.startOffset = 0;
                         k.playrate = 1.0;
+                        for (auto& n : model::fitTakeContext(k, model::TakeHome::Item))
+                            fitNotes.push_back(std::move(n));
                     });
                 }
                 txn.modify<model::Item>(*owner, [](model::Item& it) { it.loop = false; });
                 result.unrolled = true;
             }
+            // A pooled original that no take reads now goes.
+            const model::Session after = txn.preview();
+            for (const Id old : replaced) {
+                bool used = false;
+                for (const auto& t : after.takes) used |= t.value->source == old;
+                if (!used) txn.remove<model::MidiSource>(old);
+            }
+            for (const auto& n : fitNotes) ctx.warn(n.code, n.message, "/take");
             txn.modify<model::Take>(*id,
                                     [](model::Take& k) { k.follow = model::ClipFollow::None; });
-            // History records the pitches it wrote.
+            // History records the notes it wrote over, and the pitches.
             if (!a.pitches) {
                 TakeBakeArgs resolved = a;
-                resolved.pitches = std::move(sounded);
+                resolved.pitches = std::move(baked);
                 ctx.setResolvedArgs(takeBakeArgsSchema().encode(resolved));
             }
             for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);

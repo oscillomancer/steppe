@@ -2133,7 +2133,7 @@ q = nil
 
 ---@class Steppe.take_bake_args
 ---@field take string Take id, e.g. "tk_1".
----@field pitches? integer[]
+---@field pitches? table[] Recorded by history, not given: each heard note's written pitch, where it is heard and the pitch it sounded as, so a replay writes what was heard. A replay that finds other notes is take.bake_replay.
 
 ---@class Steppe.take_bake_result
 ---@field followed table
