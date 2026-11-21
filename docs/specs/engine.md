@@ -399,14 +399,17 @@ until it is released.
   editor moved is that edit repeated and is not passed on (review round
   81b, E5). A barrier that drops queued edits, a deactivation or a full
   queue ends every editor gesture still open, so a lost `endEdit` leaves
-  no gesture open in the stage. Within a grab the plug-in's state is
-  captured at `endEdit`, not at each `performEdit`: a capture mid-drag was
-  a step of its own, and its plan swap dropped the drag's gesture. In the
-  anticipative executor the edit's state flag captures the plug-in state
-  while the rendered gesture waits to be heard, and that step's plan swap
-  usually drops the gesture: the edit is recorded as the plug-in's state
-  and writes no point, or now and then as the state and then the
-  parameter edit (STATUS). Without the filter an echoing plug-in under
+  no gesture open in the stage, and so does closing the editor with a grab
+  open (review round 81c, E6). A processing VST3's editor edit does not flag
+  the plug-in's state as changed: the gesture's commit saves the state, and
+  a capture of its own was a step that swapped the plan, which dropped the
+  rendered gesture before it was heard (the anticipative executor; review
+  round 81, E2). It asks the stage to process instead, so a bypassed stage
+  still reports it. Only an instance that is not processing flags its state,
+  and so does one that stops processing with edits still queued. Outputs a
+  plan swap drops (pending, or drained under an older plan) that carry an
+  edit capture their plug-in's state, so the edit still reaches the
+  history, as a state step. Without the filter an echoing plug-in under
   modulation added a history step per echo, stopped or playing, and wrote
   points in a writing mode (the gui-lead's second walk, defect 1).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds

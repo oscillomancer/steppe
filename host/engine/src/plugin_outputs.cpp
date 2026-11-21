@@ -276,9 +276,42 @@ void EngineApp::consumePluginOutputs() {
             app.engine_->armOutputWake(epoch, target);
         }
     } arm{*this};
-    if (generation != outputGeneration_ || patches != outputPatches_ || epoch != outputEpoch_) {
+    // Outputs a plan swap makes stale are dropped, and with them any edit they
+    // carried (a VST3 editor's edit the anticipative executor rendered and
+    // nobody heard yet). A processing VST3 does not flag its state for an
+    // editor edit (its gesture's commit saves it), so a VST3's state is
+    // captured instead, and the edit still reaches the model and the history,
+    // as a state step. A CLAP plug-in's stale outputs are dropped as before.
+    const auto dirty = [&](model::Id fx) {
+        if (std::find(pendingDirtyStates_.begin(), pendingDirtyStates_.end(), fx) ==
+            pendingDirtyStates_.end())
+            pendingDirtyStates_.push_back(fx);
+    };
+    // Only edits count: gestures, and values of parameters that are not
+    // read-only (a meter's outputs never enter the model).
+    const auto edits = [&](const auto& output) {
+        auto* instance = pool_->find(output.fx);
+        if (!instance || instance->info().format != "vst3") return false;
+        if (output.event.kind == Kind::GestureBegin || output.event.kind == Kind::GestureEnd)
+            return true;
+        if (output.event.kind != Kind::ParamValue || !global(output.event)) return false;
+        for (const auto& info : instance->params())
+            if (info.id == output.event.paramId) return !(info.flags & CLAP_PARAM_IS_READONLY);
+        return false;
+    };
+    const auto dropStale = [&] {
+        for (const auto& output : pendingOutputs_)
+            if (edits(output)) dirty(output.fx);
+        for (const auto& [key, gesture] : outputGestures_) {
+            auto* instance = pool_->find(key.first);
+            if ((gesture.begun || gesture.latest) && instance && instance->info().format == "vst3")
+                dirty(key.first);
+        }
         outputGestures_.clear();
         pendingOutputs_.clear();
+    };
+    if (generation != outputGeneration_ || patches != outputPatches_ || epoch != outputEpoch_) {
+        dropStale();
         outputGeneration_ = generation;
         outputPatches_ = patches;
         outputEpoch_ = epoch;
@@ -300,15 +333,17 @@ void EngineApp::consumePluginOutputs() {
     if (engine_ && loadedHead_ && loadedHead_->version != head().version) {
         // A failed head rebuild leaves an older plan playing. Its outputs must
         // not edit the newer model merely because the published generation stayed.
-        outputGestures_.clear();
-        pendingOutputs_.clear();
+        dropStale();
         outputOverflow_ = false;
         return;
     }
     for (const auto& output : taken.events) {
+        if (!head().fx.contains(output.fx)) continue;
         if (output.planGeneration != generation || output.patchSequence != patches ||
-            output.epoch != epoch || !head().fx.contains(output.fx))
+            output.epoch != epoch) {
+            if (edits(output)) dirty(output.fx);
             continue;
+        }
         if (pendingOutputs_.size() == kPendingOutputs) {
             ++consumerDrops_;
             overflow = true;

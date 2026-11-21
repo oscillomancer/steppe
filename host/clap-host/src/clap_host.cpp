@@ -2252,6 +2252,7 @@ int Instance::nextTimerMs() const {
 
 bool Instance::processRequested() const SUPPLE_RT {
     if (paramProcessRequested_.load(std::memory_order_acquire)) return true;
+    if (vst3_ && vst3_->processRequested()) return true;
     if (remote_) return remote_->processRequested();
     return hostState_ && hostState_->processRequested.load(std::memory_order_acquire);
 }
@@ -2287,10 +2288,11 @@ bool Instance::claimOwner(const void* owner) SUPPLE_RT {
 
 bool Instance::takeProcessRequest() SUPPLE_RT {
     const bool params = paramProcessRequested_.exchange(false, std::memory_order_acq_rel);
+    const bool editor = vst3_ && vst3_->takeProcessRequest();
     const bool requested = remote_ ? remote_->takeProcessRequest()
                                    : hostState_ && hostState_->processRequested.exchange(
                                                        false, std::memory_order_acq_rel);
-    return params || requested;
+    return params || editor || requested;
 }
 
 bool Instance::sleeping() const SUPPLE_RT {

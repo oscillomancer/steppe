@@ -35,6 +35,11 @@ class PendingEdits {
         pending_.push_back(change);
         return true;
     }
+    // Audio thread: changes queued and not yet popped.
+    bool queued() const SUPPLE_RT {
+        Change change;
+        return queue_.peek(change);
+    }
     bool pop(Change& change) SUPPLE_RT {
         while (queue_.pop(change)) {
             consumed_.store(change.sequence, std::memory_order_release);

@@ -815,8 +815,7 @@ instructions are in `docs/guides/installing.md`.
   stepped plug-in's quantized report all count), so a modulated parameter
   adds no undo step and writes no point. Its own editor edits are recorded:
   a VST3 editor's beginEdit/performEdit/endEdit are its gesture, as a CLAP
-  plug-in's (in the anticipative executor such a VST3 edit is recorded as
-  the plug-in's state instead: see Known limits). Depth and enabled are mix values (no
+  plug-in's, in both executors and bridged. Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
@@ -1454,13 +1453,6 @@ Library boundaries:
   while its backlog has room.
 
 Engine and hosting:
-- A VST3 editor's edit in the anticipative executor is recorded as the
-  plug-in's state and writes no point in touch or latch, or now and then
-  as the state and then the parameter edit (two steps): its state flag
-  captures the state on the main thread while the rendered gesture waits
-  to be heard, and that step's plan swap usually drops the gesture (review
-  round 81, E2; as before, with the processor's echo). In-callback and
-  bridged it is the plug-in's gesture, one step.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue

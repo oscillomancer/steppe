@@ -136,6 +136,22 @@ class Handler : public Steinberg::U::Implements<Steinberg::U::Directly<vst::ICom
     // performEdit outside beginEdit/endEdit is a gesture of its own.
     std::function<bool(vst::ParamID, vst::ParamValue, PendingEdits::Kind)> edit;
     std::vector<vst::ParamID> open;  // main thread: parameters inside beginEdit
+    // The instance's processing flag and its process request (State's).
+    const std::atomic<bool>* processing = nullptr;
+    std::atomic<bool>* request = nullptr;
+    // An editor edit's state (review round 81b and the batch 3 follow-up): a
+    // processing instance reports the edit as its gesture, and that commit
+    // carries the state, so it asks to process (a bypassed stage then runs)
+    // and nothing captures the state apart, which in the anticipative
+    // executor raced the rendered gesture and dropped it. An instance that is
+    // not processing reports nothing: its state is captured (`edited`).
+    void editorEdit() {
+        if (processing && processing->load(std::memory_order_acquire))
+            request->store(true, std::memory_order_release);
+        else
+            edited = true;
+        notifyMain();
+    }
     Steinberg::tresult PLUGIN_API beginEdit(vst::ParamID id) override {
         if (std::find(open.begin(), open.end(), id) != open.end()) return kResultOk;
         if (!edit || !edit(id, 0, PendingEdits::Begin)) return kResultFalse;
@@ -147,13 +163,7 @@ class Handler : public Steinberg::U::Implements<Steinberg::U::Directly<vst::ICom
         const bool accepted = edit && (inside || edit(id, 0, PendingEdits::Begin)) &&
                               edit(id, value, PendingEdits::Edited) &&
                               (inside || edit(id, 0, PendingEdits::End));
-        // The state is captured once the gesture ends (review round 81b): a
-        // capture during a drag is a step of its own, and its plan swap
-        // drops the drag's open gesture.
-        if (!inside) {
-            edited = true;
-            notifyMain();
-        }
+        editorEdit();
         return accepted ? kResultOk : kResultFalse;
     }
     Steinberg::tresult PLUGIN_API endEdit(vst::ParamID id) override {
@@ -161,8 +171,7 @@ class Handler : public Steinberg::U::Implements<Steinberg::U::Directly<vst::ICom
         if (it == open.end()) return kResultOk;
         open.erase(it);
         const bool queued = edit && edit(id, 0, PendingEdits::End);
-        edited = true;
-        notifyMain();
+        editorEdit();
         return queued ? kResultOk : kResultFalse;
     }
     Steinberg::tresult PLUGIN_API restartComponent(Steinberg::int32 flags) override {
@@ -486,6 +495,9 @@ struct Vst3Instance::State {
     std::array<vst::ParamID, 16> begun{};
     std::size_t begunCount = 0;
     std::atomic<bool> endGestures{false};
+    // Set while the processor processes (audio thread), and an editor edit's
+    // request to process (main thread, taken by the audio thread).
+    std::atomic<bool> processingNow{false}, editorRequest{false};
     std::atomic<std::uint32_t> dropped{0};
     std::atomic<bool> latencyChanged{false};
     std::atomic<bool> restartWanted{false};  // kLatencyChanged: reactivate to apply
@@ -552,6 +564,8 @@ Result<std::unique_ptr<Vst3Instance>> Vst3Instance::create(const PluginInfo& inf
     }
     if (s.controller) s.controller->setComponentHandler(s.handler);
     // Editor edits reach the processor through the same queue as setParam().
+    s.handler->processing = &s.processingNow;
+    s.handler->request = &s.editorRequest;
     s.handler->edit = [state = &s](vst::ParamID param, vst::ParamValue normalized,
                                    PendingEdits::Kind kind) {
         const bool queued = state->changes.push(param, normalized, kind);
@@ -897,9 +911,26 @@ Status Vst3Instance::loadState(std::span<const std::uint8_t> bytes) {
 bool Vst3Instance::startProcessing() SUPPLE_RT {
     // kNotImplemented means "nothing to do" (the SDK documents it as OK; sfizz returns it).
     const auto result = state_->processor->setProcessing(true);
-    return result == kResultOk || result == Steinberg::kNotImplemented;
+    const bool started = result == kResultOk || result == Steinberg::kNotImplemented;
+    if (started) state_->processingNow.store(true, std::memory_order_release);
+    return started;
 }
-void Vst3Instance::stopProcessing() SUPPLE_RT { state_->processor->setProcessing(false); }
+void Vst3Instance::stopProcessing() SUPPLE_RT {
+    auto& s = *state_;
+    s.processingNow.store(false, std::memory_order_release);
+    s.processor->setProcessing(false);
+    // Editor edits it will now not report: their state is captured instead.
+    if (s.changes.queued()) {
+        s.handler->edited = true;
+        s.handler->notifyMain();
+    }
+}
+bool Vst3Instance::processRequested() const SUPPLE_RT {
+    return state_->editorRequest.load(std::memory_order_acquire);
+}
+bool Vst3Instance::takeProcessRequest() SUPPLE_RT {
+    return state_->editorRequest.exchange(false, std::memory_order_acq_rel);
+}
 void Vst3Instance::reset() SUPPLE_RT {
     // A VST3 has no reset: the notes the host delivered and did not end are
     // remembered, and the next process() prepends their note-offs.
@@ -1414,6 +1445,14 @@ Result<Instance::EditorSize> Vst3Instance::setEditorScale(double scale, double f
 
 void Vst3Instance::closeEditor() {
     auto& s = *state_;
+    // An editor closed mid-drag sends no endEdit (review round 81c E6): its
+    // grabs end here, so the drag is recorded now, not when something else
+    // ends it.
+    if (!s.handler->open.empty()) {
+        s.handler->open.clear();
+        s.endGestures = true;
+        s.handler->editorEdit();
+    }
     if (!s.view) return;
     s.view->removed();
     s.view->setFrame(nullptr);

@@ -155,6 +155,8 @@ TEST_CASE("a VST3 editor's gesture goes out with its block, and a barrier ends o
         return std::vector<OutputEvent>(storage.begin(), storage.begin() + out.count);
     };
     REQUIRE(instance.setParam(2, 0.5));  // a move alone is a gesture of its own
+    // Processing, its state is not flagged apart: the gesture's commit holds it.
+    CHECK_FALSE(instance.takeNotifications().stateDirty);
     auto events = block();
     REQUIRE(events.size() == 3);  // and no report of Level from the processor
     CHECK(events[0].kind == Kind::GestureBegin);
@@ -175,7 +177,14 @@ TEST_CASE("a VST3 editor's gesture goes out with its block, and a barrier ends o
     CHECK(events[0].paramId == 3);
     REQUIRE(instance.setParam(2, 0.95));  // the release no longer opens or ends anything
     CHECK(block().empty());
+    // Processing stops before an edit is reported: its state is flagged.
+    REQUIRE(instance.setParam(2, 0.4));
+    CHECK_FALSE(instance.takeNotifications().stateDirty);
     instance.stopProcessing();
+    CHECK(instance.takeNotifications().stateDirty);
+    // Not processing, an edit is flagged at once.
+    REQUIRE(instance.setParam(2, 0.6));
+    CHECK(instance.takeNotifications().stateDirty);
     instance.deactivate();
 }
 
