@@ -412,7 +412,15 @@ Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id 
     clip.mute = it.mute;
     clip.gainDb = it.gainDb;
     clip.color = it.color;
+    // An item's name is its active take's.
+    if (it.activeTake)
+        if (const model::Take* active = s.takes.find(*it.activeTake)) clip.name = active->name;
     return clip;
+}
+
+void nameItemFromClip(model::EditTxn& t, const model::Clip& clip, const model::Item& item) {
+    if (clip.name.empty() || !item.activeTake) return;
+    t.modify<model::Take>(*item.activeTake, [&](model::Take& k) { k.name = clip.name; });
 }
 
 Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const model::Clip& clip,
@@ -482,6 +490,7 @@ Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const m
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)
         if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+    nameItemFromClip(t, clip, item);
     return t.create(std::move(item));
 }
 
@@ -835,7 +844,8 @@ void registerClipCommands(cmd::Registry& registry) {
             "MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes "
             "rounded up to whole bars; an audio clip in seconds of take time, as long as the "
             "file. From an item, the length, loop and take envelopes convert at the tempo where "
-            "the item sits (ADR-0097). Clips live on channels, one per (track, scene).";
+            "the item sits (ADR-0097); the clip is named as the item is (its active take's name) "
+            "unless name is given. Clips live on channels, one per (track, scene).";
         c.tags = {"clip launcher", "clip"};
         c.args = schema::object<ClipAddArgs>("clip_add_args")
                      .field("track", &ClipAddArgs::track, idArg("tr", "Track"))
@@ -911,7 +921,7 @@ void registerClipCommands(cmd::Registry& registry) {
                 if (!made) return std::move(made).error();
                 made->track = clip.track;
                 made->scene = clip.scene;
-                made->name = clip.name;
+                if (a.name) made->name = *a.name;  // else the item's
                 clip = std::move(*made);
             } else if (a.audioFile) {
                 auto imported = importAudioFile(app, t, s, *a.audioFile);

@@ -406,6 +406,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 item.takes = *copied;
                 for (std::size_t k = 0; k < clip.takes.size(); ++k)
                     if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+                nameItemFromClip(t, clip, item);
                 done.items.push_back(t.create(std::move(item)).str());
                 return {};
             };

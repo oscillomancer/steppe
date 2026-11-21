@@ -153,11 +153,18 @@ double contentLength(const model::Session& s, const model::Take& take);
 Status checkClipTakeUnwarped(const model::Session& s, model::Id take, const std::string& path);
 
 // The clip an item makes (clip.add {item}, scene.capture): its kind, length,
-// loop, takes (copied; a MIDI source with them unless `pooled`), gain, mute and
-// colour. The track, scene, mode and name are the caller's. A warped take is
+// loop, takes (copied; a MIDI source with them unless `pooled`), gain, mute,
+// colour and name (an item's name is its active take's). The track, scene and
+// mode are the caller's, and so is the name when one is given. A warped take is
 // clip.unsupported and takes of both kinds clip.mixed; errors point at `path`.
 Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, model::Id item,
                                  bool pooled, const std::string& path);
+
+// An item made from `clip` (its takes already copied and set on `item`) is
+// named as the clip is: an item's name is its active take's, so the clip's
+// name, when it has one, becomes that take's. A clip without a name leaves the
+// copied take's own.
+void nameItemFromClip(model::EditTxn& t, const model::Clip& clip, const model::Item& item);
 
 // A clip laid on the timeline as an item over [startBeat, endBeat) on the
 // clip's own track (scene.insert; ADR-0097 "Scene <-> section: the rules"):

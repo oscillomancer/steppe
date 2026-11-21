@@ -23,6 +23,11 @@ loop, quantize, gain and content).
 - `clip.move`, `clip.duplicate` (the copy's MIDI is its own unless `pooled`),
   `clip.remove`.
 
+Names go with the material: the items `scene.insert`, `arrangement.build`, `item.add {clip}`
+and `launch.commit` make from a clip are named as it is, and the clips `clip.add {item}` and
+`scene.capture` make from an item are named as it is (an item's name is its active take's,
+`item.set {name}`); `session.describe` shows a named item as `it_3 "Bass line" bar 5–bar 9`.
+
 Content commands take a clip as they take an item: `midi.get`, `midi.write`,
 `midi.edit`, `midi.notes`, take FX and the take's own envelopes. **A clip keeps
 its length under `midi.write`**: notation longer than it is kept but never plays,

@@ -194,7 +194,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "the span, as one looping item when it repeats within it, which needs its period to be "
             "its content: loop off with its length (as clip.add makes it), or loop on over the "
             "whole content with a length of whole repeats (scene.insert.period otherwise). Takes "
-            "are copied, MIDI with them unless pooled. An item already in "
+            "are copied, MIDI with them unless pooled; an item takes its clip's name (its active "
+            "take's) when the clip has one. An item already in "
             "the span on a track that receives a clip is refused (scene.insert.occupied), and "
             "an empty scene (scene.empty). A section named after the scene (name overrides) "
             "is added over the span. One undo step.";
@@ -263,7 +264,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "clip begins at its own start); a region holding no item is scene.capture.empty. "
             "Items on a master are skipped with a warning. Each item becomes a clip as clip.add "
             "{item} makes it (MIDI copied unless pooled; a warped take is clip.unsupported): "
-            "loop mode when it fills the region, once when it is shorter. The scene is added "
+            "loop mode when it fills the region, once when it is shorter, named as the item is "
+            "(its active take's name). The scene is added "
             "after the last, named after the region unless name is given, with its colour. The "
             "region and the items are unchanged. One undo step.";
         c.tags = {"clip launcher", "scene", "arrangement"};

@@ -353,6 +353,7 @@ Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, m
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)
         if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+    nameItemFromClip(t, clip, item);
     const double length = model::itemLengthBeats(s, item);
     const Id it = t.create(std::move(item));
     ItemAddResult r;
@@ -465,7 +466,8 @@ void registerItemCommands(cmd::Registry& registry) {
             "project's tempo (the file's tempo and meter are not applied; a warning says when they "
             "differ), and the item is as long as the file unless length is given. clip: a copy of "
             "that clip's takes, as long as the clip, its loop and take envelopes converted at "
-            "the tempo where the item lands (ADR-0097). A master holds "
+            "the tempo where the item lands (ADR-0097); the item is named as the clip is (its "
+            "active take's name) when the clip has a name. A master holds "
             "audio items only (prints, played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =

@@ -283,7 +283,11 @@ instructions are in `docs/guides/installing.md`.
   wrap too, and render the committed arrangement offline: it matches what
   played exactly away from the switches and to 1e-6 through the fades. A
   scene launched whole also writes a section named after it, as
-  `scene.insert` does. Known limit: the capture logs clips, not the command
+  `scene.insert` does. Names go with the material: an item made from a clip
+  (`item.add {clip}`, `scene.insert`, `arrangement.build`, `launch.commit`) takes the
+  clip's name, a clip made from an item (`clip.add {item}`, `scene.capture`) the
+  item's (an item's name is its active take's), and `session.describe` shows a
+  named item. Known limit: the capture logs clips, not the command
   that launched them, so a scene is recognised by every clip of it starting
   together; a clip launched alone is taken for a scene launch only when it
   is the scene's only clip.

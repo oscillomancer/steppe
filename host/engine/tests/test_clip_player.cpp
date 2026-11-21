@@ -1987,3 +1987,20 @@ TEST_CASE("launch.commit writes a section for each scene launched whole, in the 
         CHECK(done["sections"].at(1).find("start")->asDouble() == doctest::Approx(4));
     }
 }
+
+TEST_CASE("launch.commit names the items after their clips") {
+    Project p;
+    twoTracks(p);
+    p.run("clip.set", R"({"clip": "cl_1", "name": "Riff"})");
+    json::Value args = json::Value::object();
+    args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": 192000,
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]})");
+    json::Value done = p.runArgs("launch.commit", args);
+    REQUIRE(done["items"].size() > 0);
+    const model::Session s = p.app->head();
+    for (const auto& item : done["items"].asArray()) {
+        const model::Item& it = *s.items.find(id(item.asString().c_str()));
+        CHECK(s.takes.find(*it.activeTake)->name == "Riff");
+    }
+}

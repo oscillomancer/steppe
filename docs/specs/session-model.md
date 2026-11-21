@@ -1806,7 +1806,7 @@ present, and the project field `launch_quantize`, written only when not
 | `loop` | `{on, start, length}`: the content window that repeats inside the clip, from the take's start offset; default off. |
 | `mode` | `loop` (default) or `once`. |
 | `quantize` | Overrides `launch_quantize` for this clip: `bar`, `beat`, `1/2` … `1/32`, `none`. |
-| `name`, `color`, `mute`, `gain_db` | As an item's. |
+| `name`, `color`, `mute`, `gain_db` | As an item's. An item has no name field of its own: its name is its active take's (`item.set {name}`), so a clip's name and an item's go with the clip or item they come from (below). |
 
 **The clip's kind and unit.** A clip's `kind` is set when it is made and
 never changes. `length`, `loop` and the clip's take envelopes are in beats
@@ -1824,6 +1824,14 @@ numbers mean. Takes without a source fit either kind.
            "loop": {"on": true, "start": 0.0, "length": 4.0}, "name": "Bass line"}
 }
 ```
+
+**Names between clips and items.** An item's name is its active take's.
+`item.add {clip}`, `scene.insert`, `arrangement.build` and `launch.commit`
+make an item named as its clip is: a clip with a `name` gives it to the
+item's active take; a clip without one leaves the copied take's own.
+`clip.add {item}` and `scene.capture` make a clip named as the item is (its
+active take's name), `clip.add`'s own `name` taking precedence. `session.describe`
+lists a named item as `it_1 "name" bar 1–bar 3`.
 
 **The take owner.** A take belongs to exactly one item or clip
 (`model::takeOwner`); the orphan-take invariant counts both. Moving material
