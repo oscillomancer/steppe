@@ -614,7 +614,7 @@
   {
     "name": "item_add",
     "title": "Add an item on a track: notation, a MIDI or audio file, or a clip's copy.",
-    "description": "position in beats (quarter notes from the start) or bar (1-based). notation: e.g. \"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. clip: a copy of that clip's takes, as long as the clip, its loop and take envelopes converted at the tempo where the item lands (ADR-0097); the item is named as the clip is (its active take's name) when the clip has a name. follow (none, key or chords; default: the clip's own) maps the clip's notes from the key or chords it was written against to those under the item (ADR-0098): notes on channel 10 and clips that cannot follow are copied, and the answer's followed says what was done, by bar. With none the notes are copied as they are and context.mismatch warns when the clip's key, or in the same key its chord, is not the project's under the item. A master holds audio items only (prints, played after its fader); busses hold none. See describe for errors and examples.",
+    "description": "position in beats (quarter notes from the start) or bar (1-based). notation: e.g. \"voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h\" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. clip: a copy of that clip's takes, as long as the clip, its loop and take envelopes converted at the tempo where the item lands (ADR-0097); the item is named as the clip is (its active take's name) when the clip has a name. follow (none, key or chords; default: the clip's own) is set on the laid MIDI takes with the clip's context, so the notes sound as the key or chords under the item say, mapped from those they were written against (ADR-0098, following is playback): the notes stay as written, a context edit moves them, take.bake writes the sounding pitches, and notes on channel 10 and clips that cannot follow sound as written. The answer's followed says how they sound, by bar. With none context.mismatch warns when the clip's key, or in the same key its chord, is not the project's under the item. A master holds audio items only (prints, played after its fader); busses hold none. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "item_add_args",
@@ -803,6 +803,19 @@
           "type": "string",
           "pattern": "^(it|cl)_[0-9]+$",
           "description": "Item or clip id, e.g. \"it_1\" or \"cl_1\"."
+        },
+        "sounding": {
+          "type": "boolean",
+          "description": "Answer what sounds (a following take's notes as they play), in item time, not what is written. A clip is refused: midi.sounding_clip.",
+          "default": false
+        },
+        "from": {
+          "type": "number",
+          "description": "With sounding: the first song beat; the heard notes of from..to answer, passes as they fall."
+        },
+        "to": {
+          "type": "number",
+          "description": "With sounding: the end song beat."
         }
       },
       "required": ["item"],
@@ -817,7 +830,7 @@
   {
     "name": "midi_write",
     "title": "Replace an item's or clip's MIDI with notation (keeping its place and length).",
-    "description": "The item or clip keeps its length: notation longer than it is stored but does not play past its end, and midi.beyond_length warns. Lengthen it first (item.set length, clip.set length), or write the notation to fit. See describe for errors and examples.",
+    "description": "The item or clip keeps its length: notation longer than it is stored but does not play past its end, and midi.beyond_length warns. Lengthen it first (item.set length, clip.set length), or write the notation to fit. The notes are stored as written: on a take that follows (take.set {follow}) its context and follow stay, so the new notes sound as the context says, and the answer's follows says key or chords. Chord symbols in the text do not change a take's context (take.set does). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "midi_write_args",

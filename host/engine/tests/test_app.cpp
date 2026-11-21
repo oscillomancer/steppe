@@ -1513,6 +1513,52 @@ TEST_CASE("recorded MIDI notes are clipped at punch and overdub item edges") {
     CHECK(clipped->length == 192);
 }
 
+TEST_CASE("midi_overdub never merges into an item whose take follows: the notes are a new item") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    call("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Keys"}, "as": "k"},
+        {"command": "item.add", "args": {"track": "${k.track}", "bar": 1, "notation": "voice v; 1: C3:w"}},
+        {"command": "track.set", "args": {"track": "${k.track}", "record_mode": "midi_overdub"}}]})");
+    call("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    call("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    const model::Session before = app->head();
+    RecordedTake played;
+    played.track = model::Id{model::Kind::Track, 1};
+    played.isMidi = true;
+    played.sampleRate = 48000;
+    played.frames = 144000;
+    played.segments = {{0, 0}};
+    played.midi = {{48000, 0, {0x90, 74, 100}}, {72000, 0, {0x80, 74, 0}}};
+    auto recorded = app->commitTakes({played});
+    REQUIRE_MESSAGE(recorded, (recorded ? std::string() : recorded.error().toString()));
+    const model::Session& s = app->head();
+    REQUIRE(s.items.size() == 2);  // the played notes are an item of their own
+    // The following item is as it was: its notes, take and follow.
+    const model::Item& old = *s.items.find(model::Id{model::Kind::Item, 1});
+    CHECK(old.takes.size() == 1);
+    CHECK(s.takes.find(*old.activeTake)->follow == model::ClipFollow::Key);
+    CHECK(s.midi.find(*s.takes.find(*old.activeTake)->source)->sequence ==
+          before.midi.find(*before.takes.find(*old.activeTake)->source)->sequence);
+    // The new item follows nothing and holds no context, and says why it is not merged.
+    const model::Item& fresh = *s.items.find(model::Id{model::Kind::Item, 2});
+    const model::Take& take = *s.takes.find(*fresh.activeTake);
+    CHECK(take.follow == model::ClipFollow::None);
+    CHECK(take.context.empty());
+    REQUIRE(recorded->size() == 1);
+    REQUIRE((*recorded)[0].warnings);
+    CHECK((*recorded)[0].warnings->at(0).code == "record.follow_kept");
+    // A track whose item does not follow still merges (the case above).
+}
+
 TEST_CASE("midi_overdub merges a performance into the item under it, as a new take") {
     Root root;
     cmd::Registry registry;

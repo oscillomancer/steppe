@@ -1147,3 +1147,86 @@ TEST_CASE("placeAt: both sides' keys and chords, a place before the item, and no
     CHECK_FALSE(placeAt(l.s, l.item, 5)->project.key);
     CHECK(soundsAt(*placeAt(l.s, l.item, 5), 0, 67).pitch == 67);
 }
+
+// --- a take laid from a clip ---------------------------------------------------------------------
+
+TEST_CASE(
+    "takeContextFromClip: the clip's context in the take's beats, read as the launcher reads it") {
+    Clip clip;
+    clip.length = 8;
+    clip.context = {keyPt(0, "C", "major"), keyPt(4, "Eb", "major"), chordPt(2, "F")};
+    std::stable_sort(clip.context.begin(), clip.context.end(), [](const auto& a, const auto& b) {
+        return a.beat != b.beat ? a.beat < b.beat : a.type < b.type;
+    });
+    Take take;
+    take.source = Id{Kind::Midi, 1};
+    takeContextFromClip(take, clip, 0, ClipFollow::Key);
+    CHECK(take.contextPeriod == std::optional<double>(8.0));
+    CHECK(take.contextPhase == 0);
+    CHECK(take.context.size() == 3);
+    CHECK(take.follow == ClipFollow::Key);
+    // Playrate 2 and a slip of 1.5: beats and period scale, the phase is c0*r - offset.
+    Take fast;
+    fast.source = Id{Kind::Midi, 1};
+    fast.playrate = 2;
+    fast.startOffset = 1.5;
+    takeContextFromClip(fast, clip, 3, ClipFollow::Chords);
+    CHECK(fast.contextPeriod == std::optional<double>(16.0));
+    CHECK(fast.contextPhase == 3 * 2 - 1.5);
+    CHECK(fast.context[1].beat == 4);  // the chord at clip beat 2
+    CHECK(fast.context[2].beat == 8);  // Eb at clip beat 4
+    CHECK(fast.follow == ClipFollow::Chords);
+    // A clip with no context leaves the take as it was; an audio or empty take holds none.
+    Take plain;
+    plain.source = Id{Kind::Midi, 1};
+    takeContextFromClip(plain, Clip{}, 0, ClipFollow::None);
+    CHECK(plain.context.empty());
+    CHECK_FALSE(plain.contextPeriod);
+    Take empty;
+    takeContextFromClip(empty, clip, 0, ClipFollow::Key);
+    CHECK(empty.context.empty());
+    // Follow other than none without a readable key is reset by the fit.
+    Clip chordsOnly;
+    chordsOnly.length = 4;
+    chordsOnly.context = {chordPt(0, "C")};
+    Take reset;
+    reset.source = Id{Kind::Midi, 1};
+    takeContextFromClip(reset, chordsOnly, 0, ClipFollow::Key);
+    CHECK(reset.follow == ClipFollow::None);
+}
+
+TEST_CASE(
+    "takeContextFromClip: a note heard d beats after the item's start reads clip beat (c0 + d) * "
+    "r") {
+    for (const double rate : {1.0, 2.0, 0.5}) {
+        for (const double offset : {0.0, 1.0}) {
+            for (const double c0 : {0.0, 2.0}) {
+                // A clip of length 8 over 4 beats of looping content (C at 0, Eb at 4).
+                Clip clip;
+                clip.length = 8;
+                clip.context = {keyPt(0, "C", "major"), keyPt(4, "Eb", "major")};
+                RigSpec spec;
+                spec.notes = {note(0, 1, 60), note(1, 1, 62), note(2, 1, 64), note(3, 1, 65)};
+                spec.lengthBeats = 4;
+                spec.loop = true;
+                spec.length = 8 / rate;
+                spec.playrate = rate;
+                spec.startOffset = offset;
+                spec.project = {keyPt(0, "F", "major")};
+                Rig r = rig(spec);
+                r.s = edit<Take>(r.s, r.take, [&](Take& t) {
+                          takeContextFromClip(t, clip, c0, ClipFollow::Key);
+                      }).value();
+                const Item& item = *r.s.items.find(r.item);
+                for (const SoundingNote& n : soundingNotes(r.s, r.item, -100, 100)) {
+                    const double d = n.songBeat - item.position;
+                    double want = std::fmod((c0 + d) * rate, 8 * rate);
+                    if (want < 0) want += 8 * rate;
+                    INFO("rate " << rate << " offset " << offset << " c0 " << c0 << " note "
+                                 << n.note << " pass " << n.pass);
+                    CHECK(n.contextBeat == doctest::Approx(want).epsilon(1e-9));
+                }
+            }
+        }
+    }
+}

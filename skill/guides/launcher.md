@@ -81,34 +81,41 @@ keeps the harmony at a place. Say it when you make the clip:
 ### Following when a clip is laid
 
 `item.add {clip}`, `scene.insert` and `arrangement.build` take `follow` (`none`, `key`,
-`chords`), by default the clip's own: a MIDI clip's notes are mapped from the key it was
-written against (or its chord at that beat) to the key (or chord) under the item. Write a
-clip once in D minor with `follow: key`, and it lands in C minor, or F minor from bar 7, with
-no second copy. Each laid item's answer has `followed: {mode, regions, folded?, unrolled?,
-copied?}`; `regions` is a list of runs, each `{from_bar, to_bar, from_key, to_key, by,
-interval?}` (project bars, inclusive; `by` is `transpose` with the `interval` in semitones,
-`degree`, `chords` or `copy`): the run `5-6 transpose D minor>C minor -2` is `{from_bar: 5,
-to_bar: 6, from_key: "D minor", to_key: "C minor", by: "transpose", interval: -2}`. A `chords`
-run names no chords and no interval, and is the same whether the chords under it differ from the
-clip's or match them: `midi.get` on the laid item says what it now holds.
+`chords`), by default the clip's own. The laid item's MIDI takes get the clip's context
+and `follow`, and the notes are copied **as written**: what sounds is worked out when the
+item plays (**following is playback**), from the key it was written against (or its chord at
+that beat) to the key (or chord) under it. Write a clip once in D minor with `follow: key`,
+and it lands in C minor, or F minor from bar 7, with no second copy. Because nothing is
+written into the notes, nothing laid goes stale: edit the context track and what follows moves
+with it. `take.bake` writes the sounding pitches into the notes when you want them fixed.
+Each laid item's answer has `followed: {mode, regions, folded?, copied?}`; `regions` is a list
+of runs, each `{from_bar, to_bar, from_key, to_key, by, interval?}` (project bars, inclusive;
+`by` is `transpose` with the `interval` in semitones, `degree`, `chords` or `copy`): the run
+`5-6 transpose D minor>C minor -2` is `{from_bar: 5, to_bar: 6, from_key: "D minor", to_key:
+"C minor", by: "transpose", interval: -2}`. A `chords` run names no chords and no interval, and
+is the same whether the chords under it differ from the clip's or match them.
 
 - Same scale: a transpose by the nearest interval. Scales of the same size (D minor to C
   major): by degree. Different sizes (a pentatonic): a transpose, with `context.scale_shape`.
 - `chords`: each note goes from its chord tone (root, third, fifth, seventh, extensions) to
   the same tone of the chord under it; a note with no chord on either side follows by key.
 - Notes on channel 10 (drums) are never moved. A drum-only, empty, keyless or audio clip is
-  copied, and `followed.copied` says why (`drums`, `no_notes`, `no_key`, `audio`).
-- Where no key holds under the item, the notes are copied with `context.no_key`.
-- A looped item stays looped when every pass maps alike; when the key changes between
-  passes, or in `chords` mode the chords under one pass differ from the next, the item is laid
-  out pass by pass (`unrolled: true`).
+  laid without following, and `followed.copied` says why (`drums`, `no_notes`, `no_key`,
+  `audio`).
+- Where no key holds under a note, it sounds as written, with `context.no_key`.
+- A looped item stays one looped item: each pass sounds as the key under it says, so a key
+  change between passes (or, in `chords` mode, chords that differ from one pass to the next)
+  changes what the passes sound as and nothing else. A note sounds as the key where it
+  **starts**, to its end.
 - Under a bar the context track marks "no chord" (`""`), `chords` falls back to a transpose by
   the key (`by: transpose` for that bar).
-- `pooled: true` with a mapping that moves a note is refused (`clip.follow_pooled`).
-- A launched clip is **not** followed yet: it plays as written, and `launch.clip` /
-  `launch.scene` warn `launch.unfollowed` for a clip whose `follow` is not `none`. To hear a
-  scene followed, lay it with `scene.insert` or `arrangement.build` (a clip: `item.add {clip}`);
-  `launch.commit` copies what was heard, so a performance of followed clips is laid as played.
+- `pooled: true` may follow too: the mapping belongs to each take that reads the source.
+- Playing a laid item that follows is the engine's: until the build that plays a take's
+  `follow` is in, the item plays as written, and `followed` and the take hold what it will
+  sound as.
+- A launched clip follows live as laid ones do, once built (`launch.state` says which).
+  `launch.commit` lays notes as written and gives each laid take the clip's context and the
+  follow that was heard, so a performance of followed clips is laid as played.
 
 ## Launching
 

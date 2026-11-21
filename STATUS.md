@@ -214,24 +214,25 @@ instructions are in `docs/guides/installing.md`.
   on a clip read the clip's own context at the clip beat each note sounds,
   never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert` and
   `arrangement.build` take `follow` (`none`, `key`, `chords`; default the
-  clip's own) and map a MIDI clip's notes by `harmony::follow` from the key or
-  chords it was written against to those under the item; the answer's
-  `followed` says how, by bar, and a looped item whose passes map differently
-  is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
-  that cannot follow is copied with its reason, and `launch.commit` copies
-  what was heard and warns `context.mismatch` when a clip's key (or, in the same key, chord) is not the
+  clip's own) and, as of X4d, lay the notes as written with the clip's context and `follow`
+  on each laid MIDI take (nothing is unrolled, and a pooled item may follow); the
+  answer's `followed` says how the notes sound, by bar, read from
+  `model::soundingNotes`. Notes on channel 10 are never mapped, a clip that cannot follow
+  is laid without following and says why, and `launch.commit` copies what was heard and
+  warns `context.mismatch` when a clip's key (or, in the same key, chord) is not the
   project's under it. `scene.insert` and `arrangement.build` take
   `write_context` (X5): the scenes' own harmony is written to the context
-  track under each section that has none. Not built: a launched clip
-  following live (X4: `launch.clip` and `launch.scene` warn
-  `launch.unfollowed`, and a launched clip plays as written). The roll shows
+  track under each section that has none. Not built: the engine playing a take's
+  `follow` (X4c) and a launched clip following live (X4a): until they land a laid item
+  and a launched clip play as written, and `launch.clip` and `launch.scene` warn
+  `launch.unfollowed`. The roll shows
   and edits a clip's context, and the clip inspector sets Follow (X3). A clip or scene
   laid from the clip launcher, or written by Capture (`launch.commit`'s
   `mismatches`), says in the status line how its keys were followed or why a
   clip was copied (`followed.mismatch` names the keys that differ); a
   launcher cell shows its clip's key, marked "→" when the clip follows.
 - **Take context and follow** (ADR-0098 amended, "following is playback"; step
-  X4b, the model only; session-model "Take context and follow", schema 2.21): a
+  X4b the model, X4d the commands; session-model "Take context and follow", schema 2.21): a
   MIDI take of an item carries `context`, `context_period`, `context_phase` and
   `follow`, loaded and saved with every older file unchanged (the open drops a
   point against the rules with `take.context_dropped` and resets a follow
@@ -239,16 +240,27 @@ instructions are in `docs/guides/installing.md`.
   takes hold none of the four). `model/follow.h` has a note's place (its context
   beat is the take's phase plus its unwrapped source beat, so the context
   travels with the notes), `soundingNotes`, `soundingKey`, `contextOver` and
-  `placeAt`. Not built: the commands (placement, `take.set`, `take.bake`,
-  `midi.get {sounding}` and the rest of the contract's table, X4d) and the
-  engine's use of it (X4c): a take's `follow` is stored and nothing plays by it
-  yet. The GUI shows it (X4e, the model's part): a following take's roll draws
-  its notes where they sound with the written pitches outlined, and a Written
-  cell; the strip shows the song's and the take's chords; the item carries
-  "→D" and a thumbnail at the sounding pitches; the inspector says what the
-  take was written in. Not yet: Follow and Bake in the inspector and the Item
-  menu, editing the take's context in the roll, degree steps on a following
-  take, and the placement and context-edit status lines (X4d's commands).
+  `placeAt`. The commands (X4d) keep to the contract's table: `take.set
+  {context, follow}` (the lead sheet in bars of the meter at the item, errors
+  `take.no_key`, `take.follow_audio`, `take.in_clip`, `take.context_syntax`,
+  `take.context_range`), `take.bake` (writes what sounds, unrolls a looped item
+  whose passes differ, `take.not_following`, `take.not_active`, records the pitches
+  it wrote), `midi.get {sounding, from, to}` with `sounding_differs` and
+  `differs_by_pass` (`midi.sounding_clip` on a clip), `midi.edit` reading a following
+  take's own context (`acts_on: "written"`), `midi.write` keeping context and follow
+  (`follows`), `item.consolidate` (MIDI; what sounds is preserved and checked,
+  `item.follow_merge`), `take.extract` from a clip, `clip.add {item}` and
+  `scene.capture` (a following take's context becomes the clip's), `take.add`,
+  a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
+  `context.no_key` warning on every context edit, and `session.describe`. Not
+  built: the engine's use of it (X4c): a take's `follow` is stored and nothing
+  plays by it yet, and `item.glue` is not registered. The GUI shows it (X4e, the
+  model's part): a following take's roll draws its notes where they sound with the
+  written pitches outlined, and a Written cell; the strip shows the song's and the
+  take's chords; the item carries "→D" and a thumbnail at the sounding pitches; the
+  inspector says what the take was written in. Not yet: Follow and Bake in the
+  inspector and the Item menu, editing the take's context in the roll, degree steps on
+  a following take, and the placement and context-edit status lines.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

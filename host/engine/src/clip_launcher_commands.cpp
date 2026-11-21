@@ -9,6 +9,7 @@
 #include "clip_context.h"
 #include "command_helpers.h"
 #include "supple/model/env_shape.h"
+#include "supple/model/follow.h"
 #include "supple/model/launcher.h"
 #include "supple/model/take_owner.h"
 
@@ -403,6 +404,22 @@ Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id 
                                fxEnvelopesToClip(s, clip.kind, span.startBeat, span.startSec));
     if (!copied) return std::move(copied).error();
     clip.takes = *copied;
+    // A clip's takes hold none of the four context members: the clip's context and follow are the
+    // clip's (ADR-0098, following is playback). An item whose active take follows gives the clip
+    // that take's context over the span copied, re-based and in clip beats, and its follow; the
+    // key and the chord in force at the span's start are carried in at 0, so the clip has a key.
+    for (const Id tk : clip.takes)
+        t.modify<model::Take>(
+            tk, [](model::Take& k) { model::fitTakeContext(k, model::TakeHome::Clip); });
+    if (clip.kind == model::ClipKind::Midi && it.activeTake)
+        if (const model::Take* active = s.takes.find(*it.activeTake);
+            active && active->follow != model::ClipFollow::None) {
+            const double rate = active->playrate > 0 ? active->playrate : 1.0;
+            const double u0 = active->contextPhase + active->startOffset;
+            clip.context = model::contextOver(*active, u0, u0 + clip.length * rate);
+            for (model::ContextPoint& p : clip.context) p.beat /= rate;
+            clip.follow = active->follow;
+        }
     for (std::size_t k = 0; k < it.takes.size(); ++k)
         if (it.activeTake == it.takes[k]) clip.activeTake = clip.takes[k];
     if (!clip.activeTake && !clip.takes.empty()) clip.activeTake = clip.takes.front();
@@ -1083,6 +1100,8 @@ void registerClipCommands(cmd::Registry& registry) {
             ClipAddResult r;
             std::vector<notation::ChordSymbol> symbolsOf;        // the notation's {SYMBOL} chords
             std::optional<std::pair<double, double>> underItem;  // where an item's context is
+            std::optional<std::vector<model::ContextPoint>> fromTake;  // a following take's
+            model::ClipFollow itemFollow = model::ClipFollow::None;    // and its follow
             auto single = [&](model::Take take) {
                 const Id tk = t.create(std::move(take));
                 clip.takes = {tk};
@@ -1098,7 +1117,14 @@ void registerClipCommands(cmd::Registry& registry) {
                 if (a.name) made->name = *a.name;  // else the item's
                 clip = std::move(*made);
                 const model::Item& it = *s.items.find(*item);
-                underItem = {model::itemSpan(s, it).startBeat, model::itemLengthBeats(s, it)};
+                // An item whose take follows keeps that take's context (clipFromItem); any
+                // other, the project's under it.
+                if (clip.follow != model::ClipFollow::None) {
+                    fromTake = clip.context;
+                    itemFollow = clip.follow;
+                } else {
+                    underItem = {model::itemSpan(s, it).startBeat, model::itemLengthBeats(s, it)};
+                }
             } else if (a.audioFile) {
                 auto imported = importAudioFile(app, t, s, *a.audioFile);
                 if (!imported) return std::move(imported).error().at("/audio_file");
@@ -1139,6 +1165,7 @@ void registerClipCommands(cmd::Registry& registry) {
             auto stated =
                 statedContext(ctx, s, clip.kind, clip.length, a.context, a.contextAt, underItem);
             if (!stated) return std::move(stated).error();
+            if (fromTake && !stated->points) stated->points = std::move(fromTake);
             std::vector<detail::ClipNote> notes;
             detail::SymbolChords symbols;
             if (!symbolsOf.empty())
@@ -1146,8 +1173,11 @@ void registerClipCommands(cmd::Registry& registry) {
                     detail::chordsFromSymbols(s, symbolsOf, s.project->ppq, 0.0, 1.0, clip.length);
             clip.context =
                 detail::composeContext(std::move(stated->points), std::move(symbols), notes);
-            SUPPLE_TRY(checkFollow(clip, a.follow.value_or(model::ClipFollow::None)));
-            clip.follow = a.follow.value_or(model::ClipFollow::None);
+            // A following take's follow is the default only for the context it brought.
+            const model::ClipFollow wanted =
+                a.follow.value_or(a.context || a.contextAt ? model::ClipFollow::None : itemFollow);
+            SUPPLE_TRY(checkFollow(clip, wanted));
+            clip.follow = wanted;
             warnNotes(ctx, notes);
             warnFit(ctx, model::fitClipContext(clip));
             // History replays the context the user saw, not the place it was read from:
