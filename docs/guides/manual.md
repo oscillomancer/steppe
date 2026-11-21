@@ -1663,7 +1663,8 @@ no clips, a section has two items on one track) the status line says why.
 
 In a cell, no click does two things:
 - a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds
-  more) and a double-click opens it, a MIDI clip in the piano roll;
+  more) and a double-click opens it: a MIDI clip in the piano roll, an
+  audio clip in the same pane as its waveform with its envelope lanes;
 - on a track with clips, an empty cell's small square stops the track; a
   click elsewhere in the cell selects it, and a double-click makes an empty
   one-bar MIDI clip there and opens it.
@@ -1708,6 +1709,13 @@ shows where.
 Notes outside the key at their place are outlined in amber, and the roll's
 title counts them ("3 outside A minor"). That is how you see a clip laid into a song in another
 key: its notes are copied as they are, and the ones that clash stand out.
+
+An audio clip opens in the same pane, as its waveform: time in seconds
+from the clip's start, its end marked, and under it the same **Lanes**
+menu and envelope lanes as a MIDI clip's (the take's volume, pan and mute,
+and its effects' parameters), placed in seconds. The key button there is
+the clip's key: click it to set one, remove it, or take the song's at the
+playhead. The pane doesn't edit the audio itself.
 
 ### Playing clips
 

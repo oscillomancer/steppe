@@ -300,12 +300,11 @@ instructions are in `docs/guides/installing.md`.
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;
-  - a double-click on an audio clip opens the inspector, as there is no
-    audio clip editor;
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
     roll (clip-time lanes, with point add, drag and remove; no shape menu or
-    point selection yet); an audio clip's have no lane until its pane is
-    built (after ADR-0098 X3), so they are edited by command only;
+    point selection yet); an audio clip's in its pane (a double-click opens
+    its waveform, in seconds, with the same Lanes menu and lanes and a key
+    button for its one key point), which edits no audio;
   - an item's take FX have lanes on the timeline, drawn across the whole
     timeline although only the item's span plays;
   - native macOS and Windows CI has not run on it.

@@ -1603,7 +1603,8 @@ Commands: `route.*`, `track.set {record_input}`.
 
 **Launcher clips** (ADR-0097) open here as items do (a double-click on a
 clip, Alt+E with a clip selected after a launcher click, or the first MIDI
-clip when the project has no MIDI item). A clip has no place in time: the
+clip when the project has no MIDI item); an audio clip opens in the pane's
+audio form (below). A clip has no place in time: the
 roll places it at beat 0 with its own length, so its bars count from its
 start; it reads the clip's own context (ADR-0098 X3), in clip beats, as
 `midi.edit` does, for the shading, the spelling, the key button, a degree
@@ -1715,8 +1716,39 @@ edited in its roll, not on the timeline. For a MIDI clip:
   envelope's: 0 dB, centre, unmuted); unticking hides it. Refusals go to the
   status line.
 
-An audio clip has no roll yet; its pane (mock 93) comes after X3 of
-ADR-0098.
+**An audio clip's pane** (mock 93). An audio clip opens in the same panel
+(a double-click on it in the launcher, or Alt+E with it picked there or
+open last) in an audio form; an audio item does not, its take being on the
+timeline:
+- its active take's waveform (`views::drawAudioBody`, as the launcher
+  cell's, from the app's peak service) where the roll's notes are, on an
+  axis in seconds of played time from the clip's start (the clip's own
+  unit, as its length): the time ruler above it (m:ss.d at a step that
+  fits), the clip shaded outside its span and its end marked "end", the
+  take's name in the keyboard's column, and the playhead where the launcher
+  plays it. The wheel zooms and scrolls it as the roll; nothing on it edits
+  the audio;
+- the header has the title ("Audio · Keys — Break · clip · 2.00 s"), the
+  key button, Lanes and Close; grid, Snap, Quantize, Notation, List, and the
+  velocity and CC lanes are hidden, and come back for a MIDI take (the
+  notation pane as it was);
+- the key button names the clip's one key point (ADR-0098: an audio clip
+  has at most a key at 0, and no chords or degrees) and opens its menu:
+  **Key…** (the key field, from the clip's key, else the project's),
+  **Remove key**, and **Take from the project at bar N** (`clip.set
+  {context_at}` at the playhead). An audio clip's text is bar 1 only, a key
+  and holds;
+- the Lanes menu and clip-time lanes are a MIDI clip's, in seconds: no
+  Velocity or CC rows, Take volume, pan and mute without the instrument
+  rule, the take FX and their parameters; a click adds a point at the
+  second under it (no beat grid there), and the points go to `env.add` and
+  `env.points.set` as `seconds`.
+
+Tests: test_midi_editor "an audio clip opens as its take's waveform in
+seconds, its end marked" (golden `audio-clip-pane-dark.png`), "an audio
+clip's Lanes menu and clip-time lanes are in seconds" (golden
+`audio-clip-lanes-dark.png`) and "an audio clip's key button sets its one
+key point".
 
 Tests: test_midi_editor "the Lanes menu shows and hides the velocity and CC
 lanes", "a clip's take envelopes and take FX parameters get lanes in clip
@@ -2759,7 +2791,7 @@ same heights, scroll and colours.
 - **Click the body** of a clip: select it (Ctrl adds to the selection). It
   never launches. A click on the lanes clears that selection.
 - **Double-click the body**: open it in the piano roll (MIDI) or the
-  inspector (audio). The editors and content commands take the clip as
+  bottom pane's audio form (audio: its waveform and clip-time lanes, §4.7). The editors and content commands take the clip as
   they take an item (ADR-0097, "The take owner").
 - No click does two things: a clip's ▶ only launches and its body only
   selects; an empty cell's square only stops and the rest of the cell
@@ -2931,8 +2963,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   play/stop, R record (also Ctrl+R), L loop, Delete or Alt+C deletes the
   selection (items, tracks or points; notes over the MIDI editor), Ctrl+M or
   Alt+D the mixer,
-  Alt+E the MIDI editor on the item it had last (else the selected or first
-  MIDI item; nothing without one). Space is never a button's: buttons and
+  Alt+E the MIDI editor on the item it had last (else the clip picked in the
+  launcher, an audio clip included, else the selected or first MIDI item;
+  nothing without one). Space is never a button's: buttons and
   toggles take Enter, so Space after a click still plays or stops, and a
   rename that ends gives the keys back to the shortcuts.
 - **Macros:** a sequence of actions (or a Lua script) run as one batch (one
