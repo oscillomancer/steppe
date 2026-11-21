@@ -692,6 +692,34 @@ run time, not a position in the timeline.
   through the chain's warm-up). It is the rare case of a latency change
   racing a queued launch, and live and the replay agree on it.
 
+## Revision (2026-11-20, batch 3): the replay loops; a capture stays in one epoch
+
+**Context.** The offline replay of a launch log played one linear run, so
+no live-versus-replay test could loop (review round 66). The draft for
+batch 3 proposed logging seeks as well, so that a capture could span them
+and a replay follow them, with an inexact window after each seek where the
+anticipative renderer's flush and the plug-ins' state may not reproduce.
+
+**Decision (the co-director's).**
+- **Wraps, exactly.** An internal replay is given the transport loop
+  (`OfflineSettings::loop`) and wraps where the live executors do: no block
+  crosses the loop end, the song continues at the loop start (`wrapTo`),
+  and the take chains running ahead wrap early in the same loop. The log's
+  running frames count on across wraps, as the live executors' do within an
+  epoch; a wrap is not logged, since it follows from the loop.
+- **No seeks in a capture.** A seek, a loop change or a stop still ends a
+  capture, so a capture and its replay never cross a relocation, no window
+  is inexact, and the law that live equals the replay holds everywhere. The
+  performance schema gains nothing.
+- A capture already records its loop and the commit lays wraps out (L-f);
+  an exact wrap needed nothing else.
+
+**Consequences.**
+- Every live-versus-replay launcher test runs once more under a loop that
+  wraps before an anchor, in both executors, through the bridge too.
+- A looped replay under a master playrate is refused (`render.loop`) until
+  launches play under one (the next revision).
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

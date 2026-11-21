@@ -959,6 +959,17 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             : selected->timelineShift + selected->latChain;
     const std::int64_t timelineLength =
         time::samplesAt(opt.endSeconds, p.rate) - time::samplesAt(opt.startSeconds, p.rate);
+    // A looped render (internal; the launch log's replay): the loop in plan
+    // samples, converted as the live transport converts it (Engine::setLoop).
+    LoopRange loop;
+    if (opt.loop) {
+        if (p.rateEnabled)
+            return Error("render.loop", "a looped render cannot follow a master playrate", "",
+                         "render without the loop, or without the master playrate");
+        const std::int64_t origin = time::samplesAt(opt.startSeconds, p.rate);
+        loop = {time::samplesAt(std::max(0.0, opt.loop->first), p.rate) - origin,
+                time::samplesAt(std::max(0.0, opt.loop->second), p.rate) - origin, true};
+    }
     if (opt.freezeProbe) {
         OfflineResult result;
         result.warnings = p.warnings;
@@ -1066,8 +1077,10 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             if (!in->startProcessing()) startFailed = true;
         }
         // The launch log's replay (internal; engine.md §1.4.2): each channel
-        // switches at the block boundary where its song position reaches the
-        // anchor, its log frame plus its timeline shift.
+        // switches at the block boundary where its running frame reaches the
+        // anchor's, its log frame plus its timeline shift. Without a loop the
+        // running frame is the song position; with one the song wraps at the
+        // loop end as the live executors' does, and the running frames go on.
         // A rack Notes feed that follows the track switches with it, at its
         // rack's own position (ADR-0097, dated revision 2026-11-20).
         struct Switch {
@@ -1124,6 +1137,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         std::stable_sort(switches.begin(), switches.end(),
                          [](const Switch& a, const Switch& b) { return a.at < b.at; });
         std::size_t nextSwitch = 0;
+        std::int64_t song = 0;  // the plan sample `pos` (the running frame) plays
         if (!startFailed) {
             for (std::int64_t pos = 0; pos < total;) {
                 if (RenderWatch::requested(opt)) {
@@ -1145,11 +1159,13 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                 }
                 auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(p.block, total - pos));
                 if (p.rateEnabled) n = std::min(n, static_cast<std::uint32_t>(64 - (pos & 63)));
+                n = loop.until(song, n);  // no block crosses a loop wrap
                 if (nextSwitch < switches.size())
                     n = static_cast<std::uint32_t>(
                         std::min<std::int64_t>(n, switches[nextSwitch].at - pos));
-                if (!(workers.helpers() ? processBlockOn(workers, p, pos, n)
-                                        : processBlock(p, pos, n))) {
+                const LoopRange* looped = loop.active() ? &loop : nullptr;
+                if (!(workers.helpers() ? processBlockOn(workers, p, song, n, looped)
+                                        : processBlock(p, song, n, true, looped))) {
                     failed = true;
                     break;
                 }
@@ -1205,6 +1221,9 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     progressAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
                 }
                 pos += n;
+                const std::int64_t next = loop.next(song, song + n);
+                if (next != song + n) detail::wrapTo(p, next, -1);
+                song = next;
                 if (opt.freezeTail && settled) break;
             }
         }

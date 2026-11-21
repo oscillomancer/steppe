@@ -4262,11 +4262,12 @@ void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole) SUPP
         if (n.live == live) locateNode(p, n, pos, restartConsole);
 }
 
-bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n) {
-    prepareRateWindow(p, pos, n, -1);
+bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n,
+                    const LoopRange* loop) {
+    prepareRateWindow(p, pos, n, -1, loop);
     syncMix(p, -1);
-    const host::Transport transport = transportAt(p, pos);
-    BlockRun run{&p, pos, n, &transport};
+    const host::Transport transport = transportAt(p, pos, loop);
+    BlockRun run{&p, pos, n, &transport, nullptr, nullptr, loop};
     workers.run(*p.graph, &runNode, &run);
     return run.ok.load(std::memory_order_relaxed);
 }

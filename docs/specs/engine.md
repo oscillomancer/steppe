@@ -513,8 +513,10 @@ the same.*
   source like an item's fade, in both executors and offline.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
-  the epoch's terms) and its song position. Seeks and transport wraps
-  are not logged yet (staged, STATUS): the replay plays one linear run.
+  the epoch's terms) and its song position. A transport wrap is not
+  logged: it follows from the loop, which a replay is given. A seek, a
+  loop change or a stop ends a capture, so a replay never crosses one
+  (ADR-0097, revision 2026-11-20, batch 3).
   Renders and the render dialog play the arrangement only, and the dialog
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at
@@ -650,8 +652,12 @@ the same.*
   of `launchMidi`. At each switch the notes the timeline or a clip held
   end (`releaseHeld`); an audio clip leaves the feed silent. Wraps,
   relocations and plan swaps treat the feed as they treat the channel.
-- `OfflineSettings::launches` replays a log from the render's start (no
-  seeks or wraps yet; L4 adds them with capture).
+- `OfflineSettings::launches` replays a log from the render's start. With
+  `OfflineSettings::loop` the render wraps as the live executors do: no
+  block crosses the loop end, the song continues at the loop start
+  (`wrapTo`), the take chains wrap early in that loop, and the running
+  frames the switches are placed at count on. Not under a master playrate
+  (`render.loop`).
 - **The queue (launch_runtime.cpp).** `Engine::launch` places a set of
   requests (a scene's tracks) on one target. The floor is the latest of
   its tracks' floors: the published position's stream plus one device

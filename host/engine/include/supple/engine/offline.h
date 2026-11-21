@@ -26,6 +26,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include "supple/base/stop.h"
 
@@ -384,6 +385,12 @@ struct OfflineSettings {
     // order, from the render's start, which must be the log's play start.
     // The render dialog never sets it: renders play the arrangement only.
     std::vector<LaunchLogEntry> launches;
+    // Internal (tests): the transport loop, timeline seconds [start, end),
+    // which the render wraps at exactly as the live executors do (engine.md
+    // §1.4.2). [startSeconds, endSeconds) is then the running time rendered,
+    // and the launches' running frames count across the wraps. Not under a
+    // master playrate (`render.loop`).
+    std::optional<std::pair<double, double>> loop;
 };
 
 struct OfflineResult {
