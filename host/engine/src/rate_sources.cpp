@@ -44,13 +44,6 @@ struct Source {
     RateSource reader() const { return {this, read, clip.data->channelCount()}; }
 };
 
-std::int64_t quantumAt(const Plan& p, std::int64_t pos) SUPPLE_RT {
-    const auto offset = pos - p.rateOrigin;
-    auto q = offset / kRateQuantum;
-    if (offset < 0 && offset % kRateQuantum != 0) --q;
-    return p.rateOrigin + q * kRateQuantum;
-}
-
 double sourcePosition(const Clip& clip, const PlayrateTimeline& timeline,
                       std::int64_t signalDevice) SUPPLE_RT {
     return timeline.absolutePhase(signalDevice) -
@@ -98,6 +91,13 @@ bool primeClip(RateClipState& state, const Clip& clip, PlayrateTimeline& timelin
     return true;
 }
 }  // namespace
+
+std::int64_t quantumAt(const Plan& p, std::int64_t pos) SUPPLE_RT {
+    const auto offset = pos - p.rateOrigin;
+    auto q = offset / kRateQuantum;
+    if (offset < 0 && offset % kRateQuantum != 0) --q;
+    return p.rateOrigin + q * kRateQuantum;
+}
 
 void prepareRateWindow(Plan& p, std::int64_t pos, std::uint32_t frames, int liveClass,
                        const LoopRange* loop) SUPPLE_RT {

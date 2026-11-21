@@ -231,6 +231,7 @@ struct NotesFeed {
     std::vector<host::Event> clipEvents;  // this block's, reserved
     bool follows = false;                 // its source track has clips: launches reach it
     bool releaseHeld = false;
+    bool launchFresh = false;  // as Node::launchFresh
 };
 // The clip launcher for a Notes feed (clip_player.cpp): its source track's
 // MIDI clips, compiled after its timeline events (main thread); the feed's
@@ -241,6 +242,10 @@ int playerOf(const NotesFeed& feed, Id clip) SUPPLE_RT;
 void applyFeedLaunch(NotesFeed& feed, LaunchState::Kind kind, Id clip, std::int64_t anchorSample,
                      double anchorBeat) SUPPLE_RT;
 void feedClipMidi(Plan& p, const Node& rack, NotesFeed& feed, std::int64_t pos,
+                  std::uint32_t frames) SUPPLE_RT;
+// On a playrate plan, while anything but the arrangement holds the source
+// track: the clip's notes into the feed's stage, as rateLaunchMidi (S3).
+void feedRateMidi(Plan& p, const Node& rack, NotesFeed& feed, std::int64_t pos,
                   std::uint32_t frames) SUPPLE_RT;
 
 // A module parameter's envelope, read by the schedule once per grid block.

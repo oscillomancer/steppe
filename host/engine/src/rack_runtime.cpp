@@ -1028,6 +1028,13 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     const bool playing = transport.playing;
     for (NotesFeed& feed : r.notes) {
         feed.block.clear();
+        // On a playrate plan a launch's release comes first: the clip's notes
+        // at the switch follow it (S3), and the stage holds none of the old.
+        if (p.rateEnabled && feed.releaseHeld) {
+            feed.notes->endSource(0);
+            feed.midiStage.voices.clear();
+            feed.releaseHeld = false;
+        }
         if (playing && p.rateEnabled) {
             rackTimelineEvents(p, n, feed, pos, frames);
             for (const auto& e : feed.midiStage.blockEvents) {
