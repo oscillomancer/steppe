@@ -822,6 +822,68 @@ TEST_CASE("automation lanes: a plug-in described by a list (a VST3) gets its par
     std::filesystem::remove_all(options.workdir);
 }
 
+TEST_CASE("automation lanes: twin lanes' titles say their chain place or their item") {
+    // gui.md §4.3: two effects of one name in a chain are numbered; one
+    // effect's parameter on two items' takes of a track says each item.
+    Fixture f;
+    if (!f.ok) return;
+    auto run = [&](const char* command, const std::string& args) {
+        return f.dispatcher->execute({command, json::parse(args).value(), kUi});
+    };
+    const model::Id first = f.itemOnRow(0);
+    const model::Id track = f.item(first).track;
+    auto second = run("item.add", R"({"track":")" + track.str() +
+                                      R"(","position":64,"notation":"voice k; 1: C4:w"})");
+    REQUIRE(second);
+    const model::Id other = *model::Id::parse((*second)["item"].asString());
+    auto onTake = [&](model::Id item) -> std::optional<std::string> {
+        auto added = run(
+            "fx.add", R"({"take":")" + f.item(item).activeTake->str() + R"(","plugin":"Teasel"})");
+        if (!added) return std::nullopt;
+        return (*added)["fx"].asString();
+    };
+    const auto a = onTake(first), b = onTake(other);
+    if (!a || !b) {
+        MESSAGE("skipped: Teasel is not built (partial build)");
+        return;
+    }
+    auto envOn = [&](const std::string& fx) {
+        auto added = run(
+            "env.add", R"({"fx":")" + fx + R"(","param":"drive","points":[{"beat":0,"value":3}]})");
+        REQUIRE(added);
+        return *model::Id::parse((*added)["env"].asString());
+    };
+    const model::Id ea = envOn(*a), eb = envOn(*b);
+    const model::Session& s = f.app->head();
+    auto title = [&](model::Id env) { return views::envTitle(*s.envelopes.find(env), s, nullptr); };
+    const auto& names = s.takes.find(*f.item(first).activeTake)->name;
+    const auto& otherName = s.takes.find(*f.item(other).activeTake)->name;
+    auto barOf = [&](model::Id item) {
+        return std::to_string(s.timeMap->barBeat(model::itemSpan(s, f.item(item)).startBeat).bar);
+    };
+    CHECK(title(ea) == "Teasel · drive (take: " + (names.empty() ? "" : names + ", ") + "bar " +
+                           barOf(first) + ")");
+    CHECK(title(eb) == "Teasel · drive (take: " + (otherName.empty() ? "" : otherName + ", ") +
+                           "bar " + barOf(other) + ")");
+    CHECK(title(ea) != title(eb));
+    // A second Teasel in the first take's chain: each is numbered by its place.
+    auto twin =
+        run("fx.add", R"({"take":")" + f.item(first).activeTake->str() + R"(","plugin":"Teasel"})");
+    REQUIRE(twin);
+    const model::Id ec = envOn((*twin)["fx"].asString());
+    const model::Session& now = f.app->head();
+    auto titleNow = [&](model::Id env) {
+        return views::envTitle(*now.envelopes.find(env), now, nullptr);
+    };
+    CHECK(titleNow(ea).starts_with("Teasel 1 · drive (take"));
+    CHECK(titleNow(ec).starts_with("Teasel 2 · drive (take"));
+    // Alone on its track, a take effect's lane is just "(take)".
+    REQUIRE(run("item.remove", R"({"item":")" + other.str() + R"("})"));
+    REQUIRE(run("fx.remove", R"({"fx":")" + (*twin)["fx"].asString() + R"("})"));
+    const model::Session& alone = f.app->head();
+    CHECK(views::envTitle(*alone.envelopes.find(ea), alone, nullptr) == "Teasel · drive (take)");
+}
+
 TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item's track") {
     Fixture f;
     if (!f.ok) return;
