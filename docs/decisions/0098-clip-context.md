@@ -332,7 +332,9 @@ following is playback".)*
 Decided by the co-director on 2026-11-21 (design question B of the X4 review),
 with the picks for recording, edits and glue below. Revised the same day after
 review round 82, with the co-director's decisions on its P2s (A1 to A5): a note
-has a place, and edits that do not mean to change it do not.
+has a place, and edits that do not mean to change it do not; and after round
+82b, which made the place compositional (C1) and kept the four members off a
+clip's takes (C2).
 
 **Why.** Baking at placement left laid items stale. When the context track
 changed nothing said so, and the only repair was to remove the item and lay
@@ -354,18 +356,21 @@ clips alike.
   `take.bake`.
 - **A note has a place**: its context beat, where its start falls in the
   take's context, and its song beat, where its start sounds or would have
-  sounded. The context beat runs in the item's time, unwrapped, at the take's
-  playrate (`u = phase + (song beat − item start) × playrate`), modulo the
-  context's period when it has one; it never depends on where the content
-  sits. A take laid from a clip gets the clip's length as its period, so a
-  clip reads the same context on the timeline as in the launcher, pass for
-  pass.
+  sounded. The context beat is the take's phase plus the note's unwrapped
+  source beat (`start_offset + (song beat − item start) × playrate`, never
+  reduced modulo the source or the loop), modulo the context's period when it
+  has one: the context is anchored to the source material and travels with
+  the notes. A take laid from a clip gets the clip's length as its period and
+  a phase that puts each note at its clip beat, so a clip reads the same
+  context on the timeline as in the launcher, pass for pass. A clip's own
+  takes hold no context or `follow`: those are the clip's.
 - **The start rule is the only rule**: a note sounds by the place of its own
   start to its note-off, also a chased note whose start lies before the
   item's edge and a crossing note from the loop's previous pass.
-- **Invariance**: split, trims, loop on and off, and the commands that move
-  or copy a take keep every surviving note's context beat; split, trims and
-  loop changes keep what sounds.
+- **Invariance**: no edit that moves, cuts, slips, re-rates or copies a take
+  touches its phase or changes a surviving note's context beat; split, trims
+  and loop changes keep what sounds. Only placement and the commands that
+  build a context set a phase.
 - One helper, `model::soundingNotes`, gives each heard note occurrence its
   place and what it sounds as, through `model::soundingKey`. Compile,
   `take.bake`, `midi.get {sounding}`, `item.export`, placement's answer and
