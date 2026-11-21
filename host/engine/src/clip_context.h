@@ -64,6 +64,17 @@ std::vector<model::ContextPoint> composeContext(
     std::optional<std::vector<model::ContextPoint>> stated, SymbolChords symbols,
     std::vector<ClipNote>& notes);
 
+// The `context.mismatch` warning for a MIDI clip laid as an item over [start, start +
+// length) beats with its notes copied (ADR-0098, follow none): when at some beat of the span
+// the clip's key (at its clip beat: the beat from the item's start through the clip's
+// period, `phase` beats into it at the start) and the project's key both hold and differ in
+// tonic pitch class or scale. It names the clip, both keys and the first project bar where
+// they differ. A clip with no note off channel 10 (drums, or empty) gives none, and neither
+// does an enharmonic spelling.
+std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
+                                     const model::Clip& clip, double start, double length,
+                                     double phase = 0, const std::string& path = "/clip");
+
 // The key a clip's points say at beat 0 (a readable one), for describe and the checks.
 std::optional<std::string> clipKeyWords(const model::Clip& clip);
 

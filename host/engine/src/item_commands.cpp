@@ -362,9 +362,8 @@ schema::Schema<model::FadeShape> fadeShapeSchema() {
 // item.add {clip}: a new item from a copy of the clip's takes, converted
 // at the tempo where it lands (ADR-0097 "Converting between an item and a
 // clip").
-Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, model::EditTxn& t,
+Result<ItemAddResult> addItemFromClip(Context& ctx, const model::Session& s, model::EditTxn& t,
                                       Id track, double pos, const std::string& text) {
-    (void)app;
     auto id = existing<model::Clip>(s, text, "/clip");
     if (!id) return std::move(id).error();
     const model::Clip& clip = *s.clips.find(*id);
@@ -387,6 +386,9 @@ Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, m
         if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
     nameItemFromClip(t, clip, item);
     const double length = model::itemLengthBeats(s, item);
+    // The notes are copied as they are: say when the clip's key is not the project's here.
+    if (auto note = detail::mismatchNote(s, *id, clip, pos, length, 0.0, "/clip"))
+        ctx.warn(note->code, note->message, note->path);
     const Id it = t.create(std::move(item));
     ItemAddResult r;
     r.item = it.str();
@@ -499,7 +501,9 @@ void registerItemCommands(cmd::Registry& registry) {
             "differ), and the item is as long as the file unless length is given. clip: a copy of "
             "that clip's takes, as long as the clip, its loop and take envelopes converted at "
             "the tempo where the item lands (ADR-0097); the item is named as the clip is (its "
-            "active take's name) when the clip has a name. A master holds "
+            "active take's name) when the clip has a name; the notes are copied as they are, and "
+            "context.mismatch warns when the clip's key is not the project's under the item "
+            "(ADR-0098). A master holds "
             "audio items only (prints, played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =
@@ -567,7 +571,7 @@ void registerItemCommands(cmd::Registry& registry) {
             take.name = a.name.value_or("");
             double length = a.length.value_or(4.0);
             ItemAddResult r;
-            if (a.clip) return addItemFromClip(app, s, t, *track, pos, *a.clip);
+            if (a.clip) return addItemFromClip(ctx, s, t, *track, pos, *a.clip);
             if (a.notation) {
                 auto compiled = compileNotation(s, *a.notation, pos);
                 if (!compiled) return std::move(compiled).error();

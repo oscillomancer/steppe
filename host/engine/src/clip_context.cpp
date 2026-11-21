@@ -186,6 +186,61 @@ std::vector<model::ContextPoint> composeContext(
     return out;
 }
 
+std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
+                                     const model::Clip& clip, double start, double length,
+                                     double phase, const std::string& path) {
+    if (clip.kind != model::ClipKind::Midi || !(clip.length > 0) || !(length > 0)) return {};
+    if (model::keyPointAt(clip, 0) == nullptr && clip.context.empty()) return {};
+    // Notes off channel 10 (stored 9): a drum clip, or an empty one, has no pitch to move.
+    const model::Take* take = clip.activeTake ? s.takes.find(*clip.activeTake) : nullptr;
+    const model::MidiSource* src = take && take->source && take->source->kind == model::Kind::Midi
+                                       ? s.midi.find(*take->source)
+                                       : nullptr;
+    if (!src || std::none_of(src->sequence.notes.begin(), src->sequence.notes.end(),
+                             [](const midi::Note& n) { return n.channel != 9; }))
+        return {};
+    // The beats at which either key can change, inside the span.
+    const double end = start + length;
+    std::vector<double> at{start};
+    for (const auto& e : s.context)
+        if (e.value->type == model::ContextType::Key && e.value->beat > start &&
+            e.value->beat < end)
+            at.push_back(e.value->beat);
+    for (const model::ContextPoint& p : clip.context) {
+        if (p.type != model::ContextType::Key) continue;
+        // The first pass starts `phase` into the clip; later ones at its period.
+        double first = p.beat - phase;
+        if (first < 0) first += clip.length;
+        for (int pass = 0; pass < 100000; ++pass) {
+            const double b = start + first + pass * clip.length;
+            if (b >= end - 1e-9) break;
+            if (b > start) at.push_back(b);
+        }
+    }
+    std::sort(at.begin(), at.end());
+    for (const double b : at) {
+        const double rel = b - start + phase;
+        const double inClip = rel - std::floor(rel / clip.length + 1e-9) * clip.length;
+        const model::ContextPoint* cp = model::keyPointAt(clip, std::max(0.0, inClip));
+        const auto pid = model::keyPointAt(s, b);
+        const model::ContextPoint* pp = pid ? s.context.find(*pid) : nullptr;
+        const auto ck = cp ? model::parseKey(*cp) : std::nullopt;
+        const auto pk = pp ? model::parseKey(*pp) : std::nullopt;
+        if (!ck || !pk) continue;
+        if (harmony::pitchClassNumber(ck->tonic) == harmony::pitchClassNumber(pk->tonic) &&
+            ck->scale == pk->scale)
+            continue;
+        const std::string name =
+            clip.name.empty() ? clipId.str() : clipId.str() + " \"" + clip.name + "\"";
+        return ClipNote{"context.mismatch",
+                        name + " was written in " + model::keyWords(*cp) + " and sits under " +
+                            model::keyWords(*pp) + " from " + barWords(s, b) +
+                            ": its notes are copied as they are",
+                        path};
+    }
+    return {};
+}
+
 std::optional<std::string> clipKeyWords(const model::Clip& clip) {
     if (const model::ContextPoint* p = model::keyPointAt(clip, 0)) return model::keyWords(*p);
     return std::nullopt;

@@ -487,7 +487,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "and so is the arrangement a loop repeated. A scene launched whole (launch.scene: "
             "every clip that could play started on one boundary) also writes a section named "
             "after it, from that boundary until one of its tracks is launched again or the "
-            "capture ends, as scene.insert does; clips launched singly write none. A running "
+            "capture ends, as scene.insert does; clips launched singly write none. A launched "
+            "clip is not followed (until ADR-0098's X4): its items copy what was heard, and "
+            "context.mismatch warns for each whose clip's key is not the project's under it. "
+            "A running "
             "capture ends first; the "
             "capture stays, so committing again writes it again over itself. performance is "
             "what history records: leave it out and launch.commit fills it from the capture.";

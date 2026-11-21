@@ -1357,3 +1357,75 @@ TEST_CASE("midi.write on a clip records its chord symbols, replacing the chords 
     CHECK(warningCodes(beyond).find("clip.chords_beyond_length") != std::string::npos);
     CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Em");
 }
+
+TEST_CASE("laying a clip copies its notes and warns when its key is not the project's") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "name": "Break bass"})");
+    // item.add {clip}: the notes are copied as they are, with a warning that names the clip,
+    // both keys and the first project bar where they differ.
+    const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    const auto codes = warningCodes(laid);
+    CHECK(codes.find("context.mismatch") != std::string::npos);
+    const std::string message = laid.find("warnings")->at(0).find("message")->asString();
+    CHECK(message.find("cl_1 \"Break bass\"") != std::string::npos);
+    CHECK(message.find("D minor") != std::string::npos);
+    CHECK(message.find("C minor") != std::string::npos);
+    CHECK(message.find("bar 5") != std::string::npos);
+    CHECK(l.run("midi.notes", R"({"item": ")" + laid.find("item")->asString() + R"("})")["notes"]
+              .at(0)
+              .find("pitch")
+              ->asInt() == 33);  // copied: A1, whatever follow says until X2
+    // follow does not change that until X2: every clip is copied as none, with the warning.
+    l.run("clip.set", R"({"clip": "cl_1", "follow": "key"})");
+    CHECK(warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_1"})"))
+              .find("context.mismatch") != std::string::npos);
+    // The same key, an enharmonic spelling of it, a clip with no key and a clip of drums or
+    // nothing give none.
+    l.run("clip.set", R"({"clip": "cl_1", "follow": "none", "context": "1: key C minor ~:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 13, "clip": "cl_1"})")).empty());
+    l.run("clip.set", R"({"clip": "cl_1", "context": ""})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 17, "clip": "cl_1"})")).empty());
+    l.run("key.set", R"({"at": 0, "tonic": "C#", "scale": "major"})");
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key Db major ~:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 21, "clip": "cl_1"})")).empty());
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "notation": "voice kick ch 10; 1: C2:w",
+                          "context": "1: key D minor ~:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 25, "clip": "cl_2"})")).empty());
+    l.run("scene.add", R"({"name": "Empty"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "context": "1: key D minor ~:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 29, "clip": "cl_3"})")).empty());
+}
+
+TEST_CASE("the mismatch warning finds a key change inside the span, and comes from scene.insert") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "D", "scale": "minor"})");
+    l.run("key.set", R"({"at": 40, "tonic": "C", "scale": "minor"})");  // bar 11
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w"})");
+    l.run("clip.set", R"({"clip": "cl_1", "length": 16})");
+    // Laid at bar 9 for four bars, the clip's D minor agrees with the project's for two bars
+    // and parts from it at bar 11.
+    const auto inserted = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 4})");
+    REQUIRE(warningCodes(inserted).find("context.mismatch") != std::string::npos);
+    CHECK(inserted.find("warnings")->at(0).find("message")->asString().find("from bar 11") !=
+          std::string::npos);
+    CHECK(inserted.find("warnings")->size() == 1);  // once per item
+    // arrangement.build gives it as well.
+    l.run("history.undo", "{}");
+    const auto built =
+        l.run("arrangement.build", R"({"sequence": [{"scene": "sc_1", "bars": 4}], "bar": 9})");
+    CHECK(warningCodes(built).find("context.mismatch") != std::string::npos);
+    l.run("history.undo", "{}");
+    // A clip that changes key itself at its bar 3 agrees with the project throughout.
+    l.run("clip.set",
+          R"({"clip": "cl_1", "context": "1: key D minor ~:w\n2: ~:w\n3: key C minor ~:w"})");
+    const auto agrees = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 4})");
+    CHECK(warningCodes(agrees).empty());
+}

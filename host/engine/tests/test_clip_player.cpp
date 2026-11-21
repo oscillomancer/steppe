@@ -2004,3 +2004,26 @@ TEST_CASE("launch.commit names the items after their clips") {
         CHECK(s.takes.find(*it.activeTake)->name == "Riff");
     }
 }
+
+TEST_CASE("launch.commit copies a launched clip and warns when its key is not the project's") {
+    Project p;
+    twoTracks(p);
+    p.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w"})");
+    json::Value args = json::Value::object();
+    args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": 192000,
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]})");
+    json::Value done = p.runArgs("launch.commit", args);
+    REQUIRE(done["items"].size() > 0);
+    const json::Value* warnings = done.find("warnings");
+    REQUIRE(warnings);
+    bool mismatch = false;
+    for (const auto& w : warnings->asArray())
+        mismatch |= w.find("code")->asString() == "context.mismatch";
+    CHECK(mismatch);
+    // The notes are as they were played: nothing was mapped.
+    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key C minor ~:w"})");
+    json::Value again = p.runArgs("launch.commit", args);
+    CHECK_FALSE(again.find("warnings"));
+}
