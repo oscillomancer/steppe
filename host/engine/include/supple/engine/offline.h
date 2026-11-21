@@ -340,6 +340,10 @@ struct LaunchLogEntry {
     std::int64_t anchorSample = 0;
     double anchorBeat = 0;
     std::uint64_t epoch = 0;  // the transport epoch it applied in (the replay ignores it)
+    // The scene a scene launch (launch.scene) launched it as; none for a
+    // track's own launch, so a commit knows a scene was launched whole
+    // without guessing from clips that started together (the replay ignores it).
+    std::optional<model::Id> scene;
     bool operator==(const LaunchLogEntry&) const = default;
 };
 

@@ -1680,6 +1680,47 @@ std::vector<std::string> itemsOn(const model::Session& s, const char* track) {
 
 }  // namespace
 
+TEST_CASE("the launch log and a performance say which launches were a scene's" *
+          doctest::description("rt")) {
+    // A commit writes a section per scene launched whole; it must not guess
+    // one from clips that started together (a launch.clip of a scene's only
+    // clip would look the same). Each logged launch names its scene, or none.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        AppLive live(p, options, 128, 48000 * 5 + 16384);
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2, both tracks
+        live.until(96000 + 4000);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 3, tr_1 alone
+        live.until(192000 + 4000);
+        const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
+        REQUIRE(log.size() == 3);
+        CHECK(log[0].scene == id("sc_1"));
+        CHECK(log[1].scene == id("sc_1"));
+        CHECK_FALSE(log[2].scene);
+        CHECK(log[2].clip == id("cl_1"));
+        p.run("launch.capture", R"({"on": false})");
+        p.run("launch.commit", "{}");
+        json::Value history = p.run("log.list", R"({"limit": 1})");
+        const json::Value& last = history["entries"].at(history["entries"].size() - 1);
+        REQUIRE(last.find("command")->asString() == "launch.commit");
+        const json::Value* launches = last.find("args")->find("performance")->find("launches");
+        REQUIRE(launches);
+        REQUIRE(launches->size() == 3);
+        for (std::size_t k : {0u, 1u}) {
+            const json::Value* scene = launches->at(k).find("scene");
+            REQUIRE(scene);
+            CHECK(scene->asString() == "sc_1");
+        }
+        CHECK_FALSE(launches->at(2).find("scene"));
+        live.stop();
+    }
+}
+
 TEST_CASE("a captured performance commits as items that play as it was heard" *
           doctest::description("rt")) {
     // The scene on bar 2 (both tracks, from the arrangement), tr_1 back to

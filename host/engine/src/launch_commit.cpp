@@ -57,6 +57,7 @@ schema::Schema<CapturedPerformance> capturedPerformanceSchema() {
                    schema::enumeration<std::string>(
                        {{"clip", "clip"}, {"arrangement", "arrangement"}, {"stop", "stop"}}))
             .field("clip", &CapturedLaunch::clip, idArg("cl", "Clip"))
+            .field("scene", &CapturedLaunch::scene, idArg("sc", "Scene"))
             .field("anchor", &CapturedLaunch::anchor, sample)
             .field("anchor_beat", &CapturedLaunch::anchorBeat, schema::number().min(0))
             .build();

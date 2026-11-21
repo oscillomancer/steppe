@@ -796,6 +796,7 @@ class Engine {
         model::Id track;
         LaunchLogEntry::Action action = LaunchLogEntry::Action::Clip;
         model::Id clip;
+        std::optional<model::Id> scene;  // a scene launch's, logged with it
     };
     // Where a launch was placed: one target for all its tracks (a scene's),
     // in the epoch's stream, and the song position there.
@@ -1190,6 +1191,7 @@ class Engine {
         };
         std::atomic<std::uint64_t> state{0};
         std::atomic<std::uint64_t> track{0}, clip{0}, epoch{0};
+        std::atomic<std::uint64_t> scene{0};  // a scene launch's scene id number; 0: none
         std::atomic<std::uint8_t> action{0}, done{0}, required{0};
         std::atomic<std::int64_t> target{0}, anchorSample{0};
         std::atomic<double> anchorBeat{0};
@@ -1198,7 +1200,7 @@ class Engine {
         model::LaunchQuantize quantize = model::LaunchQuantize::Bar;
     };
     struct LaunchAck {
-        std::uint64_t track = 0, clip = 0, epoch = 0;
+        std::uint64_t track = 0, clip = 0, epoch = 0, scene = 0;
         std::uint8_t action = 0;
         std::int64_t stream = 0, anchorSample = 0;
         double anchorBeat = 0;

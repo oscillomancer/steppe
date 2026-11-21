@@ -516,7 +516,9 @@ the same.*
   source like an item's fade, in both executors and offline.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
-  the epoch's terms) and its song position. A transport wrap is not
+  the epoch's terms), its song position, and the scene when `launch.scene`
+  launched it (carried through the slot and the executor's ack; the replay
+  ignores it). A transport wrap is not
   logged: it follows from the loop, which a replay is given. A seek, a
   loop change or a stop ends a capture, so a replay never crosses one
   (ADR-0097, revision 2026-11-20, batch 3).

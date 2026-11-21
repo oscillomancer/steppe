@@ -137,10 +137,10 @@ Result<LaunchDone> toAll(EngineApp& app, Context&, Action action, const TrackArg
             return Error("launch.track", id->str() + " has no clips in the running plan", "/track",
                          "a track without clips follows the arrangement; mute it to silence it");
         }
-        requests.push_back({*id, action, {}});
+        requests.push_back({*id, action, {}, {}});
     } else {
         for (const Engine::TrackLaunch& t : (*engine)->launchState())
-            if (wanted(t)) requests.push_back({t.track, action, {}});
+            if (wanted(t)) requests.push_back({t.track, action, {}, {}});
     }
     const model::LaunchQuantize q = quantizeOf(s, nullptr);
     return launchNow(app, action, requests, q, a.track ? "/track" : "");
@@ -172,6 +172,7 @@ CapturedPerformance performanceOf(const Engine::LaunchCapture& c, double rate) {
         l.track = e.track.str();
         l.action = actionName(e.action);
         if (e.action == Action::Clip) l.clip = e.clip.str();
+        if (e.scene) l.scene = e.scene->str();
         l.anchor = e.anchorSample;
         l.anchorBeat = e.anchorBeat;
         p.launches.push_back(std::move(l));
@@ -264,7 +265,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (!id) return std::move(id).error();
             const model::Clip& clip = *s.clips.find(*id);
             SUPPLE_TRY(refuseFrozen(s, clip.track, "/clip"));
-            return launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id}},
+            return launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
                              quantizeOf(s, &clip), "/clip");
         };
         addChecked(registry, std::move(c));
@@ -315,7 +316,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
                                  e.id.str() + "'s audio did not fit the prepared-audio budget",
                                  "/scene");
                     } else {
-                        requests.push_back({track, Action::Clip, e.id});
+                        requests.push_back({track, Action::Clip, e.id, *scene});
                     }
                 }
             if (requests.empty())

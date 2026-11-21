@@ -20,7 +20,8 @@ struct CapturedLaunch {
     std::int64_t frame = 0;
     std::string track, action;  // clip | arrangement | stop
     std::optional<std::string> clip;
-    std::int64_t anchor = 0;  // song sample the clip's phase runs from
+    std::optional<std::string> scene;  // launched as part of this scene (launch.scene)
+    std::int64_t anchor = 0;           // song sample the clip's phase runs from
     double anchorBeat = 0;
 };
 struct CapturedLoop {
