@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -372,6 +374,63 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     f.side->show("inspector");
     f.pass();
     CHECK(f.text("inspector.title") == "buss_1");
+}
+
+TEST_CASE("inspector: one item's Timebase, and Written in while its take has a context") {
+    // gui.md §4.14 (ADR-0098 amended, X4e): the take's own key, read-only.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string keys = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    const std::string item =
+        f.exec("item.add",
+               R"({"track":")" + keys + R"(","bar":1,"notation":"voice v; 1: C4:w"})")["item"]
+            .asString();
+    f.side->show("inspector");
+    f.ui.selectedItems = {item};
+    f.ui.tracksFocused = false;
+    f.pass();
+    REQUIRE(f.inView("inspector.item"));
+    auto* timebase = dynamic_cast<ui::Label*>(f.node("inspector.label.timebase"));
+    REQUIRE(timebase);
+    CHECK(timebase->text() == "Timebase");
+    CHECK_FALSE(f.inView("inspector.row.written_in"));  // no context: no row
+    // The take given a context in D minor through a save and an open (no
+    // command sets one before X4d).
+    const auto itemId = model::Id::parse(item);
+    REQUIRE(itemId);
+    const std::string take = f.app->head().items.find(*itemId)->activeTake->str();
+    const auto path = f.dir / ("written-in." + std::string(product::kSlug));
+    auto args = json::Value::object();
+    args["path"] = path.string();
+    REQUIRE(f.dispatcher->execute({"project.save", args, kTest}));
+    std::string bytes;
+    {
+        std::ifstream in(path, std::ios::binary);
+        bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    auto doc = json::parse(bytes);
+    REQUIRE(doc);
+    (*doc)["takes"][take]["context"] =
+        json::parse(R"([{"beat":0,"type":"key","tonic":"D","scale":"minor"}])").value();
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << json::writeCompact(*doc);
+    }
+    REQUIRE(f.app->open(path));
+    f.ui.selectedItems = {item};
+    f.pass();
+    REQUIRE(f.inView("inspector.row.written_in"));
+    auto* written = dynamic_cast<ui::Label*>(f.node("inspector.written_in"));
+    REQUIRE(written);
+    CHECK(written->text() == "D minor");
+    // Several items: no row.
+    const std::string other =
+        f.exec("item.add",
+               R"({"track":")" + keys + R"(","bar":3,"notation":"voice v; 1: E4:w"})")["item"]
+            .asString();
+    f.ui.selectedItems = {item, other};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.row.written_in"));
 }
 
 TEST_CASE("inspector: a track's Modulation row leads to each source, 'N routes' past four") {

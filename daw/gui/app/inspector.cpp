@@ -17,6 +17,8 @@
 #include "mod_source.h"
 #include "rack_engine.h"
 #include "supple/base/chars.h"
+#include "supple/model/context.h"
+#include "supple/model/follow.h"
 #include "supple/model/launcher.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
@@ -495,7 +497,8 @@ std::unique_ptr<ui::Node> Inspector::build() {
     field(box, "name", "Name");
     field(box, "start", "Start");
     field(box, "length", "Length");
-    auto& follows = formRow(box, "timebase", "Follows");
+    // Timebase: "Follows" read as Follow's neighbour once a take follows a key.
+    auto& follows = formRow(box, "timebase", "Timebase");
     rows_["timebase"] = &follows;
     timebase_ = &follows.emplace<ui::Dropdown>(
         "inspector.timebase", std::vector<ui::Choice>{{"track", "Its track's setting"},
@@ -512,6 +515,13 @@ std::unique_ptr<ui::Node> Inspector::build() {
     state(states, "mute", "Mute", "mute");
     state(states, "loop", "Loop", "accent");
     state(states, "locked", "Lock", "accent");
+    // The heard MIDI take's own key (ADR-0098 amended, gui.md §4.14): what its
+    // notes were written in, while it has a context; read-only.
+    auto& writtenIn = formRow(box, "written_in", "Written in");
+    rows_["written_in"] = &writtenIn;
+    writtenIn_ = &writtenIn.emplace<ui::Label>("inspector.written_in", "", ui::Font::Ui, "small");
+    writtenIn_->layout.width = ui::SizeRule::fraction();
+    writtenIn.visible = false;
 
     // The heard take, when it plays audio: each one take.set.
     auto& take = box.emplace<ui::Node>("inspector.take");
@@ -786,6 +796,22 @@ void Inspector::readItems(bool force) {
                                      : "Some of these are locked. Turn Lock off to edit.";
     if (locked_->text() != note) locked_->setText(note);
     locked_->visible = locked;
+    // One item whose heard take has a context: the key its notes were written
+    // in, where the content starts (model::contextKeyPointAt; "no key" when
+    // that point is unreadable).
+    {
+        const model::ContextPoint* own =
+            take && !take->context.empty()
+                ? model::contextKeyPointAt(take->context,
+                                           model::contextBeatOf(*take, take->startOffset))
+                : nullptr;
+        const bool shown = one && take && !take->context.empty();
+        rows_["written_in"]->visible = shown;
+        const std::string words = !shown ? std::string()
+                                  : own  ? model::keyWords(*own)
+                                         : std::string("no key");
+        if (writtenIn_->text() != words) writtenIn_->setText(words);
+    }
     const model::MediaSource* media = take && take->source ? s.media.find(*take->source) : nullptr;
     takeBox_->visible = media != nullptr;
     if (media) {

@@ -2735,11 +2735,12 @@ inspector adds no command:
 | Name (`inspector.name`) | The active take's name; unnamed, the file's name as a placeholder | Any text | `name` |
 | Start (`inspector.start`) | "3.1.000": bar, beat of that bar's meter, thousandths of the beat, each from 1 | "3", "3.2" or "3.2.500"; the third part is the digits after the beat's decimal point, up to three, so "3.2.5" is "3.2.500" and "3.2.005" five thousandths (`inspectorParseBars`) | `position` (beats) |
 | Length (`inspector.length`) | "32 beats" | A number, with or without "beats" | `length` |
-| Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
+| Timebase (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
+| Written in (`inspector.written_in`) | One item whose heard MIDI take has a context (ADR-0098 amended): the take's own key where its content starts, "D major" ("no key" when that point is unreadable) | Read only | |
 
 When the heard take plays audio, its speed and pitch follow
 (`inspector.take`), each one `take.set` on that take:
@@ -2765,7 +2766,7 @@ Edits made elsewhere, an agent's included, show at the next pass, except
 in the field being typed in. A locked item's fields are disabled, all but
 Lock, under a line that says so. An item with no take cannot be named.
 
-**Several items** show the fields they can share: Follows, Gain, the
+**Several items** show the fields they can share: Timebase, Gain, the
 fades and the three cells. Name, Start, Length, the take settings, the
 take list and the file are for one item only. A field shows the value all
 of them have, and is empty with the placeholder "mixed" when they differ;

@@ -111,7 +111,8 @@ class Inspector {
     std::map<std::string, Field> fields_;
     std::map<std::string, ui::Toggle*> states_;
     ui::Dropdown* timebase_ = nullptr;
-    ui::Node* clipBox_ = nullptr;  // one launcher clip's fields (clip.set)
+    ui::Label* writtenIn_ = nullptr;  // the heard take's own key (Written in)
+    ui::Node* clipBox_ = nullptr;     // one launcher clip's fields (clip.set)
     ui::Node* clipColors_ = nullptr;
     ui::Dropdown* clipMode_ = nullptr;
     ui::Dropdown* clipQuantize_ = nullptr;
