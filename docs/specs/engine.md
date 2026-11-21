@@ -488,6 +488,11 @@ the same.*
   sample; it applies there too, live as in the replay, and the chain
   warms up through its first frames (its lead), as when a swap raises the
   lead (ADR-0097, amended 2026-11-20; review round 69).
+  Under a master playrate the play start is a seek to the play position,
+  which begins a new transport epoch: `play()` places the launches made
+  while stopped again in that epoch, at its first sample, before the
+  transport runs, so they still start at the play start and not on the
+  next boundary (the builder's song journey 2, D1).
 - **Quantize** is project-wide (`launch_quantize`) with a per-clip
   override. `none` means the floor: about the render-ahead (200 ms) for a
   rendered track, one device block for a live one. That is accepted for

@@ -965,6 +965,14 @@ void Engine::play() {
             notifyMain();
             return;
         }
+        // The seek begins a new epoch at the play position: the launches
+        // placed while stopped, for the play start, are placed there again
+        // before the transport runs (else service would place them once it
+        // runs, on the next boundary).
+        playStart_.emplace(seekEpoch_.load(std::memory_order_acquire),
+                           seekSample_.load(std::memory_order_acquire));
+        placeLaunchesAgain();
+        playStart_.reset();
     }
     placeCapture();  // a capture armed while stopped begins at the play position
     wantPlaying_.store(true, std::memory_order_release);

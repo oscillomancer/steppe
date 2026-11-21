@@ -1262,6 +1262,15 @@ class Engine {
     // Main thread (service): collects acks, re-places missed launches and
     // those of an old epoch.
     void serviceLaunches();
+    // Main thread: places again the missed launches and those of an ended
+    // epoch (from serviceLaunches, and from play()).
+    void placeLaunchesAgain();
+    // Main thread, inside play() only: the epoch its seek to the play
+    // position begins, and that position. While set, a stopped launch
+    // clock reads the start of that epoch, so a launch placed while
+    // stopped still starts at the play start (the builder's song journey
+    // 2, D1).
+    std::optional<std::pair<std::uint64_t, std::int64_t>> playStart_;
     struct LaunchClock;
     bool launchClock(LaunchClock& out) const;
     // Main thread: the capture (captureLaunches). `pending`: its start is

@@ -118,6 +118,57 @@ TEST_CASE("a launch under a master playrate switches where the song reaches its 
     CHECK(edited.log[0].runningFrame > 200 * 128);
 }
 
+TEST_CASE("a launch made while stopped under a new playrate starts at the play start" *
+          doctest::description("rt")) {
+    // The builder's second song journey, D1: with the engine running and the
+    // transport stopped, a playrate set and then a scene launched answered
+    // beat 0 but played from bar 2. Stopped, a launch targets the play start
+    // whatever the rate (as at 1.0).
+    for (const double rate : {1.25, 0.8})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("rate " << rate << ", anticipative " << options.anticipative);
+            Project p;
+            twoTracks(p);
+            const model::Session unity = p.app->head();
+            json::Value set = j(R"({"preserve_pitch": false})");
+            set["rate"] = rate;
+            p.runArgs("transport.playrate.set", set);
+            const model::Session rated = p.app->head();
+            constexpr std::uint32_t block = 128;
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+            REQUIRE(engine.load(unity, p.app->projectDir()));
+            const auto run = [&](std::int64_t cycles) {
+                if (options.anticipative)
+                    runAheadOnState(engine, backend, cycles, block);
+                else
+                    backend.run(cycles);
+                engine.service();
+            };
+            run(10);
+            REQUIRE(engine.load(rated, p.app->projectDir()));  // stopped
+            run(10);
+            const std::vector<Engine::LaunchRequest> scene{request("tr_1", "cl_1"),
+                                                           request("tr_2", "cl_2")};
+            auto placed = engine.launch(scene, model::LaunchQuantize::Bar);
+            REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
+            CHECK(placed->anchorSample == 0);
+            run(10);  // still stopped: it stays queued for the play start
+            engine.play();
+            run(200);
+            const auto log = engine.launchLog();
+            REQUIRE(log.size() == 2);
+            for (const LaunchLogEntry& e : log) {
+                CHECK(e.anchorSample == 0);
+                CHECK(e.runningFrame == 0);
+            }
+            engine.stop();
+        }
+}
+
 TEST_CASE("a launch while a playrate change is in flight says so, and lands once it is not") {
     // Review round 78 K1: right after a rate edit reaches the engine, and
     // before the executors take it, placement answers launch.later with the
