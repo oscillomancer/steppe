@@ -527,6 +527,11 @@ struct ParamLane {
     Automation curve;
     std::shared_ptr<const params::DescribedParam> spec;  // null: plain CLAP values
     double lastSent = std::numeric_limits<double>::quiet_NaN();
+    // The stage block (Stage::blocks) in which it last sent the plug-in a
+    // value; 0, never. What the plug-in reports for this parameter outside
+    // its own gesture, in that block or the next, is the host's value
+    // repeated (dropEchoes), whatever the value.
+    std::uint64_t sentBlock = 0;
     // Modulation through the envelope (ADR-0096 step M4): its routes are
     // Stage::laneModRoutes[modFirst .. modFirst + modCount); their sum,
     // depth x signal x modRange, is added to the curve's value and the
@@ -746,6 +751,18 @@ struct Stage {
     std::uint64_t modDeferred = 0;
     std::vector<host::OutputEvent> outStorage;
     host::OutputEvents outEvents;
+    // Echoes (the gui-lead's second walk, defect 1; review round 81 E1):
+    // the blocks this stage's plug-in has processed, and the parameters
+    // whose own gesture it has open. Only lanes send it parameter values,
+    // and each lane notes its last sending block (ParamLane::sentBlock).
+    // Outside such a gesture, a value it reports for a parameter its lane
+    // sent this block or the one before is the host's value repeated, never
+    // its edit: it is dropped before the main thread (`dropEchoes`). Fixed
+    // sizes: nothing allocates on the audio path.
+    static constexpr std::size_t kOpenGestures = 16;
+    std::uint64_t blocks = 0;
+    std::array<std::uint32_t, kOpenGestures> openGesture{};
+    std::size_t openGestures = 0;
     // PDC policy (fx.pdc): an ignored stage keeps its own dry delay but adds
     // nothing to its chain's compensation.
     bool pdcIgnore = false;

@@ -1158,7 +1158,7 @@ TEST_CASE("VST3 scan retains search path precedence and suppresses repeated bund
     const std::array<fs::path, 3> paths{first.parent_path(), second.parent_path(), first};
     auto found = scan(paths);
     REQUIRE(found);
-    REQUIRE(found->size() == 18);  // two bundles of nine classes
+    REQUIRE(found->size() == 20);  // two bundles of ten classes
     CHECK(found->front().path == first);
     CHECK(found->back().path == second);
 }

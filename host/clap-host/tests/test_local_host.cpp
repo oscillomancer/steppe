@@ -84,7 +84,7 @@ TEST_CASE("host Unicode conversion bounds and validates plugin text") {
 TEST_CASE("VST3 fixture scans, processes, and restores state") {
     auto found = scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
     REQUIRE(found);
-    REQUIRE(found->size() == 9);
+    REQUIRE(found->size() == 10);
     CHECK((*found)[0].format == "vst3");
     CHECK((*found)[0].id.rfind("vst3:", 0) == 0);
     CHECK((*found)[0].version == "2.0");
@@ -122,6 +122,59 @@ TEST_CASE("VST3 fixture scans, processes, and restores state") {
     REQUIRE(instance.process(buffer.block(64, std::span<const Event>(&automation, 1))));
     CHECK(static_cast<double>(buffer.ol[19]) == doctest::Approx(0.25));
     CHECK(static_cast<double>(buffer.ol[20]) == doctest::Approx(0.5));
+    instance.stopProcessing();
+    instance.deactivate();
+}
+
+TEST_CASE("a VST3 editor's gesture goes out with its block, and a barrier ends one left open") {
+    // Review round 81, E2, and 81b: the editor's beginEdit/performEdit/
+    // endEdit come out after what the processor reports, which leaves out
+    // its report of the parameter the editor moved (E5). A state load drops
+    // queued edits (a barrier): the next block ends the gesture whose
+    // endEdit can no longer arrive, so none stays open. The fixture's editor
+    // acts on Level (3) when Edit (2) is set: below 0.1 it grabs, from 0.9 it
+    // lets go, else it moves Level.
+    auto found = scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
+    REQUIRE(found);
+    const auto info = std::find_if(found->begin(), found->end(), [](const PluginInfo& p) {
+        return p.name == "Test VST3 Stepped Echo";
+    });
+    REQUIRE(info != found->end());
+    auto made = Instance::create(*info, {});
+    REQUIRE(made);
+    auto& instance = **made;
+    REQUIRE(instance.activate(48000, 1, 64));
+    REQUIRE(instance.startProcessing());
+    Buffers buffer(64);
+    std::vector<OutputEvent> storage(16);
+    OutputEvents out{storage};
+    using Kind = OutputEvent::Kind;
+    const auto block = [&] {
+        out.clear();
+        REQUIRE(instance.process(buffer.block(64), &out));
+        return std::vector<OutputEvent>(storage.begin(), storage.begin() + out.count);
+    };
+    REQUIRE(instance.setParam(2, 0.5));  // a move alone is a gesture of its own
+    auto events = block();
+    REQUIRE(events.size() == 3);  // and no report of Level from the processor
+    CHECK(events[0].kind == Kind::GestureBegin);
+    CHECK(events[1].kind == Kind::ParamValue);
+    CHECK(events[1].value == doctest::Approx(0.5));
+    CHECK(events[2].kind == Kind::GestureEnd);
+    for (const auto& e : events) CHECK(e.paramId == 3);
+    REQUIRE(instance.setParam(2, 0.05));  // grab
+    events = block();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].kind == Kind::GestureBegin);
+    const auto state = instance.saveState();
+    REQUIRE(state);
+    REQUIRE(instance.loadState(*state));  // a barrier before the release
+    events = block();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].kind == Kind::GestureEnd);
+    CHECK(events[0].paramId == 3);
+    REQUIRE(instance.setParam(2, 0.95));  // the release no longer opens or ends anything
+    CHECK(block().empty());
     instance.stopProcessing();
     instance.deactivate();
 }
