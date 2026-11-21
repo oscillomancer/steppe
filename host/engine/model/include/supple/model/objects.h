@@ -558,6 +558,20 @@ struct Modulation {
 };
 inline constexpr std::size_t kMaxModulations = 4096;
 
+// A point of the project's context track (ADR-0095): a key or a chord that holds
+// from `beat` until the next point of its type. The strings are data: a later
+// build may write a scale or a chord quality this one lacks, so the model keeps
+// them and only the commands (and the harmony library) judge them.
+enum class ContextType : std::uint8_t { Key, Chord };
+inline constexpr std::size_t kMaxContextPoints = 4096;  // per type
+struct ContextPoint {
+    double beat = 0.0;  // beats from project start
+    ContextType type = ContextType::Key;
+    std::string tonic, scale;  // Key: a spelled pitch class and a scale name
+    std::string symbol;        // Chord: "" is "no chord from here"
+    bool operator==(const ContextPoint&) const = default;
+};
+
 // The clip launcher (ADR-0097, session-model "Scenes and clips"). A scene is
 // a column; a clip is a channel's material for one scene, holding ordinary
 // takes. A clip is not an Item: timeline code never sees one.
@@ -577,6 +591,9 @@ enum class ClipMode : std::uint8_t { Loop, Once };
 // Fixed when the clip is made: a take whose source does not match is
 // refused, so the unit never changes under a clip.
 enum class ClipKind : std::uint8_t { Midi, Audio };
+// How a clip's notes are mapped when it is laid on the timeline (ADR-0098,
+// session-model "Clip context"): not at all, by the key, or by the chords.
+enum class ClipFollow : std::uint8_t { None, Key, Chords };
 struct Clip {
     Id track = kMaster;  // a channel
     Id scene{Kind::Scene, 0};
@@ -593,6 +610,13 @@ struct Clip {
     std::string name, color;
     bool mute = false;
     double gainDb = 0.0;
+    // The key and chords the clip was written against (ADR-0098): the context
+    // track's points with `beat` counted from the clip's start in beats, by
+    // beat and then type (key first), each on the 1/960 grid. An audio clip
+    // holds at most a key at 0. `follow` other than None needs a MIDI clip with
+    // a readable key at 0.
+    std::vector<ContextPoint> context;
+    ClipFollow follow = ClipFollow::None;
     bool operator==(const Clip&) const = default;
 };
 inline constexpr std::size_t kMaxScenes = 1024;
@@ -609,19 +633,6 @@ struct Region {
     Timebase timebase = Timebase::Beats;
     std::string name, color;
     bool section = true;  // a section of the song (ADR-0095); false: a plain range
-};
-
-// A point of the project's context track (ADR-0095): a key or a chord that holds
-// from `beat` until the next point of its type. The strings are data: a later
-// build may write a scale or a chord quality this one lacks, so the model keeps
-// them and only the commands (and the harmony library) judge them.
-enum class ContextType : std::uint8_t { Key, Chord };
-inline constexpr std::size_t kMaxContextPoints = 4096;  // per type
-struct ContextPoint {
-    double beat = 0.0;  // beats from project start
-    ContextType type = ContextType::Key;
-    std::string tonic, scale;  // Key: a spelled pitch class and a scale name
-    std::string symbol;        // Chord: "" is "no chord from here"
 };
 
 }  // namespace supple::model
