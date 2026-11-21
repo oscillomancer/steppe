@@ -1629,7 +1629,11 @@ button records audio. Click it so it lights, then play and launch clips and
 scenes. When you stop (or seek, or change the loop) the performance is
 written onto the timeline as items, in one undo step, and Capture stays lit
 for the next take; click it again to finish and turn it off. If every track
-stayed on the arrangement, nothing is written.
+stayed on the arrangement, nothing is written. Once the take is written with
+the transport stopped, every track goes back to the arrangement, so pressing
+play plays what you just recorded rather than the clips again. Capture also
+lights when an agent is capturing; clicking it then finishes that capture
+and writes it.
 
 If the performance can't be written (a locked item is in the way, say),
 Capture goes dark and the status line says why. The performance is kept: fix
@@ -1667,12 +1671,15 @@ Drag a clip to another empty cell to move it, with Ctrl to copy it; an
 occupied cell refuses it. Drag a clip onto a channel's lane to lay a copy
 on the timeline, or an item into an empty cell to make a clip from it.
 Right-click a clip for Rename, Colour, Mode (loop or once), Quantize,
-Duplicate, Lay on timeline at playhead and Delete; Delete on the keyboard
+Duplicate, Lay on timeline at playhead, Take FX… (the clip's own effects,
+which play whenever the clip does) and Delete; Delete on the keyboard
 removes the selected clips. Ctrl+C copies the selected clips; click an empty
 cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
 marks clips to move, and the next paste moves them. Copied clips stay in
 their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
-colour, length, gain, mode, launch quantize and mute.
+colour, length, gain, mode, launch quantize and mute. While the master
+playrate is not 1 (or its envelope is on), clips can't be launched: the
+pane draws them dimmed, and a click says why in the status line.
 
 In the piano roll a clip starts at its own bar 1. It has no place in the
 song, so the roll shades and spells it by the key at the project's start

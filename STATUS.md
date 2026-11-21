@@ -250,17 +250,22 @@ instructions are in `docs/guides/installing.md`.
   line. The piano roll opens MIDI clips. L4 adds the header's Capture
   toggle (armed while lit; a stop, seek or loop change commits the
   performance with `launch.commit` and arms the next; a refused commit
-  keeps the performance, dark, for the next click), a scene dragged onto
+  keeps the performance, dark, for the next click; a commit made while
+  stopped returns the tracks to the arrangement; the cell also lights for
+  an agent's capture), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for
   its longest clip's whole bars, with a drop marker while dragged), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
-  status line. Limits:
+  status line. The clip menu's Take FX… opens a clip's take chain, and with
+  a master playrate on the pane draws dimmed. Limits:
   - there is no dialog for `arrangement.build`;
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;
   - a double-click on an audio clip opens the inspector, as there is no
     audio clip editor;
+  - an envelope on a take's FX has no lane, on an item's take or a clip's
+    (clip time), so clip-time envelopes are edited by command only;
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole

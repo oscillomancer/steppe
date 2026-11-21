@@ -425,7 +425,11 @@ number. Then a note: "Preparing audio…", a preparation error, or the last
 message a view or an action reported. An action that fails (`AppActions`'
 `onError`: a menu entry, a key, a toolbar or transport button, an inspector
 field) puts its message there, and on stderr as before; the message stays
-until the next one.
+until the next one. So does a refused edit from the track panel and its
+menus (strip controls, the envelope, input and output menus), a plug-in
+window, or a timeline gesture (an item drag, an envelope point, the item and
+take menus): `Shell::onError`, which defaults to the status line, and the
+item gestures' `onError`, which the shell routes to it.
 While the pointer rests on a control that has a name (§2, Names), the name
 takes the note's place: "7 tracks  version 12 · Mute", and with the keys
 bound to the control's action after it, every binding, as the actions list
@@ -876,7 +880,11 @@ have none of these four lanes.
 
 A strip's envelope menu lists, after its own and its effects' envelopes, its
 sends' volume, pan and mute (`env.add {route}`, flat at the send's value;
-titled "Send → destination · Volume"). A send's visible lanes sit under the
+titled "Send → destination · Volume"). A plug-in parameter's lane is titled
+with its effect (the instance's label, else the plug-in's name) and the
+name the plug-in's description gives the parameter: "Marram · Filter 1
+Cutoff" (`views::envTitle` with the lane's scale); a parameter the plug-in
+does not describe shows its key after the effect. A send's visible lanes sit under the
 strip it leaves, after the strip's own and its effects' lanes; `route.set`
 records into them in touch, latch and write like `track.set`.
 
@@ -2551,6 +2559,16 @@ same heights, scroll and colours.
   it off. A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
   item in the way) shows its message in the status line.
+- **After a commit made while stopped** (at stop, or the cell turned off
+  while stopped) every track returns to the arrangement where playing
+  starts (`launch.arrangement`), so play plays the take just committed, not
+  the clips again. A commit made while playing (a seek or a loop change
+  ended the capture, or the cell went off mid-take) leaves the tracks
+  playing what they play.
+- **The cell follows the engine's capture**, whoever armed it: an agent's
+  `launch.capture` lights it too (`CaptureControl::lit`). A click on a cell
+  lit that way ends that capture and commits it, as the toggle's own; at
+  stop the app commits only a capture its toggle armed.
 - **A refused commit keeps the performance.** When `launch.commit` refuses
   (a locked item under a track that left the arrangement, a clip loop with
   no item equivalent, a captured track or clip deleted meanwhile), nothing
@@ -2610,7 +2628,12 @@ same heights, scroll and colours.
 - **A clip** is a small item: a name bar in its colour (the track's when it
   has none) and its content drawn by the shared item-body functions
   (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
-  muted clip is dimmed, as a muted item is.
+  muted clip is dimmed, as a muted item is. While the master playrate is
+  not 1 or its envelope is active the engine refuses every launch
+  (`launch.playrate`), so every clip and the scenes' ▶ draw dimmed the same
+  way (`views::launchesRefused`, the plan's condition read from the
+  session); a click still asks, and the refusal's message reaches the status
+  line.
   - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
     name bar's ink while idle).
   - **Playing:** the ▶, an outline, and a progress line along the bottom
@@ -2656,7 +2679,9 @@ same heights, scroll and colours.
 - **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
   Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
   empty cell to its right; none left is an error in the status line), Lay on
-  timeline at playhead (`item.add {clip}`), Delete (the selection, one undo
+  timeline at playhead (`item.add {clip}`), Take FX… (the FX window on the
+  active take's chain, which plays when the clip does; `FxWindow::openTake`
+  opens a clip's take on the clip's track), Delete (the selection, one undo
   step). A right-click on an unselected clip selects it first. A row that
   opens a second menu ends in "…", as elsewhere.
 - **Delete** removes the selected clips (`clip.remove`), one undo step,
@@ -2704,7 +2729,14 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   engine; off with nothing played writing nothing. A commit refused by a
   locked item: dark, the performance kept in the engine, a click refused
   again and still kept, then after unlocking a click committing it in one
-  undo step and arming; refused twice, a third click drops it.
+  undo step and arming; refused twice, a third click drops it. After a
+  commit at stop the tracks are back on the arrangement, or queued to it.
+  An agent's capture lights the cell, and a click on it ends and commits it.
+- With a master playrate on: the pane and the scenes' ▶ dimmed (golden
+  `launcher-refused-dark.png`), a ▶ click refused with `launch.playrate`
+  through the launcher's error hook, undimmed again at rate 1.
+- The clip menu's Take FX… handing the app the active take, and the FX
+  window opening a clip's take chain.
 - A scene dragged onto the lanes (its ghost, the command, the section and
   items after), refused on an occupied span; the menu's inserts at the
   playhead and the end; an empty scene refused; the bar arithmetic.
