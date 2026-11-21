@@ -10991,6 +10991,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "track": "tr_1",
         "action": "clip",
         "clip": "cl_1",
+        "scene": "sc_1",
         "anchor": 0,
         "anchor_beat": 0
       }
