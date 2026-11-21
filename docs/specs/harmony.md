@@ -130,7 +130,7 @@ snapping in each mode, ties, the range edges and a one-class set, and every pitc
 every scale in every key landing in the scale within six semitones; the index
 against a brute-force scan.
 
-## 5. Following (ADR-0098; the contract for step X2)
+## 5. Following (ADR-0098; the contract for step X2, built)
 
 ```cpp
 struct Place { std::optional<Key> key; std::optional<Chord> chord; };
@@ -146,6 +146,9 @@ struct Followed {
 // what cannot be mapped is copied (`Copy`), and a result out of range is folded.
 Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
 ```
+
+`tonicInterval(a, b)` is step 1's `iv` as a public function (a tonic interval from `a` to `b`,
+−5..6, the tritone −6), for callers that report the interval a transposition used.
 
 **Notation.**
 - `pc(x)` is `pitchClassNumber`.

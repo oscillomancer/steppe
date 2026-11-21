@@ -426,4 +426,182 @@ std::optional<Chord> ContextIndex::chordAt(double beat) const {
     return p ? p->chord : std::nullopt;
 }
 
+// --- following ----------------------------------------------------------------------------------
+
+namespace {
+
+int pcOf(PitchClass pc) { return pitchClassNumber(pc); }
+
+int ivBetween(int fromClass, int toClass) {
+    const int d = floorMod(toClass - fromClass, 12);
+    return d < 6 ? d : (d > 6 ? d - 12 : -6);
+}
+
+// The result of Key mode before folding, or nothing when a key is missing (a copy).
+struct KeyStep {
+    int pitch = 0;
+    FollowedBy by = FollowedBy::Transpose;
+    bool scaleShape = false;
+};
+std::optional<KeyStep> keyStep(int pitch, const std::optional<Key>& from,
+                               const std::optional<Key>& to) {
+    if (!from || !to) return std::nullopt;
+    const int iv = ivBetween(pcOf(from->tonic), pcOf(to->tonic));
+    if (from->scale == to->scale) return KeyStep{pitch + iv, FollowedBy::Transpose, false};
+    const auto fromIv = scaleIntervals(from->scale);
+    const auto toIv = scaleIntervals(to->scale);
+    if (fromIv.size() != toIv.size()) return KeyStep{pitch + iv, FollowedBy::Transpose, true};
+    // The highest scale pitch at or below `pitch` (it may lie below 0), and the
+    // alteration above it.
+    const int tonic = pcOf(from->tonic);
+    int s = pitch;
+    for (int d = 0; d < 12; ++d, --s) {
+        const int rel = floorMod(s - tonic, 12);
+        if (std::find(fromIv.begin(), fromIv.end(), rel) != fromIv.end()) break;
+    }
+    const int alt = pitch - s;
+    const int r = s - tonic;
+    const int o = floorDiv(r, 12);
+    const int rem = r - 12 * o;
+    const auto k =
+        static_cast<std::size_t>(std::find(fromIv.begin(), fromIv.end(), rem) - fromIv.begin());
+    return KeyStep{tonic + iv + 12 * o + toIv[k] + alt, FollowedBy::Degree, false};
+}
+
+int slotOf(int interval) {
+    if (interval == 0) return 0;
+    if (interval >= 2 && interval <= 5) return 1;
+    if (interval >= 6 && interval <= 8) return 2;
+    if (interval >= 9 && interval <= 11) return 3;
+    if (interval >= 13 && interval <= 15) return 4;
+    if (interval == 17) return 5;
+    if (interval == 21) return 6;
+    return -1;
+}
+
+struct Tone {
+    int slot = 0;
+    int pitchClass = 0;
+};
+std::vector<Tone> tonesOf(const Chord& chord) {
+    std::vector<Tone> out;
+    const auto& table = chordQualities();
+    const auto it = table.find(chord.quality);
+    if (it == table.end()) return out;
+    for (const int interval : it->second) {
+        const int slot = slotOf(interval);
+        if (slot < 0) continue;
+        out.push_back({slot, floorMod(pcOf(chord.root) + interval, 12)});
+    }
+    return out;
+}
+const Tone* toneInSlot(const std::vector<Tone>& tones, int slot) {
+    for (const Tone& t : tones)
+        if (t.slot == slot) return &t;
+    return nullptr;
+}
+// The highest tone below `slot`, the root at least.
+const Tone* toneBelow(const std::vector<Tone>& tones, int slot) {
+    const Tone* best = nullptr;
+    for (const Tone& t : tones)
+        if (t.slot < slot && (!best || t.slot > best->slot)) best = &t;
+    return best ? best : toneInSlot(tones, 0);
+}
+
+}  // namespace
+
+int tonicInterval(PitchClass a, PitchClass b) { return ivBetween(pcOf(a), pcOf(b)); }
+
+Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode) {
+    Followed out;
+    const auto fold = [&](int p) {
+        while (p > 127) {
+            p -= 12;
+            out.folded = true;
+        }
+        while (p < 0) {
+            p += 12;
+            out.folded = true;
+        }
+        return p;
+    };
+    const auto byKey = [&]() {
+        const auto step = keyStep(pitch, from.key, to.key);
+        if (!step) {
+            out.pitch = pitch;
+            out.by = FollowedBy::Copy;
+            return;
+        }
+        out.by = step->by;
+        out.scaleShape = step->scaleShape;
+        out.pitch = fold(step->pitch);
+    };
+    if (mode == FollowMode::Key || !from.chord || !to.chord) {
+        byKey();
+        return out;
+    }
+    const std::vector<Tone> fromTones = tonesOf(*from.chord), toTones = tonesOf(*to.chord);
+    if (fromTones.empty() || toTones.empty()) {  // a quality the table does not hold
+        byKey();
+        return out;
+    }
+    const int pitchClass = floorMod(pitch, 12);
+    const int fromRoot = pcOf(from.chord->root), toRoot = pcOf(to.chord->root);
+    int target = 0;
+    const Tone* tone = nullptr;
+    for (const Tone& t : fromTones)
+        if (t.pitchClass == pitchClass) {
+            tone = &t;
+            break;
+        }
+    if (tone) {
+        const Tone* landing = toneInSlot(toTones, tone->slot);
+        if (!landing) {
+            if (tone->slot >= 4) {  // an extension: the root, third or fifth, else below that
+                const int base = tone->slot - 4;
+                landing = toneInSlot(toTones, base);
+                if (!landing) landing = toneBelow(toTones, base);
+            } else {
+                landing = toneBelow(toTones, tone->slot);
+            }
+        }
+        target = landing ? landing->pitchClass : toRoot;
+    } else if (from.chord->bass && pcOf(*from.chord->bass) == pitchClass) {
+        target = to.chord->bass ? pcOf(*to.chord->bass) : toRoot;
+    } else if (from.key && to.key &&
+               scaleIntervals(from.key->scale).size() == scaleIntervals(to.key->scale).size()) {
+        const auto fromIv = scaleIntervals(from.key->scale);
+        const auto toIv = scaleIntervals(to.key->scale);
+        const auto indexOf = [](std::span<const int> iv, int rel) {
+            const auto it = std::find(iv.begin(), iv.end(), rel);
+            return it == iv.end() ? -1 : static_cast<int>(it - iv.begin());
+        };
+        const int kr = indexOf(fromIv, floorMod(fromRoot - pcOf(from.key->tonic), 12));
+        const int kt = indexOf(toIv, floorMod(toRoot - pcOf(to.key->tonic), 12));
+        if (kr >= 0 && kt >= 0) {
+            const int tonic = pcOf(from.key->tonic);
+            int s = pitch;
+            for (int d = 0; d < 12; ++d, --s)
+                if (indexOf(fromIv, floorMod(s - tonic, 12)) >= 0) break;
+            const int alt = pitch - s;
+            const int j = indexOf(fromIv, floorMod(s - tonic, 12));
+            const int m = static_cast<int>(fromIv.size());
+            target = floorMod(pcOf(to.key->tonic) +
+                                  toIv[static_cast<std::size_t>(floorMod(kt + j - kr, m))] + alt,
+                              12);
+        } else {
+            target = floorMod(pitchClass + ivBetween(fromRoot, toRoot), 12);
+        }
+    } else {
+        target = floorMod(pitchClass + ivBetween(fromRoot, toRoot), 12);
+    }
+    // The octave nearest the key-followed pitch, a tie down.
+    int reference = pitch + ivBetween(fromRoot, toRoot);
+    if (const auto step = keyStep(pitch, from.key, to.key)) reference = step->pitch;
+    const int d = floorMod(target - reference, 12);
+    out.pitch = fold(reference + (d < 6 ? d : d - 12));  // 6 is a tie: down
+    out.by = FollowedBy::Chords;
+    return out;
+}
+
 }  // namespace supple::harmony

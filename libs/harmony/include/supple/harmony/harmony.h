@@ -116,6 +116,32 @@ enum class SnapMode { Nearest, Down, Up };
 std::optional<int> snapToPitchClasses(int pitch, std::span<const int> classes,
                                       SnapMode mode = SnapMode::Nearest);
 
+// --- following (ADR-0098, specs/harmony.md §5) --------------------------------------------------
+
+// The key and chord that hold at a place; a part that does not hold, or that this
+// build cannot read, is absent.
+struct Place {
+    std::optional<Key> key;
+    std::optional<Chord> chord;
+};
+enum class FollowMode { Key, Chords };
+enum class FollowedBy { Transpose, Degree, Chords, Copy };
+struct Followed {
+    int pitch = 0;  // always in 0..127
+    FollowedBy by = FollowedBy::Copy;
+    bool scaleShape = false;  // the scales had different sizes and the note was transposed
+    bool folded = false;      // moved by octaves into range
+};
+
+// The nearest interval in semitones from tonic `a` to tonic `b`, -5..6 with the tritone
+// going down: -6.
+int tonicInterval(PitchClass a, PitchClass b);
+
+// A MIDI pitch (0..127) written against `from`, mapped to `to` (docs/specs/harmony.md §5).
+// It never fails: what cannot be mapped is copied (`Copy`), and a result outside 0..127
+// is folded by octaves. Deterministic, allocation-free apart from the quality lookup.
+Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
+
 // --- context ------------------------------------------------------------------------------------
 
 struct KeyPoint {
