@@ -62,8 +62,12 @@ Result<ParamRef> resolveParam(std::span<const host::ParamInfo> list, const json:
                               std::string_view ref, std::string_view plugin, Ambiguity ambiguity) {
     const json::Value* params = paramsOf(schema);
     // A semantic key, exactly (one may be all digits; it wins over an id).
+    // Only one with an id: one without could not be found from the id or a
+    // name, so it would be a second spelling (review round 79 J2; the host
+    // refuses such a schema at load, Instance::semanticSchema).
     if (params)
-        if (const json::Value* entry = params->find(ref); entry && entry->isObject()) {
+        if (const json::Value* entry = params->find(ref);
+            entry && entry->isObject() && idOf(*entry)) {
             ParamRef r;
             r.canonical = std::string(ref);
             r.semantic = r.described = entry;

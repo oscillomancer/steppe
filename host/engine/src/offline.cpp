@@ -1092,6 +1092,10 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             bool early = false;  // its clip chains' input side (Node::launchLead)
         };
         std::vector<Switch> switches;
+        // The log's anchors are timeline samples (the live plan counts from
+        // 0); this plan counts from the render's start (round 74 F1). Beats
+        // are absolute in both.
+        const std::int64_t launchOrigin = time::samplesAt(opt.startSeconds, p.rate);
         for (const LaunchLogEntry& e : opt.launches)
             for (std::size_t k = 0; k < p.nodes.size(); ++k) {
                 detail::Node& node = p.nodes[k];
@@ -1109,13 +1113,13 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                          : e.action == LaunchLogEntry::Action::Stop
                                              ? detail::LaunchState::Kind::Stopped
                                              : detail::LaunchState::Kind::Arrangement;
-                        sw.action.anchorSample = e.anchorSample;
+                        sw.action.anchorSample = e.anchorSample - launchOrigin;
                         sw.action.anchorBeat = e.anchorBeat;
                         switches.push_back(sw);
                     }
                 if (node.id != e.track || node.players.empty()) continue;
                 detail::LaunchAction a;
-                a.anchorSample = e.anchorSample;
+                a.anchorSample = e.anchorSample - launchOrigin;
                 a.anchorBeat = e.anchorBeat;
                 a.kind = e.action == LaunchLogEntry::Action::Clip ? detail::LaunchState::Kind::Clip
                          : e.action == LaunchLogEntry::Action::Stop

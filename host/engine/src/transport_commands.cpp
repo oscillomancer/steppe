@@ -87,7 +87,9 @@ void registerTransportCommands(cmd::Registry& registry) {
             "requested_rate is the saved project ratio; envelope names the active nonempty "
             "tr_0/playrate envelope, including automation items. No engine is required. "
             "effective_rate follows consumed output, including compensated source transitions "
-            "and graph/backend output latency; it is 1.0 without a running engine. GUI clients "
+            "and graph/backend output latency; it is 1.0 without a running engine. While the "
+            "transport is stopped, a steady rate reads as the rate playing starts at (an "
+            "envelope or a sync chase reads as last heard). GUI clients "
             "can use EngineApp::playrateState() without executing/logging a query each sync.";
         c.tags = {"transport", "automation"};
         c.args = schema::object<NoArgs>("no_args").build();
@@ -113,7 +115,8 @@ void registerTransportCommands(cmd::Registry& registry) {
             "levels (ADR-0061), the curve keeps playing while it is written (no hold or touch "
             "return). Recording requires unity. "
             "Settings are saved/undoable. File sources convert before take FX and live input "
-            "mixing; instruments retain their pitch. Scalar edits ramp and converter changes "
+            "mixing; instruments retain their pitch. While playing, scalar edits ramp (while "
+            "stopped, playing starts at the new rate) and converter changes "
             "crossfade for 10 ms after priming. Edits include the render horizon and compensated "
             "source lookahead; newer requests coalesce while a transition finishes. Long-latency "
             "take chains can exceed the usual 200 ms response. effective_rate follows audible "

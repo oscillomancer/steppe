@@ -380,7 +380,35 @@ until it is released.
   plug-in's gesture (§1.4), so what the plug-in reports is the hand's value,
   recorded as it is. Outside a held pass (stopped, or a reading mode) the
   route's current offset is taken off what the plug-in reports
-  (`commitOutputGesture`), so the static value keeps the base.
+  (`commitOutputGesture`), so the static value keeps the base. What a
+  plug-in merely repeats of the values it was sent never gets that far:
+  each lane notes the stage block in which it last sent its parameter, and
+  the executor drops, before the main thread, a global output value for a
+  parameter its lane sent in that block or the one before, outside the
+  plug-in's own gesture on it, whatever the value (review round 81, E1 and
+  E2: matched by parameter, so no count of lanes or points overflows it,
+  an echo one block late is caught, and so is a stepped plug-in's report of
+  the step it plays). That holds for every format, bridged or not, and for
+  plain automation as for this lane. What it gives up: a gestureless edit
+  of a parameter while its lane sends, which the lane overwrites within 32
+  frames anyway. A VST3 editor's `beginEdit`/`performEdit`/`endEdit`
+  reach the executor as the plug-in's gesture (a `performEdit` outside
+  `beginEdit` is one of its own), after what the processor reports in that
+  block, so they are recorded and hold a writing lane as a CLAP gesture
+  does; what the processor reports in that block for a parameter the
+  editor moved is that edit repeated and is not passed on (review round
+  81b, E5). A barrier that drops queued edits, a deactivation or a full
+  queue ends every editor gesture still open, so a lost `endEdit` leaves
+  no gesture open in the stage. Within a grab the plug-in's state is
+  captured at `endEdit`, not at each `performEdit`: a capture mid-drag was
+  a step of its own, and its plan swap dropped the drag's gesture. In the
+  anticipative executor the edit's state flag captures the plug-in state
+  while the rendered gesture waits to be heard, and that step's plan swap
+  usually drops the gesture: the edit is recorded as the plug-in's state
+  and writes no point, or now and then as the state and then the
+  parameter edit (STATUS). Without the filter an echoing plug-in under
+  modulation added a history step per echo, stopped or playing, and wrote
+  points in a writing mode (the gui-lead's second walk, defect 1).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
   that its target cannot take it: the parameter is gone, read-only, bypass,
   neither modulatable nor reachable through an active envelope, or the
@@ -488,6 +516,11 @@ the same.*
   sample; it applies there too, live as in the replay, and the chain
   warms up through its first frames (its lead), as when a swap raises the
   lead (ADR-0097, amended 2026-11-20; review round 69).
+  Under a master playrate the play start is a seek to the play position,
+  which begins a new transport epoch: `play()` places the launches made
+  while stopped again in that epoch, at its first sample, before the
+  transport runs, so they still start at the play start and not on the
+  next boundary (the builder's song journey 2, D1).
 - **Quantize** is project-wide (`launch_quantize`) with a per-clip
   override. `none` means the floor: about the render-ahead (200 ms) for a
   rendered track, one device block for a live one. That is accepted for
@@ -3542,11 +3575,19 @@ are independent clients of the command API and the cached state accessor below.
   scalar; `envelope` is present only for an active master rate envelope with
   effective points (including automation items). `effective_rate` reports
   consumed output, accounting for graph and backend output latency, rather than the
-  requested or render-lookahead value. Without an engine it is 1.0.
+  requested or render-lookahead value. Without an engine it is 1.0. While
+  the transport is stopped nothing is heard, and a steady scalar reads as
+  the rate playing starts at; an envelope or a sync chase reads as last
+  heard (the builder's song journey 2, F8).
 - `transport.playrate.set {rate?: number, preserve_pitch?: bool}` is an edit
   returning the same result. Rate is finite 0.25..4.0, and omitted fields retain
   their values. Empty arguments or unchanged settings make no version unless
-  the call writes an automation point. GUI drags use `Origin.gesture` for the
+  the call writes an automation point. While playing, a scalar edit glides
+  (the knob ramp and its low-pass); while stopped (the transport asked to
+  stop) it keeps the plan and makes a seek transport.stop prepared stale,
+  so play and a count-in prepare the seek again and start at the new rate
+  with no glide (D2: a glide queued on the prepared seek played out after
+  the play start). GUI drags use `Origin.gesture` for the
   same live model updates and coalesced undo as strip faders. The range of a
   future knob is display state, never a model constraint.
 - `transport.playrate.apply-to-tempo {}` is an edit returning `{}`. It

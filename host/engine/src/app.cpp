@@ -1243,15 +1243,24 @@ void EngineApp::warnStoredParamRefs(const model::Session& s,
         const json::Value* described = schema->isObject() ? &*schema : nullptr;
         auto strict = detail::resolveParam(*list, described, t.param, info->name);
         if (strict && strict->canonical != t.param) {
+            // Re-added under the same spelling, env.add converts plain points
+            // to the key's units; under the key they would be read as its
+            // units (review round 79 J1).
             const std::string what =
-                envelope ? "a write, touch or latch pass is not recorded into it and the FX "
-                           "window's lane lookup does not find it; remove it (env.remove) and "
-                           "add it again (env.add) to store it as " +
-                               strict->canonical
-                         : "the FX window does not show it on its parameter; remove it "
-                           "(modulation.remove) and add it again (modulation.add) to store it "
-                           "as " +
-                               strict->canonical;
+                envelope
+                    ? "a write, touch or latch pass is not recorded into it and the FX window's "
+                      "lane lookup does not find it; remove it (env.remove) and add it again "
+                      "with the same points under the same spelling, \"" +
+                          t.param + "\" (env.add stores it as " + strict->canonical +
+                          (strict->respelled()
+                               ? ", converting the points to its units; added under " +
+                                     strict->canonical + " itself they would be read as " +
+                                     strict->canonical + "'s units"
+                               : "") +
+                          ")"
+                    : "the FX window does not show it on its parameter; remove it "
+                      "(modulation.remove) and add it again (modulation.add) to store it as " +
+                          strict->canonical;
             warnings.push_back({"param.spelling",
                                 t.object.str() + " " + t.param + " (" + strict->name() +
                                     ") is stored in an older spelling, so " + what,

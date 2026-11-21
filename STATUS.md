@@ -275,7 +275,13 @@ instructions are in `docs/guides/installing.md`.
       of the track's clip chains;
     - a capture ends at a seek, a loop change or a stop, by design
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
-      wraps at the loop as live does, but not under a master playrate.
+      wraps at the loop as live does, but not under a master playrate;
+    - right after a pause, in the anticipative executor, the reported
+      position can be up to one device period short when the pause lands
+      while a device cycle is in flight, so a launch made while stopped,
+      or a capture armed, in that moment starts that much early (review
+      round 74 F3; the renderer waits for that cycle, the main thread's
+      reading does not).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle
@@ -808,7 +814,16 @@ instructions are in `docs/guides/installing.md`.
   lane sends the base plus the offset, clamped, on the same grid; it needs
   an active envelope (`modulate` adds a one-point one). A write pass holds
   the lane, so it records the hand's values and the modulation pauses on
-  that parameter until release (ADR-0061, amended). Depth and enabled are mix values (no
+  that parameter until release (ADR-0061, amended). A plug-in that repeats
+  on its output the values it is sent (automation, or the lane's base plus
+  offset) is not recording edits: outside the plug-in's own gesture, the
+  executor drops its values for a parameter whose lane sent one this block
+  or the one before (by parameter, so many moving lanes, a late echo or a
+  stepped plug-in's quantized report all count), so a modulated parameter
+  adds no undo step and writes no point. Its own editor edits are recorded:
+  a VST3 editor's beginEdit/performEdit/endEdit are its gesture, as a CLAP
+  plug-in's (in the anticipative executor such a VST3 edit is recorded as
+  the plug-in's state instead: see Known limits). Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
@@ -1452,6 +1467,13 @@ Library boundaries:
   while its backlog has room.
 
 Engine and hosting:
+- A VST3 editor's edit in the anticipative executor is recorded as the
+  plug-in's state and writes no point in touch or latch, or now and then
+  as the state and then the parameter edit (two steps): its state flag
+  captures the state on the main thread while the rendered gesture waits
+  to be heard, and that step's plan swap usually drops the gesture (review
+  round 81, E2; as before, with the processor's echo). In-callback and
+  bridged it is the plug-in's gesture, one step.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue

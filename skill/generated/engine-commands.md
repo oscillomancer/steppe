@@ -10868,7 +10868,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
-- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
 
 ### Examples
 
@@ -10894,7 +10894,7 @@ Result:
 
 Start or end capturing launches for the timeline.
 
-While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time. Refused while a master playrate is active, where running time is not song time; one that becomes active ends a running capture.
+While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time. Refused while a master playrate is active, where running time is not song time, and while the rate heard is still gliding to 1 after one was set (effective_rate in transport.playrate.get); one that becomes active ends a running capture.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -10936,7 +10936,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope, then capture
+- `launch.playrate`: a master playrate is active, or still gliding to 1 Hint: set the master playrate to 1 and turn off its envelope, then capture once effective_rate is 1
 
 ### Examples
 
@@ -11029,7 +11029,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
-- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
 - `track.frozen`: the clip's track is frozen Hint: track.unfreeze first
 - `launch.memory`: the clip's audio did not fit the budget Hint: use shorter audio or fewer files in clips
 
@@ -11293,7 +11293,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
-- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
 - `launch.scene`: the scene has no clip that can play Hint: add clips to the scene, or unfreeze their tracks
 
 ### Examples
@@ -11505,7 +11505,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
-- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
 - `launch.track`: the track has no clips in the running plan Hint: mute the track to silence it
 
 ### Examples
@@ -22951,7 +22951,7 @@ Result:
 
 Get requested/effective master playrate, pitch mode and active envelope.
 
-requested_rate is the saved project ratio; envelope names the active nonempty tr_0/playrate envelope, including automation items. No engine is required. effective_rate follows consumed output, including compensated source transitions and graph/backend output latency; it is 1.0 without a running engine. GUI clients can use EngineApp::playrateState() without executing/logging a query each sync.
+requested_rate is the saved project ratio; envelope names the active nonempty tr_0/playrate envelope, including automation items. No engine is required. effective_rate follows consumed output, including compensated source transitions and graph/backend output latency; it is 1.0 without a running engine. While the transport is stopped, a steady rate reads as the rate playing starts at (an envelope or a sync chase reads as last heard). GUI clients can use EngineApp::playrateState() without executing/logging a query each sync.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -23016,7 +23016,7 @@ Result:
 
 Set the project's master playrate ratio and preserve-pitch flag.
 
-rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. Omitted fields keep their values. Updates during a drag use Origin.gesture like track faders, and write/touch/latch capture tr_0/playrate coarsely: unlike track levels (ADR-0061), the curve keeps playing while it is written (no hold or touch return). Recording requires unity. Settings are saved/undoable. File sources convert before take FX and live input mixing; instruments retain their pitch. Scalar edits ramp and converter changes crossfade for 10 ms after priming. Edits include the render horizon and compensated source lookahead; newer requests coalesce while a transition finishes. Long-latency take chains can exceed the usual 200 ms response. effective_rate follows audible output, independently of requested_rate.
+rate: finite 0.25..4.0 (default 1); preserve_pitch defaults false in a new project. Omitted fields keep their values. Updates during a drag use Origin.gesture like track faders, and write/touch/latch capture tr_0/playrate coarsely: unlike track levels (ADR-0061), the curve keeps playing while it is written (no hold or touch return). Recording requires unity. Settings are saved/undoable. File sources convert before take FX and live input mixing; instruments retain their pitch. While playing, scalar edits ramp (while stopped, playing starts at the new rate) and converter changes crossfade for 10 ms after priming. Edits include the render horizon and compensated source lookahead; newer requests coalesce while a transition finishes. Long-latency take chains can exceed the usual 200 ms response. effective_rate follows audible output, independently of requested_rate.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
