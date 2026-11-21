@@ -660,6 +660,20 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     for (const auto& e : f.app->head().items) laid = laid || e.value->track == drums;
     CHECK(laid);
     CHECK(f.app->head().version == before + 1);  // one undo step
+    // Committed while stopped: the tracks return to the arrangement where
+    // playing starts, so play plays the take, not Kit A again.
+    using Plays = engine::Engine::TrackLaunch::Plays;
+    auto drumsNow = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums) return t;
+        return engine::Engine::TrackLaunch{};
+    };
+    {
+        const auto now = drumsNow();
+        CHECK((now.plays == Plays::Arrangement ||
+               (now.queued &&
+                now.queued->request.action == engine::LaunchLogEntry::Action::Arrangement)));
+    }
     // Still lit, and armed for the next take.
     CHECK(capture.armed());
     CHECK(f.app->launchCapturing());

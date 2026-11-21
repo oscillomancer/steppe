@@ -48,6 +48,8 @@ class CaptureControl {
   private:
     // Ends the capture and commits it when it holds something to write: a
     // track that left the arrangement (no launch at all writes nothing).
+    // Committed while stopped, the tracks return to the arrangement
+    // (launch.arrangement, at the play start).
     Status commit();
     // A refused commit: the performance is kept and the toggle goes dark.
     Error keep(Error refusal);

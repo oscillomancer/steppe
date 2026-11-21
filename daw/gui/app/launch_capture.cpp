@@ -74,6 +74,14 @@ Status CaptureControl::commit() {
     if (!capture || capture->frames <= 0 || capture->launches.empty()) return {};
     auto r = run("launch.commit", json::Value::object());
     if (!r) return std::move(r).error();
+    // Stopped (a commit at stop, or the toggle turned off while stopped):
+    // every track returns to the arrangement where playing starts, so play
+    // plays the take just committed, not the clips again. While playing (a
+    // seek or a loop change ended it, or the toggle went off mid-take) the
+    // tracks keep what they play. A refusal here is not the commit's.
+    if (auto transport = app_.transport("get"); transport && !transport->playing)
+        if (auto back = run("launch.arrangement", json::Value::object()); !back && onError)
+            onError(back.error());
     return {};
 }
 
