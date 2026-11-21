@@ -702,3 +702,43 @@ TEST_CASE(
         if (e.value->track == id("tr_2")) starts.insert(model::itemSpan(s, *e.value).startBeat);
     CHECK(starts == std::set<double>{16.0, 32.0});  // bar 5 and bar 9
 }
+
+TEST_CASE("scene.insert lays a clip take's FX envelope in timeline beats, pass after pass") {
+    // Review round 69 F2 (the reviewer's probe P2): cl_1, a four-beat loop,
+    // has the gain fixture on its take with an envelope from 0 dB at beat 0
+    // to -24 dB at beat 3, in clip time (C2). Laid at bar 3 for two bars,
+    // the item's copy repeats it each pass from the item's start: the value
+    // at the period held to the boundary, the next pass from its first
+    // point there, and the span's end taking the next pass's start.
+    Song l;
+    l.verseClips();  // cl_1: four beats, loop mode
+    const model::Id take = *l.head().clips.find(id("cl_1"))->activeTake;
+    auto fx = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+    fx["take"] = take.str();
+    const std::string fxId = l.runArgs("fx.add", fx)["fx"].asString();
+    auto env =
+        j(R"({"param": "gain", "points": [{"beat": 0, "value": 0}, {"beat": 3, "value": -24}]})");
+    env["fx"] = fxId;
+    l.runArgs("env.add", env);
+    auto r = l.run("scene.insert", R"({"scene": "sc_1", "bar": 3, "bars": 2})");
+    const model::Id bass = id(at(r["items"], 0)["item"].asString().c_str());
+    const model::Take& itemTake = *l.head().takes.find(*l.head().items.find(bass)->activeTake);
+    REQUIRE(itemTake.chain.size() == 1);
+    const model::Envelope* laid = nullptr;
+    for (const auto& e : l.head().envelopes)
+        if (e.value->target.object == itemTake.chain[0]) laid = &*e.value;
+    REQUIRE(laid);
+    CHECK(laid->timebase == model::Timebase::Beats);
+    std::string points;
+    for (const auto& p : laid->points)
+        points += json::formatDouble(p.pos) + ":" + json::formatDouble(p.value) + " ";
+    CHECK(points ==
+          "8.0:0.0 11.0:-24.0 12.0:-24.0 12.0:0.0 15.0:-24.0 16.0:-24.0 16.0:0.0 19.0:-24.0 ");
+    // The clip's own envelope stays in clip time.
+    for (const auto& e : l.head().envelopes)
+        if (e.value->target.object == id(fxId.c_str())) {
+            REQUIRE(e.value->points.size() == 2);
+            CHECK(e.value->points.front().pos == 0.0);
+            CHECK(e.value->points.back().pos == 3.0);
+        }
+}
