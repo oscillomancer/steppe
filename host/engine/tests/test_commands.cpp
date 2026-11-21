@@ -1932,6 +1932,14 @@ TEST_CASE("take FX and take envelopes over the bus: add, reorder, copy with the 
                        kOrigin})
               .error()
               .code == "env.position");
+    // A take's pitch is a constant (take.set); its envelope is not offered, as the engine does
+    // not play one (engine.md, ItemPlayer).
+    const auto pitchEnvelope = bus.execute(
+        {"env.add", j(R"({"take":"tk_1","param":"pitch","points":[{"beat":0,"value":0}]})"),
+         kOrigin});
+    REQUIRE_FALSE(pitchEnvelope);
+    CHECK(pitchEnvelope.error().code == "env.param");
+    CHECK(pitchEnvelope.error().hint == "volume, pan, mute");
     run(bus, "env.add",
         R"({"take":"tk_1","param":"volume","points":[{"beat":0,"value":0},{"beat":4,"value":-12}]})");
     run(bus, "env.add", R"({"fx":"fx_2","param":"gain","points":[{"beat":0,"value":0}]})");
