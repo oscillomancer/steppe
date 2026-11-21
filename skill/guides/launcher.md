@@ -59,8 +59,8 @@ keeps the harmony at a place. Say it when you make the clip:
 - `clip.set {context, context_at, follow}` changes it (`context: ""` clears it).
   `follow` (`none`, `key`, `chords`) says how the clip's notes are to be mapped
   when it is laid under another key; it needs a MIDI clip with a key at its start
-  (`clip.no_key`, `clip.follow_audio`). **Nothing follows yet:** placement copies
-  every clip as it is, whatever its `follow`.
+  (`clip.no_key`, `clip.follow_audio`). Laying it on the timeline maps its notes
+  (see "Following when a clip is laid").
 - `midi.get` on a clip answers `context` (its runs by clip bar and beat, and `text`, the
   lead sheet) and `follow`, and spells pitch names by the clip's own key.
   `session.describe` shows `cl_3 "Break bass" in D minor …`.
@@ -70,10 +70,33 @@ keeps the harmony at a place. Say it when you make the clip:
   with no context says `midi.no_key` / `midi.no_chord` (give it one, or pass `key` /
   `chord`).
 - Laying a clip (`item.add {clip}`, `scene.insert`, `arrangement.build`, `launch.commit`)
-  gives a `context.mismatch` warning when the clip's key is not the project's under the
-  item: the notes were copied as they are.
+  with its notes copied as they are gives a `context.mismatch` warning when the clip's key is
+  not the project's under the item (once per item; once per launched clip in `launch.commit`).
 - Shortening a clip drops the context points past its end (`clip.context_dropped`); a
   context change that leaves no key at the start resets `follow` (`clip.follow_reset`).
+
+### Following when a clip is laid
+
+`item.add {clip}`, `scene.insert` and `arrangement.build` take `follow` (`none`, `key`,
+`chords`), by default the clip's own: a MIDI clip's notes are mapped from the key it was
+written against (or its chord at that beat) to the key (or chord) under the item. Write a
+clip once in D minor with `follow: key`, and it lands in C minor, or F minor from bar 7, with
+no second copy. Each laid item's answer has `followed: {mode, regions, folded?, unrolled?,
+copied?}`; `regions` read like `5-6 transpose D minor>C minor -2` (project bars, the keys, how
+the notes moved).
+
+- Same scale: a transpose by the nearest interval. Scales of the same size (D minor to C
+  major): by degree. Different sizes (a pentatonic): a transpose, with `context.scale_shape`.
+- `chords`: each note goes from its chord tone (root, third, fifth, seventh, extensions) to
+  the same tone of the chord under it; a note with no chord on either side follows by key.
+- Notes on channel 10 (drums) are never moved. A drum-only, empty, keyless or audio clip is
+  copied, and `followed.copied` says why (`drums`, `no_notes`, `no_key`, `audio`).
+- Where no key holds under the item, the notes are copied with `context.no_key`.
+- A looped item stays looped when every pass maps alike; when the key changes between
+  passes the item is laid out pass by pass (`unrolled: true`).
+- `pooled: true` with a mapping that moves a note is refused (`clip.follow_pooled`).
+- A launched clip is **not** followed yet: it plays as written, and `launch.clip` /
+  `launch.scene` warn `launch.unfollowed` for a clip whose `follow` is not `none`.
 
 ## Launching
 
@@ -102,8 +125,10 @@ make bars short.
 A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.scene` skips it with a warning. `launch.stop` on a track with no clips is
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
-master playrate refuses launches (`launch.playrate`). A clip's take FX and
-their envelopes play, and so do a rack's Notes module and the track's MIDI sends.
+master playrate does not stop launches, but while it keeps the pitch an audio clip's
+launch is refused (`launch.playrate`), and `launch.capture` is refused under any active
+playrate. A clip's FX and envelopes play through its own chain; a rack's Notes module
+and the track's MIDI sends follow launches.
 
 Two things to expect when polling. A launch given just as the transport started (the
 first launch while stopped, or right after a seek) can be refused with `launch.later`

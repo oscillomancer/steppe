@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 // FX commands: fx.add/remove/set/restart/move, patches, parameters, meters and fx.describe.
 #include "command_helpers.h"
+#include "param_ref.h"
 
 namespace supple::engine {
 
@@ -604,15 +605,8 @@ void registerFxCommands(cmd::Registry& registry) {
                 if (touches && changed->isObject())
                     if (auto list = app(ctx).fxParams(*app(ctx).view().fx.find(*id)))
                         for (const auto& m : changed->asObject())
-                            for (const host::ParamInfo& p : *list)
-                                if (std::to_string(p.id) == m.key ||
-                                    std::ranges::equal(p.name, m.key, [](char x, char y) {
-                                        return std::tolower(static_cast<unsigned char>(x)) ==
-                                               std::tolower(static_cast<unsigned char>(y));
-                                    })) {
-                                    app(ctx).touchParam(*id, std::to_string(p.id));
-                                    break;
-                                }
+                            if (auto ref = detail::resolveParam(*list, nullptr, m.key, ""))
+                                app(ctx).touchParam(*id, ref->canonical);
                 return MergeResult{std::move(*changed), "Plugin parameters updated", std::nullopt};
             }
             json::Value patch = json::Value::object();

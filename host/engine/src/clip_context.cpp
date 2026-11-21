@@ -90,29 +90,93 @@ Result<std::vector<model::ContextPoint>> clipContextFromText(const model::Sessio
 ContextTaken contextUnder(const model::Session& s, double fromBeat, double lengthBeats,
                           bool keyOnly) {
     ContextTaken out;
+    // A point this build cannot read is not taken, and is named: `at` is its beat in the clip.
+    struct Dropped {
+        bool key;
+        double at;
+        std::string what;
+    };
+    std::vector<Dropped> dropped;
+    const auto readable = [&](const model::ContextPoint& p, double at) {
+        const bool key = p.type == model::ContextType::Key;
+        if (key ? model::parseKey(p).has_value()
+                : p.symbol.empty() || model::parseChordPoint(p).has_value())
+            return true;
+        dropped.push_back({key, at,
+                           (key ? "key " + p.tonic + " " + p.scale : "chord " + p.symbol) + " in " +
+                               barWords(s, p.beat)});
+        return false;
+    };
     if (const auto id = model::keyPointAt(s, fromBeat))
         if (const model::ContextPoint* p = s.context.find(*id)) {
-            model::ContextPoint q = *p;
-            q.beat = 0;
-            out.points.push_back(std::move(q));
             out.key = true;
+            if (readable(*p, 0)) {
+                model::ContextPoint q = *p;
+                q.beat = 0;
+                out.points.push_back(std::move(q));
+            }
         }
-    if (keyOnly) return out;
+    const auto message = [](const std::string& what, const char* then) {
+        return "dropped " + what + ": this build cannot read it, so the clip does not take it" +
+               then;
+    };
+    if (keyOnly) {
+        for (const Dropped& d : dropped) out.unreadable.push_back(message(d.what, ""));
+        return out;
+    }
     if (const auto id = model::chordPointAt(s, fromBeat))
-        if (const model::ContextPoint* p = s.context.find(*id); p && !p->symbol.empty()) {
-            model::ContextPoint q = *p;
-            q.beat = 0;
-            out.points.push_back(std::move(q));
-        }
+        if (const model::ContextPoint* p = s.context.find(*id); p && !p->symbol.empty())
+            if (readable(*p, 0)) {
+                model::ContextPoint q = *p;
+                q.beat = 0;
+                out.points.push_back(std::move(q));
+            }
     for (const auto& e : s.context) {
         const double at = e.value->beat - fromBeat;
         if (at <= 1e-9 || at >= lengthBeats - 1e-9) continue;
+        if (!readable(*e.value, at)) continue;
         model::ContextPoint q = *e.value;
         q.beat = at;
         out.points.push_back(std::move(q));
     }
     sortPoints(out.points);
+    // Leaving a point out must not let the one before it carry on over its stretch: where the
+    // project reads no chord, the clip says no chord; there is no "no key" to write, so the
+    // answer says the earlier key holds.
+    const auto before = [&](model::ContextType type, double at) {
+        const model::ContextPoint* last = nullptr;
+        for (const model::ContextPoint& p : out.points)
+            if (p.type == type && p.beat < at - 1e-9) last = &p;
+        return last;
+    };
+    std::vector<model::ContextPoint> none;
+    for (const Dropped& d : dropped) {
+        const char* then = "";
+        if (d.key) {
+            if (before(model::ContextType::Key, d.at))
+                then = "; the clip's earlier key carries on over that stretch";
+        } else if (const model::ContextPoint* last = before(model::ContextType::Chord, d.at);
+                   last && !last->symbol.empty()) {
+            model::ContextPoint gap;
+            gap.beat = d.at;
+            gap.type = model::ContextType::Chord;  // an empty symbol is "no chord from here"
+            none.push_back(std::move(gap));
+            then = "; the clip holds no chord from there";
+        }
+        out.unreadable.push_back(message(d.what, then));
+    }
+    if (!none.empty()) {
+        for (auto& p : none) out.points.push_back(std::move(p));
+        sortPoints(out.points);
+    }
     return out;
+}
+
+std::vector<ClipNote> unreadableNotes(const ContextTaken& taken, const std::string& path) {
+    std::vector<ClipNote> notes;
+    for (const std::string& what : taken.unreadable)
+        notes.push_back({"clip.context_dropped", what, path});
+    return notes;
 }
 
 SymbolChords chordsFromSymbols(const model::Session& s,

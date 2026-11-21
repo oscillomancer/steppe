@@ -853,8 +853,11 @@ class Engine {
     // play position, where playing starts), or ends the running one at the
     // heard position. A relocation (a seek, a stop, a loop change) ends a
     // capture that has run any frames; one that has not starts again where
-    // the transport goes.
-    void captureLaunches(bool on);
+    // the transport goes. Starting is refused while a master playrate is
+    // active (`launch.playrate`; ADR-0097, dated revision 2026-11-21): its
+    // running time is not song time. One that becomes active ends a running
+    // capture (service).
+    Status captureLaunches(bool on);
     // Main thread: the running capture, else the last one; none before the
     // first. Collects the executors' acknowledgements first.
     std::optional<LaunchCapture> launchCapture();
@@ -1235,6 +1238,15 @@ class Engine {
     // say what it plays.
     std::map<model::Id, std::size_t> launchReset_;
     std::uint64_t launchCheckedGen_ = UINT64_MAX;  // the plan generation last checked
+    // The rate controls of the plan last checked (serviceLaunches): a
+    // change voids the launches placed on the old trajectory.
+    struct LaunchRateControls {
+        bool enabled = false, sync = false;
+        double scalar = 1;
+        std::vector<double> points;  // sample, value pairs
+        bool operator==(const LaunchRateControls&) const = default;
+    };
+    LaunchRateControls launchRateControls_;
     // Executors: applies the launches due at `stream` to this class's nodes
     // of `p`, marks those already past as missed, and returns the frames
     // until the next one (at most `k`).
@@ -1266,6 +1278,22 @@ class Engine {
     std::int64_t captureHeard() const;  // the capture epoch's heard stream
     Result<LaunchPlaced> placeLaunch(std::span<const LaunchRequest> requests,
                                      model::LaunchQuantize quantize) const;
+    // launch()'s one attempt: placed, published and decided; `missed` when
+    // every slot it published was missed.
+    Result<LaunchPlaced> publishLaunch(std::span<const LaunchRequest> requests,
+                                       model::LaunchQuantize quantize, bool& missed);
+    // placeLaunch on a playrate plan while playing (S3): the first stream
+    // frame at or after `floor` whose song position, on a copy of the
+    // running rate timeline, reaches the quantize boundary.
+    Result<LaunchPlaced> placeRateLaunch(const detail::Plan& plan, std::uint64_t epoch,
+                                         std::int64_t floor, model::LaunchQuantize quantize) const;
+    // Main thread: voids the pending launches of the current epoch whose
+    // target lies at or past device frame `device` of the running rate
+    // timeline (a control edit from there), for service to place again.
+    void voidRateLaunches(std::int64_t device);
+    // Main thread: whether the newest plan plays at a master playrate other
+    // than a steady 1 (a rate, an envelope or a sync chase).
+    bool rateActive() const;
     std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
     // Whether a refused playrate move was pending when the deferral began:
     // the restore puts it back with rateDeferredFrom_ (review 37c F1).

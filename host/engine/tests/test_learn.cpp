@@ -696,3 +696,38 @@ TEST_CASE("MIDI learn: all pan controls move, take over and refuse masters") {
     rig.send(0xb0, 24, 127);
     CHECK_FALSE(track().panLaw->boost);
 }
+
+TEST_CASE("MIDI learn: a parameter is named as envelopes and routes name it") {
+    // Review round 75 G2: learn goes through the one resolver. On a semantic
+    // plug-in an id or a name binds the key; a leading-zero id is refused
+    // with the canonical one; an exact-case name wins among case variants,
+    // and an ambiguous name is refused with the ids.
+    Rig rig;
+    rig.call("track.add", "{}");
+    rig.call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    for (const char* spelling : {"0", "Gain", "gain"}) {
+        CAPTURE(spelling);
+        json::Value args = j(R"({"fx":"fx_1","midi":{"kind":"cc","channel":1,"number":7}})");
+        args["param"] = spelling;
+        auto set = rig.bus->execute({"fx.learn.set", args, kTest});
+        REQUIRE_MESSAGE(set, (set ? "" : set.error().toString()));
+        CHECK((*set)["param"].asString() == "gain");
+    }
+    CHECK(rig.app->head().fx.find(*model::Id::parse("fx_1"))->learn.size() == 1);
+    rig.call("fx.learn.remove", R"({"fx":"fx_1","param":"0"})");  // removed by id too
+    CHECK(rig.app->head().fx.find(*model::Id::parse("fx_1"))->learn.empty());
+    auto zeros = rig.bus->execute(
+        {"fx.learn.set", j(R"({"fx":"fx_1","param":"00","midi":{"kind":"cc","channel":1}})"),
+         kTest});
+    REQUIRE_FALSE(zeros);
+    CHECK(zeros.error().code == "fx.param_id");
+    CHECK(zeros.error().hint == "use the canonical parameter id 0");
+    rig.call("track.add", "{}");
+    rig.call("fx.add", R"({"track":"tr_2","plugin":"com.suppleaudio.test.twin-gain"})");
+    auto twin = rig.bus->execute(
+        {"fx.learn.set", j(R"({"fx":"fx_2","param":"Gain","midi":{"kind":"cc","channel":1}})"),
+         kTest});
+    REQUIRE_FALSE(twin);
+    CHECK(twin.error().code == "fx.param_ambiguous");
+    CHECK(twin.error().hint.find("0 (Gain)") != std::string::npos);
+}

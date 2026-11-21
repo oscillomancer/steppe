@@ -37,12 +37,20 @@ Result<std::vector<model::ContextPoint>> clipContextFromText(const model::Sessio
 // The project's context read from `fromBeat` for `lengthBeats`: the key and chord holding
 // there become points at 0 (a "no chord" holding adds none), and the points inside the
 // span follow, shifted. `keyOnly` (an audio clip) gives the key at 0 and nothing more.
+// A key or chord this build cannot read (an unknown scale or chord quality from a later
+// build) is absent here, as it is everywhere: the clip does not take it, `unreadable` names
+// it (`unreadableNotes` turns the names into `clip.context_dropped` warnings), and so
+// nothing unreadable reaches a resolved text.
 struct ContextTaken {
     std::vector<model::ContextPoint> points;
     bool key = false;  // a key holds at fromBeat (whether or not this build reads it)
+    std::vector<std::string>
+        unreadable;  // a `clip.context_dropped` message for each point not taken
 };
 ContextTaken contextUnder(const model::Session& s, double fromBeat, double lengthBeats,
                           bool keyOnly);
+// `clip.context_dropped` notes for the points a take left out, at `path`.
+std::vector<ClipNote> unreadableNotes(const ContextTaken& taken, const std::string& path);
 
 // The chord points a notation's symbols make: each at its clip beat ((tick / ppq - offset) /
 // rate), by tick and voice order; equal neighbours collapse; of two different symbols at one

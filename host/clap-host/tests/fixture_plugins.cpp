@@ -153,6 +153,21 @@ const clap_plugin_descriptor_t* fixedGainDescriptor() {
     return &descriptor;
 }
 
+// Review round 72 D3, D4: the raw gain with both its parameters named
+// "Gain" (twin-gain: a name that matches two), and with its gain neither
+// modulatable nor automatable (manual-gain).
+const clap_plugin_descriptor_t* namingGainDescriptor(bool twin) {
+    static const auto descriptors = [] {
+        std::array<clap_plugin_descriptor_t, 2> value{*gainDescriptor(), *gainDescriptor()};
+        value[0].id = "com.suppleaudio.test.twin-gain";
+        value[0].name = "Test Twin Gain";
+        value[1].id = "com.suppleaudio.test.manual-gain";
+        value[1].name = "Test Manual Gain";
+        return value;
+    }();
+    return &descriptors[twin ? 0 : 1];
+}
+
 const clap_plugin_descriptor_t* checkedGainDescriptor(bool reject) {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_STEREO,
                                      nullptr};
@@ -256,6 +271,8 @@ struct Gain {
     int delayPos = 0;
     bool noSemantic = false;
     bool noModulation = false;  // fixed-gain: no parameter flagged modulatable
+    bool twinNames = false;     // twin-gain: both parameters named "Gain"
+    bool noAutomation = false;  // manual-gain: its gain not automatable
     bool enforceThread = false;
     bool rejectPatch = false;
     bool slowPatch = false;
@@ -308,8 +325,12 @@ bool CLAP_ABI gainParamInfo(const clap_plugin_t* pl, uint32_t index, clap_param_
     info->flags = params::clapFlags(p);
     if (G(pl)->noModulation)
         info->flags &= ~static_cast<clap_param_info_flags>(CLAP_PARAM_IS_MODULATABLE);
+    if (G(pl)->noAutomation && index == 0)
+        info->flags &= ~static_cast<clap_param_info_flags>(CLAP_PARAM_IS_MODULATABLE |
+                                                           CLAP_PARAM_IS_AUTOMATABLE);
     std::snprintf(info->name, sizeof(info->name), "%.*s", static_cast<int>(p.name.size()),
                   p.name.data());
+    if (G(pl)->twinNames) std::snprintf(info->name, sizeof(info->name), "Gain");
     const auto r = params::clapRange(p);
     info->min_value = r.min;
     info->max_value = r.max;
@@ -1891,7 +1912,7 @@ clap_process_status CLAP_ABI noteGenProcess(const clap_plugin_t* p, const clap_p
     return CLAP_PROCESS_CONTINUE;
 }
 
-uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 21; }
+uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 23; }
 const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t*, uint32_t i) {
     return i == 0    ? gainDescriptor()
            : i == 1  ? sineDescriptor()
@@ -1914,6 +1935,8 @@ const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t
            : i == 18 ? noteEchoDescriptor()
            : i == 19 ? noteGenDescriptor()
            : i == 20 ? fixedGainDescriptor()
+           : i == 21 ? namingGainDescriptor(true)
+           : i == 22 ? namingGainDescriptor(false)
                      : nullptr;
 }
 const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const clap_host_t* host,
@@ -1925,6 +1948,14 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
         G(plugin)->noModulation = true;
         return plugin;
     }
+    for (const bool twin : {true, false})
+        if (!std::strcmp(id, namingGainDescriptor(twin)->id)) {
+            const auto* plugin =
+                make<Gain>(host, namingGainDescriptor(twin), gainActivate, gainProcess, gainExt);
+            G(plugin)->noSemantic = true;
+            (twin ? G(plugin)->twinNames : G(plugin)->noAutomation) = true;
+            return plugin;
+        }
     if (!std::strcmp(id, rawGainDescriptor()->id)) {
         const auto* plugin =
             make<Gain>(host, rawGainDescriptor(), gainActivate, gainProcess, gainExt);

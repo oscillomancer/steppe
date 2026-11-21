@@ -1188,9 +1188,11 @@ TEST_CASE("clip.add {item} takes the context under the item; a stated one wins")
     l.run("chord.set", R"({"at": 2, "symbol": "Fm"})");
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
     CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm, chord@2 Fm");
+    // An item is taken by reference, so history keeps the reference and replay reads the
+    // context again with the notes; only context_at records the text it resolved to.
     const json::Value recorded = lastRecorded(l);
-    REQUIRE(recorded.find("context"));  // replayed as the points it took
-    CHECK(recorded.find("context")->asString() == "1: key C minor {Cm}:h {Fm}:h\n");
+    CHECK_FALSE(recorded.find("context"));
+    CHECK(recorded.find("item")->asString() == "it_1");
     // A stated context, even none, is the clip's.
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "item": "it_1", "context": ""})");
     CHECK(clipOf(l, "cl_2").context.empty());
@@ -1200,6 +1202,110 @@ TEST_CASE("clip.add {item} takes the context under the item; a stated one wins")
     const auto r = bare.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
     CHECK(clipOf(bare, "cl_1").context.empty());
     CHECK(warningCodes(r).empty());
+}
+
+TEST_CASE(
+    "a replay re-reads what an item is taken by; context_at replays the text it resolved to") {
+    // ADR-0098, the history rule: a command that takes project material by reference
+    // re-reads all of it on replay; context_at, which states a place for the context alone,
+    // records the resolved text.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Cm"})");
+    l.run("branch.create", R"({"name": "agent/test/ctx"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");  // cl_1 (item)
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_2", )") + kTwoBars +
+                          R"(, "context_at": {"bar": 1}})");  // cl_2 (context_at)
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm");
+    CHECK(pointsOf(clipOf(l, "cl_2")) == "key@0 C minor, chord@0 Cm");
+    // Main moves: the key under bar 1 changes. The merge replays both steps there.
+    l.run("branch.switch", R"({"name": "main"})");
+    l.run("key.set", R"({"at": 0, "tonic": "E", "scale": "minor"})");
+    l.run("branch.merge", R"({"from": "agent/test/ctx"})");
+    const model::Session& s = l.head();
+    const auto fromItem = model::clipAt(s, id("tr_1"), id("sc_1"));
+    REQUIRE(fromItem);
+    // The item case reads the context under the item on this branch: E minor, as its notes.
+    CHECK(pointsOf(*s.clips.find(*fromItem)) == "key@0 E minor, chord@0 Cm");
+    // context_at replays the context the user saw: C minor.
+    const auto fromPlace = model::clipAt(s, id("tr_1"), id("sc_2"));
+    REQUIRE(fromPlace);
+    CHECK(pointsOf(*s.clips.find(*fromPlace)) == "key@0 C minor, chord@0 Cm");
+}
+
+TEST_CASE(
+    "a key or chord this build cannot read is not taken, and nothing unreadable is recorded") {
+    // ADR-0098: unreadable is absent. The clip does not take the point, the answer names it
+    // (clip.context_dropped), and the resolved text history keeps holds none of it, so a
+    // merge replays it.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Cm"})");
+    auto tx = l.app->beginTransaction(kOrigin, "a later build's points");
+    REQUIRE(tx);
+    model::ContextPoint key;  // a scale from a later build, at beat 16 (bar 5)
+    key.beat = 16;
+    key.tonic = "D";
+    key.scale = "zz_future_scale";
+    l.app->txn().create(key);
+    model::ContextPoint chord;  // a chord quality from a later build, at beat 20
+    chord.beat = 20;
+    chord.type = model::ContextType::Chord;
+    chord.symbol = "Cm11";
+    l.app->txn().create(chord);
+    REQUIRE(l.app->commitTransaction(*tx));
+    const auto dropped = [](const json::Value& r) {
+        std::string out;
+        if (const auto* w = r.find("warnings"))
+            for (const auto& e : w->asArray())
+                if (e.find("code")->asString() == "clip.context_dropped")
+                    out += e.find("message")->asString() + "\n";
+        return out;
+    };
+    l.run("branch.create", R"({"name": "agent/test/later"})");
+    // The span from beat 14 holds both: C minor and Cm are taken, the later build's two named.
+    const auto spanned = l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") +
+                                               kTwoBars + R"(, "context_at": {"at": 14}})");
+    // The chord the later build wrote at beat 6 is "no chord" in the clip, as it reads in the
+    // project: Cm does not carry on over it (H4); the key, which has no such point, says that
+    // the earlier one does.
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm, chord@6 ");
+    CHECK_FALSE(model::chordAt(clipOf(l, "cl_1"), 7).has_value());
+    CHECK(model::chordAt(clipOf(l, "cl_1"), 5).has_value());
+    CHECK(dropped(spanned).find("no chord from there") != std::string::npos);
+    CHECK(dropped(spanned).find("earlier key carries on") != std::string::npos);
+    CHECK(dropped(spanned).find("zz_future_scale") != std::string::npos);
+    CHECK(dropped(spanned).find("Cm11") != std::string::npos);
+    const std::string text = lastRecorded(l).find("context")->asString();
+    CHECK(text.find("zz_future_scale") == std::string::npos);
+    CHECK(text.find("Cm11") == std::string::npos);
+    // The unreadable key holds at the start: the clip has no key (so it cannot follow), the
+    // answer names the key and the later chord, and no context.no_key is added to it.
+    const auto held = l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_2", )") +
+                                            kTwoBars + R"(, "context_at": {"bar": 5}})");
+    CHECK(pointsOf(clipOf(l, "cl_2")) == "chord@0 Cm, chord@4 ");
+    CHECK(dropped(held).find("zz_future_scale") != std::string::npos);
+    CHECK(warningCodes(held).find("context.no_key") == std::string::npos);
+    // The same under an item, and by scene.capture: named, not taken.
+    l.run("item.add", R"({"track": "tr_1", "bar": 5, "notation": "voice bass; 1: C2:w"})");
+    l.run("scene.add", R"({"name": "Bridge"})");
+    const auto under = l.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "item": "it_2"})");
+    CHECK(pointsOf(clipOf(l, "cl_3")) == "chord@0 Cm");
+    CHECK(dropped(under).find("zz_future_scale") != std::string::npos);
+    l.run("region.add", R"({"start": 16, "end": 20, "name": "Bridge"})");
+    l.run("scene.add", R"({"name": "Take"})");
+    const auto captured = l.run("scene.capture", R"({"region": "rg_1", "name": "Taken"})");
+    CHECK(dropped(captured).find("zz_future_scale") != std::string::npos);
+    // The merge replays the branch's steps on a main that moved, with none refused.
+    l.run("branch.switch", R"({"name": "main"})");
+    l.run("key.set", R"({"at": 0, "tonic": "E", "scale": "minor"})");
+    const auto merged =
+        l.bus->execute({"branch.merge", j(R"({"from": "agent/test/later"})"), kOrigin});
+    REQUIRE_MESSAGE(merged, (merged ? "" : merged.error().toString()));
+    const auto first = model::clipAt(l.head(), id("tr_1"), id("sc_1"));
+    REQUIRE(first);
+    CHECK(pointsOf(*l.head().clips.find(*first)) ==
+          "key@0 C minor, chord@0 Cm, chord@6 ");  // as it saw
 }
 
 TEST_CASE("clip.add records the chord symbols of its notation, by precedence") {
@@ -1363,8 +1469,8 @@ TEST_CASE("laying a clip copies its notes and warns when its key is not the proj
     l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
                           "context": "1: key D minor ~:w", "name": "Break bass"})");
-    // item.add {clip}: the notes are copied as they are, with a warning that names the clip,
-    // both keys and the first project bar where they differ.
+    // item.add {clip, follow: "none"}: the notes are copied as they are, with a warning that
+    // names the clip, both keys and the first project bar where they differ.
     const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
     const auto codes = warningCodes(laid);
     CHECK(codes.find("context.mismatch") != std::string::npos);
@@ -1376,10 +1482,21 @@ TEST_CASE("laying a clip copies its notes and warns when its key is not the proj
     CHECK(l.run("midi.notes", R"({"item": ")" + laid.find("item")->asString() + R"("})")["notes"]
               .at(0)
               .find("pitch")
-              ->asInt() == 33);  // copied: A1, whatever follow says until X2
-    // follow does not change that until X2: every clip is copied as none, with the warning.
+              ->asInt() == 33);  // copied: A1
+    CHECK(laid.find("followed")->find("mode")->asString() == "none");
+    // The clip's own follow is the default: a clip that follows the key is mapped, with no
+    // mismatch warning (the notes were moved), and follow: none overrides it.
     l.run("clip.set", R"({"clip": "cl_1", "follow": "key"})");
-    CHECK(warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_1"})"))
+    const auto followed = l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_1"})");
+    CHECK(warningCodes(followed).find("context.mismatch") == std::string::npos);
+    CHECK(followed.find("followed")->find("mode")->asString() == "key");
+    CHECK(
+        l.run("midi.notes", R"({"item": ")" + followed.find("item")->asString() + R"("})")["notes"]
+            .at(0)
+            .find("pitch")
+            ->asInt() == 31);  // D minor's fifth, A1, is C minor's, G1
+    CHECK(warningCodes(
+              l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_1", "follow": "none"})"))
               .find("context.mismatch") != std::string::npos);
     // The same key, an enharmonic spelling of it, a clip with no key and a clip of drums or
     // nothing give none.
@@ -1428,4 +1545,342 @@ TEST_CASE("the mismatch warning finds a key change inside the span, and comes fr
           R"({"clip": "cl_1", "context": "1: key D minor ~:w\n2: ~:w\n3: key C minor ~:w"})");
     const auto agrees = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 4})");
     CHECK(warningCodes(agrees).empty());
+}
+
+// --- following at placement (ADR-0098 X2) ------------------------------------------------------
+
+namespace {
+
+// The pitches of an item's notes by start beat, "31@0 31@4".
+std::string pitchesOf(Launcher& l, const std::string& item) {
+    json::Value notes = l.run("midi.notes", R"({"item": ")" + item + R"("})");
+    std::string out;
+    for (const auto& n : notes["notes"].asArray()) {
+        char at[32];
+        std::snprintf(at, sizeof at, "%g", n.find("start")->asDouble());
+        out += std::string(out.empty() ? "" : " ") + std::to_string(n.find("pitch")->asInt()) +
+               "@" + at;
+    }
+    return out;
+}
+
+// "5-6 transpose D minor>C minor -2, 7-8 transpose D minor>F minor 3": a followed block's regions.
+std::string regionsOf(const json::Value& followed) {
+    std::string out;
+    const json::Value* regions = followed.find("regions");
+    if (!regions) return out;
+    for (const auto& r : regions->asArray()) {
+        auto text = [&](const char* key) {
+            const json::Value* v = r.find(key);
+            return v ? v->asString() : std::string("-");
+        };
+        out += std::string(out.empty() ? "" : ", ") + std::to_string(r.find("from_bar")->asInt()) +
+               "-" + std::to_string(r.find("to_bar")->asInt()) + " " + text("by") + " " +
+               text("from_key") + ">" + text("to_key");
+        if (const json::Value* iv = r.find("interval")) out += " " + std::to_string(iv->asInt());
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("item.add {clip} maps a clip to the key under it, by bar, and says how") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("key.set", R"({"at": 24, "tonic": "F", "scale": "minor"})");  // bar 7
+    l.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "context": "1: key D minor ~:w", "follow": "key",
+              "notation": "voice bass; 1: A1:w; 2: A1:w; 3: A1:w; 4: A1:w"})");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    const json::Value& followed = *laid.find("followed");
+    CHECK(followed.find("mode")->asString() == "key");
+    CHECK(regionsOf(followed) ==
+          "5-6 transpose D minor>C minor -2, 7-8 transpose D minor>F minor 3");
+    CHECK(followed.find("unrolled") == nullptr);
+    // D minor's fifth is C minor's G and F minor's C.
+    CHECK(pitchesOf(l, laid["item"].asString()) == "31@0 31@4 36@8 36@12");
+    CHECK(warningCodes(laid).find("context.mismatch") == std::string::npos);
+    // A clip's key that is the project's scale a tonic away is a transpose, with its interval.
+    Launcher t;
+    t.run("key.set", R"({"at": 0, "tonic": "E", "scale": "minor"})");
+    t.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+              "context": "1: key D minor ~:w"})");
+    auto up = t.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1", "follow": "key"})");
+    CHECK(regionsOf(*up.find("followed")) == "5-5 transpose D minor>E minor 2");
+    CHECK(pitchesOf(t, up["item"].asString()) == "35@0");
+    // Scales of the same size map by degree: D minor's third (F) is C major's (E).
+    Launcher d;
+    d.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    d.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: F2:w",
+              "context": "1: key D minor ~:w"})");
+    auto deg = d.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1", "follow": "key"})");
+    CHECK(regionsOf(*deg.find("followed")) == "5-5 degree D minor>C major");
+    CHECK(pitchesOf(d, deg["item"].asString()) == "40@0");
+}
+
+TEST_CASE("following copies what cannot follow, and says why") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    auto laidAt = [&](int bar, const std::string& clip) {
+        return l.run("item.add", R"({"track": "tr_1", "bar": )" + std::to_string(bar) +
+                                     R"(, "clip": ")" + clip + R"(", "follow": "key"})");
+    };
+    auto copied = [](const json::Value& laid) {
+        const json::Value* c = laid.find("followed")->find("copied");
+        return c ? c->asString() : std::string();
+    };
+    // No key at the clip's start.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w"})");
+    auto noKey = laidAt(5, "cl_1");
+    CHECK(copied(noKey) == "no_key");
+    CHECK(noKey.find("followed")->find("mode")->asString() == "none");
+    CHECK(pitchesOf(l, noKey["item"].asString()) == "33@0");
+    // Drums only (channel 10).
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "notation": "voice kick ch 10; 1: C2:w",
+                          "context": "1: key D minor ~:w"})");
+    CHECK(copied(laidAt(9, "cl_2")) == "drums");
+    // A MIDI clip with no notes.
+    l.run("scene.add", R"({"name": "Bare"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "context": "1: key D minor ~:w"})");
+    CHECK(copied(laidAt(13, "cl_3")) == "no_notes");
+    // Audio.
+    l.run("scene.add", R"({"name": "Wav"})");
+    auto args = j(R"({"track": "tr_1", "scene": "sc_4"})");
+    args["audio_file"] = l.wav("a.wav").string();
+    l.runArgs("clip.add", args);
+    CHECK(copied(laidAt(17, "cl_4")) == "audio");
+}
+
+TEST_CASE("following with no key under the item copies the notes, with context.no_key") {
+    Launcher l;  // the project has no key
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(pitchesOf(l, laid["item"].asString()) == "33@0");
+    CHECK(regionsOf(*laid.find("followed")) == "5-5 copy D minor>-");
+    CHECK(warningCodes(laid) == "context.no_key ");
+}
+
+TEST_CASE("following between scales of different sizes transposes, with context.scale_shape") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor_pentatonic"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(pitchesOf(l, laid["item"].asString()) == "31@0");
+    CHECK(regionsOf(*laid.find("followed")) == "5-5 transpose D minor>C minor pentatonic -2");
+    CHECK(warningCodes(laid) == "context.scale_shape ");
+}
+
+TEST_CASE("following by chords maps each chord tone to its counterpart") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Gm"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice pad; 1: {Dm}:w",
+                          "context": "1: key D minor ~:w", "follow": "chords"})");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Dm");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(laid.find("followed")->find("mode")->asString() == "chords");
+    // Dm's D, F, A become Gm's G, Bb, D (as pitch classes, whatever the octave).
+    std::set<int> classes;
+    json::Value heard = l.run("midi.notes", R"({"item": ")" + laid["item"].asString() + R"("})");
+    for (const auto& n : heard["notes"].asArray()) classes.insert(n.find("pitch")->asInt() % 12);
+    CHECK(classes == std::set<int>{2, 7, 10});
+    CHECK(regionsOf(*laid.find("followed")).find("chords") != std::string::npos);
+}
+
+TEST_CASE("a looped item stays looped when every pass maps alike, and is unrolled when not") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    // One key for the four bars: the looped item keeps its loop over the mapped source.
+    auto steady = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const json::Value& laid = steady["items"].at(0);
+    const std::string item = laid.find("item")->asString();
+    CHECK(l.head().items.find(id(item.c_str()))->loop);
+    CHECK(laid.find("followed")->find("unrolled") == nullptr);
+    CHECK(pitchesOf(l, item) == "31@0");
+    l.run("history.undo", "{}");
+    // The key changes at bar 7: the passes map differently, so the item is written out.
+    l.run("key.set", R"({"at": 24, "tonic": "F", "scale": "minor"})");
+    auto moving = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const json::Value& out = moving["items"].at(0);
+    const std::string unrolled = out.find("item")->asString();
+    CHECK(out.find("followed")->find("unrolled")->asBool());
+    CHECK_FALSE(l.head().items.find(id(unrolled.c_str()))->loop);
+    CHECK(pitchesOf(l, unrolled) == "31@0 31@4 36@8 36@12");
+    CHECK(regionsOf(*out.find("followed")) ==
+          "5-6 transpose D minor>C minor -2, 7-8 transpose D minor>F minor 3");
+    // Undo and redo take the written-out item away and back as one step.
+    l.run("history.undo", "{}");
+    CHECK(l.head().items.size() == 1);
+    l.run("history.redo", "{}");
+    CHECK(pitchesOf(l, unrolled) == "31@0 31@4 36@8 36@12");
+}
+
+TEST_CASE("a pooled placement that would move a note is refused; one that moves none is not") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    const Error refused =
+        l.fails("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 1, "pooled": true})");
+    CHECK(refused.code == "clip.follow_pooled");
+    CHECK(refused.path == "/args/pooled");
+    CHECK(l.head().items.size() == 1);  // nothing was laid
+    // Placed as none, or under the clip's own key, a pooled copy moves nothing.
+    l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 1, "pooled": true,
+                              "follow": "none"})");
+    l.run("key.set", R"({"at": 0, "tonic": "D", "scale": "minor"})");
+    l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 1, "pooled": true})");
+    CHECK(l.head().items.size() == 3);
+}
+
+TEST_CASE("arrangement.build follows too, and a replay maps against the branch it lands on") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    l.run("branch.create", R"({"name": "agent/test/follow"})");
+    auto built =
+        l.run("arrangement.build", R"({"sequence": [{"scene": "sc_1", "bars": 1}], "bar": 5})");
+    const json::Value& item = built["segments"].at(0).find("items")->at(0);
+    CHECK(item.find("followed")->find("mode")->asString() == "key");
+    CHECK(pitchesOf(l, item.find("item")->asString()) == "31@0");
+    // Main's key moves under the same bar; merging replays the placement there.
+    l.run("branch.switch", R"({"name": "main"})");
+    l.run("key.set", R"({"at": 0, "tonic": "E", "scale": "minor"})");
+    l.run("branch.merge", R"({"from": "agent/test/follow"})");
+    const model::Session& s = l.head();
+    std::string merged;
+    for (const auto& e : s.items)
+        if (e.value->position >= 16) merged = e.id.str();
+    REQUIRE_FALSE(merged.empty());
+    CHECK(pitchesOf(l, merged) == "35@0");  // D minor's A1 under E minor
+}
+
+TEST_CASE("following folds a pitch pushed out of range, and counts it") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "D", "scale": "major"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice hi; 1: G9:w",
+                          "context": "1: key C major ~:w", "follow": "key"})");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(pitchesOf(l, laid["item"].asString()) == "117@0");  // G9 (127) + 2, folded an octave
+    CHECK(laid.find("followed")->find("folded")->asInt() == 1);
+}
+
+TEST_CASE("notes on channel 10 are copied by a follow, in an unrolled item too") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("key.set", R"({"at": 24, "tonic": "F", "scale": "minor"})");  // bar 7
+    l.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "context": "1: key D minor ~:w", "follow": "key",
+              "notation": "voice bass; 1: A1:w; voice kick ch 10; 1: C2:w"})");
+    // One pass in one key: the bass moves, the kick stays.
+    auto once = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(pitchesOf(l, once["item"].asString()) == "31@0 36@0");
+    l.run("history.undo", "{}");
+    // Four passes over two keys: unrolled, with the kick repeated unmapped each pass.
+    auto four = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const std::string item = four["items"].at(0).find("item")->asString();
+    CHECK(four["items"].at(0).find("followed")->find("unrolled")->asBool());
+    CHECK(pitchesOf(l, item) ==
+          "31@0 36@0 31@4 36@4 36@8 36@8 36@12 36@12");  // bass: G G C C; kick: C2 four times
+}
+
+TEST_CASE("an unrolled item's other takes are laid out alike, by plain repetition") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("key.set", R"({"at": 24, "tonic": "F", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    const model::Id first = l.head().clips.find(id("cl_1"))->takes[0];
+    l.runArgs("take.add",
+              json::parse(R"({"item": "cl_1", "from": ")" + first.str() + "\"}").value());
+    auto four = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const std::string item = four["items"].at(0).find("item")->asString();
+    CHECK(four["items"].at(0).find("followed")->find("unrolled")->asBool());
+    const model::Item& laid = *l.head().items.find(id(item.c_str()));
+    REQUIRE(laid.takes.size() == 2);
+    CHECK_FALSE(laid.loop);
+    CHECK(pitchesOf(l, item) == "31@0 31@4 36@8 36@12");  // the active take, followed
+    // Activating the other take plays it over the whole item, unmapped (A1 each pass).
+    l.run("take.activate", R"({"item": ")" + item + R"(", "index": 1})");
+    CHECK(pitchesOf(l, item) == "33@0 33@4 33@8 33@12");
+}
+
+TEST_CASE("notes that follow to one pitch are one note, and stay so under an edit") {
+    // harmony.md section 5 "Duplicates": Cmaj7's C E G B under C5 map to C C G G; a sequence
+    // holds one of identical notes, so placement writes two, and an unrelated edit loses none.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "C5"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice pad; 1: {Cmaj7}:w",
+                          "context": "1: key C major ~:w", "follow": "chords"})");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    const std::string item = laid.find("item")->asString();
+    json::Value before = l.run("midi.notes", R"({"item": ")" + item + R"("})");
+    CHECK(before["notes"].size() == 2);
+    l.run("midi.edit",
+          R"({"item": ")" + item + R"(", "ops": [{"op": "move", "notes": [0], "semitones": 0}]})");
+    json::Value after = l.run("midi.notes", R"({"item": ")" + item + R"("})");
+    CHECK(after["notes"].size() == before["notes"].size());
+}
+
+TEST_CASE("a note held into the item's start is mapped from where it was written") {
+    // The clip's second bar is in C major; its first, in D minor. The take starts at beat 6,
+    // inside the second bar's whole note, so that note sounds from the item's start as a
+    // fragment. It was written in C major, so under C major it does not move (mapped from
+    // the clip's beat 0, D minor, its E would become D).
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "follow": "key",
+                          "notation": "voice lead; 1: r:w; 2: E3:w",
+                          "context": "1: key D minor ~:w\n2: key C major ~:w"})");
+    const model::Id take = l.head().clips.find(id("cl_1"))->takes[0];
+    l.runArgs("take.set",
+              json::parse(R"({"take": ")" + take.str() + R"(", "start_offset": 6})").value());
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(pitchesOf(l, laid.find("item")->asString()) ==
+          "52@-2");  // the note began two beats before the item
+}
+
+TEST_CASE("a held-in fragment does not unroll an item whose whole passes map alike") {
+    // As above, looped over four bars from bar 5, with the project in C major at bar 5 and in
+    // D major from bar 6: the fragment at the item's start is in C major, every whole pass is
+    // in D major (+2). The item stays looped over the mapped source.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    l.run("key.set", R"({"at": 20, "tonic": "D", "scale": "major"})");  // bar 6
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "follow": "key",
+                          "notation": "voice lead; 1: r:w; 2: E3:w",
+                          "context": "1: key C major ~:w"})");
+    const model::Id take = l.head().clips.find(id("cl_1"))->takes[0];
+    l.runArgs("take.set",
+              json::parse(R"({"take": ")" + take.str() + R"(", "start_offset": 6})").value());
+    auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const json::Value& row = laid["items"].at(0);
+    CHECK(row.find("followed")->find("unrolled") == nullptr);
+    CHECK(l.head().items.find(id(row.find("item")->asString().c_str()))->loop);
+}
+
+TEST_CASE("followed.regions run across a bar where no note starts") {
+    // session-model: a region is a maximal run of project bars over which the keys and the
+    // way notes were mapped stay the same. A rest bar between two notes does not split it.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "E", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "follow": "key",
+                          "notation": "voice bass; 1: A1:w; 2: r:w; 3: A1:w",
+                          "context": "1: key D minor ~:w"})");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(regionsOf(*laid.find("followed")) == "5-7 transpose D minor>E minor 2");
+    // A key change inside the rest bar still splits the run: the keys differ.
+    l.run("history.undo", "{}");
+    l.run("key.set", R"({"at": 20, "tonic": "F", "scale": "minor"})");  // bar 6
+    auto split = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(regionsOf(*split.find("followed")) ==
+          "5-5 transpose D minor>E minor 2, 7-7 transpose D minor>F minor 3");
 }

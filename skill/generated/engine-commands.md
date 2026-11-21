@@ -201,7 +201,7 @@ Result:
 
 Lay a song out from scenes, each for some bars, in order.
 
-scene.insert for each entry of sequence in turn, each starting where the last ended, from bar or at (default bar 1), with a section for each. A scene may appear more than once. Every entry's refusal (scene.empty, scene.insert.period, scene.insert.occupied) names its index in path, and changes nothing; an empty sequence or one of more than 256 entries is scene.sequence. Each item warns context.mismatch as scene.insert's does. One undo step.
+scene.insert for each entry of sequence in turn, each starting where the last ended, from bar or at (default bar 1), with a section for each. A scene may appear more than once. Every entry's refusal (scene.empty, scene.insert.period, scene.insert.occupied) names its index in path, and changes nothing; an empty sequence or one of more than 256 entries is scene.sequence. follow, pooled and each item's followed and context.mismatch are as scene.insert's. One undo step.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -215,6 +215,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `at` | number |  | 0.0.. |  | Start in beats, on a bar line. |
 | `bar` | integer |  | 1.0..1e+05 |  | Start bar, 1-based [1]. |
 | `pooled` | boolean |  |  | false |  |
+| `follow` | string |  |  |  | How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow. One of: none, key, chords. |
 
 ### Result
 
@@ -245,7 +246,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
             "type": "array",
             "items": {
               "type": "object",
-              "title": "laid_clip",
+              "title": "laid_item",
               "properties": {
                 "clip": {
                   "type": "string"
@@ -255,6 +256,61 @@ Kind: `edit`. Exposure: `mcp-exec`.
                 },
                 "track": {
                   "type": "string"
+                },
+                "followed": {
+                  "type": "object",
+                  "title": "followed",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": ["none", "key", "chords"]
+                    },
+                    "regions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "title": "followed_region",
+                        "properties": {
+                          "from_bar": {
+                            "type": "integer",
+                            "description": "First project bar of the run."
+                          },
+                          "to_bar": {
+                            "type": "integer",
+                            "description": "Last project bar of the run (inclusive)."
+                          },
+                          "from_key": {
+                            "type": "string"
+                          },
+                          "to_key": {
+                            "type": "string"
+                          },
+                          "by": {
+                            "type": "string",
+                            "enum": ["transpose", "degree", "chords", "copy"]
+                          },
+                          "interval": {
+                            "type": "integer",
+                            "description": "Semitones, for transpose."
+                          }
+                        },
+                        "required": ["from_bar", "to_bar", "by"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "folded": {
+                      "type": "integer"
+                    },
+                    "unrolled": {
+                      "type": "boolean"
+                    },
+                    "copied": {
+                      "type": "string",
+                      "enum": ["drums", "audio", "no_key", "no_notes"]
+                    }
+                  },
+                  "required": ["mode"],
+                  "additionalProperties": false
                 }
               },
               "required": ["clip", "item", "track"],
@@ -284,6 +340,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `scene.sequence`: the sequence is empty or longer than 256 entries Hint: give 1 to 256 entries of {scene, bars}
 - `scene.empty`: a scene in the sequence has no clips Hint: add clips with clip.add
 - `scene.insert.occupied`: items are already in an entry's span Hint: move or remove them, or start at another bar
+- `clip.follow_pooled`: pooled with a mapping that moves a note Hint: leave pooled off, or place the clips with follow: none
 - `scene.insert.period`: a repeating clip no single looping item reproduces Hint: loop the clip over its whole content, or ask for fewer bars
 
 ### Examples
@@ -1790,7 +1847,7 @@ Result:
 
 Add a clip to a scene's cell: from notation, a file or an item.
 
-One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097); the clip is named as the item is (its active take's name) unless name is given. Clips live on channels, one per (track, scene). A clip keeps the key and chords it was written against (context): as a lead sheet in clip bars ("1: key D minor {Dm}:w"), read from the project at a place (context_at), under the item it copies, or from the {SYMBOL} chords of its notation (a stated context holding chords wins over them, clip.chords_ignored). follow (none, key or chords) needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); until placement follows it, only the mismatch warning on laying a clip uses the context (ADR-0098).
+One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097); the clip is named as the item is (its active take's name) unless name is given. Clips live on channels, one per (track, scene). A clip keeps the key and chords it was written against (context): as a lead sheet in clip bars ("1: key D minor {Dm}:w"), read from the project at a place (context_at), under the item it copies, or from the {SYMBOL} chords of its notation (a stated context holding chords wins over them, clip.chords_ignored). follow (none, key or chords) needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the key or chords under it (their follow argument), and a launched clip plays as written until ADR-0098's X4 (launch.unfollowed).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -6030,7 +6087,7 @@ Result:
 
 Automate a parameter: a track's or route's mixer control, or a plugin's.
 
-Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item), or on a clip's take from the clip's start in beats (MIDI) or seconds (audio); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty.
+Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name; a semantic plugin's parameter named by id or name is stored by its key, its plain points converted to the key's units: converted), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item), or on a clip's take from the clip's start in beats (MIDI) or seconds (audio); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -6065,6 +6122,18 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "points": {
       "type": "integer"
+    },
+    "param": {
+      "type": "string",
+      "description": "A plug-in parameter's canonical reference: its semantic key or decimal id."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in parameter's display name."
+    },
+    "converted": {
+      "type": "boolean",
+      "description": "True when a semantic plugin's parameter was named by id or name: the points were plain values, stored converted to the key's units (env.list shows those)."
     },
     "warnings": {
       "type": "array",
@@ -6137,7 +6206,9 @@ Result:
 ```json
 {
   "env": "en_1",
-  "points": 2
+  "points": 2,
+  "param": "gain",
+  "param_name": "<any>"
 }
 
 ```
@@ -6277,6 +6348,10 @@ Kind: `query`. Exposure: `mcp-exec`.
           "visible": {
             "type": "boolean"
           },
+          "param_name": {
+            "type": "string",
+            "description": "A plug-in parameter's display name."
+          },
           "mode": {
             "type": "string"
           }
@@ -6319,7 +6394,8 @@ Result:
       "points": 2,
       "active": true,
       "visible": true,
-      "mode": "read"
+      "mode": "read",
+      "param_name": "<any>"
     }
   ]
 }
@@ -7264,7 +7340,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `fx` | string |  |  |  |  |
-| `param` | string |  |  |  | A semantic key, or a plain parameter's id or name (fx.describe) |
+| `param` | string |  |  |  | A parameter's semantic key, id or name (fx.describe); a semantic plugin's is stored as its key |
 | `midi` | object |  |  |  |  |
 | `midi.kind` | string |  |  |  | One of: cc, note, pitch_bend, program. |
 | `midi.channel` | integer |  | 1.0..16.0 |  |  |
@@ -9244,7 +9320,7 @@ Result:
 
 Add an item on a track: notation, a MIDI or audio file, or a clip's copy.
 
-position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. clip: a copy of that clip's takes, as long as the clip, its loop and take envelopes converted at the tempo where the item lands (ADR-0097); the item is named as the clip is (its active take's name) when the clip has a name; the notes are copied as they are, and context.mismatch warns when the clip's key is not the project's under the item (ADR-0098). A master holds audio items only (prints, played after its fader); busses hold none.
+position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. clip: a copy of that clip's takes, as long as the clip, its loop and take envelopes converted at the tempo where the item lands (ADR-0097); the item is named as the clip is (its active take's name) when the clip has a name. follow (none, key or chords; default: the clip's own) maps the clip's notes from the key or chords it was written against to those under the item (ADR-0098): notes on channel 10 and clips that cannot follow are copied, and the answer's followed says what was done, by bar. With none the notes are copied as they are and context.mismatch warns when the clip's key is not the project's under the item. A master holds audio items only (prints, played after its fader); busses hold none.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -9260,6 +9336,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 | `audio_file` | string |  |  |  |  |
 | `midi_file` | string |  |  |  |  |
 | `clip` | string |  |  |  | Lay a copy of this clip's takes here. |
+| `follow` | string |  |  |  | How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow. One of: none, key, chords. |
 | `name` | string |  |  |  |  |
 
 ### Result
@@ -9296,6 +9373,61 @@ Kind: `edit`. Exposure: `mcp-tool`.
           }
         ]
       }
+    },
+    "followed": {
+      "type": "object",
+      "title": "followed",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["none", "key", "chords"]
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "followed_region",
+            "properties": {
+              "from_bar": {
+                "type": "integer",
+                "description": "First project bar of the run."
+              },
+              "to_bar": {
+                "type": "integer",
+                "description": "Last project bar of the run (inclusive)."
+              },
+              "from_key": {
+                "type": "string"
+              },
+              "to_key": {
+                "type": "string"
+              },
+              "by": {
+                "type": "string",
+                "enum": ["transpose", "degree", "chords", "copy"]
+              },
+              "interval": {
+                "type": "integer",
+                "description": "Semitones, for transpose."
+              }
+            },
+            "required": ["from_bar", "to_bar", "by"],
+            "additionalProperties": false
+          }
+        },
+        "folded": {
+          "type": "integer"
+        },
+        "unrolled": {
+          "type": "boolean"
+        },
+        "copied": {
+          "type": "string",
+          "enum": ["drums", "audio", "no_key", "no_notes"]
+        }
+      },
+      "required": ["mode"],
+      "additionalProperties": false
     }
   },
   "required": ["item", "take", "position", "length"],
@@ -9307,6 +9439,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ### Errors
 
 - `notation.*`: the notation does not compile Hint: line:col and a hint in the error
+- `item.follow`: follow with a source other than clip Hint: follow applies to a clip's copy: give clip, or leave follow out
 - `tr.unknown`: no such track Hint: see track.list
 
 ### Examples
@@ -10690,7 +10823,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating Hint: launch again in a moment
@@ -10719,7 +10852,7 @@ Result:
 
 Start or end capturing launches for the timeline.
 
-While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time.
+While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time. Refused while a master playrate is active, where running time is not song time; one that becomes active ends a running capture.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -10761,6 +10894,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope, then capture
 
 ### Examples
 
@@ -10788,7 +10922,7 @@ Result:
 
 Play a clip on its track from the next quantize boundary.
 
-It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms.
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms. A clip whose follow is not none warns launch.unfollowed: a launched clip plays as written until ADR-0098's X4.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -10850,7 +10984,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating Hint: launch again in a moment
@@ -10890,7 +11024,7 @@ Result:
 
 Write the captured performance onto the timeline as items.
 
-One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start. On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A scene launched whole (launch.scene: every clip that could play started on one boundary) also writes a section named after it, from that boundary until one of its tracks is launched again or the capture ends, as scene.insert does; clips launched singly write none. A launched clip is not followed (until ADR-0098's X4): its items copy what was heard, and context.mismatch warns for each whose clip's key is not the project's under it. A running capture ends first; the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
+One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start. On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A scene launched whole (launch.scene: every clip that could play started on one boundary) also writes a section named after it, from that boundary until one of its tracks is launched again or the capture ends, as scene.insert does; clips launched singly write none. A launched clip is not followed (until ADR-0098's X4): its items copy what was heard, and context.mismatch warns once for each launched clip whose key is not the project's under it, however many periods it is laid as. A running capture ends first; the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -11025,7 +11159,7 @@ Result:
 
 Play every clip of a scene together at one boundary.
 
-It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning, a clip past the memory budget with a launch.memory warning.
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning, a clip past the memory budget with a launch.memory warning, and clips whose follow is not none with one launch.unfollowed warning (launched clips play as written until ADR-0098's X4).
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -11087,7 +11221,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating Hint: launch again in a moment
@@ -11299,7 +11433,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating Hint: launch again in a moment
@@ -12155,6 +12289,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "modulation": {
       "type": "string"
     },
+    "param": {
+      "type": "string",
+      "description": "A plug-in target's canonical reference."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in target's display name."
+    },
     "rack": {
       "type": "string"
     },
@@ -12215,6 +12357,8 @@ Result:
 ```json
 {
   "modulation": "mr_1",
+  "param": "gain",
+  "param_name": "<any>",
   "rack": "rk_1",
   "module": "mo_3",
   "mod_out": "mo_2",
@@ -12257,6 +12401,14 @@ Kind: `edit`. Exposure: `mcp-exec`.
     "modulation": {
       "type": "string"
     },
+    "param": {
+      "type": "string",
+      "description": "A plug-in target's canonical reference: its semantic key or decimal id."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in target's display name."
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -12293,7 +12445,9 @@ Result:
 
 ```json
 {
-  "modulation": "mr_1"
+  "modulation": "mr_1",
+  "param": "gain",
+  "param_name": "<any>"
 }
 
 ```
@@ -12411,6 +12565,10 @@ Kind: `query`. Exposure: `mcp-exec`.
           },
           "inert": {
             "type": "string"
+          },
+          "param_name": {
+            "type": "string",
+            "description": "A plug-in target's display name."
           }
         },
         "required": [
@@ -12468,7 +12626,8 @@ Result:
       "lane": true,
       "range": "bipolar",
       "fed_by": [],
-      "inert": "source"
+      "inert": "source",
+      "param_name": "<any>"
     }
   ]
 }
@@ -18582,7 +18741,7 @@ Result:
 
 Lay a scene's clips on the timeline as items and a section.
 
-The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole bars. Each clip becomes an item on its track at the start, as item.add {clip} makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts the span, as one looping item when it repeats within it, which needs its period to be its content: loop off with its length (as clip.add makes it), or loop on over the whole content with a length of whole repeats (scene.insert.period otherwise). Takes are copied, MIDI with them unless pooled; an item takes its clip's name (its active take's) when the clip has one. Notes are copied as they are, and context.mismatch warns once for each item whose clip's key is not the project's under it. An item already in the span on a track that receives a clip is refused (scene.insert.occupied), and an empty scene (scene.empty). A section named after the scene (name overrides) is added over the span. One undo step.
+The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole bars. Each clip becomes an item on its track at the start, as item.add {clip} makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts the span, as one looping item when it repeats within it, which needs its period to be its content: loop off with its length (as clip.add makes it), or loop on over the whole content with a length of whole repeats (scene.insert.period otherwise). Takes are copied, MIDI with them unless pooled; an item takes its clip's name (its active take's) when the clip has one. follow (none, key or chords; default: each clip's own) maps a MIDI clip's notes from the key or chords it was written against to those under the item (ADR-0098), as item.add {clip} does: each item's followed says what was done, by bar, unrolled: true when a looped item had to be written out pass by pass, and copied why a clip that cannot follow was left as it is; pooled with a mapping that moves a note is refused (clip.follow_pooled). With none the notes are copied as they are, and context.mismatch warns once for each item whose clip's key is not the project's under it. An item already in the span on a track that receives a clip is refused (scene.insert.occupied), and an empty scene (scene.empty). A section named after the scene (name overrides) is added over the span. One undo step.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -18596,6 +18755,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `bars` | integer |  | 1.0.. |  |  |
 | `name` | string |  |  |  |  |
 | `pooled` | boolean |  |  | false |  |
+| `follow` | string |  |  |  | How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow. One of: none, key, chords. |
 
 ### Result
 
@@ -18608,7 +18768,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
       "type": "array",
       "items": {
         "type": "object",
-        "title": "laid_clip",
+        "title": "laid_item",
         "properties": {
           "clip": {
             "type": "string"
@@ -18618,6 +18778,61 @@ Kind: `edit`. Exposure: `mcp-exec`.
           },
           "track": {
             "type": "string"
+          },
+          "followed": {
+            "type": "object",
+            "title": "followed",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["none", "key", "chords"]
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "title": "followed_region",
+                  "properties": {
+                    "from_bar": {
+                      "type": "integer",
+                      "description": "First project bar of the run."
+                    },
+                    "to_bar": {
+                      "type": "integer",
+                      "description": "Last project bar of the run (inclusive)."
+                    },
+                    "from_key": {
+                      "type": "string"
+                    },
+                    "to_key": {
+                      "type": "string"
+                    },
+                    "by": {
+                      "type": "string",
+                      "enum": ["transpose", "degree", "chords", "copy"]
+                    },
+                    "interval": {
+                      "type": "integer",
+                      "description": "Semitones, for transpose."
+                    }
+                  },
+                  "required": ["from_bar", "to_bar", "by"],
+                  "additionalProperties": false
+                }
+              },
+              "folded": {
+                "type": "integer"
+              },
+              "unrolled": {
+                "type": "boolean"
+              },
+              "copied": {
+                "type": "string",
+                "enum": ["drums", "audio", "no_key", "no_notes"]
+              }
+            },
+            "required": ["mode"],
+            "additionalProperties": false
           }
         },
         "required": ["clip", "item", "track"],
@@ -18654,6 +18869,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `scene.bars`: bars is out of range Hint: give a whole number of bars from 1
 - `scene.empty`: the scene has no clips Hint: add clips with clip.add
 - `scene.insert.occupied`: an item is already in the span on a track that gets a clip Hint: move or remove it, or choose another bar
+- `clip.follow_pooled`: pooled with a mapping that moves a note Hint: leave pooled off, or place the clip with follow: none
 - `scene.insert.period`: a repeating clip no single looping item reproduces Hint: loop the clip over its whole content, or ask for no more bars than it is long
 
 ### Examples

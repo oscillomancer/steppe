@@ -211,14 +211,18 @@ instructions are in `docs/guides/installing.md`.
   sheet as `context.text`) and `follow` and spells by the clip's own key;
   `session.describe` names a clip's key and follow. The `midi.edit` scale ops
   on a clip read the clip's own context at the clip beat each note sounds,
-  never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert`,
-  `arrangement.build` and `launch.commit` copy a clip's notes as they are and
-  warn `context.mismatch` when its key is not the project's under the item.
-  The roll shows and edits a clip's context, and the clip inspector sets
-  Follow (X3). Not built: following (X2: the `follow` argument on placement
-  and `harmony::follow`), launching a followed clip (X4), `write_context`
-  (X5). A clip with `follow` set is
-  copied as `none` until X2.
+  never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert` and
+  `arrangement.build` take `follow` (`none`, `key`, `chords`; default the
+  clip's own) and map a MIDI clip's notes by `harmony::follow` from the key or
+  chords it was written against to those under the item; the answer's
+  `followed` says how, by bar, and a looped item whose passes map differently
+  is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
+  that cannot follow is copied with its reason, and `launch.commit` copies
+  what was heard and warns `context.mismatch` when a clip's key is not the
+  project's under it. Not built: a launched clip following live (X4:
+  `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
+  clip plays as written), `write_context` (X5). The roll shows and edits a
+  clip's context, and the clip inspector sets Follow (X3).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
@@ -250,7 +254,13 @@ instructions are in `docs/guides/installing.md`.
     clip holds a track, following launches while it is open.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
-    - a master playrate refuses launches (`launch.playrate`);
+    - under a master playrate clips play on the playrate path, live as
+      the replay (ADR-0097, revision 2026-11-21), but while it keeps the
+      pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
+      clips can); `launch.capture` is refused while one is active, and
+      one becoming active ends a capture; there a frozen track's print
+      cuts in without the crossfade, and launched audio does not crossfade
+      between trajectories when a plan swap changes the rate;
     - freezing, or removing the playing clip, crossfades an audio clip
       out, but a clip with a take chain stops dead (its chain leaves with
       the plan), and so does one removed by an edit that comes before the
@@ -758,6 +768,24 @@ instructions are in `docs/guides/installing.md`.
   validate the actual FX state and require canonical numeric ids. Loading
   restores one validation probe per FX, and open skips it when warnings are
   not requested.
+  Plug-in parameter references (session-model): envelopes, modulation
+  routes, `fx.param.set`, cables into plugin modules and MIDI learn name a
+  parameter through one resolver: a semantic key, a canonical decimal id,
+  or a display name in any letter case. An ambiguous name is refused with the ids, new
+  references are stored canonical (one spelling per parameter: the semantic
+  key on a plug-in that has keys, whatever the caller wrote, else the
+  decimal id; `env.add` converts plain points to the key's units and
+  answers `converted`), and answers give `param_name` beside them. Every
+  lookup by parameter (one envelope per parameter, write, touch and latch
+  recording, gesture holds, the FX window's lanes) compares stored
+  references. A parameter the plug-in does not mark automatable takes
+  neither an envelope nor a route. Older files that stored a name, or an id
+  on a semantic plug-in, still play; opening warns of one that resolves to
+  nothing or ambiguously, of one in another spelling (`param.spelling`: not
+  recorded into, not found by the FX window; remove it and add it again),
+  and of two active envelopes on one parameter (`param.unresolved`,
+  `param.ambiguous`, `param.spelling`, `env.duplicate`). Tested on CLAP
+  fixtures and a VST3.
   Modulation routes (ADR-0096, schema 2.16): a Mod Out module's inputs
   drive plug-in parameters outside the rack (`modulation.add/set/remove/
   list`; `fx.describe` marks the parameters a route can take), a track's
@@ -1441,7 +1469,19 @@ Engine and hosting:
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
-  post-fader sends into an In module take the linear path.
+  post-fader sends into an In module take the linear path. A rack knob's text
+  ("1.2 kHz") is read the same under any process locale, but the numbers in
+  `module.set`'s refusal messages and hints are printed with the locale's decimal
+  separator, so under a comma-decimal locale they read "0,01 to 100 Hz".
+- Renders are deterministic for plug-ins that keep no process-wide state. A
+  plug-in that does (Airwindows Consolidated, review round 72 O1) renders
+  one project differently run to run in process, from frame 0; bridged
+  (`fx.set {isolation: "dedicated"}`), each render is a fresh process and
+  identical. Nothing in the app points at the plug-in or at bridging.
+- Opening a project checks stored plug-in parameter references against the
+  plug-in's parameter list in its default state, so a plug-in whose names
+  follow its state can be warned of wrongly (`param.unresolved`); the
+  engine binds them against the running instance.
 - Modulation routes (ADR-0096): `modulation.add`, `modulate`,
   `modulation.list` and `fx.describe` judge a plug-in parameter from a fresh
   copy of the plug-in in its default state, not the running instance, while

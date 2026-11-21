@@ -348,3 +348,59 @@ there. Not in X1 or X2.
 - **Items stay plain notes.** Nothing that plays today changes, since
   `follow` defaults to `none`.
 - **D1 is fixed by X1.** It needs no separate fix.
+
+## Notes
+
+- *(2026-11-21, X1 review round 73, F2.)* The history rule is one rule: a
+  command that takes project material by reference (an item, a region)
+  re-reads all of it on replay, the notes and the context together, and only
+  `context_at`, which states a place for the context alone, records the
+  resolved `context` text. So `clip.add {item}` records no resolved text, as
+  `scene.capture` never did; the History bullet above, which listed the
+  context taken under an item with `context_at`, is superseded by this for the
+  item case. A replay of either on another branch gives the clip the context
+  that branch holds under the item.
+- *(2026-11-21, X1 review round 73, F3.)* Two sentences of the body are
+  superseded by what the code does and `notation.md` now says. A chord symbol
+  whose quality this build does not know is a compile error
+  (`notation.unknown_chord`), not a warning, so it adds no entry because the
+  text does not compile. A bar range (`2-4: …`) belongs to grid voices, which
+  hold no chord symbols; only a copy line repeats the bars of a chord voice.
+  And `context.no_key` is warned for an explicit `context_at` only: an item
+  (`clip.add {item}`) or `scene.capture` takes what lies under the item
+  without a warning.
+- *(2026-11-21, X1 review round 73, F5.)* "Unreadable reads as absent" holds
+  where a clip takes the context too: a key or chord this build cannot read,
+  met by `context_at` or taken under an item (`clip.add {item}`,
+  `scene.capture`), is not taken. The answer warns `clip.context_dropped`
+  naming the point and its project bar, and no unreadable text enters a
+  resolved `context`, so `branch.merge` can replay the step.
+- *(2026-11-21, X1 review round 73, suggestion.)* In `launch.commit` a clip
+  laid as one item per period gave the mismatch warning once per period, each
+  naming a later bar. It is given once for each launched stretch of the clip,
+  naming the first bar: one launch, one warning.
+- *(2026-11-21, X2 built.)* `harmony::follow` and following at placement are
+  built as the contracts say. What the contracts left to the builder:
+  - `followed` is on every laid item (`{mode: "none"}` when nothing was
+    mapped); `harmony::tonicInterval` is public, for the `interval` a
+    transpose region reports.
+  - A key or a chord the clip holds that this build cannot read is absent,
+    so a note there follows by what remains (or is copied).
+  - An unrolled item drops the notes it never played; the contract's "copied"
+    applies to the looped item that stays looped.
+  - A note held into the item's start (a note that began in an earlier pass) is
+    mapped at the item's start, as it sounds from there.
+  - `launch.unfollowed` is given by `launch.clip` and `launch.scene` (once per
+    launch) until X4.
+  - `follow` with an `item.add` source other than `clip` is `item.follow`.
+- *(2026-11-21, X2 review round 76, H3.)* The note held into the item's start
+  (the X2 note above) is mapped to the place it sounds from, the item's start,
+  but from the clip beat it was written at, not from clip beat 0; and a
+  held-in fragment does not count in "every pass maps alike", so one fragment
+  cannot unroll an item whose whole passes agree.
+- *(2026-11-21, X2 review round 76, H4.)* Leaving an unreadable point out of a
+  clip (the F5 note above) must not extend the point before it: an unreadable
+  chord inside the clip is written as a "no chord from here" point, as the
+  project reads it, and an unreadable key (there is no "no key" point) is named
+  in the warning as leaving the earlier key in force over that stretch.
+

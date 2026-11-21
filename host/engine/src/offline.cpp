@@ -864,7 +864,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     const RenderDeadlines deadlines(p.instances, opt.bridgeDeadlineMs);
     RenderWatch watch(p.instances, opt);
     if (RenderWatch::requested(opt)) return renderCancelled();
-    if (!opt.applyMasterPlayrate) p.rateEnabled = false;
+    if (!opt.applyMasterPlayrate) p.rateEnabled = p.rateStretch = false;
     MediaCache localMedia;
     p.projectDir = opt.projectDir;
     p.media = opt.media ? opt.media : &localMedia;
@@ -1155,7 +1155,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
                     else
-                        detail::applyLaunch(p, node, sw.action);
+                        detail::applyLaunch(p, node, sw.action, sw.at + p.rateOrigin);
                 }
                 auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(p.block, total - pos));
                 if (p.rateEnabled) n = std::min(n, static_cast<std::uint32_t>(64 - (pos & 63)));

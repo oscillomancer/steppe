@@ -764,6 +764,8 @@ Result<Stated> statedContext(Context& ctx, const model::Session& s, model::ClipK
             span = underItem->second;
         }
         auto taken = detail::contextUnder(s, from, span, audio);
+        for (const auto& n : detail::unreadableNotes(taken, at ? "/context_at" : "/item"))
+            ctx.warn(n.code, n.message, n.path);
         if (at && !taken.key)
             ctx.warn("context.no_key",
                      "no key holds at " + std::string("bar ") +
@@ -1006,9 +1008,10 @@ void registerClipCommands(cmd::Registry& registry) {
             "(\"1: key D minor {Dm}:w\"), read from the project at a place (context_at), under "
             "the item it copies, or from the {SYMBOL} chords of its notation (a stated context "
             "holding chords wins over them, clip.chords_ignored). follow (none, key or chords) "
-            "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); until "
-            "placement follows it, only the mismatch warning on laying a clip uses the context "
-            "(ADR-0098).";
+            "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying "
+            "the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the "
+            "key or chords under it (their follow argument), and a launched clip plays as "
+            "written until ADR-0098's X4 (launch.unfollowed).";
         c.tags = {"clip launcher", "clip"};
         c.args = clipAddArgsSchema();
         c.result =
@@ -1146,8 +1149,10 @@ void registerClipCommands(cmd::Registry& registry) {
             clip.follow = a.follow.value_or(model::ClipFollow::None);
             warnNotes(ctx, notes);
             warnFit(ctx, model::fitClipContext(clip));
-            // History replays the context the user saw, not the place it was read from.
-            if (a.contextAt || (a.item && !a.context)) {
+            // History replays the context the user saw, not the place it was read from:
+            // only context_at, which states a place for the context alone, records the text.
+            // An item is taken by reference and re-read on replay, notes and context together.
+            if (a.contextAt) {
                 ClipAddArgs resolved = a;
                 resolved.contextAt.reset();
                 resolved.context = stated->text;

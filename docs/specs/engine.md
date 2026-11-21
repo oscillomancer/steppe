@@ -583,12 +583,38 @@ the same.*
 - **Audio clips play at the take's own rate,** with its playrate, pitch
   and channel mode as on the timeline, and no warp. A clip whose audio
   does not fit the project tempo gets a `launch.tempo` warning.
-- **Staged within L2, each stated in STATUS until done:**
-  - *Master playrate.* Clip audio is a source on the playrate path
-    (ADR-0045 §2: converted before take FX and mixing), so it speeds up
-    with the master playrate. Until that lands, a plan with the master
-    playrate active compiles no players, its tracks follow the
-    arrangement, and a launch is refused with `launch.playrate`.
+- **Under a master playrate (ADR-0097, revision 2026-11-21).** Clips play
+  on the playrate path (ADR-0045 §2), at the song positions the rate
+  timeline gives:
+  - *Placement.* The target stays a stream frame. `placeLaunch` seeds a
+    copy of the running rate timeline from the executor's published clock
+    (with the scalar edits after it and the envelope), finds the quantize
+    boundary from the floor's song position, and targets the first frame
+    whose unwrapped song position reaches it (`placeRateLaunch`). A rate
+    control still on its way to the executors answers `launch.later`. A
+    scalar edit voids the pending launches past its frame
+    (`voidRateLaunches`), and a plan with other rate controls those after
+    its handover; service places them again. A launch whose every slot was
+    missed while it was placed is placed again at once (`launch()`, up to
+    three tries).
+  - *Audio* reads through a tape converter per player reading
+    (`PlayerReader`): positions are the frames' unwrapped song positions,
+    and its source folds them over the loop and maps them by the player's
+    phase rule. It keeps no state between quanta, so a launch primes
+    nothing. Under a playrate that keeps the pitch an audio clip has no
+    player yet (step 1b): compile warns and its launch is refused with
+    `launch.playrate`.
+  - *MIDI* (`rateLaunchMidi`, a clip chain's input, a rack's Notes feed):
+    each event at the first frame whose song position reaches it; what is
+    held ends where the song enters a new loop pass; a switch's first frame
+    reaches back to the anchor (`ClipWindow::Anchor`).
+  - *The switch crossfade* runs in device frames, 5 ms as heard
+    (`launchClock`; `LaunchState::fadeStart` is the node's frame there).
+  - *Clip-time lanes and a clip chain's take envelopes* are not bound to
+    the rate timeline; they read the clip position from the song position.
+  - A frozen track's print cuts in on a playrate plan (no
+    `retiringIntoPrint`), and a looped replay under a playrate stays
+    refused (`render.loop`).
 - **A clip take's chain (ADR-0097, amended 2026-11-20).** A clip whose
   active take has FX or an active envelope plays through a chain of its
   own, as an item's take does (`TakeChain::clipChain`, compiled with the
@@ -2510,7 +2536,9 @@ harness. See the tooling README for schemas, limits and invocation details.
 - **Plugin-parameter automation:** an envelope on `fx_* <param>` resolves the
   parameter from the plugin's semantic schema (`params::fromDescription`
   rebuilds its ParamSpec, so the host converts exactly as the plugin does)
-  or, for any plugin, by CLAP id or name (plain CLAP values). Semantic points
+  or, for any plugin, by parameter id or name (plain CLAP values), through the
+  one resolver session-model's "Plug-in parameter references" describes.
+  Semantic points
   are physical and interpolated in the normalized (curve) domain (ADR-0010).
   The stage gets param events at absolute timeline sample positions that are
   multiples of 32 in the lane's latency-shifted coordinates, and at each exact

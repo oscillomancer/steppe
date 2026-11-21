@@ -689,7 +689,9 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   and run as stages of the rack node (`Node::rackStages`, prepared and
   automated as chain stages), in sub-blocks on the grid, with notes made
   from their pitch and gate cables. A cable into `fx_N.<key>` (a semantic
-  key, a decimal CLAP parameter id or its name) rides one of the plugin module's 16
+  key, a decimal parameter id or its name, resolved as session-model's
+  "Plug-in parameter references" say; a new cable stores the canonical
+  reference) rides one of the plugin module's 16
   hidden knobs `mod_1`..`mod_16` (−1..1, never listed); at each point of
   the rack's grid (never where a host block splits it, so renders do not
   depend on the block size) the module sends each parameter its cables'

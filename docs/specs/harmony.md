@@ -130,7 +130,7 @@ snapping in each mode, ties, the range edges and a one-class set, and every pitc
 every scale in every key landing in the scale within six semitones; the index
 against a brute-force scan.
 
-## 5. Following (ADR-0098; the contract for step X2)
+## 5. Following (ADR-0098; the contract for step X2, built)
 
 ```cpp
 struct Place { std::optional<Key> key; std::optional<Chord> chord; };
@@ -146,6 +146,9 @@ struct Followed {
 // what cannot be mapped is copied (`Copy`), and a result out of range is folded.
 Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
 ```
+
+`tonicInterval(a, b)` is step 1's `iv` as a public function (a tonic interval from `a` to `b`,
+−5..6, the tritone −6), for callers that report the interval a transposition used.
 
 **Notation.**
 - `pc(x)` is `pitchClassNumber`.
@@ -222,14 +225,18 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
      reference: `follow(pitch, from, to, Key)` computed without step 7, or
      `pitch + iv(from.root, to.root)` when that gives `Copy`. A tie goes
      down. By `Chords`.
-   - **Duplicates.** Two notes that map to the same pitch at the same start
-     are both kept, in the source's canonical order. Cmaj7 voiced C4 E4 G4
-     B4 → C5 gives C4 C4 G4 G4.
+   - **Duplicates.** `follow` maps each note on its own, so two notes may map
+     to one pitch at one start: Cmaj7 voiced C4 E4 G4 B4 → C5 gives C4 C4 G4
+     G4. A caller that writes the notes keeps one of identical notes, as every
+     sequence does (`Sequence::canonicalize`): placement writes C4 G4, and
+     X4's tables must play such a pair once.
 7. **Range.** A result above 127 goes down by octaves, and one below 0 up by
    octaves, until it is in 0..127, with `folded`. The live player (X4) folds
    alike, so a laid clip and a launched one give the same notes.
 
-Deterministic. It allocates nothing and has no model or engine dependency.
+Deterministic. It allocates nothing (not even a first-use table: it reads the
+constant quality table `chordQualities()` is built from) and has no model or
+engine dependency.
 X4 builds the engine's pitch tables from it.
 
 **Tests (X2; this is the only test list, and ADR-0098 points here):**

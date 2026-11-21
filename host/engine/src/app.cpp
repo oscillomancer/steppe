@@ -369,6 +369,17 @@ Status restoreFx(host::Instance& instance, const model::FxInstance& fx, const mo
 }
 }  // namespace
 
+Result<std::vector<host::ParamInfo>> EngineApp::fxStateParams(model::Id id,
+                                                              const model::FxInstance& fx) {
+    if (host::Instance* live = instanceOf(id)) return live->params();
+    auto info = findPlugin(fx.plugin.id);
+    if (!info) return std::move(info).error();
+    auto probe = probeFor(*info, fx);
+    if (!probe) return std::move(probe).error();
+    SUPPLE_TRY(restoreFx(*probe->use, fx, view()));
+    return probe->use->params();
+}
+
 Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& values) {
     if (const auto owner = model::frozenOwner(view(), id))
         return model::frozenError(view(), *owner, "/fx");
@@ -392,24 +403,19 @@ Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& v
     std::map<std::uint32_t, double> pending;
     json::Value changed = json::Value::object();
     for (const auto& entry : values.asObject()) {
-        std::uint32_t numeric = 0;
-        const auto parsed =
-            std::from_chars(entry.key.data(), entry.key.data() + entry.key.size(), numeric);
-        const bool byId =
-            parsed.ec == std::errc{} && parsed.ptr == entry.key.data() + entry.key.size();
-        const host::ParamInfo* found = nullptr;
-        for (const auto& param : params)
-            if ((byId && param.id == numeric) || (!byId && iequals(param.name, entry.key))) {
-                if (found)
-                    return Error("fx.param_ambiguous", "parameter name is ambiguous",
-                                 "/values/" + entry.key,
-                                 "use the numeric id from fx.describe full");
-                found = &param;
-            }
         const auto path = "/values/" + entry.key;
-        if (!found)
-            return Error("fx.param_unknown", "unknown parameter " + entry.key, path,
-                         "use a parameter name or id from fx.describe full");
+        // The one resolver (session-model "Plug-in parameter references");
+        // a plain plug-in has no semantic schema.
+        auto ref = detail::resolveParam(params, nullptr, entry.key, info->name);
+        if (!ref) {
+            Error e = std::move(ref).error();
+            if (e.code == "param.unknown")
+                e.hint = "use a parameter name or id from fx.describe full";
+            e.code = e.code == "param.ambiguous" ? "fx.param_ambiguous" : "fx.param_unknown";
+            e.path = path;
+            return e;
+        }
+        const host::ParamInfo* found = ref->info;
         if (found->flags & CLAP_PARAM_IS_READONLY)
             return Error("fx.param_readonly", "parameter is read-only", path,
                          "choose a writable parameter");
@@ -470,7 +476,7 @@ Result<json::Value> EngineApp::setPlainParams(model::Id id, const json::Value& v
 Status EngineApp::validatePluginMod(model::Id id, const model::FxInstance& fx,
                                     const std::string& key, const std::string& path,
                                     std::shared_ptr<const model::Blob> blob,
-                                    PluginModValidation* validation) {
+                                    PluginModValidation* validation, std::string* canonical) {
     auto check = [&](host::Instance& instance) -> Status {
         json::Value schema;
         if (instance.info().semantic) {
@@ -478,9 +484,14 @@ Status EngineApp::validatePluginMod(model::Id id, const model::FxInstance& fx,
             if (!described) return std::move(described).error().at(path);
             schema = std::move(*described);
         }
-        auto target = detail::resolvePluginMod(instance.params(), &schema, key,
-                                               instance.info().format == "vst3");
+        // A stored cable (validation at open) binds an ambiguous name as the
+        // plan does; a new one must name one parameter.
+        auto target = detail::resolvePluginMod(
+            instance.params(), &schema, key, instance.info().format == "vst3", false,
+            validation ? detail::Ambiguity::First : detail::Ambiguity::Refuse,
+            instance.info().name);
         if (!target) return std::move(target).error().at(path);
+        if (canonical) *canonical = target->canonical;
         return {};
     };
     if (!validation)
@@ -1207,6 +1218,81 @@ void EngineApp::settleCleanSuspects() {
     ranBefore_.clear();
 }
 
+// Envelopes and routes store a plug-in parameter by its canonical reference
+// (session-model "Plug-in parameter references"); older files may hold
+// another spelling (an id or a name on a semantic plug-in, a name on
+// another). They still bind, but a reference that resolves to nothing, one
+// that is ambiguous, one in another spelling than the canonical (no lookup
+// by parameter finds it), and two envelopes on one parameter are said at
+// open. A missing plug-in is not probed.
+void EngineApp::warnStoredParamRefs(const model::Session& s,
+                                    std::vector<schema::Warning>& warnings) {
+    struct Resolved {
+        std::optional<std::uint32_t> id;
+        std::string name;
+    };
+    const auto resolve = [&](const model::EnvTarget& t, const std::string& path,
+                             bool envelope) -> std::optional<Resolved> {
+        const model::FxInstance* fx = s.fx.find(t.object);
+        if (!fx) return std::nullopt;
+        auto info = findPlugin(fx->plugin.id);
+        if (!info) return std::nullopt;
+        auto list = fxParams(*fx);
+        auto schema = fxSchema(*fx);
+        if (!list || !schema) return std::nullopt;
+        const json::Value* described = schema->isObject() ? &*schema : nullptr;
+        auto strict = detail::resolveParam(*list, described, t.param, info->name);
+        if (strict && strict->canonical != t.param) {
+            const std::string what =
+                envelope ? "a write, touch or latch pass is not recorded into it and the FX "
+                           "window's lane lookup does not find it; remove it (env.remove) and "
+                           "add it again (env.add) to store it as " +
+                               strict->canonical
+                         : "the FX window does not show it on its parameter; remove it "
+                           "(modulation.remove) and add it again (modulation.add) to store it "
+                           "as " +
+                               strict->canonical;
+            warnings.push_back({"param.spelling",
+                                t.object.str() + " " + t.param + " (" + strict->name() +
+                                    ") is stored in an older spelling, so " + what,
+                                path});
+        }
+        if (strict) return Resolved{strict->id, strict->name()};
+        if (strict.error().code == "param.ambiguous") {
+            auto first = detail::resolveParam(*list, described, t.param, info->name,
+                                              detail::Ambiguity::First);
+            warnings.push_back({"param.ambiguous",
+                                t.object.str() + " " + t.param + ": " + strict.error().message +
+                                    "; the first, " + first->canonical + ", plays; " +
+                                    strict.error().hint,
+                                path});
+            return Resolved{first->id, first->name()};
+        }
+        warnings.push_back({"param.unresolved",
+                            t.object.str() + " " + t.param + ": " + strict.error().message +
+                                "; it is kept but not heard",
+                            path});
+        return std::nullopt;
+    };
+    std::map<std::pair<model::Id, std::uint32_t>, model::Id> automated;
+    for (const auto& e : s.envelopes) {
+        if (e.value->target.object.kind != model::Kind::Fx) continue;
+        auto r = resolve(e.value->target, "/envelopes/" + e.id.str() + "/target/param", true);
+        if (!r || !r->id || !e.value->active) continue;  // only active lanes play
+        const auto key = std::make_pair(e.value->target.object, *r->id);
+        if (const auto it = automated.find(key); it != automated.end())
+            warnings.push_back({"env.duplicate",
+                                it->second.str() + " and " + e.id.str() + " both automate " +
+                                    e.value->target.object.str() + " " + r->name + "; " +
+                                    e.id.str() + " plays. Remove one with env.remove",
+                                "/envelopes/" + e.id.str() + "/target/param"});
+        automated[key] = e.id;
+    }
+    for (const auto& e : s.modulations)
+        if (e.value->target.object.kind == model::Kind::Fx)
+            resolve(e.value->target, "/modulations/" + e.id.str() + "/target/param", false);
+}
+
 Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warnings,
                        std::string_view expectHash) {
     const fs::path path = resolve(where);
@@ -1251,6 +1337,7 @@ Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warn
                                          checked.error().hint,
                                      checked.error().path});
         }
+        warnStoredParamRefs(*s, *warnings);
     }
     const bool dropped = opened->branchesDropped.has_value();
     const auto through = opened->autosavedThrough;

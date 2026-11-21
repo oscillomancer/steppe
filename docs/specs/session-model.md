@@ -299,6 +299,73 @@ Chains are arrays of fx ids on tracks (`chain`, `input_chain`), takes
 (`chain`) and the master's monitoring chain (`project.monitor_chain`, not
 rendered).
 
+#### Plug-in parameter references
+
+Envelopes (`{fx, param}`), modulation routes (`target.param`), `fx.param.set`
+keys, cables into a plugin module (`fx_N.<key>`) and MIDI learn
+(`fx.learn.set`, `fx.learn.remove`) name a plug-in parameter the same way,
+through one resolver (`detail::resolveParam`). Learn keeps its own error
+codes (`fx.param_unknown`, `fx.param_ambiguous`, `fx.param_id`,
+`fx.param_readonly`) with the resolver's messages and hints.
+
+- **What it accepts**, in this order:
+  - a semantic key of the plug-in's schema, exactly;
+  - a decimal parameter id (the CLAP `clap_id`, or the VST3 `ParamID`, both
+    stable by their formats) without leading zeros: `007` is refused with
+    the canonical spelling `7` in the hint;
+  - a display name, ignoring letter case. When several parameters match, a
+    single exact-case match wins; otherwise the name is ambiguous.
+- **An ambiguous name is refused**, naming the parameters it matches with
+  their ids in the hint, so the caller can use an id (up to eight are named,
+  then a count). A name the plug-in lacks is refused as each command
+  states. The plug-in is named by its display name, not its raw id.
+- **What is stored** is the canonical reference: on a semantic plug-in the
+  semantic key that describes the parameter, whichever spelling the caller
+  used; on any other plug-in (or for a parameter no key describes) the
+  decimal id. So each parameter has one stored spelling.
+  - *Values.* A key's envelope points are physical (the schema's units),
+    an id's or a name's plain (the plug-in's own range). `env.add` given a
+    semantic plug-in's parameter by id or name reads its points as plain,
+    converts them to physical, stores the key, and says so in its answer
+    (`converted: true`), so `env.list` and later point edits are in the
+    key's units. A route's depth is a fraction of the range, so nothing
+    converts.
+  - Answers that echo a parameter give the canonical reference as `param`
+    and the display name beside it as `param_name` (`env.add`, `modulate`
+    and `modulation.add`; `env.list` and `modulation.list` add
+    `param_name`).
+- **Identity** is the resolved parameter, and since each has one stored
+  spelling, comparing stored references is comparing parameters. Every
+  check that finds an envelope or route for a parameter compares the
+  stored reference with the canonical one: `env.exists`,
+  `modulation.duplicate`, which envelope a write, touch or latch pass
+  records into (`fx.param.set`, the plug-in window's gestures), which lane
+  a gesture holds, which route's offset a recorded gesture leaves out, and
+  the GUI's lane and route lookups.
+- **Stored references in older files** (a display name, any letter case)
+  still open and play: the plan binds them through the same resolver, and
+  an ambiguous one binds the first match, as before. The file is not
+  rewritten. Opening warns, at the reference's path, for one that resolves
+  to no parameter (`param.unresolved`), one that is ambiguous
+  (`param.ambiguous`, with the ids), and two active envelopes that resolve
+  to one parameter (`env.duplicate`; the later plays, as before).
+  - *A reference stored in another spelling* (an id or a name on a
+    semantic plug-in, a name on another) plays, in its own values' domain,
+    but no lookup by parameter finds it. Opening warns
+    (`param.spelling`): for an envelope, a write, touch or latch pass is
+    not recorded into it and the FX window's lane lookup does not find it;
+    for a route, the FX window does not show it on its parameter. The fix
+    it names: remove it and add it again (`env.remove` and `env.add`,
+    `modulation.remove` and `modulation.add`).
+  - A plug-in
+  that is missing is not probed, and its references are not checked. The
+  check reads the plug-in's parameter list in its default state.
+- **Automatable.** A parameter the plug-in does not mark automatable
+  (`CLAP_PARAM_IS_AUTOMATABLE`, VST3 `kCanAutomate`) takes no new envelope
+  (`env.param`, hint: set it with `fx.param.set`) and no route
+  (`modulation.target`, the same hint). Envelopes already in a file on such a
+  parameter keep playing.
+
 ### 1.8 Routes
 
 `sd_*` edges, stored at top level (not inside tracks):
@@ -380,7 +447,8 @@ with `route.add`).
 `{track: id, param: width|pan_left|pan_right|pan_boost}` (channels and
 busses only; `track.strip_type` on masters),
 `{track: "tr_0", param: playrate}` (one global master-rate envelope only),
-`{route: id, param: volume|pan|mute}`, `{fx: id, param: <key or CLAP id>}`,
+`{route: id, param: volume|pan|mute}`, `{fx: id, param: <key, id or name>}`
+(stored canonical; "Plug-in parameter references"),
 `{take: id, param: volume|pan|pitch|mute}`, `{tempo: true}` (the tempo map is
 edited through `tempo.*`, not envelopes); `mode`
 (`trim|read|touch|latch|latch_preview|write`); `active`, `armed`,
@@ -1307,7 +1375,8 @@ eviction; blob dedup.
   MIDI there, and any item on a buss, is `track.strip_type`. `transport.record` records
   armed masters' outputs with the armed channels' inputs.
   `fx.param.set` keeps semantic parameter units and also supports plain CLAP/VST3
-  parameter names/IDs, declared ranges, writable flags and plugin text conversion.
+  parameter names/IDs (resolved as "Plug-in parameter references" say),
+  declared ranges, writable flags and plugin text conversion.
   Plain parameter edits save processor state after applying queued values on a
   private probe. Latency probes restore patch/state/params before measuring.
 - Ruler lists include `timebase`; descriptions map seconds through the time map.
@@ -1712,7 +1781,7 @@ warning at its path that names it and says why.
 | Field | Meaning |
 |---|---|
 | `source` | `{module, input}` (required): a Mod Out module (`com.suppleaudio.rack.mod-out`, rack.md §5) and one of its inputs, `in_1` .. `in_16`. |
-| `target` | `{object, param}` as an envelope's target is stored (required): an `fx_*` with `param` a key, name or decimal CLAP id; a `tr_*` with `volume`, `pan` or `width` (`width`: not on a master); an `sd_*` with `volume`, for an audio send between strips or a rack send. |
+| `target` | `{object, param}` as an envelope's target is stored (required): an `fx_*` with `param` a key, name or decimal parameter id, stored canonical ("Plug-in parameter references"); a `tr_*` with `volume`, `pan` or `width` (`width`: not on a master); an `sd_*` with `volume`, for an audio send between strips or a rack send. |
 | `depth` | The offset at a signal of 1 (required). Plug-in parameter: a fraction of its CLAP range, −1..1. Volume and send level: dB, −48..48. Pan and width: percent, −200..200. |
 | `enabled` | Default true. |
 | `lane` | The target's lane is shown, default true. Undoable like an envelope's `visible`. It never changes the sound, but changing it compiles, as an envelope's `visible` does. |
@@ -2037,12 +2106,12 @@ Scenes (2):
 
 ### Clip context (schema 2.20, ADR-0098; the contract for steps X1 and X2)
 
-*Step X1 is built: the fields and schema 2.20, the commands, `midi.get`,
-`midi.write` and the scale ops on a clip, `session.describe`, and the
-`context.mismatch` warning. Following itself (step X2, `follow` on
-`item.add {clip}`, `scene.insert` and `arrangement.build`) and launching a
-followed clip (X4) are not built: until then placement copies every clip as
-`none`, whatever its `follow`.*
+*Steps X1 and X2 are built: the fields and schema 2.20, the commands,
+`midi.get`, `midi.write` and the scale ops on a clip, `session.describe`, the
+`context.mismatch` warning, and following at placement (`follow` on
+`item.add {clip}`, `scene.insert` and `arrangement.build`, with `harmony::follow`).
+A launched clip following live (X4) is not built: until then it plays as it was
+written, and `launch.unfollowed` says so.*
 
 Writers emit `supple.project/2.20`. A clip gains two members; earlier files
 load unchanged and nothing migrates. A 2.19 build drops both members with its
@@ -2097,12 +2166,24 @@ bars.
   - `context_at` reads the project's context from that place for the clip's
     length: the key and the chord holding there become points at 0, and the
     points inside the span follow, shifted. With no key there, the clip gets
-    no key and the answer warns `context.no_key`. It gives the place's points
+    no key and the answer warns `context.no_key` (only for an explicit
+    `context_at`: `clip.add {item}` and `scene.capture` take what is under the
+    item without a warning, as most projects have no context track). It gives
+    the place's points
     as a stated `context` with them would, so the resolved text in history
     replays exactly (below).
   - `clip.add {item}` takes the context under the item the same way, from
     the item's start, unless `context` or `context_at` is given, which wins.
     An audio clip takes the key only.
+  - **Unreadable points.** A key or chord this build cannot read (an unknown
+    scale or chord quality from a later build) is absent here as everywhere:
+    `context_at`, an item and `scene.capture` do not take it, the answer warns
+    `clip.context_dropped` naming it and its bar, and nothing unreadable is ever
+    written into a resolved text, so a replay of the step is never refused for
+    it. Where the dropped point lay inside the clip, the clip does not let the
+    point before it carry on: a dropped chord becomes a "no chord from here" point
+    (the project reads none there either), and a dropped key, which has no such
+    point, is named in the warning as leaving the earlier key in force.
   - `follow` is accepted under the invariant (`clip.no_key`, hint: give the
     clip a context with a key at its start).
 - **Chord symbols in a `notation` source** are recorded as chord points
@@ -2125,9 +2206,12 @@ bars.
   `clip.chords_set` (also when the clip had none), and keeps its keys. A text without symbols leaves
   the context alone.
 - **`scene.capture`** gives each clip the context under its item.
-- **History** records `context_at`, and the context taken under an item,
-  as the resolved `context` text, so a replay on another branch gives the
-  clip the same points.
+- **History.** A command that takes project material by reference (an
+  item, a region: `clip.add {item}`, `scene.capture`) keeps the reference, and
+  a replay on another branch re-reads all of it there, the notes and the
+  context together. Only `context_at`, which states a place for the context
+  alone, records what it resolved to: the `context` text, so a replay gives
+  the clip the points the user saw.
 - **Copies.**
   - `clip.duplicate` and `clip.move` keep `context` and `follow`.
   - `take.extract` from a clip and `item.export` copy the notes, with no
@@ -2170,11 +2254,9 @@ bars.
 
 **Laying a clip (X1: the warning; X2: following).**
 - **Where.** `item.add {clip}`, `scene.insert` and `arrangement.build` take
-  `follow?: none | key | chords` (X2), defaulting to each clip's `follow`.
-  `launch.commit` copies, as heard (ADR-0098).
-- **Until X2** those three copy every clip as `none`, whatever its `follow`,
-  and give the mismatch warning below. The `follow` argument and the
-  mapping arrive with X2.
+  `follow?: none | key | chords`, defaulting to each clip's `follow`.
+  `launch.commit` copies, as heard (ADR-0098). `follow` with an `item.add`
+  source other than `clip` is `item.follow`.
 - **Following never refuses and never fails.**
   - A `follow` other than `none` applies to each clip that can follow: a
     MIDI clip with a readable key at 0 and a note off channel 10 (stored
@@ -2197,12 +2279,13 @@ bars.
   key at b's clip beat and the project's key at b both hold and differ in
   tonic pitch class or scale. It names the clip, both keys and the first
   project bar where they differ. A clip whose notes are all on channel 10
-  gives none.
-- **`key` (X2).** Each note goes through `harmony::follow` (`harmony.md` §5)
+  gives none. `launch.commit` gives it once for each launched stretch of a
+  clip, not for each period the stretch is laid as.
+- **`key`.** Each note goes through `harmony::follow` (`harmony.md` §5)
   from the clip's key at its clip beat to the key at its place. Where no
   readable key holds at the place, the note is copied, with one
   `context.no_key` warning per item.
-- **`chords` (X2).** From the clip's chord at the note's clip beat to the
+- **`chords`.** From the clip's chord at the note's clip beat to the
   chord at its place. A note with either chord missing or unreadable
   follows by key.
 - **The item.**
@@ -2221,7 +2304,9 @@ bars.
   to_bar, from_key?, to_key?, by, interval?}], folded?, unrolled?,
   copied?}`.
   - A region is a maximal run of project bars over which the clip's key, the
-    place's key and the way notes were mapped stay the same.
+    place's key and the way notes were mapped stay the same. Regions are read
+    from the bars where notes start; a bar where none does (a rest, a held
+    note) does not end a run.
   - `from_bar` and `to_bar` are project bars, and `to_bar` is inclusive.
   - `by` is `transpose`, `degree`, `chords` or `copy`; `interval` is in
     semitones, for `transpose`.
@@ -2233,3 +2318,20 @@ bars.
   on, as `scene.insert` re-reads the clip.
 - **Launching, until X4.** A launched clip plays unfollowed. Launching one
   whose `follow` is not `none` warns `launch.unfollowed` once per launch.
+- **What was built (X2).**
+  - `followed` is on every laid item, `{mode: "none"}` when nothing was
+    mapped. A clip placed as `none` or copied for a reason gives the
+    `context.mismatch` warning as before.
+  - `context.no_key` (the notes of a followed clip copied for want of a key
+    under them) and `context.scale_shape` (step 5 applied) are given once per
+    item, naming the first bar.
+  - An unrolled item drops the notes it never played (they are heard nowhere);
+    its controllers and sysex repeat with the passes.
+  - A note held into the item's start is mapped to the key (or chord) at the
+    item's start, from the clip beat it was written at (in the clip's
+    previous pass), and does not decide whether every pass maps alike: a looped
+    item stays looped when every whole pass maps alike, and the fragment plays
+    the note's own pitch. A pitched note's `folded` counts once per note
+    written.
+  - `launch.clip` and `launch.scene` warn `launch.unfollowed` for a clip whose
+    `follow` is not `none`, once per launch.
