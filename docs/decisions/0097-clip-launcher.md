@@ -455,6 +455,8 @@ Clips replace that with an **ordered budget**:
     with the master playrate. Until that lands, a plan with the master
     playrate active compiles no players, its tracks follow the
     arrangement, and a launch is refused with `launch.playrate`.
+    (2026-11-21: launches play under a master playrate; see the revision
+    of that date below.)
   - *A clip take's FX and envelopes.* They will play as an item's take
     chain does. Until then a clip plays without them, and the plan warns
     with `launch.take_chain`, naming the clip.
@@ -723,6 +725,96 @@ anticipative renderer's flush and the plug-ins' state may not reproduce.
   wraps before an anchor, in both executors, through the bridge too.
 - A looped replay under a master playrate is refused (`render.loop`) until
   launches play under one (the next revision).
+
+## Revision (2026-11-21, batch 3, S3 step 1): launches under a master playrate
+
+**Context.** L2 staged the master playrate: a plan with it active compiled
+no players, its tracks followed the arrangement, and a launch was refused
+with `launch.playrate`. Batch 3's S3 put clips on the playrate path. This
+revision records step 1 as built.
+
+**Decision.**
+- **The target stays a stream frame.** The queue protocol, the launch log
+  and the replay by running frame are unchanged.
+  - *Placement.* On a playrate plan, while playing, `placeLaunch` seeds a
+    copy of the running rate timeline from the executor's published clock,
+    with the scalar edits after it and the plan's envelope. It takes the
+    song position at the floor, finds the quantize boundary as on the unity
+    path (folding over the loop), and targets the first frame whose
+    unwrapped song position reaches it. With quantize `none` the anchor is
+    the floor's song sample, rounded down.
+  - *A rate control in flight.* While the running plan's scalar or envelope
+    differ from the newest plan's, placement answers `launch.later`, and
+    service places a queued launch again later.
+  - *Edits.* A scalar edit voids the pending launches whose target lies
+    past the edit's frame. A plan with other rate controls (the playrate on
+    or off, the scalar, the envelope, a sync chase) voids those that switch
+    after its handover. Service places them again on the new trajectory, on
+    the same boundary unless the floor has passed it.
+  - *A launch missed while it was placed* (every executor's horizon passed
+    it before it was decided) is placed again at once by `launch()`, up to
+    three times, instead of at the next service. A placement on a playrate
+    plan integrates the rate up to the boundary, which takes milliseconds.
+- **Audio clips** play through a tape converter (`PlayerReader`: per
+  channel one for what plays and one for what fades out, and one per clip
+  chain).
+  - The converter's positions are the song positions of the frames (the
+    rate timeline's unwrapped phase). Its source folds them over the
+    transport loop and maps them by the player's phase rule: the anchor,
+    `once`, the loop window and the take's offset.
+  - Before the anchor it is silent, unless the clip is unanchored or the
+    frame is read in a later loop pass than the output's (a clip chain
+    reading ahead of a wrap).
+  - The tape converter keeps no state between quanta, so a launch primes
+    nothing.
+- **With the pitch preserved**, a playrate plan reads the timeline through
+  stretch converters, which a launch would have to seek and prime. In
+  step 1 an audio clip then has no player: compile warns
+  `launch.playrate`, and its launch is refused with `launch.playrate` (hint:
+  turn off the playrate's preserve pitch, or set it to 1 without an
+  envelope). MIDI clips launch. Step 1b plays these audio clips.
+- **MIDI clips** play each event at the first frame whose song position
+  reaches it, by the rule timeline MIDI follows on the playrate path
+  (`rateEvents`).
+  - What the track holds ends where the song enters a new loop pass.
+  - A switch's first frame reaches back to the anchor, which at a slow rate
+    can lie behind the previous frame's song position.
+  - While anything but the arrangement holds the track, the timeline's
+    notes pass unplayed, as on the unity path.
+  - A clip chain's instrument (its input, the lead ahead) and a rack's
+    Notes feed follow the same rule.
+- **The 5 ms switch crossfade is in device frames, as heard.** On a
+  playrate plan `LaunchState::fadeStart` is the node's frame at the switch
+  (`launchClock`). A crossfade in progress when a plan changes between the
+  unity and playrate paths ends there.
+- **Clip time (C2).** Clip-time lanes and a clip chain's take envelopes
+  are not bound to the rate timeline. They read the clip position from the
+  song position, now fractional.
+- **Capture.** `launch.capture` is refused at arming while a master
+  playrate is active: a rate other than a steady 1, an envelope, or a sync
+  chase. The error is `launch.playrate`, with the hint "set the master
+  playrate to 1 and turn off its envelope, then capture". A playrate that
+  becomes active ends a running capture, with a warning. Committing a
+  capture by the song positions heard (S3, Q2) needs the scalar history
+  logged with it, and is left for later.
+- **Still refused:** a looped replay under a master playrate
+  (`render.loop`). The replay does not wrap on the playrate path.
+
+**Consequences.**
+- Live equals the replay under a constant 0.75 and under an envelope, in
+  both executors, at two block sizes. This holds for audio and MIDI clips,
+  clips with take chains, and a rack's Notes feed. Further tests cover the
+  switch frame at the boundary, a scalar edit placing a launch again, the
+  crossfade in device frames, a note on the anchor at 0.25, a clip lane in
+  clip time, and the refused capture.
+- A placement integrates the rate up to the boundary on the main thread,
+  on a 64k-frame copy of the timeline.
+- Limits until later steps:
+  - audio clips under a pitch-keeping playrate (step 1b);
+  - a frozen track's print cuts in, not crossfaded, on a playrate plan;
+  - when a plan swap changes the trajectory, launched audio reads the new
+    one at once, where timeline clips crossfade between the two;
+  - a looped transport under a playrate has no replay to compare with.
 
 ## Consequences
 

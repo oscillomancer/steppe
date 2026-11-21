@@ -1729,7 +1729,10 @@ committing again writes the same performance over itself.
 
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
-- launching while a master playrate is active (`launch.playrate`).
+- launching an audio clip while the master playrate keeps the pitch
+  (`launch.playrate`); MIDI clips, and audio clips without it, follow
+  the playrate;
+- capturing a performance while a master playrate is active.
 
 A rack's Notes module that plays a track's notes follows that track's
 launches: it plays the clip, falls silent when the track stops, and

@@ -226,7 +226,13 @@ instructions are in `docs/guides/installing.md`.
     clip holds a track, following launches while it is open.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
-    - a master playrate refuses launches (`launch.playrate`);
+    - under a master playrate clips play on the playrate path, live as
+      the replay (ADR-0097, revision 2026-11-21), but while it keeps the
+      pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
+      clips can); `launch.capture` is refused while one is active, and
+      one becoming active ends a capture; there a frozen track's print
+      cuts in without the crossfade, and launched audio does not crossfade
+      between trajectories when a plan swap changes the rate;
     - freezing, or removing the playing clip, crossfades an audio clip
       out, but a clip with a take chain stops dead (its chain leaves with
       the plan), and so does one removed by an edit that comes before the
