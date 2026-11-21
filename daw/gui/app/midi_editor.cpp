@@ -2305,11 +2305,11 @@ void MidiEditor::editChord(double beat, ui::Point at) {
         host.run = [this, item](const std::string& command, json::Value args) {
             const auto owner = midiOwner(app_.head(), item);
             if (command != "chord.set" || !owner || !owner->clip) return false;
-            const auto at = clipBeatAt(args["at"].asDouble());
-            if (!at) return false;
+            const auto clipAt = clipBeatAt(args["at"].asDouble());
+            if (!clipAt) return false;
             model::ContextPoint p;
             p.type = model::ContextType::Chord;
-            p.beat = *at;
+            p.beat = *clipAt;
             p.symbol = args["symbol"].asString();
             return static_cast<bool>(setClipContext(withContextPoint(owner->clip->context, p)));
         };
@@ -2428,8 +2428,8 @@ std::optional<double> MidiEditor::clipBeatAt(double rollBeat) {
     if (axis.looping && (beat < -1e-9 || beat >= axis.shownEnd() - 1e-9)) {
         if (actions_.onError)
             actions_.onError(
-                "Context: a looped clip's key and chords are placed inside its "
-                "loop, where the strip shows them");
+                "Context: a looped clip's key and chords go inside its loop, "
+                "the part of the roll they are shown over");
         return std::nullopt;
     }
     return std::max(0.0, beat);
