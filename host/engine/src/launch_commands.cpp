@@ -522,7 +522,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             {"A captured bar of cl_1",
              j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,
                             "launches": [{"frame": 0, "track": "tr_1", "action": "clip",
-                                          "clip": "cl_1", "anchor": 0, "anchor_beat": 0}]}})"),
+                                          "clip": "cl_1", "scene": "sc_1", "anchor": 0,
+                                          "anchor_beat": 0}]}})"),
              j(R"({"tracks": ["tr_1"], "items": ["<any>"], "sections": [{"scene": "sc_1", "region": "<any>", "start": 0, "end": 4}], "from": 0, "to": 4})"),
              "song_with_clip"}};
         c.resolve = [](CommitArgs& a, Context& ctx) -> Status {
