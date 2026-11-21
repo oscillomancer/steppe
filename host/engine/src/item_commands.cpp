@@ -391,10 +391,11 @@ Result<ItemAddResult> addItemFromClip(Context& ctx, const model::Session& s, mod
     nameItemFromClip(t, clip, item);
     const double length = model::itemLengthBeats(s, item);
     const Id it = t.create(std::move(item));
-    // The notes follow the key (or chords) under the item when asked to; otherwise they are
-    // copied as they are, and context.mismatch says when the clip's key is not the project's.
+    // The laid takes carry the clip's context and follow: the notes sound as the key (or chords)
+    // under the item says when asked to; otherwise as written, and context.mismatch says when the
+    // clip's key is not the project's.
     std::vector<detail::ClipNote> notes;
-    auto followed = detail::followPlacedItem(s, t, *id, clip, it, follow, false, "/clip", notes);
+    auto followed = detail::followPlacedItem(s, t, *id, clip, it, follow, "/clip", notes);
     if (!followed) return std::move(followed).error();
     for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
     ItemAddResult r;
@@ -510,11 +511,13 @@ void registerItemCommands(cmd::Registry& registry) {
             "that clip's takes, as long as the clip, its loop and take envelopes converted at "
             "the tempo where the item lands (ADR-0097); the item is named as the clip is (its "
             "active take's name) when the clip has a name. follow (none, key or chords; default: "
-            "the clip's own) maps the clip's notes from the key or chords it was written against "
-            "to those under the item (ADR-0098): notes on channel 10 and clips that cannot follow "
-            "are copied, and the answer's followed says what was done, by bar. With none the "
-            "notes are copied as they are and context.mismatch warns when the clip's key, or in "
-            "the same key its chord, is not the project's under the item. A master holds "
+            "the clip's own) is set on the laid MIDI takes with the clip's context, so the notes "
+            "sound as the key or chords under the item say, mapped from those they were written "
+            "against (ADR-0098, following is playback): the notes stay as written, a context edit "
+            "moves them, take.bake writes the sounding pitches, and notes on channel 10 and clips "
+            "that cannot follow sound as written. The answer's followed says how they sound, by "
+            "bar. With none context.mismatch warns when the clip's key, or in the same key its "
+            "chord, is not the project's under the item. A master holds "
             "audio items only (prints, played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =

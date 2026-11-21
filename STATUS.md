@@ -213,17 +213,18 @@ instructions are in `docs/guides/installing.md`.
   on a clip read the clip's own context at the clip beat each note sounds,
   never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert` and
   `arrangement.build` take `follow` (`none`, `key`, `chords`; default the
-  clip's own) and map a MIDI clip's notes by `harmony::follow` from the key or
-  chords it was written against to those under the item; the answer's
-  `followed` says how, by bar, and a looped item whose passes map differently
-  is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
-  that cannot follow is copied with its reason, and `launch.commit` copies
-  what was heard and warns `context.mismatch` when a clip's key (or, in the same key, chord) is not the
+  clip's own) and, as of X4d, lay the notes as written with the clip's context and `follow`
+  on each laid MIDI take (nothing is unrolled, and a pooled item may follow); the
+  answer's `followed` says how the notes sound, by bar, read from
+  `model::soundingNotes`. Notes on channel 10 are never mapped, a clip that cannot follow
+  is laid without following and says why, and `launch.commit` copies what was heard and
+  warns `context.mismatch` when a clip's key (or, in the same key, chord) is not the
   project's under it. `scene.insert` and `arrangement.build` take
   `write_context` (X5): the scenes' own harmony is written to the context
-  track under each section that has none. Not built: a launched clip
-  following live (X4: `launch.clip` and `launch.scene` warn
-  `launch.unfollowed`, and a launched clip plays as written). The roll shows
+  track under each section that has none. Not built: the engine playing a take's
+  `follow` (X4c) and a launched clip following live (X4a): until they land a laid item
+  and a launched clip play as written, and `launch.clip` and `launch.scene` warn
+  `launch.unfollowed`. The roll shows
   and edits a clip's context, and the clip inspector sets Follow (X3).
 - **Take context and follow** (ADR-0098 amended, "following is playback"; step
   X4b, the model only; session-model "Take context and follow", schema 2.21): a

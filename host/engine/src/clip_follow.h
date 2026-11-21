@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #pragma once
-// Following at placement (ADR-0098 "Following (X2)", session-model "Clip context"): a clip
-// laid on the timeline as an item has its notes mapped from the key (or chords) it was
-// written against to the key (or chords) of the place it lands. `followPlacedItem` runs
-// after the item and its copied takes are in the transaction.
+// Following at placement (ADR-0098 "Following (X2)", amended "following is playback"): a clip
+// laid on the timeline as an item carries its context and `follow` onto its takes, and its
+// notes sound as the key (or chords) of the place they land says. `followPlacedItem` runs after
+// the item and its copied takes are in the transaction.
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,7 +30,6 @@ struct FollowedInfo {
     std::string mode = "none";  // none | key | chords: what was done
     std::optional<std::vector<FollowRegion>> regions;
     std::optional<std::int64_t> folded;  // notes that were folded into range
-    std::optional<bool> unrolled;
     std::optional<std::string> copied;  // why a clip that could not follow was copied
 };
 
@@ -39,17 +38,19 @@ schema::Schema<FollowedInfo> followedSchema();
 // The `follow` argument as the commands take it.
 schema::Schema<model::ClipFollow> followArgSchema();
 
-// Maps the notes of `itemId` (just laid from `clip`, its takes copied) by the context, as
-// `requested` (else the clip's own `follow`) says, and returns the answer's block. `s` is the
-// session the command started from: the project's context is read from it. A clip that cannot
-// follow, or one placed as `none`, is left as it is, with the `context.mismatch` note when its
-// key is not the project's under the item. Warnings go to `notes` (`context.no_key`,
-// `context.scale_shape`, `context.mismatch`). The one refusal is `clip.follow_pooled`: the
-// item shares the clip's MIDI (`pooled`) and the mapping would move a note. `path` is where
-// errors and warnings point.
+// Lays the clip's context on every MIDI take of `itemId` (just laid from `clip`, its takes
+// copied): each take gets the clip's context in its own beats, its period and phase, and the
+// `follow` that `requested` (else the clip's own) says, or none when the clip cannot follow
+// (ADR-0098 "following is playback": the notes stay as written and are mapped when they
+// sound). Returns the answer's block, read from `model::soundingNotes`: how the notes sound
+// as, by bar. A clip that cannot follow, or one placed as `none`, is left as it is, with the
+// `context.mismatch` note when its key is not the project's under the item. `s` is the
+// session the command started from. Warnings go to `notes` (`context.no_key`,
+// `context.scale_shape`, `context.mismatch`). Placement never refuses: a pooled item may
+// follow, since the mapping belongs to each take. `path` is where warnings point.
 Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t, model::Id clipId,
                                       const model::Clip& clip, model::Id itemId,
-                                      std::optional<model::ClipFollow> requested, bool pooled,
+                                      std::optional<model::ClipFollow> requested,
                                       const std::string& path, std::vector<ClipNote>& notes);
 
 }  // namespace supple::engine::detail

@@ -216,6 +216,17 @@ void checkTakeContext(const Session& s, std::vector<Error>& errors) {
     }
 }
 
+void takeContextFromClip(Take& take, const Clip& clip, double clipBeatAtStart, ClipFollow follow) {
+    if (clip.context.empty() || !takeIsMidi(take)) return;
+    const double rate = take.playrate > 0 ? take.playrate : 1.0;
+    take.context = clip.context;
+    for (ContextPoint& p : take.context) p.beat *= rate;
+    take.contextPeriod = clip.length * rate;
+    take.contextPhase = clipBeatAtStart * rate - take.startOffset;
+    take.follow = follow;
+    fitTakeContext(take, TakeHome::Item);
+}
+
 // --- a note's place -----------------------------------------------------------------------
 
 double contextBeatOf(const Take& take, double unwrappedSourceBeat) {

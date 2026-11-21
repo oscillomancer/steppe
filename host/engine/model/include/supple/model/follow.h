@@ -68,6 +68,17 @@ std::vector<ClipContextNote> fitTakeContext(Take& take, TakeHome home);
 // above, at commit); checkInvariants calls it.
 void checkTakeContext(const Session& s, std::vector<Error>& errors);
 
+// A take laid from a clip (placement, `launch.commit`, `take.extract` from a clip) gets the
+// clip's context in the take's own beats (session-model "Converting between a clip and a take"):
+// each point's beat times the take's playrate `r`, `context_period` the clip's length times
+// `r`, `context_phase` = `c0 * r - start_offset` where `c0` is the clip beat at the item's start
+// (0 for placement; for `launch.commit`, where the laid stretch begins in the clip's period),
+// and `follow` as given. A note heard `d` beats after the item's start then reads context beat
+// `(c0 + d) * r` modulo the period: its clip beat, as the launcher reads it. A clip with no
+// context leaves the take as it is. The take is made fit afterwards (`fitTakeContext`), so
+// follow other than none needs a key the take reads.
+void takeContextFromClip(Take& take, const Clip& clip, double clipBeatAtStart, ClipFollow follow);
+
 // --- a note's place -----------------------------------------------------------------------
 
 // The context beat of the **unwrapped source beat** `u0`, the note's start in the source with

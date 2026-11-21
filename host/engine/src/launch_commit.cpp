@@ -17,7 +17,9 @@
 #include "clip_context.h"
 #include "clip_launcher.h"
 #include "command_validation.h"
+#include "follow_tables.h"
 #include "plan.h"
+#include "supple/model/follow.h"
 #include "supple/time/timeline.h"
 
 namespace supple::engine {
@@ -371,6 +373,19 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const bool fadeOut = x.to < perf.frames && !heldBy(x, x.to);
             const double speed = take.playrate > 0 ? take.playrate : 1.0;
             const std::string path = at + "/launches";
+            // How the plan played this clip, after its budget (follow_tables.h): what each laid
+            // take follows. A drum-only clip, one with no readable key, and audio follow nothing.
+            model::ClipFollow outcome = model::ClipFollow::None;
+            if (midi) {
+                bool pitched = false;
+                if (take.source && take.source->kind == model::Kind::Midi)
+                    if (const model::MidiSource* source = s.midi.find(*take.source))
+                        for (const midi::Note& n : source->sequence.notes) pitched |= n.channel != 9;
+                const auto built = detail::buildClipFollow(clip, pitched, detail::projectFollow(s));
+                outcome = built.outcome == detail::FollowOutcome::Chords ? model::ClipFollow::Chords
+                          : built.outcome == detail::FollowOutcome::Key  ? model::ClipFollow::Key
+                                                                         : model::ClipFollow::None;
+            }
 
             // One item: running frames [f0, f1), its content starting `phase`
             // into the period, at timeline beat `beat` (MIDI) or sample.
@@ -411,17 +426,23 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                                                      midi ? phase : phase / rate, period, span));
                 if (!copied) return std::move(copied).error();
                 const double shift = midi ? phase * speed : phase / rate * speed;
-                if (shift != 0)
+                if (shift != 0 || midi)
                     for (const Id tk : *copied)
-                        t.modify<model::Take>(tk, [&](model::Take& k) { k.startOffset += shift; });
+                        t.modify<model::Take>(tk, [&](model::Take& k) {
+                            k.startOffset += shift;
+                            // The notes are laid as written; the take carries the clip's context
+                            // and the follow the plan used for the clip, so the committed timeline
+                            // sounds as the performance did (ADR-0098, following is playback).
+                            // `phase` is the clip beat at the item's start.
+                            if (midi) model::takeContextFromClip(k, clip, phase, outcome);
+                        });
                 item.takes = *copied;
                 for (std::size_t k = 0; k < clip.takes.size(); ++k)
                     if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
                 nameItemFromClip(t, clip, item);
-                // The notes are copied as they were played (a launched clip is not followed
-                // until X4): say when the clip's key is not the project's under the item, once
-                // for the stretch however many periods (items) it is laid as.
-                if (midi && !mismatchGiven)
+                // A clip played as written says when its key is not the project's under the
+                // item, once for the stretch however many periods (items) it is laid as.
+                if (midi && outcome == model::ClipFollow::None && !mismatchGiven)
                     if (auto note = detail::mismatchNote(now, clipId, clip, beat0, beat1 - beat0,
                                                          phase, path)) {
                         ctx.warn(note->code, note->message, note->path);
