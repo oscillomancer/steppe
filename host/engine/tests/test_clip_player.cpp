@@ -1202,6 +1202,54 @@ double chained(std::int64_t k) { return double(rampAt(k)) * std::pow(10.0, -6.0 
 
 }  // namespace
 
+TEST_CASE("a clip with a take chain launched while stopped plays from the play start" *
+          doctest::description("rt")) {
+    // Review round 69: placed while stopped, the target is the play start
+    // and the chain's early half falls before the epoch's first frame. It
+    // applies at that first frame, as the replay applies it, the chain
+    // warming up through its first frames; it used to count as passed, and
+    // the launch was placed again a bar later.
+    Project p;
+    latentClip(p);
+    const model::Session s = p.app->head();
+    const std::uint32_t block = 128;
+    const std::int64_t frames = 48000 * 2 + 8192;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        backend.run(8);  // stopped cycles
+        const Engine::LaunchRequest r = request("tr_1", "cl_1");
+        auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+        REQUIRE(placed);
+        CHECK(placed->stream == 0);
+        engine.play();
+        if (options.anticipative)
+            runAheadOnState(engine, backend, frames / block - 8, block);
+        else
+            backend.run(frames / block - 8);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        CHECK(engine.launchLog()[0].runningFrame == 0);
+        const std::uint32_t latency = engine.outputLatency();
+        engine.stop();
+        std::vector<float> live = backend.capture().channels[0];
+        live.erase(live.begin(), live.begin() + 8 * block);
+        CHECK(double(live[latency + 5000]) == doctest::Approx(chained(5000)).epsilon(1e-5));
+        OfflineSettings settings;
+        settings.endSeconds = 1.5;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = engine.launchLog();
+        auto offline = renderOffline(s, pool, settings);
+        REQUIRE(offline);
+        CHECK(maxDiff(live, latency, offline->audio.channels[0], 72000) == 0.0);
+    }
+}
+
 TEST_CASE("a clip plays through its take's chain, heard at its boundary, not its latency later") {
     Project p;
     latentClip(p);
