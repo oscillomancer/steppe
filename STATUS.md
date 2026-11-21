@@ -222,11 +222,17 @@ instructions are in `docs/guides/installing.md`.
   each clip's context and the follow the plan used, warning `context.mismatch` only for a
   clip played as written whose key (or, in the same key, chord) is not the project's under it. `scene.insert` and `arrangement.build` take
   `write_context` (X5): the scenes' own harmony is written to the context
-  track under each section that has none. Not built: the engine playing a take's
-  `follow` (X4c) and a launched clip following live (X4a): until they land a laid item
-  and a launched clip play as written, and `launch.clip` and `launch.scene` warn
-  `launch.unfollowed`. The roll shows
-  and edits a clip's context, and the clip inspector sets Follow (X3). A clip or scene
+  track under each section that has none. A launched clip follows live
+  (X4a): pitch rows pooled across the plan within a budget of 1024 pairs of
+  places per clip (past it a chords clip follows its key, then plays as
+  written, with `launch.follow_budget` from `launch.clip` and `launch.scene`
+  and in the plan's warnings), a note keeps the pitch of its start, a context
+  edit compiles while a clip or take follows, and `launch.state` gives each
+  track's `followed` and `follow_budget`. A laid take that follows sounds at
+  playback as `model::soundingNotes` maps it (X4c), so a clip launched and the
+  same clip laid sound the same. The roll shows and edits a clip's context,
+  and the clip inspector sets Follow (X3); the roll's sounding ghosts and the
+  take inspector's Follow are X4e. A clip or scene
   laid from the clip launcher, or written by Capture (`launch.commit`'s
   `mismatches`), says in the status line how its keys were followed or why a
   clip was copied (`followed.mismatch` names what differs: a key or a chord); a
@@ -252,9 +258,9 @@ instructions are in `docs/guides/installing.md`.
   `item.follow_merge`), `take.extract` from a clip, `clip.add {item}` and
   `scene.capture` (a following take's context becomes the clip's), `take.add`,
   a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
-  `context.no_key` warning on every context edit, and `session.describe`. Not
-  built: the engine's use of it (X4c): a take's `follow` is stored and nothing
-  plays by it yet, and `item.glue` is not registered. The GUI shows it (X4e, the model's part): a following take's roll draws
+  `context.no_key` warning on every context edit, and `session.describe`. The
+  engine plays a take's `follow` (X4c, engine.md "Following at playback"). Not
+  built: `item.glue` is not registered. The GUI shows it (X4e, the model's part): a following take's roll draws
   its notes where they sound with the written pitches outlined, and a Written
   cell; the strip shows the song's and the take's chords; the item carries
   "→D" and a thumbnail at the sounding pitches; the inspector says what the
@@ -855,8 +861,7 @@ instructions are in `docs/guides/installing.md`.
   stepped plug-in's quantized report all count), so a modulated parameter
   adds no undo step and writes no point. Its own editor edits are recorded:
   a VST3 editor's beginEdit/performEdit/endEdit are its gesture, as a CLAP
-  plug-in's (in the anticipative executor such a VST3 edit is recorded as
-  the plug-in's state instead: see Known limits). Depth and enabled are mix values (no
+  plug-in's, in both executors and bridged. Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
@@ -1500,13 +1505,6 @@ Library boundaries:
   while its backlog has room.
 
 Engine and hosting:
-- A VST3 editor's edit in the anticipative executor is recorded as the
-  plug-in's state and writes no point in touch or latch, or now and then
-  as the state and then the parameter edit (two steps): its state flag
-  captures the state on the main thread while the rendered gesture waits
-  to be heard, and that step's plan swap usually drops the gesture (review
-  round 81, E2; as before, with the processor's echo). In-callback and
-  bridged it is the plug-in's gesture, one step.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue

@@ -194,8 +194,8 @@ Result<json::Value> describe(const model::Session& s, const Target& t, bool soun
         const model::LeadPitches lead = model::leadPitches(
             heard, sounded, item ? model::itemSpan(s, *item).startBeat : 0.0, seq.notes.size());
         for (std::size_t i = 0; i < seq.notes.size() && i < lead.keep.size(); ++i)
-            notes.asArray()[i]["sounds"] = lead.keep[i] ? *lead.keep[i]
-                                                         : static_cast<std::int64_t>(seq.notes[i].pitch);
+            notes.asArray()[i]["sounds"] =
+                lead.keep[i] ? *lead.keep[i] : static_cast<std::int64_t>(seq.notes[i].pitch);
         if (!lead.alike) out["differs_by_pass"] = true;
     }
     out["notes"] = std::move(notes);
@@ -919,8 +919,9 @@ void registerMidiCommands(cmd::Registry& registry) {
             if (!t) return std::move(t).error();
             if (a.sounding && s.clips.find(t->item))
                 return Error("midi.sounding_clip",
-                             a.item + " is a clip: what it sounds as depends on where it is "
-                                      "launched",
+                             a.item +
+                                 " is a clip: what it sounds as depends on where it is "
+                                 "launched",
                              "/sounding",
                              "launch.state says how a launched clip follows; lay it on the "
                              "timeline (item.add {clip}) to read what sounds");

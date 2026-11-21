@@ -83,7 +83,8 @@ void midiEvents(ClipPlayer& pl, const model::Clip& clip, Id clipId, const model:
             if (!(off - at > 1e-9)) continue;
             ClipEvent a;
             a.beat = a.start = at;
-            a.origin = {kClipOrigin | clipId.n, clip.activeTake->n, take.source->n, n.start, r};
+            a.origin = {
+                kClipOrigin | clipId.n, clip.activeTake->n, take.source->n, n.start, r, false};
             a.event.kind = host::Event::Kind::NoteOn;
             a.event.channel = n.channel;
             a.event.key = n.pitch;
@@ -209,6 +210,8 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
                         (built.outcome == FollowOutcome::Key ? "the chords; it follows the key"
                                                              : "live; it plays as written"));
                 pl.follow = std::move(built.tables);
+                pl.followed = built.outcome;
+                pl.followBudget = built.overBudget;
             }
             const auto [voices, window] = midiSizing(pl, blockBeats);
             n.clipVoices = std::max(n.clipVoices, voices);

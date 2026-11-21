@@ -494,7 +494,9 @@ def live(j):
     assert not launched.get("started"), launched
     poll("the Verse plays", lambda: all(r["plays"] == "clip" for r in j.state().values()))
     warnings = [w["code"] for w in launched.get("warnings", [])]
-    assert warnings == ["launch.unfollowed"], launched  # the clips follow when laid, not live
+    assert warnings == [], launched  # the clips follow live (ADR-0098 X4a), within budget
+    followed = [r.get("followed", "none") for r in j.state().values()]
+    assert any(f != "none" for f in followed), followed
     error = j.refused("launch.capture", {"on": True}, "launch.playrate",
                       "A capture is refused under a playrate.")
     assert "playrate" in error["hint"], error
@@ -669,51 +671,51 @@ def other_direction(j, built):
                       "A scene from the Hook's second pass (bars 13-16: C Em Bb Fm|G).")
     clip = {row["track"]: row["clip"] for row in captured["clips"]}
     got = j.exec("midi.get", {"item": clip["tr_2"]}, "The captured bass clip.")
+    # A following take's context and follow become the clip's (X4d): the Hook bass was written
+    # against bars 9-12 (C Am F G) and follows the chords, so launched it sounds as it did there.
     assert got["context"]["text"] == (
-        "1: key C major {C}:w\n2: {Em}:w\n3: {Bb}:w\n4: {Fm}:h {G}:h\n"), got["context"]
-    # The captured clip does not follow until asked; ask, and lay it under A minor.
-    j.exec("clip.set", {"clip": clip["tr_2"], "follow": "chords"}, "Follow the chords.")
-    j.exec("clip.set", {"clip": clip["tr_3"], "follow": "chords"}, "Follow the chords.")
+        "1: key C major {C}:w\n2: {Am}:w\n3: {F}:w\n4: {G}:w\n"), got["context"]
+    for track in ("tr_2", "tr_3"):
+        followed = j.exec("midi.get", {"item": clip[track]}, "A captured clip.").get("follow")
+        assert followed == "chords", (track, followed)
+    # Laid under A minor, it follows the chords there.
     laid = j.exec("scene.insert", {"scene": captured["scene"], "bar": 29, "bars": 4},
                   "Lay it after the song, bars 29-32: A minor holds, Am F E7 Am would not be "
                   "written there, so the chords there are the last ones: Am.")
     rows = {row["track"]: row for row in laid["items"]}
     for track in ("tr_2", "tr_3"):
         assert rows[track]["followed"]["mode"] == "chords", rows[track]
-    for _ in range(4):  # the lay-out, two clip.set, the capture
+    for _ in range(2):  # the lay-out, the capture
         j.undo()
 
 
+def written_notes(j, item):
+    """An item's notes as written: (start, pitch)."""
+    return [(n["start"], n["pitch"])
+            for n in j.exec("midi.notes", {"item": item}, "An item's notes, as written.")["notes"]]
+
+
 def edit_after(j, built):
-    """A chord changed on the context track after the song was laid: nothing laid moves."""
+    """A chord changed on the context track after the song was laid: the laid notes stay as
+    written, and the items that follow sound the new chord at once (following is playback)."""
     verse_two = {row["track"]: row for row in built["segments"][1]["items"]}
     keys_item, bass_item = verse_two["tr_3"]["item"], verse_two["tr_2"]["item"]
     before = laid_notes(j, bass_item, 16.0)
+    written = written_notes(j, bass_item)
     changed = j.exec("context.write", {"text": "6: {Bb}:w\n"}, "Bar 6 becomes Bb: one call.")
     assert (changed["replaced"], changed["added"], changed["removed"]) == (1, 0, 0), changed
     CHANGED[6] = "Bb"
-    assert laid_notes(j, bass_item, 16.0) == before, "the laid bass did not move"
+    assert written_notes(j, bass_item) == written, "the laid bass's notes are not rewritten"
+    assert laid_notes(j, bass_item, 16.0) != before, "the laid bass sounds the new chord"
     context_now = j.exec("midi.get", {"item": keys_item}, "The keys item reads the new chord.")
     assert [c["what"] for c in context_now["context"]["chords"]] == ["Am", "Bb", "E7", "Am"]
-    roots, tones = bar_matches(laid_notes(j, bass_item, 16.0), 5, 4)
-    assert roots == [True, False, True, True], "bar 6's bass is still on D, not Bb"
-    # The way back: remove the segment's items and its section, and lay the scene again,
-    # in one batch (one call, one undo step).
-    steps = [{"command": "item.remove", "args": {"item": row["item"]}}
-             for row in built["segments"][1]["items"]]
-    steps += [{"command": "region.remove", "args": {"id": built["segments"][1]["region"]}},
-              {"command": "scene.insert", "args": {"scene": "sc_1", "bar": 5, "bars": 4}}]
-    answer = j.exec("batch", {"label": "re-follow bars 5-8", "steps": steps},
-                    "Take the second Verse out and lay it again over the new chord.")
-    laid = {row["track"]: row for row in answer["results"][-1]["items"]}
-    roots, tones = bar_matches(laid_notes(j, laid["tr_2"]["item"], 16.0), 5, 4)
+    roots, _ = bar_matches(laid_notes(j, bass_item, 16.0), 5, 4)
     assert all(roots), roots
-    _, tones = bar_matches(laid_notes(j, laid["tr_3"]["item"], 16.0), 5, 4)
+    _, tones = bar_matches(laid_notes(j, keys_item, 16.0), 5, 4)
     assert all(tones), tones
     report = j.exec("analyze.track", {"track": "tr_2", "start_beat": 20.5, "end_beat": 23.5},
                     "The bass over bar 6, heard.")
     assert report["harmonic"]["note"].startswith("A#"), report["harmonic"]
-    j.undo()  # the batch
     j.undo()  # the context change
     CHANGED.clear()
 

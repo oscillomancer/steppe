@@ -571,7 +571,12 @@ struct NoteOrigin {
     std::uint64_t item = 0, take = 0, source = 0;
     std::int64_t tick = 0;
     std::int32_t pass = 0;
+    // A following take's note (ADR-0098 X4c): its key is the mapped one, so a
+    // plan swap carries it, and its note-off pairs with it, without the key, as
+    // a launched clip's (kClipOrigin). Not part of the address.
+    bool followed = false;
     auto address() const { return std::tuple{item, take, source, tick, pass}; }
+    bool keyless() const { return (item & kClipOrigin) != 0 || followed; }
 };
 struct NoteSource {
     NoteOrigin origin{};
@@ -875,6 +880,10 @@ struct ClipPlayer {
     std::vector<ClipEvent> events;
     // A following clip's pitch tables (ADR-0098 X4); none: it plays as written.
     std::optional<ClipFollowTables> follow;
+    // What it follows by (launch.state's `followed`), and whether the budget
+    // forced that (`follow_budget`).
+    FollowOutcome followed = FollowOutcome::None;
+    bool followBudget = false;
     // Its take's chain (Node::takeChains), or -1: it plays straight into the
     // track (ADR-0097, amended 2026-11-20).
     int chain = -1;

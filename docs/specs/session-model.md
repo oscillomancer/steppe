@@ -1243,7 +1243,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   running time; on each track that left the arrangement its clip,
   stopped and held stretches replace the arrangement, each clip as
   copies of its takes at the phase heard, MIDI copied unless `pooled`,
-  the envelopes on their FX repeated pass after pass over each copy; a
+  the envelopes on their FX repeated pass after pass over each copy, and
+  the takes' own envelopes too over a looped copy of more than one period
+  (on an item they would run once from its start); a
   scene launched whole (every clip of it that could play, on a track not
   frozen, started on one frame) writes a section (a region with `section`
   true) named after the scene and in its colour, from that boundary until
@@ -2087,7 +2089,10 @@ nothing.
     - `loop` and the clip at least as long as the span: one item for the span.
   - The takes are copied, and a MIDI source with them unless `pooled`. The
     envelopes on their FX, in clip time, are written in timeline position
-    pass after pass over the item (schema 2.19).
+    pass after pass over the item (schema 2.19); the takes' own envelopes
+    (volume, pan, mute), in item-relative beats, pass after pass too when
+    the item loops over more than one period, since on an item they run
+    once from its start.
   - An item already on a track that receives a clip and overlapping the span
     is `scene.insert.occupied` (named in the message); other tracks' items are
     not touched. A scene with no clip is `scene.empty`. A frozen track or one
@@ -2184,8 +2189,9 @@ Scenes (2):
 `midi.get`, `midi.write` and the scale ops on a clip, `session.describe`, the
 `context.mismatch` warning, and following at placement (`follow` on
 `item.add {clip}`, `scene.insert` and `arrangement.build`, with `harmony::follow`).
-A launched clip following live (X4) is not built: until then it plays as it was
-written, and `launch.unfollowed` says so.*
+A launched clip follows live (X4a; `launch.state` says how): `launch.unfollowed`
+is gone. Following at placement is being replaced by the take's own context
+and follow (ADR-0098 amended; X4b to X4d).*
 
 Writers emit `supple.project/2.20`. A clip gains two members; earlier files
 load unchanged and nothing migrates. A 2.19 build drops both members with its
@@ -2413,8 +2419,10 @@ whose start rule is the only rule.)*
     applied.
 - **History.** Placement with `follow` replays against the branch it replays
   on, as `scene.insert` re-reads the clip.
-- **Launching, until X4.** A launched clip plays unfollowed. Launching one
-  whose `follow` is not `none` warns `launch.unfollowed` once per launch.
+- **Launching (X4a).** A launched clip follows live, as `engine.md`
+  "Following at playback" says; `launch.state` gives each track's `followed`
+  outcome. *(Until X4a, a launched clip played unfollowed and warned
+  `launch.unfollowed`; that warning is gone.)*
 - **What was built (X2).**
   - `followed` is on every laid item, `{mode: "none"}` when nothing was
     mapped. A clip placed as `none` or copied for a reason gives the
@@ -2430,13 +2438,14 @@ whose start rule is the only rule.)*
     item stays looped when every whole pass maps alike, and the fragment plays
     the note's own pitch. A pitched note's `folded` counts once per note
     written.
-  - `launch.clip` and `launch.scene` warn `launch.unfollowed` for a clip whose
-    `follow` is not `none`, once per launch.
+  - `launch.clip` and `launch.scene` warned `launch.unfollowed` for a clip whose
+    `follow` is not `none`, once per launch, until X4a made a launched clip
+    follow live.
 
 ### Take context and follow (schema 2.21, ADR-0098 amended; the contract for X4b and X4d)
 
-*Built: X4b (model) and X4d (commands); X4c (engine) is not yet, and is in
-`engine.md` "Following at playback". Revised after review round 82 with the
+*Built: X4b (model), X4c (engine, in `engine.md` "Following at playback") and
+X4d (commands); X4e (the roll and take inspector) is not. Revised after review round 82 with the
 co-director's decisions (A1 to A5, B1 to B9), and after round 82b (C1, C2,
 D1 to D4).*
 

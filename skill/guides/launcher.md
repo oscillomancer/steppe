@@ -112,11 +112,13 @@ is the same whether the chords under it differ from the clip's or match them.
 - Under a bar the context track marks "no chord" (`""`), `chords` falls back to a transpose by
   the key (`by: transpose` for that bar).
 - `pooled: true` may follow too: the mapping belongs to each take that reads the source.
-- Playing a laid item that follows is the engine's: until the build that plays a take's
-  `follow` is in, the item plays as written, and `followed` and the take hold what it will
-  sound as.
-- A launched clip follows live as laid ones do, once built (`launch.state` says which).
-  `launch.commit` lays notes as written and gives each laid take the clip's context and the
+- A laid item that follows plays as its take maps it (`followed` and `midi.get {sounding}`
+  say how); `take.bake` writes those pitches into the notes.
+- A launched clip follows live as laid ones do, by the place where each note starts; a note
+  keeps its pitch to its note-off. `launch.state` gives each track's `followed` (`none`,
+  `key` or `chords`), and `follow_budget: true` when a clip's context and the project's are
+  too varied to follow fully (a chords clip then follows its key, or plays as written).
+- `launch.commit` lays notes as written and gives each laid take the clip's context and the
   follow that was heard, so a performance of followed clips is laid as played.
 
 ## Launching

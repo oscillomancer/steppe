@@ -382,7 +382,10 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                     if (const model::MidiSource* source = s.midi.find(*take.source))
                         for (const midi::Note& n : source->sequence.notes)
                             pitched |= n.channel != 9;
-                const auto built = detail::buildClipFollow(clip, pitched, detail::projectFollow(s));
+                // Its outcome is the plan's: a clip's pairs are counted before
+                // the pool's deduplication, so this pool's contents do not matter.
+                detail::ProjectFollow projectTables = detail::projectFollow(s);
+                const auto built = detail::buildClipFollow(clip, pitched, projectTables);
                 outcome = built.outcome == detail::FollowOutcome::Chords ? model::ClipFollow::Chords
                           : built.outcome == detail::FollowOutcome::Key  ? model::ClipFollow::Key
                                                                          : model::ClipFollow::None;
@@ -421,10 +424,16 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 // the phase heard, pass after pass over the item (C2).
                 const double period = midi ? P : double(time::samplesAt(P, rate)) / rate;
                 const double span = midi ? beat1 - beat0 : double(end - (perf.start + f0)) / rate;
-                auto copied =
-                    copyTakesFor(t, now, clip.takes, pooled, envelopePos, path,
-                                 fxEnvelopesFromClip(now, clip.kind, pos,
-                                                     midi ? phase : phase / rate, period, span));
+                // So do its take's own envelopes over a looped item of more
+                // than one period: on an item they would run once.
+                const bool passes = item.loop && span > period + 1e-9 * std::max(1.0, period);
+                auto copied = copyTakesFor(
+                    t, now, clip.takes, pooled, envelopePos, path,
+                    fxEnvelopesFromClip(now, clip.kind, pos, midi ? phase : phase / rate, period,
+                                        span),
+                    passes ? takeEnvelopesFromClip(now, clip.kind, pos, midi ? phase : phase / rate,
+                                                   period, span)
+                           : FxEnvelopeMap{});
                 if (!copied) return std::move(copied).error();
                 const double shift = midi ? phase * speed : phase / rate * speed;
                 if (shift != 0 || midi)

@@ -36,6 +36,9 @@ class Vst3Instance {
     Status loadState(std::span<const std::uint8_t> bytes);
     bool startProcessing() SUPPLE_RT;
     void stopProcessing() SUPPLE_RT;
+    // An editor edit asked to process (a bypassed stage runs to report it).
+    bool processRequested() const SUPPLE_RT;
+    bool takeProcessRequest() SUPPLE_RT;
     bool process(const ProcessBlock& block, OutputEvents* out) SUPPLE_RT;
     void flushParams() SUPPLE_RT;
     void reset() SUPPLE_RT;

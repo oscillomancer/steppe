@@ -108,6 +108,14 @@ FxEnvelopeMap fxEnvelopesToClip(const model::Session& s, model::ClipKind kind, d
 // boundary takes the next pass's start, which its FX hears within its latency.
 FxEnvelopeMap fxEnvelopesFromClip(const model::Session& s, model::ClipKind kind, double pos,
                                   double phase = 0, double period = 0, double length = 0);
+// A clip take's own envelopes (volume, pan, mute) onto a looped item at `pos`
+// that spans more than one of the clip's periods: repeated pass after pass, as
+// fxEnvelopesFromClip repeats its FX's, in item-relative beats (a take
+// envelope's unit on an item), its timebase kept. On an item the take's
+// envelopes run once from its start, where the clip ran them from the start of
+// each pass.
+FxEnvelopeMap takeEnvelopesFromClip(const model::Session& s, model::ClipKind kind, double pos,
+                                    double phase, double period, double length);
 // Applies `map` to the envelopes on `take`'s FX.
 void convertTakeFxEnvelopes(model::EditTxn& t, const model::Session& s, model::Id take,
                             const FxEnvelopeMap& map);
@@ -119,12 +127,15 @@ void convertTakeFxEnvelopes(model::EditTxn& t, const model::Session& s, model::I
 // position from the old owner's unit to the new one's (null: unchanged); a
 // take envelope with automation items cannot be mapped (clip.unsupported).
 // `fxEnvelope` maps the envelopes on its FX the same way (null: unchanged),
-// which cannot carry automation items either. `path` is where errors point.
+// which cannot carry automation items either. `takeEnvelope`, when given,
+// maps each take envelope whole instead of `envelopePos` point by point
+// (takeEnvelopesFromClip). `path` is where errors point.
 Result<std::vector<model::Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
                                             const std::vector<model::Id>& takes, bool pooled,
                                             const std::function<double(double)>& envelopePos,
                                             const std::string& path,
-                                            const FxEnvelopeMap& fxEnvelope = {});
+                                            const FxEnvelopeMap& fxEnvelope = {},
+                                            const FxEnvelopeMap& takeEnvelope = {});
 
 // The item a clip's `take` makes at `pos` on `track` (ADR-0097 "Converting
 // between an item and a clip"): its length, loop, gain, mute and colour,
