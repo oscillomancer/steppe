@@ -41,6 +41,34 @@ PAD_CHORDS = "voice pad; 1: [A2 C3 E3]:w | [F2 A2 C3]:w | [G2 B2 D3]:w | [E2 G#2
 LEAD_LINE = "voice lead; 1: E4:q A4:q C5:h | A4:q F4:q C5:h | B4:q G4:q D5:h | B4:w"
 
 
+# How long the harness waits in silence for the server's answer to one call. A wall-clock
+# guard must only turn a hang into a failure, never decide a test by how fast the machine
+# is: the default is for ordinary commands, and a render, an analysis, a freeze or a bounce
+# gets the long limit, which stays below ctest's own test timeout (1500 s by default).
+SILENCE_LIMIT = 120
+HEAVY_LIMIT = 900
+HEAVY_COMMANDS = ("render.", "analyze.", "track.freeze", "item.apply-fx", "item.mix-to-track",
+                  "item.export", "plugin.scan")
+
+
+def heavy(command):
+    """Whether a command (a registry name, or an MCP tool name with underscores) renders."""
+    name = command.replace("_", ".")
+    return any(name.startswith(prefix) for prefix in HEAVY_COMMANDS)
+
+
+def limit_for(tool, arguments):
+    """The silence limit for one tool call: long when it, or a step of a batch, renders."""
+    if heavy(tool):
+        return HEAVY_LIMIT
+    if tool == "exec" and heavy(str(arguments.get("command", ""))):
+        return HEAVY_LIMIT
+    if tool == "batch" and any(heavy(str(step.get("command", "")))
+                               for step in arguments.get("steps", [])):
+        return HEAVY_LIMIT
+    return SILENCE_LIMIT
+
+
 class Client:
     def __init__(self, argv):
         self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -49,11 +77,11 @@ class Client:
         self.transcript = []
         self.next_id = 1
 
-    def receive(self):
+    def receive(self, limit=SILENCE_LIMIT):
         while b"\n" not in self.pending:
-            readable = wait_pipe(self.process.stdout, 120)
+            readable = wait_pipe(self.process.stdout, limit)
             if not readable:
-                raise AssertionError("MCP server timed out")
+                raise AssertionError("MCP server silent for %d s" % limit)
             chunk = os.read(self.process.stdout.fileno(), 1 << 16)
             if not chunk:
                 raise AssertionError("MCP server closed stdout: " +
@@ -64,7 +92,7 @@ class Client:
         del self.pending[: end + 1]
         return json.loads(frame)
 
-    def send(self, method, params=None, notify=False):
+    def send(self, method, params=None, notify=False, limit=None):
         message = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             message["params"] = params
@@ -73,10 +101,13 @@ class Client:
             self.next_id += 1
         os.write(self.process.stdin.fileno(),
                  (json.dumps(message, separators=(",", ":")) + "\n").encode())
-        return None if notify else self.receive()
+        if limit is None:  # a tool call is judged by what it asks for, anything else by default
+            limit = (limit_for(params.get("name", ""), params.get("arguments") or {})
+                     if method == "tools/call" and params else SILENCE_LIMIT)
+        return None if notify else self.receive(limit)
 
-    def call(self, tool, arguments, note):
-        response = self.send("tools/call", {"name": tool, "arguments": arguments})
+    def call(self, tool, arguments, note, limit=None):
+        response = self.send("tools/call", {"name": tool, "arguments": arguments}, limit=limit)
         result = response["result"]
         assert not result.get("isError"), (tool, result)
         structured = result["structuredContent"]
