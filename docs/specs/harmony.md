@@ -135,59 +135,122 @@ against a brute-force scan.
 ```cpp
 struct Place { std::optional<Key> key; std::optional<Chord> chord; };
 enum class FollowMode { Key, Chords };
-enum class FollowedBy { Transpose, Degree, Chords };
-struct Followed { int pitch; FollowedBy by; bool scaleShape = false; };
-// A MIDI pitch written against `from`, mapped to `to`. Errors: `follow.no_key`
-// (Key mode, or Chords mode falling back to it, without both keys),
-// `follow.pitch_range` (the result is outside 0..127).
-Result<Followed> follow(int pitch, const Place& from, const Place& to, FollowMode mode);
+enum class FollowedBy { Transpose, Degree, Chords, Copy };
+struct Followed {
+    int pitch;               // always in 0..127
+    FollowedBy by;
+    bool scaleShape = false; // step 4 applied: the caller warns context.scale_shape
+    bool folded = false;     // step 7 moved it by octaves into range
+};
+// A MIDI pitch (0..127) written against `from`, mapped to `to`. It never fails:
+// what cannot be mapped is copied (`Copy`), and a result out of range is folded.
+Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
 ```
 
-Notation: `pc(x)` is `pitchClassNumber`; `I(scale)` is `scaleIntervals`;
-`tones(chord)` is the root followed by each interval of its quality as
-`chordQualities` lists them, as classes relative to the root (mod 12).
+**Notation.**
+- `pc(x)` is `pitchClassNumber`.
+- `I(scale)` is `scaleIntervals` and `m(scale)` its size.
+- A key or a chord that does not parse (a later build's scale or quality) is
+  absent: callers pass none.
 
-1. **Tonic interval** `iv(a, b)`: `d = (pc(b) − pc(a)) mod 12`; `d` when
-   `d < 6`, `d − 12` when `d > 6`, and `−6` when `d = 6` (a tie goes down).
-2. **Key mode, same scale:** `pitch + iv(from.tonic, to.tonic)`, by
+1. **Tonic interval** `iv(a, b)`: `d = (pc(b) − pc(a)) mod 12`. It is `d` when
+   `d < 6`, `d − 12` when `d > 6`, and `−6` when `d = 6` (a tie goes down, as
+   in §2's snapping).
+2. **Key mode, no key on either side:** the pitch unchanged, by `Copy`.
+3. **Key mode, same scale:** `pitch + iv(from.tonic, to.tonic)`, by
    `Transpose`.
-3. **Key mode, different scales with as many degrees:**
+4. **Key mode, different scales with `m(from) = m(to)`:**
    - Let `s` be the highest pitch `≤ pitch` whose class is in `from`'s
      scale, and `alt = pitch − s`.
    - Let `r = s − pc(from.tonic)`, `o = floor(r / 12)`, and `k` the index
      with `I(from)[k] = r − 12·o`.
    - The result is `pc(from.tonic) + iv(from.tonic, to.tonic) + 12·o +
      I(to)[k] + alt`, by `Degree`.
-4. **Key mode, different degree counts:** as step 2, with `scaleShape`
-   true. The caller warns `context.scale_shape`.
-5. **Chords mode, both chords present.**
-   - Let `c = (pc(pitch) − pc(from.root)) mod 12`.
-   - If `c` is `tones(from)[i]` (the first such `i`), the target class is
-     `(pc(to.root) + tones(to)[i mod n]) mod 12`, where `n` is the size of
-     `tones(to)`.
-   - Else, if `pc(pitch)` is `from`'s slash bass, the target is `to`'s bass,
-     or its root.
-   - Else, if both keys are present and each root's class is in its key's
-     scale, the target is step 3's arithmetic with the roots in place of the
-     tonics (degrees counted from the root's degree).
-   - Else the target is `pitch + iv(from.root, to.root)`.
-   - The result is the pitch of the target class nearest to `follow(pitch,
-     from, to, Key)` when both keys are present, else nearest to `pitch +
-     iv(from.root, to.root)`; a tie goes down. By `Chords`.
-   - With a chord missing on either side, Key mode.
-6. Deterministic, no allocation beyond the result, no model or engine
-   dependency. X4 builds the engine's pitch tables from it.
+   - `alt` is measured from the degree below, so a note two semitones above
+     a degree whose next degree is three semitones up (harmonic minor's
+     sixth, a pentatonic's gaps) maps to the next degree's image, and
+     distinct notes may merge. A harmonic minor's G4 and G#4 both go to B4
+     in C major. This is deliberate: the rule keeps degrees, and no rule can
+     keep both degrees and every distinction across a gap that narrows.
+   - A relative key moves every note, tonic to tonic: C minor to Eb major
+     raises C, Eb and G to Eb, G and Bb.
+5. **Key mode, `m(from) ≠ m(to)`** (a pentatonic, blues or chromatic scale on
+   one side): as step 3, with `scaleShape`.
+6. **Chords mode.** With a chord missing on either side, Key mode for that
+   note. Otherwise:
+   - **Slots.**
+     - `tones(chord)` is `chordQualities()`'s list for the chord's quality,
+       exactly as stored. It begins with 0, the root, and its intervals may
+       exceed 12.
+     - Each tone has a slot by its interval: 0 root; 2, 3, 4, 5 third (sus2
+       and sus4 stand in for the third); 6, 7, 8 fifth; 9, 10, 11 seventh (a
+       sixth takes the seventh's slot); 13, 14, 15 ninth; 17 eleventh; 21
+       thirteenth.
+     - Its class is `(pc(root) + interval) mod 12`.
+     - No quality in the table has two tones in one slot.
+   - **A chord tone.** If `pitch`'s class is a tone of `from` in slot S
+     (checked from the root's slot upward; the first match), the target
+     class is `to`'s tone in slot S. When `to` has none:
+     - for a ninth, eleventh or thirteenth, `to`'s root, third or fifth
+       respectively;
+     - otherwise `to`'s tone in the highest slot below S that it has, its
+       root at least.
 
-**Tests (X2):**
-- C major → D major is +2 for every pitch 0..125;
-- C major → F# major is −6;
-- C major E4 → D minor is F4;
-- C major F#4 → D minor is G#4;
-- A minor → C major by degree;
-- C major → C minor pentatonic is a transpose with `scaleShape`;
-- Cmaj7 → Dm7 tone by tone, in each octave;
-- C/E's bass → G/B;
-- Cadd9's ninth over a D triad (`i mod n`);
-- an octave tie;
-- `follow.no_key`;
-- `follow.pitch_range` at both edges.
+     So C11 → Dm7 maps C, G, Bb, D, F to D, A, C, D, F; C5 → Dm maps G to A;
+     C13 → D maps C, E, Bb, D, A to D, F#, A, D, A.
+   - **A slash bass that is also a tone** maps as that tone: C/E → G/D maps E
+     to B. A slash bass that is not a tone (C/D) maps to `to`'s bass, or its
+     root without one: C/D → G/A maps D to A.
+   - **Any other note** keeps its degree distance above the root, as a class:
+     - If both keys are present, `m(from) = m(to)`, and each root's class is
+       in its key's scale:
+       - let `s` and `alt` be as in step 4, `j` the degree of `s` in `from`'s
+         scale, and `kr` and `kt` the degrees of `from`'s root in `from`'s
+         scale and of `to`'s root in `to`'s scale;
+       - the target class is `(pc(to.tonic) + I(to)[(kt + j − kr) mod m] +
+         alt) mod 12`.
+       - So C over Dm in C major, to Em in D major, gives D (the seventh to
+         the seventh); A over G7 in C major, to A7 in D minor, gives Bb.
+     - Otherwise the target class is `(pc(pitch) + iv(from.root, to.root))
+       mod 12`.
+   - **Octave.** The result is the pitch of the target class nearest to the
+     reference: `follow(pitch, from, to, Key)` computed without step 7, or
+     `pitch + iv(from.root, to.root)` when that gives `Copy`. A tie goes
+     down. By `Chords`.
+   - **Duplicates.** Two notes that map to the same pitch at the same start
+     are both kept, in the source's canonical order. Cmaj7 voiced C4 E4 G4
+     B4 → C5 gives C4 C4 G4 G4.
+7. **Range.** A result above 127 goes down by octaves, and one below 0 up by
+   octaves, until it is in 0..127, with `folded`. The live player (X4) folds
+   alike, so a laid clip and a launched one give the same notes.
+
+Deterministic. It allocates nothing and has no model or engine dependency.
+X4 builds the engine's pitch tables from it.
+
+**Tests (X2; this is the only test list, and ADR-0098 points here):**
+- **Key mode:**
+  - C major → D major is +2 for every pitch 0..125;
+  - 126 and 127 fold to 116 and 117 with `folded`;
+  - C major → F# major is −6;
+  - C major E4 → D minor is F4;
+  - C major F#4 → D minor is G#4;
+  - A minor → C major: A4 → C5, C5 → E5, G4 → B4;
+  - C minor → Eb major: C4, Eb4, G4 → Eb4, G4, Bb4;
+  - A harmonic minor → C major: G4 → B4 and G#4 → B4;
+  - C major pentatonic → A minor pentatonic: F#4 → E4;
+  - C major → C minor pentatonic is a transpose with `scaleShape`;
+  - no key on either side is `Copy`.
+- **Chords mode:**
+  - Cmaj7 → Dm7, tone by tone, in each octave; at the top, G9 (127) with
+    keys C major → D major goes to A9 (129) by the nearest rule and folds to
+    A8 (117);
+  - C11 → Dm7;
+  - C5 → Dm;
+  - C13 → D;
+  - Cmaj7 → C5 (the duplicate rule);
+  - C/D → G/A (D → A);
+  - C/E → G/D (E → B);
+  - C over Dm (C major) → Em (D major) gives D;
+  - A over G7 (C major) → A7 (D minor) gives Bb;
+  - the octave tie (keys C major → F# major, chord C held: C4 → C3);
+  - a missing chord falls back to Key mode.

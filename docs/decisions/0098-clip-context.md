@@ -2,7 +2,11 @@
 
 **Status:** Accepted, 2026-11-20. Written by the lead from the
 co-director's outline (`designs/headline-core.md` §7); the co-director
-accepted it with the seven differences listed below.
+accepted it with the seven differences listed below. Revised the same day
+after the design review (round 71, F1 to F19), with the co-director's
+decisions on F1, F2, F5, F7 and F8: chord tones map by function, following
+never refuses, and a laid note reads the clip's context at its place in the
+clip's period.
 It extends ADR-0095 (the context track) and ADR-0097 (the clip launcher).
 It is built in steps X1 to X5 (below); X1 and X2 are specified here and in
 the contracts precisely enough to build without asking.
@@ -68,15 +72,17 @@ then forgets the symbol. It can hand the symbols over **without a format
 change**:
 - an additive member of the public result, `Compiled::chords`: one
   `ChordSymbol {std::int64_t tick; harmony::Chord chord; std::string voice;}`
-  per symbol event, in text order;
+  per symbol event as compiled (the bars a copy line or a bar range repeats
+  included), ordered by tick and then by voice declaration;
 - the continuation of a tied chord (`{Cm7}:h~ {Cm7}:h`) adds no entry;
 - a symbol that fails to parse already raises a warning and adds no notes;
   it adds no entry either.
 
 The text format, its parser and `decompile` are unchanged.
 
-**3. The mapping rules.** These are below under "Following", as one
-deterministic function with its tie rules.
+**3. The mapping rules.** These are in `harmony.md` §5, as one
+deterministic function with its tie rules and the only test list, and are
+summarized below under "The mapping".
 
 ## Decision
 
@@ -85,18 +91,28 @@ deterministic function with its tie rules.
 - **`Clip.context`** (optional): the clip's own key and chord points, in the
   context track's shapes (`ContextPoint`: `beat`, `type`, `tonic`/`scale` or
   `symbol`), with `beat` counted from the clip's start in beats.
-  - A MIDI clip:
-    - keys and chords at beats in `[0, length)`;
-    - a key at beat 0 whenever it has any key;
-    - at most one point of a type at a beat;
-    - at most 4096 of a type.
-  - An audio clip: at most one point, a key at beat 0 (for display and for
-    the mismatch warning); chords are refused (`clip.context_audio`).
-  - The strings are data, as on the context track: an unknown scale or chord
-    quality from a later build is kept and treated as unreadable.
+  - A MIDI clip: points in `[0, length)`, at most one of a type at a beat, at
+    most 4096 of a type.
+  - An audio clip: at most one point, a key at 0 (for display and for the
+    mismatch warning).
+  - The strings are data, as on the context track. An unknown scale or
+    chord quality from a later build is kept, and it reads as no key or no
+    chord at that beat everywhere: the scale ops, following and the
+    warning.
 - **`Clip.follow`**: `none` (default), `key` or `chords`. With the default,
-  nothing that plays today changes. An audio clip takes only `none`
-  (`clip.follow_audio`).
+  nothing that plays today changes.
+- **The invariants live on the clip** and are checked at commit:
+  - the points rule above;
+  - `follow` other than `none` needs a MIDI clip with a readable key at
+    beat 0.
+  - `clip.add` and `clip.set` refuse a `follow` that breaks the second
+    (`clip.no_key`, `clip.follow_audio`).
+  - **Edits keep both in the same step and say so:**
+    - shortening a clip removes the points at or past its new length
+      (`clip.context_dropped`);
+    - a context edit that leaves no readable key at 0 resets `follow` to
+      `none` (`clip.follow_reset`).
+  - Undo restores both.
 - **Items keep no link.** An item is plain notes. Following happens when a
   clip becomes an item, and in X4 when it is launched.
 - **File:**
@@ -106,200 +122,166 @@ deterministic function with its tie rules.
     written only when not empty;
   - it gains `"follow": "key"`, written only when not `none`.
 - **Older files** load unchanged; nothing migrates. A 2.19 build drops both
-  members with its unknown-field warnings (session-model, "Unknown fields
-  within known objects").
+  members with its unknown-field warnings.
 - **Load:**
-  - points out of range or breaking the rules above are dropped, each with a
-    `clip.context_dropped` warning naming the clip and the point;
-  - a key point after beat 0 with none at 0 is kept and a key at 0 is not
-    invented: the clip then has no key before its first key point, and
-    `key` following refuses it (`clip.no_key`).
+  - points against the rules are dropped with `clip.context_dropped`;
+  - a `follow` the invariant refuses reads as `none`, with
+    `clip.follow_reset`.
   - The open never fails for any of this.
 
 ### How a clip gets its context (X1)
 
-- **`clip.add {context: TEXT}`.** The lead sheet text form (session-model
-  "Lead sheet"), read in clip bars:
-  - bar 1 is the clip's start, and the bars run in the project's meters from
-    bar 1, which is how the clip's own notation compiles (`compileNotation`
-    at beat 0);
-  - the text may cover less than the clip, never more (`clip.context_range`);
-  - the rules above apply (`clip.context_key_first`: a key point after beat 0
-    with none at 0).
-- **`clip.add {context_at: {bar}}`.** The project's context read from that
-  place for the clip's length:
-  - the key holding at the bar's start becomes a key at 0;
-  - so does the chord holding there;
+- **`clip.add {context: TEXT}`.** The lead sheet text form, in clip bars.
+  Bar 1 is the clip's start, and bars run in the project's meters from bar
+  1, which is how the clip's notation compiles. The bars are full bars and
+  may run past the clip's end. What is checked is the points
+  (`clip.context_range`), so a clip that is not whole bars can still state
+  a change in its last part bar. An audio clip's text holds only a key at
+  the start of bar 1.
+- **`clip.add {context_at: {bar} | {at}}`.** The project's context read from
+  that place for the clip's length:
+  - the key and chord holding there become points at 0;
   - the points inside the span follow, shifted.
-  - No key there gives no key point and the warning `context.no_key`, so the
-    agent is told before a `key` follow is refused.
+  - No key there gives the clip no key, and the answer warns
+    `context.no_key`.
   - `context` and `context_at` together: `clip.context_args`.
-- **Chord symbols in the clip's notation** (`clip.add {notation}`,
-  `midi.write` on a clip) are recorded as the clip's chord points from
-  `Compiled::chords`, each at its tick in beats.
-  - Two different symbols at one tick from different voices: the first in
-    text order wins, with the warning `clip.chord_conflict` naming both.
-  - Equal neighbours collapse into one point.
-  - A rest does not end a chord; the next symbol does.
-  - Precedence:
-    - a stated `context` with chord points wins, and the notation's symbols
-      are ignored with the warning `clip.chords_ignored`;
-    - a stated `context` with only a key takes the notation's chords as well;
-    - `context_at` takes the place's chords and ignores the symbols, again
-      with `clip.chords_ignored`.
-  - `midi.write` on a clip whose text has symbols replaces the clip's chord
-    points and leaves its keys. A text without symbols leaves the context
-    alone.
 - **`clip.add {item}` and `scene.capture`.** The project's context under the
-  item (its span from its start, for the clip's length), by the same
-  function as `context_at`. A clip remembers where it came from. An audio
-  item gives a key only.
-- **`clip.set {context, follow}`:**
-  - `context: TEXT` replaces the context;
-  - `context: ""` clears it;
-  - `context_at` is accepted as in `clip.add`.
-  - One undo step, as any `clip.set`.
-- **`clip.get` and `midi.get` on a clip** answer:
-  - `context: {text, keys: [{beat, key}], chords: [{beat, chord}]}`, where
-    `text` is the canonical lead sheet in clip bars;
-  - `follow`.
-  - `session.describe` names a clip's key beside its name (`"Bass" D minor`).
+  item, from its start, by the same function as `context_at`, unless
+  `context` or `context_at` is given, which wins. A clip remembers where it
+  came from. An audio item gives a key only.
+- **Chord symbols in the clip's notation** (`clip.add {notation}`,
+  `midi.write` on a clip) are recorded from `Compiled::chords` at their clip
+  beats, through the active take's start offset and playrate.
+  - Repeated bars (copy lines and bar ranges) count.
+  - Symbols at or past the clip's length are not recorded
+    (`clip.chords_beyond_length`).
+  - At one tick the earlier-declared voice wins (`clip.chord_conflict`).
+  - Equal neighbours collapse, and a rest does not end a chord.
+  - **Precedence:**
+    - a stated `context` with chords, and `context_at`, win over the
+      symbols, which are ignored with `clip.chords_ignored`;
+    - a stated `context` with only a key takes the symbols' chords;
+    - `midi.write` replaces the chord points only when the symbols differ,
+      with `clip.chords_replaced`, and a text without symbols leaves the
+      context alone.
+- **History** records `context_at`, and the context taken under an item, as
+  the resolved `context` text. So a replay on another branch gives the clip
+  the points the user saw, as the lead sheet's history does.
+- **`clip.set {context, context_at, follow}`**: `context: ""` clears it. One
+  undo step, as any `clip.set`.
+- **Copies.** `clip.duplicate` and `clip.move` keep `context` and `follow`.
+  `take.extract` from a clip and `item.export` copy the notes, with no
+  following.
+- **Reading it back.**
+  - **`midi.get` on a MIDI clip** answers `context` in the shape it already
+    has for items (`midi_context`), one shape under one name: runs `{item_bar,
+    what, beat}` with the clip bar as `item_bar` and no `project_bar`, plus
+    `text` and `follow`.
+  - Its pitch names follow the clip's own key at its start.
+  - There is no `clip.get`. `session.describe` names a clip's key at 0 and
+    its `follow`, audio clips included.
 
 ### Editing against it (X1, fixes D1)
 
 - `midi.edit`'s `transpose_degrees`, `snap_to_scale` and `fit_to_chord` on a
-  clip read the clip's own context at each note's clip beat.
-  - A note's beat is its start within the period: for a looping clip, the
-    window's notes at each pass's beat inside `[0, length)`. When the passes
-    disagree, the op is refused with `midi.context_varies`, as on items.
-  - Without a key (or a chord for `fit_to_chord`):
-    - `midi.no_key`, with the hint "give the clip a context (clip.set
-      {context} or {context_at}) or pass key";
-    - `midi.no_chord`, likewise.
-  - The ops never read the project's context for a clip. ADR-0095 amendment
-    C-e (the key at the project's start) is superseded for clips.
+  clip read the clip's own context at each note's clip beat: its sounding
+  beat through the take's start offset, playrate and the clip's loop
+  window, modulo the clip's length. Where those beats disagree for one
+  note, the op is refused with `midi.context_varies`, as on items.
+- Without a key: `midi.no_key`, hint "give the clip a context (clip.set
+  {context} or {context_at}) or pass key". Without a chord: `midi.no_chord`.
+- The ops never read the project's context for a clip. ADR-0095 amendment
+  C-e (the key at the project's start) is superseded for clips.
 - `key` and `chord` in the op still replace the reading.
 
 ### Following (X2)
 
-**Where.** `item.add {clip}`, `scene.insert` and `arrangement.build` take
-`follow: none | key | chords`, defaulting to each clip's own `follow`.
-- `launch.commit` does not take it: see "Where this differs from the
-  outline", (1).
-- **Each note's place** is its start beat on the timeline: the item's
-  start, plus its beat in the source, plus the pass offset for a looped item.
-- **Notes on MIDI channel 10 are never followed**: General MIDI drums, as the
-  notation's `voice drums` writes them. The answer counts them
-  (`drums_kept`).
-- CC, pitch bend and pressure are copied as they are.
+**Following itself never refuses and never fails.** X4 must give the same
+notes live, and a refusal has no live meaning. So the conditions live on the
+clip (above), and placement copies what cannot follow, saying why.
+- **Where.** `item.add {clip}`, `scene.insert` and `arrangement.build` take
+  `follow: none | key | chords`, defaulting to each clip's own `follow`.
+  `launch.commit` does not take it (difference 1).
+- **Which clips follow.** A `follow` other than `none`, given or the clip's
+  own, applies to each MIDI clip with a readable key at 0 and at least one
+  note off channel 10. Any other clip (a drum clip, an audio clip, a keyless
+  clip) is copied, and its item's answer says why: `copied: "drums" |
+  "audio" | "no_key"`.
+- **A note's place and its clip beat.** A note's sounding beat is where it
+  starts from the item's start, through the take's start offset and
+  playrate and the item's loop.
+  - Its place is the item's start plus its sounding beat.
+  - Its clip beat, where the clip's context is read, is its sounding beat
+    modulo the clip's length: the clip's own period, as it plays when
+    launched.
+  - Only the active take is followed; the item's other takes are copied.
+  - Notes the item never plays are copied, and do not count toward "every
+    pass maps alike".
+- **Never followed:** notes on MIDI channel 10 (stored as 9; General MIDI
+  drums, as `voice drums` writes them). Controllers, bend and pressure are
+  copied as they are.
+- **`none`.** Notes are copied. A `context.mismatch` warning is given once
+  per item when, at some beat of the item, the clip's key at the clip beat
+  and the project's key both hold and differ in tonic pitch class or scale.
+  It names the clip, both keys and the first project bar. A drum-only clip
+  gives none, and neither does an enharmonic spelling (Eb major under D#
+  major).
+- **`key`.** Each note is mapped by `harmony::follow` from the clip's key at
+  its clip beat to the key at its place. Where no readable key holds at the
+  place, the note is copied, with one `context.no_key` warning per item.
+- **`chords`.** Each note is mapped from the clip's chord at its clip beat to
+  the chord at its place. A note with either chord missing or unreadable
+  follows by key (difference 7).
+- **The item that results.**
+  - If every pass of a looped item maps every played note alike, it stays
+    looped over the mapped source.
+  - Otherwise it is laid unrolled (loop off, its passes written out, each
+    mapped at its place), with `unrolled: true`.
+  - `pooled: true` with a mapping that moves any note is refused
+    (`clip.follow_pooled`): a shared source cannot be two keys. This is the
+    one refusal, and it concerns the argument, not the mapping.
+- **Range.** A mapped pitch outside 0..127 is folded by octaves inside
+  `harmony::follow`. X4 folds alike, and the answer counts such notes
+  (`folded`).
+- **The answer.** Each laid item gains `followed: {mode, regions, folded?,
+  unrolled?, copied?}`.
+  - A region is a maximal run of project bars over which the clip's key, the
+    place's key and the way notes were mapped stay the same: `{from_bar,
+    to_bar (inclusive), from_key?, to_key?, by, interval?}`.
+  - `by` is `transpose`, `degree`, `chords` or `copy`.
+  - A `chords` follow lists its key fallbacks as their own regions.
+- **History.** A placement with `follow` re-maps against the branch it
+  replays on, as `scene.insert` re-reads the clip.
+- **Until X4** a launched clip plays unfollowed. Launching a clip whose
+  `follow` is not `none` warns `launch.unfollowed`, and STATUS says so, so
+  live and the timeline never differ silently.
 
-**`none`.** Notes are copied.
-- If the clip has a key and a key region the item spans holds a different
-  key (tonic or scale differ), the answer carries one `context.mismatch`
-  warning per item naming the clip, the clip's key, the place's key and the
-  bar where they first differ.
-- A clip without a key gives no warning; nothing is known to disagree.
-- Never silent when something is known.
+### The mapping, `harmony::follow`
 
-**`key`.** Each note is mapped by `harmony::follow` from the clip's key at
-its clip beat to the key at its place.
-- No key in the clip: refused, `clip.no_key` (hint: give the clip a context,
-  or follow `none`).
-- No key at the place: the note is copied, with one `context.no_key` warning
-  per item.
-- A key change inside the item splits the mapping at it, because the map is
-  per note.
-
-**`chords`.** Each note is mapped from the clip's chord at its clip beat to
-the chord at its place.
-- No clip chord at the note's beat, or no chord at its place: `key` for that
-  note (if that is impossible too, it is copied with the warnings above).
-- A clip with neither chords nor a key: refused, `clip.no_key`.
-
-**The item that results.**
-- If every pass of a looped item maps every note the same way (one key
-  region, or regions that give the same map), the item stays looped over the
-  followed source.
-- Otherwise the item is laid unrolled: loop off, its source written out pass
-  by pass, each pass mapped at its own place. The answer says `unrolled:
-  true`.
-- `pooled: true` with a follow that changes any note is refused
-  (`clip.follow_pooled`), since a shared source cannot be two keys. A follow
-  that changes nothing lays it pooled.
-- A result outside 0..127 is refused (`midi.pitch_range`, naming the clip and
-  the note's beat), and nothing is laid.
-
-**The answer.** Each laid item gains `followed: {mode, regions: [{from_bar,
-to_bar, from_key, to_key, interval?, by}]}`.
-- `by` is `transpose`, `degree` or `chords`.
-- `interval` is in semitones, for `transpose`.
-- `drums_kept` and `unrolled` appear when they apply, and the warnings go in
-  the usual list.
-
-**The mapping, `harmony::follow`** (one function; `harmony.md` §5 is its
-contract):
-
-`follow(pitch, from, to, mode) → {pitch, by}` where `from` and `to` are each
-`{optional Key, optional Chord}`.
-1. **Tonic interval.** `d = (pc(to.tonic) − pc(from.tonic)) mod 12` in 0..11.
-   The interval is `d` if `d < 6`, `d − 12` if `d > 6`, and **−6 at the
-   tritone** (a tie goes down, as every tie in the library does).
-2. **Key, same scale** (`from.scale == to.scale`): `pitch + interval`
-   (`by: transpose`).
-3. **Key, different scale with the same number of degrees** (major, the
-   minors and the modes are all seven):
-   - Let `s` be the nearest pitch at or below `pitch` that is in `from`'s
-     scale, `alt = pitch − s` (0 for an in-scale note, else 1 or 2), and
-     `k`, `o` its degree and octave in `from`'s scale.
-   - The result is `to's tonic placed at from's tonic + interval, plus
-     to.intervals[k], plus 12·o, plus alt` (`by: degree`).
-   - So an altered note keeps its alteration above the mapped degree.
-4. **Key, different degree counts** (a pentatonic, blues or chromatic scale
-   on either side): `pitch + interval`, as step 2 (`by: transpose`). The
-   answer then warns `context.scale_shape`, naming both scales, since
-   degrees do not correspond.
-5. **Chords** (`mode = chords`, both chords present):
-   - The from chord's tones in order are its root, then each interval of its
-     quality (`chordQualities`, in the table's order), as pitch classes
-     relative to the root.
-   - If `pitch`'s class is tone `i`, the target class is the to chord's tone
-     `i mod n`, where `n` is the to chord's tone count.
-   - A tone beyond the target chord's count wraps by design: the target
-     chord has no such tone, and the wrap gives every note a target among
-     the chord's own tones instead of inventing an extension it does not
-     have. So a seventh over a triad (Cmaj7's B, tone 3, to D) lands on the
-     triad's root (D), in the octave nearest the key-followed pitch. It is
-     not a bug.
-   - If it is the slash bass of the from chord and not a tone, the target is
-     the to chord's bass, or its root without one.
-   - Any other note keeps its distance in scale degrees above the from root:
-     - with keys on both sides and both roots in their scales, step 3's
-       arithmetic is run with the roots in place of the tonics;
-     - else `pitch + (pc(to.root) − pc(from.root))`, folded to −6..+5 as in
-       step 1.
-   - **Octave:** the result is the pitch of the target class nearest to
-     `k = follow(pitch, from, to, key)`, the key-followed pitch (a tie goes
-     down). Without keys on both sides, it is nearest to
-     `pitch + root interval`.
-   - `by: chords`.
-6. **Range:** a result outside 0..127 is an error the caller turns into
-   `midi.pitch_range`.
-
-The function allocates nothing per call beyond its result, is deterministic,
-and has no model dependency. The engine reuses it in X4 to build pitch
-tables at compile time.
-
-**Tests the builder writes with it** (`harmony.tests`):
-- C major to D major moves every pitch +2;
-- C major to F# major is −6;
-- C major E4 to D minor is F4 (degree);
-- C major F#4 to D minor is G#4 (the alteration kept);
-- C major to C minor pentatonic is a transpose by 0, with the warning flag;
-- chords Cmaj7 → Dm7, tone by tone;
-- C/E's bass to G/B;
-- a ninth over a triad, as `i mod n`;
-- the octave choice at a tie;
-- the range errors.
+The function, its formulas and **the only test list** are in `harmony.md` §5.
+In short:
+- **The tonic interval** is the nearest one, with the tritone down.
+- **The same scale** transposes.
+- **Scales with as many degrees** map by degree, keeping a note's alteration
+  above the degree below it. So distinct notes may merge across a gap that
+  narrows (harmonic minor's G and G# both go to B in C major), and a
+  relative key moves every note, tonic to tonic.
+- **Scales of different sizes** transpose, with `context.scale_shape`.
+- **Chord tones map by function**, through a slot table: root, third (sus
+  tones stand in), fifth, seventh (a sixth stands in), ninth, eleventh,
+  thirteenth.
+  - When the target chord has no tone in a slot, an extension goes to the
+    root, third or fifth, and any other tone to the highest slot below it.
+    So a seventh over a triad lands on the triad's fifth, and a power
+    chord's missing third on its root.
+  - Two notes that land on one pitch are both kept.
+  - A slash bass that is also a tone maps as the tone; a bass that is not a
+    tone maps to the target's bass, or root.
+- **Other notes** keep their degree distance above the root, as a class (a
+  rotation of the scale's degrees). They move by the root interval when the
+  scales differ in size or a root is outside its scale.
+- **The octave** is the one nearest the key-followed pitch, with a tie down.
+- **Out of range** is folded by octaves.
 
 ### The other direction (X5)
 
@@ -311,10 +293,10 @@ there. Not in X1 or X2.
 
 | Step | Who | What |
 |---|---|---|
-| X1 | builder (model, commands) | The fields, schema 2.20 and its round trip; `clip.add {context, context_at}`, chord symbols recorded (with `Compiled::chords`), `clip.set`, `clip.get`, `midi.get`, describe; `clip.add {item}` and `scene.capture` take the context under the item; the `midi.edit` ops on clips (D1); the `none` mismatch warning at placement. |
-| X2 | builder (harmony, commands) | `harmony::follow` with its tests; `follow` on `item.add {clip}`, `scene.insert`, `arrangement.build`, with unrolling, `clip.follow_pooled` and the answer; the song journey writes its Verse once, in C minor, and it lands right in D minor. |
+| X1 | builder (model, commands) | The fields, schema 2.20, the invariants and their edits, and the round trip; `clip.add {context, context_at, follow}`, chord symbols recorded (with `Compiled::chords`), `clip.set`, `midi.get` on a clip (one shape; spelling by the clip's key), describe; `clip.add {item}` and `scene.capture` take the context under the item; history records the resolved text; the `midi.edit` ops on clips (D1); the `none` mismatch warning at placement. It updates what states the old reading: the tests in test_clip_launcher.cpp and test_context_commands.cpp, `skill/guides/launcher.md`, `skill/guides/harmony.md`, `docs/guides/manual.md`, midi.get's description, and the generated commands. |
+| X2 | builder (harmony, commands) | `harmony::follow` with `harmony.md` §5's tests; `follow` on `item.add {clip}`, `scene.insert` and `arrangement.build`, with the copies and their reasons, unrolling, `clip.follow_pooled` and the answer; `launch.unfollowed` and its STATUS line; the song journey writes its Verse once, in C minor, and it lands right in D minor beside its drums. |
 | X3 | gui-lead | A clip's roll shows and edits its context (chord strip, scale shading); the clip inspector has Follow; a mismatch shows on a laid item's roll. |
-| X4 | lead (engine) | A launched clip follows live: per key region and chord region pitch tables built at compile from `harmony::follow`, looked up by song position in the player without allocating; `launch.commit` lays what was heard, followed. |
+| X4 | lead (engine) | A launched clip follows live through pitch tables built at compile from `harmony::follow`, per key region and chord region. A note is looked up by the song position of its *start* (its clip beat by the launch's phase), and keeps that pitch until its note-off, so a note held across a change cannot stick. A note out of range folds as on the timeline, and a clip that cannot follow plays unfollowed, as placement copies it. Context edits then publish the tables while a clip with `follow` ≠ `none` exists, which amends engine.md "Context edits". `launch.commit` lays what was heard, followed, and `launch.unfollowed` goes. |
 | X5 | later | `write_context`; modulation sources that read the context (idea I7); scenes carrying macro state (I5). |
 
 ## Where this differs from the outline, and why
@@ -348,7 +330,8 @@ there. Not in X1 or X2.
 - The harmony is written once: a clip written against D minor knows it, says
   so when laid under C minor, and can follow.
 - **One mapping function**, in an MIT library, is shared by the commands now
-  and the engine in X4, so offline and live cannot differ.
+  and the engine in X4, so offline and live cannot differ. It never fails,
+  and following never refuses, so there is nothing X4 could not do live.
 - **Clips grow by their context points.** No limit changes except the new
   per-clip 4096.
 - **Items stay plain notes.** Nothing that plays today changes, since
