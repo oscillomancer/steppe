@@ -1274,6 +1274,11 @@ class Engine {
     // stopped still starts at the play start (the builder's song journey
     // 2, D1).
     std::optional<std::pair<std::uint64_t, std::int64_t>> playStart_;
+    // Main thread, from play() and playCountIn(): under rate scheduling,
+    // the seek to the play position, unless transport.stop prepared it,
+    // then the stopped launches placed again (D1). False: the seek failed
+    // (a warning says why).
+    bool seekToPlayStart();
     struct LaunchClock;
     bool launchClock(LaunchClock& out) const;
     // Main thread: the capture (captureLaunches). `pending`: its start is

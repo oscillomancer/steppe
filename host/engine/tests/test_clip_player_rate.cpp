@@ -123,10 +123,12 @@ TEST_CASE("a launch made while stopped under a new playrate starts at the play s
     // The builder's second song journey, D1: with the engine running and the
     // transport stopped, a playrate set and then a scene launched answered
     // beat 0 but played from bar 2. Stopped, a launch targets the play start
-    // whatever the rate (as at 1.0).
-    for (const double rate : {1.25, 0.8})
+    // whatever the rate (as at 1.0), and after a count-in too (review round
+    // 81 E3: its seek skipped the re-place).
+    for (const auto [rate, countIn] : {std::pair{1.25, false}, {0.8, false}, {1.25, true}})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-            INFO("rate " << rate << ", anticipative " << options.anticipative);
+            INFO("rate " << rate << ", count-in " << countIn << ", anticipative "
+                         << options.anticipative);
             Project p;
             twoTracks(p);
             const model::Session unity = p.app->head();
@@ -157,7 +159,10 @@ TEST_CASE("a launch made while stopped under a new playrate starts at the play s
             REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
             CHECK(placed->anchorSample == 0);
             run(10);  // still stopped: it stays queued for the play start
-            engine.play();
+            if (countIn)
+                engine.playCountIn(4800, 1200, 4);  // the transport is held for 0.1 s
+            else
+                engine.play();
             run(200);
             const auto log = engine.launchLog();
             REQUIRE(log.size() == 2);
