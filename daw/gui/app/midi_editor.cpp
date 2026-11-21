@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "midi_editor.h"
+#include "clip_context_edit.h"
 #include "midi_event_list.h"
 #include "panel_grip.h"
 #include "panel_height.h"
@@ -18,6 +19,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
+#include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
@@ -615,18 +617,26 @@ class BarStrip : public ui::Node {
     // the grid beat there.
     bool onPointer(const ui::PointerEvent& e) override {
         const ui::Rect b = bounds();
-        if (e.type != ui::PointerEvent::Type::Down || e.button != 1 || e.clicks != 2 ||
-            e.pos.y < b.y + kHeight || e.pos.x < b.x + kKeysWidth || s_.chords.empty())
-            return false;
-        std::optional<double> beat;
-        for (const ChordHit& hit : chordHits_)
-            if (hit.label.contains(e.pos)) beat = hit.beat;
-        if (!beat) {
+        if (e.type != ui::PointerEvent::Type::Down || e.pos.x < b.x + kKeysWidth) return false;
+        std::optional<double> hit;
+        for (const ChordHit& h : chordHits_)
+            if (h.label.contains(e.pos)) hit = h.beat;
+        auto gridBeat = [&] {
             const Geometry g{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}};
             const double at = std::max(0.0, s_.itemPosition + g.beatOf(e.pos.x));
-            beat = s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
+            return s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
+        };
+        // A clip's own context (ADR-0098 X3): its menu on a right-click.
+        if (s_.clip && e.button == 3) {
+            editor_.openContextMenu(gridBeat(), hit, e.pos);
+            return true;
         }
-        editor_.editChord(*beat, e.pos);
+        // A double-click edits the chord there; on a clip with no chords yet,
+        // anywhere on the strip starts its first.
+        const bool chordRow = !s_.chords.empty() && e.pos.y >= b.y + kHeight;
+        const bool firstChord = s_.clip && s_.chords.empty();
+        if (e.button != 1 || e.clicks != 2 || !(chordRow || firstChord)) return false;
+        editor_.editChord(hit ? *hit : gridBeat(), e.pos);
         return true;
     }
     // The strip's height: the bar numbers, and the chord row while chords
@@ -692,9 +702,12 @@ class BarStrip : public ui::Node {
             const RollState::ChordMark& m = s_.chords[i];
             const float x = g.xOf(m.beat - s_.itemPosition);
             if (x > row.right()) break;
+            // A clip's last chord ends with the clip (ADR-0098: its points
+            // lie inside it); the project's runs on.
             const float end = i + 1 < s_.chords.size()
                                   ? g.xOf(s_.chords[i + 1].beat - s_.itemPosition)
-                                  : row.right() + 2;
+                              : s_.clip ? g.xOf(s_.itemLength)
+                                        : row.right() + 2;
             if (end < row.x) continue;
             if (m.text.empty()) {
                 c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint"));
@@ -1722,7 +1735,7 @@ void MidiEditor::refreshEnvLanes() {
 }
 
 Status MidiEditor::command(std::string_view name, json::Value args,
-                           std::optional<std::uint64_t> expectedVersion) {
+                           std::optional<std::uint64_t> expectedVersion, std::string_view what) {
     if (expectedVersion && (*expectedVersion != app_.head().version ||
                             gestureGeneration_ != app_.projectGeneration())) {
         follow({});
@@ -1731,7 +1744,7 @@ Status MidiEditor::command(std::string_view name, json::Value args,
     }
     auto r = dispatcher_.execute({std::string(name), std::move(args), kOrigin});
     if (!r) {
-        if (actions_.onError) actions_.onError("Lanes: " + r.error().message);
+        if (actions_.onError) actions_.onError(std::string(what) + ": " + r.error().message);
         return std::move(r).error();
     }
     return reload();
@@ -2112,16 +2125,144 @@ Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVe
 }
 
 void MidiEditor::editChord(double beat, ui::Point at) {
-    views::openChordField(
-        root_,
-        {[this]() -> const model::Session& { return app_.head(); },
-         [this](const std::string& command, json::Value args) {
-             auto r = dispatcher_.execute({command, std::move(args), kOrigin});
-             if (!r && actions_.onError) actions_.onError("Chord: " + r.error().message);
-             return static_cast<bool>(r);
-         },
-         [this](double b) { return bars_ ? static_cast<BarStrip*>(bars_)->chordX(b) : 0.0f; }},
-        beat, at);
+    views::ChordFieldHost host{
+        [this]() -> const model::Session& { return app_.head(); },
+        [this](const std::string& command, json::Value args) {
+            auto r = dispatcher_.execute({command, std::move(args), kOrigin});
+            if (!r && actions_.onError) actions_.onError("Chord: " + r.error().message);
+            return static_cast<bool>(r);
+        },
+        [this](double b) { return bars_ ? static_cast<BarStrip*>(bars_)->chordX(b) : 0.0f; }};
+    if (state_.clip) {
+        // The clip's own chord at that clip beat: chord.set {at, symbol}
+        // becomes a point of the clip's context.
+        const std::string item = state_.item;
+        host.symbolAt = [this, item](double b) {
+            const auto owner = midiOwner(app_.head(), item);
+            if (!owner || !owner->clip) return std::string();
+            for (const model::ContextPoint& p : owner->clip->context)
+                if (p.type == model::ContextType::Chord && std::abs(p.beat - b) < 1e-6)
+                    return p.symbol;
+            return std::string();
+        };
+        host.run = [this, item](const std::string& command, json::Value args) {
+            const auto owner = midiOwner(app_.head(), item);
+            if (command != "chord.set" || !owner || !owner->clip) return false;
+            model::ContextPoint p;
+            p.type = model::ContextType::Chord;
+            p.beat = args["at"].asDouble();
+            p.symbol = args["symbol"].asString();
+            return static_cast<bool>(setClipContext(withContextPoint(owner->clip->context, p)));
+        };
+    }
+    views::openChordField(root_, std::move(host), beat, at);
+}
+
+void MidiEditor::editClipKey(double beat, ui::Point at) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip) return;
+    // It starts from the clip's key there, else the project's at its start,
+    // else C major.
+    std::string text = "C major";
+    if (const model::ContextPoint* p = model::keyPointAt(*owner->clip, beat))
+        text = model::keyWords(*p);
+    else if (const auto id = model::keyPointAt(app_.head(), 0.0))
+        if (const model::ContextPoint* project = app_.head().context.find(*id))
+            text = model::keyWords(*project);
+    auto field = std::make_unique<ui::TextField>("midi-key-field", text);
+    field->layout.width = ui::SizeRule::fixed(200);
+    field->selectAll();
+    const std::string item = state_.item;
+    field->onSubmit = [this, item, beat](const std::string& typed) {
+        const auto parts = views::splitKeyText(typed);
+        if (!parts) {
+            if (actions_.onError)
+                actions_.onError("Key: '" + typed +
+                                 "' is not a key: a tonic and a scale, "
+                                 "Eb major or F# dorian");
+            return;
+        }
+        const auto clip = midiOwner(app_.head(), item);
+        if (!clip || !clip->clip) return;
+        model::ContextPoint p;
+        p.type = model::ContextType::Key;
+        p.beat = beat;
+        p.tonic = parts->first;
+        p.scale = parts->second;
+        if (setClipContext(withContextPoint(clip->clip->context, p))) root_.closePopup();
+    };
+    root_.openPopup(std::move(field), {at.x, at.y, 1, 1});
+}
+
+void MidiEditor::openContextMenu(double beat, std::optional<double> chord, ui::Point at) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip) return;
+    const model::Clip& clip = *owner->clip;
+    const time::TimeMap& tm = *app_.head().timeMap;
+    // A key goes at the start of the bar under the pointer, inside the clip.
+    double barStart = tm.beatOfBar(tm.barBeat(std::max(0.0, beat)).bar);
+    if (barStart >= clip.length) barStart = 0;
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, bool enabled, std::function<void()> run) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.enabled = enabled;
+        m.run = std::move(run);
+        items.push_back(std::move(m));
+    };
+    const int bar = tm.barBeat(barStart).bar;
+    add(barStart == 0 ? "Key\u2026" : "Key at bar " + std::to_string(bar) + "\u2026", true,
+        [this, barStart, at] { editClipKey(barStart, at); });
+    add("Chord\u2026", true, [this, beat, at] { editChord(beat, at); });
+    const model::ContextPoint* key = nullptr;
+    for (const model::ContextPoint& p : clip.context)
+        if (p.type == model::ContextType::Key && std::abs(p.beat - barStart) < 1e-6) key = &p;
+    if (key) {
+        const model::ContextPoint gone = *key;
+        add("Remove key " + model::keyWords(gone), true, [this, gone] {
+            if (const auto o = midiOwner(app_.head(), state_.item); o && o->clip)
+                (void)setClipContext(withContextPoint(o->clip->context, gone, true));
+        });
+    }
+    if (chord) {
+        model::ContextPoint gone;
+        gone.type = model::ContextType::Chord;
+        gone.beat = *chord;
+        for (const model::ContextPoint& p : clip.context)
+            if (p.type == model::ContextType::Chord && std::abs(p.beat - *chord) < 1e-6)
+                gone.symbol = p.symbol;
+        add("Remove chord" + (gone.symbol.empty() ? std::string() : " " + gone.symbol), true,
+            [this, gone] {
+                if (const auto o = midiOwner(app_.head(), state_.item); o && o->clip)
+                    (void)setClipContext(withContextPoint(o->clip->context, gone, true));
+            });
+    }
+    ui::MenuItem rule;
+    rule.separator = true;
+    items.push_back(rule);
+    // The project's key and chords from the playhead, for the clip's length.
+    const auto t = app_.transport("get");
+    const double from = t ? t->beat : 0.0;
+    add("Take from the project at bar " + std::to_string(tm.barBeat(from).bar), true, [this, from] {
+        json::Value args = json::Value::object(), place = json::Value::object();
+        args["clip"] = state_.item;
+        place["at"] = std::max(0.0, from);
+        args["context_at"] = std::move(place);
+        (void)command("clip.set", std::move(args), {}, "Context");
+    });
+    add("Clear context", !clip.context.empty(), [this] { (void)setClipContext({}); });
+    root_.openPopup(
+        ui::makeMenu("midi.context.menu", std::move(items), [this] { root_.closePopup(); }),
+        ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+Status MidiEditor::setClipContext(const std::vector<model::ContextPoint>& points) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip) return Error("gui.midi", "no clip is open", "/clip");
+    json::Value args = json::Value::object();
+    args["clip"] = state_.item;
+    args["context"] = clipLeadSheet(points, *app_.head().timeMap, owner->clip->length);
+    return command("clip.set", std::move(args), {}, "Context");
 }
 
 namespace {

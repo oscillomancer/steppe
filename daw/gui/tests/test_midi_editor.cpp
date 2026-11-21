@@ -15,6 +15,7 @@
 #include <set>
 
 #include "app_actions.h"
+#include "clip_context_edit.h"
 #include "control_map.h"
 #include "history_panel.h"
 #include "midi_editor.h"
@@ -3717,6 +3718,151 @@ TEST_CASE("MIDI editor: a clip in another key than the project's: degrees previe
     CHECK(f.editor->keyText() == "No key");
     REQUIRE(said.size() == 1);
     CHECK(said[0].find("the clip has no key") != std::string::npos);
+}
+
+TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"F","scale":"major"})");
+    f.exec("chord.set", R"({"at":0,"symbol":"Bb"})");
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add", R"({"track":")" + track +
+                               R"(","scene":"sc_1","name":"Riff",)"
+                               R"("notation":"voice v; 1: D4:q F4:q r:h | 2: G4:w"})")
+            .find("clip")
+            ->asString();
+    const model::Id id = *model::Id::parse(clip);
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    auto& s = f.editor->state();
+    const auto context = [&] { return f.app->head().clips.find(id)->context; };
+    const auto text = [&] {
+        const json::Value got = f.exec("midi.get", R"({"item":")" + clip + R"("})");
+        const json::Value* c = got.find("context");
+        const json::Value* t = c ? c->find("text") : nullptr;
+        return t ? t->asString() : std::string();
+    };
+    auto type = [&](const char* typed) {
+        f.root->frame(false);
+        f.root->text(typed);
+        f.root->key(SDLK_RETURN);
+        f.frame();
+    };
+    ui::Node* strip = f.root->find("midi.bars");
+    REQUIRE(strip);
+    auto stripAt = [&](double beat) {
+        const ui::Rect b = strip->bounds();
+        return ui::Point{f.at(beat, 60).x, b.y + 8};
+    };
+    auto menuAt = [&](ui::Point at) {
+        ui::PointerEvent right{ui::PointerEvent::Type::Down, at, 3};
+        f.root->pointer(right);
+        right.type = ui::PointerEvent::Type::Up;
+        f.root->pointer(right);
+        f.root->frame(false);
+        ui::Node* m = f.root->find("midi.context.menu");
+        REQUIRE(m);
+        std::map<std::string, std::pair<bool, std::function<void()>>> rows;
+        for (const auto& item : ui::menuItems(*m))
+            if (!item.separator) rows[item.label] = {item.enabled, item.run};
+        f.root->closePopup();
+        return rows;
+    };
+    auto menu = [&](double beat) { return menuAt(stripAt(beat)); };
+    // No context yet: Key…, Chord… and Take from the project; nothing to clear.
+    auto rows = menu(0.5);
+    REQUIRE(rows.contains("Key…"));
+    REQUIRE(rows.contains("Chord…"));
+    REQUIRE(rows.contains("Take from the project at bar 1"));
+    CHECK_FALSE(rows.at("Clear context").first);
+    // The key field: "D dorian" makes the clip's key at its start.
+    rows.at("Key…").second();
+    REQUIRE(f.root->find("midi-key-field"));
+    CHECK(f.root->find("midi-key-field")->valueText() == "F major");  // the project's
+    type("D dorian");
+    CHECK_FALSE(f.root->popupOpen());
+    REQUIRE(context().size() == 1);
+    CHECK(context()[0].tonic == "D");
+    CHECK(context()[0].scale == "dorian");
+    CHECK(f.editor->keyText() == "D dorian");
+    // A double-click on the strip of a clip with no chords starts its first,
+    // at the grid beat there.
+    f.pointer(ui::PointerEvent::Type::Down, stripAt(4.02), 2);
+    f.pointer(ui::PointerEvent::Type::Up, stripAt(4.02), 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText().empty());
+    type("Gm7");
+    CHECK_FALSE(f.root->popupOpen());
+    REQUIRE(s.chords.size() == 1);
+    CHECK(s.chords[0].beat == doctest::Approx(4));
+    CHECK(s.chords[0].text == "Gm7");
+    // The chord row is there now: a double-click on the chord holds it.
+    f.frame();
+    const float row = strip->bounds().y + 16 + 9;
+    f.pointer(ui::PointerEvent::Type::Down, {f.at(4.1, 60).x, row}, 2);
+    f.pointer(ui::PointerEvent::Type::Up, {f.at(4.1, 60).x, row}, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText() == "Gm7");
+    type("C7");
+    REQUIRE(s.chords.size() == 1);
+    CHECK(s.chords[0].text == "C7");
+    // What the roll printed is the engine's own lead sheet for the clip.
+    CHECK(text() == "1: key D dorian ~:w\n2: {C7}:w\n");
+    CHECK(views::chordSymbolAt(f.app->head(), 4).empty());  // the project's are untouched
+    // The menu over the chord removes it, and the key at the clip's start.
+    rows = menuAt({f.at(4.1, 60).x, row});
+    REQUIRE(rows.contains("Remove chord C7"));
+    rows.at("Remove chord C7").second();
+    CHECK(s.chords.empty());
+    rows = menu(0.5);
+    REQUIRE(rows.contains("Remove key D dorian"));
+    rows.at("Remove key D dorian").second();
+    CHECK(context().empty());
+    CHECK_FALSE(f.editor->keyButton()->enabled);
+    // Take from the project at the playhead: its key and chord there.
+    menu(0.5).at("Take from the project at bar 1").second();
+    REQUIRE(context().size() == 2);
+    CHECK(f.editor->keyText() == "F major");
+    REQUIRE(s.chords.size() == 1);
+    CHECK(s.chords[0].text == "Bb");
+    // A bad key is refused into the status line, and the field stays.
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    menu(0.5).at("Key…").second();
+    type("Dorian");
+    CHECK(f.root->popupOpen());
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].find("is not a key") != std::string::npos);
+    f.root->closePopup();
+    // Clear context: back to none, one undo step.
+    const auto versions = f.exec("history.list", "{}")["versions"].size();
+    menu(0.5).at("Clear context").second();
+    CHECK(context().empty());
+    CHECK(f.exec("history.list", "{}")["versions"].size() == versions + 1);
+}
+
+TEST_CASE("clip context edit: the printed lead sheet covers the clip's bars in the meters") {
+    model::ContextPoint key;
+    key.type = model::ContextType::Key;
+    key.tonic = "Eb";
+    key.scale = "harmonic_minor";
+    model::ContextPoint chord;
+    chord.type = model::ContextType::Chord;
+    chord.beat = 2;
+    chord.symbol = "Cm";
+    model::ContextPoint rest;
+    rest.type = model::ContextType::Chord;
+    rest.beat = 5;
+    const time::TimeMap map;  // 4/4
+    const auto points = gui::withContextPoint(gui::withContextPoint({chord, rest}, key), chord);
+    REQUIRE(points.size() == 3);
+    CHECK(points[0].type == model::ContextType::Key);
+    CHECK(gui::clipLeadSheet(points, map, 12) ==
+          "1: key Eb harmonic_minor ~:h {Cm}:h\n2: ~:q r:h.\n3: ~:w\n");
+    CHECK(gui::clipLeadSheet({}, map, 4).empty());
+    CHECK(gui::withContextPoint(points, chord, true).size() == 2);
 }
 
 TEST_CASE("MIDI editor: a launcher clip opens at beat 0 in its own key and chords") {

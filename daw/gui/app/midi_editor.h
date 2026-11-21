@@ -216,7 +216,15 @@ class MidiEditor {
     const std::string& keyText() const { return keyText_; }  // the key button's words
     // The chord field (views/chord_field.h) for the chord point at the project
     // beat `beat`, opened at the window point `at` (the strip's double-click).
+    // On a clip it edits the clip's own chord at that clip beat (ADR-0098).
     void editChord(double beat, ui::Point at);
+    // A clip's own context (ADR-0098 X3): the key field for the key at clip
+    // beat `beat`; the strip's right-click menu at clip beat `beat` (`chord`:
+    // the beat of a chord point under the pointer); the context replaced
+    // (clip.set {context}, printed as the lead sheet in clip bars).
+    void editClipKey(double beat, ui::Point at);
+    void openContextMenu(double beat, std::optional<double> chord, ui::Point at);
+    Status setClipContext(const std::vector<model::ContextPoint>& points);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.
     void removeSelected();
@@ -281,8 +289,11 @@ class MidiEditor {
     void openLanesMenu();
     void applyLanes();       // the lanes' visibility from the state
     void refreshEnvLanes();  // the clip-time lanes' nodes from state_.envLanes
+    // A command on the open item or clip, then a reload; a refusal goes to
+    // the error hook after `what` ("Lanes: …").
     Status command(std::string_view name, json::Value args,
-                   std::optional<std::uint64_t> expectedVersion = {});
+                   std::optional<std::uint64_t> expectedVersion = {},
+                   std::string_view what = "Lanes");
     std::unique_ptr<PluginScales> scales_;
     ui::Node* envColumn_ = nullptr;    // the clip-time lanes, under the CC lane
     std::vector<model::Id> envNodes_;  // the envelopes envColumn_ has lanes for
