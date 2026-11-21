@@ -199,7 +199,11 @@ if(SUPPLE_BUILD_TESTS)
   add_dependencies(engine-plan-soak.tests clap-host-fixtures)
   supple_target_defaults(engine-plan-soak.tests)
   add_test(NAME engine-plan-soak.tests COMMAND engine-plan-soak.tests)
-  set_tests_properties(engine-plan-soak.tests PROPERTIES LABELS "engine;rt"
+  # Two seeded epochs in both executors, which must cover every command it
+  # lists: on native CI's Windows runner it took 546 s (batch 2) and then
+  # 600.7 s, past ctest's 600, with no change to it (batch 3, run
+  # 44906238230); 45 s on a Linux dev build.
+  set_tests_properties(engine-plan-soak.tests PROPERTIES LABELS "engine;rt" TIMEOUT 1200
     ENVIRONMENT "RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
   # The regression corpus (tests/fuzz/README.md): each file, present or
   # added later, replays as its own test.
