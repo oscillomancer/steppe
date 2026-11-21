@@ -287,7 +287,7 @@ void registerModuleCommands(cmd::Registry& registry) {
     [&] {
         Command<CheckArgs, json::Value> c;
         common(c, "module.check", Kind::Query,
-               "Compile a module without saving it; return its diagnostics and description.");
+               "Compile a module without saving; return diagnostics and description.");
         c.description =
             "source (a whole module) or name (one in the library). ok is true when it "
             "compiles; type then describes it as module.describe would.";

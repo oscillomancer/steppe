@@ -375,12 +375,12 @@ q = nil
 
 ---@class Steppe.dsp
 ---@field check fun(args?: Steppe.dsp_check_args): Steppe.dsp_check_result Compile a DSP script without saving it; return its diagnostics.
----@field edit fun(args: Steppe.dsp_edit_args): Steppe.dsp_edit_result Change part of a library script by replacing text; compile it, as dsp.write.
----@field export fun(args: Steppe.dsp_export_args): Steppe.dsp_export_result Export a DSP script as a plugin for other DAWs: a CLAP file, or C++ source.
+---@field edit fun(args: Steppe.dsp_edit_args): Steppe.dsp_edit_result Replace text in a library script and compile it, as dsp.write.
+---@field export fun(args: Steppe.dsp_export_args): Steppe.dsp_export_result Export a DSP script as a plugin: a CLAP file, or C++ source.
 ---@field get fun(args: Steppe.dsp_get_args): Steppe.dsp_get_result Read a DSP script from the library.
 ---@field list fun(): Steppe.dsp_list_result List the DSP scripts in the library, compiled, with their plugin ids.
 ---@field preview fun(args?: Steppe.dsp_preview_args): Steppe.dsp_preview_result Draw a plugin's editor to a PNG, after a test signal plays through it.
----@field test fun(args?: Steppe.dsp_test_args): Steppe.dsp_test_result Play test signals or notes through a plugin and measure it: levels, THD, pitch.
+---@field test fun(args?: Steppe.dsp_test_args): Steppe.dsp_test_result Play test signals or notes through a plugin; measure levels, THD, pitch.
 ---@field write fun(args: Steppe.dsp_write_args): Steppe.dsp_write_result Save a DSP script to the library and compile it, with diagnostics.
 
 ---@class Steppe.job

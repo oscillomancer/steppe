@@ -97,7 +97,8 @@ schema::Schema<EnvPointArg> envPointSchema() {
 
 // `itemRelative`: a take's envelope, positions from its owner's start: beats
 // from an item's start, or in a clip's unit from the clip's start (`clip`:
-// beats for MIDI, seconds for audio; ADR-0097).
+// beats for MIDI, seconds for audio; ADR-0097). An envelope on a clip take's
+// FX is clip-relative too (ADR-0097, amended 2026-11-20, C2).
 Result<std::vector<model::EnvPoint>> envPoints(const model::Session& s, const EnvDomain& d,
                                                const std::vector<EnvPointArg>& in,
                                                const std::string& path, bool itemRelative = false,
@@ -111,8 +112,10 @@ Result<std::vector<model::EnvPoint>> envPoints(const model::Session& s, const En
             const bool audio = *clip == model::ClipKind::Audio;
             if (audio ? !a.seconds || a.beat || a.bar : !a.beat || a.seconds || a.bar)
                 return Error("clip.unsupported",
-                             audio ? "an audio clip's take envelope takes seconds from its start"
-                                   : "a MIDI clip's take envelope takes beats from its start",
+                             audio ? "an audio clip's take and take FX envelopes take seconds "
+                                     "from its start"
+                                   : "a MIDI clip's take and take FX envelopes take beats from "
+                                     "its start",
                              at,
                              audio ? "e.g. {\"seconds\": 0.5, \"value\": -6}; a clip has no bars"
                                    : "e.g. {\"beat\": 2, \"value\": -6}; a clip has no bars");
@@ -262,17 +265,6 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             } else if (a.fx) {
                 auto id = existing<model::FxInstance>(s, *a.fx, "/fx");
                 if (!id) return std::move(id).error();
-                // A clip take's FX chain plays, but nothing plays its envelopes yet
-                // (ADR-0097): refused rather than written to do nothing.
-                for (const auto& t : s.takes)
-                    if (std::find(t.value->chain.begin(), t.value->chain.end(), *id) !=
-                            t.value->chain.end() &&
-                        clipKindOfTake(s, t.id))
-                        return Error("clip.unsupported",
-                                     id->str() + " is in the FX of clip take " + t.id.str(), "/fx",
-                                     "clip FX envelopes are not played yet; automate the "
-                                     "clip take's volume, pan or mute with env.add {take}, or "
-                                     "the track's FX");
                 env.target.object = *id;
             } else if (a.module) {
                 auto id = existing<model::RackModule>(s, *a.module, "/module");
@@ -290,10 +282,13 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                                  "/param", "env.points.set " + e.id.str());
             auto domain = envDomain(app, s, env.target, "/param");
             if (!domain) return std::move(domain).error();
+            // On a clip take's FX: clip-relative, an audio clip's in seconds.
+            const auto clipFx = clipKindOfFx(s, env.target.object);
+            if (clipFx == model::ClipKind::Audio) env.timebase = model::Timebase::Time;
             if (a.points) {
                 auto pts = envPoints(
-                    s, *domain, *a.points, "/points", a.take.has_value(), model::Timebase::Beats,
-                    a.take ? clipKindOfTake(s, *model::Id::parse(*a.take)) : std::nullopt);
+                    s, *domain, *a.points, "/points", a.take.has_value() || clipFx.has_value(),
+                    env.timebase, a.take ? clipKindOfTake(s, *model::Id::parse(*a.take)) : clipFx);
                 if (!pts) return std::move(pts).error();
                 env.points = std::move(*pts);
             }
@@ -348,7 +343,10 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Replace an envelope's points (all of them, or those in a beat range).";
-        c.description = "from_beat/to_beat: replace only points with from_beat <= beat < to_beat.";
+        c.description =
+            "from_beat/to_beat: replace only points with from_beat <= beat < to_beat. On a "
+            "clip's take or take FX they are in the clip's unit from its start (beats, or "
+            "seconds on an audio clip).";
         c.tags = {"automation"};
         c.args = schema::object<EnvPointsSetArgs>("env_points_set_args")
                      .field("env", &EnvPointsSetArgs::env, idArg("en", "Envelope"))
@@ -371,17 +369,19 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             const model::Envelope& env = *s.envelopes.find(*id);
             auto domain = envDomain(app, s, env.target, "/env");
             if (!domain) return std::move(domain).error();
+            const auto clip = env.target.object.kind == model::Kind::Take
+                                  ? clipKindOfTake(s, env.target.object)
+                                  : clipKindOfFx(s, env.target.object);
             auto pts = envPoints(s, *domain, a.points, "/points",
-                                 env.target.object.kind == model::Kind::Take, env.timebase,
-                                 env.target.object.kind == model::Kind::Take
-                                     ? clipKindOfTake(s, env.target.object)
-                                     : std::nullopt);
+                                 env.target.object.kind == model::Kind::Take || clip.has_value(),
+                                 env.timebase, clip);
             if (!pts) return std::move(pts).error();
             std::vector<model::EnvPoint> next;
             if (a.fromBeat || a.toBeat) {
                 const auto position = [&](double beat) {
-                    return env.timebase == model::Timebase::Time ? s.timeMap->secondsAt(beat)
-                                                                 : beat;
+                    return env.timebase == model::Timebase::Time && !clip
+                               ? s.timeMap->secondsAt(beat)
+                               : beat;
                 };
                 const double lo = a.fromBeat ? position(*a.fromBeat) : 0.0;
                 const double hi =
@@ -404,7 +404,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
         c.name = "env.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set an envelope's options: active (heard), mode (read, touch, latch, write).";
+        c.summary = "Set an envelope's active flag and mode (read, touch, latch, write).";
         c.description =
             "visible shows or hides the envelope's lane in the arrange view (a hidden envelope "
             "still plays while active).";
@@ -420,8 +420,16 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                        "song_with_env"}};
         c.run = [](const EnvSetArgs& a, Context& ctx) -> Result<Empty> {
             EngineApp& app = engine::app(ctx);
-            auto id = existing<model::Envelope>(app.view(), a.env, "/env");
+            const model::Session s = app.view();
+            auto id = existing<model::Envelope>(s, a.env, "/env");
             if (!id) return std::move(id).error();
+            // A write pass writes timeline positions; this one is in clip time.
+            if (a.mode && *a.mode != model::EnvMode::Read &&
+                clipKindOfFx(s, s.envelopes.find(*id)->target.object))
+                return Error("env.mode",
+                             "an envelope on a clip take's FX is in clip time, which a write "
+                             "pass does not write",
+                             "/mode", "keep mode read and edit its points with env.points.set");
             app.txn().modify<model::Envelope>(*id, [&](model::Envelope& e) {
                 if (a.active) e.active = *a.active;
                 if (a.visible) e.visible = *a.visible;
@@ -643,6 +651,11 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                                  "automation items sit on track, route and "
                                  "plugin envelopes",
                                  "/env", "edit the take envelope's points");
+                if (clipKindOfFx(s, env.target.object))
+                    return Error("autoitem.take",
+                                 "automation items sit on the timeline; an envelope on a clip "
+                                 "take's FX is in clip time",
+                                 "/env", "edit the envelope's points");
                 if (a.position && a.bar)
                     return Error("autoitem.position", "give position or bar", "/position",
                                  "provide either position in beats or bar, not both");

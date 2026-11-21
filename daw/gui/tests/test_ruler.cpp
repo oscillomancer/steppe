@@ -873,3 +873,103 @@ TEST_CASE("ruler: an edge dragged onto the other removes a range; the menu delet
     CHECK_FALSE(f.app->punch().end > f.app->punch().start);
     CHECK(f.errors.empty());
 }
+
+TEST_CASE("ruler: a key change's flag drags to another beat; Alt-drag copies a chord") {
+    RulerFixture f;
+    auto keys = [&] {
+        std::map<double, std::string> out;
+        for (const auto& e : f.app->head().context)
+            if (e.value->type == model::ContextType::Key)
+                out[e.value->beat] = e.value->tonic + " " + e.value->scale;
+        return out;
+    };
+    auto chords = [&] {
+        std::map<double, std::string> out;
+        for (const auto& e : f.app->head().context)
+            if (e.value->type == model::ContextType::Chord) out[e.value->beat] = e.value->symbol;
+        return out;
+    };
+    using Points = std::map<double, std::string>;
+    f.exec("key.set", json::parse(R"({"at": 0, "tonic": "F", "scale": "major"})").value());
+    f.exec("key.set", json::parse(R"({"at": 4, "tonic": "A", "scale": "minor"})").value());
+    auto n = f.history();
+    // A drag on its flag moves it on the grid, keeping its key: one undo step.
+    f.drag(f.at(4.4, 55), f.at(6.4, 55));
+    CHECK(keys() == Points{{0, "F major"}, {6, "A minor"}});
+    CHECK(f.history() == ++n);
+    // A click alone moves nothing; a double-click still edits it.
+    f.click(f.at(6.4, 55));
+    CHECK(f.history() == n);
+    f.click(f.at(6.4, 55), 0, 2);
+    REQUIRE(f.root->find("ruler-key"));
+    f.root->closePopups();
+    // The chord row: a drag moves a chord, Alt-drag leaves it and copies it.
+    f.exec("chord.set", json::parse(R"({"at": 4, "symbol": "Am7"})").value());
+    n = f.history();
+    constexpr float kRow = 81;  // the chord row: 72 to 90
+    f.drag(f.at(4.05, kRow), f.at(8.05, kRow), ui::kAlt);
+    CHECK(chords() == Points{{4, "Am7"}, {8, "Am7"}});
+    CHECK(f.history() == ++n);
+    f.drag(f.at(8.05, kRow), f.at(12.05, kRow));
+    CHECK(chords() == Points{{4, "Am7"}, {12, "Am7"}});
+    CHECK(f.history() == ++n);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("ruler: a section's menu captures it as a launcher scene; a refusal says why") {
+    RulerFixture f;
+    auto rightClick = [&](ui::Point p) {
+        ui::PointerEvent e;
+        e.type = Pointer::Down;
+        e.pos = p;
+        e.button = 3;
+        f.root->pointer(e);
+        e.type = Pointer::Up;
+        f.root->pointer(e);
+        f.root->frame(false);
+    };
+    auto menuRows = [&] {
+        std::vector<std::string> rows;
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        for (const ui::MenuItem& m : ui::menuItems(*menu)) rows.push_back(m.label);
+        return rows;
+    };
+    auto pick = [&](int row) {  // menu rows are 26 px
+        ui::Node* menu = f.root->find("ruler.menu");
+        REQUIRE(menu);
+        const ui::Point p{menu->bounds().x + 30,
+                          menu->bounds().y + static_cast<float>(row) * 26 + 13};
+        f.pointer(Pointer::Move, p);
+        f.pointer(Pointer::Down, p);
+        f.pointer(Pointer::Up, p);
+        f.sync();
+    };
+    f.exec("track.add", json::parse(R"({"type": "channel", "name": "Bass"})").value());
+    f.exec("region.add", json::parse(R"({"start": 0, "end": 4, "name": "Verse"})").value());
+    f.exec("region.add", json::parse(R"({"start": 8, "end": 12, "name": "Gap"})").value());
+    // An empty section refuses, and says so.
+    rightClick(f.at(10, 64));
+    CHECK(menuRows() ==
+          std::vector<std::string>{"Rename region…", "Delete region", "Capture as scene"});
+    pick(2);
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "scene.capture.empty");
+    f.errors.clear();
+    CHECK(f.app->head().scenes.size() == 0);
+    // With an item filling it: a scene named after it, one clip.
+    std::string track;
+    for (const auto& e : f.app->head().tracks)
+        if (e.value->type == model::StripType::Channel) track = e.id.str();
+    f.exec("item.add", json::parse(R"({"track": ")" + track +
+                                   R"(", "position": 0, "notation": "voice b; 1: C2:w"})")
+                           .value());
+    const auto n = f.history();
+    rightClick(f.at(2, 64));
+    pick(2);
+    REQUIRE(f.app->head().scenes.size() == 1);
+    CHECK(f.app->head().scenes.begin()->value->name == "Verse");
+    CHECK(f.app->head().clips.size() == 1);
+    CHECK(f.history() == n + 1);
+    CHECK(f.errors.empty());
+}

@@ -1420,3 +1420,229 @@ TEST_CASE(
             }
         }
 }
+
+namespace {
+
+// ADR-0061, amended 2026-11-20: B's gain is the fixed gain (automatable, not
+// modulatable), its envelope moving from -30 dB to 0 dB over a second, in
+// `mode`; `modulated`, a route of depth 0.2 from the beat phase reaches it
+// through that envelope (ADR-0096 step M4).
+struct HeldLane {
+    model::Session s;
+    Id gain, b;
+};
+HeldLane movingLane(bool modulated, model::EnvMode mode = model::EnvMode::Touch) {
+    Emit emit("beat_phase", std::nullopt);
+    model::EditTxn t(emit.s, 2);
+    t.modify<model::FxInstance>(emit.gain, [&](model::FxInstance& f) {
+        f.plugin.id = "com.suppleaudio.test.fixed-gain";
+        f.patch.reset();
+    });
+    params::ParamSpec spec;
+    spec.type = params::Type::Float;
+    spec.unit = units::Unit::dB;
+    spec.min = -60;
+    spec.max = 12;
+    model::Envelope env;
+    env.target = {emit.gain, "0"};
+    env.mode = mode;
+    env.timebase = model::Timebase::Time;
+    env.points = {{0.0, params::toClap(spec, -30)}, {1.0, params::toClap(spec, 0)}};
+    t.create(env);
+    if (modulated) modulate(t, emit.modOut, emit.gain, "0", 0.2);
+    return {commit(t), emit.gain, emit.b};
+}
+
+// The fixture's test controls (GainControl in fixture_plugins.cpp).
+struct GainHand {
+    void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+    std::uint32_t (*deliveries)(const clap_plugin_t*);
+    void (*latency)(const clap_plugin_t*, bool);
+    std::uint32_t (*creates)();
+    void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+    void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
+    void (*hand)(const clap_plugin_t*, double, std::uint32_t);
+};
+const GainHand& handOf(InstancePool& pool, Id fx) {
+    host::Instance* instance = pool.find(fx);
+    REQUIRE(instance);
+    const auto* plugin = instance->raw();
+    const auto* control =
+        static_cast<const GainHand*>(plugin->get_extension(plugin, "supple.test.gain-control"));
+    REQUIRE(control);
+    return *control;
+}
+
+double dbGain(double db) { return std::pow(10.0, db / 20.0); }
+
+}  // namespace
+
+TEST_CASE(
+    "write holds: a touch over a moving lane plays the hand, and the rest the offline render" *
+    doctest::description("rt")) {
+    // ADR-0061, amended 2026-11-20: from the block after the plug-in's
+    // gesture begins to the one it ends in, the lane sends nothing, so the
+    // plug-in plays what the hand set, whatever the curve or the modulation
+    // does. Released, the lane sends at once and from its next grid point
+    // the output is the offline render's again. In the callback, and in an
+    // anticipative engine's live executor (B armed); the renderer's own
+    // run is the next case.
+    constexpr std::uint32_t kBlock = 128;
+    constexpr std::int64_t kBefore = 100, kAfter = 100;
+    for (const bool modulated : {false, true}) {
+        const HeldLane lane = movingLane(modulated);
+        model::EditTxn t(lane.s, lane.s.version + 1);
+        t.modify<model::Track>(lane.b, [](model::Track& tr) { tr.record.armed = true; });
+        const model::Session armed = commit(t);
+        const auto offline = render(lane.s, 1.0, kBlock);
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("modulated " << modulated << ", anticipative " << options.anticipative);
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 40000});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+            const auto run = [&](std::int64_t blocks) {
+                if (options.anticipative)
+                    runAheadOnState(engine, backend, blocks, kBlock);
+                else
+                    backend.run(blocks);
+            };
+            REQUIRE(engine.load(options.anticipative ? armed : lane.s));
+            engine.play();
+            run(kBefore);
+            const GainHand& control = handOf(pool, lane.gain);
+            const auto* plugin = pool.find(lane.gain)->raw();
+            control.hand(plugin, -20, 1);  // grabbed: its gesture begins in this block
+            run(1);
+            const auto deliveries = control.deliveries(plugin);
+            std::vector<double> hand;  // what it set before each held block
+            for (int k = 1; k <= 20; ++k) {
+                hand.push_back(-20 + 0.5 * k);
+                control.hand(plugin, hand.back(), 0);
+                run(1);
+            }
+            hand.push_back(-9);
+            control.hand(plugin, hand.back(), 2);  // let go: its gesture ends in this block
+            run(1);
+            const bool lanesQuiet = control.deliveries(plugin) == deliveries;
+            CHECK(lanesQuiet);  // the lane sent the plug-in nothing while held
+            run(kAfter);
+            engine.stop();
+            CHECK(engine.processErrors() == 0);
+            const auto& cap = backend.capture().channels[0];
+            const std::size_t L = engine.outputLatency();
+            const auto same = [&](std::int64_t from, std::int64_t to) {
+                double worst = 0;
+                for (auto i = from; i < to; ++i)
+                    worst = std::max(worst, std::fabs(double(cap[L + std::size_t(i)]) -
+                                                      double(offline.left[std::size_t(i)])));
+                return worst;
+            };
+            CHECK(same(0, kBefore * kBlock) == 0.0);
+            bool handHeard = true;
+            for (std::size_t j = 0; j < hand.size(); ++j) {
+                const auto start = (kBefore + 1 + std::int64_t(j)) * std::int64_t(kBlock);
+                for (std::int64_t i = start; i < start + kBlock; ++i)
+                    handHeard = handHeard && double(cap[L + std::size_t(i)]) ==
+                                                 doctest::Approx(dbGain(hand[j])).epsilon(1e-6);
+            }
+            CHECK(handHeard);
+            const std::int64_t released =
+                (kBefore + 1 + std::int64_t(hand.size())) * std::int64_t(kBlock);
+            CHECK(same(released + d::kAutomationStep, released + kAfter * kBlock) == 0.0);
+        }
+    }
+}
+
+TEST_CASE(
+    "write holds: the renderer holds a latch past its gesture, across a plan swap, until "
+    "the transport stops") {
+    // A latching mode holds the hand's last value after the gesture ends,
+    // to the pass's end (ADR-0061). B is the renderer's here. The hold comes
+    // with the plan swap the pass's commit makes; a stop ends it and the
+    // lane sends again. Each step runs well past the render-ahead, so the
+    // renderer has processed what the hand did (decided by its state).
+    const HeldLane held = movingLane(false, model::EnvMode::Latch);
+    params::ParamSpec spec;
+    spec.type = params::Type::Float;
+    spec.unit = units::Unit::dB;
+    spec.min = -60;
+    spec.max = 12;
+    model::EditTxn t(held.s, held.s.version + 1);  // what the pass's commit writes
+    t.modify<model::Envelope>(held.s.envelopes.begin()->id, [&](model::Envelope& e) {
+        e.points.push_back({0.5, params::toClap(spec, -18)});
+        std::sort(e.points.begin(), e.points.end(),
+                  [](const auto& x, const auto& y) { return x.pos < y.pos; });
+    });
+    const model::Session written = commit(t);
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, EngineOptions{.workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    const auto run = [&] { runAheadOnState(engine, backend, 200, 128); };
+    REQUIRE(engine.load(held.s));
+    engine.play();
+    run();
+    const GainHand& control = handOf(pool, held.gain);
+    const auto* plugin = pool.find(held.gain)->raw();
+    const auto playing = control.deliveries(plugin);
+    run();
+    CHECK(control.deliveries(plugin) > playing);  // the moving lane sends
+    control.hand(plugin, -20, 1);
+    run();
+    const auto deliveries = control.deliveries(plugin);
+    control.hand(plugin, -18, 2);
+    run();
+    const auto generation = engine.planGeneration();
+    REQUIRE(engine.load(written));
+    CHECK(engine.planGeneration() > generation);
+    run();
+    run();
+    CHECK(control.deliveries(plugin) == deliveries);  // held past the gesture and the swap
+    REQUIRE(pool.find(held.gain)->paramValue(0));
+    CHECK(*pool.find(held.gain)->paramValue(0) == doctest::Approx(params::toClap(spec, -18)));
+    // Paused: the pass is over, and the lane plays its curve again.
+    engine.pause();
+    while (!engine.awaitRendered(0)) {
+    }
+    engine.play();
+    run();
+    CHECK(control.deliveries(plugin) > deliveries);
+    engine.stop();
+    CHECK(engine.processErrors() == 0);
+}
+
+TEST_CASE("write holds: the main thread's hold keeps a latch and its release lets it go") {
+    // The pass's own hold (EngineApp::writeHolds, through the mix slots)
+    // holds the lane with no gesture and no compile; when it lets go before
+    // the stop (an undo starts the pass again) the latch goes with it.
+    const HeldLane held = movingLane(false, model::EnvMode::Latch);
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(held.s));
+    engine.play();
+    backend.run(20);
+    const GainHand& control = handOf(pool, held.gain);
+    const auto* plugin = pool.find(held.gain)->raw();
+    const auto generation = engine.planGeneration();
+    CHECK_FALSE(engine.setWriteHolds({{held.gain, "0"}}));
+    CHECK(engine.planGeneration() == generation);
+    backend.run(1);
+    const auto deliveries = control.deliveries(plugin);
+    backend.run(20);
+    CHECK(control.deliveries(plugin) == deliveries);
+    control.hand(plugin, -20, 1);
+    backend.run(1);
+    control.hand(plugin, -18, 2);
+    backend.run(20);
+    CHECK(control.deliveries(plugin) == deliveries);
+    CHECK_FALSE(engine.setWriteHolds({}));
+    backend.run(2);
+    CHECK(control.deliveries(plugin) > deliveries);
+    engine.stop();
+}

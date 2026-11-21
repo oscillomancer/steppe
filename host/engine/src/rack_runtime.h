@@ -221,7 +221,27 @@ struct NotesFeed {
     int fromChannel = 0, toChannel = 0;
     bool sourceAuto = false;
     std::uint64_t liveGeneration = 0;  // the Notes module's live input (RackPool)
+    // The clip launcher (ADR-0097): what its source track plays, switched by
+    // the same launches at the rack's own position, and the track's MIDI
+    // clips. While a clip, a stop or a held clip holds the track, the
+    // timeline's events pass unplayed; `releaseHeld`: end what the track
+    // source holds at the next block's start (the switch).
+    LaunchState launch;
+    std::vector<ClipPlayer> players;      // the source track's MIDI clips
+    std::vector<host::Event> clipEvents;  // this block's, reserved
+    bool follows = false;                 // its source track has clips: launches reach it
+    bool releaseHeld = false;
 };
+// The clip launcher for a Notes feed (clip_player.cpp): its source track's
+// MIDI clips, compiled after its timeline events (main thread); the feed's
+// player for a clip (-1: none, an audio clip); a launch applied at the
+// rack's switch; this block's clip events into feed.clipEvents.
+void compileFeedClips(Plan& p, NotesFeed& feed, const Session& s);
+int playerOf(const NotesFeed& feed, Id clip) SUPPLE_RT;
+void applyFeedLaunch(NotesFeed& feed, LaunchState::Kind kind, Id clip, std::int64_t anchorSample,
+                     double anchorBeat) SUPPLE_RT;
+void feedClipMidi(Plan& p, const Node& rack, NotesFeed& feed, std::int64_t pos,
+                  std::uint32_t frames) SUPPLE_RT;
 
 // A module parameter's envelope, read by the schedule once per grid block.
 struct RackCurve final : rack::ParamCurve {

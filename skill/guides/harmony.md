@@ -88,7 +88,8 @@ unloop or unshare the item first.
 Regions are sections unless told otherwise. `region.add {"section": false}` or
 `region.set {"id": "rg_1", "section": false}` marks a region that is only a
 span to loop or label. `context.at` names the section at a beat: the region
-that starts latest and covers it.
+that starts latest and covers it. `scene.insert` and `arrangement.build` add a
+section for every scene they lay out, named after it (`guides/launcher.md`).
 
 ## Rules of thumb
 

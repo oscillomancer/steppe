@@ -469,7 +469,7 @@ TEST_CASE("session.describe lists the scenes with their clips") {
     l.runArgs("clip.add", args);
     l.run(
         "clip.set",
-        R"({"clip": "cl_2", "name": "Pad swell", "mode": "once", "quantize": "beat", "mute": true})");
+        R"({"clip": "cl_2", "name": "Pad swell", "mode": "once", "quantize": "beat", "mute": true, "gain_db": -6})");
     const std::string text = l.run("session.describe", "{}")["text"].asString();
     const auto at = text.find("Scenes (2):");
     REQUIRE(at != std::string::npos);
@@ -483,7 +483,7 @@ TEST_CASE("session.describe lists the scenes with their clips") {
               ", 4 notes\n"
               "    tr_2 Pad: cl_2 \"Pad swell\" 6.0 s once · audio " +
               md.str() +
-              " pad.wav · quantize beat · muted\n"
+              " pad.wav · quantize beat · -6 dB · muted\n"
               "  sc_2 Chorus (no clips)\n");
     // The project's length is the arrangement's.
     CHECK(text.find("· 2.0 s\n") != std::string::npos);
@@ -561,6 +561,27 @@ TEST_CASE("midi.write, midi.get, midi.notes and midi.edit take a clip") {
     CHECK(l.run("midi.get", R"({"item": "cl_1"})")["text"].asString().find("D2") !=
           std::string::npos);
     CHECK(l.fails("midi.get", R"({"item": "cl_9"})").code == "cl.unknown");
+}
+
+TEST_CASE("midi.write warns when the notation runs past the clip's or item's length") {
+    Launcher l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    const auto fits = l.run("midi.write", R"({"item": "cl_1", "notation": "voice bass; 1: D2:w"})");
+    CHECK(warningCodes(fits).empty());
+    const auto over =
+        l.run("midi.write", R"({"item": "cl_1", "notation": "voice bass; 1: C2:w; 2: D2:w"})");
+    CHECK(warningCodes(over) == "midi.beyond_length ");
+    CHECK(over.find("warnings")->at(0).find("path")->asString() == "/notation");
+    CHECK(l.head().clips.find(id("cl_1"))->length == 4);  // it keeps its length
+    // After lengthening it, the same notation fits.
+    l.run("clip.set", R"({"clip": "cl_1", "length": 8})");
+    CHECK(warningCodes(l.run("midi.write", R"({"item": "cl_1", "notation":
+        "voice bass; 1: C2:w; 2: D2:w"})"))
+              .empty());
+    // An item says the same.
+    l.run("item.add", R"({"track": "tr_1", "bar": 1, "notation": "voice bass; 1: C2:w"})");
+    CHECK(warningCodes(l.run("midi.write", R"({"item": "it_1", "notation":
+        "voice bass; 1: C2:w; 2: D2:w"})")) == "midi.beyond_length ");
 }
 
 TEST_CASE("midi.edit's scale ops on a clip read the key at the project's start, no chord") {
@@ -659,6 +680,107 @@ TEST_CASE("take.extract moves a clip's take onto the timeline at a position") {
     CHECK(l.head().clips.empty());  // the clip goes with its last take
 }
 
+TEST_CASE("envelopes on a clip take's FX are in clip time, and convert with the take") {
+    // ADR-0097, amended 2026-11-20 (C2).
+    Launcher l;
+    const auto fxOn = [&](model::Id take) {
+        auto r = l.runArgs("fx.add", json::parse(R"({"take": ")" + take.str() +
+                                                 R"(", "plugin": "com.suppleaudio.test.gain"})")
+                                         .value());
+        return id(r["fx"].asString().c_str());
+    };
+    const auto envOn = [&](model::Id fx) -> const model::Envelope* {
+        for (const auto& e : l.head().envelopes)
+            if (e.value->target.object == fx) return e.value.get();
+        return nullptr;
+    };
+    const auto fxOf = [&](model::Id take) { return l.head().takes.find(take)->chain.at(0); };
+    // An audio clip's: seconds from its start, never beats or bars.
+    auto args = j(R"({"track": "tr_1", "scene": "sc_2"})");
+    args["audio_file"] = l.wav("pad.wav", 3.0).string();
+    l.runArgs("clip.add", args);
+    const model::Id audioTake = l.head().clips.find(id("cl_1"))->takes[0];
+    const model::Id audioFx = fxOn(audioTake);
+    CHECK(l.fails("env.add",
+                  json::writeCompact(
+                      json::parse(R"({"fx": ")" + audioFx.str() +
+                                  R"(", "param": "gain", "points": [{"beat": 1, "value": -6}]})")
+                          .value()))
+              .code == "clip.unsupported");
+    l.runArgs("env.add",
+              json::parse(R"({"fx": ")" + audioFx.str() +
+                          R"(", "param": "gain", "points": [{"seconds": 0.5, "value": -6},
+                                                                       {"seconds": 1, "value": 0}]})")
+                  .value());
+    const model::Envelope* inClip = envOn(audioFx);
+    REQUIRE(inClip);
+    CHECK(inClip->timebase == model::Timebase::Time);
+    CHECK(inClip->points.at(0).pos == 0.5);
+    // No automation items in clip time.
+    model::Id envId;
+    for (const auto& e : l.head().envelopes)
+        if (e.value->target.object == audioFx) envId = e.id;
+    CHECK(
+        l.fails("autoitem.add", json::writeCompact(json::parse(R"({"env": ")" + envId.str() +
+                                                               R"(", "position": 0, "length": 4})")
+                                                       .value()))
+            .code == "autoitem.take");
+    // No write pass: it would write timeline positions.
+    CHECK(l.fails("env.set",
+                  json::writeCompact(
+                      json::parse(R"({"env": ")" + envId.str() + R"(", "mode": "touch"})").value()))
+              .code == "env.mode");
+    // A range is in the clip's seconds: only the point at 1 s is replaced.
+    l.runArgs("env.points.set",
+              json::parse(
+                  R"({"env": ")" + envId.str() +
+                  R"(", "from_beat": 0.75, "to_beat": 2, "points": [{"seconds": 1, "value": -3}]})")
+                  .value());
+    REQUIRE(envOn(audioFx)->points.size() == 2);
+    CHECK(envOn(audioFx)->points.at(0).value == -6.0);
+    CHECK(envOn(audioFx)->points.at(1).value == -3.0);
+    l.runArgs("env.points.set",
+              json::parse(
+                  R"({"env": ")" + envId.str() +
+                  R"(", "from_beat": 0.75, "to_beat": 2, "points": [{"seconds": 1, "value": 0}]})")
+                  .value());
+    // Onto the timeline at beat 8 (120 BPM): timeline beats, 1 beat per 0.5 s.
+    auto placed = l.run("item.add", R"({"track": "tr_1", "position": 8, "clip": "cl_1"})");
+    const model::Item& copy = *l.head().items.find(id(placed["item"].asString().c_str()));
+    const model::Envelope* onItem = envOn(fxOf(copy.takes[0]));
+    REQUIRE(onItem);
+    CHECK(onItem->timebase == model::Timebase::Beats);
+    CHECK(onItem->points.at(0).pos == doctest::Approx(9.0));
+    CHECK(onItem->points.at(1).pos == doctest::Approx(10.0));
+    // And back into a clip: seconds from its start again.
+    l.runArgs("clip.add", json::parse(R"({"track": "tr_1", "scene": "sc_1", "item": ")" +
+                                      placed["item"].asString() + "\"}")
+                              .value());
+    const model::Id back = l.head().clips.find(id("cl_2"))->takes[0];
+    const model::Envelope* again = envOn(fxOf(back));
+    REQUIRE(again);
+    CHECK(again->timebase == model::Timebase::Time);
+    CHECK(again->points.at(0).pos == doctest::Approx(0.5));
+    CHECK(again->points.at(1).pos == doctest::Approx(1.0));
+    // A MIDI clip's: beats from its start; extracted to beat 16, the
+    // timeline's beat 16 on.
+    l.run("track.add", R"({"name": "Keys"})");
+    l.run("clip.add", R"({"track": "tr_2", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    const model::Id midiTake = l.head().clips.find(id("cl_3"))->takes[0];
+    l.runArgs("fx.add", json::parse(R"({"take": ")" + midiTake.str() +
+                                    R"(", "plugin": "com.suppleaudio.test.sine"})")
+                            .value());
+    const model::Id gain = fxOn(midiTake);
+    l.runArgs("env.add", json::parse(R"({"fx": ")" + gain.str() +
+                                     R"(", "param": "gain", "points": [{"beat": 2, "value": -6}]})")
+                             .value());
+    CHECK(envOn(gain)->points.at(0).pos == 2.0);
+    l.runArgs("take.extract",
+              json::parse(R"({"take": ")" + midiTake.str() + R"(", "position": 16})").value());
+    CHECK(envOn(gain)->timebase == model::Timebase::Beats);
+    CHECK(envOn(gain)->points.at(0).pos == doctest::Approx(18.0));
+}
+
 TEST_CASE("env.add on a clip's take measures in the clip's unit; fx.add works") {
     Launcher l;
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
@@ -676,16 +798,6 @@ TEST_CASE("env.add on a clip's take measures in the clip's unit; fx.add works") 
                                        R"(", "param": "pan", "points": [{"bar": 1, "value": 0}]})")
                                .value()));
     CHECK(bar.code == "clip.unsupported");
-    // The take's FX play, but their envelopes would not: refused (L2 settles it).
-    const model::Id takeFx = l.head().takes.find(midiTake)->chain.at(0);
-    const Error fxEnv = l.fails(
-        "env.add", json::writeCompact(
-                       json::parse(R"({"fx": ")" + takeFx.str() +
-                                   R"(", "param": "gain", "points": [{"beat": 0, "value": 0}]})")
-                           .value()));
-    CHECK(fxEnv.code == "clip.unsupported");
-    CHECK(fxEnv.path == "/args/fx");
-    CHECK(fxEnv.hint.find("not played yet") != std::string::npos);
     auto args = j(R"({"track": "tr_1", "scene": "sc_2"})");
     args["audio_file"] = l.wav("pad.wav").string();
     l.runArgs("clip.add", args);

@@ -832,11 +832,17 @@ int frontendMain(int argc, char** argv) {
         g.onSelection = [&](const std::vector<model::Id>& items) {
             uiState.selectedItems.clear();
             for (model::Id id : items) uiState.selectedItems.push_back(id.str());
-            if (!items.empty()) uiState.tracksFocused = false;  // Delete takes the items now
+            if (!items.empty()) {  // Delete takes the items now
+                uiState.tracksFocused = false;
+                uiState.clipsFocused = false;
+            }
         };
         g.onEnvelopeFocus = [&](bool lane) {
             uiState.envelopeFocused = lane;
-            if (lane) uiState.tracksFocused = false;
+            if (lane) {
+                uiState.tracksFocused = false;
+                uiState.clipsFocused = false;
+            }
         };
         g.onOpenMidi = [&](model::Id item) {
             if (auto r = midiEditor.open(item.str()); !r)
@@ -861,13 +867,58 @@ int frontendMain(int argc, char** argv) {
             (void)dispatcher.execute({"transport.seek", std::move(args), ui});
         };
     }
+    // The clip launcher (gui.md §4.15): its commands, its errors in the status
+    // line, its editors and its selection (Delete takes the clips).
+    shell.arrange()->setLauncherCallbacks(
+        {[&dispatcher](const std::string& command, json::Value args) {
+             return dispatcher.execute(
+                 {command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+         },
+         [&appActions](const Error& e) {
+             if (appActions.onError) appActions.onError("Clip launcher: " + e.message);
+         },
+         [&](model::Id clip) {
+             const model::Clip* c = (*app)->head().clips.find(clip);
+             if (!c) return;
+             if (c->kind == model::ClipKind::Midi) {
+                 if (auto r = midiEditor.open(clip.str()); !r && appActions.onError)
+                     appActions.onError("MIDI: " + r.error().message);
+             } else {
+                 appActions.invoke("ui.inspector");
+             }
+         },
+         [&](const std::vector<model::Id>& clips) {
+             uiState.selectedClips.clear();
+             for (model::Id id : clips) uiState.selectedClips.push_back(id.str());
+             // A clip or a cell picked: the launcher has the keys now.
+             if (!clips.empty() || shell.arrange()->selectedCell()) {
+                 uiState.clipsFocused = true;
+                 uiState.tracksFocused = false;
+                 uiState.envelopeFocused = false;
+             }
+         },
+         [&](const std::vector<model::Id>& clips) {
+             std::vector<std::string> ids;
+             for (model::Id id : clips) ids.push_back(id.str());
+             if (auto r = gui::removeClips(dispatcher, ids); !r && appActions.onError)
+                 appActions.onError("Clip launcher: " + r.error().message);
+         },
+         [&](bool on) {
+             if (auto r = shell.capture().set(on); !r && appActions.onError)
+                 appActions.onError("Capture: " + r.error().message);
+         }});
+    // A capture's commit at stop, or the next one's arming, refused.
+    shell.capture().onError = [&appActions](const Error& e) {
+        if (appActions.onError) appActions.onError("Capture: " + e.message);
+    };
     shell.arrange()->setRulerCallbacks(
         {[&dispatcher](const std::string& command, json::Value args) {
              return dispatcher.execute(
                  {command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
          },
-         [](const Error& e) {
-             std::fprintf(stderr, "ruler edit refused: %s\n", e.toString().c_str());
+         // A refusal (a tempo, a section captured as a scene) in the status line.
+         [&appActions](const Error& e) {
+             if (appActions.onError) appActions.onError("Ruler: " + e.message);
          }});
     // A new, empty MIDI item on the selected channel (else the first), over the
     // loop range when it is on, else one bar at the playhead; opened.
@@ -913,13 +964,52 @@ int frontendMain(int argc, char** argv) {
     appActions.addUi("ui.env.points.paste", "Envelope: paste points at the playhead", [&] {
         reportEdit("paste points", shell.arrange()->gestures().pastePoints(playheadBeat()));
     });
+    // With the launcher's keys (a clip or cell clicked last) they take its
+    // clips; a paste lands in the selected cell.
+    auto pasteClips = [&] {
+        views::ArrangeView& a = *shell.arrange();
+        const auto& cell = a.selectedCell();
+        if (!cell) return shell.setStatus("Paste: select an empty cell in the launcher");
+        std::vector<std::string> channels;
+        for (const views::TrackRow& row : a.trackLayout().rows())
+            if (!row.lane() && row.type == model::StripType::Channel)
+                channels.push_back(row.track.str());
+        gui::ClipClipboard& board = uiState.clipClipboard;
+        const std::vector<std::string> clips = board.in((*app)->projectGeneration());
+        auto made = gui::pasteClips(dispatcher, (*app)->head(), clips, cell->track.str(),
+                                    cell->scene.str(), channels, board.cut);
+        if (!made) {
+            if (appActions.onError) appActions.onError("Clip launcher: " + made.error().message);
+            return;
+        }
+        if (board.cut) board = {};  // the clips have moved
+        std::vector<model::Id> ids;
+        for (const std::string& id : *made)
+            if (auto parsed = model::Id::parse(id)) ids.push_back(*parsed);
+        a.selectClips(std::move(ids));
+    };
     appActions.addUi("ui.item.copy", "Item: copy selected (or automation points)", [&] {
+        if (uiState.clipsFocused) {
+            if (uiState.selectedClips.empty()) return;
+            uiState.clipClipboard.fill(uiState.selectedClips, false, (*app)->projectGeneration());
+            return;
+        }
         if (pointKeys())
             shell.arrange()->gestures().copyPoints();
         else
             shell.arrange()->gestures().copySelection();
     });
     appActions.addUi("ui.item.cut", "Item: cut selected (or automation points)", [&] {
+        if (uiState.clipsFocused) {
+            // A clip has no place to wait in, so a cut clip stays until the
+            // paste moves it.
+            if (uiState.selectedClips.empty()) return;
+            uiState.clipClipboard.fill(uiState.selectedClips, true, (*app)->projectGeneration());
+            const std::size_t n = uiState.selectedClips.size();
+            shell.setStatus(n == 1 ? "Cut 1 clip: paste moves it"
+                                   : "Cut " + std::to_string(n) + " clips: paste moves them");
+            return;
+        }
         auto& g = shell.arrange()->gestures();
         if (pointKeys())
             reportEdit("cut points", g.cutPoints());
@@ -927,6 +1017,7 @@ int frontendMain(int argc, char** argv) {
             reportEdit("cut", g.cutSelection());
     });
     appActions.addUi("ui.item.paste", "Item: paste at the playhead (or automation points)", [&] {
+        if (uiState.clipsFocused) return pasteClips();
         if (pointKeys()) {
             reportEdit("paste points", shell.arrange()->gestures().pastePoints(playheadBeat()));
             return;

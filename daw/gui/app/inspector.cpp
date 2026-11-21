@@ -22,6 +22,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/lanes.h"
+#include "supple/views/launcher.h"
 
 namespace supple::gui {
 namespace {
@@ -262,8 +263,23 @@ InspectorSubject inspectorSubject(const model::Session& s, const UiState& select
     InspectorSubject out;
     const auto tracks = held(s.tracks, selection.selectedTracks);
     const auto items = held(s.items, selection.selectedItems);
+    std::vector<std::pair<model::Id, const model::Clip*>> clips;
+    if (selection.clipsFocused) clips = held(s.clips, selection.selectedClips);
     const bool showTracks = !tracks.empty() && (selection.tracksFocused || items.empty());
-    if (showTracks && tracks.size() == 1) {
+    if (clips.size() == 1) {
+        const auto& [id, clip] = clips.front();
+        out.kind = InspectorSubject::Kind::Clip;
+        out.ids = {id};
+        out.title = clip->name.empty() ? id.str() : clip->name;
+        const model::Scene* scene = s.scenes.find(clip->scene);
+        out.detail = std::string(clip->kind == model::ClipKind::Midi ? "MIDI clip" : "Audio clip") +
+                     " on " + model::trackLabel(s, clip->track) +
+                     (scene && !scene->name.empty() ? ", " + scene->name : std::string());
+        out.color = views::clipColor(theme, s, *clip);
+    } else if (clips.size() > 1) {
+        out.title = std::to_string(clips.size()) + " clips";
+        out.detail = "Selected together";
+    } else if (showTracks && tracks.size() == 1) {
         const auto& [id, track] = tracks.front();
         out.kind = InspectorSubject::Kind::Track;
         out.ids = {id};
@@ -511,6 +527,48 @@ std::unique_ptr<ui::Node> Inspector::build() {
         &box.emplace<ui::TextBlock>("inspector.file", "", ui::Font::Mono, "caption", "ink-quiet");
     file_->layout.height = ui::SizeRule::content();
 
+    // One launcher clip: each field one clip.set (ADR-0097).
+    auto& clipBox = panel->emplace<ui::Node>("inspector.clip");
+    clipBox_ = &clipBox;
+    clipBox.layout.dir = ui::Layout::Dir::Column;
+    clipBox.layout.height = ui::SizeRule::content();
+    clipBox.layout.gap = 4;
+    clipBox.visible = false;
+    field(clipBox, "clip.name", "Name");
+    auto& clipColour = formRow(clipBox, "clip.color", "Colour");
+    auto& clipSwatches = clipColour.emplace<ColorRow>("inspector.clip.color");
+    clipSwatches.layout.width = ui::SizeRule::fraction();
+    clipSwatches.pick = [this](const std::string& name) { set("color", name); };
+    clipColors_ = &clipSwatches;
+    field(clipBox, "clip.length", "Length");
+    field(clipBox, "clip.gain_db", "Gain");
+    auto dropdown = [&](const std::string& key, const std::string& label,
+                        std::vector<ui::Choice> choices) {
+        auto& row = formRow(clipBox, key, label);
+        rows_[key] = &row;
+        auto& d = row.emplace<ui::Dropdown>("inspector." + key, std::move(choices));
+        d.layout.width = ui::SizeRule::fraction();
+        d.layout.height = ui::SizeRule::fixed(22);
+        return &d;
+    };
+    clipMode_ = dropdown("clip.mode", "Plays", {{"loop", "Loop"}, {"once", "Once"}});
+    clipMode_->onChange = [this](const std::string& value) { set("mode", value); };
+    clipQuantize_ = dropdown("clip.quantize", "Launch",
+                             {{"", "Project's quantize"},
+                              {"bar", "Bar"},
+                              {"beat", "Beat"},
+                              {"1/2", "1/2"},
+                              {"1/4", "1/4"},
+                              {"1/8", "1/8"},
+                              {"1/16", "1/16"},
+                              {"1/32", "1/32"},
+                              {"none", "At once"}});
+    clipQuantize_->onChange = [this](const std::string& value) {
+        set("quantize", value.empty() ? json::Value() : json::Value(value));
+    };
+    auto& clipStates = formRow(clipBox, "clip.state", "State");
+    state(clipStates, "clip.mute", "Mute", "mute");
+
     // Tracks: each field one track.set on every selected track.
     auto& tracks = panel->emplace<ui::Node>("inspector.track");
     trackBox_ = &tracks;
@@ -580,6 +638,36 @@ void Inspector::read(bool force) {
         readItems(force);
     else if (kind_ == Kind::Track || kind_ == Kind::Tracks)
         readTracks(force);
+    else if (kind_ == Kind::Clip)
+        readClip(force);
+}
+
+void Inspector::readClip(bool force) {
+    const model::Session& s = app_.head();
+    const model::Clip* clip = ids_.empty() ? nullptr : s.clips.find(ids_.front());
+    if (!clip) return;
+    show("clip.name", clip->name, force);
+    // A MIDI clip's period is in beats, an audio clip's in seconds of take time.
+    const bool midi = clip->kind == model::ClipKind::Midi;
+    show("clip.length", midi ? plain(clip->length, 3) + " beats" : fixed(clip->length, 3, "s"),
+         force);
+    show("clip.gain_db", fixed(clip->gainDb, 1, "dB"), force);
+    auto* row = static_cast<ColorRow*>(clipColors_);
+    row->current = clip->color;
+    row->invalidate();
+    clipMode_->setValue(clip->mode == model::ClipMode::Loop ? "loop" : "once");
+    static constexpr std::pair<model::LaunchQuantize, const char*> kNames[] = {
+        {model::LaunchQuantize::Bar, "bar"},           {model::LaunchQuantize::Beat, "beat"},
+        {model::LaunchQuantize::Half, "1/2"},          {model::LaunchQuantize::Quarter, "1/4"},
+        {model::LaunchQuantize::Eighth, "1/8"},        {model::LaunchQuantize::Sixteenth, "1/16"},
+        {model::LaunchQuantize::ThirtySecond, "1/32"}, {model::LaunchQuantize::None, "none"}};
+    std::string quantize;
+    for (const auto& [q, name] : kNames)
+        if (clip->quantize && *clip->quantize == q) quantize = name;
+    clipQuantize_->setValue(quantize);
+    states_["clip.mute"]->setOn(clip->mute);
+    for (const char* key : {"clip.name", "clip.length", "clip.gain_db"})
+        fields_[key].node->enabled = true;
 }
 
 void Inspector::readItems(bool force) {
@@ -625,7 +713,8 @@ void Inspector::readItems(bool force) {
     const bool locked =
         std::any_of(items.begin(), items.end(), [](const model::Item* i) { return i->locked; });
     for (auto& [key, f] : fields_)
-        if (key.rfind("track.", 0) != 0) f.node->enabled = !locked && (key != "name" || take);
+        if (key.rfind("track.", 0) != 0 && key.rfind("clip.", 0) != 0)
+            f.node->enabled = !locked && (key != "name" || take);
     timebase_->enabled = !locked;
     states_["mute"]->enabled = states_["loop"]->enabled = !locked;
     const std::string note = !locked ? std::string()
@@ -728,6 +817,13 @@ void Inspector::run(const char* command, json::Value args) {
 void Inspector::set(const std::string& key, json::Value value) {
     using Kind = InspectorSubject::Kind;
     if (ids_.empty() || kind_ == Kind::Nothing) return;
+    if (kind_ == Kind::Clip) {  // one clip.set; the field keys carry "clip."
+        json::Value args = json::Value::object();
+        args["clip"] = ids_.front().str();
+        args[key.rfind("clip.", 0) == 0 ? key.substr(5) : key] = std::move(value);
+        run("clip.set", std::move(args));
+        return;
+    }
     const bool tracks = kind_ == Kind::Track || kind_ == Kind::Tracks;
     const char* command = tracks ? "track.set" : "item.set";
     auto one = [&](const model::Id& id) {
@@ -771,13 +867,19 @@ void Inspector::setTake(const std::string& key, json::Value value) {
 
 void Inspector::commit(const std::string& key, const std::string& text) {
     if (ids_.empty() || text == fields_[key].shown) return;
-    if (key == "name" || key == "track.name") {
+    if (key == "name" || key == "track.name" || key == "clip.name") {
         set("name", text);
         return;
     }
     const model::Session& s = app_.head();
+    // A MIDI clip's length is in beats, an audio clip's in seconds.
+    const model::Clip* clip =
+        kind_ == InspectorSubject::Kind::Clip ? s.clips.find(ids_.front()) : nullptr;
+    const char* clipUnit = clip && clip->kind == model::ClipKind::Audio ? "s" : "beats";
     Result<double> value = key == "start"             ? inspectorParseBars(text, *s.timeMap)
                            : key == "length"          ? inspectorParseNumber(text, "beats")
+                           : key == "clip.length"     ? inspectorParseNumber(text, clipUnit)
+                           : key == "clip.gain_db"    ? inspectorParseNumber(text, "dB")
                            : key == "gain_db"         ? inspectorParseNumber(text, "dB")
                            : key == "track.volume_db" ? inspectorParseNumber(text, "dB")
                            : key == "track.pan"       ? inspectorParseNumber(text, "%")
@@ -792,6 +894,8 @@ void Inspector::commit(const std::string& key, const std::string& text) {
         setTake(key, *value);
     else if (key == "start")
         set("position", *value);
+    else if (key.rfind("clip.", 0) == 0)
+        set(key.substr(5), *value);
     else
         set(key.rfind("track.", 0) == 0 ? key.substr(6) : key, *value);
 }
@@ -800,7 +904,8 @@ void Inspector::sync() {
     if (!visible_ || !panel_) return;
     if (app_.head().version == version_ && app_.projectGeneration() == generation_ &&
         selection_.selectedTracks == tracks_ && selection_.selectedItems == items_ &&
-        selection_.tracksFocused == tracksFocused_)
+        selection_.tracksFocused == tracksFocused_ && selection_.selectedClips == clips_ &&
+        selection_.clipsFocused == clipsFocused_)
         return;
     using Kind = InspectorSubject::Kind;
     InspectorSubject subject = inspectorSubject(app_.head(), selection_, root_.theme());
@@ -810,6 +915,7 @@ void Inspector::sync() {
         // new head, so the subject is read again after it.
         root_.releaseWithin(itemBox_);
         root_.releaseWithin(trackBox_);
+        root_.releaseWithin(clipBox_);
         subject = inspectorSubject(app_.head(), selection_, root_.theme());
     }
     version_ = app_.head().version;
@@ -817,6 +923,8 @@ void Inspector::sync() {
     tracks_ = selection_.selectedTracks;
     items_ = selection_.selectedItems;
     tracksFocused_ = selection_.tracksFocused;
+    clips_ = selection_.selectedClips;
+    clipsFocused_ = selection_.clipsFocused;
     if (title_->text() != subject.title) title_->setText(subject.title);
     if (detail_->text() != subject.detail) detail_->setText(subject.detail);
     static_cast<Swatch*>(swatch_)->color = subject.color;
@@ -825,6 +933,7 @@ void Inspector::sync() {
     ids_ = subject.ids;
     itemBox_->visible = kind_ == Kind::Item || kind_ == Kind::Items;
     trackBox_->visible = kind_ == Kind::Track || kind_ == Kind::Tracks;
+    clipBox_->visible = kind_ == Kind::Clip;
     read(another);
     root_.relayout();
     panel_->invalidate();

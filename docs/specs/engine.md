@@ -262,8 +262,26 @@ at compile time). Per block, each automated target evaluates its segments:
   compiles. Holds exist only while the transport plays; undo, redo and a
   branch switch mid-pass start the pass again at that point, so the
   abandoned writes neither stay held nor get a latch tail at stop. A halt
-  ends the pass that was playing. Mute, plug-in parameters and the master
-  playrate are not held: their writes compile as before.
+  ends the pass that was playing. Mute and the master playrate are not
+  held: their writes compile as before.
+- plug-in parameter holds (ADR-0061, amendment 2026-11-20): a held lane
+  sends nothing, so the plug-in keeps what the hand set. Two things hold it:
+  - **the executor** (`ParamLane::gesture`, `latched`), on a real-time plan
+    (`Plan::gestureHolds`) for a lane whose envelope is in a writing mode.
+    It holds from the block after the plug-in reports `GestureBegin` while
+    playing (`holdGestures`, after each process call). Touch holds to the
+    block with `GestureEnd`; a latching mode holds on until a start or seek
+    (`locate` with a console restart) or a stopped block. A plan swap
+    carries an open gesture, and a latch whose main-thread hold has not
+    fallen;
+  - **`EngineApp`'s hold** (`ParamLane::held`, a `MixSlots::lanes` flag per
+    lane by envelope), from the touched envelopes as for a level. When it
+    falls, the executor's latch goes too.
+
+  Released, the lane sends its value at once (`lastSent` is cleared while
+  held), then on its grid. The first block of a gesture is not held. Points
+  written into a plug-in envelope compile, since they change the FX's
+  values too.
 
 ### 1.4.1 Modulation (ADR-0096)
 
@@ -271,7 +289,8 @@ A modulation route (`mr_*`, session-model "Modulation") moves a target
 parameter by a rack's Mod Out signal × its `depth`, as an offset on top of
 the base: the static value, the envelope or a write hold's hand. It never
 writes the base, the model or an envelope, and write modes record the base
-only.
+only. A held plug-in lane (§1.4) carries no modulation through its envelope
+until it is released.
 
 - **Edges.** Every route, enabled or not, is an edge from its source rack's
   node to the node that applies its target; `enabled` only zeroes its
@@ -357,9 +376,11 @@ only.
   executor, the last sum holds. The lane has a telemetry slot of its own,
   stored as a fraction of its range. Without an active envelope on the
   parameter, the route is inert (`modulation.target`, "has no active
-  envelope to carry it"). When a write mode records a plug-in output for
-  such a parameter, the route's current offset is taken off first
-  (`commitOutputGesture`), so the envelope keeps the base.
+  envelope to carry it"). In a write pass the lane is held from the
+  plug-in's gesture (§1.4), so what the plug-in reports is the hand's value,
+  recorded as it is. Outside a held pass (stopped, or a reading mode) the
+  route's current offset is taken off what the plug-in reports
+  (`commitOutputGesture`), so the static value keeps the base.
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
   that its target cannot take it: the parameter is gone, read-only, bypass,
   neither modulatable nor reachable through an active envelope, or the
@@ -425,8 +446,14 @@ the same.*
   `once` clip past its length) or `stopped`. Plans carry it across swaps
   by node id and clip id (§1.6 of engine.md). A clip the new plan no
   longer has (removed, or now past the memory budget) ends at that swap
-  and its track returns to the arrangement, without the switch fade: the
-  new plan holds no player to fade out.
+  and its track returns to the arrangement. An audio clip without a take
+  chain crossfades out over the switch fade: before publishing a plan,
+  `Engine::load` copies into each node the previous plan's audio players
+  whose clip it lacks (`Node::retiring`, `addRetiring`; main thread, never
+  launched or listed), and the carry fades from that copy
+  (`LaunchState::fadeFrom` −3), starting at the first block the node
+  plays after adoption. A clip with a take chain stops at the swap (its
+  chain's instances leave with the plan), and a MIDI clip's notes end.
 - **A launch is a timed message (L-a, B1).** Its target is `{epoch,
   stream sample}`, the coordinate plan handoffs use (`handAt`,
   `handEpoch`). A scene launch has one target for all its tracks: the
@@ -457,7 +484,10 @@ the same.*
     sample, its running frame and its song position.
 - **While stopped,** a launch is not quantized. It starts the transport
   and applies at the play start's first sample, so the clip's anchor is
-  the play position.
+  the play position. A clip chain's early half would fall before that
+  sample; it applies there too, live as in the replay, and the chain
+  warms up through its first frames (its lead), as when a swap raises the
+  lead (ADR-0097, amended 2026-11-20; review round 69).
 - **Quantize** is project-wide (`launch_quantize`) with a per-clip
   override. `none` means the floor: about the render-ahead (200 ms) for a
   rendered track, one device block for a live one. That is accepted for
@@ -474,6 +504,9 @@ the same.*
   - A `once` clip sounds while its position is within its length after
     the anchor. It is silent before the anchor, and silent after a
     transport wrap until it is launched again.
+  - A loop clip plays nothing before its anchor until a wrap or a seek
+    takes the song there; from then on it plays by its phase wherever the
+    song is. A wrap or a seek also ends a switch's crossfade.
   - Seeks and wraps use the same formulas, so clips stay on the grid and
     a performance replays exactly from its log.
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
@@ -483,11 +516,38 @@ the same.*
   source like an item's fade, in both executors and offline.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
-  the epoch's terms) and its song position, and logs seeks and transport
-  wraps beside them. Renders and the render dialog play the arrangement
-  only, and the dialog says so in one line while any track is held by a
-  clip. An internal offline replay applies a log at its logged running
-  frames. The tests use it, and L4's capture will.
+  the epoch's terms) and its song position. Seeks and transport wraps
+  are not logged yet (staged, STATUS): the replay plays one linear run.
+  Renders and the render dialog play the arrangement only, and the dialog
+  says so in one line while any track is held by a clip, following
+  launches while it is open. An internal offline replay applies a log at
+  its logged running frames; the tests use it.
+- **Capturing a performance (L4, L-f).** While `launch.capture` is on, the
+  engine keeps the song sample where the capture began, the transport
+  loop it runs under, what each track that was not following the
+  arrangement played then (its launch, anchor kept), and every launch
+  applied after it, by running frame from the start
+  (`Engine::launchCapture`). It begins at the heard position (stopped:
+  where playing starts). A relocation (a seek, a stop, a loop change) ends
+  a capture that has run any frames, where it was heard; one that has not
+  begins again where the transport goes. A capture lives in one transport
+  epoch.
+- **Committing it.** `launch.commit` lays the capture out linearly: a
+  launch at running frame f lands at the capture's start plus f, whatever
+  the loop did. On each track that left the arrangement, the stretches
+  where it played a clip, was stopped or held replace the arrangement:
+  its items there are split, trimmed or removed (audio from 5 ms after a
+  switch away, with a 5 ms fade out, and a 5 ms fade in where a clip
+  returned it to the arrangement; MIDI at the switch itself). Each clip
+  stretch becomes copies of the clip's takes, split where a loop wrap
+  moved the song, each piece starting at the phase the song gave it (the
+  take's start offset): one looped item when the clip's period is its
+  content's whole pass, else one item per period. An audio piece starting
+  at a switch from the arrangement or a clip fades in over 5 ms; one
+  ending at a switch runs 5 ms on and fades out, the crossfade as items.
+  The arrangement a loop repeated is not copied. What it writes plays as
+  the capture was heard: exactly away from the switches, and to rounding
+  through the fades.
 - **Memory (L-e).** The prepared-source budget counts sample values
   across channels: the decoded source plus each converted variant, with
   a source or variant shared by several takes counted once. A clip on
@@ -498,9 +558,10 @@ the same.*
   and names the skipped clips in a `launch.memory` warning. A launch of a
   skipped clip is refused with `launch.memory`.
 - **Frozen tracks.** Freezing returns the track to the arrangement at the
-  swap that adopts the frozen plan, in both executors (no switch fade:
-  the frozen node has no players to fade out), and drops its queued
-  launch. `launch.clip` on a frozen track
+  swap that adopts the frozen plan, in both executors, and drops its
+  queued launch. An audio clip it played crossfades into the print as a
+  removed one does into the arrangement (`retiringIntoPrint`, at the
+  print's chain delay). `launch.clip` on a frozen track
   fails with `track.frozen`, and `launch.scene` skips it with a
   `track.frozen` warning.
 - **Audio clips play at the take's own rate,** with its playrate, pitch
@@ -512,13 +573,47 @@ the same.*
     with the master playrate. Until that lands, a plan with the master
     playrate active compiles no players, its tracks follow the
     arrangement, and a launch is refused with `launch.playrate`.
-  - *A clip take's FX and envelopes.* They will play as an item's take
-    chain does. Until then a clip plays without them, and the plan warns
-    with `launch.take_chain`, naming the clip.
-  - *Racks.* A clip's notes reach the track's own instrument and its
-    MIDI sends (they join the track's MIDI stream). A rack's Notes module
-    plays its source track's compiled events in the rack's own node and
-    does not yet follow the track's launches.
+- **A clip take's chain (ADR-0097, amended 2026-11-20).** A clip whose
+  active take has FX or an active envelope plays through a chain of its
+  own, as an item's take does (`TakeChain::clipChain`, compiled with the
+  timeline's take chains and linked to its player by
+  `compileClipPlayers`):
+  - *The lead.* A channel's `launchLead` is the most latency among its
+    clips' chains. Every clip chain's input runs that far ahead; its
+    output is delayed back by the lead less its own latency, so a clip is
+    heard at its switch frame, not its chain's latency later.
+  - *The early half of a launch.* A launch reaches such a channel
+    `launchLead` before its frame as well (`prelaunch`, recorded in
+    `Node::launchNext` until the launch applies). From there the incoming
+    clip's chain reads it from its new anchor. A MIDI chain going out
+    stops taking notes there and what it holds ends, so its notes end
+    where the switch is heard. An audio chain going out reads on through
+    the switch's crossfade, as a player's audio does.
+  - *Running.* A chain runs while its clip is coming in, plays or fades
+    out, and is otherwise idle. It is fresh (plug-ins reset, delays and
+    held notes cleared) each time it starts, and runs on, unreset, across
+    the clip's passes and a relaunch of the playing clip. Its output is
+    weighed by the switch's crossfade as a player's audio is, with the
+    clip's and the take's gain and pan after the chain.
+  - *Its input over a transport loop* folds as the output will: an audio
+    chain reads the loop start's song position (unanchored, as after a
+    wrap), and a MIDI chain ends what it holds at the fold, as a timeline
+    take chain running ahead does at its early wrap.
+  - *The take's envelopes* (volume, pan, mute) are from the clip's start
+    as heard: beats on a MIDI clip, seconds on an audio clip, from the
+    start of each pass.
+  - *Envelopes on its FX* are in clip time too (C2, schema 2.19): their
+    lanes (`ParamLane::clipTime`) compile in the clip position's domain,
+    unshifted, and read the clip position each stage's input will be heard
+    at (`clipLanePosition`: the lead less the stages before it, folded as
+    the input is). A lane sends on the absolute grid, at each point it
+    crosses and at each new pass or anchor; with no input it holds.
+  - *A MIDI take's instrument* in its chain plays the clip's notes, not
+    the track's (`launchMidi` leaves them to it).
+  - Plan swaps carry a chain by take id (its stages by instance, its
+    delay while its length holds); the offline replay applies each
+    launch's early half at its frame less the lead. A render without
+    launches drops clip chains before `prepare` (`dropClipChains`).
 - **The take `pitch` envelope** that is stored but never played (core
   §4.5) stays unplayed for clips as for items. Whether to play it is
   decided with the stretch path, for both.
@@ -547,7 +642,17 @@ the same.*
   the old one). It adds the clip's audio, crossfading by song position
   over `kLaunchFadeSeconds`. Plain items and take chains are scaled by
   that gain. Timeline MIDI passes unplayed while a clip holds the track,
-  and `launchMidi` emits the clip's notes instead.
+  and `launchMidi` emits the clip's notes instead. A clip's notes join
+  the track's MIDI stream, so its MIDI sends carry them.
+- **A rack's Notes module follows its source track** (revised
+  2026-11-20). Its feed keeps its own launch state and its own players
+  for the source track's MIDI clips (`compileFeedClips`), switched by the
+  same launches at the rack node's frame (below). While a clip, a stop or
+  a held clip holds the source track, the feed's timeline events pass
+  unplayed and `feedClipMidi` gives the clip's notes, with the phase rules
+  of `launchMidi`. At each switch the notes the timeline or a clip held
+  end (`releaseHeld`); an audio clip leaves the feed silent. Wraps,
+  relocations and plan swaps treat the feed as they treat the channel.
 - `OfflineSettings::launches` replays a log from the render's start (no
   seeks or wraps yet; L4 adds them with capture).
 - **The queue (launch_runtime.cpp).** `Engine::launch` places a set of
@@ -560,15 +665,44 @@ the same.*
   the play position, applied at the play start. The queue has
   `kLaunchSlots` fixed slots, one per track; a newer request replaces the
   track's pending one, and a full queue refuses with `launch.queue`.
-  Each slot's state word carries a generation. The executor that runs the
-  track's node applies an entry by compare-and-swap of the state it read,
-  so a slot the main thread rewrote meanwhile is never applied, and an
-  entry is applied once even when the node moves between executors.
-  Applying happens at the stream sample `target + timelineShift`; each
-  executor cuts its block there. An entry of another epoch is not
-  applied, and one already past is marked missed; nor is a clip entry
-  in a plan without that clip. `service()` places missed and old-epoch
-  entries again, alone, from the current position. It drops, with a
+  Each slot's state word carries a generation, so a slot the main thread
+  rewrote meanwhile is never applied.
+  - **Targets (ADR-0097, revised 2026-11-20).** An entry switches the
+    track's channel (when it has players) and every rack Notes feed whose
+    source is the track (`NotesFeed::follows`: the source track has clips
+    and plays them). Each target switches at the stream sample `target +
+    timelineShift` of its own node, in the executor that runs that node;
+    each executor cuts its block at its targets' frames. The floor counts
+    every target's executor. A channel with clip chains is a target
+    `launchLead` early as well (`prelaunch`): its floor, its horizon check
+    and the frame that decides the entry are that much earlier (ADR-0097,
+    amended 2026-11-20).
+  - **One decision for all of them.** States: pending, committed,
+    applied, missed and voided. Each executor class (the renderer, the
+    callback) stores its horizon, the epoch and the stream its current
+    block may reach, before it reads the queue (sequentially consistent).
+    The main thread publishes an entry pending, then reads the horizons of
+    the executors running its targets in the latest plan. If each is at or
+    before the target (or in an older epoch), it commits the entry;
+    otherwise it marks it missed. An executor that reaches, or is past, a
+    frame of a pending entry marks it missed. So a committed entry is read
+    by every executor running a target before it passes that target's
+    frame.
+  - The first target of a committed entry to switch moves it to applied
+    by compare-and-swap. An executor past a frame of a committed entry, or
+    whose plan lacks the clip at the track's frame, voids it instead, and
+    `service()` voids a committed entry of an ended epoch: nothing of a
+    voided entry switches. An applied entry switches each remaining
+    target at its frame. An executor that relocated before reaching one
+    switches it at its next block, marked as after a relocation. Each
+    executor sets its bit in the slot's `done` when it has nothing left of
+    it; the slot is free again once every executor class has.
+  - Only the track's switch sends the ack and joins the log; a feed's
+    switch follows from it, in the offline replay as live.
+  - An entry of another epoch is not applied by an executor in a newer
+    one, except the remaining targets of an applied entry (above).
+    `service()` places missed, voided and old-epoch entries again, alone,
+    from the current position. It drops, with a
   warning, any waiting entry whose track or clip the latest plan cannot
   play (frozen, removed, or a master playrate active), so an edit never
   leaves a launch to fire later. Applied entries come back

@@ -38,13 +38,15 @@ namespace supple::gui {
 // it, and the colour the thing is drawn in elsewhere (an item's or a track's;
 // none for several things or nothing).
 struct InspectorSubject {
-    enum class Kind { Nothing, Item, Items, Track, Tracks } kind = Kind::Nothing;
+    enum class Kind { Nothing, Item, Items, Track, Tracks, Clip } kind = Kind::Nothing;
     std::string title, detail;
     std::optional<ui::Color> color;
-    std::vector<model::Id> ids;  // the items (Item, Items) or the tracks (Track, Tracks)
+    std::vector<model::Id> ids;  // the items (Item, Items), tracks (Track, Tracks) or clip
 };
-// Tracks win when they were selected last (UiState::tracksFocused), else
-// items; ids the session no longer holds are left out.
+// Launcher clips win when a cell was clicked last (UiState::clipsFocused; one
+// clip has its fields, several only a count), then tracks when they were
+// selected last (UiState::tracksFocused), else items; ids the session no
+// longer holds are left out.
 InspectorSubject inspectorSubject(const model::Session& session, const UiState& selection,
                                   const ui::Theme& theme);
 
@@ -86,6 +88,7 @@ class Inspector {
     void read(bool force);
     void readItems(bool force);
     void readTracks(bool force);
+    void readClip(bool force);
     void commitNotes(const std::string& text);  // one track's notes, when they changed
     ui::Root& root_;
     engine::EngineApp& app_;
@@ -101,6 +104,10 @@ class Inspector {
     std::map<std::string, Field> fields_;
     std::map<std::string, ui::Toggle*> states_;
     ui::Dropdown* timebase_ = nullptr;
+    ui::Node* clipBox_ = nullptr;  // one launcher clip's fields (clip.set)
+    ui::Node* clipColors_ = nullptr;
+    ui::Dropdown* clipMode_ = nullptr;
+    ui::Dropdown* clipQuantize_ = nullptr;
     ui::Node* takeBox_ = nullptr;  // speed and pitch: an audio take's
     ui::Toggle* keepPitch_ = nullptr;
     ui::Node* takesBox_ = nullptr;  // the take list: an item with several
@@ -120,8 +127,8 @@ class Inspector {
     bool visible_ = false;
     // What the header was last built from.
     std::uint64_t version_ = ~std::uint64_t{0}, generation_ = ~std::uint64_t{0};
-    std::vector<std::string> tracks_, items_;
-    bool tracksFocused_ = false;
+    std::vector<std::string> tracks_, items_, clips_;
+    bool tracksFocused_ = false, clipsFocused_ = false;
 };
 
 }  // namespace supple::gui

@@ -603,7 +603,7 @@ void registerDspTest(cmd::Registry& registry, const std::string& exampleEffect,
     c.name = "dsp.test";
     c.kind = Kind::Action;
     c.exposure = exposure;
-    c.summary = "Play test signals or notes through a plugin and measure it: levels, THD, pitch.";
+    c.summary = "Play test signals or notes through a plugin; measure levels, THD, pitch.";
     c.description =
         "Give plugin (an id: a script's, or any effect's or instrument's) or script (a name in "
         "the library). A fresh instance, set by patch (a merge patch) when given, plays each "

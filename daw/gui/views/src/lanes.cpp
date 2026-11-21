@@ -86,7 +86,9 @@ class LaneLabels : public ui::Node {
                                    t.color("ink-quiet").withAlpha(.5f));
                 }
                 const bool laneMuted = owner && owner->laneMute;  // a master's prints (ADR-0057)
-                const float alpha = item->mute || frozen || laneMuted ? 0.5f : 0.95f;
+                const float alpha = lanes_.layout_.heldTracks.contains(item->track) ? 0.45f
+                                    : item->mute || frozen || laneMuted             ? 0.5f
+                                                                                    : 0.95f;
                 // An item that does not follow the beat says what it follows: a
                 // tempo change leaves "time" items at their seconds, and "pos"
                 // items keep their length in seconds (their start follows).
@@ -560,7 +562,8 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
             if (span.endSec <= t0) continue;
             ++stats_.items;
             const model::Track* owner = s.tracks.find(item->track);
-            const bool dim = item->mute || (owner && owner->laneMute);
+            const bool dim = item->mute || (owner && owner->laneMute) ||
+                             layout_.heldTracks.contains(item->track);
             const ui::Color type = itemColor(t, *item, rowTrack, layout_.rows()[i].type);
             const std::uint32_t note = ui::packRgba(noteColor(t, type));
             const std::uint32_t body = ui::packRgba(type.withAlpha(dim ? 0.10f : 0.24f));

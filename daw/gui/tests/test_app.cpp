@@ -5597,3 +5597,41 @@ TEST_CASE("the crash viewer opened on a report that is gone says so and keeps th
     a.root->frame(false);
     CHECK(a.root->find("crash.viewer.status")->valueText().find("no longer") == std::string::npos);
 }
+
+TEST_CASE("edit.delete removes the launcher's selected clips in one undo step") {
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "t", {}};
+    auto run = [&](const char* name, const char* args) {
+        auto r = a.dispatcher->execute({name, json::parse(args).value(), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    run("track.add", R"({"type":"channel"})");
+    run("scene.add", "{}");
+    run("scene.add", "{}");
+    run("clip.add", R"({"track":"tr_1","scene":"sc_1","notation":"voice midi; 1: c4:q r:*"})");
+    run("clip.add", R"({"track":"tr_1","scene":"sc_2","notation":"voice midi; 1: d4:q r:*"})");
+    // Tracks selected last: Delete would take them; a launcher click hands it the clips.
+    a.ui.selectedTracks = {"tr_1"};
+    a.ui.tracksFocused = true;
+    a.ui.selectedClips = {"cl_1", "cl_2"};
+    a.ui.clipsFocused = true;
+    a.ui.tracksFocused = false;
+    const std::size_t tracks = a.app->head().tracks.size();
+    REQUIRE(a.actions->run("edit.delete"));
+    CHECK(a.app->head().clips.size() == 0);
+    CHECK(a.app->head().tracks.size() == tracks);  // the track stays
+    CHECK(a.ui.selectedClips.empty());
+    run("history.undo", "{}");
+    CHECK(a.app->head().clips.size() == 2);  // both back in one step
+    // A launcher click that left no clip selected (an empty cell): Delete
+    // removes nothing, not the items selected before on the timeline.
+    run("item.add", R"({"track":"tr_1","position":0,"notation":"voice v; 1: c4:q r:*"})");
+    a.ui.selectedItems = {"it_1"};
+    a.ui.selectedClips.clear();
+    a.ui.clipsFocused = true;
+    (void)a.actions->run("edit.delete");
+    CHECK(a.app->head().items.size() == 1);
+    CHECK(a.app->head().clips.size() == 2);
+}

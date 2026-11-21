@@ -223,7 +223,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.name = "engine.devices";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "List native audio device names, host APIs, rates and channel capacities.";
+        c.summary = "List audio devices: names, host APIs, rates, channel counts.";
         c.description =
             "Enumerates PortAudio devices on macOS/Windows without opening a stream. "
             "backend defaults to portaudio; dummy returns an empty list without initializing "
@@ -399,7 +399,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.name = "engine.inputs";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "The device's audio inputs, MIDI devices and the outputs masters play to.";
+        c.summary = "The device's audio inputs, MIDI devices and master outputs.";
         c.description =
             "audio: one entry per input channel (channel, the 1-based number track.set "
             "record_input takes, and the device port it is connected to). midi: the MIDI devices "
@@ -460,7 +460,7 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.name = "engine.status";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Real-time engine state: backend, rate, block, device period, latency, xruns.";
+        c.summary = "Engine state: backend, rate, block, device period, latency, xruns.";
         c.description =
             "preparing_audio: source preparation is pending; the previous ready plan stays "
             "audible. "

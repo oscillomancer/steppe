@@ -453,8 +453,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.name = "project.plugins";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary =
-            "The plug-ins a project, or a recovery, names, and any a crash report suspects.";
+        c.summary = "Plug-ins a project or recovery names, and any a crash report suspects.";
         c.description =
             "Reads the file as project.open would and loads nothing: no plug-in, no probe. Every "
             "branch's head is read, not the history steps behind them. plugins lists each "
@@ -841,7 +840,7 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.name = "session.describe";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Describe the whole session in compact text (tracks, items, fx, routes, key).";
+        c.summary = "Describe the session in compact text: tracks, items, fx, routes, key.";
         c.description =
             "The quickest way to see where things are; use the IDs it shows with other commands.";
         c.tags = {"session"};

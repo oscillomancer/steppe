@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <utility>
 #include <vector>
@@ -18,15 +19,135 @@
 #include "supple/ui/controls.h"
 #include "supple/ui/node.h"
 #include "supple/ui/root.h"
+#include "supple/views/launcher.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
+
+Status removeClips(cmd::Dispatcher& dispatcher, const std::vector<std::string>& clips) {
+    if (clips.empty()) return {};
+    const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
+    auto r = dispatcher.transact(
+        clips.size() == 1 ? "Delete clip" : "Delete clips", origin, [&]() -> Result<json::Value> {
+            for (const std::string& id : clips) {
+                json::Value args = json::Value::object();
+                args["clip"] = id;
+                auto one = dispatcher.execute({"clip.remove", std::move(args), origin});
+                if (!one) return one;
+            }
+            return json::Value::object();
+        });
+    if (!r) return std::move(r).error();
+    return {};
+}
+
+void ClipClipboard::fill(std::vector<std::string> ids, bool cutting,
+                         std::uint64_t projectGeneration) {
+    clips = std::move(ids);
+    cut = cutting;
+    generation = projectGeneration;
+}
+
+const std::vector<std::string>& ClipClipboard::in(std::uint64_t projectGeneration) {
+    if (projectGeneration != generation) *this = {};
+    return clips;
+}
+
+Result<std::vector<std::string>> pasteClips(cmd::Dispatcher& dispatcher, const model::Session& s,
+                                            const std::vector<std::string>& clips,
+                                            const std::string& track, const std::string& scene,
+                                            const std::vector<std::string>& channels, bool move) {
+    if (clips.empty())
+        return Error("clip.paste", "no clips are copied", "", "select clips and copy them first");
+    std::vector<std::string> scenes;
+    for (model::Id id : views::launcherColumns(s).scenes) scenes.push_back(id.str());
+    auto indexIn = [](const std::vector<std::string>& list,
+                      const std::string& id) -> std::optional<std::size_t> {
+        const auto it = std::find(list.begin(), list.end(), id);
+        if (it == list.end()) return std::nullopt;
+        return static_cast<std::size_t>(it - list.begin());
+    };
+    struct Copy {
+        std::string clip;
+        std::size_t row, column;
+    };
+    std::vector<Copy> copies;
+    std::size_t top = SIZE_MAX, left = SIZE_MAX;
+    for (const std::string& id : clips) {
+        const auto parsed = model::Id::parse(id);
+        const model::Clip* clip = parsed ? s.clips.find(*parsed) : nullptr;
+        const auto row = clip ? indexIn(channels, clip->track.str()) : std::nullopt;
+        const auto column = clip ? indexIn(scenes, clip->scene.str()) : std::nullopt;
+        if (!row || !column)
+            return Error("clip.paste", id + " is gone", "", "copy the clips again");
+        copies.push_back({id, *row, *column});
+        top = std::min(top, *row);
+        left = std::min(left, *column);
+    }
+    const auto row0 = indexIn(channels, track);
+    const auto column0 = indexIn(scenes, scene);
+    if (!row0 || !column0)
+        return Error("clip.paste", "the cell is not a channel's cell of a scene", "",
+                     "select an empty cell in the launcher");
+    for (Copy& c : copies) {
+        c.row = c.row - top + *row0;
+        c.column = c.column - left + *column0;
+        if (c.row >= channels.size())
+            return Error("clip.paste", "the clips run past the last channel", "",
+                         "select a cell on a higher row");
+        if (c.column >= scenes.size())
+            return Error("clip.paste", "the clips run past the last scene", "",
+                         "select a cell further left, or add scenes");
+    }
+    // A move whose new cells overlap its old ones goes front first: the clip
+    // furthest along the offset moves before the one landing in its cell.
+    // The cells are the copied ones shifted by one offset, so that order
+    // always exists.
+    std::vector<std::size_t> order(copies.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    if (move) {
+        const auto dr = static_cast<std::int64_t>(*row0) - static_cast<std::int64_t>(top);
+        const auto dc = static_cast<std::int64_t>(*column0) - static_cast<std::int64_t>(left);
+        auto along = [&](std::size_t i) {
+            return dr * static_cast<std::int64_t>(copies[i].row) +
+                   dc * static_cast<std::int64_t>(copies[i].column);
+        };
+        std::stable_sort(order.begin(), order.end(),
+                         [&](std::size_t a, std::size_t b) { return along(a) > along(b); });
+    }
+    const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
+    std::vector<std::string> made;
+    auto r = dispatcher.transact(
+        move ? (copies.size() == 1 ? "Move clip" : "Move clips")
+             : (copies.size() == 1 ? "Paste clip" : "Paste clips"),
+        origin, [&]() -> Result<json::Value> {
+            if (move)
+                for (const Copy& c : copies) made.push_back(c.clip);
+            for (std::size_t i : order) {
+                const Copy& c = copies[i];
+                json::Value args = json::Value::object();
+                args["clip"] = c.clip;
+                args["track"] = channels[c.row];
+                args["scene"] = scenes[c.column];
+                auto one = dispatcher.execute(
+                    {move ? "clip.move" : "clip.duplicate", std::move(args), origin});
+                if (!one) return one;
+                if (move) continue;
+                if (const json::Value* id = one->find("id"); id && id->isString())
+                    made.push_back(id->asString());
+            }
+            return json::Value::object();
+        });
+    if (!r) return std::move(r).error();
+    return made;
+}
 
 void selectTrack(UiState& ui, const std::string& track, unsigned mods,
                  const std::vector<std::string>& order) {
     auto& sel = ui.selectedTracks;
     ui.tracksFocused = true;
     ui.envelopeFocused = false;
+    ui.clipsFocused = false;
     if ((mods & views::kSelectKeep) && std::find(sel.begin(), sel.end(), track) != sel.end()) {
         ui.trackAnchor = track;      // a press that may drag the selection: it stays
     } else if (mods & ui::kShift) {  // extend from the anchor, in the view's order
@@ -305,10 +426,15 @@ AppActions::AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatche
     remove.name = "Edit: delete the selection";
     remove.description =
         "Remove the selected automation points when an automation lane was "
-        "clicked last, the selected tracks when tracks were selected last, else "
-        "the selected items.";
+        "clicked last, the selected clips (or nothing) when a launcher cell was, "
+        "the selected tracks when tracks were selected last, else the selected items.";
     remove.builtin = [this](const actions::Context&) -> Result<json::Value> {
         if (ui_.envelopeFocused) return run("ui.env.points.delete");
+        if (ui_.clipsFocused) {  // a launcher cell was clicked last: clips or nothing
+            const std::vector<std::string> clips = std::exchange(ui_.selectedClips, {});
+            if (auto r = removeClips(dispatcher_, clips); !r) return std::move(r).error();
+            return json::Value::object();
+        }
         return run(ui_.tracksFocused && !ui_.selectedTracks.empty() ? "track.remove:selected"
                                                                     : "item.remove:selected");
     };

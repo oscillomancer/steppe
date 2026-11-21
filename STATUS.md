@@ -135,11 +135,12 @@ instructions are in `docs/guides/installing.md`.
   pooled sharer in another key) are in; on a launcher clip they, and
   `midi.get`, read the key at the project's start and no chord. In the app
   (C3): key changes in the ruler's meter half and a chord row (shown with the
-  first chord, or by View > Chord row), both edited there; the piano roll's
+  first chord, or by View > Chord row), both edited there (a key change's
+  flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
-  (drags and arrows). The roll does not open launcher clips yet, so a clip's
-  opening-key shading waits for that.
+  (drags and arrows). The roll opens launcher clips (L3), shaded and spelled
+  by the key at the project's start, with no chord row.
   Native macOS and Windows CI has not run on C3.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
@@ -192,9 +193,8 @@ instructions are in `docs/guides/installing.md`.
   `session.describe`. Playing them is the next entry; the pane (L3) is to
   come. The content commands (`midi.*`,
   `take.*`, `item.export`, take envelopes and take FX) take a clip as they
-  take an item; timeline commands refuse one with `item.kind`; `env.add`
-  refuses an FX in a clip take's chain (`clip.unsupported`) while a clip
-  take's FX do not play (below).
+  take an item; timeline commands refuse one with `item.kind`; the
+  envelopes on a clip take's FX are in clip time (schema 2.19).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
@@ -210,23 +210,84 @@ instructions are in `docs/guides/installing.md`.
   - The engine logs every applied launch. The tests replay that log
     offline and match live output bit for bit, in both executors, at two
     block sizes and through the bridge.
+  - A rack's Notes module follows its source track's launches (clip notes,
+    stops, the arrangement again), and so do the track's MIDI sends. A
+    launch is decided once for the track and every such rack, even when
+    they run on different executors: it switches all of them at their
+    own positions, or none (a missed launch is placed again).
+  - A clip whose take has FX or envelopes plays through them, as an
+    item's take does: its chain runs its latency ahead, so the clip is
+    heard at its boundary, starts afresh at each launch, and is cut at the
+    switch away after the crossfade. The take's envelopes, and those on its
+    FX, are from the clip's start, pass after pass (ADR-0097, amended
+    2026-11-20). Modulation routes do not reach a clip take's FX, as
+    they do not reach an item's (`modulation.target`: take FX come later).
   - Renders play the arrangement only. The render dialog says so while a
-    clip holds a track.
+    clip holds a track, following launches while it is open.
+    `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - a master playrate refuses launches (`launch.playrate`);
-    - a clip take's FX and envelopes do not play (`launch.take_chain`
-      warning);
-    - a rack's Notes module does not follow its source track's launches:
-      clip MIDI never reaches it, and the arrangement's notes go on
-      playing through it while a clip or a stop holds the track (the
-      track's own instrument and its MIDI sends do follow them);
-    - freezing, or removing the playing clip, returns the track to the
-      arrangement without the switch fade;
+    - freezing, or removing the playing clip, crossfades an audio clip
+      out, but a clip with a take chain stops dead (its chain leaves with
+      the plan), and so does one removed by an edit that comes before the
+      previous edit's plan is adopted;
     - a quantize of `none` waits for the floor, about a device block for
-      a live track and about 0.2 s for a rendered one;
-    - the offline replay does not yet take seeks or transport wraps (L4,
-      with capture);
-    - the pane is L3.
+      a live track and about 0.2 s for a rendered one, plus the latency
+      of the track's clip chains;
+    - the engine logs no seeks or transport wraps, so the offline
+      replay plays one linear run and a capture ends at a relocation.
+- **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
+  columns between the track panel and the lanes, on the arrange view's
+  rows, with a resizable width, a full-view mode and a View menu toggle
+  saved in the UI sidecar. Cells draw their clips' notes or waveforms with
+  the item-body functions, and what the engine plays each pass
+  (`EngineApp::launchState()`): playing with progress, queued, held, the
+  playing scene, the Arr dots, and the held tracks' items dimmed. Every
+  gesture in §4.15 is in: launch, select, stop, create, open, move and
+  copy, drags to and from the timeline, the clip and scene menus, rename,
+  scene reordering, Delete, copy and paste (a cut moves the clips at the
+  paste; the clipboard empties when another project opens), the inspector's clip fields and the scene count in the status
+  line. The piano roll opens MIDI clips. L4 adds the header's Capture
+  toggle (armed while lit; a stop, seek or loop change commits the
+  performance with `launch.commit` and arms the next; a refused commit
+  keeps the performance, dark, for the next click), a scene dragged onto
+  the timeline or inserted at the playhead or the end (`scene.insert`, for
+  its longest clip's whole bars, with a drop marker while dragged), and a
+  section's Capture as scene (`scene.capture`); their refusals show in the
+  status line. Limits:
+  - there is no dialog for `arrangement.build`;
+  - Capture sits under Stop all, and in a pane too narrow for it (one or
+    two scenes) Arrangement is not drawn, as before;
+  - an item dragged into a cell makes a clip of the pressed item only;
+  - a double-click on an audio clip opens the inspector, as there is no
+    audio clip editor;
+  - native macOS and Windows CI has not run on it.
+- **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
+  `scene.insert` lays a scene's clips on the timeline as items over whole
+  bars and adds a section, `scene.capture` makes a scene from the items of a
+  section, `arrangement.build` lays scenes out one after the other. Model
+  only, one undo step each. They refuse rather than guess: an item in the
+  span, an empty scene, a repeating clip no single item reproduces, several
+  items of a track, an item across or after the section's start, a warped
+  take. MIDI is copied unless `pooled`. Limits: capture reads whole items
+  only (it never splits or trims), a master's items are skipped with a
+  warning, and fades are not kept (as in the item and clip conversion). A clip
+  whose loop period is not its content (a gap after it, a length shorter than
+  it) is refused with `scene.insert.period`: it is not laid out yet.
+- **Clip launcher, capture** (ADR-0097, step L4's engine half; engine.md
+  §1.4.2): `launch.capture` keeps a performance and `launch.commit` writes
+  it onto the timeline in one undo step, laid out linearly by running time
+  (L-f), each clip as copies of its takes at the phase heard, replacing the
+  arrangement where a track left it, the switch crossfades as item fades.
+  The tests capture live in both executors at two block sizes, over a loop
+  wrap too, and render the committed arrangement offline: it matches what
+  played exactly away from the switches and to 1e-6 through the fades.
+  History records the performance, so merges replay it. A stop, seek or
+  loop change ends a capture; the arrangement a loop repeated is not
+  copied; under a tempo change a MIDI piece laid where the loop repeated
+  plays at the tempo where it lands. `scene.insert`, `scene.capture` and
+  `arrangement.build` are the builder's (model). Native macOS and Windows
+  CI has not run on it.
 - **Track freeze** (ADR-0054): whole-channel pre-fader float32 capture, including
   take FX and auxiliary channels, with virtual latency and plugin retirement.
   Typed freeze/unfreeze, cancellable jobs, dependency-checked completion, retained
@@ -463,7 +524,9 @@ instructions are in `docs/guides/installing.md`.
 - **Automation**: envelopes on strip, route and plugin parameters,
   automation items with pools, take envelopes, touch/latch/write recording
   (a written level or pan is heard as the hand moves it, held over its curve
-  until the pass ends, or for touch 500 ms after the last move: ADR-0061);
+  until the pass ends, or for touch 500 ms after the last move: ADR-0061; a
+  plug-in parameter is held from its editor's grab, for touch until the
+  release, and records the hand's values);
   automation points selected (click, Ctrl+click, or the arrange marquee,
   which takes items and points on any track at once) and moved, deleted,
   copied, pasted and reshaped together, across lanes, from the lane's menu or
@@ -663,8 +726,9 @@ instructions are in `docs/guides/installing.md`.
   clamped to the fader's range. A VST3 or unmarked CLAP parameter that is
   automatable and continuous is modulated through its envelope (M4): its
   lane sends the base plus the offset, clamped, on the same grid; it needs
-  an active envelope (`modulate` adds a one-point one), and write modes
-  record the base. Depth and enabled are mix values (no
+  an active envelope (`modulate` adds a one-point one). A write pass holds
+  the lane, so it records the hand's values and the modulation pauses on
+  that parameter until release (ADR-0061, amended). Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
@@ -1345,12 +1409,6 @@ Engine and hosting:
   (`modulation.target`), and one modulatable by default but read-only in the
   loaded state is accepted and listed as playable while the engine leaves it
   unmodulated.
-- Modulation through an envelope (ADR-0096 step M4) under a write pass: the
-  lane goes on sending curve plus modulation while the hand drags the
-  parameter (plug-in parameters are not held, ADR-0061), and the commit
-  takes the offset as it stands at the gesture's end off every recorded
-  point. With a moving source each stored base is off by how far the
-  offset moved since that point, up to the source's swing x depth x range.
 - A take whose FX report latency runs its input ahead and, looping, wraps
   that much early (engine.md, PDC). At unity a loop no longer than that
   look-ahead has no early wrap: on every pass after the first the notes
@@ -1396,6 +1454,10 @@ Engine and hosting:
 - A touch-mode write hold ends 500 ms after the last move, not when the
   control is let go (ADR-0061): nothing reports a strip control's release to
   the engine, so a fader held still longer than that hears its old curve.
+  (A plug-in parameter's hold follows the plug-in's own gesture instead.)
+- A plug-in parameter's write hold starts in the block after the plug-in
+  reports the grab; in that first block the lane's events can still move the
+  knob (ADR-0061, amended 2026-11-20).
 - REAPER's default anticipative FX sustains about 10 % more tracks than
   Steppe with anticipation on B1's session (82 to 83 against 75, B2). The
   anticipative renderer is the limit: it ran at 78 % of real time at 64
@@ -1568,7 +1630,8 @@ Session and editing:
   trimmed media (tape conversion: only near its edges); renders from builds
   before that change do not null against new ones. Non-unity audio/MIDI
   recording is refused, including queued transitions. Writing the playrate
-  holds nothing over its curve (strip levels and pans do, ADR-0061). Compatible scalar-only live edits publish bounded clock
+  holds nothing over its curve (strip levels, pans and plug-in parameters
+  do, ADR-0061). Compatible scalar-only live edits publish bounded clock
   controls, retain source/converter state and glide over the time between
   moves through a 150 ms low-pass (one smooth pitch glide for a mouse drag or
   MIDI knob, at the cost of some extra lag) without graph

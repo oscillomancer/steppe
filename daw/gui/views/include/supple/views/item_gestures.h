@@ -130,6 +130,27 @@ class ItemGestures {
 
     // The snap grid at the current zoom, in beats (1/16 .. 32).
     double gridBeats() const;
+    // The beat under a window x, snapped to the grid unless `free`, never
+    // before the start.
+    double snappedBeatAt(float x, bool free) const { return std::max(0.0, snap(beatAtX(x), free)); }
+    // A launcher clip dragged over the lanes (gui.md §4.15): where its copy
+    // would land, drawn by the ghost layer.
+    struct ClipGhost {
+        model::Id track;
+        double start = 0, end = 0;  // beats
+        bool operator==(const ClipGhost&) const = default;
+    };
+    void showClipGhost(std::optional<ClipGhost> ghost);
+    const std::optional<ClipGhost>& clipGhost() const { return clipGhost_; }
+    // A launcher scene dragged over the lanes: the span it would lie over (a
+    // drop marker at its start) and its clips' copies on their tracks.
+    struct SceneGhost {
+        double start = 0, end = 0;  // beats
+        std::vector<model::Id> tracks;
+        bool operator==(const SceneGhost&) const = default;
+    };
+    void showSceneGhost(std::optional<SceneGhost> ghost);
+    const std::optional<SceneGhost>& sceneGhost() const { return sceneGhost_; }
     // An empty MIDI item on a channel from the start of the bar holding
     // `fromBeat` to `toBeat` (at least that bar), selected and opened
     // (onOpenMidi): one transaction. Also a double-click on empty lane space.
@@ -343,6 +364,8 @@ class ItemGestures {
     void commit(const ui::PointerEvent& e);
     void changed();
     ArrangeView& view_;
+    std::optional<ClipGhost> clipGhost_;
+    std::optional<SceneGhost> sceneGhost_;
     std::vector<model::Id> selection_;
     State state_;
     ui::Point press_{};
