@@ -209,6 +209,8 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
                         (built.outcome == FollowOutcome::Key ? "the chords; it follows the key"
                                                              : "live; it plays as written"));
                 pl.follow = std::move(built.tables);
+                pl.followed = built.outcome;
+                pl.followBudget = built.overBudget;
             }
             const auto [voices, window] = midiSizing(pl, blockBeats);
             n.clipVoices = std::max(n.clipVoices, voices);

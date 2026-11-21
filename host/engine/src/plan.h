@@ -875,6 +875,10 @@ struct ClipPlayer {
     std::vector<ClipEvent> events;
     // A following clip's pitch tables (ADR-0098 X4); none: it plays as written.
     std::optional<ClipFollowTables> follow;
+    // What it follows by (launch.state's `followed`), and whether the budget
+    // forced that (`follow_budget`).
+    FollowOutcome followed = FollowOutcome::None;
+    bool followBudget = false;
     // Its take's chain (Node::takeChains), or -1: it plays straight into the
     // track (ADR-0097, amended 2026-11-20).
     int chain = -1;

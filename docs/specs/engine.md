@@ -1154,9 +1154,11 @@ one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
 
 ### Following at playback (ADR-0098 amended; the contract for X4a and X4c)
 
-*X4a is built apart from `launch.state`'s `followed` and the context-edit
-compile (the live tables, the budget, the note identity rules below for clip
-notes); X4c is not built.* What a note sounds as is `model::soundingKey`
+*X4a is built: the live tables, the budget, the note identity rules below for
+clip notes, `launch.state`'s `followed` and `follow_budget`, and the
+context-edit compile while a launched clip follows. The plan-wide pool and the
+budget warning in the launch answer are X4c's, with the timeline mapping; X4c
+is not built.* What a note sounds as is `model::soundingKey`
 (`session-model.md`, "Take context and follow"); the engine only places its
 results.
 

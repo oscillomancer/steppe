@@ -1847,7 +1847,7 @@ Result:
 
 Add a clip to a scene's cell: from notation, a file or an item.
 
-One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097); the clip is named as the item is (its active take's name) unless name is given. Clips live on channels, one per (track, scene). A clip keeps the key and chords it was written against (context): as a lead sheet in clip bars ("1: key D minor {Dm}:w"), read from the project at a place (context_at), under the item it copies, or from the {SYMBOL} chords of its notation (a stated context holding chords wins over them, clip.chords_ignored). follow (none, key or chords) needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the key or chords under it (their follow argument), and a launched clip plays as written until ADR-0098's X4 (launch.unfollowed).
+One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097); the clip is named as the item is (its active take's name) unless name is given. Clips live on channels, one per (track, scene). A clip keeps the key and chords it was written against (context): as a lead sheet in clip bars ("1: key D minor {Dm}:w"), read from the project at a place (context_at), under the item it copies, or from the {SYMBOL} chords of its notation (a stated context holding chords wins over them, clip.chords_ignored). follow (none, key or chords) needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the key or chords under it (their follow argument), and a launched clip follows them live (ADR-0098).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -10922,7 +10922,7 @@ Result:
 
 Play a clip on its track from the next quantize boundary.
 
-It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms. A clip whose follow is not none warns launch.unfollowed: a launched clip plays as written until ADR-0098's X4.
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms. A clip whose follow is not none follows the project's key or chords live, as it would laid there (launch.state says how).
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -11159,7 +11159,7 @@ Result:
 
 Play every clip of a scene together at one boundary.
 
-It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning, a clip past the memory budget with a launch.memory warning, and clips whose follow is not none with one launch.unfollowed warning (launched clips play as written until ADR-0098's X4).
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning and a clip past the memory budget with a launch.memory warning. Clips whose follow is not none follow live.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -11260,7 +11260,7 @@ Result:
 
 What each track with clips plays, and what it has queued.
 
-plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on.
+plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. followed (none, key or chords) is what the clip it plays, else the one it has queued, follows by in the running plan (ADR-0098); follow_budget: true when the follow budget forced that (a chords clip by its key, or any as written). Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11319,6 +11319,13 @@ Kind: `query`. Exposure: `mcp-exec`.
             },
             "required": ["action", "beat", "seconds"],
             "additionalProperties": false
+          },
+          "followed": {
+            "type": "string",
+            "enum": ["none", "key", "chords"]
+          },
+          "follow_budget": {
+            "type": "boolean"
           }
         },
         "required": ["track", "plays"],

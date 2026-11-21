@@ -2114,8 +2114,9 @@ Scenes (2):
 `midi.get`, `midi.write` and the scale ops on a clip, `session.describe`, the
 `context.mismatch` warning, and following at placement (`follow` on
 `item.add {clip}`, `scene.insert` and `arrangement.build`, with `harmony::follow`).
-A launched clip following live (X4) is not built: until then it plays as it was
-written, and `launch.unfollowed` says so.*
+A launched clip follows live (X4a; `launch.state` says how): `launch.unfollowed`
+is gone. Following at placement is being replaced by the take's own context
+and follow (ADR-0098 amended; X4b to X4d).*
 
 Writers emit `supple.project/2.20`. A clip gains two members; earlier files
 load unchanged and nothing migrates. A 2.19 build drops both members with its
@@ -2330,8 +2331,10 @@ whose start rule is the only rule.)*
     applied.
 - **History.** Placement with `follow` replays against the branch it replays
   on, as `scene.insert` re-reads the clip.
-- **Launching, until X4.** A launched clip plays unfollowed. Launching one
-  whose `follow` is not `none` warns `launch.unfollowed` once per launch.
+- **Launching (X4a).** A launched clip follows live, as `engine.md`
+  "Following at playback" says; `launch.state` gives each track's `followed`
+  outcome. *(Until X4a, a launched clip played unfollowed and warned
+  `launch.unfollowed`; that warning is gone.)*
 - **What was built (X2).**
   - `followed` is on every laid item, `{mode: "none"}` when nothing was
     mapped. A clip placed as `none` or copied for a reason gives the

@@ -1687,9 +1687,8 @@ cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
 marks clips to move, and the next paste moves them. Copied clips stay in
 their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
 colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
-chords) says how the clip's notes are to be mapped onto the song's key when
-it is laid; it needs a key at the clip's start, and until following is built
-a laid clip is copied as it is. Clips launch under a master playrate, but
+chords) maps the clip's notes onto the song's key or chords, when it is laid
+and when it is launched; it needs a key at the clip's start. Clips launch under a master playrate, but
 while it keeps the pitch an audio clip can't be launched: the pane draws
 those clips (and the scenes holding one) dimmed, and a click says why in
 the status line.
@@ -1741,7 +1740,8 @@ launch, and their tail is cut when the track switches away.
 `launch.state` tells what each track with clips plays as you hear it:
 `arrangement`, `clip` (with its position in the clip), `held` (a `once`
 clip that has finished, silent until the next launch) or `stopped`. It
-also shows what each track has queued.
+also shows what each track has queued, and for a clip that plays or is
+queued, `followed`: what it follows by (`none`, `key` or `chords`).
 
 ### Capturing a performance
 

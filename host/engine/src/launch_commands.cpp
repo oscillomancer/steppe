@@ -42,6 +42,8 @@ struct LaunchTrackState {
     std::optional<std::string> clip;
     std::optional<double> position;
     std::optional<LaunchQueued> queued;
+    std::optional<Engine::TrackLaunch::Followed> followed;
+    std::optional<bool> followBudget;
 };
 struct LaunchStateResult {
     bool playing = false, capturing = false;
@@ -247,8 +249,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             std::string(kWhen) +
             " Launching while stopped starts the transport. The track leaves the "
             "arrangement (or the clip it played) there: its sounding notes end and "
-            "audio crossfades over 5 ms. A clip whose follow is not none warns launch.unfollowed: "
-            "a launched clip plays as written until ADR-0098's X4.";
+            "audio crossfades over 5 ms. A clip whose follow is not none follows the project's "
+            "key or chords live, as it would laid there (launch.state says how).";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<ClipArg>("launch_clip_args")
                      .field("clip", &ClipArg::clip, idArg("cl", "Clip"))
@@ -269,16 +271,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (!id) return std::move(id).error();
             const model::Clip& clip = *s.clips.find(*id);
             SUPPLE_TRY(refuseFrozen(s, clip.track, "/clip"));
-            auto done = launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
-                                  quantizeOf(s, &clip), "/clip");
-            if (done && clip.follow != model::ClipFollow::None)
-                ctx.warn("launch.unfollowed",
-                         id->str() + " follows the " +
-                             (clip.follow == model::ClipFollow::Key ? "key" : "chords") +
-                             " when it is laid on the timeline, but a launched clip plays as "
-                             "it was written until ADR-0098's X4",
-                         "/clip");
-            return done;
+            return launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
+                             quantizeOf(s, &clip), "/clip");
         };
         addChecked(registry, std::move(c));
     }();
@@ -292,9 +286,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             std::string(kWhen) +
             " All the scene's tracks switch at the same boundary, the project's launch_quantize. "
             "Tracks with no clip in the scene keep playing what they play. A frozen track is "
-            "skipped with a track.frozen warning, a clip past the memory budget with a "
-            "launch.memory warning, and clips whose follow is not none with one "
-            "launch.unfollowed warning (launched clips play as written until ADR-0098's X4).";
+            "skipped with a track.frozen warning and a clip past the memory budget with a "
+            "launch.memory warning. Clips whose follow is not none follow live.";
         c.tags = {"clip launcher", "transport", "scene"};
         c.args = schema::object<SceneArg>("launch_scene_args")
                      .field("scene", &SceneArg::scene, idArg("sc", "Scene"))
@@ -335,22 +328,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (requests.empty())
                 return Error("launch.scene", a.scene + " has no clip that can play", "/scene",
                              "add clips to the scene with clip.add, or unfreeze their tracks");
-            auto done = launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
-            std::string following;
-            int followers = 0;
-            for (const auto& r : requests)
-                if (s.clips.find(r.clip)->follow != model::ClipFollow::None) {
-                    following += (following.empty() ? "" : ", ") + r.clip.str();
-                    ++followers;
-                }
-            if (done && !following.empty())
-                ctx.warn("launch.unfollowed",
-                         (followers == 1 ? "the clip " : "the clips ") + following +
-                             (followers == 1 ? " follows" : " follow") +
-                             " the context when laid on the timeline, but launched clips play "
-                             "as they were written until ADR-0098's X4",
-                         "/scene");
-            return done;
+            return launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
         };
         addChecked(registry, std::move(c));
     }();
@@ -409,8 +387,11 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "plays is arrangement, clip, held (a once clip past its length, silent) or stopped, "
             "as heard. position is the playing clip's place in its period, in beats for a MIDI "
             "clip and seconds for an audio clip. queued is a launch not heard yet, with the "
-            "song position it applies at. Tracks without clips always follow the arrangement "
-            "and are not listed. capturing: launch.capture is on.";
+            "song position it applies at. followed (none, key or chords) is what the clip it "
+            "plays, else the one it has queued, follows by in the running plan (ADR-0098); "
+            "follow_budget: true when the follow budget forced that (a chords clip by its key, "
+            "or any as written). Tracks without clips always follow the arrangement and are not "
+            "listed. capturing: launch.capture is on.";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto queued = schema::object<LaunchQueued>("launch_queued")
@@ -425,6 +406,12 @@ void registerLaunchCommands(cmd::Registry& registry) {
                          .field("clip", &LaunchTrackState::clip, schema::string())
                          .field("position", &LaunchTrackState::position, schema::number())
                          .field("queued", &LaunchTrackState::queued, queued)
+                         .field("followed", &LaunchTrackState::followed,
+                                schema::enumeration<Engine::TrackLaunch::Followed>(
+                                    {{Engine::TrackLaunch::Followed::None, "none"},
+                                     {Engine::TrackLaunch::Followed::Key, "key"},
+                                     {Engine::TrackLaunch::Followed::Chords, "chords"}}))
+                         .field("follow_budget", &LaunchTrackState::followBudget, schema::boolean())
                          .build();
         c.result = schema::object<LaunchStateResult>("launch_state")
                        .field("playing", &LaunchStateResult::playing, schema::boolean())
@@ -459,6 +446,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
                     q.seconds = double(t.queued->placed.anchorSample) / rate;
                     e.queued = q;
                 }
+                e.followed = t.followed;
+                if (t.followBudget) e.followBudget = true;
                 out.tracks.push_back(std::move(e));
             }
             return out;

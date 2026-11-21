@@ -370,6 +370,9 @@ bool Engine::loadContextOnly(const model::Session& session, const std::filesyste
         rateDeferred_ || rateDeferredFrom_ || scalarPending_ || dir != p->projectDir)
         return false;
     if (!contextOnly(*latest_, session)) return false;
+    // A launched clip that follows reads the context through its pitch
+    // tables (ADR-0098 X4): the edit compiles them.
+    if (p->follow) return false;
     latest_ = std::make_shared<const model::Session>(session);
     return true;
 }

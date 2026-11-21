@@ -868,6 +868,22 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
                     tl.position = mod(since, period);
             }
         }
+        // What its clip follows by: the one it plays, else the one queued.
+        const bool playsClip =
+            tl.plays == TrackLaunch::Plays::Clip || tl.plays == TrackLaunch::Plays::Held;
+        std::optional<model::Id> shown;
+        if (playsClip)
+            shown = tl.clip;
+        else if (tl.queued && tl.queued->request.action == LaunchLogEntry::Action::Clip)
+            shown = tl.queued->request.clip;
+        if (const int k = shown ? detail::playerOf(n, *shown) : -1; k >= 0) {
+            const detail::ClipPlayer& pl = n.players[static_cast<std::size_t>(k)];
+            tl.followed = pl.followed == detail::FollowOutcome::Chords
+                              ? TrackLaunch::Followed::Chords
+                          : pl.followed == detail::FollowOutcome::Key ? TrackLaunch::Followed::Key
+                                                                      : TrackLaunch::Followed::None;
+            tl.followBudget = pl.followBudget;
+        }
         out.push_back(std::move(tl));
     }
     return out;

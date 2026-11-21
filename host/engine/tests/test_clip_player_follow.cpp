@@ -199,3 +199,92 @@ TEST_CASE("a plan swap mid-note with other pitch tables leaves no following note
         CHECK(same);
     }
 }
+
+TEST_CASE(
+    "a context edit compiles while a launched clip follows, and takes the shortcut otherwise" *
+    doctest::description("rt")) {
+    // cl_1 (D minor) launched on bar 2 under C minor; mid-bar 2 the context
+    // track alone changes to E minor. Following, the edit compiles and bar 3
+    // plays the new tables (equal to the new session's replay); as written,
+    // the edit compiles nothing (ADR-0095's shortcut).
+    for (const char* follow : {"key", "none"}) {
+        CAPTURE(follow);
+        Project p;
+        followingClip(p, follow, "voice bass; 1: D3:q F3:q A3:q Bb3:q", "1: key D minor ~:w");
+        p.runArgs("context.write", contextText("1: key C minor ~:w\n2: ~:w\n3: ~:w"));
+        const model::Session before = p.app->head();
+        p.runArgs("context.write", contextText("1: key E minor ~:w\n2: ~:w\n3: ~:w"));
+        const model::Session after = p.app->head();
+        {
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+            Engine engine(pool, media, kInCallback);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+            REQUIRE(engine.load(before, p.app->projectDir()));
+            engine.play();
+            backend.run(8);
+            engine.service();
+            const auto generation = engine.planGeneration();
+            REQUIRE(engine.load(after, p.app->projectDir()));
+            CHECK((engine.planGeneration() > generation) == (std::string(follow) != "none"));
+            engine.stop();
+        }
+        if (std::string(follow) == "none") continue;
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("anticipative " << options.anticipative);
+            constexpr std::uint32_t block = 128;
+            const Live live =
+                playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192,
+                         {{20, {request("tr_1", "cl_1")}}, {(5 * kBeat) / block, {}, {}, &after}});
+            REQUIRE(live.log.size() == 1);
+            InstancePool pool = makePool();
+            OfflineSettings settings;
+            settings.endSeconds = 5.0;
+            settings.projectDir = p.app->projectDir();
+            settings.launches = live.log;
+            auto replay = renderOffline(after, pool, settings);
+            REQUIRE(replay);
+            bool same = true;
+            for (std::int64_t t = 8 * kBeat + kFade; t < 9 * kBeat; ++t)
+                same = same && live.left[std::size_t(t + live.latency)] ==
+                                   replay->audio.channels[0][std::size_t(t)];
+            CHECK(same);
+        }
+    }
+}
+
+TEST_CASE("launch.state says what a launched clip follows by, and nothing warns it unfollowed") {
+    // ADR-0098 X4a: launch.unfollowed went with live following; launch.state
+    // names the outcome the running plan uses for the clip a track plays, else
+    // the one it has queued, and leaves it out when there is neither.
+    Project p;
+    followingClip(p, "chords", "voice bass; 1: D3:q F3:q A3:q Bb3:q");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
+    const auto track = [&]() {
+        const json::Value state = p.run("launch.state", "{}");
+        for (const json::Value& t : state.find("tracks")->asArray())
+            if (t.find("track")->asString() == "tr_1") return t;
+        FAIL("tr_1 is not listed");
+        return json::Value();
+    };
+    CHECK_FALSE(track().find("followed"));  // the arrangement
+    const json::Value done = p.run("launch.clip", R"({"clip": "cl_1"})");
+    CHECK_FALSE(done.find("warnings"));
+    CHECK(track().find("queued"));
+    CHECK(track().find("followed")->asString() == "chords");  // queued
+    for (int i = 0; i < 200; ++i) {
+        backend.run(1);
+        p.app->tick();
+    }
+    REQUIRE(track().find("plays")->asString() == "clip");
+    CHECK(track().find("followed")->asString() == "chords");  // playing
+    CHECK_FALSE(track().find("follow_budget"));
+    p.run("clip.set", R"({"clip": "cl_1", "follow": "key"})");
+    CHECK(track().find("followed")->asString() == "key");
+    p.run("clip.set", R"({"clip": "cl_1", "follow": "none"})");
+    CHECK(track().find("followed")->asString() == "none");
+    CHECK_FALSE(p.run("launch.scene", R"({"scene": "sc_1"})").find("warnings"));
+    p.app->stopEngine();
+}

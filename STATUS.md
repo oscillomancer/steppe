@@ -219,9 +219,14 @@ instructions are in `docs/guides/installing.md`.
   is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
   that cannot follow is copied with its reason, and `launch.commit` copies
   what was heard and warns `context.mismatch` when a clip's key is not the
-  project's under it. Not built: a launched clip following live (X4:
-  `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
-  clip plays as written), `write_context` (X5). The roll shows and edits a
+  project's under it. A launched clip follows live (X4a): pitch tables per
+  clip within a budget of 1024 pairs of places (past it a chords clip follows
+  its key, then plays as written, with `launch.follow_budget` in the plan's
+  warnings), a note keeps the pitch of its start, a context edit compiles
+  while a launched clip follows, and `launch.state` gives each track's
+  `followed` and `follow_budget`. Not built: following at playback for
+  timeline items (the ADR-0098 amendment, X4b to X4e; placement still bakes),
+  `write_context` (X5). The roll shows and edits a
   clip's context, and the clip inspector sets Follow (X3).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and

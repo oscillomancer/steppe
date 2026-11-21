@@ -95,8 +95,11 @@ the notes moved).
 - A looped item stays looped when every pass maps alike; when the key changes between
   passes the item is laid out pass by pass (`unrolled: true`).
 - `pooled: true` with a mapping that moves a note is refused (`clip.follow_pooled`).
-- A launched clip is **not** followed yet: it plays as written, and `launch.clip` /
-  `launch.scene` warn `launch.unfollowed` for a clip whose `follow` is not `none`.
+- A launched clip follows live, by the place where each note starts, as placement
+  maps it; a note keeps its pitch to its note-off. `launch.state` gives each track's
+  `followed` (`none`, `key` or `chords`), and `follow_budget: true` when a clip's
+  context and the project's are too varied to follow fully (a chords clip then follows
+  its key, or plays as written).
 
 ## Launching
 

@@ -585,32 +585,6 @@ TEST_CASE("a render without a launch log plays the arrangement, with no clip war
         [](const std::string& w) { return w.find("launch.tempo") != std::string::npos; }));
 }
 
-TEST_CASE("launching a clip that follows the context warns launch.unfollowed, once per launch") {
-    // ADR-0098: a launched clip plays as written until X4, so live and the timeline differ for
-    // a clip whose follow is not none; the answer says so.
-    Project p;
-    twoTracks(p);
-    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
-    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
-    const auto unfollowed = [](const json::Value& done) {
-        int n = 0;
-        if (const json::Value* w = done.find("warnings"))
-            for (const json::Value& e : w->asArray())
-                n += e.find("code")->asString() == "launch.unfollowed";
-        return n;
-    };
-    CHECK(unfollowed(p.run("launch.clip", R"({"clip": "cl_1"})")) == 0);  // follow none
-    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w", "follow": "key"})");
-    json::Value one = p.run("launch.clip", R"({"clip": "cl_1"})");
-    REQUIRE(unfollowed(one) == 1);
-    CHECK(one["warnings"].at(0).find("message")->asString().find("cl_1") != std::string::npos);
-    json::Value scene = p.run("launch.scene", R"({"scene": "sc_1"})");
-    CHECK(unfollowed(scene) == 1);  // one for the scene, not one per clip
-    const std::string said = scene["warnings"].at(0).find("message")->asString();
-    CHECK(said.find("the clip cl_1 follows") != std::string::npos);  // one clip: singular
-    p.app->stopEngine();
-}
-
 TEST_CASE("a MIDI clip plays through the track's MIDI send") {
     // tr_1 has no instrument and sends its MIDI to tr_2's sine: a launched
     // clip sounds there, as an item's notes do.

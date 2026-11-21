@@ -834,6 +834,12 @@ class Engine {
         model::Id clip;                  // Clip and Held
         std::optional<double> position;  // Clip: in its period, in the clip's unit
         std::optional<LaunchPending> queued;
+        // What the plan's player for the clip it plays (else the one it has
+        // queued) follows by (ADR-0098 X4), and whether the follow budget
+        // forced that; unset when it plays no clip and has none queued.
+        enum class Followed : std::uint8_t { None, Key, Chords };
+        std::optional<Followed> followed;
+        bool followBudget = false;
     };
     std::vector<TrackLaunch> launchState() const;
     // Main thread: the clips the running plan left out of the memory
