@@ -35,6 +35,7 @@
 #include "learn_dialog.h"
 #include "mixer.h"
 #include "mouse_dialog.h"
+#include "param_menu.h"
 #include "plugin_browser.h"
 #include "preferences.h"
 #include "safe_load.h"
@@ -5634,4 +5635,53 @@ TEST_CASE("edit.delete removes the launcher's selected clips in one undo step") 
     (void)a.actions->run("edit.delete");
     CHECK(a.app->head().items.size() == 1);
     CHECK(a.app->head().clips.size() == 2);
+}
+
+TEST_CASE("the FX window's lane lookup finds an envelope added by the parameter's id") {
+    // Review round 75: on a semantic plug-in an envelope named by id is
+    // stored by its key, so the window's lookup by key finds it, and showing
+    // or hiding the lane edits it instead of adding another.
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-lane-test-" + std::to_string(testProcessId()));
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    struct Cleanup {  // declared first, so removed after the engine
+        std::filesystem::path dir;
+        ~Cleanup() {
+            std::error_code ec;
+            std::filesystem::remove_all(dir, ec);
+        }
+    } cleanup{dir};
+    engine::AppOptions options;
+    options.workdir = dir;
+    options.pluginPath.push_back(FIXTURE_CLAP_PATH);
+    auto created = engine::EngineApp::create(options);
+    REQUIRE(created);
+    auto& app = **created;
+    cmd::Registry registry;
+    engine::registerEngineCommands(registry);
+    cmd::Dispatcher dispatcher(registry, app);
+    const cmd::Origin origin{cmd::Origin::Type::Ui, "test", {}};
+    auto exec = [&](const char* command, json::Value args) {
+        auto result = dispatcher.execute({command, std::move(args), origin});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    exec("track.add", *json::parse(R"({"type": "channel"})"));
+    const auto fx = *model::Id::parse(
+        exec("fx.add",
+             *json::parse(R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})"))["fx"]
+            .asString());
+    json::Value add = *json::parse(R"({"param": "0", "points": [{"beat": 0, "value": 0.5}]})");
+    add["fx"] = fx.str();
+    exec("env.add", std::move(add));
+    const model::EnvTarget byKey{fx, "gain"};
+    CHECK(gui::laneShown(app.head(), byKey));
+    json::Value envArgs = json::Value::object();
+    envArgs["fx"] = fx.str();
+    REQUIRE(gui::setLaneShown(dispatcher, app.head(), byKey, false, envArgs, 0.0));
+    CHECK_FALSE(gui::laneShown(app.head(), byKey));
+    REQUIRE(gui::setLaneShown(dispatcher, app.head(), byKey, true, envArgs, 0.0));
+    CHECK(gui::laneShown(app.head(), byKey));
+    CHECK(app.head().envelopes.size() == 1);
 }

@@ -1218,19 +1218,21 @@ void EngineApp::settleCleanSuspects() {
     ranBefore_.clear();
 }
 
-// Envelopes and routes store a plug-in parameter by key, id or (older
-// files) display name (session-model "Plug-in parameter references"). They
-// still bind, but a reference that resolves to nothing, one that is
-// ambiguous, and two envelopes on one parameter are said at open. A missing
-// plug-in is not probed.
+// Envelopes and routes store a plug-in parameter by its canonical reference
+// (session-model "Plug-in parameter references"); older files may hold
+// another spelling (an id or a name on a semantic plug-in, a name on
+// another). They still bind, but a reference that resolves to nothing, one
+// that is ambiguous, one in another spelling than the canonical (no lookup
+// by parameter finds it), and two envelopes on one parameter are said at
+// open. A missing plug-in is not probed.
 void EngineApp::warnStoredParamRefs(const model::Session& s,
                                     std::vector<schema::Warning>& warnings) {
     struct Resolved {
         std::optional<std::uint32_t> id;
         std::string name;
     };
-    const auto resolve = [&](const model::EnvTarget& t,
-                             const std::string& path) -> std::optional<Resolved> {
+    const auto resolve = [&](const model::EnvTarget& t, const std::string& path,
+                             bool envelope) -> std::optional<Resolved> {
         const model::FxInstance* fx = s.fx.find(t.object);
         if (!fx) return std::nullopt;
         auto info = findPlugin(fx->plugin.id);
@@ -1240,6 +1242,21 @@ void EngineApp::warnStoredParamRefs(const model::Session& s,
         if (!list || !schema) return std::nullopt;
         const json::Value* described = schema->isObject() ? &*schema : nullptr;
         auto strict = detail::resolveParam(*list, described, t.param, info->name);
+        if (strict && strict->canonical != t.param) {
+            const std::string what =
+                envelope ? "a write, touch or latch pass is not recorded into it and the FX "
+                           "window's lane lookup does not find it; remove it (env.remove) and "
+                           "add it again (env.add) to store it as " +
+                               strict->canonical
+                         : "the FX window does not show it on its parameter; remove it "
+                           "(modulation.remove) and add it again (modulation.add) to store it "
+                           "as " +
+                               strict->canonical;
+            warnings.push_back({"param.spelling",
+                                t.object.str() + " " + t.param + " (" + strict->name() +
+                                    ") is stored in an older spelling, so " + what,
+                                path});
+        }
         if (strict) return Resolved{strict->id, strict->name()};
         if (strict.error().code == "param.ambiguous") {
             auto first = detail::resolveParam(*list, described, t.param, info->name,
@@ -1260,7 +1277,7 @@ void EngineApp::warnStoredParamRefs(const model::Session& s,
     std::map<std::pair<model::Id, std::uint32_t>, model::Id> automated;
     for (const auto& e : s.envelopes) {
         if (e.value->target.object.kind != model::Kind::Fx) continue;
-        auto r = resolve(e.value->target, "/envelopes/" + e.id.str() + "/target/param");
+        auto r = resolve(e.value->target, "/envelopes/" + e.id.str() + "/target/param", true);
         if (!r || !r->id || !e.value->active) continue;  // only active lanes play
         const auto key = std::make_pair(e.value->target.object, *r->id);
         if (const auto it = automated.find(key); it != automated.end())
@@ -1273,7 +1290,7 @@ void EngineApp::warnStoredParamRefs(const model::Session& s,
     }
     for (const auto& e : s.modulations)
         if (e.value->target.object.kind == model::Kind::Fx)
-            resolve(e.value->target, "/modulations/" + e.id.str() + "/target/param");
+            resolve(e.value->target, "/modulations/" + e.id.str() + "/target/param", false);
 }
 
 Status EngineApp::open(const fs::path& where, std::vector<schema::Warning>* warnings,

@@ -32,6 +32,9 @@ struct EnvAddResult {
     // A plug-in parameter's canonical reference and display name
     // (session-model "Plug-in parameter references").
     std::optional<std::string> param, param_name;
+    // The points were given in the plain values of an id or name and stored
+    // in the semantic key's physical units.
+    std::optional<bool> converted;
 };
 
 struct EnvPointsSetArgs {
@@ -183,7 +186,9 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             "channels/busses; playrate only on tr_0), route "
             "(volume|pan|mute), group (VCA volume|mute), or "
             "fx (a semantic key such as \"gain\" or \"filter1.cutoff\", or for other plugins a "
-            "CLAP id or parameter name), or module (a rack module's knob by key, values in its "
+            "CLAP id or parameter name; a semantic plugin's parameter named by id or name is "
+            "stored by its key, its plain points converted to the key's units: converted), or "
+            "module (a rack module's knob by key, values in its "
             "unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, "
             "shape?, tension?}]; "
             "values in the parameter's unit (dB, %, Hz… — text like \"800 Hz\" works for "
@@ -217,6 +222,11 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                                                    "its semantic key or decimal id."))
                        .field("param_name", &EnvAddResult::param_name,
                               schema::string().doc("A plug-in parameter's display name."))
+                       .field("converted", &EnvAddResult::converted,
+                              schema::boolean().doc(
+                                  "True when a semantic plugin's parameter was named by id or "
+                                  "name: the points were plain values, stored converted to the "
+                                  "key's units (env.list shows those)."))
                        .build();
         c.examples = {
             {"Fade a track out over bar 2",
@@ -328,12 +338,19 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                 if (!pts) return std::move(pts).error();
                 env.points = std::move(*pts);
             }
+            // Named by id or name, stored by its key: the plain points become
+            // the key's physical values (session-model "Plug-in parameter
+            // references").
+            if (domain->storedAs)
+                for (model::EnvPoint& pt : env.points)
+                    pt.value = params::fromClap(domain->storedAs->spec, pt.value);
             const Id id = app.txn().create(env);
             EnvAddResult out{id.str(), static_cast<std::int64_t>(env.points.size()), std::nullopt,
-                             std::nullopt};
+                             std::nullopt, std::nullopt};
             if (env.target.object.kind == model::Kind::Fx) {
                 out.param = env.target.param;
                 out.param_name = domain->paramName;
+                if (domain->storedAs) out.converted = true;
             }
             return out;
         };

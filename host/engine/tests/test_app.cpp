@@ -3910,6 +3910,118 @@ TEST_CASE("a touch over a moving plug-in lane records the hand's values, modulat
         }
 }
 
+// Review round 75: an envelope named by id on a semantic plug-in is stored by
+// its key, so every lookup by parameter finds it (session-model "Plug-in
+// parameter references"): a write pass from fx.param.set, the plug-in
+// window's gestures and the lane they hold.
+TEST_CASE("an envelope added by id on a semantic plug-in is stored by its key and recorded into") {
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+        void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+        void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
+        void (*hand)(const clap_plugin_t*, double, std::uint32_t);
+    };
+    for (const bool byGesture : {false, true}) {
+        CAPTURE(byGesture);
+        Root root;
+        auto app = makeApp(root.path);
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher bus(registry, *app);
+        auto call = [&](const char* command, std::string_view args) {
+            auto result = bus.execute({command, j(args), kTest});
+            REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+            return *result;
+        };
+        call("track.add", "{}");
+        call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+        // The gain's id is 0; its plain values are the plug-in's CLAP range.
+        const model::FxInstance& fxModel = *app->head().fx.find({model::Kind::Fx, 1});
+        const auto list = app->fxParams(fxModel);
+        REQUIRE(list);
+        const auto gain =
+            std::find_if(list->begin(), list->end(), [](const auto& p) { return p.id == 0; });
+        REQUIRE(gain != list->end());
+        const double plain = gain->min + 0.5 * (gain->max - gain->min);
+        json::Value add = j(R"({"fx":"fx_1","param":"0"})");
+        add["points"] = json::Value::array();
+        for (const double beat : {0.0, 16.0}) {
+            json::Value pt = json::Value::object();
+            pt["beat"] = beat;
+            pt["value"] = plain;
+            add["points"].asArray().push_back(std::move(pt));
+        }
+        auto added = bus.execute({"env.add", add, kTest});
+        REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+        CHECK(added->find("param")->asString() == "gain");
+        REQUIRE(added->find("converted"));
+        CHECK(added->find("converted")->asBool());
+        const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
+        const model::Envelope& stored = *app->head().envelopes.find(env);
+        CHECK(stored.target.param == "gain");
+        // The plain midpoint, converted to the key's dB.
+        auto described = app->fxSchema(fxModel);
+        REQUIRE(described);
+        REQUIRE(described->isObject());
+        auto spec = params::fromDescription("gain", *described->find("params")->find("gain"));
+        REQUIRE(spec);
+        CHECK(stored.points.at(0).value == doctest::Approx(params::fromClap((*spec)->spec, plain)));
+        // Named again by key or by name: the same parameter.
+        auto again = bus.execute({"env.add", j(R"({"fx":"fx_1","param":"Gain"})"), kTest});
+        REQUIRE_FALSE(again);
+        CHECK(again.error().code == "env.exists");
+        call("env.set", R"({"env":"en_1","mode":"latch"})");
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64},
+                                 {.anticipative = false}));
+        REQUIRE(app->transport("play"));
+        backend.run(1);
+        app->tick();
+        const std::size_t before = app->head().envelopes.find(env)->points.size();
+        const std::vector<double> moves{-20, -15, -10};
+        for (const double db : moves) {
+            if (byGesture) {
+                auto* live = app->instanceOf(fx);
+                REQUIRE(live);
+                const auto* plugin = live->raw();
+                const auto* control = static_cast<const Control*>(
+                    plugin->get_extension(plugin, "supple.test.gain-control"));
+                REQUIRE(control);
+                // Begun on the first move, ended on the last.
+                control->hand(plugin, db, db == moves.front() ? 1u : db == moves.back() ? 2u : 0u);
+            } else {
+                json::Value set = j(R"({"fx":"fx_1"})");
+                set["values"] = json::Value::object();
+                set["values"]["gain"] = db;
+                REQUIRE(bus.execute({"fx.param.set", set, kTest}));
+            }
+            backend.run(20);
+            app->tick();
+        }
+        app->tick();
+        for (const auto& [topic, payload] : app->takeEvents())
+            if (topic == "engine.error") MESSAGE(json::writeCompact(payload));
+        const auto& points = app->head().envelopes.find(env)->points;
+        CHECK(points.size() > before);
+        for (const double db : moves) {
+            CAPTURE(db);
+            CHECK(std::any_of(points.begin(), points.end(), [&](const model::EnvPoint& p) {
+                return p.value == doctest::Approx(db).epsilon(1e-4);
+            }));
+        }
+        if (byGesture) {  // the latch pass holds the lane it records into
+            const auto& holds = app->engine()->writeHolds();
+            CHECK(std::find(holds.begin(), holds.end(), model::EnvTarget{fx, "gain"}) !=
+                  holds.end());
+        }
+        REQUIRE(app->transport("pause"));
+        app->stopEngine();
+    }
+}
+
 TEST_CASE("audio thread preference applies at next start and explicit options win") {
     Root root;
     auto app = makeApp(root.path);

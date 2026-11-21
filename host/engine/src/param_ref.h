@@ -21,14 +21,23 @@ struct ParamRef {
     // The parameter in the list; null only for a semantic key whose id the
     // list lacks (the caller decides).
     const host::ParamInfo* info = nullptr;
-    // What the model stores: a semantic key when the caller named one (its
-    // values are physical), otherwise the decimal id (plain values).
+    // What the model stores, one spelling per parameter: the semantic key
+    // describing it (on a semantic plug-in, whatever the caller wrote),
+    // otherwise the decimal id.
     std::string canonical;
     // The parameter's id: what identity compares (two spellings of one
     // parameter are one parameter). Absent only for a semantic key without one.
     std::optional<std::uint32_t> id;
-    // The schema entry when the parameter is a semantic key's.
+    // The schema entry when the caller spelled the semantic key: the values
+    // given with this reference are physical. Null for an id or a name,
+    // whose values are plain (session-model "Plug-in parameter references").
     const json::Value* semantic = nullptr;
+    // The schema entry of the key `canonical` names, however it was spelled
+    // (null: no key describes the parameter).
+    const json::Value* described = nullptr;
+    // Spelled other than as stored: an id or name a key describes (the
+    // caller's plain values convert to the key's physical ones).
+    bool respelled() const { return described && !semantic; }
     std::string name() const { return info && !info->name.empty() ? info->name : canonical; }
 };
 

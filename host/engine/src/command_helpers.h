@@ -140,6 +140,10 @@ struct EnvDomain {
     std::string canonical;
     std::optional<std::uint32_t> paramId;
     std::string paramName;
+    // Spelled by id or name on a semantic plug-in: values given are plain
+    // (`clapRange`), and the key `canonical` stores takes them as physical
+    // through this description (env.add converts).
+    std::unique_ptr<params::DescribedParam> storedAs;
 };
 
 inline Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s,
@@ -235,6 +239,11 @@ inline Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s,
         return d;
     }
     d.clapRange = std::pair{ref->info->min, ref->info->max};
+    if (ref->respelled()) {
+        auto spec = params::fromDescription(ref->canonical, *ref->described);
+        if (!spec) return std::move(spec).error();
+        d.storedAs = std::move(*spec);
+    }
     return d;
 }
 

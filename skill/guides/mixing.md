@@ -108,6 +108,9 @@ route `volume`, `pan`, `mute`. Plugin targets: the semantic keys
 `fx.describe` lists (values in their unit; a cutoff sweep moves evenly in
 pitch), or a parameter id or name (any case) for other plugins; a name two
 parameters share is refused with their ids, and the envelope stores the id.
+A semantic plugin's parameter named by id or name is stored by its key: the
+points you gave in plain values are converted to the key's unit, and the
+answer says `converted: true`, so `env.list` shows other numbers.
 One parameter takes one envelope. `env.points.set` replaces
 points (or a beat range of them); `env.set {env, active: false}` bypasses an
 envelope; render and `analyze.compare` to hear what it did.

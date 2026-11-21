@@ -24,7 +24,8 @@ exec {"command": "modulate", "args": {"target": {"fx": "fx_4", "param": "gain"},
 `target` is a plug-in parameter `{fx, param}` (key, id, or name in any case), a
 track's `{track, param: volume | pan | width}` or a send's `{route, param: volume}`.
 A name that two parameters share is refused with their ids; the route stores the
-key or id, and answers give `param_name` beside it.
+key (any spelling, on a plug-in that has keys) or else the id, and answers give
+`param_name` beside it.
 
 It finds or makes the rack that does the work (the first rack on the target's
 track with a Mod Out, else one named Modulators on a new channel), adds the

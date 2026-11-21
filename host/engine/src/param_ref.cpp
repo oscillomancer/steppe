@@ -35,15 +35,22 @@ std::optional<std::uint32_t> idOf(const json::Value& entry) {
     return static_cast<std::uint32_t>(v->asInt());
 }
 
-// A parameter named by id or name: its decimal id. Not its semantic key, even
-// when one describes it: on a semantic plug-in the spelling chooses the
-// values' domain (a key's are physical, an id's plain), so an envelope's
-// points keep their meaning.
-ParamRef canonicalOf(const host::ParamInfo& info, const json::Value*) {
+// A parameter named by id or name: stored as the semantic key describing it
+// when one does (one spelling per parameter, so identity is equality of
+// stored references), otherwise as its decimal id. `semantic` stays null:
+// the values given with this spelling are plain.
+ParamRef canonicalOf(const host::ParamInfo& info, const json::Value* params) {
     ParamRef r;
     r.info = &info;
     r.id = info.id;
     r.canonical = std::to_string(info.id);
+    if (params)
+        for (const auto& entry : params->asObject())
+            if (idOf(entry.value) == info.id) {
+                r.canonical = entry.key;
+                r.described = &entry.value;
+                break;
+            }
     return r;
 }
 
@@ -59,7 +66,7 @@ Result<ParamRef> resolveParam(std::span<const host::ParamInfo> list, const json:
         if (const json::Value* entry = params->find(ref); entry && entry->isObject()) {
             ParamRef r;
             r.canonical = std::string(ref);
-            r.semantic = entry;
+            r.semantic = r.described = entry;
             r.id = idOf(*entry);
             if (r.id)
                 for (const host::ParamInfo& info : list)
@@ -98,8 +105,7 @@ Result<ParamRef> resolveParam(std::span<const host::ParamInfo> list, const json:
     constexpr std::size_t kNamed = 8;
     std::string named;
     for (std::size_t i = 0; i < matches.size() && i < kNamed; ++i)
-        named += (i ? ", " : "") + canonicalOf(*matches[i], params).canonical + " (" +
-                 matches[i]->name + ")";
+        named += (i ? ", " : "") + std::to_string(matches[i]->id) + " (" + matches[i]->name + ")";
     if (matches.size() > kNamed)
         named += " and " + std::to_string(matches.size() - kNamed) + " more";
     return Error("param.ambiguous",

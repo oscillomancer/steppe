@@ -3341,18 +3341,25 @@ TEST_CASE("plug-in parameter references: one resolver for keys, ids and names") 
     REQUIRE_FALSE(unknown);
     CHECK(unknown.error().code == "param.unknown");
     CHECK(unknown.error().message == "Ferric has no parameter \"nope\"");
-    // A semantic key is kept as the key; the same parameter by id or name stays
-    // its id (the spelling chooses the values' domain), with one identity.
+    // On a semantic plug-in every spelling is stored as the key (review round
+    // 75); an id or a name still gives plain values (`semantic` null).
     const auto schema = *json::parse(R"({"params":{"mix":{"id":2}}})");
     auto byKey = resolveParam(list, &schema, "mix", "P");
     REQUIRE(byKey);
     CHECK(byKey->canonical == "mix");
     CHECK(byKey->semantic);
-    auto byId = resolveParam(list, &schema, "2", "P");
-    REQUIRE(byId);
-    CHECK(byId->canonical == "2");
-    CHECK_FALSE(byId->semantic);
-    CHECK(byKey->id == byId->id);
+    CHECK_FALSE(byKey->respelled());
+    for (const char* other : {"2", "Mix"}) {
+        CAPTURE(other);
+        auto r = resolveParam(list, &schema, other, "P");
+        REQUIRE(r);
+        CHECK(r->canonical == "mix");
+        CHECK_FALSE(r->semantic);
+        CHECK(r->respelled());
+        CHECK(r->id == byKey->id);
+    }
+    // A parameter no key describes keeps its id.
+    CHECK(resolveParam(list, &schema, "Drive", "P")->canonical == "0");
 }
 
 TEST_CASE("plug-in parameter references: a VST3's parameter is one parameter however named") {
@@ -3452,6 +3459,52 @@ TEST_CASE("plug-in parameter references: an ambiguous name is refused and warned
     CHECK(hasWarning(warnings, "env.duplicate"));
     // It still plays: the plan binds the first match.
     run(bus, "render.mix", R"({"pattern":"older","end_beat":1})");
+}
+
+TEST_CASE("plug-in parameter references: an older spelling on a semantic plug-in is warned of") {
+    // Review round 75: an older file's envelope by id, and a route by name,
+    // on a semantic plug-in play, but no lookup by parameter finds them. The
+    // warning at open says what does not work and how to fix it.
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Fx"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    run(bus, "env.add", R"({"fx":"fx_1","param":"gain","points":[{"beat":0,"value":-6}]})");
+    json::Value made =
+        run(bus, "modulate", R"({"target":{"fx":"fx_1","param":"gain"},"source":"lfo"})");
+    const std::string route = made["modulation"].asString();
+    auto doc = model::projectToJson(app->head());
+    doc["envelopes"]["en_1"]["target"]["param"] = json::Value("0");
+    doc["modulations"][route]["target"]["param"] = json::Value("Gain");
+    REQUIRE(writeFileAtomic(dir.path / "older.json", json::writeCanonical(doc)));
+    std::vector<schema::Warning> warnings;
+    REQUIRE(app->open(dir.path / "older.json", &warnings));
+    int spelled = 0;
+    for (const auto& w : warnings) {
+        if (w.code != "param.spelling") continue;
+        ++spelled;
+        CAPTURE(w.message);
+        if (w.path == "/envelopes/en_1/target/param") {
+            CHECK(w.message.find("not recorded into it") != std::string::npos);
+            CHECK(w.message.find("lane lookup does not find it") != std::string::npos);
+            CHECK(w.message.find("env.remove") != std::string::npos);
+            CHECK(w.message.find("as gain") != std::string::npos);
+        } else {
+            CHECK(w.path == "/modulations/" + route + "/target/param");
+            CHECK(w.message.find("modulation.remove") != std::string::npos);
+        }
+    }
+    CHECK(spelled == 2);
+    // A file stored canonically warns of none.
+    warnings.clear();
+    doc["envelopes"]["en_1"]["target"]["param"] = json::Value("gain");
+    doc["modulations"][route]["target"]["param"] = json::Value("gain");
+    REQUIRE(writeFileAtomic(dir.path / "canonical.json", json::writeCanonical(doc)));
+    REQUIRE(app->open(dir.path / "canonical.json", &warnings));
+    CHECK_FALSE(hasWarning(warnings, "param.spelling"));
 }
 
 TEST_CASE("plug-in parameter references: a parameter the plug-in does not automate") {
