@@ -263,6 +263,7 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
         slot->quantize = quantize;
         slot->track.store(r.track.n, std::memory_order_relaxed);
         slot->clip.store(r.clip.n, std::memory_order_relaxed);
+        slot->scene.store(r.scene ? r.scene->n : 0, std::memory_order_relaxed);
         slot->action.store(static_cast<std::uint8_t>(r.action), std::memory_order_relaxed);
         slot->done.store(0, std::memory_order_relaxed);
         slot->required.store(required, std::memory_order_relaxed);
@@ -389,6 +390,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                                                       slot.track.load(std::memory_order_relaxed))};
         const model::Id clip{model::Kind::Clip,
                              static_cast<std::uint32_t>(slot.clip.load(std::memory_order_relaxed))};
+        const std::uint64_t scene = slot.scene.load(std::memory_order_relaxed);
         const auto action =
             static_cast<LaunchLogEntry::Action>(slot.action.load(std::memory_order_relaxed));
         const detail::LaunchState::Kind kind =
@@ -421,6 +423,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 LaunchAck ack;
                 ack.track = track.n;
                 ack.clip = clip.n;
+                ack.scene = scene;
                 ack.epoch = slotEpoch;
                 ack.action = static_cast<std::uint8_t>(action);
                 ack.stream = target;
@@ -533,6 +536,8 @@ void Engine::serviceLaunches() {
             e.anchorSample = ack.anchorSample;
             e.anchorBeat = ack.anchorBeat;
             e.epoch = ack.epoch;
+            if (ack.scene != 0)
+                e.scene = model::Id{model::Kind::Scene, static_cast<std::uint32_t>(ack.scene)};
             launchLog_.push_back(e);
         }
     }
@@ -634,7 +639,7 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
             if (e.epoch == epoch && e.runningFrame + n.timelineShift > played) {
                 if (!tl.queued) {
                     LaunchPending q;
-                    q.request = {e.track, e.action, e.clip};
+                    q.request = {e.track, e.action, e.clip, e.scene};
                     q.placed = {e.epoch, e.runningFrame, e.anchorSample, e.anchorBeat};
                     tl.queued = q;
                 }

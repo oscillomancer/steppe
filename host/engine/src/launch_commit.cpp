@@ -58,6 +58,7 @@ schema::Schema<CapturedPerformance> capturedPerformanceSchema() {
                    schema::enumeration<std::string>(
                        {{"clip", "clip"}, {"arrangement", "arrangement"}, {"stop", "stop"}}))
             .field("clip", &CapturedLaunch::clip, idArg("cl", "Clip"))
+            .field("scene", &CapturedLaunch::scene, idArg("sc", "Scene"))
             .field("anchor", &CapturedLaunch::anchor, sample)
             .field("anchor_beat", &CapturedLaunch::anchorBeat, schema::number().min(0))
             .build();
@@ -151,18 +152,30 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
     done.to = beatAt(double(perf.start + perf.frames));
     model::EditTxn& t = app.txn();
 
-    // A section for each scene launched whole: at one running frame the
-    // launches that hold (the last of a track's at a frame) start every clip
-    // of the scene that could play (a frozen track's cannot). It runs until
-    // one of those tracks is launched again, else the capture's end. A clip
-    // launched alone, or some of a scene's, writes none. The song position
-    // of a frame is the launch's own beat where it is exact.
+    // A section for each scene launched whole: launch.scene logs each clip it
+    // starts with the scene's id, all at one running frame. The scene holds
+    // there when every one of those launches still holds (a track's last at
+    // the frame: a later launch of the track at the same frame takes it
+    // over). It runs until one of its tracks is launched again, else the
+    // capture's end. Clips launched one by one write none, however they
+    // line up. Its edges are where the items land: the launch's own beat
+    // where it is exact, else the timeline's position of the running frame.
     {
         const model::Session s = app.view();
+        // Where running frame `frame` lands on the timeline, as the items do
+        // (timelineBeat): the launch's exact beat before the first wrap, the
+        // timeline's own position past it, never the folded song position.
         const auto beatOfEntry = [&](std::int64_t frame, const CapturedLaunch& e) {
-            const std::int64_t songFrame = song(frame);
-            return songFrame == e.anchor ? e.anchorBeat : beatAt(double(songFrame));
+            return frame < firstWrap && perf.start + frame == e.anchor
+                       ? e.anchorBeat
+                       : beatAt(double(perf.start + frame));
         };
+        std::map<std::pair<std::int64_t, Id>, std::size_t> given;  // (frame, scene): launches
+        for (const CapturedLaunch& e : perf.launches)
+            if (e.scene) {
+                const auto scene = Id::parse(*e.scene);
+                if (scene) ++given[{e.frame, *scene}];
+            }
         std::map<std::int64_t, std::vector<const CapturedLaunch*>> holding;  // by frame
         for (const auto& [track, launches] : byTrack) {
             std::map<std::int64_t, const CapturedLaunch*> last;  // the last at each frame
@@ -174,17 +187,13 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
         for (const auto& [frame, launched] : holding) {
             std::map<Id, std::vector<const CapturedLaunch*>> byScene;
             for (const CapturedLaunch* e : launched)
-                byScene[s.clips.find(*Id::parse(*e->clip))->scene].push_back(e);
+                if (e->scene) {
+                    const auto scene = Id::parse(*e->scene);
+                    if (scene) byScene[*scene].push_back(e);
+                }
             for (const auto& [sceneId, started] : byScene) {
                 const model::Scene* scene = s.scenes.find(sceneId);
-                if (!scene) continue;
-                std::size_t playable = 0;
-                for (const auto& c : s.clips)
-                    if (c.value->scene == sceneId) {
-                        const model::Track* tr = s.tracks.find(c.value->track);
-                        if (tr && !tr->freeze) ++playable;
-                    }
-                if (playable == 0 || started.size() != playable) continue;
+                if (!scene || started.size() != given[{frame, sceneId}]) continue;
                 std::int64_t until = perf.frames;
                 const CapturedLaunch* next = nullptr;
                 for (const CapturedLaunch* e : started) {

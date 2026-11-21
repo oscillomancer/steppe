@@ -1165,7 +1165,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   committing again keeps a section already there; answers `{tracks, items,
   sections: [{scene, region, start, end}], from, to}`. `performance` is filled from the
   capture and recorded in history: `{sample_rate, start, frames, loop?,
-  launches: [{frame, track, action, clip?, anchor, anchor_beat}]}`.
+  launches: [{frame, track, action, clip?, scene?, anchor, anchor_beat}]}`;
+  `scene` names the scene when `launch.scene` launched it (none for a
+  track's own launch), so a commit knows a scene was launched whole.
   Errors `launch.capture` (nothing captured), `launch.commit` (a captured
   track or clip is gone), `item.locked`, `clip.unsupported`); `scene.insert`,
   `scene.capture {region}`, `arrangement.build {sequence}` (L4a: "Scenes and

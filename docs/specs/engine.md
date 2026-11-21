@@ -516,8 +516,12 @@ the same.*
   source like an item's fade, in both executors and offline.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
-  the epoch's terms) and its song position. Seeks and transport wraps
-  are not logged yet (staged, STATUS): the replay plays one linear run.
+  the epoch's terms), its song position, and the scene when `launch.scene`
+  launched it (carried through the slot and the executor's ack; the replay
+  ignores it). A transport wrap is not
+  logged: it follows from the loop, which a replay is given. A seek, a
+  loop change or a stop ends a capture, so a replay never crosses one
+  (ADR-0097, revision 2026-11-20, batch 3).
   Renders and the render dialog play the arrangement only, and the dialog
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at
@@ -548,15 +552,16 @@ the same.*
   The arrangement a loop repeated is not copied. What it writes plays as
   the capture was heard: exactly away from the switches, and to rounding
   through the fades.
-  A scene launched whole also writes a section. The commit reads the
-  launches that hold at each running frame (of several at one frame on a
-  track, the last), and a scene is launched whole when they start every one
-  of its clips that sits on a track not frozen: the log records clips, not
-  the command that launched them, so a clip launched alone is a scene
-  launch only when it is the scene's only clip. The section is a region
-  (`section` true) named after the scene, in its colour, from the song
-  position of that frame (the launch's own beat where it is exact) to the
-  first later launch on any of the scene's tracks, else the capture's end.
+  A scene launched whole also writes a section. `launch.scene` logs each
+  clip it starts with the scene's id, all on one running frame; the commit
+  writes a section for a scene whose launches at a frame all still hold (a
+  track's last at that frame: one taken over by a later launch of the track
+  on the same frame spoils it). Clips launched one by one write none, however
+  they line up. The section is a region (`section` true) named after the
+  scene, in its colour, from where the items of that frame land (the
+  launch's own beat before the loop's first wrap, the timeline's position of
+  the running frame after it, as the items do) to the first later launch on
+  any of the scene's tracks, else the capture's end.
   A section already there with the same name and span is kept (committing
   again writes the same performance over itself).
 - **Memory (L-e).** The prepared-source budget counts sample values
@@ -664,8 +669,12 @@ the same.*
   of `launchMidi`. At each switch the notes the timeline or a clip held
   end (`releaseHeld`); an audio clip leaves the feed silent. Wraps,
   relocations and plan swaps treat the feed as they treat the channel.
-- `OfflineSettings::launches` replays a log from the render's start (no
-  seeks or wraps yet; L4 adds them with capture).
+- `OfflineSettings::launches` replays a log from the render's start. With
+  `OfflineSettings::loop` the render wraps as the live executors do: no
+  block crosses the loop end, the song continues at the loop start
+  (`wrapTo`), the take chains wrap early in that loop, and the running
+  frames the switches are placed at count on. Not under a master playrate
+  (`render.loop`).
 - **The queue (launch_runtime.cpp).** `Engine::launch` places a set of
   requests (a scene's tracks) on one target. The floor is the latest of
   its tracks' floors: the published position's stream plus one device
@@ -673,7 +682,11 @@ the same.*
   plan block for a node it renders. The target is the first quantize
   boundary at or after the floor's song position. A loop end before it
   places it at the first boundary inside the loop. Stopped, the target is
-  the play position, applied at the play start. The queue has
+  the play position, applied at the play start. Right after a pause or a
+  seek, before the anticipative renderer has relocated, the play position
+  `transport()` reports (and so a launch's anchor and a capture's start)
+  is where it will relocate: the seek's sample, else where it paused
+  (review round 70). The queue has
   `kLaunchSlots` fixed slots, one per track; a newer request replaces the
   track's pending one, and a full queue refuses with `launch.queue`.
   Each slot's state word carries a generation, so a slot the main thread
