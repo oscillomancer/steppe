@@ -128,23 +128,44 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
         if (laid == Laid::Quiet) return std::nullopt;
         return text;
     }
-    if (command != "scene.insert") return std::nullopt;
-    const json::Value* items = answer.find("items");
-    if (!items || !items->isArray()) return std::nullopt;
     std::vector<std::string> phrases, followed, copied;
-    for (const json::Value& item : items->asArray()) {
-        const std::string name = laidName(s, jsonText(item.find("clip")));
-        auto [laid, text] = laidPhrase(name, item.find("followed"));
-        if (laid == Laid::Quiet) continue;
-        phrases.push_back(std::move(text));
-        (laid == Laid::Followed ? followed : copied).push_back(name);
+    std::string head;
+    if (command == "launch.commit") {
+        // A capture's commit copies what was heard: each launched stretch
+        // copied under a key that is not its clip's, as `mismatches` says.
+        const json::Value* list = answer.find("mismatches");
+        if (!list || !list->isArray()) return std::nullopt;
+        for (const json::Value& m : list->asArray()) {
+            json::Value followedBlock = json::Value::object();
+            followedBlock["mode"] = "none";
+            followedBlock["mismatch"] = m;
+            const std::string name = laidName(s, jsonText(m.find("clip")));
+            auto [laid, text] = laidPhrase(name, &followedBlock);
+            if (laid == Laid::Quiet) continue;
+            phrases.push_back(std::move(text));
+            copied.push_back(name);
+        }
+        head = "Committed";
+    } else if (command == "scene.insert") {
+        const json::Value* items = answer.find("items");
+        if (!items || !items->isArray()) return std::nullopt;
+        for (const json::Value& item : items->asArray()) {
+            const std::string name = laidName(s, jsonText(item.find("clip")));
+            auto [laid, text] = laidPhrase(name, item.find("followed"));
+            if (laid == Laid::Quiet) continue;
+            phrases.push_back(std::move(text));
+            (laid == Laid::Followed ? followed : copied).push_back(name);
+        }
+        head = "The scene";
+        if (const auto id = model::Id::parse(jsonText(args.find("scene"))))
+            if (const model::Scene* sc = s.scenes.find(*id); sc && !sc->name.empty())
+                head = sc->name;
+        if (const json::Value* bar = args.find("bar"); bar && bar->isNumber())
+            head += " at bar " + std::to_string(bar->asInt());
+    } else {
+        return std::nullopt;
     }
     if (phrases.empty()) return std::nullopt;
-    std::string head = "The scene";
-    if (const auto id = model::Id::parse(jsonText(args.find("scene"))))
-        if (const model::Scene* sc = s.scenes.find(*id); sc && !sc->name.empty()) head = sc->name;
-    if (const json::Value* bar = args.find("bar"); bar && bar->isNumber())
-        head += " at bar " + std::to_string(bar->asInt());
     std::string all;
     for (const std::string& p : phrases) all += (all.empty() ? "" : "; ") + p;
     if (all.size() <= 110) return head + ": " + all;

@@ -126,8 +126,10 @@ bool sceneLaunchRefused(const model::Session& session, model::Id scene);
 // `followed` blocks: "Bass followed to D minor, +2", "Keys copied: its key C
 // minor differs from D minor at bar 21", "Drums copied: drums don't follow";
 // for scene.insert the scene and its bar, then each clip, or counts when
-// they would not fit. `command` and `args` are what ran (item.add {clip} or
-// scene.insert); nothing when no clip was mapped or copied in another key.
+// they would not fit; for launch.commit "Committed: " and each launched clip
+// copied under another key (`mismatches`). `command` and `args` are what ran
+// (item.add {clip}, scene.insert or launch.commit); nothing when no clip was
+// mapped or copied in another key.
 std::optional<std::string> followNotice(const model::Session& session, const std::string& command,
                                         const json::Value& args, const json::Value& answer);
 

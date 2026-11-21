@@ -919,6 +919,8 @@ int frontendMain(int argc, char** argv) {
     shell.capture().onError = [&appActions](const Error& e) {
         if (appActions.onError) appActions.onError("Capture: " + e.message);
     };
+    // What a commit copied under another key (gui.md §4.15), as a lay says it.
+    shell.capture().onNotice = [&shell](const std::string& notice) { shell.setStatus(notice); };
     shell.arrange()->setRulerCallbacks(
         {[&dispatcher](const std::string& command, json::Value args) {
              return dispatcher.execute(

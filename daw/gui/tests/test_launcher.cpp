@@ -735,6 +735,54 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: a Capture commit says which clips it copied under another key") {
+    // gui.md §4.15: the commit's mismatches in the status line, as a lay's.
+    LauncherFixture f;
+    f.song();
+    f.exec("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key D minor ~:w"})");
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    std::vector<std::string> notices;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    capture.onNotice = [&](const std::string& n) { notices.push_back(n); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    // Root (Bass), written in D minor, launched under C minor.
+    const double at = f.exec("launch.clip", R"({"clip":"cl_3"})")["beat"].asDouble();
+    const model::Id bass = *model::Id::parse("tr_2");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == bass && t.plays == engine::Engine::TrackLaunch::Plays::Clip) return true;
+        return false;
+    };
+    const auto service = [&] { capture.service(); };
+    REQUIRE(f.runUntil(playing, at, "Root heard", service));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Root", service));
+    f.exec("transport.stop", "{}");
+    f.app->tick();
+    capture.service();
+    CHECK(refused.empty());
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0] == "Committed: Root copied: its key D minor differs from C minor at bar 1");
+    // Kit A, with no key, commits with nothing to say.
+    const double kit = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto kitPlaying = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    REQUIRE(f.runUntil(kitPlaying, kit, "Kit A heard", service));
+    REQUIRE(
+        f.runUntil([&] { return f.playingBeat() >= kit + 1; }, kit, "a beat of Kit A", service));
+    REQUIRE(capture.set(false));
+    CHECK(notices.size() == 1);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: a refused capture commit keeps the performance; a click commits it") {
     LauncherFixture f;
     f.song();
