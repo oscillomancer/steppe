@@ -3,6 +3,7 @@
 // Item commands: item.add/remove/move/set/duplicate/paste/split, midi.write and midi.get.
 #include <cstdio>
 #include "clip_context.h"
+#include "clip_follow.h"
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "supple/model/context.h"
@@ -20,7 +21,8 @@ struct ItemAddArgs {
     std::optional<std::int64_t> bar;
     std::optional<double> length;  // beats
     std::optional<std::string> notation, audioFile, midiFile;
-    std::optional<std::string> clip;  // a copy of a clip's takes (ADR-0097)
+    std::optional<std::string> clip;          // a copy of a clip's takes (ADR-0097)
+    std::optional<model::ClipFollow> follow;  // how the clip's notes follow the context
     std::optional<std::string> name;
 };
 
@@ -29,6 +31,7 @@ struct ItemAddResult {
     std::optional<std::string> source;
     double position = 0, length = 0;
     std::optional<std::vector<std::string>> warnings;
+    std::optional<detail::FollowedInfo> followed;  // a clip's copy: what following did
 };
 
 struct ItemRef {
@@ -363,7 +366,8 @@ schema::Schema<model::FadeShape> fadeShapeSchema() {
 // at the tempo where it lands (ADR-0097 "Converting between an item and a
 // clip").
 Result<ItemAddResult> addItemFromClip(Context& ctx, const model::Session& s, model::EditTxn& t,
-                                      Id track, double pos, const std::string& text) {
+                                      Id track, double pos, const std::string& text,
+                                      std::optional<model::ClipFollow> follow) {
     auto id = existing<model::Clip>(s, text, "/clip");
     if (!id) return std::move(id).error();
     const model::Clip& clip = *s.clips.find(*id);
@@ -386,11 +390,15 @@ Result<ItemAddResult> addItemFromClip(Context& ctx, const model::Session& s, mod
         if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
     nameItemFromClip(t, clip, item);
     const double length = model::itemLengthBeats(s, item);
-    // The notes are copied as they are: say when the clip's key is not the project's here.
-    if (auto note = detail::mismatchNote(s, *id, clip, pos, length, 0.0, "/clip"))
-        ctx.warn(note->code, note->message, note->path);
     const Id it = t.create(std::move(item));
+    // The notes follow the key (or chords) under the item when asked to; otherwise they are
+    // copied as they are, and context.mismatch says when the clip's key is not the project's.
+    std::vector<detail::ClipNote> notes;
+    auto followed = detail::followPlacedItem(s, t, *id, clip, it, follow, false, "/clip", notes);
+    if (!followed) return std::move(followed).error();
+    for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
     ItemAddResult r;
+    r.followed = std::move(*followed);
     r.item = it.str();
     r.take = t.preview().items.find(it)->activeTake->str();
     if (const model::Take* tk = t.preview().takes.find(*t.preview().items.find(it)->activeTake);
@@ -501,9 +509,12 @@ void registerItemCommands(cmd::Registry& registry) {
             "differ), and the item is as long as the file unless length is given. clip: a copy of "
             "that clip's takes, as long as the clip, its loop and take envelopes converted at "
             "the tempo where the item lands (ADR-0097); the item is named as the clip is (its "
-            "active take's name) when the clip has a name; the notes are copied as they are, and "
-            "context.mismatch warns when the clip's key is not the project's under the item "
-            "(ADR-0098). A master holds "
+            "active take's name) when the clip has a name. follow (none, key or chords; default: "
+            "the clip's own) maps the clip's notes from the key or chords it was written against "
+            "to those under the item (ADR-0098): notes on channel 10 and clips that cannot follow "
+            "are copied, and the answer's followed says what was done, by bar. With none the "
+            "notes are copied as they are and context.mismatch warns when the clip's key is not "
+            "the project's under the item. A master holds "
             "audio items only (prints, played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =
@@ -523,6 +534,7 @@ void registerItemCommands(cmd::Registry& registry) {
                        schema::string()
                            .pattern("^cl_[0-9]+$", "clip id")
                            .doc("Lay a copy of this clip's takes here."))
+                .field("follow", &ItemAddArgs::follow, detail::followArgSchema())
                 .field("name", &ItemAddArgs::name, schema::string())
                 .build();
         c.result =
@@ -533,9 +545,12 @@ void registerItemCommands(cmd::Registry& registry) {
                 .field("position", &ItemAddResult::position, schema::number())
                 .field("length", &ItemAddResult::length, schema::number())
                 .field("warnings", &ItemAddResult::warnings, schema::arrayOf(schema::string()))
+                .field("followed", &ItemAddResult::followed, detail::followedSchema())
                 .build();
         c.errors = {
             {"notation.*", "the notation does not compile", "line:col and a hint in the error"},
+            {"item.follow", "follow with a source other than clip",
+             "follow applies to a clip's copy: give clip, or leave follow out"},
             {"tr.unknown", "no such track", "see track.list"}};
         c.examples = {
             {"A bass line at bar 1",
@@ -559,6 +574,9 @@ void registerItemCommands(cmd::Registry& registry) {
                 1)
                 return Error("item.source", "give one of notation, audio_file, midi_file or clip",
                              {}, "provide exactly one source for the item");
+            if (a.follow && !a.clip)
+                return Error("item.follow", "follow applies to a clip's copy", "/follow",
+                             "give clip, or leave follow out");
             if (a.clip && a.length)
                 return Error("item.source", "an item from a clip is as long as the clip", "/length",
                              "leave length out, or set it after with item.set");
@@ -571,7 +589,7 @@ void registerItemCommands(cmd::Registry& registry) {
             take.name = a.name.value_or("");
             double length = a.length.value_or(4.0);
             ItemAddResult r;
-            if (a.clip) return addItemFromClip(ctx, s, t, *track, pos, *a.clip);
+            if (a.clip) return addItemFromClip(ctx, s, t, *track, pos, *a.clip, a.follow);
             if (a.notation) {
                 auto compiled = compileNotation(s, *a.notation, pos);
                 if (!compiled) return std::move(compiled).error();

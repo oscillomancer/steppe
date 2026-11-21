@@ -1008,9 +1008,10 @@ void registerClipCommands(cmd::Registry& registry) {
             "(\"1: key D minor {Dm}:w\"), read from the project at a place (context_at), under "
             "the item it copies, or from the {SYMBOL} chords of its notation (a stated context "
             "holding chords wins over them, clip.chords_ignored). follow (none, key or chords) "
-            "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); until "
-            "placement follows it, only the mismatch warning on laying a clip uses the context "
-            "(ADR-0098).";
+            "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying "
+            "the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the "
+            "key or chords under it (their follow argument), and a launched clip plays as "
+            "written until ADR-0098's X4 (launch.unfollowed).";
         c.tags = {"clip launcher", "clip"};
         c.args = clipAddArgsSchema();
         c.result =

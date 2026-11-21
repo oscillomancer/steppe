@@ -42,6 +42,7 @@ q = nil
 ---@field at? number Start in beats, on a bar line.
 ---@field bar? integer Start bar, 1-based [1].
 ---@field pooled? boolean (default: false)
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow.
 
 ---@class Steppe.arrangement_build_result
 ---@field segments table[]
@@ -946,6 +947,7 @@ q = nil
 ---@field audio_file? string
 ---@field midi_file? string
 ---@field clip? string Lay a copy of this clip's takes here.
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow.
 ---@field name? string
 
 ---@class Steppe.item_add_result
@@ -955,6 +957,7 @@ q = nil
 ---@field position number
 ---@field length number
 ---@field warnings? (string|table)[]
+---@field followed? table
 
 ---@class Steppe.item_apply_fx_args
 ---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
@@ -2019,6 +2022,7 @@ q = nil
 ---@field bars integer
 ---@field name? string
 ---@field pooled? boolean (default: false)
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow.
 
 ---@class Steppe.scene_insert_result
 ---@field items table[]
