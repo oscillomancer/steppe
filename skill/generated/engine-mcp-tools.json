@@ -551,7 +551,7 @@
   {
     "name": "fx_patch_merge",
     "title": "Merge a partial patch into a plugin instance; returns the effective change.",
-    "description": "Semantic plugins only. Values in physical units: {\"params\": {\"gain\": \"-6 dB\"}}. See describe for errors and examples.",
+    "description": "Semantic plugins only. Values in physical units: {\"params\": {\"gain\": \"-6 dB\"}}. changed holds only the members the merge changed: against the saved patch, or for an instance never saved against the plug-in's defaults (a value set to what it already is changes nothing). See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "fx_patch_args",

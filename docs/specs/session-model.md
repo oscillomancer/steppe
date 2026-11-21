@@ -1092,7 +1092,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `fx.param.set {fx, values: {key|id: value}}`,
   `fx.param.get` (q), `fx.meters {fx, from: live|render}` (q: the read-only
   values of the playing instance, or as the last `render.mix` ended),
-  `fx.patch.get` (q), `fx.patch.set`, `fx.patch.merge`,
+  `fx.patch.get` (q), `fx.patch.set`, `fx.patch.merge` (answers `{changed,
+  description, inactive?}`: `changed` is the merge patch from the instance's saved
+  patch, or for one never saved from the defaults its schema gives, to the merged
+  one, so it holds only the members the call changed),
   `fx.describe` (q; each parameter's `modulatable`, or
   `modulatable_by_envelope` when a route reaches it through its envelope,
   ADR-0096), a plugin's presets `fx.preset.list` (q),

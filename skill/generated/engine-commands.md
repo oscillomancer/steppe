@@ -7640,7 +7640,7 @@ Result:
 
 Merge a partial patch into a plugin instance; returns the effective change.
 
-Semantic plugins only. Values in physical units: {"params": {"gain": "-6 dB"}}.
+Semantic plugins only. Values in physical units: {"params": {"gain": "-6 dB"}}. changed holds only the members the merge changed: against the saved patch, or for an instance never saved against the plug-in's defaults (a value set to what it already is changes nothing).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 

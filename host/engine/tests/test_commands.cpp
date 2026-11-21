@@ -3350,3 +3350,38 @@ TEST_CASE("module.set: a knob takes text in its own unit, as other parameters do
     REQUIRE_FALSE(choice);
     CHECK(choice.error().code == "rack.param");
 }
+
+TEST_CASE("fx.patch.merge on an instance never saved reports only what the patch changed") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Bus"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    REQUIRE_FALSE(app->head().fx.find(*model::Id::parse("fx_1"))->patch);  // never saved
+    const auto members = [](const json::Value& patch) {
+        const json::Value* params = patch.find("params");
+        return params && params->isObject() ? params->asObject().size() : std::size_t{0};
+    };
+    const auto first =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"gain":-6}}})");
+    CHECK(members(*first.find("changed")) == 1);
+    CHECK(first.find("changed")->find("params")->find("gain")->asDouble() == -6.0);
+    // The same again changes nothing; another member is the only one reported.
+    const auto again =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"gain":-6}}})");
+    CHECK(members(*again.find("changed")) == 0);
+    const auto other =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"latency":"short"}}})");
+    CHECK(members(*other.find("changed")) == 1);
+    // A member set to what it already is reports nothing, on a fresh instance too.
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    const auto defaulted =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_2","patch":{"params":{"gain":0}}})");
+    CHECK(members(*defaulted.find("changed")) == 0);
+    // fx.param.set answers the same way.
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    const auto set = run(bus, "fx.param.set", R"({"fx":"fx_3","values":{"gain":-3}})");
+    CHECK(members(*set.find("changed")) == 1);
+}
