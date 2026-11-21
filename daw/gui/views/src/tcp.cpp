@@ -1005,9 +1005,14 @@ ui::Meter* TcpPanel::meterOf(Row* row) const {
 
 // ----------------------------------------------------------------- EnvRow
 
-// An automation lane's header, indented under its strip: the parameter, the
+// An automation lane's header, indented under its strip: the parameter
+// first, then what owns it (elided before the parameter is), and the cells in
+// fixed columns: "mod" (its modulation's source; empty without a route), the
 // automation mode (click cycles read → touch → latch → write → trim), whether
-// the envelope is heard, and hiding the lane (the envelope keeps playing).
+// the envelope is heard, and hiding the lane (the envelope keeps playing). A
+// lane of a modulated parameter without an envelope has its title, "mod" and
+// "hide". From 32 units tall the title has a line of its own, the cells under
+// it; a lower lane puts both on one line.
 class TcpPanel::EnvRow : public ui::Node {
   public:
     EnvRow(TcpPanel& panel, std::size_t slot)
@@ -1015,6 +1020,11 @@ class TcpPanel::EnvRow : public ui::Node {
         const std::string id = this->id();
         clipsChildren = true;
         title_ = &emplace<ui::Label>(id + ".title", "", ui::Font::Ui, "small", "ink-quiet");
+        mod_ = &emplace<ui::Button>(id + ".mod", "mod", [this] {
+            if (target_ && panel_.cb_.modulationSource)
+                panel_.cb_.modulationSource(*target_, mod_->bounds());
+        });
+        mod_->setTextColor("signal-cv");
         mode_ = &emplace<ui::Button>(id + ".mode", "read", [this] {
             const model::Envelope* e = envelope();
             if (!e) return;
@@ -1026,35 +1036,53 @@ class TcpPanel::EnvRow : public ui::Node {
         });
         active_ = &emplace<ui::Toggle>(id + ".active", "on", "meter",
                                        [this](bool on) { set("active", json::Value(on)); });
-        hide_ = &emplace<ui::Button>(id + ".hide", "hide",
-                                     [this] { set("visible", json::Value(false)); });
+        hide_ = &emplace<ui::Button>(id + ".hide", "hide", [this] { hideLane(); });
+        mod_->hint = {"Show the modulation source", {}};
         mode_->hint = {"Automation mode", {}};
         active_->hint = {"Envelope on or off", {}};
         hide_->hint = {"Hide the lane", {}};
     }
-    void bind(const model::Id& env, int depth, const model::Session& session) {
+    void bind(const model::EnvTarget& target, std::optional<model::Id> env, int depth,
+              const model::Session& session) {
+        target_ = target;
         env_ = env;
         depth_ = depth;
         refresh(session);
     }
     void refresh(const model::Session& session) {
+        if (!target_) return;
         const model::Envelope* e = env_ ? session.envelopes.find(*env_) : nullptr;
-        if (!e) return;
-        const auto* g = session.groups.find(e->target.object);
-        const auto scale = panel_.layout_.scaleOf(*e);
-        title_->setText(g ? g->name + " · " + envTitle(*e)
-                          : envTitle(*e, session, scale ? &*scale : nullptr));
-        mode_->setText(modeName(e->mode));
-        active_->setOn(e->active);
+        model::Envelope probe;
+        probe.target = *target_;
+        const model::Envelope& shown = e ? *e : probe;
+        const auto scale = panel_.layout_.scaleOf(shown);
+        const LaneTitle title = laneTitle(shown, session, scale ? &*scale : nullptr);
+        const bool mod = !routesOn(session, *target_).empty(), envelope = e != nullptr;
+        const bool changed = title.headerText() != title_parts_.headerText() ||
+                             mod != mod_->visible || envelope != mode_->visible;
+        title_parts_ = title;
+        mod_->visible = mod;
+        mode_->visible = active_->visible = envelope;
+        if (e) {
+            mode_->setText(modeName(e->mode));
+            active_->setOn(e->active);
+        }
+        if (changed) {  // the title is fitted, and the cells placed, in arrange
+            panel_.rearrange_ = true;
+            invalidate();
+        }
     }
     void unbind() {
+        target_.reset();
         env_.reset();
         visible = false;
     }
-    bool bound() const { return env_.has_value(); }
-    const model::Id& env() const { return *env_; }
+    bool bound() const { return target_.has_value(); }
+    const std::optional<model::Id>& env() const { return env_; }
+    const model::EnvTarget& target() const { return *target_; }
     ui::Node* control(std::string_view what) const {
         if (what == "title") return title_;
+        if (what == "mod") return mod_;
         if (what == "mode") return mode_;
         if (what == "active") return active_;
         if (what == "hide") return hide_;
@@ -1063,11 +1091,21 @@ class TcpPanel::EnvRow : public ui::Node {
     void arrange(const ui::Canvas& canvas, const ui::Rect& r) override {
         setBounds(r);
         const float x = r.x + 26 + 14.0f * static_cast<float>(depth_ + 1);
-        const float y = r.y + std::max(2.0f, (r.h - 16) / 2);
-        title_->arrange(canvas, {x, y, 56, 16});
-        mode_->arrange(canvas, {x + 58, y + 1, 44, 14});
-        active_->arrange(canvas, {x + 104, y + 1, 22, 14});
-        hide_->arrange(canvas, {x + 128, y + 1, 34, 14});
+        const float right = r.right() - 6;
+        // The cells' fixed columns: mod, mode, on, hide.
+        const float cells = kModW + 2 + kModeW + 2 + kActiveW + 2 + kHideW;
+        const bool twoLines = r.h >= 32;
+        const float titleY = twoLines ? r.y + std::max(1.0f, (r.h - 32) / 2 + 1)
+                                      : r.y + std::max(2.0f, (r.h - 16) / 2);
+        const float cellY = twoLines ? titleY + 16 : titleY + 1;
+        const float titleW = twoLines ? right - x : std::max(24.0f, right - x - cells - 4);
+        const float cx = twoLines ? x : right - cells;
+        title_->setText(fitTitle(canvas, titleW));
+        title_->arrange(canvas, {x, titleY, titleW, 16});
+        mod_->arrange(canvas, {cx, cellY, kModW, 14});
+        mode_->arrange(canvas, {cx + kModW + 2, cellY, kModeW, 14});
+        active_->arrange(canvas, {cx + kModW + kModeW + 4, cellY, kActiveW, 14});
+        hide_->arrange(canvas, {cx + kModW + kModeW + kActiveW + 6, cellY, kHideW, 14});
     }
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
@@ -1077,6 +1115,21 @@ class TcpPanel::EnvRow : public ui::Node {
     }
 
   private:
+    static constexpr float kModW = 32, kModeW = 44, kActiveW = 22, kHideW = 34;
+    // The header's words in `width`: the parameter whole when it fits, what
+    // owns it elided first, then the parameter.
+    std::string fitTitle(const ui::Canvas& c, float width) const {
+        const float size = c.theme().type("small");
+        const std::string full = title_parts_.headerText();
+        if (c.textWidth(full, ui::Font::Ui, size) <= width) return full;
+        std::string rest = title_parts_.owner;
+        if (!title_parts_.note.empty()) rest += (rest.empty() ? "" : " ") + title_parts_.note;
+        const std::string head = title_parts_.param + " · ";
+        const float room = width - c.textWidth(head, ui::Font::Ui, size);
+        const std::string fit = c.elide(rest, ui::Font::Ui, size, room);
+        if (!fit.empty() && room > c.textWidth("M…", ui::Font::Ui, size)) return head + fit;
+        return c.elide(title_parts_.param, ui::Font::Ui, size, width);
+    }
     static std::string modeName(model::EnvMode m) {
         switch (m) {
             case model::EnvMode::Trim:
@@ -1104,10 +1157,36 @@ class TcpPanel::EnvRow : public ui::Node {
         args[key] = std::move(value);
         panel_.cb_.commit("env.set", std::move(args), {});
     }
+    // Hide: the envelope's `visible` and each route's `lane` off, one undo
+    // step; the envelope and the routes keep playing.
+    void hideLane() {
+        if (!target_ || !panel_.cb_.commit) return;
+        const model::Session& s = panel_.session_;
+        std::vector<std::pair<std::string, json::Value>> edits;
+        if (const model::Envelope* e = envelope(); e && e->visible) {
+            json::Value args = json::Value::object();
+            args["env"] = env_->str();
+            args["visible"] = false;
+            edits.emplace_back("env.set", std::move(args));
+        }
+        for (model::Id route : routesOn(s, *target_))
+            if (s.modulations.find(route)->lane) {
+                json::Value args = json::Value::object();
+                args["modulation"] = route.str();
+                args["lane"] = false;
+                edits.emplace_back("modulation.set", std::move(args));
+            }
+        const std::string gesture =
+            edits.size() > 1 ? "tcp.lane.hide:" + std::to_string(++panel_.gestureSerial_) : "";
+        for (auto& [command, args] : edits) panel_.cb_.commit(command, std::move(args), gesture);
+    }
     TcpPanel& panel_;
+    std::optional<model::EnvTarget> target_;
     std::optional<model::Id> env_;
     int depth_ = 0;
+    LaneTitle title_parts_;
     ui::Label* title_ = nullptr;
+    ui::Button* mod_ = nullptr;
     ui::Button* mode_ = nullptr;
     ui::Toggle* active_ = nullptr;
     ui::Button* hide_ = nullptr;
@@ -1127,7 +1206,7 @@ void TcpPanel::setSession(const model::Session& session) {
 
 void TcpPanel::updateSession(const model::Session& session, const std::set<model::Id>& tracks,
                              const std::set<model::Id>& envelopes,
-                             const std::set<model::Id>& routes) {
+                             const std::set<model::Id>& routes, bool modulations) {
     session_ = session;
     for (auto* row : rows_) {
         if (!row->visible || !row->bound()) continue;
@@ -1138,8 +1217,13 @@ void TcpPanel::updateSession(const model::Session& session, const std::set<model
             row->invalidate();  // includes the colour stripe and type/selection badge
         }
     }
+    // Every shown lane header: its title names effects, sends and groups that
+    // may have been renamed, and its "mod" follows the routes. A refresh that
+    // changes nothing redraws nothing.
+    (void)envelopes;
+    (void)modulations;
     for (auto* row : envRows_)
-        if (row->visible && row->bound() && envelopes.contains(row->env())) row->refresh(session_);
+        if (row->visible && row->bound()) row->refresh(session_);
 }
 
 // Modulation (ADR-0096): a bar beside the fader and each pan bar that a
@@ -1179,12 +1263,12 @@ void TcpPanel::bindRows() {
         const ui::Rect r = rowRect(i);
         if (r.bottom() <= bounds().y) continue;
         if (r.y >= bounds().bottom() - kFootHeight) break;  // under the foot
-        // A lane's header shows its envelope; a lane without one (a
-        // modulated parameter) has none yet.
+        // Every lane has a header, with its envelope or without one (a
+        // modulated parameter).
         const TrackRow& spec = layout_.rows()[i];
         if (!spec.lane())
             shownRows.push_back(i);
-        else if (spec.env)
+        else
             shownLanes.push_back(i);
     }
     while (envRows_.size() < shownLanes.size())
@@ -1196,7 +1280,7 @@ void TcpPanel::bindRows() {
         }
         const TrackRow& spec = layout_.rows()[shownLanes[i]];
         envRows_[i]->visible = true;
-        envRows_[i]->bind(*spec.env, spec.depth, session_);
+        envRows_[i]->bind(*spec.target, spec.env, spec.depth, session_);
     }
     while (rows_.size() < shownRows.size())
         rows_.push_back(&rowsHost_->emplace<Row>(*this, rows_.size()));
@@ -1237,7 +1321,8 @@ void TcpPanel::arrange(const ui::Canvas& canvas, const ui::Rect& r) {
     }
     for (EnvRow* row : envRows_) {
         if (!row->visible || !row->bound()) continue;
-        if (const auto at = layout_.indexOfEnv(row->env())) row->arrange(canvas, rowRect(*at));
+        if (const auto at = layout_.indexOfTarget(row->target()))
+            row->arrange(canvas, rowRect(*at));
     }
 }
 
@@ -1287,6 +1372,12 @@ ui::Node* TcpPanel::rowNode(const model::Id& track) const {
 ui::Node* TcpPanel::envControl(const model::Id& env, std::string_view what) const {
     for (EnvRow* row : const_cast<TcpPanel*>(this)->envRows_)
         if (row->visible && row->bound() && row->env() == env) return row->control(what);
+    return nullptr;
+}
+
+ui::Node* TcpPanel::laneControl(const model::EnvTarget& target, std::string_view what) const {
+    for (EnvRow* row : const_cast<TcpPanel*>(this)->envRows_)
+        if (row->visible && row->bound() && row->target() == target) return row->control(what);
     return nullptr;
 }
 

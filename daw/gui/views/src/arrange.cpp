@@ -1323,6 +1323,9 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
     forward.mixer = [this] {
         if (tcpCallbacks_.mixer) tcpCallbacks_.mixer();
     };
+    forward.modulationSource = [this](const model::EnvTarget& target, const ui::Rect& anchor) {
+        if (tcpCallbacks_.modulationSource) tcpCallbacks_.modulationSource(target, anchor);
+    };
     forward.menu = [this](const model::Id& id, const ui::Rect& anchor,
                           std::function<void()> rename) {
         if (tcpCallbacks_.menu) tcpCallbacks_.menu(id, anchor, std::move(rename));
@@ -1437,7 +1440,15 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
             if (auto track = model::trackOfFx(session, id)) tracks.insert(*track);
         }
     }
-    tcp_->updateSession(session, tracks, envelopes, routes);
+    // A route's change: its target's chain mark and the lanes' "mod" cells.
+    const auto modulations = changedObjects(before.modulations, session.modulations, changes);
+    for (auto id : modulations)
+        for (const model::Session* at : {&before, &session})
+            if (const model::Modulation* m = at->modulations.find(id)) {
+                if (auto track = model::trackOfFx(*at, m->target.object)) tracks.insert(*track);
+                if (m->target.object.kind == model::Kind::Track) tracks.insert(m->target.object);
+            }
+    tcp_->updateSession(session, tracks, envelopes, routes, !modulations.empty());
     for (auto id : changedObjects(before.autoItems, session.autoItems, changes)) {
         if (const auto* old = before.autoItems.find(id)) dirtyEnvelopes.insert(old->envelope);
         if (const auto* now = session.autoItems.find(id)) dirtyEnvelopes.insert(now->envelope);

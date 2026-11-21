@@ -1031,6 +1031,20 @@ Under each track, envelope lanes come first, in their order, then
 modulated-only lanes by target. Its row sits under the strip that owns the
 target, as an envelope's lane does (an FX's track, the strip a send leaves).
 Turning the last route's `lane` off removes the lane.
+**The lane's header** in the track panel, indented under its strip, says
+the parameter first and then what owns it, "Filter 1 Cutoff · Marram",
+"Volume · Send → Verb" (`views::laneTitle`, `LaneTitle::headerText`; the
+lane's own caption keeps `envTitle`'s order). When the words do not fit,
+the owner is elided first, then the parameter. Its cells sit in fixed
+columns, the same in every lane: **mod** in `signal-cv` (shown while a
+route, enabled or not, reaches the target: one click asks the app for the
+source, §2), the automation mode (read → touch → latch → write → trim),
+**on** (whether the envelope is heard) and **hide**. A lane without an
+envelope (a modulated parameter) has its title, **mod** and **hide**, the
+other columns empty. Hide turns the envelope's `visible` and every route's
+`lane` off in one undo step; they keep playing. From 32 units tall the
+title has a line of its own over the cells; a lower lane puts the cells
+beside it.
 **The band.** On a modulated target's lane, the enabled routes' span
 (`views::modulationBand`, summed as a control's span, §2) is drawn around
 the base in faint `signal-cv`, under the curve and any automation items. The

@@ -862,6 +862,116 @@ TEST_CASE("TCP: a chain with a modulated plug-in marks its fx as the mixer does"
     CHECK(views::chainModulated(f.app->head(), track));
 }
 
+TEST_CASE(
+    "lane headers: the parameter first, a fixed mod column, a modulation-only lane's header") {
+    // gui.md §4.3: "Cutoff · Marram", the owner elided first; "mod" in its
+    // column, also on a lane without an envelope, whose header has title,
+    // mod and hide.
+    Fixture f;
+    if (!f.ok) return;
+    auto run = [&](const char* command, const std::string& args) {
+        auto r = f.dispatcher->execute({command, json::parse(args).value(), kUi});
+        INFO((r ? std::string() : r.error().toString()));
+        return r;
+    };
+    const model::Id track = f.item(f.itemOnRow(0)).track;
+    auto added = run("fx.add", R"({"track":")" + track.str() + R"(","plugin":"Hickory"})");
+    if (!added) {
+        MESSAGE("skipped: Hickory is not built (partial build)");
+        return;
+    }
+    const std::string fx = (*added)["fx"].asString();
+    auto scales = std::make_shared<gui::PluginScales>(*f.dispatcher);
+    f.view->trackLayout().pluginScales = [scales](const model::Envelope& e) {
+        return (*scales)(e);
+    };
+    std::vector<std::string> params;
+    auto d = run("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    REQUIRE(d);
+    for (const auto& m : d->find("params")->asObject())
+        if (const json::Value* mod = m.value.find("modulatable"); mod && mod->asBool())
+            params.push_back(m.key);
+    REQUIRE(params.size() >= 2);
+    const model::Id fxId = *model::Id::parse(fx);
+    const model::EnvTarget withEnv{fxId, params[0]}, modOnly{fxId, params[1]};
+    // The first parameter: a visible envelope and no route yet.
+    REQUIRE(run("env.add", R"({"fx":")" + fx + R"(","param":")" + params[0] +
+                               R"(","points":[{"beat":0,"value":0.5}]})"));
+    const model::Id env = f.app->head().envelopes.begin()->id;
+    REQUIRE(run("env.set", R"({"env":")" + env.str() + R"(","visible":true})"));
+    f.sync();
+    auto control = [&](const model::EnvTarget& t, const char* what) {
+        return f.view->tcpPanel().laneControl(t, what);
+    };
+    REQUIRE(control(withEnv, "mod"));
+    CHECK_FALSE(control(withEnv, "mod")->visible);  // no route: its column stays empty
+    CHECK(control(withEnv, "mode")->visible);
+    // Each parameter modulated: the second has a lane without an envelope.
+    for (const auto& p : params)
+        if (p == params[0] || p == params[1])
+            REQUIRE(run("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" + p +
+                                        R"("},"source":"lfo"})"));
+    f.sync();
+    const model::Session& s = f.app->head();
+    REQUIRE(control(modOnly, "title"));
+    CHECK(control(withEnv, "mod")->visible);
+    CHECK(control(modOnly, "mod")->visible);
+    CHECK_FALSE(control(modOnly, "mode")->visible);
+    CHECK_FALSE(control(modOnly, "active")->visible);
+    CHECK(control(modOnly, "hide")->visible);
+    // The same columns in both lanes.
+    CHECK(control(withEnv, "mod")->bounds().x == control(modOnly, "mod")->bounds().x);
+    CHECK(control(withEnv, "hide")->bounds().x == control(modOnly, "hide")->bounds().x);
+    // The parameter first, then the plug-in.
+    model::Envelope probe;
+    probe.target = modOnly;
+    const auto scale = f.view->trackLayout().scaleOf(probe);
+    const views::LaneTitle parts = views::laneTitle(probe, s, scale ? &*scale : nullptr);
+    CHECK(parts.owner == "Hickory");
+    CHECK(control(modOnly, "title")->valueText() == parts.param + " · Hickory");
+    // A long owner gives way before the parameter does.
+    REQUIRE(run("fx.set", R"({"fx":")" + fx +
+                              R"(","label":"A plug-in label far too long for any lane header"})"));
+    f.sync();
+    const std::string fitted = control(modOnly, "title")->valueText();
+    CHECK(fitted.starts_with(parts.param + " · A"));
+    CHECK(fitted.ends_with("…"));
+    // Two lines at this height (the title over the cells); a low lane puts
+    // the cells beside the title, in the same order.
+    CHECK(control(modOnly, "mod")->bounds().y > control(modOnly, "title")->bounds().bottom() - 1);
+    f.view->trackLayout().setGlobalHeight(20);  // lanes at their 28-unit minimum
+    f.sync();
+    f.view->tcpPanel().scrolled();
+    f.sync();
+    REQUIRE(control(modOnly, "mod"));
+    CHECK(control(modOnly, "mod")->bounds().y < control(modOnly, "title")->bounds().bottom());
+    CHECK(control(modOnly, "mod")->bounds().x > control(modOnly, "title")->bounds().x);
+    CHECK(control(withEnv, "hide")->bounds().x == control(modOnly, "hide")->bounds().x);
+    // Room for a few letters only: the parameter's, the owner gone.
+    const std::string low = control(modOnly, "title")->valueText();
+    INFO(low);
+    REQUIRE(!low.empty());
+    CHECK(low.find("Hickory") == std::string::npos);
+    CHECK(low.front() == parts.param.front());
+    // "mod" asks the app for the source of that target.
+    std::vector<model::EnvTarget> asked;
+    views::TcpCallbacks cb;
+    cb.modulationSource = [&](const model::EnvTarget& t, const ui::Rect&) { asked.push_back(t); };
+    cb.commit = [&](std::string_view command, json::Value args, std::string) {
+        REQUIRE(f.dispatcher->execute({std::string(command), std::move(args), kUi}));
+    };
+    f.view->setTcpCallbacks(std::move(cb));
+    f.root->click(control(modOnly, "mod")->id());
+    CHECK(asked == std::vector<model::EnvTarget>{modOnly});
+    // Hide on the lane without an envelope turns its route's lane off: the
+    // lane goes, in one undo step.
+    const auto versions = f.app->head().version;
+    f.root->click(control(modOnly, "hide")->id());
+    f.sync();
+    CHECK_FALSE(f.view->trackLayout().indexOfTarget(modOnly));
+    CHECK(f.app->head().version == versions + 1);
+}
+
 TEST_CASE("automation lanes: twin lanes' titles say their chain place or their item") {
     // gui.md §4.3: two effects of one name in a chain are numbered; one
     // effect's parameter on two items' takes of a track says each item.

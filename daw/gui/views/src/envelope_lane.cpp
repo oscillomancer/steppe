@@ -437,14 +437,13 @@ const model::Item* takeItemOf(const model::Session& s, model::Id fx) {
 
 }  // namespace
 
-std::string envTitle(const model::Envelope& env, const model::Session& session,
-                     const EnvScale* scale) {
+LaneTitle laneTitle(const model::Envelope& env, const model::Session& session,
+                    const EnvScale* scale) {
     if (env.target.object.kind == model::Kind::Fx) {
         const bool named = scale && scale->param && !scale->param->name.empty();
-        const std::string param = named ? scale->param->name : env.target.param;
-        std::string title = param;
-        const std::string effect = effectInChain(session, env.target.object);
-        if (!effect.empty()) title = effect + " \u00b7 " + param;
+        LaneTitle title{named ? scale->param->name : env.target.param,
+                        effectInChain(session, env.target.object),
+                        {}};
         // A take's effect (its lane is under the item's track): said so,
         // after the name, which a narrow lane header keeps.
         bool take = false;
@@ -463,15 +462,19 @@ std::string envTitle(const model::Envelope& env, const model::Session& session,
                     continue;
                 const model::Item* other = takeItemOf(session, e.value->target.object);
                 if (other && other != item && other->track == item->track &&
-                    effectInChain(session, e.value->target.object) == effect)
+                    effectInChain(session, e.value->target.object) == title.owner)
                     twin = true;
             }
-        if (!twin) return title + " (take)";
+        if (!twin) {
+            title.note = "(take)";
+            return title;
+        }
         const model::Take* tk = item->activeTake ? session.takes.find(*item->activeTake) : nullptr;
         const int bar =
             session.timeMap->barBeat(std::max(0.0, model::itemSpan(session, *item).startBeat)).bar;
         const std::string name = tk && !tk->name.empty() ? tk->name + ", " : std::string();
-        return title + " (take: " + name + "bar " + std::to_string(bar) + ")";
+        title.note = "(take: " + name + "bar " + std::to_string(bar) + ")";
+        return title;
     }
     // A rack module's knob: "Bells » Osc · fine".
     if (env.target.object.kind == model::Kind::Module)
@@ -483,13 +486,14 @@ std::string envTitle(const model::Envelope& env, const model::Session& session,
                 if (!name.empty())
                     name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
             }
-            return model::rackLabel(session, m->rack) + " \u00bb " + name + " \u00b7 " +
-                   envTitle(env);
+            return {envTitle(env), model::rackLabel(session, m->rack) + " \u00bb " + name, {}};
         }
+    if (const model::TrackGroup* g = session.groups.find(env.target.object))
+        return {envTitle(env), g->name, {}};
     const model::Route* r = env.target.object.kind == model::Kind::Route
                                 ? session.routes.find(env.target.object)
                                 : nullptr;
-    if (!r) return envTitle(env);
+    if (!r) return {envTitle(env), {}, {}};
     std::string to;
     if (r->to.fx) {
         if (const model::FxInstance* fx = session.fx.find(*r->to.fx))
@@ -501,7 +505,23 @@ std::string envTitle(const model::Envelope& env, const model::Session& session,
         for (std::size_t i = 0; i < r->to.hwChannels->size(); ++i)
             to += (i ? "/" : " ") + std::to_string((*r->to.hwChannels)[i]);
     }
-    return "Send \u2192 " + to + " \u00b7 " + envTitle(env);
+    return {envTitle(env), "Send \u2192 " + to, {}};
+}
+
+std::string envTitle(const model::Envelope& env, const model::Session& session,
+                     const EnvScale* scale) {
+    // A group's (VCA's) lane says its parameter alone; its header adds the group.
+    if (session.groups.find(env.target.object)) return envTitle(env);
+    const LaneTitle t = laneTitle(env, session, scale);
+    std::string out = t.owner.empty() ? t.param : t.owner + " \u00b7 " + t.param;
+    return t.note.empty() ? out : out + " " + t.note;
+}
+
+std::string LaneTitle::headerText() const {
+    std::string out = param;
+    if (!owner.empty()) out += " \u00b7 " + owner;
+    if (!note.empty()) out += " " + note;
+    return out;
 }
 
 }  // namespace supple::views

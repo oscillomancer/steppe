@@ -53,6 +53,18 @@ std::string envTitle(const model::Envelope& env);
 // (others as above).
 std::string envTitle(const model::Envelope& env, const model::Session& session,
                      const EnvScale* scale = nullptr);
+// That title in its parts: the parameter ("Filter 1 Cutoff", "Volume"),
+// what owns it ("Marram", "Teasel 2", "Send → Reverb", a group's name,
+// "Bells » Osc"; "" for a strip's own), and a note ("(take)", "(take:
+// Stabs, bar 14)"). envTitle is "owner · param note"; a lane's header says
+// the parameter first (headerText: "Filter 1 Cutoff · Marram"), since that
+// is what tells two lanes apart.
+struct LaneTitle {
+    std::string param, owner, note;
+    std::string headerText() const;
+};
+LaneTitle laneTitle(const model::Envelope& env, const model::Session& session,
+                    const EnvScale* scale = nullptr);
 // The envelope's value at a beat (points are in beats), with the segment
 // shapes the engine plays; `fallback` when it has no points.
 double envValueAt(const model::Envelope& env, double beat, double fallback);
