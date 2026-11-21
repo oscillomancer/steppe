@@ -1459,7 +1459,10 @@ Engine and hosting:
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
-  post-fader sends into an In module take the linear path.
+  post-fader sends into an In module take the linear path. A rack knob's text
+  ("1.2 kHz") is read the same under any process locale, but the numbers in
+  `module.set`'s refusal messages and hints are printed with the locale's decimal
+  separator, so under a comma-decimal locale they read "0,01 to 100 Hz".
 - Renders are deterministic for plug-ins that keep no process-wide state. A
   plug-in that does (Airwindows Consolidated, review round 72 O1) renders
   one project differently run to run in process, from frame 0; bridged
