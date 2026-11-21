@@ -1148,6 +1148,34 @@ TEST_CASE("launcher: the clip clipboard holds only for the project it was filled
     CHECK(f.app->head().clips.find(*model::Id::parse("cl_1"))->track == model::Id::parse("tr_1"));
 }
 
+TEST_CASE("launcher: a cell shows its clip's key, with a mark when the clip follows") {
+    // gui.md §4.15: under the preview, "≈" before the key for Follow.
+    LauncherFixture f;
+    f.song();
+    // Root (Bass, Verse) in D minor, following the key; a Keys clip in G
+    // dorian as written; Kits A and B have no key.
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key D minor ~:w","follow":"key"})");
+    f.exec("clip.add", R"({"track":"tr_3","scene":"sc_2","notation":"voice k; 1: D4:w",)"
+                       R"("context":"1: key G dorian ~:w","name":"Modal"})");
+    const views::LauncherPane& pane = f.view->launcherPane();
+    std::map<std::string, std::string> keys;
+    for (std::size_t i = 0; i < pane.stats.names.size(); ++i)
+        keys[pane.stats.names[i]] = pane.stats.keys.at(i);
+    CHECK(keys == std::map<std::string, std::string>{
+                      {"Kit A", ""}, {"Kit B", ""}, {"Root", "≈Dm"}, {"Modal", "G dor"}});
+    // Following the chords marks it too; none takes the mark away.
+    f.exec("clip.set", R"({"clip":"cl_3","follow":"chords"})");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "≈Dm");
+    f.exec("clip.set", R"({"clip":"cl_3","follow":"none"})");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "Dm");
+    // Short names: minor "m", major bare, the minors' variants and the modes.
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key Eb harmonic_minor ~:w"})");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "Eb hm");
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key F# major ~:w"})");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "F#");
+    f.snapshot("launcher-keys.png");
+}
+
 TEST_CASE("launcher: laying clips on the timeline says in the status line what their keys did") {
     // gui.md §4.15: the answers' followed blocks, in a few words, no dialog.
     LauncherFixture f;

@@ -133,6 +133,11 @@ bool sceneLaunchRefused(const model::Session& session, model::Id scene);
 std::optional<std::string> followNotice(const model::Session& session, const std::string& command,
                                         const json::Value& args, const json::Value& answer);
 
+// A clip's key at its start, short, for its launcher cell (gui.md §4.15):
+// "Dm", "G", "D dor", "A hm"; with "≈" before it when the clip follows the
+// key or the chords. "" when the clip has no readable key.
+std::string clipKeyMark(const model::Clip& clip);
+
 // The clip in a channel's cell of a scene.
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);
 
@@ -159,6 +164,11 @@ class LauncherPane : public ui::Node {
     static ui::Rect playZone(const ui::Rect& cell);
     static ui::Rect stopZone(const ui::Rect& cell);
     // A clip's content area: its cell under the name bar.
+    // The strip at the foot of a clip's body that holds its key mark
+    // (clipKeyMark), under the preview: its height, 0 for no mark or a body
+    // too low for one.
+    static constexpr float kKeyStrip = 12;
+    static float keyStrip(const ui::Rect& body, const std::string& keyMark);
     static ui::Rect bodyRect(const ui::Rect& cell);
     // What a press at `p` lands on: a clip's ▶ or body, an empty cell's stop
     // square or the rest of it, a row's Arr dot.
@@ -179,6 +189,7 @@ class LauncherPane : public ui::Node {
     struct Stats {
         std::size_t cells = 0, clips = 0, empty = 0;
         std::vector<std::string> names;  // the clips' names as drawn
+        std::vector<std::string> keys;   // their key marks as drawn ("≈Dm"; "" for none)
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
         int refused = 0;  // clips drawn dimmed: their launch is refused (launchRefused)

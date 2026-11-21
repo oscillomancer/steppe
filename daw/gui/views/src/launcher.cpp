@@ -8,6 +8,8 @@
 #include <memory>
 #include <utility>
 
+#include "supple/harmony/harmony.h"
+#include "supple/model/context.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/canvas.h"
 #include "supple/ui/popup.h"
@@ -187,6 +189,36 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
     return text;
 }
 
+std::string clipKeyMark(const model::Clip& clip) {
+    const model::ContextPoint* p = model::keyPointAt(clip, 0);
+    const auto key = p ? model::parseKey(*p) : std::nullopt;
+    if (!key) return {};
+    using S = harmony::Scale;
+    std::string text = harmony::printPitchClass(key->tonic);
+    switch (key->scale) {
+        case S::Major:
+            break;
+        case S::Minor:
+            text += "m";
+            break;
+        case S::HarmonicMinor:
+            text += " hm";
+            break;
+        case S::MelodicMinor:
+            text += " mm";
+            break;
+        case S::MajorPentatonic:
+            text += " pent";
+            break;
+        case S::MinorPentatonic:
+            text += "m pent";
+            break;
+        default:  // dorian, phrygian, ...: the mode's first three letters
+            text += " " + std::string(harmony::scaleName(key->scale).substr(0, 3));
+    }
+    return (clip.follow != model::ClipFollow::None ? "\u2248" : "") + text;
+}
+
 bool launchRefused(const model::Session& s, const model::Clip& clip) {
     // launch_runtime.cpp:323: plan->rateStretch && the clip is not MIDI.
     if (clip.kind == model::ClipKind::Midi || !s.project) return false;
@@ -329,6 +361,12 @@ LauncherPane::LauncherPane(ArrangeView& view, peaks::PeakService& peaks, Resolve
     interactive = true;
     clipsChildren = true;
     drawsGl = true;
+}
+
+float LauncherPane::keyStrip(const ui::Rect& body, const std::string& keyMark) {
+    // A body too low to keep a preview over it shows no key.
+    if (keyMark.empty() || body.h < 2 * kKeyStrip) return 0;
+    return kKeyStrip;
 }
 
 ui::Rect LauncherPane::bodyRect(const ui::Rect& cell) {
@@ -504,6 +542,18 @@ void LauncherPane::paint(ui::Canvas& c) {
                 drawPlaying(c, {name.x + 1, name.y, 14, name.h});
             else
                 drawPlay(c, {name.x + 1, name.y, 14, name.h}, t.color("ink").withAlpha(dim));
+            // The clip's own key in a strip at the foot of the body, under the
+            // preview (keyStrip), right-aligned, "≈" before it when it follows.
+            const std::string keyMark = clipKeyMark(*clip);
+            const ui::Rect body = bodyRect(cell);
+            const float strip = keyStrip(body, keyMark);
+            if (strip > 0)
+                c.text({body.x + 2, body.bottom() - strip, body.w - 4, strip}, keyMark,
+                       ui::Font::Ui, caption,
+                       t.color(clip->follow != model::ClipFollow::None ? "ink" : "ink-quiet")
+                           .withAlpha(dim),
+                       ui::kRight | ui::kMiddle);
+            stats.keys.push_back(strip > 0 ? keyMark : std::string());
             std::string label = clip->name.empty() ? id->str() : clip->name;
             const std::string fit =
                 c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
@@ -594,12 +644,13 @@ void LauncherPane::paintGl(const ui::GlFrame& frame) {
         if (row.lane() || row.type != model::StripType::Channel) continue;
         for (std::size_t col = 0; col < cols.scenes.size(); ++col) {
             ui::Rect body = bodyRect(cellRect(i, col));
-            // Cut at the Arr column; a cell scrolled out of view is skipped.
-            body.w = std::min(body.right(), cols.scenesRight()) - body.x;
-            if (body.w <= 2 || body.h < 4 || body.right() <= bounds().x) continue;
             const auto id = clipIn(s, row.track, cols.scenes[col]);
             const model::Clip* c = id ? s.clips.find(*id) : nullptr;
             if (!c || c->length <= 0 || !c->activeTake) continue;
+            body.h -= keyStrip(body, clipKeyMark(*c));  // the key's strip, under the preview
+            // Cut at the Arr column; a cell scrolled out of view is skipped.
+            body.w = std::min(body.right(), cols.scenesRight()) - body.x;
+            if (body.w <= 2 || body.h < 4 || body.right() <= bounds().x) continue;
             const model::Take* take = s.takes.find(*c->activeTake);
             if (!take || !take->source) continue;
             const float dim = c->mute || launchRefused(s, *c) ? 0.45f : 1.0f;
