@@ -10,6 +10,7 @@
 
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <set>
 
 #include "app_actions.h"
@@ -127,6 +128,32 @@ struct Fixture {
         return *r;
     }
     json::Value notes() { return exec("midi.notes", R"({"item":")" + item + R"("})")["notes"]; }
+    // The Lanes menu's rows, a checked one as "[x] label"; the menu is closed again.
+    std::vector<std::string> lanesMenu() {
+        REQUIRE(root->click("midi.lanes"));
+        root->frame(false);
+        ui::Node* menu = root->find("midi.lanes.menu");
+        REQUIRE(menu);
+        std::vector<std::string> out;
+        for (const auto& m : ui::menuItems(*menu))
+            if (!m.separator) out.push_back((m.checked ? "[x] " : "") + m.label);
+        root->closePopup();
+        return out;
+    }
+    // Runs the Lanes menu's row `label`, as a click on it does.
+    void pickLane(const std::string& label) {
+        REQUIRE(root->click("midi.lanes"));
+        root->frame(false);
+        ui::Node* menu = root->find("midi.lanes.menu");
+        REQUIRE(menu);
+        std::function<void()> run;
+        for (const auto& m : ui::menuItems(*menu))
+            if (m.label == label) run = m.run;
+        REQUIRE_MESSAGE(run, "no Lanes row " << label);
+        root->closePopup();
+        run();
+        root->frame(false);
+    }
     // The time of every pass the fixture makes. A test moves it on by hand:
     // no pass reads the real clock, so nothing here depends on how long the
     // machine has been up or how fast it runs.
@@ -611,7 +638,7 @@ TEST_CASE("MIDI editor: the panel height persists, and a too-large one is shown 
     REQUIRE(f.editor->open(f.item));
     f.frame();
     f.editor->setHeight(300);
-    const json::Value saved = f.editor->saveLayout();
+    json::Value saved = f.editor->saveLayout();
     CHECK(saved.find("height")->asDouble() == near(300));
     f.editor->setHeight(200);
     f.editor->loadLayout(saved);
@@ -1108,8 +1135,11 @@ TEST_CASE("MIDI editor: the CC lane draws a ramp in one step, erases, and switch
     f.root->pointer(up);
     f.frame();
     CHECK(cc(1).size() == 1);  // the point at 0 stays
-    // The next controller (7, volume) has its own lane.
-    REQUIRE(f.root->click("midi.cc.number"));
+    // Another controller (7, volume), picked in the Lanes menu, has its own lane.
+    CHECK(f.lanesMenu() == std::vector<std::string>{"[x] Velocity", "[x] CC 1 mod", "CC 7 volume",
+                                                    "CC 10 pan", "CC 11 expression",
+                                                    "CC 64 sustain"});
+    f.pickLane("CC 7 volume");
     CHECK(s.ccNumber == 7);
     CHECK(s.cc.empty());
     f.pointer(ui::PointerEvent::Type::Down, {xAt(1.0), lane.y + 10});
@@ -1117,6 +1147,46 @@ TEST_CASE("MIDI editor: the CC lane draws a ramp in one step, erases, and switch
     CHECK(cc(7).size() == 1);
     CHECK(cc(1).size() == 1);
     f.snapshot("midi-editor-cc.png");
+}
+
+TEST_CASE("MIDI editor: the Lanes menu shows and hides the velocity and CC lanes") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    ui::Node* vel = f.root->find("midi.velocity");
+    ui::Node* cc = f.root->find("midi.cc");
+    REQUIRE(vel);
+    REQUIRE(cc);
+    CHECK(vel->visible);
+    CHECK(cc->visible);
+    const float rollH = f.root->find("midi.roll")->bounds().h;
+    // Picking the shown controller hides the CC lane; velocity goes the same way.
+    f.pickLane("CC 1 mod");
+    f.pickLane("Velocity");
+    CHECK_FALSE(vel->visible);
+    CHECK_FALSE(cc->visible);
+    CHECK(f.root->find("midi.roll")->bounds().h > rollH);  // the roll takes the room
+    CHECK(f.lanesMenu() == std::vector<std::string>{"Velocity", "CC 1 mod", "CC 7 volume",
+                                                    "CC 10 pan", "CC 11 expression",
+                                                    "CC 64 sustain"});
+    // The sidecar keeps the choice; a new editor reads it back.
+    json::Value saved = f.editor->saveLayout();
+    CHECK(saved["velocity"].asBool() == false);
+    CHECK(saved["cc"].asInt() == 0);
+    f.pickLane("CC 11 expression");
+    CHECK(cc->visible);
+    CHECK(f.editor->state().ccNumber == 11);
+    json::Value layout = json::Value::object();
+    layout["velocity"] = true;
+    layout["cc"] = 64;
+    f.editor->loadLayout(layout);
+    f.frame();
+    CHECK(vel->visible);
+    CHECK(f.editor->state().ccNumber == 64);
+    layout["cc"] = 3;  // not offered: ignored
+    f.editor->loadLayout(layout);
+    CHECK(f.editor->state().ccNumber == 64);
 }
 
 TEST_CASE("MIDI editor: the notation panel compiles live, writes back, and follows the roll") {

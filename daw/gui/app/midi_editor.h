@@ -73,8 +73,10 @@ struct RollState {
     // own, else its track's, else its strip type's), so the roll and the
     // item it edits look alike. Unset: the accent.
     std::function<ui::Color(const ui::Theme&)> color;
-    // The CC lane: one controller at a time (channel 1).
+    // The CC lane: one controller at a time (channel 1). The Lanes menu
+    // shows or hides it and the velocity lane.
     int ccNumber = 1;
+    bool ccShown = true, velocityShown = true;
     std::vector<CcPoint> cc;
     std::vector<CcPoint> ccDraft;  // a drag in progress (drawn, not yet committed)
     bool ccErasing = false;
@@ -157,7 +159,9 @@ class MidiEditor {
     static constexpr float kDefaultHeight = 420, kMinHeight = 160;
     float height() const { return height_; }
     void setHeight(float height);
-    json::Value saveLayout() const;  // {"height"}: the UI sidecar's "midi" section
+    // {"height", "velocity", "cc"}: the UI sidecar's "midi" section ("cc" 0:
+    // the CC lane hidden).
+    json::Value saveLayout() const;
     void loadLayout(const json::Value& v);
     // Row (key) height zoom, anchored at the window y whose pitch stays put.
     static constexpr float kMinRowHeight = 4, kMaxRowHeight = 48;
@@ -244,7 +248,9 @@ class MidiEditor {
     std::vector<std::string> chordLabels_;
     ui::Node* velocity_ = nullptr;
     ui::Node* ccLane_ = nullptr;
-    ui::Button* ccButton_ = nullptr;
+    ui::Button* lanesButton_ = nullptr;
+    void openLanesMenu();
+    void applyLanes();  // the lanes' visibility from the state
     ui::Toggle* keyButton_ = nullptr;
     std::string keyText_ = "No key";  // the key button's words (its width follows them)
     void refreshKeyButton();

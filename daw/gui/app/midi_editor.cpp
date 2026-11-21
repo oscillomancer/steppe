@@ -31,6 +31,10 @@ constexpr float kKeysWidth = 46;
 constexpr float kEdge = 5;  // px at a note's ends that resize it
 constexpr auto kCompileDelay = std::chrono::milliseconds(300);
 constexpr float kGripHeight = 6;  // the top border that resizes the panel
+// The controllers the Lanes menu offers: mod wheel, volume, pan, expression,
+// sustain.
+constexpr std::pair<int, const char*> kCcs[] = {
+    {1, "mod"}, {7, "volume"}, {10, "pan"}, {11, "expression"}, {64, "sustain"}};
 
 bool blackKey(int pitch) {
     const int pc = ((pitch % 12) + 12) % 12;
@@ -1148,17 +1152,8 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     keyButton_->textSize = "small";  // as the header's buttons
     keyButton_->offInk = "ink";
     keyButton_->enabled = false;
-    ccButton_ = &header.emplace<ui::Button>("midi.cc.number", "CC 1 mod", [this] {
-        // The common controllers in turn: mod wheel, volume, pan, expression, sustain.
-        static constexpr std::pair<int, const char*> kCcs[] = {
-            {1, "mod"}, {7, "volume"}, {10, "pan"}, {11, "expression"}, {64, "sustain"}};
-        std::size_t next = 0;
-        for (std::size_t i = 0; i < std::size(kCcs); ++i)
-            if (kCcs[i].first == state_.ccNumber) next = (i + 1) % std::size(kCcs);
-        state_.ccNumber = kCcs[next].first;
-        ccButton_->setText("CC " + std::to_string(kCcs[next].first) + " " + kCcs[next].second);
-        (void)reload();
-    });
+    // One menu owns every lane under the roll (gui.md §4.7).
+    lanesButton_ = &header.emplace<ui::Button>("midi.lanes", "Lanes", [this] { openLanesMenu(); });
     header.emplace<ui::Button>("midi.notation.toggle", "Notation", [this] {
         if (!notationPane_) return;
         notationPane_->visible = !notationPane_->visible;
@@ -1205,6 +1200,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     };
     roll.repaintAll = repaint;
     vel.repaintAll = repaint;
+    applyLanes();
 
     eventList_ = std::make_unique<MidiEventList>(root_, *this, app_);
     auto listPane = eventList_->build();
@@ -1317,6 +1313,8 @@ void MidiEditor::setHeight(float height) {
 json::Value MidiEditor::saveLayout() const {
     json::Value v = json::Value::object();
     v["height"] = static_cast<double>(height_);
+    v["velocity"] = state_.velocityShown;
+    v["cc"] = state_.ccShown ? state_.ccNumber : 0;
     return v;
 }
 
@@ -1328,6 +1326,69 @@ void MidiEditor::loadLayout(const json::Value& v) {
         height_ = std::clamp(static_cast<float>(h->asDouble()), kMinHeight, 4000.0f);
         applyHeight();
     }
+    if (const json::Value* vel = v.find("velocity"); vel && vel->isBool())
+        state_.velocityShown = vel->asBool();
+    // A controller the menu offers, or 0 for none; anything else is ignored.
+    if (const json::Value* cc = v.find("cc"); cc && cc->isNumber()) {
+        const double n = cc->asDouble();
+        if (n == 0) state_.ccShown = false;
+        for (const auto& [number, name] : kCcs)
+            if (n == number) {
+                state_.ccShown = true;
+                state_.ccNumber = number;
+            }
+    }
+    applyLanes();
+}
+
+void MidiEditor::applyLanes() {
+    bool changed = false;
+    auto show = [&](ui::Node* lane, bool shown) {
+        if (!lane || lane->visible == shown) return;
+        if (!shown) root_.releaseWithin(lane);  // a drag in it ends
+        lane->visible = shown;
+        changed = true;
+    };
+    show(velocity_, state_.velocityShown);
+    show(ccLane_, state_.ccShown);
+    if (!changed) return;
+    root_.relayout();
+    root_.damageAll();
+}
+
+void MidiEditor::openLanesMenu() {
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, bool checked, std::function<void()> run) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.checked = checked;
+        m.run = std::move(run);
+        items.push_back(std::move(m));
+    };
+    add("Velocity", state_.velocityShown, [this] {
+        state_.velocityShown = !state_.velocityShown;
+        applyLanes();
+    });
+    // The CC lane shows one controller: picking another switches it, picking
+    // the shown one hides the lane.
+    for (const auto& [number, name] : kCcs) {
+        const int n = number;
+        add("CC " + std::to_string(n) + " " + name, state_.ccShown && state_.ccNumber == n,
+            [this, n] {
+                if (state_.ccShown && state_.ccNumber == n) {
+                    state_.ccShown = false;
+                } else {
+                    state_.ccShown = true;
+                    state_.ccNumber = n;
+                    if (isOpen()) (void)reload();
+                }
+                applyLanes();
+            });
+    }
+    const ui::Rect b = lanesButton_ ? lanesButton_->bounds() : ui::Rect{};
+    root_.openPopup(
+        ui::makeMenu("midi.lanes.menu", std::move(items), [this] { root_.closePopup(); }),
+        ui::Rect{b.x, b.bottom(), 0, 0}, ui::Placement::Below);
 }
 
 std::string_view MidiEditor::wheelBehaviour(unsigned mods) const {
