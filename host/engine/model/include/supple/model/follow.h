@@ -152,6 +152,20 @@ struct SoundingNote {
 // applies after, is not in `sounds`.
 std::vector<SoundingNote> soundingNotes(const Session& s, Id item, double fromBeat, double toBeat);
 
+// The pitch each source note keeps in a view of the item that shows one pass: of its heard
+// occurrences the first whole pass's (a fragment held into the item's start counts only when it
+// is all there is), `sounded[i]` being the pitch occurrence `i` of `heard` sounds as (channel 10
+// as written). `keep` is by source note index, empty for a note never heard. `alike` is whether
+// every whole pass of every note sounds as its first: when it is not, a looped item needs
+// unrolling to be written down (`take.bake`) or answers its first pass (`midi.get`).
+struct LeadPitches {
+    std::vector<std::optional<std::int64_t>> keep;
+    bool alike = true;
+};
+LeadPitches leadPitches(const std::vector<SoundingNote>& heard,
+                        const std::vector<std::int64_t>& sounded, double itemStartBeat,
+                        std::size_t noteCount);
+
 // What a note written as `key` on `channel` sounds as at a place: the per-note step of the
 // helper above, for the engine's live tables for launched clips and for tests. Channel 10
 // (stored 9) and a `none` follow give the note as written. `contextBeat` is already wrapped

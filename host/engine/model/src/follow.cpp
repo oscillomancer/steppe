@@ -382,6 +382,32 @@ std::vector<SoundingNote> soundingNotes(const Session& s, Id itemId, double from
     return out;
 }
 
+LeadPitches leadPitches(const std::vector<SoundingNote>& heard,
+                        const std::vector<std::int64_t>& sounded, double itemStartBeat,
+                        std::size_t noteCount) {
+    constexpr double kEdge = 1e-9;
+    LeadPitches out;
+    out.keep.assign(noteCount, std::nullopt);
+    std::vector<bool> whole(noteCount, false);
+    for (std::size_t k = 0; k < heard.size() && k < sounded.size(); ++k) {
+        const SoundingNote& h = heard[k];
+        if (h.note >= noteCount) continue;
+        const bool chased = h.songBeat < itemStartBeat - kEdge;
+        if (!out.keep[h.note]) {
+            out.keep[h.note] = sounded[k];
+            whole[h.note] = !chased;
+        } else if (!chased) {
+            if (!whole[h.note]) {  // the first whole pass beats a held-in fragment
+                out.keep[h.note] = sounded[k];
+                whole[h.note] = true;
+            } else if (out.keep[h.note] != sounded[k]) {
+                out.alike = false;
+            }
+        }
+    }
+    return out;
+}
+
 // --- contextOver ----------------------------------------------------------------------------
 
 std::vector<ContextPoint> contextOver(const Take& take, double u0, double u1, bool* truncated) {

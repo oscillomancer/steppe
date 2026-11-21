@@ -675,26 +675,10 @@ void registerTakeCommands(cmd::Registry& registry) {
                 sounded = *a.pitches;
             }
             // The pitch each note keeps, and whether the passes of a looped item sound alike.
-            // A fragment held into the item's start does not decide: it is its own case.
-            constexpr double kEdge = 1e-9;
-            std::vector<std::optional<std::int64_t>> keep(seq.notes.size());
-            std::vector<bool> keptWhole(seq.notes.size(), false);
-            bool alike = true;
-            for (std::size_t k = 0; k < heard.size(); ++k) {
-                const auto& h = heard[k];
-                const bool chased = h.songBeat < itemStart - kEdge;
-                if (!keep[h.note]) {
-                    keep[h.note] = sounded[k];
-                    keptWhole[h.note] = !chased;
-                } else if (!chased) {
-                    if (!keptWhole[h.note]) {  // the first whole pass beats a held-in fragment
-                        keep[h.note] = sounded[k];
-                        keptWhole[h.note] = true;
-                    } else if (keep[h.note] != sounded[k]) {
-                        alike = false;
-                    }
-                }
-            }
+            const model::LeadPitches lead =
+                model::leadPitches(heard, sounded, itemStart, seq.notes.size());
+            const auto& keep = lead.keep;
+            const bool alike = lead.alike;
             auto& txn = engine.txn();
             // The take's own copy of a pooled source.
             Id sourceId = *tk->source;
