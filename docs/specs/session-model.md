@@ -1634,7 +1634,13 @@ field: the key and chords over the item's span, with item bars and project bars
 both named.
 
 **Lead sheet.** `context.get`'s `text` and `context.write {text}` use one line per
-project bar: `N: ` then items. `{SYMBOL}:DUR` is a chord point at the cursor,
+project bar: `N: ` then items. The reader takes notation's bar separators too
+(*21 Nov 2026*): a `;` outside braces ends a bar like a newline, so `1: … ; 2: …` is two
+lines; a `|` written as a token of its own ends the bar and goes on with the next one on the
+same line, and a number after it is accepted when it names that bar (`1: … | 2: …` reads
+as `1: … | …`), any other is `context.bar_order`; a `#` comment still ends the whole line,
+the `;` after it included; a trailing `|` is an empty bar (`context.bar_length`). Printing
+is unchanged: one line per bar. The same reader reads a clip's context. `{SYMBOL}:DUR` is a chord point at the cursor,
 `r:DUR` a chord point with an empty symbol, `~:DUR` a hold (no point) and
 `key TONIC SCALE` a key point at the cursor that takes no time; `DUR` is the
 notation's duration (`notation::parseDuration`, at 960 ppq) and a bar's durations

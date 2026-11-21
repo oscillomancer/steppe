@@ -374,6 +374,58 @@ TEST_CASE("sharps are not comments, and a comment ends the line") {
     CHECK(b.app->head().context.size() == 3);
 }
 
+TEST_CASE("the lead sheet takes notation's bar separators: ; like a newline, | to the next bar") {
+    // Each of these is the same four bars as kSong, written differently.
+    const char* const forms[] = {
+        // `;` ends a bar like a newline does
+        "1: key Eb major {Ebmaj7}:w; 2: {Cm7}:h {Fm7}:h; 3: ~:w; 4: {Bb7}:h r:h\n",
+        // `|` goes on with the next bar, with or without its number
+        "1: key Eb major {Ebmaj7}:w | 2: {Cm7}:h {Fm7}:h | 3: ~:w | 4: {Bb7}:h r:h\n",
+        "1: key Eb major {Ebmaj7}:w | {Cm7}:h {Fm7}:h | ~:w | {Bb7}:h r:h\n",
+        // mixed, over lines, with a comment (which ends the whole line, `;` after it too)
+        ("1: key Eb major {Ebmaj7}:w | {Cm7}:h {Fm7}:h # the turnaround; 9: {X}\n"
+         "3: ~:w; 4: {Bb7}:h r:h\n"),
+    };
+    for (const char* form : forms) {
+        Bus b;
+        CAPTURE(form);
+        REQUIRE(write(b, form));
+        CHECK(sheet(b) == kSong);  // printing stays canonical: one line per bar
+        CHECK(b.app->head().context.size() == 6);
+    }
+    // The same text through a clip: its bars are clip bars, and the context prints back canonical.
+    Bus b;
+    b.run("scene.add", R"({"name": "A"})");
+    b.run("track.add", R"({"name": "Bass"})");
+    b.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w | 2: F2:w",
+        "context": "1: key C major {C}:w | {F}:w"})");
+    CHECK(b.run("midi.get", R"({"item": "cl_1"})")["context"]["text"].asString() ==
+          "1: key C major {C}:w\n2: {F}:w\n");
+}
+
+TEST_CASE("a pipe or semicolon in the lead sheet is checked as strictly as a newline") {
+    Bus b;
+    auto refuses = [&](const std::string& text, const char* code, const char* in = "") {
+        auto result = write(b, text);
+        REQUIRE_FALSE(result);
+        CAPTURE(text);
+        CHECK(result.error().code == code);
+        CHECK_FALSE(result.error().hint.empty());
+        CHECK(result.error().message.find(in) != std::string::npos);
+        CHECK(b.app->head().context.empty());
+    };
+    refuses("1: {C}:w | 3: {G}:w\n", "context.bar_order", "bar 3 follows a | where bar 2");
+    refuses("1: {C}:w | {G}:h\n", "context.bar_length", "bar 2 holds 1920");
+    refuses("1: {C}:w |\n", "context.bar_length",
+            "bar 2 holds 0");  // a trailing pipe is an empty bar
+    refuses("1: {C}:w; {G}:w\n", "context.syntax", "expected a bar number");
+    refuses("1: {C}:w; 3: {G}:w\n", "context.bar_order", "bar 3 follows bar 1");
+    refuses("1: {C}:w | 2: {Cm11}:w\n", "chord.unknown_quality", "bar 2");
+    // A pipe that is not a token of its own is not a separator.
+    refuses("1: {C}:w| {G}:w\n", "context.syntax", "bar 1");
+}
+
 TEST_CASE("context.write is a diff: equal points keep their ids, omitted ones go") {
     Bus b;
     seedSong(b);
