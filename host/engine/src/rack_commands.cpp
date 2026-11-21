@@ -3,6 +3,7 @@
 // Modular racks' commands (ADR-0062, rack.md §7): racks, modules and cables.
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include "learn_binding.h"
 #include "module_library.h"
 #include "rack_runtime.h"
+#include "supple/base/chars.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
 #include "supple/engine/racks.h"
@@ -240,11 +242,14 @@ std::optional<double> knobFromText(const sd::ParamModel& p, const std::string& t
     if (unit.empty()) return std::nullopt;
     std::size_t i = 0;
     while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;
+    if (i < text.size() && text[i] == '+') ++i;  // from_chars takes no plus sign
+    // Locale-independent (supple::fromChars): the process locale may use a decimal comma.
     const char* first = text.c_str() + i;
-    char* end = nullptr;
-    const double v = std::strtod(first, &end);
-    if (end == first || !std::isfinite(v)) return std::nullopt;
-    std::string suffix(end);
+    const char* const last = text.c_str() + text.size();
+    double v = 0;
+    const auto parsed = fromChars(first, last, v);
+    if (parsed.ec != std::errc() || !std::isfinite(v)) return std::nullopt;
+    std::string suffix(parsed.ptr, last);
     const auto b = suffix.find_first_not_of(" \t"), e = suffix.find_last_not_of(" \t");
     suffix = b == std::string::npos ? std::string() : suffix.substr(b, e - b + 1);
     const auto same = [&](std::string_view left, std::string_view right) {

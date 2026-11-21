@@ -4,7 +4,9 @@
 #include <supple/product.h>
 
 #include <unistd.h>
+#include <clocale>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <limits>
 
@@ -3334,6 +3336,29 @@ TEST_CASE("module.set: a knob takes text in its own unit, as other parameters do
     CHECK(knob(lfo, "rate") == 2.5);
     REQUIRE(set(lfo, R"({"rate": "0.05 kHz"})"));
     CHECK(knob(lfo, "rate") == 50.0);
+    // The text is read the same under a comma-decimal locale (a process setting the app
+    // does not own): "0.05 kHz" is 50, not 0. Skipped where the machine has none.
+    {
+        const std::string saved = std::setlocale(LC_NUMERIC, nullptr);
+        bool comma = false;
+        for (const char* name : {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "fr_FR.utf8", "de-DE",
+                                 "fr-FR", "German_Germany.1252", "French_France.1252"}) {
+            if (!std::setlocale(LC_NUMERIC, name)) continue;
+            char probe[16];
+            std::snprintf(probe, sizeof probe, "%.1f", 1.5);
+            comma = std::string(probe) == "1,5";
+            if (comma) break;
+        }
+        if (comma) {
+            REQUIRE(set(lfo, R"({"rate": "0.05 kHz"})"));
+            CHECK(knob(lfo, "rate") == 50.0);
+            REQUIRE(set(lfo, R"({"rate": " 0.25 hz"})"));
+            CHECK(knob(lfo, "rate") == 0.25);
+        } else {
+            MESSAGE("no comma-decimal locale on this machine: the locale check is skipped");
+        }
+        std::setlocale(LC_NUMERIC, saved.c_str());
+    }
     // Text in another unit, or none, is refused, and the hint says what the knob takes.
     for (const char* wrong :
          {R"({"macro_1": "80 dB"})", R"({"macro_1": "loud"})", R"({"macro_1": ""})"}) {
