@@ -1757,7 +1757,9 @@ keeps playing its print.
     with or without an envelope.
   - A name the plug-in lacks is refused (`modulation.target`) with a hint
     that lists only what a route can take: the modulatable parameters,
-    then those reached through an active envelope, named as such.
+    then those reached through an active envelope, named as such. Past
+    eight parameters a list is a count instead, the names left to
+    `fx.describe`.
 - Mixer targets (step M2): the target track or send must exist and fit the
   invariants above (`modulation.target` at `/target/track`,
   `/target/route` or `/target/param` otherwise), and a target in a frozen
