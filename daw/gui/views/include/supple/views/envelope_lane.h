@@ -47,8 +47,11 @@ double modulatedValue(const EnvScale& scale, double base, double offset);
 std::optional<EnvScale> envScale(const model::Envelope& env);
 // "Volume", "Pan", "Mute", "Playrate" (or the parameter key).
 std::string envTitle(const model::Envelope& env);
-// With a send's destination: "Send → Reverb · Volume" (others as above).
-std::string envTitle(const model::Envelope& env, const model::Session& session);
+// With a send's destination: "Send → Reverb · Volume"; a plug-in parameter
+// with its effect and the name its description gives (the scale's), else its
+// key: "Marram · Filter 1 Cutoff" (others as above).
+std::string envTitle(const model::Envelope& env, const model::Session& session,
+                     const EnvScale* scale = nullptr);
 // The envelope's value at a beat (points are in beats), with the segment
 // shapes the engine plays; `fallback` when it has no points.
 double envValueAt(const model::Envelope& env, double beat, double fallback);
