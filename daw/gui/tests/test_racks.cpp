@@ -2561,6 +2561,7 @@ TEST_CASE("modulation: a route's source is named, and shown picked in the rack w
     REQUIRE(f.racks->isOpen());
     CHECK(f.racks->rack() == rack);
     CHECK(f.racks->space()->selection() == std::set<model::Id>{modOut, lfo});
+    f.snapshot("rack-modulation-source.png");
     const ui::Rect seen = f.racks->space()->visibleSpace();
     for (const auto& m : f.racks->space()->scene().modules)
         if (m.id == lfo || m.id == modOut) {
