@@ -125,8 +125,10 @@ make bars short.
 A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.scene` skips it with a warning. `launch.stop` on a track with no clips is
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
-master playrate refuses launches (`launch.playrate`). A clip's take FX and
-their envelopes play, and so do a rack's Notes module and the track's MIDI sends.
+master playrate does not stop launches, but while it keeps the pitch an audio clip's
+launch is refused (`launch.playrate`), and `launch.capture` is refused under any active
+playrate. A clip's FX and envelopes play through its own chain; a rack's Notes module
+and the track's MIDI sends follow launches.
 
 Two things to expect when polling. A launch given just as the transport started (the
 first launch while stopped, or right after a seek) can be refused with `launch.later`

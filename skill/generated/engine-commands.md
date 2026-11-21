@@ -10804,7 +10804,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating Hint: launch again in a moment
@@ -10833,7 +10833,7 @@ Result:
 
 Start or end capturing launches for the timeline.
 
-While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time.
+While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time. Refused while a master playrate is active, where running time is not song time; one that becomes active ends a running capture.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -10875,6 +10875,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
+- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope, then capture
 
 ### Examples
 
@@ -10964,7 +10965,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating Hint: launch again in a moment
@@ -11201,7 +11202,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating Hint: launch again in a moment
@@ -11413,7 +11414,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active Hint: set the master playrate to 1 and turn off its envelope
+- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating Hint: launch again in a moment

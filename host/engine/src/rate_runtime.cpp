@@ -196,6 +196,10 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
         p->timelines[1]->scalarEdits.push(edit);
         p->scalarPublication->store(sequence, std::memory_order_release);
         p->requestedScalar = value;
+        // Launches placed on the old trajectory past the edit move with it
+        // (S3): service places them again.
+        voidRateLaunches(device);
+        launchRateControls_.scalar = value;
     }
     scalarPending_ = false;
     latest_ = std::make_shared<const model::Session>(session);

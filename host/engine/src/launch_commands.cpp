@@ -223,13 +223,14 @@ const char* kWhen =
     "transport is stopped it applies at the play position when playing starts.";
 
 std::vector<cmd::ErrorSpec> commonErrors() {
-    return {{"engine.stopped", "the engine is not running", "engine.start first"},
-            {"launch.playrate", "a master playrate is active",
-             "set the master playrate to 1 and turn off its envelope"},
-            {"launch.clip", "the running plan has no player for the clip",
-             "wait for the edit to reach the engine, then launch again"},
-            {"launch.queue", "too many launches are waiting", "wait for them to play"},
-            {"launch.later", "the transport is relocating", "launch again in a moment"}};
+    return {
+        {"engine.stopped", "the engine is not running", "engine.start first"},
+        {"launch.playrate", "an audio clip cannot play while the master playrate keeps the pitch",
+         "turn off the master playrate's preserve pitch, or set it to 1 without an envelope"},
+        {"launch.clip", "the running plan has no player for the clip",
+         "wait for the edit to reach the engine, then launch again"},
+        {"launch.queue", "too many launches are waiting", "wait for them to play"},
+        {"launch.later", "the transport is relocating", "launch again in a moment"}};
 }
 
 }  // namespace
@@ -471,7 +472,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "heard now (stopped: where playing starts); on: false ends it there. A stop, a seek "
             "or a loop change ends a capture that has run; one that has not run begins again "
             "at the new position. launch.commit writes the capture onto the timeline. from and "
-            "to: its span on the timeline in beats, laid out by running time.";
+            "to: its span on the timeline in beats, laid out by running time. Refused while a "
+            "master playrate is active, where running time is not song time; one that becomes "
+            "active ends a running capture.";
         c.tags = {"clip launcher", "transport", "recording"};
         c.args = schema::object<CaptureArg>("launch_capture_args")
                      .field("on", &CaptureArg::on, schema::boolean())
@@ -481,14 +484,16 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("from", &CaptureDone::from, schema::number())
                        .field("to", &CaptureDone::to, schema::number())
                        .build();
-        c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"}};
+        c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
+                    {"launch.playrate", "a master playrate is active",
+                     "set the master playrate to 1 and turn off its envelope, then capture"}};
         c.examples = {{"While stopped", j(R"({"on": true})"),
                        j(R"({"on": true, "from": 0, "to": 0})"), "song_with_clip_running"}};
         c.run = [](const CaptureArg& a, Context& ctx) -> Result<CaptureDone> {
             EngineApp& app = engine::app(ctx);
             auto engine = runningEngine(app);
             if (!engine) return std::move(engine).error();
-            (*engine)->captureLaunches(a.on);
+            SUPPLE_TRY((*engine)->captureLaunches(a.on));
             return captureDone(app, **engine);
         };
         addChecked(registry, std::move(c));
@@ -556,7 +561,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (!engine) return std::move(engine).error();
             auto capture = (*engine)->launchCapture();
             if (capture && capture->on) {
-                (*engine)->captureLaunches(false);
+                (void)(*engine)->captureLaunches(false);
                 capture = (*engine)->launchCapture();
             }
             if (!capture || capture->frames <= 0)

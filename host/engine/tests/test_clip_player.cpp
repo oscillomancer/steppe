@@ -678,7 +678,7 @@ TEST_CASE(
         REQUIRE(heard > 0);
         engine.pause();  // and at once, in the same turn:
         CHECK(engine.transport().sample == heard);
-        engine.captureLaunches(true);
+        REQUIRE(engine.captureLaunches(true));
         const Engine::LaunchRequest r = request("tr_1", "cl_1");
         auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
         REQUIRE(placed);
@@ -851,15 +851,24 @@ TEST_CASE("a render without a launch log plays the arrangement, with no clip war
         [](const std::string& w) { return w.find("launch.tempo") != std::string::npos; }));
 }
 
-TEST_CASE("launches are refused while a master playrate is active") {
+TEST_CASE("an audio clip's launch is refused while the master playrate keeps the pitch") {
+    // S3 step 1: launched audio plays by tape only. A MIDI clip launches.
     Project p;
     twoTracks(p);
     DummyBackend backend({.mode = DummyBackend::Mode::Manual});
     REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
-    p.run("transport.playrate.set", R"({"rate": 0.5})");
-    auto r = p.bus->execute({"launch.clip", j(R"({"clip": "cl_1"})"), kOrigin});
+    p.run("transport.playrate.set", R"({"rate": 0.5, "preserve_pitch": true})");
+    REQUIRE(p.app->engine()->awaitPlan());
+    auto r = p.bus->execute({"launch.clip", j(R"({"clip": "cl_2"})"), kOrigin});
     REQUIRE_FALSE(r);
     CHECK(r.error().code == "launch.playrate");
+    CHECK(r.error().message.find("cl_2") != std::string::npos);
+    CHECK(p.bus->execute({"launch.clip", j(R"({"clip": "cl_1"})"), kOrigin}));
+    // Without the pitch kept it launches.
+    p.run("transport.playrate.set", R"({"rate": 0.5, "preserve_pitch": false})");
+    REQUIRE(p.app->engine()->awaitPlan());
+    backend.run(40);  // (playing: the new plan's clock reads)
+    CHECK(p.bus->execute({"launch.clip", j(R"({"clip": "cl_2"})"), kOrigin}));
     p.app->stopEngine();
 }
 
@@ -888,8 +897,7 @@ TEST_CASE("launching a clip that follows the context warns launch.unfollowed, on
 }
 
 TEST_CASE("a looped replay is refused under a master playrate") {
-    // The replay wraps as the live executors do only on the unity path,
-    // which is the only one that plays launches yet.
+    // The replay wraps as the live executors do only on the unity path.
     Project p;
     twoTracks(p);
     p.run("transport.playrate.set", R"({"rate": 0.5})");
@@ -1104,7 +1112,8 @@ TEST_CASE("a launch missed before it is decided lands on neither the track nor i
     // The main thread stalls between publishing a launch and deciding it,
     // while the executors play past its bar. The executor that reaches a
     // frame of it undecided marks it missed: nothing switches there. Placed
-    // again, it switches the track and the rack together on the next bar.
+    // again at once by launch() (ADR-0097, revision 2026-11-21), it
+    // switches the track and the rack together on the next bar.
     for (const bool device : {false, true}) {
         Project p;
         rackFollows(p, device);
@@ -1125,6 +1134,7 @@ TEST_CASE("a launch missed before it is decided lands on neither the track nor i
                 DummyBackend* backend;
                 bool anticipative;
                 std::int64_t cycles;
+                bool done = false;  // the first attempt stalls, not the second
             } stall{&engine, &backend, options.anticipative, (96000 + 8192) / kBlock - 20};
             const auto run = [](Stall& st, std::int64_t cycles) {
                 if (st.anticipative)
@@ -1137,6 +1147,8 @@ TEST_CASE("a launch missed before it is decided lands on neither the track nor i
                 engine,
                 [](void* context) {
                     auto& st = *static_cast<Stall*>(context);
+                    if (st.done) return;
+                    st.done = true;
                     if (st.anticipative)
                         runAheadOnState(*st.engine, *st.backend, st.cycles, kBlock);
                     else
@@ -1147,8 +1159,8 @@ TEST_CASE("a launch missed before it is decided lands on neither the track nor i
             auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
             launchCommitHookForTests(engine, nullptr, nullptr);
             REQUIRE(placed);
-            CHECK(placed->anchorSample == 96000);
-            engine.service();  // missed: placed again, on bar 3
+            CHECK(placed->anchorSample == 192000);  // missed on bar 2: placed again, on bar 3
+            engine.service();
             const auto pending = engine.launchesPending();
             REQUIRE(pending.size() == 1);
             CHECK(pending[0].placed.anchorSample == 192000);
@@ -1197,7 +1209,7 @@ TEST_CASE(
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
         REQUIRE(engine.load(s, p.app->projectDir()));
         engine.setMetronome(false, 0.0);  // the count clicks regardless
-        engine.captureLaunches(true);
+        REQUIRE(engine.captureLaunches(true));
         const std::vector<Engine::LaunchRequest> scene{request("tr_1", "cl_1"),
                                                        request("tr_2", "cl_2")};
         auto placed = engine.launch(scene, model::LaunchQuantize::Bar);
@@ -1881,7 +1893,7 @@ TEST_CASE("a capture keeps what plays as it begins and ends at a relocation" *
                                                        request("tr_2", "cl_2")};
         REQUIRE(engine.launch(scene, model::LaunchQuantize::Bar));  // bar 2
         until(110000);
-        engine.captureLaunches(true);
+        REQUIRE(engine.captureLaunches(true));
         auto capture = engine.launchCapture();
         REQUIRE(capture);
         CHECK(capture->on);
@@ -1917,7 +1929,7 @@ TEST_CASE("a capture keeps what plays as it begins and ends at a relocation" *
         engine.pause();
         stopped = true;
         until(220000);
-        engine.captureLaunches(true);
+        REQUIRE(engine.captureLaunches(true));
         engine.seek(3.0);
         engine.awaitTransport();  // as transport.seek does: the executor has placed it
         until(230000);
@@ -2270,4 +2282,285 @@ TEST_CASE("launch.commit copies a launched clip and warns when its key is not th
     p.run("clip.set", R"({"clip": "cl_1", "context": "1: key C minor ~:w"})");
     json::Value again = p.runArgs("launch.commit", args);
     CHECK_FALSE(again.find("warnings"));
+}
+
+// --- Launches under a master playrate (ADR-0097, dated revision 2026-11-21) ---
+
+namespace {
+
+// The master playrate the S3 tests play under, the pitch not kept: a
+// constant 0.75, or an envelope from 1 down to 0.6 over two bars.
+void underRate(Project& p, bool envelope) {
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+    if (envelope)
+        p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                         R"({"beat": 0, "value": 1}, {"beat": 8, "value": 0.6}]})");
+}
+
+// The live run's output against the offline replay of its log, over the
+// first `frames` device frames; and the same without the launches, which
+// must differ for the equality to say something.
+void liveIsReplay(const model::Session& s, const fs::path& dir, const Live& live, double seconds,
+                  std::size_t frames) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = seconds;
+    settings.projectDir = dir;
+    settings.launches = live.log;
+    auto offline = renderOffline(s, pool, settings);
+    REQUIRE_MESSAGE(offline, (offline ? std::string() : offline.error().toString()));
+    REQUIRE(offline->audio.channels[0].size() >= frames);
+    CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], frames) == 0.0);
+    settings.launches.clear();
+    auto plain = renderOffline(s, pool, settings);
+    REQUIRE(plain);
+    CHECK(maxDiff(live.left, live.latency, plain->audio.channels[0], frames) > 0.0);
+}
+
+}  // namespace
+
+TEST_CASE("launches under a master playrate play as the offline replay, in both executors" *
+          doctest::description("rt")) {
+    // twoTracks' scene launch, then tr_1 back to the arrangement and tr_2
+    // stopped, under a constant 0.75 and under an envelope. At 0.75 bar 2
+    // (song 96000) is heard at running frame 128000, bar 3 at 256000.
+    for (const bool envelope : {false, true}) {
+        Project p;
+        twoTracks(p);
+        underRate(p, envelope);
+        const model::Session s = p.app->head();
+        const std::int64_t frames = 48000 * 8 + 8192;
+        for (const std::uint32_t block : {128u, 512u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("envelope " << envelope << ", block " << block << ", anticipative "
+                                 << options.anticipative);
+                Engine::LaunchRequest stop = backTo("tr_2");
+                stop.action = LaunchLogEntry::Action::Stop;
+                const std::vector<Step> steps{
+                    {20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}},
+                    {(128000 + 4000) / block, {backTo("tr_1"), stop}}};
+                const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
+                REQUIRE(live.log.size() == 4);
+                CHECK(live.log[0].anchorSample == 96000);  // bar 2
+                CHECK(live.log[1].anchorSample == 96000);  // one target for the scene
+                CHECK(live.log[2].anchorSample == 192000);
+                if (!envelope) {
+                    CHECK(live.log[0].runningFrame == 128000);
+                    CHECK(live.log[2].runningFrame == 256000);
+                }
+                liveIsReplay(s, p.app->projectDir(), live, 5.0, 300000);
+            }
+    }
+}
+
+TEST_CASE("a launch under a master playrate switches where the song reaches its boundary") {
+    // The anchor is the first frame whose song position reaches the bar:
+    // on the rate timeline the frame before is short of it. And it moves
+    // with a scalar edit made while it waits.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.6, "preserve_pitch": false})");
+    const model::Session s = p.app->head();
+    const std::int64_t frames = 48000 * 5;
+    // 0.6: bar 2 (song 96000) at device 160000 exactly.
+    const Live plain = playLive(s, p.app->projectDir(), kInCallback, 128, frames,
+                                {{20, {request("tr_1", "cl_1")}}});
+    REQUIRE(plain.log.size() == 1);
+    CHECK(plain.log[0].anchorSample == 96000);
+    CHECK(plain.log[0].runningFrame == 160000);
+    // A scalar edit to 1.2 well before then: the launch is placed again on
+    // the new trajectory, still on bar 2, much earlier.
+    p.run("transport.playrate.set", R"({"rate": 1.2, "preserve_pitch": false})");
+    const model::Session faster = p.app->head();
+    const Live edited = playLive(s, p.app->projectDir(), kInCallback, 128, frames,
+                                 {{20, {request("tr_1", "cl_1")}},
+                                  {200, {}, {}, &faster},
+                                  {210, {}}});  // (a service, which places it again)
+    REQUIRE(edited.log.size() == 1);
+    CHECK(edited.log[0].anchorSample == 96000);
+    CHECK(edited.log[0].runningFrame < 140000);
+    CHECK(edited.log[0].runningFrame > 200 * 128);
+}
+
+TEST_CASE("launches of clips with take chains under a master playrate play as the replay" *
+          doctest::description("rt")) {
+    // As the unity test: an audio clip through a latent chain on tr_1, a
+    // MIDI clip through an instrument and a latent gain on tr_2.
+    for (const bool envelope : {false, true}) {
+        Project p;
+        latentClip(p);
+        p.run("track.add", R"({"name": "Keys"})");  // tr_2
+        p.run("clip.add",
+              R"({"track": "tr_2", "scene": "sc_1", "notation": "voice bass; 1: C3:q E3:q G3:h"})");
+        auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
+        fx["take"] = takeOf(p, "cl_2");
+        p.runArgs("fx.add", fx);
+        auto gain = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+        gain["take"] = takeOf(p, "cl_2");
+        const std::string fxId = p.runArgs("fx.add", gain)["fx"].asString();
+        auto patch = j(R"({"patch": {"params": {"latency": "short"}}})");
+        patch["fx"] = fxId;
+        p.runArgs("fx.patch.merge", patch);
+        auto args = j(R"({"track": "tr_1", "bar": 1})");
+        args["audio_file"] = p.ramp("item.wav", 240000).string();
+        p.runArgs("item.add", args);
+        underRate(p, envelope);
+        const model::Session s = p.app->head();
+        const std::int64_t frames = 48000 * 8 + 8192;
+        for (const std::uint32_t block : {128u, 512u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("envelope " << envelope << ", block " << block << ", anticipative "
+                                 << options.anticipative);
+                Engine::LaunchRequest stop = backTo("tr_2");
+                stop.action = LaunchLogEntry::Action::Stop;
+                const std::vector<Step> steps{
+                    {20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}},
+                    {(128000 + 4000) / block,
+                     {request("tr_1", "cl_1")},
+                     model::LaunchQuantize::Beat},
+                    {(192000 + 4000) / block, {backTo("tr_1"), stop}}};
+                const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
+                REQUIRE(live.log.size() == 5);
+                liveIsReplay(s, p.app->projectDir(), live, 5.0, 300000);
+            }
+    }
+}
+
+TEST_CASE("a rack's Notes module follows launches under a master playrate as the replay" *
+          doctest::description("rt")) {
+    Project p;
+    rackFollows(p, false);
+    underRate(p, false);
+    const model::Session s = p.app->head();
+    const std::int64_t frames = 48000 * 8 + 8192;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Engine::LaunchRequest stop = backTo("tr_1");
+        stop.action = LaunchLogEntry::Action::Stop;
+        const std::vector<Step> steps{{20, {request("tr_1", "cl_1")}},
+                                      {(128000 + 4000) / 128, {stop}},
+                                      {(256000 + 4000) / 128, {backTo("tr_1")}}};
+        const Live live = playLive(s, p.app->projectDir(), options, 128, frames, steps);
+        REQUIRE(live.log.size() == 3);
+        CHECK(live.log[2].anchorSample == 288000);
+        CHECK(live.log[2].runningFrame == 384000);
+        liveIsReplay(s, p.app->projectDir(), live, 6.5, 380000);
+        // The gate follows the clip, at song times over 0.75 in device time.
+        const auto g = gates(p, 6.5, live.log), plain = gates(p, 6.5, {});
+        const auto at = [](const std::vector<float>& v, double song) {
+            return v[std::size_t(song / 0.75 * 48000)];
+        };
+        CHECK(at(g, 2.1) == 1.0f);   // the clip's first eighth note
+        CHECK(at(g, 2.35) == 0.0f);  // its rest: the arrangement's A3 passes unplayed
+        CHECK(at(plain, 2.35) == 1.0f);
+        CHECK(at(g, 2.6) == 1.0f);  // its second eighth
+        CHECK(at(g, 4.5) == 0.0f);  // stopped
+        CHECK(at(g, 6.3) == 1.0f);  // the arrangement again
+    }
+}
+
+TEST_CASE("launch.capture is refused under a master playrate, and one becoming active ends it") {
+    Project p;
+    twoTracks(p);
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
+    // Armed at unity, running: a playrate turned on ends it.
+    p.run("launch.capture", R"({"on": true})");
+    p.run("transport.play", "{}");
+    backend.run(40);
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+    REQUIRE(p.app->engine()->awaitPlan());
+    backend.run(40);
+    p.app->engine()->service();
+    auto capture = p.app->engine()->launchCapture();
+    REQUIRE(capture);
+    CHECK_FALSE(capture->on);
+    CHECK(capture->frames > 0);
+    // Now refused at arming.
+    auto r = p.bus->execute({"launch.capture", j(R"({"on": true})"), kOrigin});
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "launch.playrate");
+    CHECK(r.error().hint.find("then capture") != std::string::npos);
+    p.app->stopEngine();
+}
+
+TEST_CASE("under a master playrate a switch crossfades over 5 ms as heard, in device frames") {
+    // At 0.75 bar 2 (song 96000) is device frame 128000. The crossfade runs
+    // over the next 240 device frames (180 song samples), the arrangement's
+    // ramp out and the clip's in, each read through the tape converter.
+    Project p;
+    auto args = j(R"({"track": "tr_1", "bar": 1})");
+    args["audio_file"] = p.ramp("item.wav", 240000).string();
+    p.runArgs("item.add", args);
+    args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = p.ramp("clip.wav", 48000).string();
+    p.runArgs("clip.add", args);
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+    LaunchLogEntry e = launch(128000, "cl_1");
+    e.anchorSample = 96000;
+    e.anchorBeat = 4;
+    const auto out = p.render(2.5, {e});
+    const auto plain = p.render(2.5, {});
+    REQUIRE(out.size() > 130000);
+    for (std::int64_t d = 120000; d < 128000; d += 97)
+        REQUIRE(out[std::size_t(d)] == plain[std::size_t(d)]);
+    for (std::int64_t k = 60; k < kFade; k += 30) {
+        const double x = double(k) / double(kFade);
+        const double clip = double(rampAt(static_cast<std::int64_t>(0.75 * double(k))));
+        const double want = double(plain[std::size_t(128000 + k)]) * (1 - x) + clip * x;
+        REQUIRE_MESSAGE(double(out[std::size_t(128000 + k)]) == doctest::Approx(want).epsilon(0.01),
+                        "frame " << 128000 + k);
+    }
+    // Past it, the clip alone, its phase the song's from the anchor.
+    CHECK(double(out[128000 + 400]) == doctest::Approx(double(rampAt(300))).epsilon(0.01));
+}
+
+TEST_CASE("under a slow master playrate a launch's first frame plays the note on its anchor") {
+    // At 0.25 the frame before a switch can already be past the anchor (an
+    // unquantized launch's anchor is the floor's song sample, rounded down):
+    // the switch's first frame reaches back to it, so the clip's first note
+    // sounds. Song 96000 + 0.5 at device frame 384002.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.25, "preserve_pitch": false})");
+    LaunchLogEntry e = launch(384002, "cl_1");
+    e.anchorSample = 96000;
+    e.anchorBeat = 4;
+    const auto out = p.render(2.5, {e});
+    REQUIRE(out.size() > 384002 + 40000);
+    // Half a second of C3 (131 Hz: about 131 zero crossings; the
+    // arrangement's A3 there would give 220), before E3 an eighth (48000
+    // frames) later.
+    int crossings = 0;
+    double peak = 0;
+    for (std::size_t i = 384002 + 500; i < 384002 + 24500; ++i) {
+        peak = std::max(peak, std::fabs(double(out[i])));
+        if ((out[i] < 0) != (out[i + 1] < 0)) ++crossings;
+    }
+    CHECK(peak > 0.05);
+    CHECK(crossings > 110);
+    CHECK(crossings < 150);
+}
+
+TEST_CASE("under a master playrate a clip take's FX envelope plays in clip time (C2)") {
+    // At 0.75 each 12000-sample pass takes 16000 device frames. The gain
+    // envelope runs 0 to -24 dB over the pass, by the clip position heard,
+    // never by the rate timeline.
+    Project p;
+    latentClip(p);
+    p.run("env.add", R"({"fx": "fx_1", "param": "gain", "points": [{"seconds": 0, "value": 0},
+                                                                  {"seconds": 0.25, "value": -24}]})");
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+    LaunchLogEntry e = launch(128000, "cl_1");
+    e.anchorSample = 96000;
+    e.anchorBeat = 4;
+    const auto x = p.render(3.0, {e});
+    REQUIRE(x.size() > 128000 + 32000);
+    const auto ratio = [&](std::int64_t k) {
+        const auto c = static_cast<std::int64_t>(0.75 * double(k)) % 12000;
+        return double(x[std::size_t(128000 + k)]) / double(rampAt(c));
+    };
+    CHECK(ratio(16000 + 800) > 0.7);    // clip position 600: about -1 dB
+    CHECK(ratio(16000 + 15333) < 0.1);  // 11500: about -23 dB
+    CHECK(ratio(16000 + 15333) > 0.05);
 }
