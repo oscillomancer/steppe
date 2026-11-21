@@ -77,7 +77,13 @@ instances (ADR-0092, §1.6).
 - **ItemPlayer** (inside a TrackNode): per active item on the track's lanes,
   per take: source reader (audio: disk-streamed decoded+resampled blocks
   from the media cache; MIDI: event generator from the source with playrate
-  and loop), take FX chain, take envelopes, item gain/fades/crossfades.
+  and loop), take FX chain, take envelopes, item gain/fades/crossfades. As
+  built, a take's envelopes are `volume`, `pan` and `mute`. An envelope with
+  `param: "pitch"` can only come from a file (`env.add` refuses it with
+  `env.param`): the plan has no slot for it, so it is never played, on an item
+  or a clip, and nothing warns. The take's own `pitch` (a constant, in
+  semitones) plays. Playing the envelope needs the stretch path to take a
+  varying ratio (the lead's decision, with clips; ADR-0097).
 - **FxInstance** wrappers around `host::Instance` (in-process) or a bridge
   proxy (§5), with wet/dry, bypass, pins, oversampling, parallel groups and
   containers compiled into a small per-chain program. As built: containers

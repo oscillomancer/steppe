@@ -453,7 +453,9 @@ busses only; `track.strip_type` on masters),
 `{track: "tr_0", param: playrate}` (one global master-rate envelope only),
 `{route: id, param: volume|pan|mute}`, `{fx: id, param: <key, id or name>}`
 (stored canonical; "Plug-in parameter references"),
-`{take: id, param: volume|pan|pitch|mute}`, `{tempo: true}` (the tempo map is
+`{take: id, param: volume|pan|pitch|mute}` (`pitch` in semitones is valid in
+a file and checked on load, but `env.add` refuses it, `env.param`, and the engine
+does not play it: engine.md, ItemPlayer), `{tempo: true}` (the tempo map is
 edited through `tempo.*`, not envelopes); `mode`
 (`trim|read|touch|latch|latch_preview|write`); `active`, `armed`,
 `visible`; `points`: array of `[pos, value, shape, tension]` in the
@@ -603,12 +605,16 @@ deduplicated, reference-counted across versions.
 ## 2. In-memory representation
 
 - Every object type is an immutable C++ value struct; collections are
-  `ImmutableMap<Id, std::shared_ptr<const T>>` (a sorted vector for ≤ 256
-  entries, a persistent HAMT beyond — behind one interface so it can start
-  as a sorted vector and upgrade without touching callers; ADR-0008 allows
-  `immer` if needed). Large arrays (MIDI events, envelope points) are chunked
-  (`ChunkedArray<T>`, 4096 elements per chunk) so editing one note copies one
-  chunk.
+  `IdMap<T>` (`supple/model/idmap.h`): a sorted vector of `{id, rev,
+  std::shared_ptr<const T>}`. Copying a map is a pointer copy; an edit copies
+  the entry vector once per transaction and shares every untouched object.
+  *(21 Nov 2026: the text before this said a persistent HAMT beyond 256
+  entries and a `ChunkedArray<T>` of 4096-element chunks for MIDI events and
+  envelope points. Neither was built. Both are plain `std::vector`s inside
+  their object, ``midi::Sequence::notes` and `Envelope::points`, so editing one
+  note or point copies that object's whole array. The interface leaves room for a
+  persistent trie (ADR-0008 allows `immer`); nothing needs one at the limits
+  the model enforces, and one is to be added only for a measured cost.)*
 - `Session` holds the root pointers; edits produce a new `Session` sharing
   everything untouched. Readers on any thread hold a `std::shared_ptr<const
   Session>`; nothing is ever mutated in place.
@@ -645,7 +651,8 @@ never a user error — user errors are caught by command validation first.
   order as in §1, then ID). Large arrays diff as summaries (`notes: 3 added,
   1 changed`) with an optional detailed form. Used by `session.changed`
   events, branch reviews and the undo history display.
-- `describe(session, scope, detail)` → compact text for LLMs, e.g.
+- `describe(session)` → compact text for LLMs (no scope or detail argument: it
+  prints the whole session), e.g.
 
 ```
 Project "Demo" · 48 kHz · 120 BPM 4/4 · 16 bars (0:32.0)
@@ -1089,8 +1096,13 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `project.template.save` (a), `project.template.load {name}` (a, a new
   unsaved project), `project.template.list` (q), `project.template.delete`
   (a).
-- **session**: `session.describe {scope, detail}` (q), `session.query
-  {kind, filter, fields}` (q), `session.get {id, fields}` (q).
+- **session**: `session.describe` (q, no arguments): the compact text of §4 and
+  the ids to use with other commands. *(21 Nov 2026: this list also named
+  `session.query {kind, filter, fields}` and `session.get {id, fields}`. They
+  were never built; the per-kind queries (`scene.list`, `take.list`, `route.list`,
+  `env.list`, `region.list`, `marker.list`, `rack.list`, `modulation.list`, … and
+  each family's `get`) answer what they were for, and error hints name
+  `session.describe`. The sandbox has its own `session.get`.)*
 - **tempo/meter**: `tempo.set {points}`, `tempo.add`, `tempo.remove`,
   `timesig.set {bar, meter: "3/4"}`, `timesig.remove`,
   `time.convert {from, to, value}` (q).
