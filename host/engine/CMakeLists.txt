@@ -179,6 +179,17 @@ if(SUPPLE_BUILD_TESTS)
       COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey_song.py
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
     set_tests_properties(engine.mcp-journey-song PROPERTIES LABELS "engine;slow")
+    # The song again after batch 3 (ADR-0098): one lead sheet with three key changes and two
+    # borrowed chords; clips that follow it by key and by chords, laid, measured bar by bar;
+    # modulation named by name, id and key (host fixtures: one plug-in without keys, one with);
+    # a launch under a master playrate; a performance committed; an edit after the fact.
+    if(TARGET clap-host-fixtures)
+      add_test(NAME engine.mcp-journey-song-2
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey_song_2.py
+                $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap
+                $<TARGET_FILE:clap-host-fixtures>)
+      set_tests_properties(engine.mcp-journey-song-2 PROPERTIES LABELS "engine;slow")
+    endif()
   endif()
 endif()
 
