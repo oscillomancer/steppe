@@ -155,13 +155,18 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
     // launches that hold (the last of a track's at a frame) start every clip
     // of the scene that could play (a frozen track's cannot). It runs until
     // one of those tracks is launched again, else the capture's end. A clip
-    // launched alone, or some of a scene's, writes none. The song position
-    // of a frame is the launch's own beat where it is exact.
+    // launched alone, or some of a scene's, writes none. Its edges are where
+    // the items land: the launch's own beat where it is exact, else the
+    // timeline's position of the running frame.
     {
         const model::Session s = app.view();
+        // Where running frame `frame` lands on the timeline, as the items do
+        // (timelineBeat): the launch's exact beat before the first wrap, the
+        // timeline's own position past it, never the folded song position.
         const auto beatOfEntry = [&](std::int64_t frame, const CapturedLaunch& e) {
-            const std::int64_t songFrame = song(frame);
-            return songFrame == e.anchor ? e.anchorBeat : beatAt(double(songFrame));
+            return frame < firstWrap && perf.start + frame == e.anchor
+                       ? e.anchorBeat
+                       : beatAt(double(perf.start + frame));
         };
         std::map<std::int64_t, std::vector<const CapturedLaunch*>> holding;  // by frame
         for (const auto& [track, launches] : byTrack) {

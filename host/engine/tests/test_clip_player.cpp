@@ -1945,6 +1945,39 @@ TEST_CASE("launch.commit writes a section for each scene launched whole, in the 
         p.run("history.redo", "{}");
         CHECK(p.app->head().regions.size() == before + 2);
     }
+    SUBCASE("under a transport loop the sections land where the items do, past the wrap") {
+        // The loop runs bars 1-2 (frames 0-192000); A is launched whole at running frame 0,
+        // C at running frame 288000, which the song heard as frame 96000 (beat 4, bar 2). The
+        // items lie on the timeline by running time, C from bar 4 (beat 12), A before it, and
+        // so must the sections: not at the folded song position.
+        const auto at = [](std::int64_t frame, std::int64_t anchor, const char* track,
+                           const char* clip, double beat) {
+            return std::string(R"({"frame": )") + std::to_string(frame) + R"(, "track": ")" +
+                   track + R"(", "action": "clip", "clip": ")" + clip + R"(", "anchor": )" +
+                   std::to_string(anchor) + R"(, "anchor_beat": )" + std::to_string(beat) + "}";
+        };
+        const std::string log = at(0, 0, "tr_1", "cl_1", 0) + "," + at(0, 0, "tr_2", "cl_2", 0) +
+                                "," + at(288000, 96000, "tr_1", "cl_4", 4) + "," +
+                                at(288000, 96000, "tr_2", "cl_5", 4);
+        json::Value args = json::Value::object();
+        args["performance"] = j(
+            R"({"sample_rate": 48000, "start": 0, "frames": 384000, "loop": {"start": 0, "end": 192000},
+                "launches": [)" +
+            log + "]}");
+        json::Value done = p.runArgs("launch.commit", args);
+        REQUIRE(done["sections"].size() == 2);
+        const auto r = regions();
+        REQUIRE(r.size() == before + 2);
+        CHECK(std::get<0>(r[before]) == "A");
+        CHECK(std::get<1>(r[before]) == doctest::Approx(0));
+        CHECK(std::get<2>(r[before]) == doctest::Approx(12));
+        CHECK(std::get<0>(r[before + 1]) == "C");
+        CHECK(std::get<1>(r[before + 1]) == doctest::Approx(12));
+        CHECK(std::get<2>(r[before + 1]) == doctest::Approx(16));  // the capture's end
+        // The section names what plays under it: C's items start where its section does.
+        CHECK(p.run("context.at", R"({"bar": 3})")["section"]["name"].asString() == "A");
+        CHECK(p.run("context.at", R"({"bar": 4})")["section"]["name"].asString() == "C");
+    }
     SUBCASE("committing again writes the same performance over itself: the sections stay") {
         const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0);
         json::Value first = commit(log, 192000);
