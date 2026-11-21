@@ -87,3 +87,28 @@ TEST_CASE("lfo: a phase input drives it") {
     CHECK(h.output("out")[1250] == doctest::Approx(-0.5));
     CHECK(h.output("trigger")[2005] == 1.0);
 }
+
+TEST_CASE("lfo: synced, it holds the play position's phase while the song is stopped") {
+    // The builder's D2: a synced LFO is a function of the song position, so
+    // with the transport stopped it sits at the play position's phase, and
+    // playing from there goes on from it.
+    ModuleHarness h(supple::rack::test::stock("lfo"));
+    h.set("sync", 1);
+    h.set("division", 6);  // 1/4: a cycle a beat
+    ModuleHarness::Transport t;
+    t.playing = false;
+    t.tempo = 120;  // 24000 frames a beat
+    t.beats = 2.25;
+    h.transport(t);
+    h.run(24000);
+    const auto& still = h.output("phase");
+    for (std::size_t k = 0; k < 24000; k += 1000) CHECK(still[k] == doctest::Approx(0.25));
+    const double held = h.output("out")[23999];
+    CHECK(h.output("out")[0] == doctest::Approx(held));
+    t.playing = true;
+    h.transport(t);
+    h.run(12000);
+    const auto& moving = h.output("phase");  // the whole run: playing from 24000
+    CHECK(moving[24000] == doctest::Approx(0.25));
+    CHECK(moving[24000 + 6000] == doctest::Approx(0.5).epsilon(1e-3));
+}
