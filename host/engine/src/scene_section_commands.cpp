@@ -217,7 +217,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "pass, and copied why a clip that cannot follow was left as it is; pooled with a "
             "mapping that moves a note is refused (clip.follow_pooled). With none the notes are "
             "copied as they are, and context.mismatch warns once for each item whose clip's key "
-            "is not the project's under it. An item already in "
+            "(or, in the same key, chord) is not the project's under it. An item already in "
             "the span on a track that receives a clip is refused (scene.insert.occupied), and "
             "an empty scene (scene.empty). A section named after the scene (name overrides) "
             "is added over the span. One undo step.";

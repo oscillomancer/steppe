@@ -218,7 +218,7 @@ instructions are in `docs/guides/installing.md`.
   `followed` says how, by bar, and a looped item whose passes map differently
   is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
   that cannot follow is copied with its reason, and `launch.commit` copies
-  what was heard and warns `context.mismatch` when a clip's key is not the
+  what was heard and warns `context.mismatch` when a clip's key (or, in the same key, chord) is not the
   project's under it. Not built: a launched clip following live (X4:
   `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
   clip plays as written), `write_context` (X5). The roll shows and edits a

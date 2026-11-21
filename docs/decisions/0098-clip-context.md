@@ -234,7 +234,9 @@ clip (above), and placement copies what cannot follow, saying why.
   and the project's key both hold and differ in tonic pitch class or scale.
   It names the clip, both keys and the first project bar. A drum-only clip
   gives none, and neither does an enharmonic spelling (Eb major under D#
-  major).
+  major). (21 Nov 2026: the same warning is also given when the key agrees
+  but the clip's chord at some beat differs from the project's there; it
+  names both chords and the first bar, and an item still gets one.)
 - **`key`.** Each note is mapped by `harmony::follow` from the clip's key at
   its clip beat to the key at its place. Where no readable key holds at the
   place, the note is copied, with one `context.no_key` warning per item.

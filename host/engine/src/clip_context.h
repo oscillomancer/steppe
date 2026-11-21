@@ -78,8 +78,10 @@ std::vector<model::ContextPoint> composeContext(
 // the clip's key (at its clip beat: the beat from the item's start through the clip's
 // period, `phase` beats into it at the start) and the project's key both hold and differ in
 // tonic pitch class or scale. It names the clip, both keys and the first project bar where
-// they differ. A clip with no note off channel 10 (drums, or empty) gives none, and neither
-// does an enharmonic spelling.
+// they differ. In the same key (or with none to compare) it is also given for the first beat
+// at which the clip's chord and the project's both hold and differ (root, quality or bass),
+// naming both chords. A clip with no note off channel 10 (drums, or empty) gives none, and
+// neither does an enharmonic spelling.
 std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
                                      const model::Clip& clip, double start, double length,
                                      double phase = 0, const std::string& path = "/clip");

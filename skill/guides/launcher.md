@@ -72,7 +72,9 @@ keeps the harmony at a place. Say it when you make the clip:
   `chord`).
 - Laying a clip (`item.add {clip}`, `scene.insert`, `arrangement.build`, `launch.commit`)
   with its notes copied as they are gives a `context.mismatch` warning when the clip's key is
-  not the project's under the item (once per item; once per launched clip in `launch.commit`).
+  not the project's under the item, or, in the same key, when its chord at some beat is not the
+  chord the project has there (once per item, naming the first bar that differs; once per
+  launched clip in `launch.commit`). A clip with no chords has none to compare.
 - Shortening a clip drops the context points past its end (`clip.context_dropped`); a
   context change that leaves no key at the start resets `follow` (`clip.follow_reset`).
 

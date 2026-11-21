@@ -2283,7 +2283,12 @@ bars.
   when the clip has a key and, at some beat b of the item's span, the clip's
   key at b's clip beat and the project's key at b both hold and differ in
   tonic pitch class or scale. It names the clip, both keys and the first
-  project bar where they differ. A clip whose notes are all on channel 10
+  project bar where they differ. In the same key (or with no key to compare)
+  it is also given when, at some beat b, the clip's chord at b's clip beat
+  and the project's chord at b both hold and differ (root, quality or bass):
+  it names the clip, both chords and the first project bar; the first bar
+  that differs, key or chord, is the one named, and an item gets one warning
+  in all. A clip with no chords, or a clip whose notes are all on channel 10
   gives none. `launch.commit` gives it once for each launched stretch of a
   clip, not for each period the stretch is laid as.
 - **`key`.** Each note goes through `harmony::follow` (`harmony.md` §5)
