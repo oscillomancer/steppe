@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <map>
 
+#include "supple/model/context.h"
 #include "supple/notation/notation.h"
 
 namespace supple::gui {
@@ -77,6 +78,56 @@ std::vector<model::ContextPoint> withContextPoint(std::vector<model::ContextPoin
                                 b.type != model::ContextType::Key;
                      });
     return points;
+}
+
+ClipContextAxis clipContextAxis(const model::Clip& clip) {
+    ClipContextAxis a;
+    a.length = clip.length > 0 ? clip.length : 0.0;
+    a.looping = clip.loop.on && clip.loop.length > 0;
+    a.from = a.looping ? clip.loop.start : 0.0;
+    a.window = a.looping ? clip.loop.length : a.length;
+    return a;
+}
+
+std::vector<double> ClipContextAxis::soundingBeats(double content) const {
+    // As the engine's clipSoundingBeats, step for step.
+    std::vector<double> beats;
+    if (!(length > 0)) return beats;
+    const int passes = looping ? static_cast<int>(std::ceil(length / window - 1e-9)) : 1;
+    if (content < from || content >= from + window) return beats;
+    for (int pass = 0; pass < passes; ++pass) {
+        const double at = pass * window + content - from;
+        if (at < length) beats.push_back(at);
+    }
+    return beats;
+}
+
+double ClipContextAxis::contextBeat(double content) const {
+    const std::vector<double> beats = soundingBeats(content);
+    if (!beats.empty()) return beats.front();
+    return std::clamp(content, 0.0, std::max(0.0, length - 1.0 / 960.0));
+}
+
+std::vector<std::pair<double, std::optional<harmony::Key>>> clipKeySpans(const model::Clip& clip) {
+    const ClipContextAxis axis = clipContextAxis(clip);
+    // contextBeat is piecewise: the key it reads can change only at a key
+    // point's beat seen directly (outside the window) or through the window
+    // (inside it), and where the mapping jumps: the window's edges and the
+    // clip's end.
+    std::vector<double> cuts{0.0, axis.from, axis.from + axis.window, axis.length};
+    for (const model::ContextPoint& p : clip.context)
+        if (p.type == model::ContextType::Key) {
+            cuts.push_back(p.beat);
+            cuts.push_back(p.beat + axis.from);
+        }
+    std::sort(cuts.begin(), cuts.end());
+    std::vector<std::pair<double, std::optional<harmony::Key>>> spans{
+        {-1e9, model::keyAt(clip, axis.contextBeat(-1.0))}};
+    for (const double at : cuts) {
+        const auto key = model::keyAt(clip, axis.contextBeat(at));
+        if (key != spans.back().second) spans.emplace_back(at, key);
+    }
+    return spans;
 }
 
 }  // namespace supple::gui

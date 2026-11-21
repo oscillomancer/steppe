@@ -789,7 +789,7 @@ class BarStrip : public ui::Node {
             // lie inside it); the project's runs on.
             const float end = i + 1 < s_.chords.size()
                                   ? g.xOf(s_.chords[i + 1].beat - s_.itemPosition)
-                              : s_.clip ? g.xOf(s_.itemLength)
+                              : s_.clip ? g.xOf(s_.contextEnd)
                                         : row.right() + 2;
             if (end < row.x) continue;
             if (m.text.empty()) {
@@ -2039,18 +2039,26 @@ Status MidiEditor::reload() {
     state_.keys.clear();
     state_.chords.clear();
     state_.keyMarks.clear();
+    state_.contextShift = 0;
+    state_.contextEnd = 0;
     if (state_.clip) {
+        // The roll's axis is the take's content; a looped clip's context is
+        // read through its loop window, as midi.edit reads it (review round
+        // 77, L1). The strip shows the first pass.
         const model::Clip& clip = *owner->clip;
-        state_.keys.push_back({0.0, model::keyAt(clip, 0.0)});
+        const ClipContextAxis axis = clipContextAxis(clip);
+        for (const auto& [beat, key] : clipKeySpans(clip)) state_.keys.push_back({beat, key});
+        state_.contextShift = axis.from;
+        state_.contextEnd = axis.from + axis.shownEnd();
         for (const model::ContextPoint& p : clip.context) {
+            if (p.beat >= axis.shownEnd() - 1e-9) continue;  // a later pass
+            const double at = p.beat + axis.from;
             if (p.type == model::ContextType::Key) {
-                if (p.beat > 0) state_.keys.push_back({p.beat, model::parseKey(p)});
-                state_.keyMarks.push_back(
-                    {p.beat, model::keyWords(p), model::parseKey(p).has_value()});
+                state_.keyMarks.push_back({at, model::keyWords(p), model::parseKey(p).has_value()});
                 continue;
             }
             const bool known = p.symbol.empty() || model::parseChordPoint(p).has_value();
-            state_.chords.push_back({p.beat, p.symbol + (known ? "" : "?"), known});
+            state_.chords.push_back({at, p.symbol + (known ? "" : "?"), known});
         }
     } else {
         const model::Session& head = app_.head();
@@ -2284,20 +2292,24 @@ void MidiEditor::editChord(double beat, ui::Point at) {
         // The clip's own chord at that clip beat: chord.set {at, symbol}
         // becomes a point of the clip's context.
         const std::string item = state_.item;
-        host.symbolAt = [this, item](double b) {
+        // The field works in roll beats; the clip's points are in clip beats.
+        const double shift = state_.contextShift;
+        host.symbolAt = [this, item, shift](double b) {
             const auto owner = midiOwner(app_.head(), item);
             if (!owner || !owner->clip) return std::string();
             for (const model::ContextPoint& p : owner->clip->context)
-                if (p.type == model::ContextType::Chord && std::abs(p.beat - b) < 1e-6)
+                if (p.type == model::ContextType::Chord && std::abs(p.beat + shift - b) < 1e-6)
                     return p.symbol;
             return std::string();
         };
         host.run = [this, item](const std::string& command, json::Value args) {
             const auto owner = midiOwner(app_.head(), item);
             if (command != "chord.set" || !owner || !owner->clip) return false;
+            const auto at = clipBeatAt(args["at"].asDouble());
+            if (!at) return false;
             model::ContextPoint p;
             p.type = model::ContextType::Chord;
-            p.beat = args["at"].asDouble();
+            p.beat = *at;
             p.symbol = args["symbol"].asString();
             return static_cast<bool>(setClipContext(withContextPoint(owner->clip->context, p)));
         };
@@ -2341,14 +2353,19 @@ void MidiEditor::editClipKey(double beat, ui::Point at) {
     root_.openPopup(std::move(field), {at.x, at.y, 1, 1});
 }
 
-void MidiEditor::openContextMenu(double beat, std::optional<double> chord, ui::Point at) {
+void MidiEditor::openContextMenu(double rollBeat, std::optional<double> rollChord, ui::Point at) {
     const auto owner = midiOwner(app_.head(), state_.item);
     if (!owner || !owner->clip) return;
     const model::Clip& clip = *owner->clip;
     const time::TimeMap& tm = *app_.head().timeMap;
-    // A key goes at the start of the bar under the pointer, inside the clip.
+    // The menu's beats are the clip's; the strip's are the roll's.
+    const double beat = rollBeat - state_.contextShift;
+    const std::optional<double> chord =
+        rollChord ? std::optional<double>(*rollChord - state_.contextShift) : std::nullopt;
+    // A key goes at the start of the bar under the pointer, inside the part
+    // of the clip the strip shows.
     double barStart = tm.beatOfBar(tm.barBeat(std::max(0.0, beat)).bar);
-    if (barStart >= clip.length) barStart = 0;
+    if (barStart >= clipContextAxis(clip).shownEnd()) barStart = 0;
     std::vector<ui::MenuItem> items;
     auto add = [&](std::string label, bool enabled, std::function<void()> run) {
         ui::MenuItem m;
@@ -2360,7 +2377,7 @@ void MidiEditor::openContextMenu(double beat, std::optional<double> chord, ui::P
     const int bar = tm.barBeat(barStart).bar;
     add(barStart == 0 ? "Key\u2026" : "Key at bar " + std::to_string(bar) + "\u2026", true,
         [this, barStart, at] { editClipKey(barStart, at); });
-    add("Chord\u2026", true, [this, beat, at] { editChord(beat, at); });
+    add("Chord\u2026", true, [this, rollBeat, at] { editChord(rollBeat, at); });
     const model::ContextPoint* key = nullptr;
     for (const model::ContextPoint& p : clip.context)
         if (p.type == model::ContextType::Key && std::abs(p.beat - barStart) < 1e-6) key = &p;
@@ -2403,9 +2420,28 @@ void MidiEditor::openContextMenu(double beat, std::optional<double> chord, ui::P
         ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
 }
 
-void MidiEditor::moveClipPoint(model::ContextType type, double from, double to, bool copy) {
+std::optional<double> MidiEditor::clipBeatAt(double rollBeat) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip) return std::nullopt;
+    const ClipContextAxis axis = clipContextAxis(*owner->clip);
+    const double beat = rollBeat - axis.from;
+    if (axis.looping && (beat < -1e-9 || beat >= axis.shownEnd() - 1e-9)) {
+        if (actions_.onError)
+            actions_.onError(
+                "Context: a looped clip's key and chords are placed inside its "
+                "loop, where the strip shows them");
+        return std::nullopt;
+    }
+    return std::max(0.0, beat);
+}
+
+void MidiEditor::moveClipPoint(model::ContextType type, double rollFrom, double rollTo, bool copy) {
     const auto owner = midiOwner(app_.head(), state_.item);
     if (!owner || !owner->clip) return;
+    const double from = rollFrom - state_.contextShift;
+    const auto landing = clipBeatAt(rollTo);
+    if (!landing) return;
+    const double to = *landing;
     std::optional<model::ContextPoint> held;
     for (const model::ContextPoint& p : owner->clip->context)
         if (p.type == type && std::abs(p.beat - from) < 1e-6) held = p;

@@ -6,8 +6,12 @@
 // engine reads, checks and keeps them.
 #pragma once
 
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "supple/harmony/harmony.h"
 
 #include "supple/model/objects.h"
 #include "supple/time/timeline.h"
@@ -28,5 +32,36 @@ std::string clipLeadSheet(const std::vector<model::ContextPoint>& points, const 
 std::vector<model::ContextPoint> withContextPoint(std::vector<model::ContextPoint> points,
                                                   const model::ContextPoint& point,
                                                   bool remove = false);
+
+// A clip's context runs in clip beats (the time it sounds, from its launch);
+// the roll's axis is its take's content beats ((tick / ppq - startOffset) /
+// playrate). A looped clip plays its loop window [from, from + window) of
+// the content once per pass, so a note there sounds at clip beat pass *
+// window + content - from. This is the engine's clipSoundingBeats
+// (midi_context.cpp), which midi.edit reads a note's key and chord by; the
+// roll reads them the same way so its preview, shading and outline agree.
+struct ClipContextAxis {
+    bool looping = false;
+    double from = 0;    // the loop's start in content beats; 0 without a loop
+    double window = 0;  // the loop's length; the clip's without a loop
+    double length = 0;  // the clip's
+    // The clip beats a note at `content` sounds at, one per pass; none when
+    // it never sounds (outside the loop window).
+    std::vector<double> soundingBeats(double content) const;
+    // The clip beat whose key and chord a note at `content` reads, as
+    // midi.edit: its first sounding beat, else (it never sounds) its content
+    // beat kept inside the clip.
+    double contextBeat(double content) const;
+    // The clip beats the roll draws a context point in, first pass only:
+    // [0, min(window, length)); a point there shows at content beat
+    // clip + from.
+    double shownEnd() const { return looping ? std::min(window, length) : length; }
+};
+ClipContextAxis clipContextAxis(const model::Clip& clip);
+
+// The key a note reads at each content beat, as spans (content beat, key)
+// from the first, which holds from before any note: the key at
+// contextBeat(content) for every content beat.
+std::vector<std::pair<double, std::optional<harmony::Key>>> clipKeySpans(const model::Clip& clip);
 
 }  // namespace supple::gui

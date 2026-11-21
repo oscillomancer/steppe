@@ -3720,6 +3720,181 @@ TEST_CASE("MIDI editor: a clip in another key than the project's: degrees previe
     CHECK(said[0].find("the clip has no key") != std::string::npos);
 }
 
+// A looped clip plays its loop window of the content, so its context (in
+// clip beats) is read through the window: review round 77, L1. Its context:
+// C major and C at clip beat 0, Eb major and Eb at clip beat 1; it is two
+// beats long and loops content beats 2 to 4, so a D4 at content beat 2.5
+// sounds at clip beat 0.5, in C, and one at 3.5 at clip beat 1.5, in Eb.
+static std::string loopedClip(Fixture& f) {
+    f.exec("key.set", R"({"at":0,"tonic":"A","scale":"minor"})");
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add", R"({"track":")" + track +
+                               R"(","scene":"sc_1","name":"Loop",)"
+                               R"("notation":"voice v; 1: r:h r:e D4:e r:e D4:e",)"
+                               R"("context":"1: key C major {C}:q key Eb major {Eb}:h."})")
+            .find("clip")
+            ->asString();
+    f.exec("clip.set",
+           R"({"clip":")" + clip + R"(","length":2,"loop":{"on":true,"start":2,"length":2}})");
+    return clip;
+}
+
+TEST_CASE(
+    "MIDI editor: a looped clip's key is read through its loop: degrees preview what "
+    "commits") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string clip = loopedClip(f);
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.scrollBeat = -0.25;
+    s.topPitch = 72;
+    f.frame();
+    const auto tonic = [&](double beat) {
+        const auto key = s.keyAt(beat);
+        return key ? harmony::printPitchClass(key->tonic) : std::string("none");
+    };
+    CHECK(tonic(2.5) == "C");
+    CHECK(tonic(3.5) == "Eb");
+    // The strip shows the clip's points on the content they sound over.
+    REQUIRE(s.keyMarks.size() == 2);
+    CHECK(s.keyMarks[0].beat == doctest::Approx(2.0));
+    CHECK(s.keyMarks[1].beat == doctest::Approx(3.0));
+    REQUIRE(s.chords.size() == 2);
+    CHECK(s.chords[0].beat == doctest::Approx(2.0));
+    CHECK(s.chords[1].beat == doctest::Approx(3.0));
+    CHECK(s.contextEnd == doctest::Approx(4.0));
+    // Outside the key: Eb4 at 2.5 is outside C major, at 3.5 inside Eb major.
+    gui::RollNote eb;
+    eb.pitch = 63;
+    eb.start = 2.5;
+    CHECK(s.outsideKey(eb));
+    eb.start = 3.5;
+    CHECK_FALSE(s.outsideKey(eb));
+    // Degrees: the preview counts in the key midi.edit commits in.
+    ui::Toggle* key = f.editor->keyButton();
+    REQUIRE(key->enabled);
+    const ui::Rect box = key->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {box.x + box.w / 2, box.y + box.h / 2});
+    f.pointer(ui::PointerEvent::Type::Up, {box.x + box.w / 2, box.y + box.h / 2});
+    REQUIRE(s.degrees);
+    auto pitch = [&](int i) {
+        const json::Value notes = f.exec("midi.notes", R"({"item":")" + clip + R"("})")["notes"];
+        return static_cast<int>(notes.at(static_cast<std::size_t>(i)).find("pitch")->asInt());
+    };
+    // D4 at 2.5, in C major: two rows up is E4, one degree.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(2.6, 62));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(2.6, 64));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(2.6, 64));
+    CHECK(pitch(0) == 64);
+    // D4 at 3.5, in Eb major: one row up is Eb4, one degree.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(3.6, 62));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(3.6, 63));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(3.6, 63));
+    CHECK(pitch(1) == 63);
+}
+
+TEST_CASE("MIDI editor: a looped clip's chords and keys drag inside its loop") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string clip = loopedClip(f);
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.scrollBeat = -0.25;
+    s.grid = 0.5;
+    f.frame();
+    ui::Node* strip = f.root->find("midi.bars");
+    REQUIRE(strip);
+    const float chordRow = strip->bounds().y + 16 + 9, keyRow = strip->bounds().y + 16 + 18 + 9;
+    const auto x = [&](double beat) { return f.at(beat, 60).x; };
+    const auto points = [&] {
+        std::vector<std::pair<double, std::string>> out;
+        for (const model::ContextPoint& p :
+             f.app->head().clips.find(*model::Id::parse(clip))->context)
+            out.emplace_back(p.beat,
+                             p.type == model::ContextType::Key ? "key " + p.tonic : p.symbol);
+        return out;
+    };
+    auto drag = [&](double from, double to, float y, unsigned mods = 0) {
+        f.pointer(ui::PointerEvent::Type::Down, {x(from + 0.1), y}, 1, mods);
+        f.pointer(ui::PointerEvent::Type::Move, {x(from + 0.1 + (to - from) / 2), y}, 1, mods);
+        f.pointer(ui::PointerEvent::Type::Move, {x(to + 0.1), y}, 1, mods);
+        f.pointer(ui::PointerEvent::Type::Up, {x(to + 0.1), y}, 1, mods);
+        f.frame();
+    };
+    // The Eb major key, shown at content beat 3 (clip beat 1), to content
+    // 3.5: clip beat 1.5.
+    drag(3, 3.5, keyRow);
+    CHECK(points() == std::vector<std::pair<double, std::string>>{
+                          {0, "key C"}, {0, "C"}, {1, "Eb"}, {1.5, "key Eb"}});
+    // The C chord Alt-copied from content 2 to 2.5: clip beat 0.5.
+    drag(2, 2.5, chordRow, ui::kAlt);
+    CHECK(points() == std::vector<std::pair<double, std::string>>{
+                          {0, "key C"}, {0, "C"}, {0.5, "C"}, {1, "Eb"}, {1.5, "key Eb"}});
+    // Before the loop the clip never sounds: refused, nothing moved.
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    drag(3, 1, chordRow);
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].find("inside its loop") != std::string::npos);
+    CHECK(points().size() == 5);
+}
+
+TEST_CASE("clip context axis: the roll reads each note's key where midi.edit does") {
+    // Pins the roll's reading (gui::ClipContextAxis, clipKeySpans) against
+    // the engine's (clipSoundingBeats, through midi.edit's
+    // transpose_degrees): a D4 every half beat of eight content beats, in a
+    // clip six beats long looping content 2 to 5 twice, keyed C major at
+    // clip beats 0 and 3 and Eb major at 1 and 4, so each pass reads alike.
+    // Notes before and after the window never sound and read the clip at
+    // their content beat, kept inside it.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    std::string notes = "voice v; 1:";
+    for (int i = 0; i < 8; ++i) notes += " D4:e";
+    notes += " | 2:";
+    for (int i = 0; i < 8; ++i) notes += " D4:e";
+    const std::string clip =
+        f.exec("clip.add", R"({"track":")" + track + R"(","scene":"sc_1","notation":")" + notes +
+                               R"(","context":"1: key C major ~:q key Eb major ~:h key C major )"
+                               R"(~:q\n2: key Eb major ~:w"})")
+            .find("clip")
+            ->asString();
+    f.exec("clip.set",
+           R"({"clip":")" + clip + R"(","length":6,"loop":{"on":true,"start":2,"length":3}})");
+    const model::Clip& c = *f.app->head().clips.find(*model::Id::parse(clip));
+    const gui::ClipContextAxis axis = gui::clipContextAxis(c);
+    CHECK(axis.soundingBeats(3.5) == std::vector<double>{1.5, 4.5});
+    CHECK(axis.soundingBeats(1.5).empty());
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    const auto& s = f.editor->state();
+    int sixtyThree = 0;
+    for (int i = 0; i < 16; ++i) {
+        const double content = 0.5 * i;
+        const auto key = s.keyAt(content);
+        REQUIRE(key);
+        const auto expected = harmony::transposeDegrees(62, *key, 1);
+        REQUIRE(expected);
+        f.exec("midi.edit", R"({"item":")" + clip +
+                                R"(","ops":[{"op":"transpose_degrees","notes":[)" +
+                                std::to_string(i) + R"(],"degrees":1}]})");
+        const json::Value after = f.exec("midi.notes", R"({"item":")" + clip + R"("})")["notes"];
+        INFO("content beat " << content);
+        CHECK(after.at(static_cast<std::size_t>(i)).find("pitch")->asInt() == *expected);
+        sixtyThree += *expected == 63;
+    }
+    // Both keys were met: Eb4 (Eb major) and E4 (C major).
+    CHECK(sixtyThree > 0);
+    CHECK(sixtyThree < 16);
+}
+
 TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {
     Fixture f;
     if (!f.ok) return;

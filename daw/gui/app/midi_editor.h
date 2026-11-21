@@ -138,6 +138,11 @@ struct RollState {
     // A clip's key points (text: "D dorian"), drawn and dragged in the
     // strip's key row (ADR-0098 X3); none for an item.
     std::vector<ChordMark> keyMarks;
+    // A clip's chords and keyMarks show at their clip beat + contextShift
+    // (a looped clip's loop start: the roll's axis is the take's content,
+    // gui::ClipContextAxis), its first pass only, the last chord ending at
+    // contextEnd; `keys` are already in content beats (gui::clipKeySpans).
+    double contextShift = 0, contextEnd = 0;
     std::optional<harmony::Key> keyAt(double projectBeat) const;
     // A note off channel 10 whose pitch is not in the key holding at its
     // start (none holding: false). The roll outlines it, and the title
@@ -225,17 +230,23 @@ class MidiEditor {
     const std::string& keyText() const { return keyText_; }  // the key button's words
     // The chord field (views/chord_field.h) for the chord point at the project
     // beat `beat`, opened at the window point `at` (the strip's double-click).
-    // On a clip it edits the clip's own chord at that clip beat (ADR-0098).
+    // On a clip `beat` is a roll beat and it edits the clip's own chord at
+    // the clip beat there (ADR-0098; clipBeatAt).
     void editChord(double beat, ui::Point at);
     // A clip's own context (ADR-0098 X3): the key field for the key at clip
-    // beat `beat`; the strip's right-click menu at clip beat `beat` (`chord`:
-    // the beat of a chord point under the pointer); the context replaced
-    // (clip.set {context}, printed as the lead sheet in clip bars).
+    // beat `beat`; the strip's right-click menu at roll beat `rollBeat`
+    // (`rollChord`: the roll beat of a chord point under the pointer); the
+    // context replaced (clip.set {context}, printed as the lead sheet in clip
+    // bars).
     void editClipKey(double beat, ui::Point at);
-    void openContextMenu(double beat, std::optional<double> chord, ui::Point at);
-    // The clip's point of `type` at clip beat `from` moved to `to` (`copy`:
-    // a second one there, the first kept), as a strip drag does.
-    void moveClipPoint(model::ContextType type, double from, double to, bool copy = false);
+    void openContextMenu(double rollBeat, std::optional<double> rollChord, ui::Point at);
+    // The clip's point of `type` at roll beat `rollFrom` moved to `rollTo`
+    // (`copy`: a second one there, the first kept), as a strip drag does.
+    void moveClipPoint(model::ContextType type, double rollFrom, double rollTo, bool copy = false);
+    // The clip beat of a roll beat on the clip's strip, or nothing (with the
+    // reason in the status line) when a looped clip's point would fall
+    // outside the first pass the strip shows.
+    std::optional<double> clipBeatAt(double rollBeat);
     Status setClipContext(const std::vector<model::ContextPoint>& points);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.
