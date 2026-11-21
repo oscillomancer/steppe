@@ -225,9 +225,11 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
      reference: `follow(pitch, from, to, Key)` computed without step 7, or
      `pitch + iv(from.root, to.root)` when that gives `Copy`. A tie goes
      down. By `Chords`.
-   - **Duplicates.** Two notes that map to the same pitch at the same start
-     are both kept, in the source's canonical order. Cmaj7 voiced C4 E4 G4
-     B4 → C5 gives C4 C4 G4 G4.
+   - **Duplicates.** `follow` maps each note on its own, so two notes may map
+     to one pitch at one start: Cmaj7 voiced C4 E4 G4 B4 → C5 gives C4 C4 G4
+     G4. A caller that writes the notes keeps one of identical notes, as every
+     sequence does (`Sequence::canonicalize`): placement writes C4 G4, and
+     X4's tables must play such a pair once.
 7. **Range.** A result above 127 goes down by octaves, and one below 0 up by
    octaves, until it is in 0..127, with `folded`. The live player (X4) folds
    alike, so a laid clip and a launched one give the same notes.

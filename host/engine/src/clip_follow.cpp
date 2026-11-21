@@ -63,19 +63,6 @@ std::string keyText(const harmony::Key& key) {
     return harmony::printPitchClass(key.tonic) + " " + scale;
 }
 
-// The canonical order of a sequence's notes, without dropping a note that equals its
-// neighbour: two notes that follow to one pitch are both kept (harmony.md section 5).
-void sortKeepingDuplicates(midi::Sequence& seq) {
-    std::vector<midi::Note> notes = std::move(seq.notes);
-    seq.notes.clear();
-    seq.canonicalize();  // controls and sysex
-    std::stable_sort(notes.begin(), notes.end(), [](const midi::Note& a, const midi::Note& b) {
-        return std::tie(a.start, a.pitch, a.channel, a.length, a.velocity, a.offVelocity) <
-               std::tie(b.start, b.pitch, b.channel, b.length, b.velocity, b.offVelocity);
-    });
-    seq.notes = std::move(notes);
-}
-
 const char* byName(harmony::FollowedBy by) {
     switch (by) {
         case harmony::FollowedBy::Transpose:
@@ -290,7 +277,7 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
                     if (!heard[i].empty())
                         m.sequence.notes[i].pitch =
                             static_cast<std::uint8_t>(heard[i].front().followed.pitch);
-                sortKeepingDuplicates(m.sequence);
+                m.sequence.canonicalize();
             });
         }
         for (const auto& h : heard)
@@ -337,7 +324,7 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
                 out.sysex.push_back(std::move(sysex));
             }
         }
-        sortKeepingDuplicates(out);
+        out.canonicalize();
         t.modify<model::MidiSource>(*take->source,
                                     [&](model::MidiSource& m) { m.sequence = std::move(out); });
         t.modify<model::Take>(*item.activeTake, [](model::Take& k) {

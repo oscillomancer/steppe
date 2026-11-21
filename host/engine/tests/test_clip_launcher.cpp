@@ -1803,3 +1803,21 @@ TEST_CASE("an unrolled item's other takes are laid out alike, by plain repetitio
     l.run("take.activate", R"({"item": ")" + item + R"(", "index": 1})");
     CHECK(pitchesOf(l, item) == "33@0 33@4 33@8 33@12");
 }
+
+TEST_CASE("notes that follow to one pitch are one note, and stay so under an edit") {
+    // harmony.md section 5 "Duplicates": Cmaj7's C E G B under C5 map to C C G G; a sequence
+    // holds one of identical notes, so placement writes two, and an unrelated edit loses none.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "C5"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice pad; 1: {Cmaj7}:w",
+                          "context": "1: key C major ~:w", "follow": "chords"})");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    const std::string item = laid.find("item")->asString();
+    json::Value before = l.run("midi.notes", R"({"item": ")" + item + R"("})");
+    CHECK(before["notes"].size() == 2);
+    l.run("midi.edit",
+          R"({"item": ")" + item + R"(", "ops": [{"op": "move", "notes": [0], "semitones": 0}]})");
+    json::Value after = l.run("midi.notes", R"({"item": ")" + item + R"("})");
+    CHECK(after["notes"].size() == before["notes"].size());
+}
