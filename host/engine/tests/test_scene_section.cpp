@@ -343,6 +343,47 @@ TEST_CASE("scene.capture makes a scene from the items of a section, one clip per
     CHECK(l.head().clips.empty());
 }
 
+TEST_CASE("scene.capture gives each clip the context under its item (ADR-0098)") {
+    Song l;
+    l.run("key.set", R"({"at": 0, "tonic": "D", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Dm"})");
+    l.run("chord.set", R"({"at": 2, "symbol": "A7"})");
+    l.run("region.add", R"({"start": 0, "end": 4, "name": "Hook"})");
+    l.run("item.add", R"({"track": "tr_2", "position": 0, "notation": "voice pad; 1: C3:h r:h"})");
+    auto r = l.run("scene.capture", R"({"region": "rg_1"})");
+    const model::Clip& bass =
+        *l.head().clips.find(id(at(r["clips"], 0)["clip"].asString().c_str()));
+    const model::Clip& pad = *l.head().clips.find(id(at(r["clips"], 1)["clip"].asString().c_str()));
+    // Each clip remembers what its item sat under, from the item's start, in clip beats.
+    for (const model::Clip* c : {&bass, &pad}) {
+        REQUIRE(c->context.size() == 3);
+        CHECK(c->context[0].type == model::ContextType::Key);
+        CHECK(c->context[0].tonic == "D");
+        CHECK(c->context[1].symbol == "Dm");
+        CHECK(c->context[2].symbol == "A7");
+        CHECK(c->context[2].beat == 2.0);
+        CHECK(c->follow == model::ClipFollow::None);
+    }
+    // An audio item gives its clip the key alone.
+    auto args = j(R"({"track": "tr_2", "position": 8})");
+    args["audio_file"] = l.wav("pad.wav", 2.0).string();
+    l.runArgs("item.add", args);
+    l.run("region.add", R"({"start": 8, "end": 12, "name": "Wash"})");
+    auto audio = l.run("scene.capture", R"({"region": "rg_2"})");
+    const model::Clip& wash =
+        *l.head().clips.find(id(at(audio["clips"], 0)["clip"].asString().c_str()));
+    CHECK(wash.kind == model::ClipKind::Audio);
+    REQUIRE(wash.context.size() == 1);
+    CHECK(wash.context[0].type == model::ContextType::Key);
+    // With no context track there is nothing to take.
+    Song bare;
+    bare.run("region.add", R"({"start": 0, "end": 4, "name": "Hook"})");
+    auto none = bare.run("scene.capture", R"({"region": "rg_1"})");
+    CHECK(bare.head()
+              .clips.find(id(at(none["clips"], 0)["clip"].asString().c_str()))
+              ->context.empty());
+}
+
 TEST_CASE("scene.capture: a shorter item is a once clip, a looped item a looped clip") {
     Song l;
     l.run("region.add", R"({"start": 0, "end": 8, "name": "Verse 2"})");

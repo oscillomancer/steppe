@@ -8,6 +8,7 @@
 #include <cmath>
 #include <set>
 
+#include "clip_context.h"
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "supple/model/freeze.h"
@@ -391,6 +392,13 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                 made->mode =
                     length < (re - rs) - kEps ? model::ClipMode::Once : model::ClipMode::Loop;
                 audio |= made->kind == model::ClipKind::Audio;
+                // The clip remembers the key and chords the item sat under (ADR-0098); an
+                // audio clip takes the key only.
+                made->context =
+                    detail::contextUnder(s, model::itemSpan(s, *s.items.find(pick.item)).startBeat,
+                                         length, made->kind == model::ClipKind::Audio)
+                        .points;
+                model::fitClipContext(*made);
                 const Id clip = t.create(std::move(*made));
                 r.clips.push_back({clip.str(), pick.item.str(), pick.track.str()});
             }

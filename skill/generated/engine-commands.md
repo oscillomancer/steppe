@@ -1790,7 +1790,7 @@ Result:
 
 Add a clip to a scene's cell: from notation, a file or an item.
 
-One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097); the clip is named as the item is (its active take's name) unless name is given. Clips live on channels, one per (track, scene).
+One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097); the clip is named as the item is (its active take's name) unless name is given. Clips live on channels, one per (track, scene). A clip keeps the key and chords it was written against (context): as a lead sheet in clip bars ("1: key D minor {Dm}:w"), read from the project at a place (context_at), under the item it copies, or from the {SYMBOL} chords of its notation (a stated context holding chords wins over them, clip.chords_ignored). follow (none, key or chords) needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); until placement follows it, only the mismatch warning on laying a clip uses the context (ADR-0098).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -1806,6 +1806,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `item` | string |  |  |  | Item id, e.g. "it_1". |
 | `pooled` | boolean |  |  | false |  |
 | `name` | string |  |  |  |  |
+| `context` | string |  |  |  | The key and chords the clip was written against, as a lead sheet in clip bars (bar 1 is the clip's start): "1: key D minor {Dm}:w". "" is none. |
+| `context_at` | object |  |  |  | A place in the project, by bar or in beats: the clip takes the key and chords holding there, and the changes up to its length after it. |
+| `context_at.bar` | integer |  | 1.0..1e+06 |  |  |
+| `context_at.at` | number |  | 0.0.. |  |  |
+| `follow` | string |  |  |  | How the clip's notes are mapped when it is laid on the timeline (ADR-0098): none (default), key or chords. Needs a MIDI clip with a key at its start. One of: none, key, chords. |
 
 ### Result
 
@@ -1862,6 +1867,12 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `clip.unsupported`: a warped take Hint: reset its warp first
 - `clip.memory`: the clips' audio would not fit Hint: use shorter audio
 - `clip.limit`: the project has 16384 clips Hint: remove clips first
+- `clip.context_args`: context and context_at together Hint: give one: the text, or a place to read
+- `clip.context_syntax`: the context text does not read Hint: write a lead sheet in clip bars: 1: key D minor {Dm}:w
+- `clip.context_range`: a context point at or past the clip's end Hint: move it earlier or lengthen the clip
+- `clip.context_audio`: a chord, or a key after the start, on an audio clip Hint: an audio clip's context is a key at the start of bar 1
+- `clip.no_key`: follow without a key at the clip's start Hint: give the clip a context with a key at its start
+- `clip.follow_audio`: follow on an audio clip Hint: follow is for MIDI clips
 
 ### Examples
 
@@ -1872,6 +1883,32 @@ Kind: `edit`. Exposure: `mcp-exec`.
   "track": "tr_1",
   "scene": "sc_2",
   "notation": "voice bass; 1: C2:h G2:h"
+}
+
+```
+
+Result:
+
+```json
+{
+  "clip": "cl_2",
+  "takes": ["tk_3"],
+  "source": "mi_3",
+  "kind": "midi",
+  "length": 4.0
+}
+
+```
+
+**A bass line written in D minor, following the key when laid** (`song_with_clip`)
+
+```json
+{
+  "track": "tr_1",
+  "scene": "sc_2",
+  "notation": "voice bass; 1: D2:h A1:h",
+  "context": "1: key D minor {Dm}:w",
+  "follow": "key"
 }
 
 ```
@@ -2069,7 +2106,7 @@ Result:
 
 Set a clip's name, colour, mute, gain, length, loop, mode or quantize.
 
-length and loop are in the clip's unit: beats for MIDI, seconds of take time for audio. loop: {on, start?, length?}, the window that repeats inside the clip from the take's start. mode loop repeats every length; once plays it once. quantize (bar, beat, 1/2 … 1/32, none) overrides the project's launch_quantize; null returns to it.
+length and loop are in the clip's unit: beats for MIDI, seconds of take time for audio. loop: {on, start?, length?}, the window that repeats inside the clip from the take's start. mode loop repeats every length; once plays it once. quantize (bar, beat, 1/2 … 1/32, none) overrides the project's launch_quantize; null returns to it. context (a lead sheet in clip bars; "" clears it) or context_at (read from the project at a bar or beat) sets the key and chords the clip was written against, and follow (none, key, chords) how it is mapped when laid; shortening a clip drops the points past its end (clip.context_dropped), and a context left with no key at the start resets follow to none (clip.follow_reset).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -2089,6 +2126,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `loop.length` | number |  |  |  |  |
 | `mode` | string |  |  |  | One of: loop, once. |
 | `quantize` | string or null |  |  |  |  |
+| `context` | string |  |  |  | As clip.add's: the lead sheet in clip bars; "" clears the context. |
+| `context_at` | object |  |  |  | A place in the project, by bar or in beats: the clip takes the key and chords holding there, and the changes up to its length after it. |
+| `context_at.bar` | integer |  | 1.0..1e+06 |  |  |
+| `context_at.at` | number |  | 0.0.. |  |  |
+| `follow` | string |  |  |  | How the clip's notes are mapped when it is laid on the timeline (ADR-0098): none (default), key or chords. Needs a MIDI clip with a key at its start. One of: none, key, chords. |
 
 ### Result
 
@@ -2112,6 +2154,12 @@ Kind: `edit`. Exposure: `mcp-exec`.
 ### Errors
 
 - `clip.length`: a length or loop length not above 0 Hint: give a positive length in the clip's unit
+- `clip.context_args`: context and context_at together Hint: give one: the text, or a place to read
+- `clip.context_syntax`: the context text does not read Hint: write a lead sheet in clip bars: 1: key D minor {Dm}:w
+- `clip.context_range`: a context point at or past the clip's end Hint: move it earlier or lengthen the clip
+- `clip.context_audio`: a chord, or a key after the start, on an audio clip Hint: an audio clip's context is a key at the start of bar 1
+- `clip.no_key`: follow without a key at the clip's start Hint: give the clip a context with a key at its start
+- `clip.follow_audio`: follow on an audio clip Hint: follow is for MIDI clips
 
 ### Examples
 
@@ -11586,7 +11634,7 @@ Result:
 
 Edit a MIDI item's notes and CCs: move, resize, quantize, fit to key or chord.
 
-ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Scale ops read the context track (key.set, chord.set) at the project beat each note starts, in the order of the ops: transpose_degrees {notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale first goes down to the scale); snap_to_scale {notes? (all), mode? nearest|down|up, key?} moves notes outside the scale to it (nearest: a tie goes down); fit_to_chord {notes? (all), chord?} moves each note to the nearest tone of the chord (a tie goes down; a slash bass counts). key is "Eb major", chord is "Cm7"; given, they replace the context. A note that is looped or shared by another item in a different key or chord is refused with midi.context_varies; none holding is midi.no_key or midi.no_chord. Returns the new indices of the notes the ops added or changed (to keep a selection).
+ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Scale ops read the context track (key.set, chord.set) at the project beat each note starts, in the order of the ops: transpose_degrees {notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale first goes down to the scale); snap_to_scale {notes? (all), mode? nearest|down|up, key?} moves notes outside the scale to it (nearest: a tie goes down); fit_to_chord {notes? (all), chord?} moves each note to the nearest tone of the chord (a tie goes down; a slash bass counts). key is "Eb major", chord is "Cm7"; given, they replace the context. A note that is looped or shared by another item in a different key or chord is refused with midi.context_varies; none holding is midi.no_key or midi.no_chord. On a clip they read the clip's own context (the key and chords it was written against, clip.set {context}) at the clip beat each note sounds, never the project's. Returns the new indices of the notes the ops added or changed (to keep a selection).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -11690,7 +11738,7 @@ Result:
 
 Read an item's or clip's MIDI as notation, with its key and chords.
 
-Pitch names follow the key that holds at the item's start (none: the default spelling). context lists the key and the chords over the item's span, each from the bar of the item (item_bar, the notation's) and of the project (project_bar) where it starts; the first of each is the one already holding at the item's start. Omitted when the project has no key or chords there. A clip has no place in time: its pitch names follow the key at the project's start, and it has no context.
+Pitch names follow the key that holds at the item's start (none: the default spelling). context lists the key and the chords over the item's span, each from the bar of the item (item_bar, the notation's) and of the project (project_bar) where it starts; the first of each is the one already holding at the item's start. Omitted when the project has no key or chords there. A clip has no place in time: its pitch names follow its own key at its start, and its context is the key and chords it was written against: runs by clip bar (item_bar, no project_bar) and beat from its start, and text, its lead sheet in clip bars (clip.set {context} takes it back). follow (none, key, chords) is a clip's.
 
 Kind: `query`. Exposure: `mcp-tool`.
 
@@ -11726,11 +11774,14 @@ Kind: `query`. Exposure: `mcp-tool`.
               "project_bar": {
                 "type": "integer"
               },
+              "beat": {
+                "type": "number"
+              },
               "what": {
                 "type": "string"
               }
             },
-            "required": ["item_bar", "project_bar", "what"],
+            "required": ["item_bar", "what"],
             "additionalProperties": false
           }
         },
@@ -11746,17 +11797,26 @@ Kind: `query`. Exposure: `mcp-tool`.
               "project_bar": {
                 "type": "integer"
               },
+              "beat": {
+                "type": "number"
+              },
               "what": {
                 "type": "string"
               }
             },
-            "required": ["item_bar", "project_bar", "what"],
+            "required": ["item_bar", "what"],
             "additionalProperties": false
           }
+        },
+        "text": {
+          "type": "string"
         }
       },
       "required": ["keys", "chords"],
       "additionalProperties": false
+    },
+    "follow": {
+      "type": "string"
     },
     "warnings": {
       "type": "array",

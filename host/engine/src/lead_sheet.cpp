@@ -35,20 +35,23 @@ Error syntax(int bar, const std::string& token, const std::string& why, const st
 
 }  // namespace
 
-std::string printLeadSheet(const model::Session& s, int firstBar, int lastBar) {
+namespace {
+
+std::string printBars(const std::vector<const model::ContextPoint*>& points,
+                      const time::TimeMap& map, int firstBar, int lastBar) {
     struct At {
         const model::ContextPoint* key = nullptr;
         const model::ContextPoint* chord = nullptr;
     };
     std::map<std::int64_t, At> byTick;  // every point by its tick, to look a bar up fast
-    for (const auto& e : s.context) {
-        At& at = byTick[static_cast<std::int64_t>(std::llround(e.value->beat * kPpq))];
-        (e.value->type == model::ContextType::Key ? at.key : at.chord) = e.value.get();
+    for (const model::ContextPoint* p : points) {
+        At& at = byTick[static_cast<std::int64_t>(std::llround(p->beat * kPpq))];
+        (p->type == model::ContextType::Key ? at.key : at.chord) = p;
     }
     std::string out;
     for (int bar = firstBar; bar <= lastBar; ++bar) {
-        const double b0 = gridBeat(s.timeMap->beatOfBar(bar));
-        const double b1 = gridBeat(s.timeMap->beatOfBar(bar + 1));
+        const double b0 = gridBeat(map.beatOfBar(bar));
+        const double b1 = gridBeat(map.beatOfBar(bar + 1));
         const auto t0 = static_cast<std::int64_t>(std::llround(b0 * kPpq));
         const auto t1 = static_cast<std::int64_t>(std::llround(b1 * kPpq));
         std::vector<std::int64_t> cuts{t0};
@@ -72,6 +75,21 @@ std::string printLeadSheet(const model::Session& s, int firstBar, int lastBar) {
         out += '\n';
     }
     return out;
+}
+
+}  // namespace
+
+std::string printLeadSheet(const model::Session& s, int firstBar, int lastBar) {
+    std::vector<const model::ContextPoint*> points;
+    for (const auto& e : s.context) points.push_back(e.value.get());
+    return printBars(points, *s.timeMap, firstBar, lastBar);
+}
+
+std::string printLeadSheetPoints(const std::vector<model::ContextPoint>& points,
+                                 const time::TimeMap& map, int firstBar, int lastBar) {
+    std::vector<const model::ContextPoint*> refs;
+    for (const model::ContextPoint& p : points) refs.push_back(&p);
+    return printBars(refs, map, firstBar, lastBar);
 }
 
 Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text) {

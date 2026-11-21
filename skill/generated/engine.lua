@@ -225,6 +225,9 @@ q = nil
 ---@field item? string Item id, e.g. "it_1".
 ---@field pooled? boolean (default: false)
 ---@field name? string
+---@field context? string The key and chords the clip was written against, as a lead sheet in clip bars (bar 1 is the clip's start): "1: key D minor {Dm}:w". "" is none.
+---@field context_at? table A place in the project, by bar or in beats: the clip takes the key and chords holding there, and the changes up to its length after it.
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped when it is laid on the timeline (ADR-0098): none (default), key or chords. Needs a MIDI clip with a key at its start.
 
 ---@class Steppe.clip_add_result
 ---@field clip string
@@ -268,6 +271,9 @@ q = nil
 ---@field loop? table
 ---@field mode? "loop"|"once"
 ---@field quantize? any
+---@field context? string As clip.add's: the lead sheet in clip bars; "" clears the context.
+---@field context_at? table A place in the project, by bar or in beats: the clip takes the key and chords holding there, and the changes up to its length after it.
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped when it is laid on the timeline (ADR-0098): none (default), key or chords. Needs a MIDI clip with a key at its start.
 
 ---@class Steppe.clip_set_result
 ---@field warnings? table[]
@@ -1217,6 +1223,7 @@ q = nil
 ---@class Steppe.midi_get_result
 ---@field text string
 ---@field context? table
+---@field follow? string
 ---@field warnings? table[]
 
 ---@class Steppe.midi_inputs_set_args
