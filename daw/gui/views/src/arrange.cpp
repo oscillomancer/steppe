@@ -4,6 +4,7 @@
 
 #include "supple/views/chord_field.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/launcher.h"
 #include "supple/views/session_changes.h"
 
 #include <SDL3/SDL.h>
@@ -516,11 +517,15 @@ class Ruler : public ui::Node {
                          [](const Shown& a, const Shown& b) { return a.beat < b.beat; });
         const float size = t.type("caption");
         const float x0 = bounds().x, x1 = bounds().right();
+        // The last chord holds to the project's end: the bar line after its
+        // last item or section (the view's edge when it starts past that).
+        const double projectEnd = tm.beatOfBar(barAfterArrangement(s));
         for (std::size_t i = 0; i < shown.size(); ++i) {
             const float x = view_.xAt(tm.secondsAt(shown[i].beat));
             if (x > x1) break;
-            const float end =
-                i + 1 < shown.size() ? view_.xAt(tm.secondsAt(shown[i + 1].beat)) : x1 + 2;
+            const float end = i + 1 < shown.size() ? view_.xAt(tm.secondsAt(shown[i + 1].beat))
+                              : projectEnd > shown[i].beat ? view_.xAt(tm.secondsAt(projectEnd))
+                                                           : x1 + 2;
             const model::ContextPoint& p = *shown[i].point;
             const float alpha = shown[i].ghost ? 0.6f : 1.0f;
             if (p.symbol.empty()) {  // no chord from here
@@ -532,18 +537,23 @@ class Ruler : public ui::Node {
             if (end >= x0) {
                 c.fillRound(cell, 2, t.color("raised").withAlpha(alpha));
                 c.strokeRound(cell, 2, t.color("rule").withAlpha(alpha));
+                stats.chordSpans.push_back({cell.x, cell.right()});
             }
             const bool known = model::parseChordPoint(p).has_value();
             const std::string text = p.symbol + (known ? "" : "?");
             const float w = c.textWidth(text, ui::Font::Ui, size);
-            const float room = std::max(0.0f, cell.w - 8);
+            // A chord that began left of the view names itself at its left
+            // edge, so a held one is never a blank cell.
+            const float textX = std::max(cell.x, x0) + 4;
+            const float room = std::max(0.0f, cell.right() - textX - 4);
             // A name too long for its cell ends in an ellipsis, or goes.
             const std::string fit = end >= x0 ? c.elide(text, ui::Font::Ui, size, room) : "";
             if (!fit.empty()) {
-                c.text({cell.x + 4, row.y, room + 4, row.h}, fit, ui::Font::Ui, size,
+                c.text({textX, row.y, room + 4, row.h}, fit, ui::Font::Ui, size,
                        t.color(known ? "ink" : "ink-quiet").withAlpha(alpha),
                        ui::kLeft | ui::kMiddle);
                 stats.chordLabels.push_back(fit);
+                stats.chordLabelXs.push_back(textX);
             }
             chordCells.push_back(
                 {shown[i].beat,

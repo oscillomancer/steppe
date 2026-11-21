@@ -874,6 +874,36 @@ TEST_CASE("ruler: an edge dragged onto the other removes a range; the menu delet
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("ruler: the last chord holds to the project's end and keeps its name in view") {
+    // gui.md §4.3: as the engine holds it, drawn as the other chords.
+    RulerFixture f;
+    f.exec("track.add", json::parse(R"({"type":"channel","name":"Keys"})").value());
+    f.exec("chord.set", json::parse(R"({"at": 0, "symbol": "C"})").value());
+    f.exec("chord.set", json::parse(R"({"at": 16, "symbol": "G"})").value());
+    // The project ends at bar 9: an item over bars 1 to 8.
+    f.exec("item.add",
+           json::parse(R"({"track":"tr_1","position":0,"notation":"voice k; 1: C4:w; 8: C4:w"})")
+               .value());
+    auto v = f.view->viewport();
+    v.pixelsPerSecond = 20;  // 10 px a beat: bars 1 to 25 in view
+    v.startSeconds = 0;
+    f.view->setViewport(v);
+    f.sync();
+    const auto& stats = f.view->rulerStats();
+    CHECK(stats.chordLabels == std::vector<std::string>{"C", "G"});
+    REQUIRE(stats.chordSpans.size() == 2);
+    const float projectEnd = f.view->xAt(f.app->head().timeMap->secondsAt(32));
+    CHECK(stats.chordSpans[1].second ==
+          doctest::Approx(static_cast<double>(projectEnd) - 1).epsilon(0.01));
+    // Scrolled to bar 7, G began left of the view: it still says so.
+    v.startSeconds = f.app->head().timeMap->secondsAt(24);
+    f.view->setViewport(v);
+    f.sync();
+    CHECK(stats.chordLabels == std::vector<std::string>{"G"});
+    REQUIRE(stats.chordLabelXs.size() == 1);
+    CHECK(stats.chordLabelXs[0] >= f.view->ruler().bounds().x);  // drawn where it is seen
+}
+
 TEST_CASE("ruler: a key change's flag drags to another beat; Alt-drag copies a chord") {
     RulerFixture f;
     auto keys = [&] {
