@@ -619,9 +619,12 @@ appear under the controller lane in clip beats, from the clip's start,
 and work like the timeline's envelope lanes: click to add a point, click a
 point to select it (Ctrl+click for more), drag to move the selected points
 together (Shift to leave the grid), Alt+click to remove one, and Delete to
-remove the selected. Right-click a lane for its menu: insert a point,
-select all, delete, give the selected points a shape (linear, square, slow,
-fast start, fast end, bezier) or hide the lane. **hide** at the lane's left
+remove the selected. Right-drag (or Ctrl-drag from empty space) to draw a
+box around points and select them. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and
+paste the points of the lane you clicked last. Right-click a lane for its
+menu: insert a point, select all, copy, cut, paste at the pointer, delete,
+give the selected points a shape (linear, square, slow, fast start, fast
+end, bezier) or hide the lane. **hide** at the lane's left
 hides it too; the envelope keeps playing while hidden.
 
 ### Moving around

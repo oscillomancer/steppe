@@ -304,8 +304,9 @@ instructions are in `docs/guides/installing.md`.
     two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
-    roll (clip-time lanes, with point selection, moves, shapes and the
-    lane's menu as on the timeline; no copy, paste or marquee); an audio
+    roll (clip-time lanes, with point selection, the marquee, moves,
+    shapes, copy and paste and the lane's menu as on the timeline, one lane
+    at a time); an audio
     clip's in its pane (a double-click opens its waveform, in seconds, with
     the same Lanes menu and lanes, snapping to a seconds grid, and a key
     button for its one key point), which edits no audio;

@@ -1707,12 +1707,22 @@ edited in its roll, not on the timeline. For a MIDI clip:
   a point there, selected; dragging a selected point moves every selected
   point in its lane by the same time (on the grid, inside the clip; Shift
   frees it) and the same share of the lane's height; Alt+click deletes a
-  point; Delete removes the selection. A right-click opens the lane's menu:
-  **Insert point**, **Select all points**, **Delete points**, **Point
-  shape…** (linear, square, slow start/end, fast start, fast end, bezier)
-  and **Hide**. One lane's points are selected at a time, named by
-  position and value; a press on the roll takes the selection away, a
-  lane's press the note selection. Selected points draw as the timeline's,
+  point; Delete removes the selection. A right-drag draws a marquee in the
+  lane that selects the points inside it (with Shift or Ctrl it adds to
+  them), as does a Ctrl-drag from empty space (adding). A right-click
+  without a drag opens the lane's menu: **Insert point**, **Select all
+  points**, **Copy**/**Cut**/**Paste points** (paste at the pointer,
+  replacing the points over the pasted span, `views::pastePoints`; points
+  of another kind keep their height on the lane), **Delete points**,
+  **Point shape…** (linear, square, slow start/end, fast start, fast end,
+  bezier) and **Hide**. After a press on a lane the editor's Ctrl+C,
+  Ctrl+X and Ctrl+V take its points instead of notes; Ctrl+V pastes into
+  the lane pressed last at the clip time the points were copied from. The
+  lanes' clipboard is the editor's own, not the timeline's. One lane's
+  points are selected at a time, named by position and value, so a marquee
+  stays in its lane and a drag moves one lane's points; a press on the
+  roll takes the selection away and gives the keys back to the notes, a
+  lane's press clears the note selection. Selected points draw as the timeline's,
   filled in the focus colour. Each edit is one `env.points.set`. Before the clip's
   start and past its end the lane is dimmed as the roll is, and the curve
   holds its end value there, dashed. Clip time takes no writing mode and no
@@ -1766,7 +1776,8 @@ key point".
 Tests: test_midi_editor "the Lanes menu shows and hides the velocity and CC
 lanes", "a clip's take envelopes and take FX parameters get lanes in clip
 beats", "a clip-time lane selects points, moves them together, shapes
-them", and the CC lane case.
+them", "a clip-time lane takes a marquee, and copies, cuts and pastes
+points", and the CC lane case.
 
 **Roll appearance.** The notes are drawn in the colour their item has in
 the arrangement (`views::Lanes::itemColor`: the item's own, else its
