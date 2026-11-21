@@ -4023,6 +4023,107 @@ TEST_CASE("MIDI editor: an audio clip opens as its take's waveform in seconds, i
     f.editor->setPeaks(nullptr);
 }
 
+TEST_CASE("MIDI editor: an audio clip's Lanes menu and clip-time lanes are in seconds") {
+    Fixture f({SUPPLE_CLAP_DIR});  // the stock plug-ins only
+    if (!f.ok) return;
+    peaks::PeakService peaks(f.dir / "peaks", [](std::function<void()>) {});
+    f.editor->setPeaks(&peaks);
+    const std::string clip = audioClip(f);
+    const model::Id take = *f.app->head().clips.find(*model::Id::parse(clip))->activeTake;
+    // A stock effect with a continuous parameter on the clip's take.
+    std::string fxId, name;
+    const json::Value listed = f.exec("plugin.list", "{}");
+    for (const json::Value& p : listed.find("plugins")->asArray()) {
+        if (!fxId.empty() || (p.find("instrument") && p.find("instrument")->asBool())) continue;
+        auto added =
+            f.dispatcher->execute({"fx.add",
+                                   json::parse(R"({"take":")" + take.str() + R"(","plugin":")" +
+                                               p.find("id")->asString() + R"("})")
+                                       .value(),
+                                   kTest});
+        if (!added) continue;
+        const std::string id = (*added)["fx"].asString();
+        const json::Value d = f.exec("fx.describe", R"({"fx":")" + id + R"(","full":true})");
+        if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+            for (const auto& m : ps->asObject()) {
+                auto desc = params::fromDescription(m.key, m.value);
+                if (!desc || (*desc)->spec.type != params::Type::Float ||
+                    ((*desc)->spec.flags & (params::kReadonly | params::kHidden)))
+                    continue;
+                fxId = id;
+                name = (*desc)->name.empty() ? m.key : (*desc)->name;
+                break;
+            }
+        if (fxId.empty()) f.exec("fx.remove", R"({"fx":")" + id + R"("})");
+    }
+    if (fxId.empty()) {
+        MESSAGE("skipped: no stock effect with a continuous parameter");
+        return;
+    }
+    const model::FxInstance& fx = *f.app->head().fx.find(*model::Id::parse(fxId));
+    const std::string effect = fx.label.empty() ? fx.plugin.name : fx.label;
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 300;
+    s.scrollBeat = -0.1;
+    f.frame();
+    // No velocity or CC rows; an audio take's envelopes need no instrument.
+    {
+        REQUIRE(f.root->click("midi.lanes"));
+        f.root->frame(false);
+        ui::Node* menu = f.root->find("midi.lanes.menu");
+        REQUIRE(menu);
+        std::map<std::string, bool> enabled;
+        for (const auto& m : ui::menuItems(*menu))
+            if (!m.separator) enabled[m.label] = m.enabled;
+        f.root->closePopup();
+        CHECK(enabled == std::map<std::string, bool>{{"Take volume", true},
+                                                     {"Take pan", true},
+                                                     {"Take mute", true},
+                                                     {effect + ": parameters…", true}});
+    }
+    // Take volume: an envelope with a point at the clip's start, in seconds.
+    f.pickLane("Take volume");
+    f.frame();
+    REQUIRE(s.envLanes.size() == 1);
+    CHECK(s.envLanes[0].title == "Volume (take)");
+    const model::Id volume = s.envLanes[0].env;
+    const auto points = [&](model::Id env) { return f.app->head().envelopes.find(env)->points; };
+    REQUIRE(points(volume).size() == 1);
+    CHECK(points(volume)[0].pos == 0);
+    // A click at 1.25 s adds a point there: seconds, not snapped to beats.
+    ui::Node* lane = f.root->find("midi.env." + volume.str());
+    REQUIRE(lane);
+    const ui::Rect r = lane->bounds();
+    const float y = r.y + 14 + (r.bottom() - 4 - r.y - 14) / 2;
+    f.pointer(ui::PointerEvent::Type::Down, {f.at(1.25, 60).x, y});
+    f.pointer(ui::PointerEvent::Type::Up, {f.at(1.25, 60).x, y});
+    REQUIRE(points(volume).size() == 2);
+    CHECK(points(volume)[1].pos == doctest::Approx(1.25).epsilon(0.005));
+    // The effect's parameter: its envelope is in time (an audio clip's FX),
+    // its lane under the take's.
+    f.pickLane(effect + ": parameters…");
+    ui::Node* params = f.root->find("midi.lanes.params");
+    REQUIRE(params);
+    std::function<void()> pick;
+    for (const auto& m : ui::menuItems(*params))
+        if (m.label == name) pick = m.run;
+    REQUIRE(pick);
+    f.root->closePopup();
+    pick();
+    f.frame();
+    REQUIRE(s.envLanes.size() == 2);
+    CHECK(s.envLanes[0].env == volume);
+    CHECK(s.envLanes[1].title == effect + " · " + name + " (take)");
+    const model::Envelope& drive = *f.app->head().envelopes.find(s.envLanes[1].env);
+    CHECK(drive.timebase == model::Timebase::Time);
+    REQUIRE(drive.points.size() == 1);
+    CHECK(drive.points[0].pos == 0);
+    settleWave(f);
+    f.golden("audio-clip-lanes-dark.png");
+    f.editor->setPeaks(nullptr);
+}
+
 TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {
     Fixture f;
     if (!f.ok) return;

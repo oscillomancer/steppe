@@ -1889,13 +1889,16 @@ void MidiEditor::openLanesMenu() {
         m.run = std::move(run);
         items.push_back(std::move(m));
     };
-    add("Velocity", state_.velocityShown, [this] {
-        state_.velocityShown = !state_.velocityShown;
-        applyLanes();
-    });
+    // An audio clip has no notes: no velocity or CC lane.
+    if (!state_.audio)
+        add("Velocity", state_.velocityShown, [this] {
+            state_.velocityShown = !state_.velocityShown;
+            applyLanes();
+        });
     // The CC lane shows one controller: picking another switches it, picking
     // the shown one hides the lane.
     for (const auto& [number, name] : kCcs) {
+        if (state_.audio) break;
         const int n = number;
         add("CC " + std::to_string(n) + " " + name, state_.ccShown && state_.ccNumber == n,
             [this, n] {
@@ -1921,14 +1924,14 @@ void MidiEditor::openLanesMenu() {
             return false;
         };
         // A MIDI take's envelope shapes what an instrument in its take FX
-        // plays (env.take_midi otherwise).
-        bool instrument = false;
+        // plays (env.take_midi otherwise); an audio take's shapes its audio.
+        bool instrument = owner->audio != nullptr;
         for (model::Id fx : owner->take->chain)
             if (const model::FxInstance* f = head.fx.find(fx))
                 if (auto info = app_.findPlugin(f->plugin.id)) instrument |= info->instrument;
         ui::MenuItem rule;
         rule.separator = true;
-        items.push_back(rule);
+        if (!items.empty()) items.push_back(rule);
         for (const auto& [param, label] :
              {std::pair{"volume", "Take volume"}, {"pan", "Take pan"}, {"mute", "Take mute"}}) {
             const model::EnvTarget target{take, param};
@@ -2042,7 +2045,7 @@ Status MidiEditor::setEnvPoints(model::Id env, const std::vector<model::EnvPoint
     args["env"] = env.str();
     for (const model::EnvPoint& pt : points) {
         json::Value p = json::Value::object();
-        p["beat"] = pt.pos;
+        p[state_.audio ? "seconds" : "beat"] = pt.pos;  // the clip's unit
         p["value"] = pt.value;
         p["shape"] = shapeName(pt.shape);
         if (pt.tension != 0) p["tension"] = pt.tension;
@@ -2078,7 +2081,7 @@ Status MidiEditor::showEnvelope(const model::EnvTarget& target, bool shown) {
                 point = json::Value::object();
     args[target.object.kind == model::Kind::Fx ? "fx" : "take"] = target.object.str();
     args["param"] = target.param;
-    point["beat"] = 0.0;
+    point[state_.audio ? "seconds" : "beat"] = 0.0;  // the clip's unit
     point["value"] = views::targetValue(head, target, *scale);
     points.push_back(std::move(point));
     args["points"] = std::move(points);
@@ -2100,6 +2103,51 @@ void MidiEditor::zoomRows(float wheel, float anchorY) {
     state_.topPitch = std::clamp(at + offset / static_cast<double>(state_.rowHeight), 12.0, 127.0);
     roll_->invalidate();
     if (keys_) keys_->invalidate();
+}
+
+// A clip's take lanes, in its unit (beats, or seconds for an audio clip);
+// an item's are on the timeline.
+void MidiEditor::collectEnvLanes(const MidiOwner& owner) {
+    state_.envLanes.clear();
+    if (owner.clip && owner.clip->activeTake) {
+        const model::Session& head = app_.head();
+        const model::Id takeId = *owner.clip->activeTake;
+        std::vector<std::pair<std::pair<int, std::uint32_t>, RollEnvLane>> lanes;
+        for (const auto& e : head.envelopes) {
+            const model::Envelope& env = *e.value;
+            if (!env.visible) continue;
+            int order = 0;
+            std::optional<views::EnvScale> scale;
+            if (env.target.object == takeId) {
+                scale = views::envScale(env);
+                order = views::envOrder(env);
+            } else if (env.target.object.kind == model::Kind::Fx) {
+                const auto at = std::find(owner.take->chain.begin(), owner.take->chain.end(),
+                                          env.target.object);
+                if (at == owner.take->chain.end()) continue;
+                scale = (*scales_)(env);
+                order = 100 + static_cast<int>(at - owner.take->chain.begin());
+            }
+            if (!scale) continue;
+            RollEnvLane lane;
+            lane.env = e.id;
+            lane.envelope = env;
+            lane.scale = *scale;
+            lane.fallback = views::targetValue(head, env.target, *scale);
+            if (env.target.object == takeId) {
+                lane.name = views::envTitle(env);
+                lane.title = lane.name + " (take)";
+            } else {
+                lane.title = views::envTitle(env, head, &*scale);
+                lane.name = scale->param && !scale->param->name.empty() ? scale->param->name
+                                                                        : env.target.param;
+            }
+            lanes.push_back({{order, e.id.n}, std::move(lane)});
+        }
+        std::sort(lanes.begin(), lanes.end(),
+                  [](const auto& x, const auto& y) { return x.first < y.first; });
+        for (auto& l : lanes) state_.envLanes.push_back(std::move(l.second));
+    }
 }
 
 Status MidiEditor::reload() {
@@ -2143,47 +2191,7 @@ Status MidiEditor::reload() {
         state_.cc.push_back(
             {c.find("beat")->asDouble(), static_cast<int>(c.find("value")->asInt())});
     }
-    // A clip's take lanes, in clip beats; an item's are on the timeline.
-    state_.envLanes.clear();
-    if (owner->clip && owner->clip->activeTake) {
-        const model::Session& head = app_.head();
-        const model::Id takeId = *owner->clip->activeTake;
-        std::vector<std::pair<std::pair<int, std::uint32_t>, RollEnvLane>> lanes;
-        for (const auto& e : head.envelopes) {
-            const model::Envelope& env = *e.value;
-            if (!env.visible) continue;
-            int order = 0;
-            std::optional<views::EnvScale> scale;
-            if (env.target.object == takeId) {
-                scale = views::envScale(env);
-                order = views::envOrder(env);
-            } else if (env.target.object.kind == model::Kind::Fx) {
-                const auto at =
-                    std::find(take->chain.begin(), take->chain.end(), env.target.object);
-                if (at == take->chain.end()) continue;
-                scale = (*scales_)(env);
-                order = 100 + static_cast<int>(at - take->chain.begin());
-            }
-            if (!scale) continue;
-            RollEnvLane lane;
-            lane.env = e.id;
-            lane.envelope = env;
-            lane.scale = *scale;
-            lane.fallback = views::targetValue(head, env.target, *scale);
-            if (env.target.object == takeId) {
-                lane.name = views::envTitle(env);
-                lane.title = lane.name + " (take)";
-            } else {
-                lane.title = views::envTitle(env, head, &*scale);
-                lane.name = scale->param && !scale->param->name.empty() ? scale->param->name
-                                                                        : env.target.param;
-            }
-            lanes.push_back({{order, e.id.n}, std::move(lane)});
-        }
-        std::sort(lanes.begin(), lanes.end(),
-                  [](const auto& x, const auto& y) { return x.first < y.first; });
-        for (auto& l : lanes) state_.envLanes.push_back(std::move(l.second));
-    }
+    collectEnvLanes(*owner);
     refreshEnvLanes();
     // Bars in a generous window around the item.
     state_.barLines.clear();
@@ -2338,7 +2346,7 @@ Status MidiEditor::reloadAudio() {
         wave.label = "Take " + std::to_string(at - takes.begin() + 1);
     }
     state_.wave = std::move(wave);
-    state_.envLanes.clear();
+    collectEnvLanes(*owner);  // in seconds, the clip's unit
     refreshEnvLanes();
     applyMode();
     refreshKeyButton();

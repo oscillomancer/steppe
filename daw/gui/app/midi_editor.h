@@ -334,7 +334,8 @@ class MidiEditor {
     bool audioShown_ = false;       // the pane is in its audio form
     bool notationWasShown_ = true;  // the notation pane, before an audio clip hid it
     void applyMode();
-    Status reloadAudio();  // reload() for an audio clip
+    Status reloadAudio();                          // reload() for an audio clip
+    void collectEnvLanes(const MidiOwner& owner);  // state_.envLanes from the clip's take
     std::unique_ptr<MidiEventList> eventList_;
     ui::Node* listPane_ = nullptr;
     ui::Node* rollPane_ = nullptr;
