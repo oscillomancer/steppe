@@ -93,7 +93,7 @@ class Inspector {
     void commitNotes(const std::string& text);  // one track's notes, when they changed
     // One track's Modulation row (gui.md §4.14): a line per route, "N routes"
     // past four; shown only while something of the track is modulated.
-    void readModulation(const model::Track& track, model::Id id);
+    void readModulation(model::Id id);
     ui::Root& root_;
     engine::EngineApp& app_;
     const UiState& selection_;

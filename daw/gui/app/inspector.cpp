@@ -840,7 +840,7 @@ void Inspector::readTracks(bool force) {
     row->current = common(tracks, [](const model::Track& t) { return t.color; });
     row->invalidate();
     rows_["track.modulation"]->visible = false;
-    if (one) readModulation(*tracks.front(), ids_.front());
+    if (one) readModulation(ids_.front());
     rows_["track.notes"]->visible = one;
     if (one) {
         notesShown_ = tracks.front()->notes;
@@ -850,8 +850,7 @@ void Inspector::readTracks(bool force) {
     }
 }
 
-void Inspector::readModulation(const model::Track& track, model::Id id) {
-    (void)track;
+void Inspector::readModulation(model::Id id) {
     const model::Session& s = app_.head();
     const auto routes = modRoutesOfTrack(s, id);
     rows_["track.modulation"]->visible = !routes.empty();
@@ -877,9 +876,9 @@ void Inspector::readModulation(const model::Track& track, model::Id id) {
     modLines_->clear();
     AppActions* a = &actions_;
     ui::Root* r = &root_;
-    auto line = [&](const std::string& id, const std::string& text, const std::string& mark,
+    auto line = [&](const std::string& nodeId, const std::string& text, const std::string& mark,
                     std::function<void()> click) {
-        auto& b = modLines_->emplace<ModLine>(id, text, std::move(click));
+        auto& b = modLines_->emplace<ModLine>(nodeId, text, std::move(click));
         b.setMark(mark, "signal-cv");
         b.layout.width = ui::SizeRule::fraction();
         b.layout.height = ui::SizeRule::fixed(22);
