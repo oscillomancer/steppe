@@ -484,7 +484,10 @@ the same.*
     sample, its running frame and its song position.
 - **While stopped,** a launch is not quantized. It starts the transport
   and applies at the play start's first sample, so the clip's anchor is
-  the play position.
+  the play position. A clip chain's early half would fall before that
+  sample; it applies there too, live as in the replay, and the chain
+  warms up through its first frames (its lead), as when a swap raises the
+  lead (ADR-0097, amended 2026-11-20; review round 69).
 - **Quantize** is project-wide (`launch_quantize`) with a per-clip
   override. `none` means the floor: about the render-ahead (200 ms) for a
   rendered track, one device block for a live one. That is accepted for

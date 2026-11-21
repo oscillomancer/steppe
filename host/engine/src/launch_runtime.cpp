@@ -31,6 +31,16 @@ std::uint64_t status(std::uint64_t state) { return state & kStatusMask; }
 std::uint64_t with(std::uint64_t state, std::uint64_t s) { return (state & ~kStatusMask) | s; }
 std::uint64_t next(std::uint64_t state, std::uint64_t s) { return ((state >> 3) + 1) << 3 | s; }
 
+// The frame a target's clip chains take a launch at `at` with lead `lead`
+// (prelaunch). One before the epoch's first frame (a launch placed while
+// stopped targets the play start) is that first frame, where the offline
+// replay applies it too: the chain warms up through its first frames, as
+// when a swap raises the lead (ADR-0097, amended 2026-11-20). Else it would
+// count as passed, and the launch would be placed again a bar later.
+std::int64_t earlyFrame(std::int64_t at, std::int64_t lead) {
+    return std::max<std::int64_t>(at - lead, 0);
+}
+
 // The song position `d` stream frames after `from`, the loop folding.
 std::int64_t songAfter(const LoopRange& loop, std::int64_t from, std::int64_t d) {
     const std::int64_t x = from + d;
@@ -295,8 +305,9 @@ bool Engine::launchHorizonsAllow(const detail::Plan& plan, model::Id track, std:
         // The end, then the epoch: an executor stores them the other way.
         const std::int64_t end = h.end.load();
         const std::uint64_t e = h.epoch.load();
-        if (e > epoch) return false;                                  // relocated already
-        if (e == epoch && end > target - n.launchLead) return false;  // its early half too
+        if (e > epoch) return false;  // relocated already
+        if (e == epoch && end > earlyFrame(target, n.launchLead))
+            return false;  // its early half too
     }
     return true;
 }
@@ -435,7 +446,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
             const std::int64_t at = target + n.timelineShift;
             // A channel with clip chains takes it its lead early as well
             // (prelaunch): its first frame, which decides it.
-            const std::int64_t early = at - (feed ? 0 : n.launchLead);
+            const std::int64_t early = earlyFrame(at, feed ? 0 : n.launchLead);
             any = true;
             first = std::min(first, early);
             if (early < stream) passed = true;  // (consulted only while undecided)
@@ -484,7 +495,8 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         }
         if (due && !repeat) {
             forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed* feed) {
-                if (feed || n.launchLead <= 0 || target + n.timelineShift - n.launchLead != stream)
+                if (feed || n.launchLead <= 0 ||
+                    earlyFrame(target + n.timelineShift, n.launchLead) != stream)
                     return;
                 detail::LaunchAction a;
                 a.kind = kind;

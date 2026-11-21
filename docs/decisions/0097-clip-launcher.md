@@ -639,7 +639,11 @@ run time, not a position in the timeline.
   or after every owning executor's horizon *plus the target track's
   launch lead*. The decision is still made once, at the first frame of
   any target, which for such a track is its early half; the horizon check
-  uses that frame. The alternative, keeping the floor and starting the
+  uses that frame. An early half before the epoch's first frame (a launch
+  placed while stopped, whose target is the play start) is that first
+  frame, so the chain warms up through its first frames *(review round 69:
+  it counted as passed, and a chained track started a bar after a dry
+  one)*. The alternative, keeping the floor and starting the
   chain at the switch, would make the clip heard its chain's latency late,
   or lose its first frames to compensation: a clip would no longer sound
   at its boundary, and a capture would not commit as it played. Quantize
