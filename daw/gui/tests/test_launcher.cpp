@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <set>
 #include <string>
 #include <thread>
@@ -22,6 +23,7 @@
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
+#include "supple/json/write.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
@@ -108,6 +110,46 @@ struct LauncherFixture {
         REQUIRE(r);
         sync();
         return *r;
+    }
+    // The song beat the transport is at while it plays, else -1.
+    double playingBeat() {
+        const auto t = app->transport("get");
+        return t && t->playing ? t->beat : -1;
+    }
+    // Runs the app's main-loop service (EngineApp::tick, which services the
+    // engine: a launch's ack reaches the launch log there, so launchState()
+    // can report it heard), then `pass`, until `done`. The engine decides: a
+    // launch placed at `beat` is heard before the transport has played a
+    // further bar, so that fails it. The wall-clock bound only stops an
+    // engine that does not run at all. A failure prints launch.state and the
+    // transport, as the engine reports them.
+    bool runUntil(const std::function<bool()>& done, double beat, const std::string& what,
+                  const std::function<void()>& pass = {}) {
+        const auto start = std::chrono::steady_clock::now();
+        std::string why;
+        for (;;) {
+            app->tick();
+            if (pass) pass();
+            if (done()) return true;
+            if (const double at = playingBeat(); at > beat + 4) {  // a 4/4 bar past it
+                why = "the transport reached beat " + std::to_string(at) + " without it";
+                break;
+            }
+            if (std::chrono::steady_clock::now() - start > std::chrono::minutes(2)) {
+                why = "the engine did not reach a bar past beat " + std::to_string(beat) +
+                      " in two minutes (a hang guard, not a timing check)";
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        auto state = dispatcher->execute({"launch.state", json::Value::object(), kLauncherUi});
+        auto transport = dispatcher->execute({"transport.get", json::Value::object(), kLauncherUi});
+        MESSAGE(
+            what << ": " << why << "\n  launch.state "
+                 << (state ? json::writeCompact(*state) : state.error().toString())
+                 << "\n  transport "
+                 << (transport ? json::writeCompact(*transport) : transport.error().toString()));
+        return false;
     }
     void pointer(Pointer type, ui::Point p, unsigned mods = 0, int clicks = 1, int button = 1) {
         ui::PointerEvent e;
@@ -320,17 +362,15 @@ TEST_CASE("launcher: the engine's launch state reaches the pane (launch.clip, du
     LauncherFixture f;
     f.song();
     f.exec("engine.start", R"({"backend":"dummy"})");
-    f.exec("launch.clip", R"({"clip":"cl_1"})");
-    // Until the engine hears it; the bound only keeps a broken build from
-    // hanging, the check is on what arrives.
-    bool playing = false;
-    for (int i = 0; i < 300 && !playing; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        f.view->setLaunchState(gui::launchViews(f.app->launchState()));
-        f.sync();
-        playing = f.view->launcherPane().stats.playing == 1;
-    }
-    CHECK(playing);
+    const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+    // Until the engine hears it, as the app's loop sees it each pass.
+    CHECK(f.runUntil(
+        [&] {
+            f.view->setLaunchState(gui::launchViews(f.app->launchState()));
+            f.sync();
+            return f.view->launcherPane().stats.playing == 1;
+        },
+        at, "Kit A heard"));
     const auto& state = f.view->launchState();
     const auto it = state.find(*model::Id::parse("tr_1"));
     REQUIRE(it != state.end());
@@ -642,7 +682,7 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     REQUIRE(capture.set(true));
     CHECK(capture.armed());
     CHECK(f.app->launchCapturing());
-    f.exec("launch.clip", R"({"clip":"cl_1"})");
+    const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
     const model::Id drums = *model::Id::parse("tr_1");
     auto playing = [&] {
         for (const auto& t : f.app->launchState())
@@ -650,22 +690,17 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
                 return true;
         return false;
     };
-    // Until the engine hears it, and a little after; the bound only keeps a
-    // broken build from hanging.
-    for (int k = 0; k < 3000 && !playing(); ++k) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        capture.service();
-    }
-    REQUIRE(playing());
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    capture.service();
+    // Until the engine hears it, and a beat after, as the app's loop sees it.
+    const auto service = [&] { capture.service(); };
+    REQUIRE(f.runUntil(playing, at, "Kit A heard", service));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Kit A", service));
     CHECK(f.app->head().items.empty());
     const std::uint64_t before = f.app->head().version;
+    // A stop ends the capture on the main thread (the transport relocates):
+    // the next pass commits it.
     f.exec("transport.stop", "{}");
-    for (int k = 0; k < 3000 && f.app->head().items.empty(); ++k) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        capture.service();
-    }
+    f.app->tick();
+    capture.service();
     CHECK(refused.empty());
     bool laid = false;
     for (const auto& e : f.app->head().items) laid = laid || e.value->track == drums;
@@ -720,27 +755,22 @@ TEST_CASE("launcher: a refused capture commit keeps the performance; a click com
     const model::Id drums = *model::Id::parse("tr_1");
     // Kit A launched and heard, then a stop. The bounds only keep a broken
     // build from hanging.
-    auto perform = [&] {
-        f.exec("launch.clip", R"({"clip":"cl_1"})");
+    auto perform = [&](const std::string& take) {
+        const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
         auto playing = [&] {
             for (const auto& t : f.app->launchState())
                 if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
                     return true;
             return false;
         };
-        for (int k = 0; k < 3000 && !playing(); ++k) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            capture.service();
-        }
-        REQUIRE(playing());
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        capture.service();
-        const std::size_t seen = refused.size();
+        const auto service = [&] { capture.service(); };
+        REQUIRE(f.runUntil(playing, at, take + ": Kit A heard", service));
+        REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at,
+                           take + ": a beat of Kit A", service));
+        // The stop ends the capture on the main thread; the next pass commits.
         f.exec("transport.stop", "{}");
-        for (int k = 0; k < 3000 && refused.size() == seen && capture.armed(); ++k) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            capture.service();
-        }
+        f.app->tick();
+        capture.service();
     };
     auto heldFrames = [&] {
         const auto held = f.app->engine()->launchCapture();
@@ -748,7 +778,7 @@ TEST_CASE("launcher: a refused capture commit keeps the performance; a click com
     };
     REQUIRE(capture.set(true));
     const std::uint64_t armedAt = f.app->head().version;
-    perform();
+    perform("the first take");
     // Refused: nothing written, the toggle dark, the performance kept.
     REQUIRE(refused.size() == 1);
     CHECK(refused[0].code == "item.locked");
@@ -783,7 +813,7 @@ TEST_CASE("launcher: a refused capture commit keeps the performance; a click com
     for (const auto& e : f.app->head().items)
         if (e.value->track == drums)
             f.exec("item.set", R"({"item":")" + e.id.str() + R"(","locked":true})");
-    perform();
+    perform("the second take");
     REQUIRE(refused.size() == 2);
     CHECK_FALSE(capture.armed());
     const std::uint64_t locked = f.app->head().version;
@@ -819,7 +849,7 @@ TEST_CASE("launcher: the Capture cell is lit by an agent's capture; a click ends
     CHECK_FALSE(capture.armed());
     CHECK(capture.lit());
     CHECK(header.stats.captureLit);
-    f.exec("launch.clip", R"({"clip":"cl_1"})");
+    const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
     const model::Id drums = *model::Id::parse("tr_1");
     auto playing = [&] {
         for (const auto& t : f.app->launchState())
@@ -827,12 +857,8 @@ TEST_CASE("launcher: the Capture cell is lit by an agent's capture; a click ends
                 return true;
         return false;
     };
-    for (int k = 0; k < 3000 && !playing(); ++k) {  // a hang guard only
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        show();
-    }
-    REQUIRE(playing());
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    REQUIRE(f.runUntil(playing, at, "Kit A heard", show));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Kit A", show));
     // A click on the lit cell ends that capture and commits it.
     const std::uint64_t before = f.app->head().version;
     f.click(centre(header.captureRect()));
