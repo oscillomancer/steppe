@@ -316,25 +316,45 @@ the same way, through one resolver (`detail::resolveParam`):
   their ids in the hint, so the caller can use an id (up to eight are named,
   then a count). A name the plug-in lacks is refused as each command
   states. The plug-in is named by its display name, not its raw id.
-- **What is stored** is the canonical reference: the semantic key when the
-  caller named one, otherwise the decimal id. A semantic plug-in's key and
-  its id stay distinct spellings because they choose the values' domain (a
-  key's envelope points are physical, an id's or a name's plain), so a
-  name or id is never rewritten to a key.
-  Answers that echo a parameter give the canonical reference as `param` and
-  the display name beside it as `param_name` (`env.add`, `modulate` and
-  `modulation.add`; `env.list` and `modulation.list` add `param_name`).
-- **Identity** is the resolved parameter. Existence checks compare it, not
-  spellings: a second envelope on one parameter is `env.exists` whichever
-  spelling either uses, and two routes from one source input to one
-  parameter are `modulation.duplicate`.
+- **What is stored** is the canonical reference: on a semantic plug-in the
+  semantic key that describes the parameter, whichever spelling the caller
+  used; on any other plug-in (or for a parameter no key describes) the
+  decimal id. So each parameter has one stored spelling.
+  - *Values.* A key's envelope points are physical (the schema's units),
+    an id's or a name's plain (the plug-in's own range). `env.add` given a
+    semantic plug-in's parameter by id or name reads its points as plain,
+    converts them to physical, stores the key, and says so in its answer
+    (`converted: true`), so `env.list` and later point edits are in the
+    key's units. A route's depth is a fraction of the range, so nothing
+    converts.
+  - Answers that echo a parameter give the canonical reference as `param`
+    and the display name beside it as `param_name` (`env.add`, `modulate`
+    and `modulation.add`; `env.list` and `modulation.list` add
+    `param_name`).
+- **Identity** is the resolved parameter, and since each has one stored
+  spelling, comparing stored references is comparing parameters. Every
+  check that finds an envelope or route for a parameter compares the
+  stored reference with the canonical one: `env.exists`,
+  `modulation.duplicate`, which envelope a write, touch or latch pass
+  records into (`fx.param.set`, the plug-in window's gestures), which lane
+  a gesture holds, which route's offset a recorded gesture leaves out, and
+  the GUI's lane and route lookups.
 - **Stored references in older files** (a display name, any letter case)
   still open and play: the plan binds them through the same resolver, and
   an ambiguous one binds the first match, as before. The file is not
   rewritten. Opening warns, at the reference's path, for one that resolves
   to no parameter (`param.unresolved`), one that is ambiguous
   (`param.ambiguous`, with the ids), and two active envelopes that resolve
-  to one parameter (`env.duplicate`; the later plays, as before). A plug-in
+  to one parameter (`env.duplicate`; the later plays, as before).
+  - *A reference stored in another spelling* (an id or a name on a
+    semantic plug-in, a name on another) plays, in its own values' domain,
+    but no lookup by parameter finds it. Opening warns
+    (`param.spelling`): for an envelope, a write, touch or latch pass is
+    not recorded into it and the FX window's lane lookup does not find it;
+    for a route, the FX window does not show it on its parameter. The fix
+    it names: remove it and add it again (`env.remove` and `env.add`,
+    `modulation.remove` and `modulation.add`).
+  - A plug-in
   that is missing is not probed, and its references are not checked. The
   check reads the plug-in's parameter list in its default state.
 - **Automatable.** A parameter the plug-in does not mark automatable
