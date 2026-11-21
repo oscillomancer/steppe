@@ -2793,3 +2793,48 @@ TEST_CASE(
                     CHECK(maxDiff(live.left, live.latency, written->audio.channels[0], n) > 0.0);
                 }
 }
+
+TEST_CASE("a plan swap mid-note with other pitch tables leaves no following note sounding" *
+          doctest::description("rt")) {
+    // cl_1 (D minor, following) plays a half note from bar 2 under C minor.
+    // Mid-note a new plan maps it elsewhere (the project now in E minor): its
+    // note-off must still end the note that sounds, so the rest is silent.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        followingClip(p, "key", "voice bass; 1: D3:h r:h", "1: key D minor ~:w");
+        p.runArgs("context.write", contextText("1: key C minor ~:w\n2: ~:w\n3: ~:w"));
+        const model::Session before = p.app->head();
+        p.runArgs("context.write", contextText("1: key E minor ~:w\n2: ~:w\n3: ~:w"));
+        p.run("track.set", R"({"track": "tr_1", "name": "Moved"})");  // a compile, not a shortcut
+        const model::Session after = p.app->head();
+        constexpr std::uint32_t block = 128;
+        const std::int64_t frames = 10 * kBeat + 8192;
+        const Live live =
+            playLive(before, p.app->projectDir(), options, block, frames,
+                     {{20, {request("tr_1", "cl_1")}}, {(5 * kBeat) / block, {}, {}, &after}});
+        REQUIRE(live.log.size() == 1);
+        CHECK(live.log[0].anchorSample == 4 * kBeat);
+        // Sounding from bar 2, silent from its note-off (beat 6) to bar 3.
+        CHECK(live.left[std::size_t(4 * kBeat + 1000 + live.latency)] != 0.0f);
+        std::size_t heard = 0;  // it plays on past the swap, to its note-off
+        for (std::int64_t t = 5 * kBeat + kFade; t < 6 * kBeat - kFade; ++t)
+            heard += live.left[std::size_t(t + live.latency)] != 0.0f;
+        CHECK(heard > std::size_t(kBeat / 2));
+        for (std::int64_t t = 6 * kBeat + kFade; t < 8 * kBeat; ++t)
+            REQUIRE(live.left[std::size_t(t + live.latency)] == 0.0f);
+        // The new tables play from then on: bar 3 is the new session's.
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 5.0;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = live.log;
+        auto replay = renderOffline(after, pool, settings);
+        REQUIRE(replay);
+        const auto& r = replay->audio.channels[0];
+        bool same = true;
+        for (std::int64_t t = 8 * kBeat + kFade; t < 9 * kBeat; ++t)
+            same = same && live.left[std::size_t(t + live.latency)] == r[std::size_t(t)];
+        CHECK(same);
+    }
+}
