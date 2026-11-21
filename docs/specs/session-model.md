@@ -299,6 +299,50 @@ Chains are arrays of fx ids on tracks (`chain`, `input_chain`), takes
 (`chain`) and the master's monitoring chain (`project.monitor_chain`, not
 rendered).
 
+#### Plug-in parameter references
+
+Envelopes (`{fx, param}`), modulation routes (`target.param`), `fx.param.set`
+keys and cables into a plugin module (`fx_N.<key>`) name a plug-in parameter
+the same way, through one resolver (`detail::resolveParam`):
+
+- **What it accepts**, in this order:
+  - a semantic key of the plug-in's schema, exactly;
+  - a decimal parameter id (the CLAP `clap_id`, or the VST3 `ParamID`, both
+    stable by their formats) without leading zeros: `007` is refused with
+    the canonical spelling `7` in the hint;
+  - a display name, ignoring letter case. When several parameters match, a
+    single exact-case match wins; otherwise the name is ambiguous.
+- **An ambiguous name is refused**, naming the parameters it matches with
+  their ids in the hint, so the caller can use an id (up to eight are named,
+  then a count). A name the plug-in lacks is refused as each command
+  states. The plug-in is named by its display name, not its raw id.
+- **What is stored** is the canonical reference: the semantic key when the
+  caller named one, otherwise the decimal id. A semantic plug-in's key and
+  its id stay distinct spellings because they choose the values' domain (a
+  key's envelope points are physical, an id's or a name's plain), so a
+  name or id is never rewritten to a key.
+  Answers that echo a parameter give the canonical reference as `param` and
+  the display name beside it as `param_name` (`env.add`, `modulate` and
+  `modulation.add`; `env.list` and `modulation.list` add `param_name`).
+- **Identity** is the resolved parameter. Existence checks compare it, not
+  spellings: a second envelope on one parameter is `env.exists` whichever
+  spelling either uses, and two routes from one source input to one
+  parameter are `modulation.duplicate`.
+- **Stored references in older files** (a display name, any letter case)
+  still open and play: the plan binds them through the same resolver, and
+  an ambiguous one binds the first match, as before. The file is not
+  rewritten. Opening warns, at the reference's path, for one that resolves
+  to no parameter (`param.unresolved`), one that is ambiguous
+  (`param.ambiguous`, with the ids), and two active envelopes that resolve
+  to one parameter (`env.duplicate`; the later plays, as before). A plug-in
+  that is missing is not probed, and its references are not checked. The
+  check reads the plug-in's parameter list in its default state.
+- **Automatable.** A parameter the plug-in does not mark automatable
+  (`CLAP_PARAM_IS_AUTOMATABLE`, VST3 `kCanAutomate`) takes no new envelope
+  (`env.param`, hint: set it with `fx.param.set`) and no route
+  (`modulation.target`, the same hint). Envelopes already in a file on such a
+  parameter keep playing.
+
 ### 1.8 Routes
 
 `sd_*` edges, stored at top level (not inside tracks):
@@ -380,7 +424,8 @@ with `route.add`).
 `{track: id, param: width|pan_left|pan_right|pan_boost}` (channels and
 busses only; `track.strip_type` on masters),
 `{track: "tr_0", param: playrate}` (one global master-rate envelope only),
-`{route: id, param: volume|pan|mute}`, `{fx: id, param: <key or CLAP id>}`,
+`{route: id, param: volume|pan|mute}`, `{fx: id, param: <key, id or name>}`
+(stored canonical; "Plug-in parameter references"),
 `{take: id, param: volume|pan|pitch|mute}`, `{tempo: true}` (the tempo map is
 edited through `tempo.*`, not envelopes); `mode`
 (`trim|read|touch|latch|latch_preview|write`); `active`, `armed`,
@@ -1296,7 +1341,8 @@ eviction; blob dedup.
   MIDI there, and any item on a buss, is `track.strip_type`. `transport.record` records
   armed masters' outputs with the armed channels' inputs.
   `fx.param.set` keeps semantic parameter units and also supports plain CLAP/VST3
-  parameter names/IDs, declared ranges, writable flags and plugin text conversion.
+  parameter names/IDs (resolved as "Plug-in parameter references" say),
+  declared ranges, writable flags and plugin text conversion.
   Plain parameter edits save processor state after applying queued values on a
   private probe. Latency probes restore patch/state/params before measuring.
 - Ruler lists include `timebase`; descriptions map seconds through the time map.
@@ -1701,7 +1747,7 @@ warning at its path that names it and says why.
 | Field | Meaning |
 |---|---|
 | `source` | `{module, input}` (required): a Mod Out module (`com.suppleaudio.rack.mod-out`, rack.md §5) and one of its inputs, `in_1` .. `in_16`. |
-| `target` | `{object, param}` as an envelope's target is stored (required): an `fx_*` with `param` a key, name or decimal CLAP id; a `tr_*` with `volume`, `pan` or `width` (`width`: not on a master); an `sd_*` with `volume`, for an audio send between strips or a rack send. |
+| `target` | `{object, param}` as an envelope's target is stored (required): an `fx_*` with `param` a key, name or decimal parameter id, stored canonical ("Plug-in parameter references"); a `tr_*` with `volume`, `pan` or `width` (`width`: not on a master); an `sd_*` with `volume`, for an audio send between strips or a rack send. |
 | `depth` | The offset at a signal of 1 (required). Plug-in parameter: a fraction of its CLAP range, −1..1. Volume and send level: dB, −48..48. Pan and width: percent, −200..200. |
 | `enabled` | Default true. |
 | `lane` | The target's lane is shown, default true. Undoable like an envelope's `visible`. It never changes the sound, but changing it compiles, as an envelope's `visible` does. |

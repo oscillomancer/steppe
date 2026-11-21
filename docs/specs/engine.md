@@ -2486,7 +2486,9 @@ harness. See the tooling README for schemas, limits and invocation details.
 - **Plugin-parameter automation:** an envelope on `fx_* <param>` resolves the
   parameter from the plugin's semantic schema (`params::fromDescription`
   rebuilds its ParamSpec, so the host converts exactly as the plugin does)
-  or, for any plugin, by CLAP id or name (plain CLAP values). Semantic points
+  or, for any plugin, by parameter id or name (plain CLAP values), through the
+  one resolver session-model's "Plug-in parameter references" describes.
+  Semantic points
   are physical and interpolated in the normalized (curve) domain (ADR-0010).
   The stage gets param events at absolute timeline sample positions that are
   multiples of 32 in the lane's latency-shifted coordinates, and at each exact
