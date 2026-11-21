@@ -468,6 +468,13 @@ int frontendMain(int argc, char** argv) {
     };
     pluginWindows.setOwner(window->get());
     gui::MidiEditor midiEditor(root, appActions, dispatcher, **app, uiState);
+    // An audio clip's waveform reads the arrangement's peaks, and repaints
+    // when one arrives as the lanes do.
+    midiEditor.setPeaks(&peaks);
+    peaks.onReady = [previous = std::move(peaks.onReady), &midiEditor](const std::string& key) {
+        if (previous) previous(key);
+        midiEditor.peaksReady();
+    };
     gui::RoutingMatrix routing(routingPanel, appActions, dispatcher, **app);
     shell.onRouting = [&routing](const model::Id&, const ui::Rect& anchor) {
         routing.open(anchor);
@@ -877,12 +884,10 @@ int frontendMain(int argc, char** argv) {
          [&](model::Id clip) {
              const model::Clip* c = (*app)->head().clips.find(clip);
              if (!c) return;
-             if (c->kind == model::ClipKind::Midi) {
-                 if (auto r = midiEditor.open(clip.str()); !r && appActions.onError)
-                     appActions.onError("MIDI: " + r.error().message);
-             } else {
-                 appActions.invoke("ui.inspector");
-             }
+             // A MIDI clip's roll, or an audio clip's waveform and lanes.
+             if (auto r = midiEditor.open(clip.str()); !r && appActions.onError)
+                 appActions.onError((c->kind == model::ClipKind::Midi ? "MIDI: " : "Audio: ") +
+                                    r.error().message);
          },
          [&](const std::vector<model::Id>& clips) {
              uiState.selectedClips.clear();

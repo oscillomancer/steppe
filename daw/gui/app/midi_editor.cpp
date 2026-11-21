@@ -15,13 +15,16 @@
 
 #include "supple/model/context.h"
 #include "supple/notation/notation.h"
+#include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/gl.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/chord_field.h"
+#include "supple/views/item_body.h"
 #include "supple/views/lanes.h"
 #include "supple/views/launcher.h"
 #include "supple/views/mouse_map.h"
@@ -116,7 +119,8 @@ bool RollState::outsideKey(const RollNote& note) const {
 }
 
 double RollState::snapBeat(double itemBeat) const {
-    if (!snap || grid <= 0) return itemBeat;
+    // An audio clip's axis is seconds: the project grid is not on it.
+    if (!snap || grid <= 0 || audio) return itemBeat;
     const double project = itemPosition + itemBeat;
     return std::round(project / grid) * grid - itemPosition;
 }
@@ -124,6 +128,24 @@ double RollState::snapBeat(double itemBeat) const {
 // ----------------------------------------------------------------- geometry
 
 namespace {
+
+// An audio clip's time ruler (gui.md §4.7): the seconds between labels at
+// `pixelsPerSecond`, the first step at least `room` pixels wide, and a
+// label as m:ss.d (two decimals for steps under a tenth).
+double timeStep(double pixelsPerSecond, double room) {
+    for (double step : {0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0,
+                        120.0, 300.0, 600.0})
+        if (step * pixelsPerSecond >= room) return step;
+    return 1200.0;
+}
+std::string timeLabel(double seconds, double step) {
+    const double s = std::max(0.0, seconds);
+    const int minutes = static_cast<int>(s / 60);
+    char text[32];
+    std::snprintf(text, sizeof text, step < 0.1 ? "%d:%05.2f" : "%d:%04.1f", minutes,
+                  s - minutes * 60.0);
+    return text;
+}
 
 struct Geometry {
     const RollState& s;
@@ -198,6 +220,7 @@ class Roll : public ui::Node {
     Roll(RollState& s, MidiEditor& editor) : Node("midi.roll"), s_(s), editor_(editor) {
         focusable = true;
         interactive = true;
+        drawsGl = true;  // an audio clip's waveform
         layout.width = ui::SizeRule::fraction();
         layout.height = ui::SizeRule::fraction();
     }
@@ -206,8 +229,14 @@ class Roll : public ui::Node {
         const ui::Theme& t = c.theme();
         const Geometry g{s_, bounds()};
         const ui::Rect b = bounds();
+        theme_ = &t;
         c.save();
         c.clip(b);
+        if (s_.audio) {
+            paintAudio(c, g);
+            c.restore();
+            return;
+        }
         // Rows: those in the scale on the panel, the others on the darker
         // ground, per span of constant key (ADR-0095). Where no key holds,
         // the black keys' rows are the dark ones, as on the keyboard beside
@@ -316,9 +345,63 @@ class Roll : public ui::Node {
     }
 
     bool onPointer(const ui::PointerEvent& e) override {
+        // An audio clip's waveform is not edited: the wheel zooms and
+        // scrolls it, as the roll.
+        if (s_.audio && e.type != ui::PointerEvent::Type::Wheel) return false;
         const bool handled = handle(e);
+        if (s_.audio) return handled;
         noteDrag(e);
         return handled;
+    }
+
+    // An audio clip (gui.md §4.7): time lines at the ruler's labels, the
+    // clip shaded outside its span, its end marked. The waveform is drawn
+    // in paintGl.
+    void paintAudio(ui::Canvas& c, const Geometry& g) {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        c.fillRect(b, t.color("panel"));
+        const double step = timeStep(s_.pixelsPerBeat, 56);
+        const double first = std::floor(std::max(0.0, g.beatOf(b.x)) / step) * step;
+        for (double at = first; g.xOf(at) <= b.right(); at += step)
+            c.fillRect({g.xOf(at), b.y, 1, b.h}, t.color("rule").withAlpha(0.6f));
+        const float x0 = g.xOf(0), x1 = g.xOf(s_.itemLength);
+        if (x0 > b.x) c.fillRect({b.x, b.y, x0 - b.x, b.h}, t.color("ground").withAlpha(0.6f));
+        if (x1 < b.right()) {
+            c.fillRect({x1, b.y, b.right() - x1, b.h}, t.color("ground").withAlpha(0.6f));
+            c.fillRect({x1, b.y, 1, b.h}, t.color("ink-quiet"));
+            c.text({x1 + 4, b.y + 2, 60, 14}, "end", ui::Font::Ui, t.type("caption"),
+                   t.color("ink-quiet"), ui::kLeft | ui::kMiddle);
+        }
+    }
+
+    void paintGl(const ui::GlFrame& frame) override {
+        s_.waveColumns = 0;
+        if (!s_.audio || !s_.wave || glFailed_ || !theme_) return;
+        peaks::PeakService* service = editor_.peaks();
+        if (!service) return;
+        if (!strips_) {
+            auto made = ui::StripRenderer::create();
+            if (!made) {
+                glFailed_ = true;
+                return;
+            }
+            strips_.emplace(std::move(*made));
+        }
+        const auto pyramid = service->get(s_.wave->hash, s_.wave->path);
+        s_.wavePending = !pyramid;
+        if (!pyramid) return;  // the service's delivery repaints (peaksReady)
+        const ui::Rect b = bounds();
+        const Geometry g{s_, b};
+        const float x0 = std::max(b.x, g.xOf(0)), x1 = std::min(b.right(), g.xOf(s_.itemLength));
+        if (x1 <= x0 || b.h < 16) return;
+        const ui::Rect r{x0, b.y + 6, x1 - x0, b.h - 12};
+        const views::AudioWindow window{[g](float x) { return g.beatOf(x); }, s_.pixelsPerBeat,
+                                        s_.wave->loop};
+        const ui::Color color = s_.color ? s_.color(*theme_) : theme_->color("accent");
+        s_.waveColumns = views::drawAudioBody(*strips_, frame, r, *pyramid, s_.wave->take, window,
+                                              s_.wave->gain, ui::packRgba(color.withAlpha(0.85f)));
+        strips_->flush(frame);
     }
 
     // Edge scroll, as in the arrange view (gui.md §4.3): a note drag or a
@@ -328,6 +411,9 @@ class Roll : public ui::Node {
     // and the drag's last event is delivered again, so the notes in hand
     // stay under the pointer.
     bool autoScrolling() const { return edgeVx_ != 0 || edgeVy_ != 0; }
+    std::optional<ui::StripRenderer> strips_;  // the waveform's, made on first use
+    bool glFailed_ = false;
+    const ui::Theme* theme_ = nullptr;  // from the last paint (paintGl has no canvas)
     bool autoScroll(double seconds) {
         if (!autoScrolling()) return false;
         if (!scrollsAtEdge()) {
@@ -585,6 +671,14 @@ class Keys : public ui::Node {
         c.save();
         c.clip(b);
         c.fillRect(b, t.color("raised"));
+        if (s_.audio) {  // an audio clip: its take's name, as a lane's title
+            if (s_.wave)
+                c.text({b.x + 6, b.y + 4, b.w - 8, 16}, s_.wave->label, ui::Font::Ui,
+                       t.type("caption"), t.color("ink"), ui::kLeft | ui::kMiddle);
+            c.fillRect({b.right() - 1, b.y, 1, b.h}, t.color("rule"));
+            c.restore();
+            return;
+        }
         for (int p = std::min(127, g.pitchOf(b.y)); p >= std::max(0, g.pitchOf(b.bottom())); --p) {
             const float y = g.yOf(p);
             if (blackKey(p)) c.fillRect({b.x, y, b.w * 0.62f, s_.rowHeight}, t.color("ground"));
@@ -629,6 +723,7 @@ class BarStrip : public ui::Node {
     // the grid beat there.
     bool onPointer(const ui::PointerEvent& e) override {
         using T = ui::PointerEvent::Type;
+        if (s_.audio) return false;  // an audio clip's ruler: no chords or keys
         const ui::Rect b = bounds();
         const Geometry g{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}};
         auto snap = [&](double at) {
@@ -738,6 +833,10 @@ class BarStrip : public ui::Node {
                 c.restore();
             }
         }
+        if (s_.audio) {
+            paintTime(c, b, area);
+            return;
+        }
         if (s_.barLines.empty()) return;
         const float size = t.type("caption");
         const int last = s_.firstBar + static_cast<int>(s_.barLines.size()) - 1;
@@ -773,6 +872,25 @@ class BarStrip : public ui::Node {
     }
 
   private:
+    // An audio clip's ruler: seconds from its start, labelled m:ss.d at a
+    // step that fits the label (timeStep), as the roll's time lines.
+    void paintTime(ui::Canvas& c, const ui::Rect& b, const ui::Rect& area) {
+        const ui::Theme& t = c.theme();
+        const Geometry g{s_, area};
+        const float size = t.type("caption");
+        const double step = timeStep(s_.pixelsPerBeat, 56);
+        c.save();
+        c.clip(area);
+        const double first = std::floor(std::max(0.0, g.beatOf(area.x)) / step) * step;
+        for (double at = first; g.xOf(at) <= area.right(); at += step) {
+            const float x = g.xOf(at);
+            const std::string text = timeLabel(at, step);
+            c.fillRect({x, b.bottom() - 6, 1, 5}, t.color("ink-quiet"));
+            c.text({x + 3, b.y, c.textWidth(text, ui::Font::Mono, size) + 4, b.h - 1}, text,
+                   ui::Font::Mono, size, t.color("ink"), ui::kLeft | ui::kMiddle);
+        }
+        c.restore();
+    }
     // Each chord a cell from its beat to the next chord point, in the
     // ruler's cell and letters; a "no chord" point a short faint tick.
     void paintChords(ui::Canvas& c, const ui::Rect& row) {
@@ -1364,7 +1482,10 @@ std::optional<MidiOwner> midiOwner(const model::Session& s, const std::string& t
     }
     o.take = take ? s.takes.find(*take) : nullptr;
     o.source = o.take && o.take->source ? s.midi.find(*o.take->source) : nullptr;
-    if (!o.source) return std::nullopt;
+    // An audio clip opens too (its waveform and lanes); an audio item does
+    // not: its take is edited on the timeline.
+    if (!o.source && o.clip && o.take && o.take->source) o.audio = s.media.find(*o.take->source);
+    if (!o.source && !o.audio) return std::nullopt;
     return o;
 }
 
@@ -1408,7 +1529,11 @@ MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dis
             return;
         }
         const model::Session& s = app_.head();
-        auto isMidi = [&s](const std::string& text) { return midiOwner(s, text).has_value(); };
+        // A MIDI take, or the audio clip it had last.
+        auto isMidi = [&](const std::string& text) {
+            const auto o = midiOwner(s, text);
+            return o && (o->source || text == lastItem_);
+        };
         std::vector<std::string> candidates;
         if (!lastItem_.empty()) candidates.push_back(lastItem_);
         if (ui_.clipsFocused)  // a launcher cell was clicked last
@@ -1479,18 +1604,20 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
                                {"1/32", 0.125},
                                {"1/8T", 1.0 / 3}}) {
         const double gv = grid;
-        header.emplace<ui::Button>(std::string("midi.grid.") + label, label, [this, gv] {
-            state_.grid = gv;
-            state_.lastLength = gv;
-            refreshTitle();
-            if (roll_) roll_->invalidate();
-        });
+        midiOnly_.push_back(
+            &header.emplace<ui::Button>(std::string("midi.grid.") + label, label, [this, gv] {
+                state_.grid = gv;
+                state_.lastLength = gv;
+                refreshTitle();
+                if (roll_) roll_->invalidate();
+            }));
     }
-    header.emplace<ui::Button>("midi.snap", "Snap", [this] {
+    midiOnly_.push_back(&header.emplace<ui::Button>("midi.snap", "Snap", [this] {
         state_.snap = !state_.snap;
         refreshTitle();
-    });
-    header.emplace<ui::Button>("midi.quantize", "Quantize", [this] { quantize(); });
+    }));
+    midiOnly_.push_back(
+        &header.emplace<ui::Button>("midi.quantize", "Quantize", [this] { quantize(); }));
     // The key at the item's start; lit, pitch drags and arrows go by degrees.
     keyButton_ = &header.emplace<ui::Toggle>("midi.key", "No key", "accent",
                                              [this](bool on) { state_.degrees = on; });
@@ -1500,14 +1627,14 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     keyButton_->enabled = false;
     // One menu owns every lane under the roll (gui.md §4.7).
     lanesButton_ = &header.emplace<ui::Button>("midi.lanes", "Lanes", [this] { openLanesMenu(); });
-    header.emplace<ui::Button>("midi.notation.toggle", "Notation", [this] {
+    midiOnly_.push_back(&header.emplace<ui::Button>("midi.notation.toggle", "Notation", [this] {
         if (!notationPane_) return;
         notationPane_->visible = !notationPane_->visible;
         if (!notationPane_->visible) root_.releaseWithin(notationPane_);
         root_.relayout();
         root_.damageAll();
-    });
-    header.emplace<ui::Button>("midi.list.toggle", "List", [this] {
+    }));
+    midiOnly_.push_back(&header.emplace<ui::Button>("midi.list.toggle", "List", [this] {
         if (!listPane_ || !rollPane_) return;
         listPane_->visible = !listPane_->visible;
         rollPane_->visible = !listPane_->visible;
@@ -1516,7 +1643,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
         if (!listPane_->visible) root_.focus(roll_);
         root_.relayout();
         root_.damageAll();
-    });
+    }));
     header.emplace<ui::Button>("midi.close", "Close", [this] { close(); });
 
     auto& body = panel->emplace<ui::Node>("midi.body");
@@ -1713,8 +1840,41 @@ void MidiEditor::applyLanes() {
         lane->visible = shown;
         changed = true;
     };
-    show(velocity_, state_.velocityShown);
-    show(ccLane_, state_.ccShown);
+    show(velocity_, state_.velocityShown && !state_.audio);
+    show(ccLane_, state_.ccShown && !state_.audio);
+    if (!changed) return;
+    root_.relayout();
+    root_.damageAll();
+}
+
+void MidiEditor::applyMode() {
+    // An audio clip has no notes: no grid, Snap, Quantize, notation, event
+    // list, velocity or CC lane. Its pane keeps the title, the key button,
+    // Lanes, Close, the waveform and its clip-time lanes.
+    const bool audio = state_.audio;
+    bool changed = false;
+    auto show = [&](ui::Node* node, bool shown) {
+        if (!node || node->visible == shown) return;
+        if (!shown) root_.releaseWithin(node);
+        node->visible = shown;
+        changed = true;
+    };
+    for (ui::Node* n : midiOnly_) show(n, !audio);
+    if (audio) {
+        if (notationPane_ && notationPane_->visible) notationWasShown_ = true;
+        if (notationPane_ && !notationPane_->visible && !audioShown_) notationWasShown_ = false;
+        show(notationPane_, false);
+        if (listPane_ && listPane_->visible) {
+            eventList_->activate(false);
+            show(listPane_, false);
+            show(rollPane_, true);
+            show(roll_, true);
+        }
+    } else if (audioShown_) {
+        show(notationPane_, notationWasShown_);
+    }
+    audioShown_ = audio;
+    applyLanes();
     if (!changed) return;
     root_.relayout();
     root_.damageAll();
@@ -1943,6 +2103,9 @@ void MidiEditor::zoomRows(float wheel, float anchorY) {
 }
 
 Status MidiEditor::reload() {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner) return Error("gui.midi", "no MIDI source", "/item");
+    if (owner->audio) return reloadAudio();
     json::Value args = json::Value::object();
     args["item"] = state_.item;
     auto r = dispatcher_.execute({"midi.notes", std::move(args), kOrigin});
@@ -1950,8 +2113,9 @@ Status MidiEditor::reload() {
     // A reload replaces note indices and CC data; an old preview cannot be
     // committed against the new sequence (including undo and item switches).
     state_.cancelGesture();
-    const auto owner = midiOwner(app_.head(), state_.item);
-    if (!owner) return Error("gui.midi", "no MIDI source", "/item");
+    state_.audio = false;
+    state_.wave.reset();
+    applyMode();
     const model::Take* take = owner->take;
     const model::MidiSource* source = owner->source;
     // A clip sits at beat 0 for the roll: its bars count from its start.
@@ -2136,8 +2300,77 @@ Status MidiEditor::reload() {
     return {};
 }
 
+// An audio clip (gui.md §4.7, mock 93): its active take's waveform in
+// seconds of played time from the clip's start, the clip's end marked, the
+// key button its one key point; no notes, chords, grid or notation.
+Status MidiEditor::reloadAudio() {
+    const model::Session& head = app_.head();
+    const auto owner = midiOwner(head, state_.item);
+    if (!owner || !owner->audio || !owner->clip) return Error("gui.midi", "no audio", "/item");
+    state_.cancelGesture();
+    state_.audio = true;
+    state_.clip = true;
+    state_.itemPosition = 0;
+    state_.itemLength = owner->clip->length;  // seconds: an audio clip's unit
+    state_.notes.clear();
+    state_.selected.clear();
+    state_.cc.clear();
+    state_.barLines.clear();
+    state_.keys.clear();
+    state_.chords.clear();
+    state_.keyMarks.clear();
+    state_.contextShift = 0;
+    state_.contextEnd = 0;
+    state_.degrees = false;
+    if (keyButton_) keyButton_->setOn(false);
+    RollState::Wave wave;
+    wave.take = *owner->take;
+    wave.hash = owner->audio->hash;
+    const std::filesystem::path path(owner->audio->path);
+    wave.path = path.is_absolute() ? path : app_.mediaDir() / path;
+    wave.gain =
+        static_cast<float>(std::pow(10.0, (owner->clip->gainDb + owner->take->gainDb) / 20));
+    wave.loop = owner->clip->loop.on;
+    wave.label = owner->take->name;
+    if (wave.label.empty()) {
+        const auto& takes = owner->clip->takes;
+        const auto at = std::find(takes.begin(), takes.end(), *owner->clip->activeTake);
+        wave.label = "Take " + std::to_string(at - takes.begin() + 1);
+    }
+    state_.wave = std::move(wave);
+    state_.envLanes.clear();
+    refreshEnvLanes();
+    applyMode();
+    refreshKeyButton();
+    if (bars_ && bars_->layout.height.value != static_cast<BarStrip*>(bars_)->wanted()) {
+        bars_->layout.height = ui::SizeRule::fixed(static_cast<BarStrip*>(bars_)->wanted());
+        root_.relayout();
+    }
+    projectGeneration_ = app_.projectGeneration();
+    version_ = head.version;
+    if (title_) {
+        const model::Track* t = head.tracks.find(owner->track);
+        char seconds[32];
+        std::snprintf(seconds, sizeof seconds, "%.2f s", owner->clip->length);
+        titleBase_ = "Audio \u00b7 " + (t && !t->name.empty() ? t->name : owner->track.str()) +
+                     " \u2014 " + (owner->clip->name.empty() ? state_.item : owner->clip->name) +
+                     " \u00b7 clip \u00b7 " + seconds;
+        refreshTitle();
+    }
+    root_.damageAll();
+    return {};
+}
+
+void MidiEditor::peaksReady() {
+    if (state_.audio && roll_) roll_->invalidate();
+}
+
 void MidiEditor::refreshTitle() {
     if (!title_) return;
+    if (state_.audio) {
+        title_->setText(titleBase_);
+        return;
+    }
     const double g = state_.grid;
     std::string grid = g >= 1                         ? "1/4"
                        : g >= 0.5                     ? "1/8"
@@ -2160,7 +2393,7 @@ std::function<midi::Meter(int)> meterAtItem(const model::Session& session, doubl
 
 std::optional<std::string> MidiEditor::modelText() const {
     const auto owner = midiOwner(app_.head(), state_.item);
-    if (!owner) return std::nullopt;
+    if (!owner || !owner->source) return std::nullopt;
     notation::DecompileOptions options;
     options.meterAt = meterAtItem(
         app_.head(), owner->item ? model::itemSpan(app_.head(), *owner->item).startBeat : 0.0);
@@ -2256,6 +2489,9 @@ std::uint64_t MidiEditor::beginGesture() {
 }
 
 Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVersion) {
+    if (state_.audio)  // an audio clip has no notes; the note actions do nothing
+        return Error("gui.midi.audio", "an audio clip has no notes", "/item",
+                     "open a MIDI item or clip to edit notes");
     if (expectedVersion && (*expectedVersion != app_.head().version ||
                             gestureGeneration_ != app_.projectGeneration())) {
         follow({});
@@ -2529,8 +2765,8 @@ void MidiEditor::refreshKeyButton() {
     }
     const bool known = point && model::parseKey(*point);
     std::string text = point ? model::keyWords(*point) : "No key";
-    keyButton_->enabled = known;
-    if (!known && state_.degrees) {  // nothing to count degrees in
+    keyButton_->enabled = known && !state_.audio;  // an audio clip has no degrees
+    if (!known && state_.degrees) {                // nothing to count degrees in
         state_.degrees = false;
         keyButton_->setOn(false);
         // midi.edit refuses degrees on a clip without a key (midi.no_key).

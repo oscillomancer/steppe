@@ -7,12 +7,16 @@
 #include "test_support.h"
 
 #include <SDL3/SDL.h>
+#include <stb_image.h>
 
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <set>
+#include <thread>
 
 #include "app_actions.h"
 #include "clip_context_edit.h"
@@ -22,11 +26,13 @@
 #include "midi_event_list.h"
 #include "mixer.h"
 #include "routing_matrix.h"
+#include "supple/audio/audio_file.h"
 #include "supple/base/fader.h"
 #include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/params/params.h"
+#include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
@@ -202,6 +208,37 @@ struct Fixture {
     ui::Point grip() const {
         const ui::Rect b = root->find("midi.grip")->bounds();
         return {b.x + b.w / 2, b.y + b.h / 2};
+    }
+    // The window against daw/gui/tests/golden/<name> (Linux; written when
+    // missing or under SUPPLE_UPDATE_GOLDEN), as the launcher's tests do.
+    void golden(const char* name) {
+        root->damageAll();
+        root->frame(false);
+        const gui::Image image = root->readBack();
+#if !defined(__linux__)
+        REQUIRE(image.width > 0);
+        return;
+#endif
+        const auto path = std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR) / name;
+        if (std::getenv("SUPPLE_UPDATE_GOLDEN") || !std::filesystem::exists(path)) {
+            REQUIRE(gui::writePng(path, image));
+            MESSAGE("golden written: " << path.string());
+            return;
+        }
+        int w = 0, h = 0, n = 0;
+        unsigned char* data = stbi_load(path.string().c_str(), &w, &h, &n, 4);
+        REQUIRE(data);
+        REQUIRE(w == image.width);
+        REQUIRE(h == image.height);
+        std::size_t off = 0;
+        for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
+            int d = 0;
+            for (int c = 0; c < 3; ++c)
+                d = std::max(d, std::abs(int(image.rgba[i + c]) - int(data[i + c])));
+            off += d > 48;
+        }
+        stbi_image_free(data);
+        CHECK(off < image.rgba.size() / 4 / 200);
     }
     void snapshot(const char* name, ui::Root* source = nullptr) {
         const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS");
@@ -3893,6 +3930,97 @@ TEST_CASE("clip context axis: the roll reads each note's key where midi.edit doe
     // Both keys were met: Eb4 (Eb major) and E4 (C major).
     CHECK(sixtyThree > 0);
     CHECK(sixtyThree < 16);
+}
+
+// An audio clip for the pane (gui.md §4.7, mock 93): eight decaying hits
+// over two seconds, as a drum break, in the Verse scene on the Keys.
+static std::string audioClip(Fixture& f) {
+    audio::AudioData hits;
+    hits.sampleRate = 48000;
+    hits.channels.assign(1, std::vector<float>(96000, 0.0f));
+    for (std::size_t i = 0; i < hits.channels[0].size(); ++i) {
+        const double t = static_cast<double>(i % 12000) / 48000;
+        hits.channels[0][i] =
+            static_cast<float>(0.8 * std::exp(-t * 18) * std::sin(static_cast<double>(i) * 0.09));
+    }
+    const auto wav = f.dir / "break.wav";
+    REQUIRE(audio::writeWav(wav, hits));
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    json::Value add = json::Value::object();
+    add["track"] = track;
+    add["scene"] = "sc_1";
+    add["name"] = "Break";
+    add["audio_file"] = wav.string();
+    return f.exec("clip.add", *json::write(add))["clip"].asString();
+}
+
+// Frames until the pane's waveform has its peaks. The deadline only guards
+// a hang: the peak worker can take seconds under a parallel ctest.
+static void settleWave(Fixture& f) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (std::chrono::steady_clock::now() < deadline) {
+        f.root->damageAll();
+        f.frame();
+        if (!f.editor->state().wavePending && f.editor->state().waveColumns > 0) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    FAIL("the waveform's peaks never arrived");
+}
+
+TEST_CASE("MIDI editor: an audio clip opens as its take's waveform in seconds, its end marked") {
+    Fixture f;
+    if (!f.ok) return;
+    peaks::PeakService peaks(f.dir / "peaks", [](std::function<void()>) {});
+    f.editor->setPeaks(&peaks);
+    const std::string clip = audioClip(f);
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    CHECK(s.audio);
+    CHECK(s.itemLength == doctest::Approx(2.0));  // seconds, the clip's unit
+    REQUIRE(s.wave);
+    CHECK(s.wave->label == "Take 1");
+    s.pixelsPerBeat = 300;  // seconds on this axis
+    s.scrollBeat = -0.1;
+    settleWave(f);
+    // Only what an audio clip has: the title, the key button, Lanes, Close;
+    // no grid, Snap, Quantize, notation, event list, velocity or CC.
+    const std::string title = f.root->find("midi.title")->valueText();
+    CHECK(title.rfind("Audio · Keys — Break · clip · 2.00 s", 0) == 0);
+    for (const char* id : {"midi.grid.1/4", "midi.snap", "midi.quantize", "midi.notation.toggle",
+                           "midi.list.toggle", "midi.notation", "midi.velocity", "midi.cc"}) {
+        INFO(id);
+        CHECK_FALSE(f.root->find(id)->visible);
+    }
+    for (const char* id : {"midi.key", "midi.lanes", "midi.close", "midi.roll"}) {
+        INFO(id);
+        CHECK(f.root->find(id)->visible);
+    }
+    CHECK(f.editor->keyText() == "No key");
+    CHECK_FALSE(f.editor->keyButton()->enabled);
+    f.golden("audio-clip-pane-dark.png");
+    // A press on the waveform edits nothing; the note actions do nothing.
+    const auto version = f.app->head().version;
+    const ui::Rect roll = f.root->find("midi.roll")->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {roll.x + 100, roll.y + 60});
+    f.pointer(ui::PointerEvent::Type::Up, {roll.x + 100, roll.y + 60});
+    f.actions->invoke("ui.midi.quantize");
+    CHECK(f.app->head().version == version);
+    // A MIDI item again: the roll, its controls and the notation are back.
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    CHECK_FALSE(s.audio);
+    for (const char* id :
+         {"midi.grid.1/4", "midi.snap", "midi.notation.toggle", "midi.notation", "midi.velocity"}) {
+        INFO(id);
+        CHECK(f.root->find(id)->visible);
+    }
+    // Alt+E reopens the audio clip it had last.
+    REQUIRE(f.editor->open(clip));
+    f.editor->close();
+    f.actions->invoke("ui.midi.toggle");
+    CHECK(f.editor->state().item == clip);
+    f.editor->setPeaks(nullptr);
 }
 
 TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {

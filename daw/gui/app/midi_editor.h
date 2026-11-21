@@ -9,6 +9,7 @@
 #pragma once
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -35,6 +36,10 @@ namespace supple::views {
 class MouseMap;
 }  // namespace supple::views
 
+namespace supple::peaks {
+class PeakService;
+}  // namespace supple::peaks
+
 namespace supple::gui {
 
 class MidiEventList;
@@ -49,6 +54,9 @@ struct MidiOwner {
     const model::Item* item = nullptr;  // set for an item
     const model::Clip* clip = nullptr;  // set for a clip
     model::Id track;
+    // An audio clip's media (its take's source), when `source` is null: the
+    // pane shows its waveform and its clip-time lanes (gui.md §4.7).
+    const model::MediaSource* audio = nullptr;
 };
 std::optional<MidiOwner> midiOwner(const model::Session& session, const std::string& id);
 
@@ -96,6 +104,22 @@ struct RollState {
     // (volume, pan, mute, then the take FX in chain order); none for an item,
     // whose take lanes are on the timeline.
     std::vector<RollEnvLane> envLanes;
+    // An audio clip (gui.md §4.7, mock 93): the roll draws its active take's
+    // waveform and the axis is in seconds of played time from the clip's
+    // start (the clip's own unit), not beats: itemLength, scrollBeat,
+    // pixelsPerBeat and the lanes' positions are seconds then.
+    bool audio = false;
+    struct Wave {
+        model::Take take;            // the active take: offset, rate, loop
+        std::string hash;            // the media's, for the peak cache
+        std::filesystem::path path;  // the media file, resolved
+        float gain = 1;              // the clip's and the take's gain
+        bool loop = false;           // the clip loops its take
+        std::string label;           // the take's name, at the left
+    };
+    std::optional<Wave> wave;
+    std::size_t waveColumns = 0;  // the last paint's waveform columns
+    bool wavePending = false;     // its peaks were not ready
     std::vector<CcPoint> cc;
     std::vector<CcPoint> ccDraft;  // a drag in progress (drawn, not yet committed)
     bool ccErasing = false;
@@ -202,6 +226,11 @@ class MidiEditor {
     // The mouse modifiers (Edit > Mouse modifiers): what the wheel does here
     // for `mods`, from its midi.wheel bindings (the defaults when unset).
     void setMouseMap(const views::MouseMap* map) { mouse_ = map; }
+    // The peak service an audio clip's waveform reads (the app's); none: no
+    // waveform is drawn. peaksReady() repaints it when a pyramid arrives.
+    void setPeaks(peaks::PeakService* peaks) { peaks_ = peaks; }
+    peaks::PeakService* peaks() const { return peaks_; }
+    void peaksReady();
     std::string_view wheelBehaviour(unsigned mods) const;
 
     // Tests and the actions.
@@ -296,7 +325,16 @@ class MidiEditor {
     std::vector<RollNote> clipboard_;  // starts from the earliest copied note
     float height_ = kDefaultHeight;
     const views::MouseMap* mouse_ = nullptr;
+    peaks::PeakService* peaks_ = nullptr;
     ui::Node* panel_ = nullptr;
+    // The header's MIDI controls (grid, Snap, Quantize, Notation, List),
+    // hidden for an audio clip; applyMode() shows the parts of the pane the
+    // open take has.
+    std::vector<ui::Node*> midiOnly_;
+    bool audioShown_ = false;       // the pane is in its audio form
+    bool notationWasShown_ = true;  // the notation pane, before an audio clip hid it
+    void applyMode();
+    Status reloadAudio();  // reload() for an audio clip
     std::unique_ptr<MidiEventList> eventList_;
     ui::Node* listPane_ = nullptr;
     ui::Node* rollPane_ = nullptr;
