@@ -790,7 +790,11 @@ number in the knob's unit (a percent knob such as a Macro's runs 0 to 100:
 parameters take it, `"80 %"` or `"1.2 kHz"` (kHz for a Hz knob, s for a ms
 one; the unit's case is free). Text in another unit, or any text for a knob
 with no unit, is `rack.param`, and its hint names the knob's range, its unit
-and an example. A choice is by its key, a switch is true or false.
+and an example. A number outside the knob's range (after the unit is converted) is
+`params.out_of_range`, as for plug-in parameters and track levels, with the range in
+its hint: it is never clamped silently, and nothing changes. A choice is by its key,
+a switch is true or false. (Values already in a file, and the knobs `module.randomize`
+picks, are clamped as they were; only what a command is given is refused.)
 
 A module's knob is automated with `env.add {module, param, points}`
 (values in the knob's unit, a choice by its key); a plugin module's knobs

@@ -29,7 +29,8 @@ probe again.
    and rate. Nothing changes. This is how you hear a patch: probe the
    module feeding the Out and the note sources behind it before rendering.
 4. Adjust: `module.set {module, params}` (a knob is a number in its unit, or text like
-   `"80 %"` or `"1.2 kHz"`), `cable.set {cable, amount}`,
+   `"80 %"` or `"1.2 kHz"`; a number outside the knob's range is refused with its
+   range in the hint, not clamped), `cable.set {cable, amount}`,
    `module.set {module, preset}` (a module's factory preset). Probe again.
 5. Render or listen as for any track. Ask the human to listen when it
    matters.

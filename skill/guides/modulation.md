@@ -29,7 +29,7 @@ track with a Mod Out, else one named Modulators on a new channel), adds the
 source module, cables it into a Mod Out input and routes that input to the
 target. The result names the `modulation` route (`mr_1`), the `rack`, the `module`,
 the `mod_out` and, for a macro, the `knob` to move (`module.set {module, params:
-{macro_1: 80}}` or `{macro_1: "80 %"}`: a bare number is in the knob's unit, so `0.8` is 0.8 %). A follower that would close a loop through a rack is moved to
+{macro_1: 80}}` or `{macro_1: "80 %"}`: a bare number is in the knob's unit, so `0.8` is 0.8 %, and a number above 100 is refused with `params.out_of_range`). A follower that would close a loop through a rack is moved to
 another rack; only a real cycle (a follower on a track the target feeds, itself
 included) is refused with `modulation.cycle`.
 

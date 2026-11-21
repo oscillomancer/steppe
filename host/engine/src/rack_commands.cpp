@@ -260,6 +260,13 @@ std::optional<double> knobFromText(const sd::ParamModel& p, const std::string& t
     return std::nullopt;
 }
 
+// A knob's number in a message: three significant digits.
+std::string knobNumber(double v) {
+    char text[32];
+    std::snprintf(text, sizeof text, "%.3g", v);
+    return text;
+}
+
 // A knob's value as a number: given as one, or as text in its unit.
 bool numberKnob(const sd::ParamModel& p, const json::Value& v) {
     if (v.isNumber()) return std::isfinite(v.asDouble());
@@ -307,19 +314,29 @@ Result<json::Value> mergeParams(const rack::ModuleType& t, const json::Value& ba
         } else if (p.kind != sd::ParamModel::Kind::Choice &&
                    p.kind != sd::ParamModel::Kind::Toggle && !numberKnob(p, m.value)) {
             const std::string unit(unitName(p.unit));
-            const auto num = [](double v) {
-                char text[32];
-                std::snprintf(text, sizeof text, "%.3g", v);
-                return std::string(text);
-            };
             return Error("rack.param", m.key + " is a number", at,
-                         m.key + " runs " + num(p.min) + " to " + num(p.max) +
+                         m.key + " runs " + knobNumber(p.min) + " to " + knobNumber(p.max) +
                              (unit.empty() ? "" : " " + unit) + ": give the number in that unit" +
                              (unit.empty() ? std::string()
-                                           : ", or text like \"" + num((p.min + p.max) / 2) + " " +
-                                                 unit + "\""));
+                                           : ", or text like \"" + knobNumber((p.min + p.max) / 2) +
+                                                 " " + unit + "\""));
         }
         const json::Value knobValue = numberFromText(p, m.value);
+        // A number outside the knob's range is refused, as plug-in parameters and
+        // track levels refuse theirs (params.out_of_range): a value that is
+        // clamped without a word makes the caller believe the one it gave.
+        if (knobValue.isNumber() && p.kind != sd::ParamModel::Kind::Toggle) {
+            const double v = knobValue.asDouble();
+            const double slack = 1e-9 * std::max(1.0, std::abs(p.max - p.min));
+            if (v < p.min - slack || v > p.max + slack) {
+                const std::string unit(unitName(p.unit));
+                const std::string u = unit.empty() ? "" : " " + unit;
+                return Error(
+                    "params.out_of_range",
+                    "'" + m.key + "' is " + knobNumber(v) + u + ", outside its range", at,
+                    "use a value from " + knobNumber(p.min) + u + " to " + knobNumber(p.max) + u);
+            }
+        }
         values[m.key] = detail::moduleParamValue(p, &knobValue);
     }
     for (const auto& p : t.params())
@@ -1404,7 +1421,8 @@ void registerRackCommands(cmd::Registry& registry) {
         common(c, "module.set", Kind::Edit, "Set a module's knobs, label, place or bypass.");
         c.description =
             "params merge into its knobs (a number in the knob's unit, or text in it, \"80 %\" "
-            "or \"1.2 kHz\"; a percent knob such as a Macro's runs 0 to 100; a choice by key; a "
+            "or \"1.2 kHz\"; a percent knob such as a Macro's runs 0 to 100; a number outside the "
+            "knob's range is refused with params.out_of_range, never clamped; a choice by key; a "
             "default value is dropped from the file). A knob edit is heard at once, without a "
             "recompile. Notes source/device accept null to clear them (source returns to the home "
             "track; device to none). source: none disables the track feed while keeping routes and "

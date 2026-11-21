@@ -3351,6 +3351,62 @@ TEST_CASE("module.set: a knob takes text in its own unit, as other parameters do
     CHECK(choice.error().code == "rack.param");
 }
 
+TEST_CASE("module.set: a number outside the knob's range is refused, not clamped") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Keys"})");
+    const auto rack = run(bus, "rack.add", R"({"track":"tr_1"})")["rack"].asString();
+    const auto macro =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.macro\"}")["module"]
+            .asString();
+    const auto lfo =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.lfo\"}")["module"]
+            .asString();
+    const auto knob = [&](const std::string& module, const char* key) {
+        const auto* m = app->head().modules.find(*model::Id::parse(module));
+        const json::Value* v = m->params.isObject() ? m->params.find(key) : nullptr;
+        return v ? v->asDouble() : -1.0;
+    };
+    const auto set = [&](const std::string& module, const char* params) {
+        auto args = json::Value::object();
+        args["module"] = module;
+        args["params"] = j(params);
+        return bus.execute({"module.set", args, kOrigin});
+    };
+    REQUIRE(set(macro, R"({"macro_1": 40})"));
+    // Above, below, and as text: the code and the hint are the plug-in parameters'.
+    for (const char* wrong :
+         {R"({"macro_1": 500})", R"({"macro_1": -1})", R"({"macro_1": "101 %"})"}) {
+        const auto refused = set(macro, wrong);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "params.out_of_range");
+        CHECK(refused.error().path == "/args/params/macro_1");
+        CHECK(refused.error().hint == "use a value from 0 % to 100 %");
+    }
+    CHECK(knob(macro, "macro_1") == 40.0);  // nothing changed
+    // The unit is converted before the range is checked: 0.5 kHz is 500 Hz.
+    const auto fast = set(lfo, R"({"rate": "0.5 kHz"})");
+    REQUIRE_FALSE(fast);
+    CHECK(fast.error().code == "params.out_of_range");
+    CHECK(fast.error().message == "'rate' is 500 Hz, outside its range");
+    // The ends themselves are in range, and module.add refuses alike.
+    REQUIRE(set(macro, R"({"macro_1": 100})"));
+    CHECK(knob(macro, "macro_1") == 100.0);
+    REQUIRE(set(macro, R"({"macro_1": 0})"));
+    const auto added =
+        bus.execute({"module.add",
+                     j("{\"rack\":\"" + rack +
+                       "\",\"type\":\"com.suppleaudio.rack.macro\",\"params\":{\"macro_1\":150}}"),
+                     kOrigin});
+    REQUIRE_FALSE(added);
+    CHECK(added.error().code == "params.out_of_range");
+}
+
 TEST_CASE("fx.patch.merge on an instance never saved reports only what the patch changed") {
     Workdir dir;
     auto app = makeApp(dir.path);
