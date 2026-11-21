@@ -77,10 +77,15 @@ std::pair<Laid, std::string> laidPhrase(const std::string& name, const json::Val
         if (regions && regions->isArray())
             for (const json::Value& r : regions->asArray()) {
                 const std::string by = jsonText(r.find("by"));
-                if (by == "copy") continue;
+                // A run already in the key moved nothing: a copy, a
+                // transpose by 0, or degrees between one key and itself.
+                const json::Value* iv = r.find("interval");
+                if (by == "copy" || (by == "transpose" && iv && iv->asInt() == 0) ||
+                    (by == "degree" && jsonText(r.find("from_key")) == jsonText(r.find("to_key"))))
+                    continue;
                 std::string run = jsonText(r.find("to_key"));
                 if (run.empty()) run = "the chords";
-                if (const json::Value* iv = r.find("interval"); by == "transpose" && iv)
+                if (by == "transpose" && iv)
                     run += ", " + semitones(iv->asInt());
                 else if (by == "degree")
                     run += " by degree";

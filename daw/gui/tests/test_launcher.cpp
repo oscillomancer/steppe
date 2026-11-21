@@ -1187,6 +1187,16 @@ TEST_CASE("launcher: followNotice words key changes, chords, folding, and sums u
         views::followNotice(s, "item.add", root,
                             item(R"({"mode":"key","regions":[{"from_bar":1,"to_bar":1,)"
                                  R"("from_key":"C minor","to_key":"C minor","by":"copy"}]})")));
+    // Already in the key as the engine answers it (Walk, C major under C
+    // major): a transpose by 0, or degrees from a key to itself, say nothing.
+    CHECK_FALSE(views::followNotice(
+        s, "item.add", root,
+        item(R"({"mode":"key","regions":[{"from_bar":23,"to_bar":23,"from_key":"C major",)"
+             R"("to_key":"C major","by":"transpose","interval":0}]})")));
+    CHECK_FALSE(views::followNotice(
+        s, "item.add", root,
+        item(R"({"mode":"key","regions":[{"from_bar":23,"to_bar":23,"from_key":"C major",)"
+             R"("to_key":"C major","by":"degree"}]})")));
     CHECK(views::followNotice(s, "item.add", root, item(R"({"mode":"none","copied":"drums"})")) ==
           "Root copied: drums don't follow");
     CHECK(views::followNotice(s, "item.add", root, item(R"({"mode":"none","copied":"audio"})")) ==
