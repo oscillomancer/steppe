@@ -615,10 +615,14 @@ one again to hide it.
 On a launcher clip, the Lanes menu also offers the clip's take envelopes
 (Take volume, pan and mute, once the take FX hold an instrument) and the
 parameters of each effect in its take FX (**parameters…**). Their lanes
-appear under the controller lane in clip beats, from the clip's start:
-click to add a point, drag one to move it, right-click one to remove it,
-and **hide** at the lane's left hides it. The envelope keeps playing while
-hidden.
+appear under the controller lane in clip beats, from the clip's start,
+and work like the timeline's envelope lanes: click to add a point, click a
+point to select it (Ctrl+click for more), drag to move the selected points
+together (Shift to leave the grid), Alt+click to remove one, and Delete to
+remove the selected. Right-click a lane for its menu: insert a point,
+select all, delete, give the selected points a shape (linear, square, slow,
+fast start, fast end, bezier) or hide the lane. **hide** at the lane's left
+hides it too; the envelope keeps playing while hidden.
 
 ### Moving around
 
@@ -1713,7 +1717,9 @@ key: its notes are copied as they are, and the ones that clash stand out.
 An audio clip opens in the same pane, as its waveform: time in seconds
 from the clip's start, its end marked, and under it the same **Lanes**
 menu and envelope lanes as a MIDI clip's (the take's volume, pan and mute,
-and its effects' parameters), placed in seconds. The key button there is
+and its effects' parameters), placed in seconds. Points snap to a grid of
+seconds that gets finer as you zoom in; **Snap** turns it off. The key
+button there is
 the clip's key: click it to set one, remove it, or take the song's at the
 playhead. The pane doesn't edit the audio itself.
 

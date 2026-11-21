@@ -1697,13 +1697,23 @@ edited in its roll, not on the timeline. For a MIDI clip:
 - a visible envelope on its active take (volume, pan, mute) or on one of
   its take FX has a lane under the CC lane, on the roll's axis in clip beats,
   in that order (volume, pan, mute, then the take FX in chain order). It is
-  titled "Volume (take)" or "Teasel · Drive (take)", with the parameter's
-  name and **hide** (`env.set {visible: false}`; the envelope still plays) at
-  the left. An item's roll shows none: its take lanes are on the timeline
+  titled "Volume (take)" or "Teasel · Drive (take)" in its title row, its
+  one name (the keyboard-wide column at the left, too narrow for the names,
+  holds only **hide**: `env.set {visible: false}`; the envelope still
+  plays). An item's roll shows none: its take lanes are on the timeline
   (§4.3);
-- a click adds a point and drags it; a point drags in beat (snapped to the
-  grid, kept between its neighbours and inside the clip) and value; a right-
-  or Alt-click removes one. Each is one `env.points.set`. Before the clip's
+- points are taken as on the timeline's lanes (§4.3): a click on a point
+  selects it, Ctrl+click adds or takes one out, a click on empty space adds
+  a point there, selected; dragging a selected point moves every selected
+  point in its lane by the same time (on the grid, inside the clip; Shift
+  frees it) and the same share of the lane's height; Alt+click deletes a
+  point; Delete removes the selection. A right-click opens the lane's menu:
+  **Insert point**, **Select all points**, **Delete points**, **Point
+  shape…** (linear, square, slow start/end, fast start, fast end, bezier)
+  and **Hide**. One lane's points are selected at a time, named by
+  position and value; a press on the roll takes the selection away, a
+  lane's press the note selection. Selected points draw as the timeline's,
+  filled in the focus colour. Each edit is one `env.points.set`. Before the clip's
   start and past its end the lane is dimmed as the roll is, and the curve
   holds its end value there, dashed. Clip time takes no writing mode and no
   automation items, so a lane has no read/write cell;
@@ -1740,9 +1750,12 @@ timeline:
   and holds;
 - the Lanes menu and clip-time lanes are a MIDI clip's, in seconds: no
   Velocity or CC rows, Take volume, pan and mute without the instrument
-  rule, the take FX and their parameters; a click adds a point at the
-  second under it (no beat grid there), and the points go to `env.add` and
-  `env.points.set` as `seconds`.
+  rule, the take FX and their parameters; the points go to `env.add` and
+  `env.points.set` as `seconds`. They snap to a seconds grid set by the zoom
+  (`RollState::audioGrid`: the finest of 0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+  1 s and up at least 20 px wide), drawn faint over the waveform under the
+  ruler's labelled lines; **Snap** stays in the header and turns it off
+  ("· snap off" in the title).
 
 Tests: test_midi_editor "an audio clip opens as its take's waveform in
 seconds, its end marked" (golden `audio-clip-pane-dark.png`), "an audio
@@ -1752,7 +1765,8 @@ key point".
 
 Tests: test_midi_editor "the Lanes menu shows and hides the velocity and CC
 lanes", "a clip's take envelopes and take FX parameters get lanes in clip
-beats", and the CC lane case.
+beats", "a clip-time lane selects points, moves them together, shapes
+them", and the CC lane case.
 
 **Roll appearance.** The notes are drawn in the colour their item has in
 the arrangement (`views::Lanes::itemColor`: the item's own, else its
