@@ -34,6 +34,19 @@ Result<std::vector<model::ContextPoint>> clipContextFromText(const model::Sessio
                                                              model::ClipKind kind, double length,
                                                              const std::string& path);
 
+// A take's lead sheet (ADR-0098, following is playback): bars of the meter in force at its
+// item's position, bar 1 at context beat 0, in context beats. `takeBarMap` is that map (the
+// project's first meter when the take has no item position, as a clip's take); the text is
+// canonical, "" for no context, and reads back to the same points. `takeContextFromText`
+// errors: `take.context_syntax` and the lead sheet's own, `take.context_range` (a point at or
+// past `period`, naming the bar), `context.limit`.
+time::TimeMap takeBarMap(const model::Session& s, std::optional<double> itemStartBeat);
+std::string takeContextText(const time::TimeMap& map, const model::Take& take);
+Result<std::vector<model::ContextPoint>> takeContextFromText(const time::TimeMap& map,
+                                                             const std::string& text,
+                                                             std::optional<double> period,
+                                                             const std::string& path);
+
 // The project's context read from `fromBeat` for `lengthBeats`: the key and chord holding
 // there become points at 0 (a "no chord" holding adds none), and the points inside the
 // span follow, shifted. `keyOnly` (an audio clip) gives the key at 0 and nothing more.

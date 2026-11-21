@@ -141,6 +141,7 @@ struct SoundingNote {
     double contextBeat;    // where its start falls in the take's context
     int channel, written;  // as stored (channel 0..15) and the pitch written
     harmony::Followed sounds;
+    double endBeat = 0.0;  // where it stops sounding: its end, at most the item's end
 };
 
 // The occurrences of `item`'s active take whose heard start (their song beat, or the item's

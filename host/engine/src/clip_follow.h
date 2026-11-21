@@ -38,6 +38,14 @@ schema::Schema<FollowedInfo> followedSchema();
 // The `follow` argument as the commands take it.
 schema::Schema<model::ClipFollow> followArgSchema();
 
+// The `followed` block for `itemId`'s active take as `now` holds it: its mode, the regions of
+// project bars over which the context's key, the project's key and the way notes sound agree,
+// and the folded count, all read from `model::soundingNotes`, with the `context.no_key` and
+// `context.scale_shape` notes in `notes`. A take that does not follow is `mode: "none"`.
+// Placement, `take.bake` (read before it writes) and `midi.get` answer through it.
+FollowedInfo followedBlock(const model::Session& now, model::Id itemId, const std::string& path,
+                           std::vector<ClipNote>& notes);
+
 // Lays the clip's context on every MIDI take of `itemId` (just laid from `clip`, its takes
 // copied): each take gets the clip's context in its own beats, its period and phase, and the
 // `follow` that `requested` (else the clip's own) says, or none when the clip cannot follow

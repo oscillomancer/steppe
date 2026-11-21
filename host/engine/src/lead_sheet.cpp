@@ -94,6 +94,10 @@ std::string printLeadSheetPoints(const std::vector<model::ContextPoint>& points,
 }
 
 Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text) {
+    return parseLeadSheet(*s.timeMap, text);
+}
+
+Result<LeadSheet> parseLeadSheet(const time::TimeMap& map, std::string_view text) {
     if (text.size() > kLeadSheetMaxBytes)
         return Error("context.too_long", "the lead sheet is over 1 MiB", "/text",
                      "write it in parts: each context.write covers the bars it names");
@@ -124,8 +128,8 @@ Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text)
                 "/text", "write it in parts");
         previous = bar;
         sheet.lastBar = bar;
-        const double b0 = gridBeat(s.timeMap->beatOfBar(bar));
-        const double b1 = gridBeat(s.timeMap->beatOfBar(bar + 1));
+        const double b0 = gridBeat(map.beatOfBar(bar));
+        const double b1 = gridBeat(map.beatOfBar(bar + 1));
         const std::int64_t barTicks = ticksBetween(b0, b1);
         std::int64_t cursor = 0;
         bool keyHere = false;
@@ -285,8 +289,8 @@ Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text)
     if (previous == 0)
         return Error("context.empty", "the lead sheet names no bars", "/text",
                      "start with a line like 1: key C major {C}:w");
-    sheet.fromBeat = gridBeat(s.timeMap->beatOfBar(sheet.firstBar));
-    sheet.toBeat = gridBeat(s.timeMap->beatOfBar(sheet.lastBar + 1));
+    sheet.fromBeat = gridBeat(map.beatOfBar(sheet.firstBar));
+    sheet.toBeat = gridBeat(map.beatOfBar(sheet.lastBar + 1));
     // Keys before chords at one beat; the order a diff applies them in.
     std::stable_sort(
         sheet.points.begin(), sheet.points.end(), [](const LeadPoint& a, const LeadPoint& b) {

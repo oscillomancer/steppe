@@ -372,6 +372,10 @@ std::vector<SoundingNote> soundingNotes(const Session& s, Id itemId, double from
             if (follows)
                 note.sounds = soundingKey(take->context, take->follow, *s.contextView,
                                           place.contextBeat, place.songBeat, n.channel, n.pitch);
+            note.endBeat = std::min(
+                endBeat, startBeat + mapping.itemBeat(static_cast<double>(n.start + n.length) /
+                                                          seq.ppq,
+                                                      static_cast<double>(k), looping));
             out.push_back(note);
         }
     }

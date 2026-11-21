@@ -85,65 +85,17 @@ struct Occurrence {
 
 }  // namespace
 
-Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t, model::Id clipId,
-                                      const model::Clip& clip, model::Id itemId,
-                                      std::optional<model::ClipFollow> requested,
-                                      const std::string& path, std::vector<ClipNote>& notes) {
-    model::Session now = t.preview();
-    const model::Item* itemPtr = now.items.find(itemId);
+FollowedInfo followedBlock(const model::Session& now, model::Id itemId, const std::string& path,
+                           std::vector<ClipNote>& notes) {
     FollowedInfo info;
-    if (!itemPtr) return info;
-    const model::Item item = *itemPtr;
-    const model::ItemSpan span = model::itemSpan(now, item);
-    const double itemStart = span.startBeat;
-    const double itemBeats = model::itemLengthBeats(now, item);
-    const model::ClipFollow wanted = requested.value_or(clip.follow);
-
-    // What the laid takes follow, and when a clip that cannot follow is copied, why.
-    const model::Take* active = item.activeTake ? now.takes.find(*item.activeTake) : nullptr;
-    const model::MidiSource* source =
-        active && active->source && active->source->kind == model::Kind::Midi
-            ? now.midi.find(*active->source)
-            : nullptr;
-    const char* copiedBecause = nullptr;
-    model::ClipFollow outcome = wanted;
-    if (wanted == model::ClipFollow::None) {
-        outcome = model::ClipFollow::None;
-    } else if (clip.kind != model::ClipKind::Midi) {
-        copiedBecause = "audio";
-    } else if (!model::keyAt(clip, 0)) {
-        copiedBecause = "no_key";
-    } else if (!source || source->sequence.notes.empty()) {
-        copiedBecause = "no_notes";
-    } else if (std::all_of(source->sequence.notes.begin(), source->sequence.notes.end(),
-                           [](const midi::Note& n) { return n.channel == 9; })) {
-        copiedBecause = "drums";
-    }
-    if (copiedBecause) outcome = model::ClipFollow::None;
-
-    // Every laid MIDI take carries the clip's context and the outcome; the notes stay as
-    // written (ADR-0098 "following is playback"). A clip with no context leaves them be.
-    for (const model::Id takeId : item.takes) {
-        const model::Take* take = now.takes.find(takeId);
-        if (!take || !model::takeIsMidi(*take)) continue;
-        t.modify<model::Take>(takeId, [&](model::Take& k) {
-            model::takeContextFromClip(k, clip, 0.0, outcome);
-        });
-    }
-
-    // Placed as it is: the mismatch warning says when the clip's key is not the project's.
-    if (outcome == model::ClipFollow::None) {
-        info.mode = "none";
-        if (copiedBecause) info.copied = copiedBecause;
-        if (auto note = mismatchNote(s, clipId, clip, itemStart, itemBeats, 0.0, path))
-            notes.push_back(std::move(*note));
-        return info;
-    }
-    info.mode = outcome == model::ClipFollow::Chords ? "chords" : "key";
-
-    // What it sounds as, from the one helper every reader uses.
-    now = t.preview();
-    const model::Take& laid = *now.takes.find(*item.activeTake);
+    const model::Item* itemPtr = now.items.find(itemId);
+    if (!itemPtr || !itemPtr->activeTake) return info;
+    const model::Item& item = *itemPtr;
+    const double itemStart = model::itemSpan(now, item).startBeat;
+    const model::Take* laidPtr = now.takes.find(*item.activeTake);
+    if (!laidPtr || laidPtr->follow == model::ClipFollow::None) return info;
+    info.mode = laidPtr->follow == model::ClipFollow::Chords ? "chords" : "key";
+    const model::Take& laid = *laidPtr;
     const auto heard = model::soundingNotes(now, itemId, -1e18, 1e18);
     std::vector<Occurrence> occurrences;
     std::map<std::uint32_t, bool> foldedNotes;
@@ -229,7 +181,7 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
     if (shaped > 0)
         notes.push_back(
             {"context.scale_shape",
-             "the clip's " + (shapeKeys ? keyText(shapeKeys->first) : std::string("key")) +
+             "the context's " + (shapeKeys ? keyText(shapeKeys->first) : std::string("key")) +
                  " and the project's " +
                  (shapeKeys ? keyText(shapeKeys->second) : std::string("key")) + " (from bar " +
                  std::to_string(*firstShapeBar) +
@@ -238,6 +190,67 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
              path});
     if (!foldedNotes.empty()) info.folded = static_cast<std::int64_t>(foldedNotes.size());
     return info;
+}
+
+Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t, model::Id clipId,
+                                      const model::Clip& clip, model::Id itemId,
+                                      std::optional<model::ClipFollow> requested,
+                                      const std::string& path, std::vector<ClipNote>& notes) {
+    model::Session now = t.preview();
+    const model::Item* itemPtr = now.items.find(itemId);
+    FollowedInfo info;
+    if (!itemPtr) return info;
+    const model::Item item = *itemPtr;
+    const model::ItemSpan span = model::itemSpan(now, item);
+    const double itemStart = span.startBeat;
+    const double itemBeats = model::itemLengthBeats(now, item);
+    const model::ClipFollow wanted = requested.value_or(clip.follow);
+
+    // What the laid takes follow, and when a clip that cannot follow is copied, why.
+    const model::Take* active = item.activeTake ? now.takes.find(*item.activeTake) : nullptr;
+    const model::MidiSource* source =
+        active && active->source && active->source->kind == model::Kind::Midi
+            ? now.midi.find(*active->source)
+            : nullptr;
+    const char* copiedBecause = nullptr;
+    model::ClipFollow outcome = wanted;
+    if (wanted == model::ClipFollow::None) {
+        outcome = model::ClipFollow::None;
+    } else if (clip.kind != model::ClipKind::Midi) {
+        copiedBecause = "audio";
+    } else if (!model::keyAt(clip, 0)) {
+        copiedBecause = "no_key";
+    } else if (!source || source->sequence.notes.empty()) {
+        copiedBecause = "no_notes";
+    } else if (std::all_of(source->sequence.notes.begin(), source->sequence.notes.end(),
+                           [](const midi::Note& n) { return n.channel == 9; })) {
+        copiedBecause = "drums";
+    }
+    if (copiedBecause) outcome = model::ClipFollow::None;
+
+    // Every laid MIDI take carries the clip's context and the outcome; the notes stay as
+    // written (ADR-0098 "following is playback"). A clip with no context leaves them be.
+    for (const model::Id takeId : item.takes) {
+        const model::Take* take = now.takes.find(takeId);
+        if (!take || !model::takeIsMidi(*take)) continue;
+        t.modify<model::Take>(takeId, [&](model::Take& k) {
+            model::takeContextFromClip(k, clip, 0.0, outcome);
+        });
+    }
+
+    // Placed as it is: the mismatch warning says when the clip's key is not the project's.
+    if (outcome == model::ClipFollow::None) {
+        info.mode = "none";
+        if (copiedBecause) info.copied = copiedBecause;
+        if (auto note = mismatchNote(s, clipId, clip, itemStart, itemBeats, 0.0, path))
+            notes.push_back(std::move(*note));
+        return info;
+    }
+    info.mode = outcome == model::ClipFollow::Chords ? "chords" : "key";
+
+    // What it sounds as, from the one helper every reader uses.
+    now = t.preview();
+    return followedBlock(now, itemId, path, notes);
 }
 
 }  // namespace supple::engine::detail
