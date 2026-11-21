@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 
+#include "clip_context.h"
 #include "clip_launcher.h"
 #include "command_validation.h"
 #include "plan.h"
@@ -57,6 +58,7 @@ schema::Schema<CapturedPerformance> capturedPerformanceSchema() {
                    schema::enumeration<std::string>(
                        {{"clip", "clip"}, {"arrangement", "arrangement"}, {"stop", "stop"}}))
             .field("clip", &CapturedLaunch::clip, idArg("cl", "Clip"))
+            .field("scene", &CapturedLaunch::scene, idArg("sc", "Scene"))
             .field("anchor", &CapturedLaunch::anchor, sample)
             .field("anchor_beat", &CapturedLaunch::anchorBeat, schema::number().min(0))
             .build();
@@ -149,6 +151,84 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
     done.from = beatAt(double(perf.start));
     done.to = beatAt(double(perf.start + perf.frames));
     model::EditTxn& t = app.txn();
+
+    // A section for each scene launched whole: launch.scene logs each clip it
+    // starts with the scene's id, all at one running frame. The scene holds
+    // there when every one of those launches still holds (a track's last at
+    // the frame: a later launch of the track at the same frame takes it
+    // over). It runs until one of its tracks is launched again, else the
+    // capture's end. Clips launched one by one write none, however they
+    // line up. Its edges are where the items land: the launch's own beat
+    // where it is exact, else the timeline's position of the running frame.
+    {
+        const model::Session s = app.view();
+        // Where running frame `frame` lands on the timeline, as the items do
+        // (timelineBeat): the launch's exact beat before the first wrap, the
+        // timeline's own position past it, never the folded song position.
+        const auto beatOfEntry = [&](std::int64_t frame, const CapturedLaunch& e) {
+            return frame < firstWrap && perf.start + frame == e.anchor
+                       ? e.anchorBeat
+                       : beatAt(double(perf.start + frame));
+        };
+        std::map<std::pair<std::int64_t, Id>, std::size_t> given;  // (frame, scene): launches
+        for (const CapturedLaunch& e : perf.launches)
+            if (e.scene) {
+                const auto scene = Id::parse(*e.scene);
+                if (scene) ++given[{e.frame, *scene}];
+            }
+        std::map<std::int64_t, std::vector<const CapturedLaunch*>> holding;  // by frame
+        for (const auto& [track, launches] : byTrack) {
+            std::map<std::int64_t, const CapturedLaunch*> last;  // the last at each frame
+            for (const CapturedLaunch* e : launches)
+                last[e->frame] = e;  // of one frame's launches the last given holds
+            for (const auto& [frame, e] : last)
+                if (e->action == "clip") holding[frame].push_back(e);
+        }
+        for (const auto& [frame, launched] : holding) {
+            std::map<Id, std::vector<const CapturedLaunch*>> byScene;
+            for (const CapturedLaunch* e : launched)
+                if (e->scene) {
+                    const auto scene = Id::parse(*e->scene);
+                    if (scene) byScene[*scene].push_back(e);
+                }
+            for (const auto& [sceneId, started] : byScene) {
+                const model::Scene* scene = s.scenes.find(sceneId);
+                if (!scene || started.size() != given[{frame, sceneId}]) continue;
+                std::int64_t until = perf.frames;
+                const CapturedLaunch* next = nullptr;
+                for (const CapturedLaunch* e : started) {
+                    for (const CapturedLaunch* later : byTrack[*Id::parse(e->track)])
+                        if (later->frame > frame && later->frame < until) {
+                            until = later->frame;
+                            next = later;
+                        }
+                }
+                model::Region region;
+                region.start = beatOfEntry(frame, *started.front());
+                region.end = next ? beatOfEntry(until, *next) : done.to;
+                if (!(region.end > region.start)) continue;
+                region.name = scene->name;
+                region.color = scene->color;
+                region.section = true;
+                CommittedSection made{sceneId.str(), {}, region.start, region.end};
+                // Committing again writes the same performance over itself: a section
+                // already there, the same name over the same span, is kept, not doubled.
+                const auto same = [&](const model::Region& r) {
+                    return r.section && r.timebase == region.timebase && r.name == region.name &&
+                           std::abs(r.start - region.start) <= 1e-9 &&
+                           std::abs(r.end - region.end) <= 1e-9;
+                };
+                const model::Session now = t.preview();
+                const auto twin = std::find_if(now.regions.begin(), now.regions.end(),
+                                               [&](const auto& e) { return same(*e.value); });
+                if (twin != now.regions.end())
+                    made.region = twin->id.str();
+                else
+                    made.region = t.create(std::move(region)).str();
+                done.sections.push_back(std::move(made));
+            }
+        }
+    }
 
     for (const Id track : order) {
         auto& launches = byTrack[track];
@@ -270,6 +350,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const model::Session s = app.view();
             const Id clipId = *Id::parse(*x.e->clip);
             const model::Clip& clip = *s.clips.find(clipId);
+            bool mismatchGiven = false;  // one context.mismatch per launched stretch of the clip
             const model::Take& take = *s.takes.find(*clip.activeTake);
             const bool midi = clip.kind == model::ClipKind::Midi;
             const bool once = clip.mode == model::ClipMode::Once;
@@ -336,6 +417,16 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 item.takes = *copied;
                 for (std::size_t k = 0; k < clip.takes.size(); ++k)
                     if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+                nameItemFromClip(t, clip, item);
+                // The notes are copied as they were played (a launched clip is not followed
+                // until X4): say when the clip's key is not the project's under the item, once
+                // for the stretch however many periods (items) it is laid as.
+                if (midi && !mismatchGiven)
+                    if (auto note = detail::mismatchNote(now, clipId, clip, beat0, beat1 - beat0,
+                                                         phase, path)) {
+                        ctx.warn(note->code, note->message, note->path);
+                        mismatchGiven = true;
+                    }
                 done.items.push_back(t.create(std::move(item)).str());
                 return {};
             };

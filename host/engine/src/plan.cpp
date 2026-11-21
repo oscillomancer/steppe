@@ -365,7 +365,7 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
         const bool vst3 = in.info().format == "vst3";
         auto target =
             resolvePluginMod(params, schema->second.isObject() ? &schema->second : nullptr,
-                             me.target.param, vst3, true);
+                             me.target.param, vst3, true, Ambiguity::First, in.info().name);
         if (!target) {
             inert(target.error().message);
             continue;
@@ -488,50 +488,48 @@ Result<ResolvedLane> paramLane(host::Instance& in, const std::string& param,
                                std::map<host::Instance*, json::Value>& schemas) {
     ResolvedLane r;
     const auto list = in.params();
+    // The one resolver (session-model "Plug-in parameter references"); a
+    // stored ambiguous name binds its first match, as it always did.
+    json::Value* described = nullptr;
     if (in.info().semantic) {
         auto it = schemas.find(&in);
         if (it == schemas.end()) {
             auto schema = in.semanticSchema();
             it = schemas.emplace(&in, schema ? std::move(*schema) : json::Value()).first;
         }
-        const json::Value* entry = nullptr;
-        if (const json::Value* ps = it->second.isObject() ? it->second.find("params") : nullptr)
-            entry = ps->find(param);
-        if (entry) {
-            auto d = params::fromDescription(param, *entry);
-            if (!d) return std::move(d).error();
-            if ((*d)->spec.flags & params::kReadonly)
-                return Error("engine.automation", param + " is read-only", {},
-                             "choose a writable parameter from fx.describe or remove the obsolete "
-                             "envelope with env.remove");
-            if (std::none_of(list.begin(), list.end(),
-                             [&](const auto& info) { return info.id == (*d)->spec.id; }))
-                return Error("engine.automation",
-                             param + " is absent from the current parameter list", {},
-                             "choose a writable parameter from fx.describe or remove the obsolete "
-                             "envelope with env.remove");
-            r.lane.clapId = (*d)->spec.id;
-            r.lane.spec = std::shared_ptr<const params::DescribedParam>(std::move(*d));
-            return r;
-        }
+        described = &it->second;
     }
-    const bool numeric = !param.empty() && std::all_of(param.begin(), param.end(),
-                                                       [](char c) { return c >= '0' && c <= '9'; });
-    for (const host::ParamInfo& pi : list) {
-        const bool match = numeric ? std::to_string(pi.id) == param : pi.name == param;
-        if (!match) continue;
-        if (pi.flags & CLAP_PARAM_IS_READONLY)
+    auto ref = resolveParam(list, described, param, in.info().name, Ambiguity::First);
+    if (!ref)
+        return Error("engine.automation", ref.error().message, {},
+                     "choose a writable parameter from fx.describe or remove the obsolete "
+                     "envelope with env.remove");
+    if (ref->semantic) {
+        auto d = params::fromDescription(ref->canonical, *ref->semantic);
+        if (!d) return std::move(d).error();
+        if ((*d)->spec.flags & params::kReadonly)
             return Error("engine.automation", param + " is read-only", {},
                          "choose a writable parameter from fx.describe or remove the obsolete "
                          "envelope with env.remove");
-        r.lane.clapId = pi.id;
-        r.lo = pi.min;
-        r.hi = pi.max;
+        if (std::none_of(list.begin(), list.end(),
+                         [&](const auto& info) { return info.id == (*d)->spec.id; }))
+            return Error("engine.automation", param + " is absent from the current parameter list",
+                         {},
+                         "choose a writable parameter from fx.describe or remove the obsolete "
+                         "envelope with env.remove");
+        r.lane.clapId = (*d)->spec.id;
+        r.lane.spec = std::shared_ptr<const params::DescribedParam>(std::move(*d));
         return r;
     }
-    return Error("engine.automation", in.info().name + " has no parameter \"" + param + "\"", {},
-                 "choose a writable parameter from fx.describe or remove the obsolete envelope "
-                 "with env.remove");
+    const host::ParamInfo& pi = *ref->info;
+    if (pi.flags & CLAP_PARAM_IS_READONLY)
+        return Error("engine.automation", param + " is read-only", {},
+                     "choose a writable parameter from fx.describe or remove the obsolete "
+                     "envelope with env.remove");
+    r.lane.clapId = pi.id;
+    r.lo = pi.min;
+    r.hi = pi.max;
+    return r;
 }
 
 Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, std::uint32_t block,
@@ -993,6 +991,10 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
         p.masterPlayrate.rate = std::clamp(p.masterPlayrate.rate * sync->rateScale,
                                            model::kMinPlayrate, model::kMaxPlayrate);
     }
+    // Sources read by stretch converters (the rate setup in prepare).
+    p.rateStretch =
+        p.rateEnabled && p.masterPlayrate.preservePitch &&
+        (p.masterPlayrate.rate != 1 || model::activePlayrateEnvelope(s).has_value() || p.syncRate);
     // Envelopes on mixer targets and plugin parameters.
     const std::int64_t origin = time::samplesAt(startSeconds, p.rate);
     for (const auto& e : s.envelopes) {
@@ -2155,13 +2157,17 @@ Status prepare(Plan& p, const Session& s) {
                   &node.autoPanRight, &node.autoPanBoost, &node.autoMute})
                 lane->timeline = timeline;
             node.vcas.timeline(timeline);
+            // A clip-time lane and a clip chain's take envelopes read the
+            // clip position, their only clock (C2; S3).
             forEachStage(node, [&](Stage& st) {
                 st.rateLive = node.live;
-                for (auto& lane : st.lanes) lane.curve.timeline = timeline;
+                for (auto& lane : st.lanes)
+                    if (!lane.clipTime) lane.curve.timeline = timeline;
             });
             for (auto& take : node.takeChains)
-                for (Automation* lane : {&take.volume, &take.pan, &take.mute})
-                    lane->timeline = timeline;
+                if (!take.clipChain)
+                    for (Automation* lane : {&take.volume, &take.pan, &take.mute})
+                        lane->timeline = timeline;
             for (auto& clip : node.clips)
                 clip.rateState = std::make_unique<RateClipState>(
                     table, clip.data->channelCount(), p.rate,
@@ -3292,14 +3298,16 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
         st.outEvents.clear();
     }
     const std::int64_t song0 = pos - node.timelineShift;
+    const std::int64_t clock0 = launchClock(p, node, pos);
     const ClipChainInput in =
         transport.playing ? clipChainInput(node, tc.player) : ClipChainInput{};
-    if (!transport.playing || (!in.on && !clipChainHeard(node, tc.player, song0))) {
+    if (!transport.playing || (!in.on && !clipChainHeard(node, tc.player, clock0))) {
         tc.active = false;
         tc.inputPlayer = -1;
         tc.inputAnchor = INT64_MIN;
         return true;
     }
+    const bool starting = !tc.active;
     if (!tc.active) {
         tc.active = true;
         for (Stage& st : tc.chain) {
@@ -3323,7 +3331,7 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
     const std::int64_t inputAnchor = in.on ? in.anchorSample : INT64_MIN;
     const bool switched = inputPlayer != tc.inputPlayer || inputAnchor != tc.inputAnchor;
     tc.buf.clear(n);
-    if (!pl.midi) clipChainAudio(node, tc.player, in, pos, lead, loop, n, tc.buf);
+    if (!pl.midi) clipChainAudio(p, node, tc, in, pos, lead, loop, n, tc.buf);
     if (tc.noteTarget >= 0 && pl.midi) {
         Stage& target = tc.chain[static_cast<std::size_t>(tc.noteTarget)];
         // What it held ends where its input switched (heard at the switch),
@@ -3333,7 +3341,11 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
             releaseVoices(target, true);
             tc.held.fill(0);
         }
-        clipChainMidi(p, node, tc.player, in, pos, lead, loop, n, target);
+        // On a playrate plan its first frame reaches back to a new anchor.
+        const ClipWindow from = switched   ? ClipWindow::Anchor
+                                : starting ? ClipWindow::Here
+                                           : ClipWindow::After;
+        clipChainMidi(p, node, tc.player, in, pos, lead, loop, n, target, from);
     }
     tc.releaseHeld = false;
     tc.inputPlayer = inputPlayer;
@@ -3360,11 +3372,14 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
             std::swap(r, tc.delay.r[tc.delayAt]);
             tc.delayAt = tc.delayAt + 1 == d ? 0 : tc.delayAt + 1;
         }
-        const std::int64_t song = song0 + i;
-        double g = launchWeight(node, tc.player, song);
+        double g = launchWeight(node, tc.player, clock0 + i);
         if (g == 0.0) continue;
         double gl = tc.gainL, gr = tc.gainR;
         std::int64_t ticks = 0;
+        // The song position heard at this frame (fractional under a rate).
+        const double song =
+            p.rateEnabled ? p.timelines[node.live ? 1 : 0]->position(pos + i - node.timelineShift)
+                          : double(song0 + i);
         if (enveloped && clipChainTicks(p, node, tc.player, song, ticks)) {
             if (tc.volume.active()) g *= dbToGain(tc.volume.at(ticks));
             if (tc.mute.active() && tc.mute.at(ticks) >= .5) g = 0.0;
@@ -3519,7 +3534,12 @@ void rackTimelineEvents(Plan& p, Node& node, NotesFeed& feed, std::int64_t pos,
                         std::uint32_t frames) SUPPLE_RT {
     auto& stage = feed.midiStage;
     stage.blockEvents.clear();
-    rateEvents(p, node.live, feed.events, stage, pos, frames, node.timelineShift, feed.rateFresh);
+    // While a launch holds its source track, the clip's notes (S3).
+    if (feed.follows && feed.launch.kind != LaunchState::Kind::Arrangement)
+        feedRateMidi(p, node, feed, pos, frames);
+    else
+        rateEvents(p, node.live, feed.events, stage, pos, frames, node.timelineShift,
+                   feed.rateFresh);
     for (const auto& event : stage.blockEvents) {
         if (event.kind == host::Event::Kind::NoteOn &&
             stage.voices.size() < stage.voices.capacity()) {
@@ -3745,11 +3765,15 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                       endDevice);
     }
     beginTrackMidi(node, transport.playing, hearInput && !endDevice);
-    if (p.rateEnabled && transport.playing)
-        rateEvents(p, node.live, node.events, node.midiStage, pos, n, node.timelineShift,
-                   node.rateEventFresh);
     // While a clip holds the track, its timeline notes pass unplayed.
     const bool arrangementMidi = node.launch.kind == LaunchState::Kind::Arrangement;
+    if (p.rateEnabled && transport.playing) {
+        if (arrangementMidi)
+            rateEvents(p, node.live, node.events, node.midiStage, pos, n, node.timelineShift,
+                       node.rateEventFresh);
+        else
+            rateLaunchMidi(p, node, pos, n);  // the clip's, by the rate timeline (S3)
+    }
     while (!p.rateEnabled && transport.playing && node.nextEvent < node.events.size() &&
            double(node.events[node.nextEvent].sample) <
                mappedAt(p, node.live, pos + n, node.timelineShift)) {
@@ -3760,7 +3784,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         auto& target = node.midiStage.blockEvents;
         if (target.size() < target.capacity()) target.push_back(e);  // never allocate here
     }
-    if (transport.playing) launchMidi(p, node, pos, n);
+    if (transport.playing && !p.rateEnabled) launchMidi(p, node, pos, n);
     // Live MIDI from the device (ADR-0016), playing or not, after timeline MIDI
     // at the same frame; not counted as held (a loop wrap does not cut what
     // the performer holds).
@@ -3873,7 +3897,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                         ? node.frozenAudio->channels[c][static_cast<std::size_t>(frame)]
                         : 0.f;
         }
-        if (transport.playing) retiringIntoPrint(node, pos, n);  // after a freeze (ADR-0097)
+        if (transport.playing) retiringIntoPrint(p, node, pos, n);  // after a freeze (ADR-0097)
     } else {
         node.utility.set(node.phaseInvert, node.mono, p.smoothFrames);
         if (!node.utility.transparent())
@@ -4262,11 +4286,12 @@ void locateClass(Plan& p, std::int64_t pos, bool live, bool restartConsole) SUPP
         if (n.live == live) locateNode(p, n, pos, restartConsole);
 }
 
-bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n) {
-    prepareRateWindow(p, pos, n, -1);
+bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t n,
+                    const LoopRange* loop) {
+    prepareRateWindow(p, pos, n, -1, loop);
     syncMix(p, -1);
-    const host::Transport transport = transportAt(p, pos);
-    BlockRun run{&p, pos, n, &transport};
+    const host::Transport transport = transportAt(p, pos, loop);
+    BlockRun run{&p, pos, n, &transport, nullptr, nullptr, loop};
     workers.run(*p.graph, &runNode, &run);
     return run.ok.load(std::memory_order_relaxed);
 }
@@ -4500,6 +4525,10 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         if (!counterpart) continue;
         Node& old = *counterpart;
         carryLaunch(old, n);  // what the channel plays, by clip (ADR-0097)
+        // A switch's crossfade runs on the song or the device clock
+        // (launchClock): across a change of path it is over.
+        if (from.rateEnabled != to.rateEnabled && n.launch.fadeStart != kFadeAtNext)
+            n.launch.fadeFrom = -2;
         // A locate may still be waiting for pooled module ownership.
         // Keep that reset through another plan adoption by this executor.
         if (n.rack && old.rack) {

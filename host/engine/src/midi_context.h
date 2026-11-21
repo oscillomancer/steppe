@@ -35,6 +35,20 @@ struct NoteContext {
 // nowhere (outside every item). Refuses with `midi.context_varies` when the beats it
 // sounds at do not agree on a context part that is asked for, `midi.no_key` or
 // `midi.no_chord` when none holds (or the point is one this build does not read).
+// The clip beats at which source tick `tick` of the clip's active take starts to sound
+// (ADR-0098): through the take's start offset and playrate and the clip's loop window,
+// once per pass inside the clip's length. Empty for a note the clip never plays.
+std::vector<double> clipSoundingBeats(const model::Clip& clip, const model::Take& take, int ppq,
+                                      std::int64_t tick);
+
+// A clip's note context: the clip's own key and chord at each clip beat the note sounds at
+// (the clip's start for one that never sounds), never the project's. Refuses with
+// `midi.context_varies` when they disagree on a part that is asked for, `midi.no_key` or
+// `midi.no_chord` when none holds (or the point is one this build does not read).
+Result<NoteContext> clipNoteContext(const model::Clip& clip, const model::Take& take, int ppq,
+                                    std::int64_t tick, bool needKey, bool needChord,
+                                    const std::string& path);
+
 Result<NoteContext> noteContext(const model::Session& s, model::Id source, std::int64_t tick,
                                 double fallbackBeat, bool needKey, bool needChord,
                                 const std::string& path);

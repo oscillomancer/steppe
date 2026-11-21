@@ -133,14 +133,18 @@ instructions are in `docs/guides/installing.md`.
   `transpose_degrees`, `snap_to_scale` and `fit_to_chord` (key and chord from the
   context at each note's beat, or given; `midi.context_varies` over a loop or a
   pooled sharer in another key) are in; on a launcher clip they, and
-  `midi.get`, read the key at the project's start and no chord. In the app
+  `midi.get`, read the clip's own context (ADR-0098, below). In the app
   (C3): key changes in the ruler's meter half and a chord row (shown with the
   first chord, or by View > Chord row), both edited there (a key change's
   flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
-  (drags and arrows). The roll opens launcher clips (L3), shaded and spelled
-  by the key at the project's start, with no chord row.
+  (drags and arrows). The roll opens launcher clips (L3) in their own
+  context (ADR-0098 X3): the clip's key shades, spells and drives degrees,
+  its chords fill the strip, both are edited there (`clip.set {context}`),
+  and a clip without a key has degree mode off. A roll outlines notes
+  outside the key at their beat and counts them in its title, which is how a
+  clip laid in another key shows (an item keeps no link to its clip).
   Native macOS and Windows CI has not run on C3.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
@@ -173,7 +177,7 @@ instructions are in `docs/guides/installing.md`.
   the oldest steps. Incremental unique-payload accounting measures only new or
   changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.18` with migration from
+  Project format `supple.project/2.20` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
   work… or at start, ADR-0078), crash recovery of recordings, a per-project
   UI sidecar.
@@ -195,6 +199,30 @@ instructions are in `docs/guides/installing.md`.
   `take.*`, `item.export`, take envelopes and take FX) take a clip as they
   take an item; timeline commands refuse one with `item.kind`; the
   envelopes on a clip take's FX are in clip time (schema 2.19).
+- **Clip context** (ADR-0098, step X1; session-model "Clip context", schema
+  2.20): a clip keeps the key and chords it was written against (`context`,
+  points in clip beats, as the context track's) and a `follow` (none, key or
+  chords). `clip.add` and `clip.set` take `context` (a lead sheet in clip
+  bars) or `context_at` (read from the project at a bar or beat) and `follow`;
+  `clip.add {item}` and `scene.capture` take the context under the item; the
+  `{SYMBOL}` chords of a clip's notation (`Compiled::chords`) and of
+  `midi.write` become chord points; history records the resolved text.
+  `midi.get` on a clip answers its context (runs by clip bar and beat, the lead
+  sheet as `context.text`) and `follow` and spells by the clip's own key;
+  `session.describe` names a clip's key and follow. The `midi.edit` scale ops
+  on a clip read the clip's own context at the clip beat each note sounds,
+  never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert` and
+  `arrangement.build` take `follow` (`none`, `key`, `chords`; default the
+  clip's own) and map a MIDI clip's notes by `harmony::follow` from the key or
+  chords it was written against to those under the item; the answer's
+  `followed` says how, by bar, and a looped item whose passes map differently
+  is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
+  that cannot follow is copied with its reason, and `launch.commit` copies
+  what was heard and warns `context.mismatch` when a clip's key is not the
+  project's under it. Not built: a launched clip following live (X4:
+  `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
+  clip plays as written), `write_context` (X5). The roll shows and edits a
+  clip's context, and the clip inspector sets Follow (X3).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
@@ -226,7 +254,13 @@ instructions are in `docs/guides/installing.md`.
     clip holds a track, following launches while it is open.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
-    - a master playrate refuses launches (`launch.playrate`);
+    - under a master playrate clips play on the playrate path, live as
+      the replay (ADR-0097, revision 2026-11-21), but while it keeps the
+      pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
+      clips can); `launch.capture` is refused while one is active, and
+      one becoming active ends a capture; there a frozen track's print
+      cuts in without the crossfade, and launched audio does not crossfade
+      between trajectories when a plan swap changes the rate;
     - freezing, or removing the playing clip, crossfades an audio clip
       out, but a clip with a take chain stops dead (its chain leaves with
       the plan), and so does one removed by an edit that comes before the
@@ -234,8 +268,15 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
-    - the engine logs no seeks or transport wraps, so the offline
-      replay plays one linear run and a capture ends at a relocation.
+    - a capture ends at a seek, a loop change or a stop, by design
+      (ADR-0097, revision 2026-11-20, batch 3); the offline replay
+      wraps at the loop as live does, but not under a master playrate;
+    - right after a pause, in the anticipative executor, the reported
+      position can be up to one device period short when the pause lands
+      while a device cycle is in flight, so a launch made while stopped,
+      or a capture armed, in that moment starts that much early (review
+      round 74 F3; the renderer waits for that cycle, the main thread's
+      reading does not).
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle
@@ -250,17 +291,29 @@ instructions are in `docs/guides/installing.md`.
   line. The piano roll opens MIDI clips. L4 adds the header's Capture
   toggle (armed while lit; a stop, seek or loop change commits the
   performance with `launch.commit` and arms the next; a refused commit
-  keeps the performance, dark, for the next click), a scene dragged onto
+  keeps the performance, dark, for the next click; a commit made while
+  stopped returns the tracks to the arrangement; the cell also lights for
+  an agent's capture), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for
   its longest clip's whole bars, with a drop marker while dragged), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
-  status line. Limits:
+  status line. The clip menu's Take FX… opens a clip's take chain, and with
+  under a pitch-keeping master playrate the pane dims the audio clips (and
+  their scenes' ▶) the engine refuses to launch, by a mirror of the
+  engine's check until the engine reports it (a MIDI-clock chase is not
+  seen). Limits:
   - there is no dialog for `arrangement.build`;
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;
   - a double-click on an audio clip opens the inspector, as there is no
     audio clip editor;
+  - a MIDI clip's take envelopes and take FX envelopes are edited in its
+    roll (clip-time lanes, with point add, drag and remove; no shape menu or
+    point selection yet); an audio clip's have no lane until its pane is
+    built (after ADR-0098 X3), so they are edited by command only;
+  - an item's take FX have lanes on the timeline, drawn across the whole
+    timeline although only the item's span plays;
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole
@@ -281,7 +334,15 @@ instructions are in `docs/guides/installing.md`.
   arrangement where a track left it, the switch crossfades as item fades.
   The tests capture live in both executors at two block sizes, over a loop
   wrap too, and render the committed arrangement offline: it matches what
-  played exactly away from the switches and to 1e-6 through the fades.
+  played exactly away from the switches and to 1e-6 through the fades. A
+  scene launched whole also writes a section named after it, as
+  `scene.insert` does. Names go with the material: an item made from a clip
+  (`item.add {clip}`, `scene.insert`, `arrangement.build`, `launch.commit`) takes the
+  clip's name, a clip made from an item (`clip.add {item}`, `scene.capture`) the
+  item's (an item's name is its active take's), and `session.describe` shows a
+  named item. The capture logs the scene on each clip `launch.scene` starts, so
+  a scene is recognised by that, not by clips that happen to start together;
+  a section lies where its items do, also past a transport loop's wrap.
   History records the performance, so merges replay it. A stop, seek or
   loop change ends a capture; the arrangement a loop repeated is not
   copied; under a tempo change a MIDI piece laid where the loop repeated
@@ -716,6 +777,24 @@ instructions are in `docs/guides/installing.md`.
   validate the actual FX state and require canonical numeric ids. Loading
   restores one validation probe per FX, and open skips it when warnings are
   not requested.
+  Plug-in parameter references (session-model): envelopes, modulation
+  routes, `fx.param.set`, cables into plugin modules and MIDI learn name a
+  parameter through one resolver: a semantic key, a canonical decimal id,
+  or a display name in any letter case. An ambiguous name is refused with the ids, new
+  references are stored canonical (one spelling per parameter: the semantic
+  key on a plug-in that has keys, whatever the caller wrote, else the
+  decimal id; `env.add` converts plain points to the key's units and
+  answers `converted`), and answers give `param_name` beside them. Every
+  lookup by parameter (one envelope per parameter, write, touch and latch
+  recording, gesture holds, the FX window's lanes) compares stored
+  references. A parameter the plug-in does not mark automatable takes
+  neither an envelope nor a route. Older files that stored a name, or an id
+  on a semantic plug-in, still play; opening warns of one that resolves to
+  nothing or ambiguously, of one in another spelling (`param.spelling`: not
+  recorded into, not found by the FX window; remove it and add it again),
+  and of two active envelopes on one parameter (`param.unresolved`,
+  `param.ambiguous`, `param.spelling`, `env.duplicate`). Tested on CLAP
+  fixtures and a VST3.
   Modulation routes (ADR-0096, schema 2.16): a Mod Out module's inputs
   drive plug-in parameters outside the rack (`modulation.add/set/remove/
   list`; `fx.describe` marks the parameters a route can take), a track's
@@ -1399,7 +1478,19 @@ Engine and hosting:
   cables into a plugin module's parameters modulate CLAP plug-ins only
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
-  post-fader sends into an In module take the linear path.
+  post-fader sends into an In module take the linear path. A rack knob's text
+  ("1.2 kHz") is read the same under any process locale, but the numbers in
+  `module.set`'s refusal messages and hints are printed with the locale's decimal
+  separator, so under a comma-decimal locale they read "0,01 to 100 Hz".
+- Renders are deterministic for plug-ins that keep no process-wide state. A
+  plug-in that does (Airwindows Consolidated, review round 72 O1) renders
+  one project differently run to run in process, from frame 0; bridged
+  (`fx.set {isolation: "dedicated"}`), each render is a fresh process and
+  identical. Nothing in the app points at the plug-in or at bridging.
+- Opening a project checks stored plug-in parameter references against the
+  plug-in's parameter list in its default state, so a plug-in whose names
+  follow its state can be warned of wrongly (`param.unresolved`); the
+  engine binds them against the running instance.
 - Modulation routes (ADR-0096): `modulation.add`, `modulate`,
   `modulation.list` and `fx.describe` judge a plug-in parameter from a fresh
   copy of the plug-in in its default state, not the running instance, while

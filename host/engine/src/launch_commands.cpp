@@ -137,10 +137,10 @@ Result<LaunchDone> toAll(EngineApp& app, Context&, Action action, const TrackArg
             return Error("launch.track", id->str() + " has no clips in the running plan", "/track",
                          "a track without clips follows the arrangement; mute it to silence it");
         }
-        requests.push_back({*id, action, {}});
+        requests.push_back({*id, action, {}, {}});
     } else {
         for (const Engine::TrackLaunch& t : (*engine)->launchState())
-            if (wanted(t)) requests.push_back({t.track, action, {}});
+            if (wanted(t)) requests.push_back({t.track, action, {}, {}});
     }
     const model::LaunchQuantize q = quantizeOf(s, nullptr);
     return launchNow(app, action, requests, q, a.track ? "/track" : "");
@@ -172,6 +172,7 @@ CapturedPerformance performanceOf(const Engine::LaunchCapture& c, double rate) {
         l.track = e.track.str();
         l.action = actionName(e.action);
         if (e.action == Action::Clip) l.clip = e.clip.str();
+        if (e.scene) l.scene = e.scene->str();
         l.anchor = e.anchorSample;
         l.anchorBeat = e.anchorBeat;
         p.launches.push_back(std::move(l));
@@ -222,13 +223,15 @@ const char* kWhen =
     "transport is stopped it applies at the play position when playing starts.";
 
 std::vector<cmd::ErrorSpec> commonErrors() {
-    return {{"engine.stopped", "the engine is not running", "engine.start first"},
-            {"launch.playrate", "a master playrate is active",
-             "set the master playrate to 1 and turn off its envelope"},
-            {"launch.clip", "the running plan has no player for the clip",
-             "wait for the edit to reach the engine, then launch again"},
-            {"launch.queue", "too many launches are waiting", "wait for them to play"},
-            {"launch.later", "the transport is relocating", "launch again in a moment"}};
+    return {
+        {"engine.stopped", "the engine is not running", "engine.start first"},
+        {"launch.playrate", "an audio clip cannot play while the master playrate keeps the pitch",
+         "turn off the master playrate's preserve pitch, or set it to 1 without an envelope"},
+        {"launch.clip", "the running plan has no player for the clip",
+         "wait for the edit to reach the engine, then launch again"},
+        {"launch.queue", "too many launches are waiting", "wait for them to play"},
+        {"launch.later", "the transport is relocating, or the master playrate is changing",
+         "launch again in a moment"}};
 }
 
 }  // namespace
@@ -240,10 +243,12 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Play a clip on its track from the next quantize boundary.";
-        c.description = std::string(kWhen) +
-                        " Launching while stopped starts the transport. The track leaves the "
-                        "arrangement (or the clip it played) there: its sounding notes end and "
-                        "audio crossfades over 5 ms.";
+        c.description =
+            std::string(kWhen) +
+            " Launching while stopped starts the transport. The track leaves the "
+            "arrangement (or the clip it played) there: its sounding notes end and "
+            "audio crossfades over 5 ms. A clip whose follow is not none warns launch.unfollowed: "
+            "a launched clip plays as written until ADR-0098's X4.";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<ClipArg>("launch_clip_args")
                      .field("clip", &ClipArg::clip, idArg("cl", "Clip"))
@@ -264,8 +269,16 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (!id) return std::move(id).error();
             const model::Clip& clip = *s.clips.find(*id);
             SUPPLE_TRY(refuseFrozen(s, clip.track, "/clip"));
-            return launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id}},
-                             quantizeOf(s, &clip), "/clip");
+            auto done = launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
+                                  quantizeOf(s, &clip), "/clip");
+            if (done && clip.follow != model::ClipFollow::None)
+                ctx.warn("launch.unfollowed",
+                         id->str() + " follows the " +
+                             (clip.follow == model::ClipFollow::Key ? "key" : "chords") +
+                             " when it is laid on the timeline, but a launched clip plays as "
+                             "it was written until ADR-0098's X4",
+                         "/clip");
+            return done;
         };
         addChecked(registry, std::move(c));
     }();
@@ -280,7 +293,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             " All the scene's tracks switch at the same boundary, the project's launch_quantize. "
             "Tracks with no clip in the scene keep playing what they play. A frozen track is "
             "skipped with a track.frozen warning, a clip past the memory budget with a "
-            "launch.memory warning.";
+            "launch.memory warning, and clips whose follow is not none with one "
+            "launch.unfollowed warning (launched clips play as written until ADR-0098's X4).";
         c.tags = {"clip launcher", "transport", "scene"};
         c.args = schema::object<SceneArg>("launch_scene_args")
                      .field("scene", &SceneArg::scene, idArg("sc", "Scene"))
@@ -315,13 +329,28 @@ void registerLaunchCommands(cmd::Registry& registry) {
                                  e.id.str() + "'s audio did not fit the prepared-audio budget",
                                  "/scene");
                     } else {
-                        requests.push_back({track, Action::Clip, e.id});
+                        requests.push_back({track, Action::Clip, e.id, *scene});
                     }
                 }
             if (requests.empty())
                 return Error("launch.scene", a.scene + " has no clip that can play", "/scene",
                              "add clips to the scene with clip.add, or unfreeze their tracks");
-            return launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
+            auto done = launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
+            std::string following;
+            int followers = 0;
+            for (const auto& r : requests)
+                if (s.clips.find(r.clip)->follow != model::ClipFollow::None) {
+                    following += (following.empty() ? "" : ", ") + r.clip.str();
+                    ++followers;
+                }
+            if (done && !following.empty())
+                ctx.warn("launch.unfollowed",
+                         (followers == 1 ? "the clip " : "the clips ") + following +
+                             (followers == 1 ? " follows" : " follow") +
+                             " the context when laid on the timeline, but launched clips play "
+                             "as they were written until ADR-0098's X4",
+                         "/scene");
+            return done;
         };
         addChecked(registry, std::move(c));
     }();
@@ -448,7 +477,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "heard now (stopped: where playing starts); on: false ends it there. A stop, a seek "
             "or a loop change ends a capture that has run; one that has not run begins again "
             "at the new position. launch.commit writes the capture onto the timeline. from and "
-            "to: its span on the timeline in beats, laid out by running time.";
+            "to: its span on the timeline in beats, laid out by running time. Refused while a "
+            "master playrate is active, where running time is not song time; one that becomes "
+            "active ends a running capture.";
         c.tags = {"clip launcher", "transport", "recording"};
         c.args = schema::object<CaptureArg>("launch_capture_args")
                      .field("on", &CaptureArg::on, schema::boolean())
@@ -458,14 +489,16 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("from", &CaptureDone::from, schema::number())
                        .field("to", &CaptureDone::to, schema::number())
                        .build();
-        c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"}};
+        c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
+                    {"launch.playrate", "a master playrate is active",
+                     "set the master playrate to 1 and turn off its envelope, then capture"}};
         c.examples = {{"While stopped", j(R"({"on": true})"),
                        j(R"({"on": true, "from": 0, "to": 0})"), "song_with_clip_running"}};
         c.run = [](const CaptureArg& a, Context& ctx) -> Result<CaptureDone> {
             EngineApp& app = engine::app(ctx);
             auto engine = runningEngine(app);
             if (!engine) return std::move(engine).error();
-            (*engine)->captureLaunches(a.on);
+            SUPPLE_TRY((*engine)->captureLaunches(a.on));
             return captureDone(app, **engine);
         };
         addChecked(registry, std::move(c));
@@ -484,14 +517,29 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "(its items are split, trimmed or removed); each clip becomes copies of its takes "
             "at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch "
             "crossfades become item fades. Tracks that followed the arrangement are untouched, "
-            "and so is the arrangement a loop repeated. A running capture ends first; the "
+            "and so is the arrangement a loop repeated. A scene launched whole (launch.scene: "
+            "every clip that could play started on one boundary) also writes a section named "
+            "after it, from that boundary until one of its tracks is launched again or the "
+            "capture ends, as scene.insert does; clips launched singly write none. A launched "
+            "clip is not followed (until ADR-0098's X4): its items copy what was heard, and "
+            "context.mismatch warns once for each launched clip whose key is not the project's "
+            "under it, however many periods it is laid as. "
+            "A running "
+            "capture ends first; the "
             "capture stays, so committing again writes it again over itself. performance is "
             "what history records: leave it out and launch.commit fills it from the capture.";
         c.tags = {"clip launcher", "recording", "item"};
         c.args = commitArgsSchema();
+        auto section = schema::object<CommittedSection>("committed_section")
+                           .field("scene", &CommittedSection::scene, schema::string())
+                           .field("region", &CommittedSection::region, schema::string())
+                           .field("start", &CommittedSection::start, schema::number())
+                           .field("end", &CommittedSection::end, schema::number())
+                           .build();
         c.result = schema::object<CommitDone>("launch_commit")
                        .field("tracks", &CommitDone::tracks, schema::arrayOf(schema::string()))
                        .field("items", &CommitDone::items, schema::arrayOf(schema::string()))
+                       .field("sections", &CommitDone::sections, schema::arrayOf(section))
                        .field("from", &CommitDone::from, schema::number())
                        .field("to", &CommitDone::to, schema::number())
                        .build();
@@ -503,12 +551,14 @@ void registerLaunchCommands(cmd::Registry& registry) {
                     {"item.locked", "a locked item is in the way", "unlock it with item.set first"},
                     {"clip.unsupported", "a clip's loop window has no item equivalent",
                      "set its loop to the whole content, or off"}};
-        c.examples = {{"A captured bar of cl_1",
-                       j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,
+        c.examples = {
+            {"A captured bar of cl_1",
+             j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,
                             "launches": [{"frame": 0, "track": "tr_1", "action": "clip",
-                                          "clip": "cl_1", "anchor": 0, "anchor_beat": 0}]}})"),
-                       j(R"({"tracks": ["tr_1"], "items": ["<any>"], "from": 0, "to": 4})"),
-                       "song_with_clip"}};
+                                          "clip": "cl_1", "scene": "sc_1", "anchor": 0,
+                                          "anchor_beat": 0}]}})"),
+             j(R"({"tracks": ["tr_1"], "items": ["<any>"], "sections": [{"scene": "sc_1", "region": "<any>", "start": 0, "end": 4}], "from": 0, "to": 4})"),
+             "song_with_clip"}};
         c.resolve = [](CommitArgs& a, Context& ctx) -> Status {
             if (a.performance) return {};
             EngineApp& app = engine::app(ctx);
@@ -516,7 +566,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (!engine) return std::move(engine).error();
             auto capture = (*engine)->launchCapture();
             if (capture && capture->on) {
-                (*engine)->captureLaunches(false);
+                (void)(*engine)->captureLaunches(false);
                 capture = (*engine)->launchCapture();
             }
             if (!capture || capture->frames <= 0)

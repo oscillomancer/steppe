@@ -236,6 +236,21 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
         const auto* after = session.routes.find(id);
         geometry |= !before || !after || before->from.track != after->from.track;
     }
+    // An item with take FX that moved to another track, came or went takes
+    // their lanes with it.
+    auto chained = [](const model::Session& in, const model::Item* item) {
+        if (!item) return false;
+        for (model::Id take : item->takes)
+            if (const model::Take* tk = in.takes.find(take); tk && !tk->chain.empty()) return true;
+        return false;
+    };
+    for (auto id : changedObjects(session_.items, session.items, changes)) {
+        const auto* before = session_.items.find(id);
+        const auto* after = session.items.find(id);
+        if (before && after && before->track == after->track && before->takes == after->takes)
+            continue;
+        geometry |= chained(session_, before) || chained(session, after);
+    }
     // An expanded item that changed may hold another number of takes now.
     bool heights = false;
     if (!expanded_.empty())
@@ -265,6 +280,12 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
     // A rack module's knobs automate on its rack's home channel (ADR-0062).
     for (const auto& m : session_.modules)
         if (const model::Rack* rk = session_.racks.find(m.value->rack)) owners[m.id] = rk->track;
+    // An item's take FX automate on the item's track, in timeline position
+    // (session-model). A clip's take FX are in clip time: no lane here.
+    for (const auto& item : session_.items)
+        for (model::Id take : item.value->takes)
+            if (const model::Take* tk = session_.takes.find(take))
+                for (auto fx : tk->chain) owners[fx] = item.value->track;
     // A lane per target: a visible envelope's, or a modulated parameter's
     // whose routes ask for one (ADR-0096 `lane`), with its envelope if any.
     // Envelopes' lanes come first in their order, then modulated ones'.

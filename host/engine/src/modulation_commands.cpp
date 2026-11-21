@@ -43,6 +43,9 @@ struct ModRef {
 
 struct ModAdded {
     std::string modulation;
+    // A plug-in target's canonical reference and display name
+    // (session-model "Plug-in parameter references").
+    std::optional<std::string> param, param_name;
 };
 
 struct ModListArgs {
@@ -61,7 +64,8 @@ struct ModEntry {
     bool enabled = true, lane = true;
     std::string range;  // bipolar (-1..1) or unipolar (0..1)
     std::vector<FedBy> fedBy;
-    std::optional<std::string> inert;  // why the plan cannot apply it: source, target, latency
+    std::optional<std::string> inert;       // why the plan cannot apply it: source, target, latency
+    std::optional<std::string> param_name;  // a plug-in target's display name
 };
 
 struct ModList {
@@ -97,6 +101,7 @@ struct ModulateArgs {
 
 struct Modulated {
     std::string modulation;
+    std::optional<std::string> param, param_name;  // a plug-in target's, as modulation.add
     std::optional<std::string> rack, module, mod_out, input, send, channel;
     std::optional<std::string> knob;  // a macro's: the knob to move
 };
@@ -150,24 +155,32 @@ Error refused(std::string code, std::string message, std::string path, std::stri
 struct PluginParam {
     host::ParamInfo info;
     bool envelope = false;
+    std::string canonical;  // what the route stores (param_ref.h)
 };
+std::string pluginName(EngineApp& app, const model::FxInstance& fx) {
+    auto info = app.findPlugin(fx.plugin.id);
+    return info && !info->name.empty() ? info->name : fx.plugin.id;
+}
+// `ambiguity`: Refuse for a reference the caller gives now; First for one a
+// route already stores (an older file's name binds as the plan binds it).
 Result<PluginParam> modulatableParam(EngineApp& app, const model::FxInstance& fx,
-                                     const std::string& key) {
+                                     const std::string& key,
+                                     detail::Ambiguity ambiguity = detail::Ambiguity::First) {
     auto params = app.fxParams(fx);
     if (!params) return std::move(params).error();
     auto schema = app.fxSchema(fx);
     const json::Value* described = schema && schema->isObject() ? &*schema : nullptr;
-    auto target =
-        detail::resolvePluginMod(*params, described, key, fx.plugin.format == "vst3", true);
+    auto target = detail::resolvePluginMod(*params, described, key, fx.plugin.format == "vst3",
+                                           true, ambiguity, pluginName(app, fx));
     if (!target) return std::move(target).error();
     for (const host::ParamInfo& p : *params)
         if (p.id == target->param) {
             if (p.flags & (CLAP_PARAM_IS_READONLY | CLAP_PARAM_IS_BYPASS))
                 return Error("modulation.target", p.name + " is read-only or a bypass", "",
                              "fx.describe marks the parameters a route can take (modulatable)");
-            return PluginParam{p, target->envelope};
+            return PluginParam{p, target->envelope, target->canonical};
         }
-    return Error("modulation.target", "the plug-in has no parameter " + key, "",
+    return Error("modulation.target", pluginName(app, fx) + " has no parameter \"" + key + "\"", "",
                  "fx.describe lists its parameters");
 }
 
@@ -303,8 +316,11 @@ bool reaches(const model::Session& s, Id from, Id to) {
 // The route as it would be, checked against what the model cannot know (the
 // instance's parameters) and what the user can fix with a better call.
 // `self`: the route being set (skipped by the duplicate check).
-Status checkRoute(EngineApp& app, const model::Session& s, const model::Modulation& m,
-                  std::optional<Id> self) {
+// A plug-in target's reference is resolved and `m` gets its canonical
+// spelling; `paramName` receives the display name.
+Status checkRoute(EngineApp& app, const model::Session& s, model::Modulation& m,
+                  std::optional<Id> self, detail::Ambiguity ambiguity,
+                  std::string* paramName = nullptr) {
     const model::RackModule* module = s.modules.find(m.source.module);
     if (!module || module->type != model::kModOutModule)
         return refused("modulation.source", m.source.module.str() + " is not a Mod Out module",
@@ -312,7 +328,8 @@ Status checkRoute(EngineApp& app, const model::Session& s, const model::Modulati
                        "add one with module.add {rack, type: \"mod_out\"}, or use rack.get to "
                        "find a rack's Mod Out");
     const Id target = m.target.object;
-    const std::string& param = m.target.param;
+    const std::string param = m.target.param;
+    std::optional<std::uint32_t> paramId;  // a plug-in target's, for the duplicate check
     // Mixer targets (M2): a track's volume, pan or width; a send's volume.
     if (target.kind == model::Kind::Track) {
         const model::Track* track = s.tracks.find(target);
@@ -356,13 +373,16 @@ Status checkRoute(EngineApp& app, const model::Session& s, const model::Modulati
                            "modulate an FX on a track; take FX and a rack's plug-ins come later");
         if (auto owner = model::frozenOwner(s, target))
             return model::frozenError(s, *owner, "/target");
-        auto found = modulatableParam(app, *fx, param);
+        auto found = modulatableParam(app, *fx, param, ambiguity);
         if (!found) {
             Error e = std::move(found).error();
             e.code = "modulation.target";
             e.path = "/target/param";
             return e;
         }
+        m.target.param = found->canonical;
+        paramId = found->info.id;
+        if (paramName) *paramName = found->info.name;
         if (found->envelope && !activeEnvelopeOn(app, s, target, *fx, found->info.id))
             return refused("modulation.envelope",
                            found->info.name +
@@ -386,8 +406,18 @@ Status checkRoute(EngineApp& app, const model::Session& s, const model::Modulati
                                   "parameter's range, -1..1"
                                 : "give the offset at a signal of 1 in the target's unit (dB "
                                   "for volume, percent for pan and width)");
+    // One parameter whatever the spellings (review round 72 D1): an older
+    // route's stored name resolves to the same parameter.
+    const auto sameTarget = [&](const model::EnvTarget& other) {
+        if (other == m.target) return true;
+        if (!paramId || other.object != m.target.object) return false;
+        const model::FxInstance* fx = s.fx.find(other.object);
+        if (!fx) return false;
+        auto found = modulatableParam(app, *fx, other.param);
+        return found && found->info.id == *paramId;
+    };
     for (const auto& e : s.modulations)
-        if (e.id != self && e.value->source == m.source && e.value->target == m.target)
+        if (e.id != self && e.value->source == m.source && sameTarget(e.value->target))
             return refused("modulation.duplicate",
                            e.id.str() + " already takes " + m.source.module.str() + "." +
                                m.source.input + " to " + target.str() + " " + m.target.param,
@@ -466,14 +496,22 @@ void registerModulationCommands(cmd::Registry& registry) {
                      .field("depth", &ModAddArgs::depth, schema::number())
                      .field("enabled", &ModAddArgs::enabled, schema::boolean())
                      .field("lane", &ModAddArgs::lane,
-                            schema::boolean().doc("Show the target's lane (default true)."))
+                            schema::boolean().doc("Show the target's automation lane in the "
+                                                  "timeline while the route exists (default "
+                                                  "true). It never changes the sound."))
                      .build();
         c.result = schema::object<ModAdded>("modulation_added")
                        .field("modulation", &ModAdded::modulation, schema::string())
+                       .field("param", &ModAdded::param,
+                              schema::string().doc("A plug-in target's canonical reference: "
+                                                   "its semantic key or decimal id."))
+                       .field("param_name", &ModAdded::param_name,
+                              schema::string().doc("A plug-in target's display name."))
                        .build();
         c.examples = {{"Add", j(R"({"source": {"module": "mo_2", "input": "in_1"},
                              "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25})"),
-                       j(R"({"modulation": "mr_1"})"), "song_with_mod_out"}};
+                       j(R"({"modulation": "mr_1", "param": "gain", "param_name": "<any>"})"),
+                       "song_with_mod_out"}};
         c.run = [](const ModAddArgs& a, Context& ctx) -> Result<ModAdded> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
@@ -495,10 +533,17 @@ void registerModulationCommands(cmd::Registry& registry) {
             m.depth = a.depth;
             m.enabled = a.enabled.value_or(true);
             m.lane = a.lane.value_or(true);
-            SUPPLE_TRY(checkRoute(app, s, m, std::nullopt));
+            std::string name;
+            SUPPLE_TRY(checkRoute(app, s, m, std::nullopt, detail::Ambiguity::Refuse, &name));
+            ModAdded out{"", std::nullopt, std::nullopt};
+            if (m.target.object.kind == model::Kind::Fx) {
+                out.param = m.target.param;
+                out.param_name = name;
+            }
             const Id id = app.txn().create(std::move(m));
             SUPPLE_TRY(checkCycle(app));
-            return ModAdded{id.str()};
+            out.modulation = id.str();
+            return out;
         };
         addChecked(registry, std::move(c));
     }();
@@ -518,7 +563,9 @@ void registerModulationCommands(cmd::Registry& registry) {
                      .field("target", &ModSetArgs::target, targetSchema())
                      .field("depth", &ModSetArgs::depth, schema::number())
                      .field("enabled", &ModSetArgs::enabled, schema::boolean())
-                     .field("lane", &ModSetArgs::lane, schema::boolean())
+                     .field("lane", &ModSetArgs::lane,
+                            schema::boolean().doc("Show or hide the target's automation lane "
+                                                  "for this route. It never changes the sound."))
                      .build();
         c.result = emptySchema();
         c.examples = {{"Deepen", j(R"({"modulation": "mr_1", "depth": 0.5})"), j("{}"),
@@ -541,7 +588,10 @@ void registerModulationCommands(cmd::Registry& registry) {
             if (a.depth) m.depth = *a.depth;
             if (a.enabled) m.enabled = *a.enabled;
             if (a.lane) m.lane = *a.lane;
-            if (a.source || a.target || a.depth) SUPPLE_TRY(checkRoute(app, s, m, *id));
+            if (a.source || a.target || a.depth)
+                SUPPLE_TRY(
+                    checkRoute(app, s, m, *id,
+                               a.target ? detail::Ambiguity::Refuse : detail::Ambiguity::First));
             app.txn().put<model::Modulation>(*id, std::move(m));
             SUPPLE_TRY(checkCycle(app));
             return Empty{};
@@ -598,7 +648,9 @@ void registerModulationCommands(cmd::Registry& registry) {
                 .field("target", &ModEntry::target, targetSchema())
                 .field("depth", &ModEntry::depth, schema::number())
                 .field("enabled", &ModEntry::enabled, schema::boolean())
-                .field("lane", &ModEntry::lane, schema::boolean())
+                .field("lane", &ModEntry::lane,
+                       schema::boolean().doc("The route asks for its target's lane to be shown "
+                                             "(a display flag; the sound is the same either way)"))
                 .field("range", &ModEntry::range, schema::string())
                 .field("fed_by", &ModEntry::fedBy,
                        schema::arrayOf(schema::object<FedBy>("modulation_fed_by")
@@ -607,6 +659,8 @@ void registerModulationCommands(cmd::Registry& registry) {
                                            .field("type", &FedBy::type, schema::string())
                                            .build()))
                 .field("inert", &ModEntry::inert, schema::string())
+                .field("param_name", &ModEntry::param_name,
+                       schema::string().doc("A plug-in target's display name."))
                 .build();
         c.result = schema::object<ModList>("modulation_list")
                        .field("modulations", &ModList::modulations, schema::arrayOf(entry))
@@ -615,7 +669,7 @@ void registerModulationCommands(cmd::Registry& registry) {
                    "source": {"module": "mo_2", "input": "in_1"},
                    "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.25,
                    "enabled": true, "lane": true, "range": "bipolar", "fed_by": [],
-                   "inert": "source"}]})"),
+                   "inert": "source", "param_name": "<any>"}]})"),
                        "song_with_modulation"}};
         c.run = [](const ModListArgs& a, Context& ctx) -> Result<ModList> {
             EngineApp& app = engine::app(ctx);
@@ -681,10 +735,14 @@ void registerModulationCommands(cmd::Registry& registry) {
                     const auto node = model::modulationTargetNode(s, m.target);
                     const model::Track* t = node ? s.tracks.find(*node) : nullptr;
                     if (t && t->freeze) row.inert = "target";  // ADR-0096 "Freeze"
-                } else if (app.instances().modulationDisabled(m.target.object)) {
-                    row.inert = "latency";
-                } else if (const std::string why = unplayable(m.target); !why.empty()) {
-                    row.inert = why;
+                } else {
+                    if (const model::FxInstance* f = s.fx.find(m.target.object))
+                        if (auto found = modulatableParam(app, *f, m.target.param))
+                            row.param_name = found->info.name;
+                    if (app.instances().modulationDisabled(m.target.object))
+                        row.inert = "latency";
+                    else if (const std::string why = unplayable(m.target); !why.empty())
+                        row.inert = why;
                 }
                 // Nothing cabled into its Mod Out input: it carries nothing.
                 if (!row.inert && row.fedBy.empty()) row.inert = "source";
@@ -734,6 +792,10 @@ void registerModulationCommands(cmd::Registry& registry) {
                      .build();
         c.result = schema::object<Modulated>("modulated")
                        .field("modulation", &Modulated::modulation, schema::string())
+                       .field("param", &Modulated::param,
+                              schema::string().doc("A plug-in target's canonical reference."))
+                       .field("param_name", &Modulated::param_name,
+                              schema::string().doc("A plug-in target's display name."))
                        .field("rack", &Modulated::rack, schema::string())
                        .field("module", &Modulated::module, schema::string())
                        .field("mod_out", &Modulated::mod_out, schema::string())
@@ -746,8 +808,9 @@ void registerModulationCommands(cmd::Registry& registry) {
                        .build();
         c.examples = {{"An LFO on a gain", j(R"({"target": {"fx": "fx_1", "param": "gain"},
                              "source": "lfo"})"),
-                       j(R"({"modulation": "mr_1", "rack": "rk_1", "module": "mo_3",
-                             "mod_out": "mo_2", "input": "in_1"})"),
+                       j(R"({"modulation": "mr_1", "param": "gain", "param_name": "<any>",
+                             "rack": "rk_1", "module": "mo_3", "mod_out": "mo_2",
+                             "input": "in_1"})"),
                        "song_with_mod_out"}};
         c.errors = {{"modulation.cycle", "a follower on a track the target feeds",
                      "listen to another track, or modulate a buss it feeds"}};
@@ -797,7 +860,8 @@ void registerModulationCommands(cmd::Registry& registry) {
                 const auto fxId = Id::parse(*a.target.fx);
                 const model::FxInstance* fx = fxId ? s0.fx.find(*fxId) : nullptr;
                 if (fx)
-                    if (auto found = modulatableParam(app, *fx, a.target.param);
+                    if (auto found =
+                            modulatableParam(app, *fx, a.target.param, detail::Ambiguity::Refuse);
                         found && found->envelope &&
                         !activeEnvelopeOn(app, s0, *fxId, *fx, found->info.id)) {
                         auto now = envelopeValueNow(app, *fxId, *fx, a.target.param, found->info);
@@ -838,6 +902,9 @@ void registerModulationCommands(cmd::Registry& registry) {
                     return e;
                 }
                 out.modulation = added->find("modulation")->asString();
+                if (const json::Value* p = added->find("param")) out.param = p->asString();
+                if (const json::Value* p = added->find("param_name"))
+                    out.param_name = p->asString();
                 out.mod_out = module;
                 out.input = input;
                 return out;

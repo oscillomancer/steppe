@@ -33,12 +33,24 @@ struct CompileContext {
     std::optional<DrumMap> drums;
 };
 
+// A chord symbol event `{SYMBOL}:DUR` as compiled, at its start tick (ADR-0098).
+struct ChordSymbol {
+    std::int64_t tick = 0;
+    harmony::Chord chord;
+    std::string voice;  // the voice's name; a text without a voice line has "main"
+};
+
 struct Compiled {
     midi::Sequence sequence;
     std::vector<midi::Meter> barMeters;
     std::optional<double> tempo;
     std::int64_t pickupTicks = 0;
     std::vector<Warning> warnings;
+    // One entry per chord symbol event, the bars a copy line or a bar range
+    // repeats included, ordered by tick and then by voice declaration (a text
+    // with no voice line has one implicit voice, declared first). A tied
+    // continuation adds none, and a symbol that failed to compile adds none.
+    std::vector<ChordSymbol> chords;
 };
 
 Result<Compiled> compile(std::string_view text, const CompileContext& context = {});

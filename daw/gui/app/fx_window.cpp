@@ -620,14 +620,21 @@ Status FxWindow::openTake(model::Id take) {
     const model::Session& s = app_.head();
     if (!s.takes.find(take))
         return Error("take.unknown", "no take " + take.str(), "/take", "use take.list");
+    // An item's take, or a launcher clip's (its chain plays when the clip is
+    // launched, ADR-0097): the window opens on the owner's track.
+    auto owns = [&](const std::vector<model::Id>& takes) {
+        return std::find(takes.begin(), takes.end(), take) != takes.end();
+    };
+    std::optional<model::Id> track;
     for (const auto& e : s.items)
-        if (std::find(e.value->takes.begin(), e.value->takes.end(), take) != e.value->takes.end()) {
-            SUPPLE_TRY(open(e.value->track));
-            take_ = take;
-            refresh();
-            return {};
-        }
-    return Error("take.orphan", take.str() + " belongs to no item", "/take");
+        if (owns(e.value->takes)) track = e.value->track;
+    for (const auto& e : s.clips)
+        if (!track && owns(e.value->takes)) track = e.value->track;
+    if (!track) return Error("take.orphan", take.str() + " belongs to no item or clip", "/take");
+    SUPPLE_TRY(open(*track));
+    take_ = take;
+    refresh();
+    return {};
 }
 
 Status FxWindow::openFor(const UiState& ui, const json::Value& prompt) {

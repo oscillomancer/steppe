@@ -8,6 +8,8 @@
 #include <cmath>
 #include <set>
 
+#include "clip_context.h"
+#include "clip_follow.h"
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "supple/model/freeze.h"
@@ -22,6 +24,7 @@ constexpr std::int64_t kMaxBars = 100000;
 
 struct LaidClip {
     std::string clip, item, track;
+    std::optional<detail::FollowedInfo> followed;  // scene.insert, arrangement.build
 };
 struct Segment {
     std::string scene, region;
@@ -36,6 +39,7 @@ struct SceneInsertArgs {
     std::int64_t bars = 0;
     std::optional<std::string> name;
     bool pooled = false;
+    std::optional<model::ClipFollow> follow;
 };
 struct SceneInsertResult {
     std::vector<LaidClip> items;
@@ -60,17 +64,20 @@ struct BuildArgs {
     std::optional<double> at;
     std::optional<std::int64_t> bar;
     bool pooled = false;
+    std::optional<model::ClipFollow> follow;
 };
 struct BuildResult {
     std::vector<Segment> segments;
 };
 
 schema::Schema<LaidClip> laidSchema(const char* second) {
-    return schema::object<LaidClip>("laid_clip")
-        .field("clip", &LaidClip::clip, schema::string())
-        .field(second, &LaidClip::item, schema::string())
-        .field("track", &LaidClip::track, schema::string())
-        .build();
+    auto laid = schema::object<LaidClip>(std::string(second) == "item" ? "laid_item" : "laid_clip")
+                    .field("clip", &LaidClip::clip, schema::string())
+                    .field(second, &LaidClip::item, schema::string())
+                    .field("track", &LaidClip::track, schema::string());
+    if (std::string(second) == "item")
+        laid.field("followed", &LaidClip::followed, detail::followedSchema());
+    return laid.build();
 }
 
 // The bar a start falls on, which must begin it (scene.at otherwise).
@@ -121,9 +128,10 @@ std::string barLabel(const model::Session& s, double beat) {
 // scene.insert for one scene: its clips as items over `bars` bars from
 // `firstBar`, and a section over them. `base` is the path of the scene
 // argument's owner.
-Result<Segment> insertScene(model::EditTxn& t, const model::Session& s, model::Id scene,
-                            int firstBar, std::int64_t bars, const std::optional<std::string>& name,
-                            bool pooled, const std::string& base) {
+Result<Segment> insertScene(Context& ctx, model::EditTxn& t, const model::Session& s,
+                            model::Id scene, int firstBar, std::int64_t bars,
+                            const std::optional<std::string>& name, bool pooled,
+                            std::optional<model::ClipFollow> follow, const std::string& base) {
     if (bars < 1 || bars > kMaxBars)
         return Error("scene.bars", "bars must be from 1 to " + std::to_string(kMaxBars),
                      base + "/bars", "give the number of whole bars the scene lasts");
@@ -166,7 +174,14 @@ Result<Segment> insertScene(model::EditTxn& t, const model::Session& s, model::I
     for (const auto& [clipId, clip] : clips) {
         auto item = layClipOnTimeline(t, s, *clip, start, end, pooled, base + "/scene");
         if (!item) return std::move(item).error();
-        seg.items.push_back({clipId.str(), item->str(), clip->track.str()});
+        // The notes follow the context under the item when asked to (ADR-0098); otherwise they
+        // are copied, and context.mismatch says when the clip's key is not the project's.
+        std::vector<detail::ClipNote> notes;
+        auto followed = detail::followPlacedItem(s, t, clipId, *clip, *item, follow, pooled,
+                                                 base + "/scene", notes);
+        if (!followed) return std::move(followed).error();
+        for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
+        seg.items.push_back({clipId.str(), item->str(), clip->track.str(), std::move(*followed)});
     }
     model::Region region;
     region.start = start;
@@ -194,7 +209,15 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "the span, as one looping item when it repeats within it, which needs its period to be "
             "its content: loop off with its length (as clip.add makes it), or loop on over the "
             "whole content with a length of whole repeats (scene.insert.period otherwise). Takes "
-            "are copied, MIDI with them unless pooled. An item already in "
+            "are copied, MIDI with them unless pooled; an item takes its clip's name (its active "
+            "take's) when the clip has one. follow (none, key or chords; default: each clip's own) "
+            "maps a MIDI clip's notes from the key or chords it was written against to those "
+            "under the item (ADR-0098), as item.add {clip} does: each item's followed says what "
+            "was done, by bar, unrolled: true when a looped item had to be written out pass by "
+            "pass, and copied why a clip that cannot follow was left as it is; pooled with a "
+            "mapping that moves a note is refused (clip.follow_pooled). With none the notes are "
+            "copied as they are, and context.mismatch warns once for each item whose clip's key "
+            "is not the project's under it. An item already in "
             "the span on a track that receives a clip is refused (scene.insert.occupied), and "
             "an empty scene (scene.empty). A section named after the scene (name overrides) "
             "is added over the span. One undo step.";
@@ -209,6 +232,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                      .field("name", &SceneInsertArgs::name, schema::string())
                      .field("pooled", &SceneInsertArgs::pooled, schema::boolean())
                      .defaultValue(false)
+                     .field("follow", &SceneInsertArgs::follow, detail::followArgSchema())
                      .build();
         c.result =
             schema::object<SceneInsertResult>("scene_insert")
@@ -226,6 +250,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             {"scene.empty", "the scene has no clips", "add clips with clip.add"},
             {"scene.insert.occupied", "an item is already in the span on a track that gets a clip",
              "move or remove it, or choose another bar"},
+            {"clip.follow_pooled", "pooled with a mapping that moves a note",
+             "leave pooled off, or place the clip with follow: none"},
             {"scene.insert.period", "a repeating clip no single looping item reproduces",
              "loop the clip over its whole content, or ask for no more bars than it is long"}};
         c.examples = {{"A verse at bar 5", j(R"({"scene": "sc_1", "bar": 5, "bars": 4})"),
@@ -239,7 +265,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             auto bar = startBar(s, a.at, a.bar, "");
             if (!bar) return std::move(bar).error();
             model::EditTxn& t = app.txn();
-            auto seg = insertScene(t, s, *scene, *bar, a.bars, a.name, a.pooled, "");
+            auto seg = insertScene(ctx, t, s, *scene, *bar, a.bars, a.name, a.pooled, a.follow, "");
             if (!seg) return std::move(seg).error();
             SceneInsertResult r;
             r.items = std::move(seg->items);
@@ -263,7 +289,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "clip begins at its own start); a region holding no item is scene.capture.empty. "
             "Items on a master are skipped with a warning. Each item becomes a clip as clip.add "
             "{item} makes it (MIDI copied unless pooled; a warped take is clip.unsupported): "
-            "loop mode when it fills the region, once when it is shorter. The scene is added "
+            "loop mode when it fills the region, once when it is shorter, named as the item is "
+            "(its active take's name). The scene is added "
             "after the last, named after the region unless name is given, with its colour. The "
             "region and the items are unchanged. One undo step.";
         c.tags = {"clip launcher", "scene", "arrangement"};
@@ -389,8 +416,17 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                 made->mode =
                     length < (re - rs) - kEps ? model::ClipMode::Once : model::ClipMode::Loop;
                 audio |= made->kind == model::ClipKind::Audio;
+                // The clip remembers the key and chords the item sat under (ADR-0098); an
+                // audio clip takes the key only.
+                auto taken =
+                    detail::contextUnder(s, model::itemSpan(s, *s.items.find(pick.item)).startBeat,
+                                         length, made->kind == model::ClipKind::Audio);
+                for (const auto& n : detail::unreadableNotes(taken, "/region"))
+                    ctx.warn(n.code, n.message, n.path);
+                made->context = std::move(taken.points);
+                model::fitClipContext(*made);
                 const Id clip = t.create(std::move(*made));
-                r.clips.push_back({clip.str(), pick.item.str(), pick.track.str()});
+                r.clips.push_back({clip.str(), pick.item.str(), pick.track.str(), std::nullopt});
             }
             if (audio) SUPPLE_TRY(checkClipMemory(app, t.preview(), "/region"));
             if (!skipped.empty()) {
@@ -415,7 +451,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "from bar or at (default bar 1), with a section for each. A scene may appear more "
             "than once. Every entry's refusal (scene.empty, scene.insert.period, "
             "scene.insert.occupied) names its index in path, and changes nothing; an empty "
-            "sequence or one of more than 256 entries is scene.sequence. One undo step.";
+            "sequence or one of more than 256 entries is scene.sequence. follow, pooled and each "
+            "item's followed and context.mismatch are as scene.insert's. One undo step.";
         c.tags = {"clip launcher", "scene", "arrangement"};
         auto entry = schema::object<SequenceEntry>("sequence_entry")
                          .field("scene", &SequenceEntry::scene, idArg("sc", "Scene"))
@@ -429,6 +466,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                             schema::integer().range(1, kMaxBars).doc("Start bar, 1-based [1]."))
                      .field("pooled", &BuildArgs::pooled, schema::boolean())
                      .defaultValue(false)
+                     .field("follow", &BuildArgs::follow, detail::followArgSchema())
                      .build();
         auto segment = schema::object<Segment>("arrangement_segment")
                            .field("scene", &Segment::scene, schema::string())
@@ -446,6 +484,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             {"scene.empty", "a scene in the sequence has no clips", "add clips with clip.add"},
             {"scene.insert.occupied", "items are already in an entry's span",
              "move or remove them, or start at another bar"},
+            {"clip.follow_pooled", "pooled with a mapping that moves a note",
+             "leave pooled off, or place the clips with follow: none"},
             {"scene.insert.period", "a repeating clip no single looping item reproduces",
              "loop the clip over its whole content, or ask for fewer bars"}};
         c.examples = {{"A verse for four bars from bar 5",
@@ -482,8 +522,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                     return Error("scene.bars",
                                  "the sequence runs past bar " + std::to_string(kMaxBars),
                                  at + "/bars", "give fewer bars");
-                auto seg = insertScene(t, s, scenes[i], static_cast<int>(where), a.sequence[i].bars,
-                                       std::nullopt, a.pooled, at);
+                auto seg = insertScene(ctx, t, s, scenes[i], static_cast<int>(where),
+                                       a.sequence[i].bars, std::nullopt, a.pooled, a.follow, at);
                 if (!seg) return std::move(seg).error();
                 r.segments.push_back(std::move(*seg));
                 bars += a.sequence[i].bars;

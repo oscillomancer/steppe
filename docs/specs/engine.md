@@ -516,8 +516,12 @@ the same.*
   source like an item's fade, in both executors and offline.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
-  the epoch's terms) and its song position. Seeks and transport wraps
-  are not logged yet (staged, STATUS): the replay plays one linear run.
+  the epoch's terms), its song position, and the scene when `launch.scene`
+  launched it (carried through the slot and the executor's ack; the replay
+  ignores it). A transport wrap is not
+  logged: it follows from the loop, which a replay is given. A seek, a
+  loop change or a stop ends a capture, so a replay never crosses one
+  (ADR-0097, revision 2026-11-20, batch 3).
   Renders and the render dialog play the arrangement only, and the dialog
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at
@@ -548,6 +552,18 @@ the same.*
   The arrangement a loop repeated is not copied. What it writes plays as
   the capture was heard: exactly away from the switches, and to rounding
   through the fades.
+  A scene launched whole also writes a section. `launch.scene` logs each
+  clip it starts with the scene's id, all on one running frame; the commit
+  writes a section for a scene whose launches at a frame all still hold (a
+  track's last at that frame: one taken over by a later launch of the track
+  on the same frame spoils it). Clips launched one by one write none, however
+  they line up. The section is a region (`section` true) named after the
+  scene, in its colour, from where the items of that frame land (the
+  launch's own beat before the loop's first wrap, the timeline's position of
+  the running frame after it, as the items do) to the first later launch on
+  any of the scene's tracks, else the capture's end.
+  A section already there with the same name and span is kept (committing
+  again writes the same performance over itself).
 - **Memory (L-e).** The prepared-source budget counts sample values
   across channels: the decoded source plus each converted variant, with
   a source or variant shared by several takes counted once. A clip on
@@ -567,12 +583,38 @@ the same.*
 - **Audio clips play at the take's own rate,** with its playrate, pitch
   and channel mode as on the timeline, and no warp. A clip whose audio
   does not fit the project tempo gets a `launch.tempo` warning.
-- **Staged within L2, each stated in STATUS until done:**
-  - *Master playrate.* Clip audio is a source on the playrate path
-    (ADR-0045 §2: converted before take FX and mixing), so it speeds up
-    with the master playrate. Until that lands, a plan with the master
-    playrate active compiles no players, its tracks follow the
-    arrangement, and a launch is refused with `launch.playrate`.
+- **Under a master playrate (ADR-0097, revision 2026-11-21).** Clips play
+  on the playrate path (ADR-0045 §2), at the song positions the rate
+  timeline gives:
+  - *Placement.* The target stays a stream frame. `placeLaunch` seeds a
+    copy of the running rate timeline from the executor's published clock
+    (with the scalar edits after it and the envelope), finds the quantize
+    boundary from the floor's song position, and targets the first frame
+    whose unwrapped song position reaches it (`placeRateLaunch`). A rate
+    control still on its way to the executors answers `launch.later`. A
+    scalar edit voids the pending launches past its frame
+    (`voidRateLaunches`), and a plan with other rate controls those after
+    its handover; service places them again. A launch whose every slot was
+    missed while it was placed is placed again at once (`launch()`, up to
+    three tries).
+  - *Audio* reads through a tape converter per player reading
+    (`PlayerReader`): positions are the frames' unwrapped song positions,
+    and its source folds them over the loop and maps them by the player's
+    phase rule. It keeps no state between quanta, so a launch primes
+    nothing. Under a playrate that keeps the pitch an audio clip has no
+    player yet (step 1b): compile warns and its launch is refused with
+    `launch.playrate`.
+  - *MIDI* (`rateLaunchMidi`, a clip chain's input, a rack's Notes feed):
+    each event at the first frame whose song position reaches it; what is
+    held ends where the song enters a new loop pass; a switch's first frame
+    reaches back to the anchor (`ClipWindow::Anchor`).
+  - *The switch crossfade* runs in device frames, 5 ms as heard
+    (`launchClock`; `LaunchState::fadeStart` is the node's frame there).
+  - *Clip-time lanes and a clip chain's take envelopes* are not bound to
+    the rate timeline; they read the clip position from the song position.
+  - A frozen track's print cuts in on a playrate plan (no
+    `retiringIntoPrint`), and a looped replay under a playrate stays
+    refused (`render.loop`).
 - **A clip take's chain (ADR-0097, amended 2026-11-20).** A clip whose
   active take has FX or an active envelope plays through a chain of its
   own, as an item's take does (`TakeChain::clipChain`, compiled with the
@@ -653,8 +695,12 @@ the same.*
   of `launchMidi`. At each switch the notes the timeline or a clip held
   end (`releaseHeld`); an audio clip leaves the feed silent. Wraps,
   relocations and plan swaps treat the feed as they treat the channel.
-- `OfflineSettings::launches` replays a log from the render's start (no
-  seeks or wraps yet; L4 adds them with capture).
+- `OfflineSettings::launches` replays a log from the render's start. With
+  `OfflineSettings::loop` the render wraps as the live executors do: no
+  block crosses the loop end, the song continues at the loop start
+  (`wrapTo`), the take chains wrap early in that loop, and the running
+  frames the switches are placed at count on. Not under a master playrate
+  (`render.loop`).
 - **The queue (launch_runtime.cpp).** `Engine::launch` places a set of
   requests (a scene's tracks) on one target. The floor is the latest of
   its tracks' floors: the published position's stream plus one device
@@ -662,7 +708,11 @@ the same.*
   plan block for a node it renders. The target is the first quantize
   boundary at or after the floor's song position. A loop end before it
   places it at the first boundary inside the loop. Stopped, the target is
-  the play position, applied at the play start. The queue has
+  the play position, applied at the play start. Right after a pause or a
+  seek, before the anticipative renderer has relocated, the play position
+  `transport()` reports (and so a launch's anchor and a capture's start)
+  is where it will relocate: the seek's sample, else where it paused
+  (review round 70). The queue has
   `kLaunchSlots` fixed slots, one per track; a newer request replaces the
   track's pending one, and a full queue refuses with `launch.queue`.
   Each slot's state word carries a generation, so a slot the main thread
@@ -2486,7 +2536,9 @@ harness. See the tooling README for schemas, limits and invocation details.
 - **Plugin-parameter automation:** an envelope on `fx_* <param>` resolves the
   parameter from the plugin's semantic schema (`params::fromDescription`
   rebuilds its ParamSpec, so the host converts exactly as the plugin does)
-  or, for any plugin, by CLAP id or name (plain CLAP values). Semantic points
+  or, for any plugin, by parameter id or name (plain CLAP values), through the
+  one resolver session-model's "Plug-in parameter references" describes.
+  Semantic points
   are physical and interpolated in the normalized (curve) domain (ADR-0010).
   The stage gets param events at absolute timeline sample positions that are
   multiples of 32 in the lane's latency-shifted coordinates, and at each exact

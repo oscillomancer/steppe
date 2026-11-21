@@ -4,6 +4,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <cctype>
 #include <memory>
 #include <utility>
 
@@ -21,9 +22,32 @@ std::string chordSymbolAt(const model::Session& s, double beat) {
     return {};
 }
 
+std::optional<std::pair<std::string, std::string>> splitKeyText(std::string_view text) {
+    auto trim = [](std::string_view v) {
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front())))
+            v.remove_prefix(1);
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
+        return v;
+    };
+    text = trim(text);
+    const auto space = text.find_first_of(" \t");
+    if (space == std::string_view::npos) return std::nullopt;
+    const std::string_view rest = trim(text.substr(space + 1));
+    if (rest.empty()) return std::nullopt;
+    std::string scale;
+    for (char ch : rest) {
+        if (std::isspace(static_cast<unsigned char>(ch))) {
+            if (!scale.empty() && scale.back() != '_') scale += '_';
+        } else {
+            scale += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+    }
+    return std::pair{std::string(text.substr(0, space)), scale};
+}
+
 void openChordField(ui::Root& root, ChordFieldHost host, double beat, ui::Point at) {
-    auto field =
-        std::make_unique<ui::TextField>("chord-field", chordSymbolAt(host.session(), beat));
+    auto field = std::make_unique<ui::TextField>(
+        "chord-field", host.symbolAt ? host.symbolAt(beat) : chordSymbolAt(host.session(), beat));
     field->layout.width = ui::SizeRule::fixed(140);
     field->selectAll();
     auto write = [run = host.run, beat](const std::string& text) {

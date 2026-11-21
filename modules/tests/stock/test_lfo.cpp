@@ -87,3 +87,55 @@ TEST_CASE("lfo: a phase input drives it") {
     CHECK(h.output("out")[1250] == doctest::Approx(-0.5));
     CHECK(h.output("trigger")[2005] == 1.0);
 }
+
+TEST_CASE("lfo: synced, locked to the song while playing, running on at tempo while stopped") {
+    // Round 74 F2: a rack auditioned from a keyboard with the transport
+    // stopped must hear a synced gate move, so a synced LFO runs on at the
+    // tempo from the stop position's phase, and locks to the song position
+    // again when play starts.
+    ModuleHarness h(supple::rack::test::stock("lfo"));
+    h.set("sync", 1);
+    h.set("division", 6);  // 1/4: a cycle a beat
+    ModuleHarness::Transport t;
+    t.playing = false;
+    t.tempo = 120;  // 24000 frames a beat
+    t.beats = 2.25;
+    h.transport(t);
+    h.run(12000);
+    {
+        const auto& ph = h.output("phase");
+        CHECK(ph[0] == doctest::Approx(0.25));
+        CHECK(ph[6000] == doctest::Approx(0.5).epsilon(1e-3));
+        CHECK(ph[11999] == doctest::Approx(0.75).epsilon(1e-3));
+    }
+    // A seek while stopped: on from the new stop position's phase.
+    t.beats = 3.5;
+    h.transport(t);
+    h.run(6000);
+    {
+        const auto& ph = h.output("phase");
+        CHECK(ph[12000] == doctest::Approx(0.5));
+        CHECK(ph[15000] == doctest::Approx(0.625).epsilon(1e-3));
+    }
+    // A stopped position that jitters by a few samples, block to block (as
+    // some hosts report it): it runs on, not restarted each block.
+    for (int k = 0; k < 94; ++k) {  // 94 blocks of 64: 6016 frames
+        t.beats = 3.5 + (k % 2 ? 3.0 : -2.0) / 24000.0;
+        h.transport(t);
+        h.run(64);
+    }
+    {
+        const auto& ph = h.output("phase");  // 0.75 at 18000, an eighth on
+        CHECK(ph[21000] == doctest::Approx(0.875).epsilon(1e-3));
+    }
+    // Playing from 2.25: the song position's phase, wherever it ran to.
+    t.playing = true;
+    t.beats = 2.25;
+    h.transport(t);
+    h.run(6000);
+    {
+        const auto& ph = h.output("phase");
+        CHECK(ph[24016] == doctest::Approx(0.25));
+        CHECK(ph[27016] == doctest::Approx(0.375).epsilon(1e-3));
+    }
+}

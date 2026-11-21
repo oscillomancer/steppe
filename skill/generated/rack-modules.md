@@ -1032,7 +1032,7 @@ A low-frequency oscillator, free or synced to the song, with poly spread.
 - Knobs:
   - `shape` sine|triangle|saw|ramp|square|stepped_random|smooth_random = sine: The wave: saw falls, ramp rises; stepped random holds a new value each cycle, smooth random glides between them. A cable morphs between neighbours.
   - `rate` 0.01..100.0 Hz = 1.0: Cycles a second while not synced.
-  - `sync` true|false = false: Lock the cycle to the song's tempo and position, one cycle a division.
+  - `sync` true|false = false: One cycle a division. Playing, the cycle is locked to the song's position; stopped, it runs on at the tempo from the stop position's phase, and locks again when play starts.
   - `division` d16_1|d8_1|d4_1|d2_1|d1_1|d1_2|d1_4|d1_8|d1_16|d1_32|d1_2_dotted|d1_4_dotted|d1_8_dotted|d1_16_dotted|d1_2_triplet|d1_4_triplet|d1_8_triplet|d1_16_triplet = d1_4: The length of a cycle while synced, in notes: 1/1 is four beats, 16/1 sixteen whole notes.
   - `offset` 0.0..360.0 deg = 0.0: Where in its cycle it is, 0 to 360 degrees: 180 starts at the top.
   - `width` 1.0..99.0 % = 50.0: The square's time high, and where the sine and triangle peak: low is a quick rise and long fall.

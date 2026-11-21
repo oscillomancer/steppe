@@ -12,6 +12,7 @@
 #include <supple/model/take_owner.h>
 #include <supple/model/versions.h>
 
+#include <cmath>
 #include <functional>
 #include <limits>
 #include <string>
@@ -106,7 +107,7 @@ TEST_CASE("launcher: sc and cl ids parse and allocate") {
 TEST_CASE("launcher: scenes and clips save, reopen and serialize the same") {
     const Fixture f = fixture();
     const std::string bytes = serializeProject(f.s);
-    CHECK(bytes.find("\"supple.project/2.19\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.20\"") != std::string::npos);
     auto doc = json::parse(bytes).value();
     json::Value& sc = doc["scenes"]["sc_2"];
     CHECK(sc["name"] == "Chorus");
@@ -634,4 +635,276 @@ TEST_CASE("launcher: lost sc and cl counters never reuse an id another branch ho
     EditTxn t(*opened->store.head("main"), opened->store.nextVersion());
     const Id freshScene = t.create(Scene{"Outro", "", 2});
     CHECK(freshScene != bridge);
+}
+
+// --- clip context (schema 2.20, ADR-0098) ---------------------------------------------
+
+namespace {
+
+ContextPoint keyPoint(double beat, const char* tonic, const char* scale) {
+    ContextPoint p;
+    p.beat = beat;
+    p.type = ContextType::Key;
+    p.tonic = tonic;
+    p.scale = scale;
+    return p;
+}
+ContextPoint chordPoint(double beat, const char* symbol) {
+    ContextPoint p;
+    p.beat = beat;
+    p.type = ContextType::Chord;
+    p.symbol = symbol;
+    return p;
+}
+
+Result<Session> setContext(const Fixture& f, std::vector<ContextPoint> points,
+                           ClipFollow follow = ClipFollow::None) {
+    return edit<Clip>(f.s, f.clip, [&](Clip& c) {
+        c.context = std::move(points);
+        c.follow = follow;
+    });
+}
+
+// The file with the clip's JSON changed by `f`, opened with its warnings.
+Result<Session> openChanged(const Session& s, Id clip, const std::function<void(json::Value&)>& f,
+                            std::vector<schema::Warning>& warnings) {
+    auto doc = json::parse(serializeProject(s)).value();
+    f(doc["clips"][clip.str()]);
+    return parseProject(json::writeCompact(doc), &warnings);
+}
+
+}  // namespace
+
+TEST_CASE("clip context: empty context and follow none write nothing") {
+    const Fixture f = fixture();
+    const std::string plain = serializeProject(f.s);
+    CHECK(plain.find("\"context\"") == std::string::npos);
+    CHECK(plain.find("\"follow\"") == std::string::npos);
+}
+
+TEST_CASE("clip context: points are sorted, unique and inside a MIDI clip") {
+    const Fixture f = fixture();
+    const auto good = setContext(
+        f, {keyPoint(0, "D", "minor"), chordPoint(0, "Dm"), chordPoint(4, "A7")}, ClipFollow::Key);
+    REQUIRE_MESSAGE(good, (good ? "" : good.error().toString()));
+    const std::string bytes = serializeProject(*good);
+    CHECK(bytes.find("\"follow\": \"key\"") != std::string::npos);
+    auto again = parseProject(bytes);
+    REQUIRE_MESSAGE(again, (again ? "" : again.error().toString()));
+    CHECK(*again->clips.find(f.clip) == *good->clips.find(f.clip));
+    CHECK(serializeProject(*again) == bytes);
+    // Out of order, a second point of a type at a beat, past the length (8), a negative beat.
+    CHECK(says(setContext(f, {chordPoint(4, "A7"), chordPoint(0, "Dm")}), "not sorted"));
+    CHECK(
+        says(setContext(f, {chordPoint(0, "Dm"), chordPoint(0, "Am")}), "two points of one type"));
+    CHECK(says(setContext(f, {keyPoint(8, "D", "minor")}), "at or past the clip's length"));
+    CHECK(says(setContext(f, {keyPoint(-1, "D", "minor")}), "beat 0 or later"));
+    // A key and a chord at one beat are two points, as on the context track.
+    CHECK(setContext(f, {keyPoint(2, "D", "minor"), chordPoint(2, "Dm")}));
+}
+
+TEST_CASE("clip context: at most 4096 points of a type") {
+    const Fixture f = fixture();
+    const auto big = edit<Clip>(f.s, f.clip, [&](Clip& c) {
+        c.length = 8192;
+        c.loop = {};
+        for (std::size_t i = 0; i < kMaxContextPoints; ++i)
+            c.context.push_back(chordPoint(static_cast<double>(i), "C"));
+    });
+    REQUIRE_MESSAGE(big, (big ? "" : big.error().toString()));
+    CHECK(says(
+        edit<Clip>(*big, f.clip, [&](Clip& c) { c.context.push_back(chordPoint(5000.0, "C")); }),
+        "context points of one type"));
+}
+
+TEST_CASE("clip context: an audio clip holds at most one key, at 0") {
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    MediaSource media;
+    media.path = "a.wav";
+    media.sampleRate = 48000;
+    media.frames = 96000;
+    const Id src = t.create(media);
+    Take take;
+    take.source = src;
+    const Id tk = t.create(take);
+    Clip c;
+    c.track = f.a;
+    c.scene = f.chorus;
+    c.kind = ClipKind::Audio;
+    c.takes = {tk};
+    c.activeTake = tk;
+    c.length = 2.0;
+    const Id audio = t.create(c);
+    auto base = t.commit();
+    REQUIRE_MESSAGE(base, (base ? "" : base.error().toString()));
+    CHECK(edit<Clip>(*base, audio, [](Clip& x) { x.context = {keyPoint(0, "D", "minor")}; }));
+    CHECK(says(edit<Clip>(*base, audio, [](Clip& x) { x.context = {chordPoint(0, "Dm")}; }),
+               "at most one key, at 0"));
+    CHECK(says(edit<Clip>(*base, audio, [](Clip& x) { x.context = {keyPoint(1, "D", "minor")}; }),
+               "at most one key, at 0"));
+    CHECK(says(edit<Clip>(*base, audio, [](Clip& x) { x.follow = ClipFollow::Key; }),
+               "follow needs a MIDI clip"));
+    CHECK(says(edit<Clip>(*base, audio,
+                          [](Clip& x) {
+                              x.context = {keyPoint(0, "D", "minor")};
+                              x.follow = ClipFollow::Key;
+                          }),
+               "follow needs a MIDI clip"));
+}
+
+TEST_CASE("clip context: follow needs a readable key at beat 0") {
+    const Fixture f = fixture();
+    CHECK(says(setContext(f, {}, ClipFollow::Key), "follow needs a MIDI clip with a readable key"));
+    CHECK(says(setContext(f, {chordPoint(0, "Dm")}, ClipFollow::Chords), "readable key"));
+    CHECK(says(setContext(f, {keyPoint(2, "D", "minor")}, ClipFollow::Key), "readable key"));
+    // A key this build cannot read (a later build's scale) is data, and cannot be followed.
+    CHECK(setContext(f, {keyPoint(0, "D", "slendro")}));
+    CHECK(says(setContext(f, {keyPoint(0, "D", "slendro")}, ClipFollow::Key), "readable key"));
+    CHECK(setContext(f, {keyPoint(0, "D", "minor")}, ClipFollow::Chords));
+}
+
+TEST_CASE("clip context: an unreadable point is kept and reads as nothing") {
+    const Fixture f = fixture();
+    const auto s = setContext(f, {keyPoint(0, "D", "slendro"), chordPoint(0, "Dzz9")});
+    REQUIRE(s);
+    const Clip& c = *s->clips.find(f.clip);
+    CHECK(keyPointAt(c, 3) != nullptr);
+    CHECK_FALSE(keyAt(c, 3));
+    CHECK(chordPointAt(c, 3) != nullptr);
+    CHECK_FALSE(chordAt(c, 3));
+    auto again = parseProject(serializeProject(*s));
+    REQUIRE(again);
+    CHECK(again->clips.find(f.clip)->context == c.context);
+}
+
+TEST_CASE("clip context: reads the point holding at a clip beat") {
+    const Fixture f = fixture();
+    const auto s = setContext(f, {keyPoint(0, "D", "minor"), chordPoint(0, "Dm"),
+                                  chordPoint(4, "A7"), keyPoint(6, "F", "major")});
+    REQUIRE(s);
+    const Clip& c = *s->clips.find(f.clip);
+    CHECK(keyAt(c, 0)->tonic.letter == 'D');
+    CHECK(keyAt(c, 5.999)->tonic.letter == 'D');
+    CHECK(keyAt(c, 6)->tonic.letter == 'F');
+    CHECK(chordAt(c, 3.5)->root.letter == 'D');
+    CHECK(chordAt(c, 4)->root.letter == 'A');
+    // Before the first chord point no chord holds.
+    const auto late = setContext(f, {keyPoint(0, "D", "minor"), chordPoint(2, "Dm")});
+    REQUIRE(late);
+    CHECK_FALSE(chordAt(*late->clips.find(f.clip), 1));
+}
+
+TEST_CASE("clip context: a 2.19 file opens unchanged, and a 2.19 build's view is a plain clip") {
+    const Fixture f = fixture();
+    auto doc = json::parse(serializeProject(f.s)).value();
+    doc["schema"] = "supple.project/2.19";
+    std::vector<schema::Warning> warnings;
+    auto opened = parseProject(json::writeCompact(doc), &warnings);
+    REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+    CHECK(warnings.empty());
+    const Clip& c = *opened->clips.find(f.clip);
+    CHECK(c.context.empty());
+    CHECK(c.follow == ClipFollow::None);
+    CHECK(serializeProject(*opened) == serializeProject(f.s));
+}
+
+TEST_CASE("clip context: the open drops what breaks the rules and says so") {
+    const Fixture f = fixture();
+    const auto good =
+        setContext(f, {keyPoint(0, "D", "minor"), chordPoint(0, "Dm")}, ClipFollow::Key);
+    REQUIRE(good);
+    const auto codes = [](const std::vector<schema::Warning>& w) {
+        std::string out;
+        for (const auto& x : w) out += x.code + " " + x.path + " | " + x.message + "\n";
+        return out;
+    };
+    SUBCASE("points at or past the length, out of order, and a duplicate") {
+        std::vector<schema::Warning> warnings;
+        auto opened = openChanged(
+            *good, f.clip,
+            [](json::Value& clip) {
+                json::Value points = json::Value::array();
+                const auto add = [&](double beat, const char* type, const char* a, const char* b) {
+                    json::Value p = json::Value::object();
+                    p["beat"] = beat;
+                    p["type"] = type;
+                    if (std::string(type) == "key") {
+                        p["tonic"] = a;
+                        p["scale"] = b;
+                    } else {
+                        p["symbol"] = a;
+                    }
+                    points.push_back(std::move(p));
+                };
+                add(4.0, "chord", "A7", "");
+                add(0.0, "key", "D", "minor");
+                add(0.0, "chord", "Dm", "");
+                add(0.0, "chord", "Am", "");  // a second chord at 0
+                add(8.0, "chord", "C", "");   // at the length
+                add(100.0, "key", "C", "major");
+                clip["context"] = std::move(points);
+            },
+            warnings);
+        REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+        const Clip& c = *opened->clips.find(f.clip);
+        // Sorted by beat then type, key first; the first of two at one beat stays.
+        REQUIRE(c.context.size() == 3);
+        CHECK(c.context[0].type == ContextType::Key);
+        CHECK(c.context[1].symbol == "Dm");
+        CHECK(c.context[2].symbol == "A7");
+        CHECK(c.context[2].beat == 4.0);
+        CHECK(c.follow == ClipFollow::Key);
+        int dropped = 0;
+        for (const auto& w : warnings)
+            if (w.code == "clip.context_dropped") {
+                ++dropped;
+                CHECK(w.path == "/clips/" + f.clip.str() + "/context");
+                CHECK(w.message.find(f.clip.str()) != std::string::npos);
+            }
+        CHECK_MESSAGE(dropped == 3, codes(warnings));
+    }
+    SUBCASE("a follow without a readable key, and a follow of an unknown name, read as none") {
+        std::vector<schema::Warning> warnings;
+        auto opened = openChanged(
+            *good, f.clip,
+            [](json::Value& clip) {
+                clip["context"] = json::Value::array();  // no key left
+            },
+            warnings);
+        REQUIRE(opened);
+        CHECK(opened->clips.find(f.clip)->follow == ClipFollow::None);
+        bool reset = false;
+        for (const auto& w : warnings) reset |= w.code == "clip.follow_reset";
+        CHECK_MESSAGE(reset, codes(warnings));
+        warnings.clear();
+        opened = openChanged(
+            *good, f.clip, [](json::Value& clip) { clip["follow"] = "harmonize"; }, warnings);
+        REQUIRE(opened);
+        CHECK(opened->clips.find(f.clip)->follow == ClipFollow::None);
+        reset = false;
+        for (const auto& w : warnings)
+            if (w.code == "clip.follow_reset") {
+                reset = true;
+                CHECK(w.path == "/clips/" + f.clip.str() + "/follow");
+            }
+        CHECK_MESSAGE(reset, codes(warnings));
+    }
+    SUBCASE("positions are rounded to 1/960 and an audio clip's chord is dropped") {
+        std::vector<schema::Warning> warnings;
+        auto opened = openChanged(
+            *good, f.clip,
+            [](json::Value& clip) {
+                json::Value p = json::Value::object();
+                p["beat"] = 1.0 / 3.0;
+                p["type"] = "chord";
+                p["symbol"] = "A7";
+                clip["context"].push_back(std::move(p));
+            },
+            warnings);
+        REQUIRE(opened);
+        const Clip& c = *opened->clips.find(f.clip);
+        REQUIRE(c.context.size() == 3);
+        CHECK(c.context[2].beat == std::round(960.0 / 3.0) / 960.0);
+    }
 }

@@ -212,8 +212,9 @@ void registerRackClipCommands(cmd::Registry& registry) {
                     if (!pastedFx)
                         return Error("rack.port", "pasted cable's plug-in is missing", "/cables/to",
                                      "copy the plug-in module with its modulation cables");
-                    SUPPLE_TRY(
-                        app.validatePluginMod(cb.to.object, *pastedFx, cb.to.key, "/cables/to"));
+                    // Stored canonical, as a new cable is.
+                    SUPPLE_TRY(app.validatePluginMod(cb.to.object, *pastedFx, cb.to.key,
+                                                     "/cables/to", {}, nullptr, &cb.to.key));
                 }
                 result["cables"].asArray().push_back(t.create(std::move(cb)).str());
             }

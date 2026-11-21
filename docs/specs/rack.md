@@ -689,7 +689,9 @@ All `com.suppleaudio.rack.<name>`, version 1.0.0.
   and run as stages of the rack node (`Node::rackStages`, prepared and
   automated as chain stages), in sub-blocks on the grid, with notes made
   from their pitch and gate cables. A cable into `fx_N.<key>` (a semantic
-  key, a decimal CLAP parameter id or its name) rides one of the plugin module's 16
+  key, a decimal parameter id or its name, resolved as session-model's
+  "Plug-in parameter references" say; a new cable stores the canonical
+  reference) rides one of the plugin module's 16
   hidden knobs `mod_1`..`mod_16` (−1..1, never listed); at each point of
   the rack's grid (never where a host block splits it, so renders do not
   depend on the block size) the module sends each parameter its cables'
@@ -783,6 +785,18 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 
 Errors carry `code`, `message`, `path` and a `hint` naming what exists
 (`"mo_2 has inputs pitch, fm, sync"`).
+
+A knob's value in `params` (`module.add`, `module.set`, `rack.patch`) is a
+number in the knob's unit (a percent knob such as a Macro's runs 0 to 100:
+`macro_1: 80` is 80 %, `0.8` is 0.8 %), or text in that unit as other
+parameters take it, `"80 %"` or `"1.2 kHz"` (kHz for a Hz knob, s for a ms
+one; the unit's case is free). Text in another unit, or any text for a knob
+with no unit, is `rack.param`, and its hint names the knob's range, its unit
+and an example. A number outside the knob's range (after the unit is converted) is
+`params.out_of_range`, as for plug-in parameters and track levels, with the range in
+its hint: it is never clamped silently, and nothing changes. A choice is by its key,
+a switch is true or false. (Values already in a file, and the knobs `module.randomize`
+picks, are clamped as they were; only what a command is given is refused.)
 
 A module's knob is automated with `env.add {module, param, points}`
 (values in the knob's unit, a choice by its key); a plugin module's knobs

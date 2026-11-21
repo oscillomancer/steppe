@@ -43,7 +43,25 @@ void checkLauncher(const Session& s, std::vector<Error>& errors);
 // with its takes that nothing else holds (their take FX, the envelopes on
 // them and those envelopes' automation items). Any other fault is left for
 // the invariants. Returns each dropped clip and why, in id order.
+// (A clip's context is made fit by fitClipContext, which the loader calls.)
 std::vector<std::pair<Id, std::string>> dropStrayClips(Session& s);
+
+// A clip's context made fit to keep (ADR-0098, session-model "Clip context"):
+// each point's beat rounded to the 1/960 grid, the points sorted by beat then
+// type (key first), and what breaks a rule dropped: a MIDI clip's points lie in
+// [0, length), one of a type per beat, at most kMaxContextPoints of a type; an
+// audio clip holds one key at 0. Then `follow` goes back to none when the clip
+// is audio or has no readable key at 0. Each change is one note, with the codes
+// `clip.context_dropped` and `clip.follow_reset`; callers turn them into
+// warnings. Idempotent.
+struct ClipContextNote {
+    std::string code, message;
+};
+std::vector<ClipContextNote> fitClipContext(Clip& clip);
+
+// Whether `follow` other than none is allowed on the clip as it is: a MIDI clip
+// with a readable key at beat 0.
+bool clipCanFollow(const Clip& clip);
 
 // The clip in (track, scene), if any.
 std::optional<Id> clipAt(const Session& s, Id track, Id scene);

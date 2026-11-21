@@ -104,7 +104,14 @@ Shell::Shell(engine::EngineApp& app, cmd::Dispatcher& dispatcher, UiState& ui, s
       status_(std::move(status)),
       peaks_(peaks),
       meters_(meters),
-      inputsSource_(std::move(inputs)) {}
+      inputsSource_(std::move(inputs)) {
+    // A refused edit from the shell's own controls (the track panel, its
+    // menus, a plug-in window) says so in the status line (gui.md §4.1).
+    onError = [this](const std::string& message) {
+        std::fprintf(stderr, "%s\n", message.c_str());
+        setStatus(message);
+    };
+}
 
 Shell::~Shell() = default;
 
@@ -179,6 +186,11 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     actions.setChecked("ui.clips",
                        [this](const actions::Context&) { return arrange_->launcherShown(); });
     arrange_->gestures().projectGeneration = [this] { return app_.projectGeneration(); };
+    // The timeline's gestures (item drags, envelope points, the item and take
+    // menus): a refusal goes to the status line too.
+    arrange_->gestures().onError = [this](const Error& e) {
+        if (onError) onError(e.message);
+    };
     // The TCP talks to the app through these: selection state, commands (with
     // a drag's gesture) and the meters it pools with its rows.
     views::TcpCallbacks tcp;
@@ -396,7 +408,7 @@ void Shell::sync(bool event) {
     // Capture (L4): a capture the transport ended is committed, and the
     // toggle shows whether it is armed.
     capture_.service();
-    arrange_->setCaptureArmed(capture_.armed());
+    arrange_->setCaptureArmed(capture_.lit());
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);

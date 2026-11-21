@@ -78,10 +78,25 @@ project bar. `context.write {text}` writes one back.
 - `key` (`"Eb major"`) and `chord` (`"Cm7"`) in an op replace what the context
   says, for that op.
 
+On a launcher clip (`guides/launcher.md`) the ops read **the clip's own** key and chord,
+the ones it was written against (`clip.set {context}`), never the project's.
+
 If no key or chord holds there, you get `midi.no_key` or `midi.no_chord` and a
 hint. If a loop or another item sharing the same MIDI puts one note in two keys
 (or over two chords), you get `midi.context_varies`: pass `key` or `chord`, or
 unloop or unshare the item first.
+
+## Clips and their context
+
+A clip keeps its own key and chords, written in the same lead sheet text over
+**clip bars** (bar 1 is the clip's start): `clip.add {context: "1: key D minor
+{Dm}:w\n2: {A7}:h {Dm}:h"}`, or `context_at: {bar: 5}` to read them from the
+project, and `clip.set {context}` to change them (`""` clears). A text for a clip
+may run past its end, but a key or chord point may not (`clip.context_range`); an
+audio clip's text is a key at the start of bar 1 with `~` holds only. The chord
+symbols in a clip's notation (`{Dm}:w`) are recorded as its chords too. `midi.get`
+shows them as `context` (runs by clip bar and beat, and `text`) with the clip's
+`follow`. `guides/launcher.md` has the rest.
 
 ## Sections
 

@@ -26,6 +26,11 @@ namespace supple::engine::detail {
 // points print the same bytes, and parsing the text gives the same points.
 std::string printLeadSheet(const model::Session& s, int firstBar, int lastBar);
 
+// The same for points that are not the project's (a clip's, in clip beats, ADR-0098):
+// bar numbers run in `map`'s meters from bar 1 at beat 0.
+std::string printLeadSheetPoints(const std::vector<model::ContextPoint>& points,
+                                 const time::TimeMap& map, int firstBar, int lastBar);
+
 struct LeadPoint {
     double beat = 0;  // project beats, on the 1/960 grid
     model::ContextType type = model::ContextType::Chord;

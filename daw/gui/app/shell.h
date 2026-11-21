@@ -85,7 +85,9 @@ class Shell {
     // The engine's record inputs, refreshed at most twice a second (force asks
     // now — the picker does, so it lists what the device has right now).
     const json::Value& inputs(bool force = false);
-    // Shown by the app's status line when a command fails.
+    // A refused edit from the track panel, its menus, plug-in windows and the
+    // timeline's gestures. By default it is written to stderr and shown in
+    // the status line (setStatus).
     std::function<void(const std::string&)> onError;
     // The restart notice's "Show report": the app opens the crash report viewer on the incident.
     std::function<void(const std::string& incident)> showCrashReport;

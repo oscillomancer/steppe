@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 // FX commands: fx.add/remove/set/restart/move, patches, parameters, meters and fx.describe.
 #include "command_helpers.h"
+#include "param_ref.h"
 
 namespace supple::engine {
 
@@ -510,7 +511,14 @@ void registerFxCommands(cmd::Registry& registry) {
             return e;
         }
         MergeResult r;
-        auto before = fx.patch ? *fx.patch : json::Value::object();
+        // What the instance holds before: its saved patch, or for one never
+        // saved the defaults its schema gives (an empty patch merged), so a
+        // first merge reports the members it changed, not every default.
+        json::Value before = json::Value::object();
+        if (fx.patch)
+            before = *fx.patch;
+        else if (auto defaults = app.mergedPatch(fx, json::Value::object(), false))
+            before = std::move(*defaults);
         auto changed = json::createMergePatch(before, *merged);
         r.changed = changed ? std::move(*changed) : json::Value::object();
         model::FxInstance next = fx;
@@ -549,7 +557,10 @@ void registerFxCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Merge a partial patch into a plugin instance; returns the effective change.";
         c.description =
-            "Semantic plugins only. Values in physical units: {\"params\": {\"gain\": \"-6 dB\"}}.";
+            "Semantic plugins only. Values in physical units: {\"params\": {\"gain\": \"-6 dB\"}}. "
+            "changed holds only the members the merge changed: against the saved patch, or for an "
+            "instance never saved against the plug-in's defaults (a value set to what it already "
+            "is changes nothing).";
         c.tags = {"fx", "patch"};
         c.args = schema::object<FxPatchArgs>("fx_patch_args")
                      .field("fx", &FxPatchArgs::fx, idArg("fx", "Plugin instance"))
@@ -594,15 +605,8 @@ void registerFxCommands(cmd::Registry& registry) {
                 if (touches && changed->isObject())
                     if (auto list = app(ctx).fxParams(*app(ctx).view().fx.find(*id)))
                         for (const auto& m : changed->asObject())
-                            for (const host::ParamInfo& p : *list)
-                                if (std::to_string(p.id) == m.key ||
-                                    std::ranges::equal(p.name, m.key, [](char x, char y) {
-                                        return std::tolower(static_cast<unsigned char>(x)) ==
-                                               std::tolower(static_cast<unsigned char>(y));
-                                    })) {
-                                    app(ctx).touchParam(*id, std::to_string(p.id));
-                                    break;
-                                }
+                            if (auto ref = detail::resolveParam(*list, nullptr, m.key, ""))
+                                app(ctx).touchParam(*id, ref->canonical);
                 return MergeResult{std::move(*changed), "Plugin parameters updated", std::nullopt};
             }
             json::Value patch = json::Value::object();

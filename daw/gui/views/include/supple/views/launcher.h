@@ -63,6 +63,8 @@ struct LauncherCallbacks {
     // The header's Capture toggle pressed: arm (true) or end and commit
     // (false) the capture of launches (launch.capture, launch.commit).
     std::function<void(bool on)> capture;
+    // The clip menu's Take FX…: open the chain of the clip's active take.
+    std::function<void(model::Id take)> takeFx;
 };
 
 // The pane's geometry, shared by its body and its header cell: one column
@@ -103,6 +105,18 @@ int barAtOrAfter(const time::TimeMap& map, double beat);
 // The bar after the arrangement: the first bar line at or after the end of
 // its last item or section (bar 1 when it is empty).
 int barAfterArrangement(const model::Session& session);
+// Whether the engine refuses to launch `clip` now (launch.playrate), so the
+// pane draws it dimmed: an audio clip while the master playrate keeps the
+// pitch at other than a steady 1 (a rate or an active envelope); a MIDI clip
+// always launches. The engine does not say which clips it would refuse
+// (neither EngineApp nor launch.state does); until it does, this mirrors
+// Engine::launch's check (launch_runtime.cpp:323, the plan's rateStretch)
+// here and nowhere else. A MIDI-clock chase, which stretches too, cannot be
+// seen from the session.
+bool launchRefused(const model::Session& session, const model::Clip& clip);
+// A scene's launch is refused when one of the clips it would start is:
+// Engine::launch takes them together (launch.scene skips frozen tracks).
+bool sceneLaunchRefused(const model::Session& session, model::Id scene);
 
 // The clip in a channel's cell of a scene.
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);
@@ -152,6 +166,7 @@ class LauncherPane : public ui::Node {
         std::vector<std::string> names;  // the clips' names as drawn
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
+        int refused = 0;  // clips drawn dimmed: their launch is refused (launchRefused)
         std::size_t notes = 0, columns = 0, pending = 0;  // the last paintGl's
     } stats;
 
@@ -201,6 +216,7 @@ class LauncherHeader : public ui::Node {
     // What the last paint drew (tests).
     struct Stats {
         bool captureLit = false;
+        int refused = 0;  // scenes whose ▶ is dimmed (sceneLaunchRefused)
     } stats;
     // The scene column under x in the headers' row, and its ▶.
     std::optional<std::size_t> sceneAt(ui::Point p) const;

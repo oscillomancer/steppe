@@ -363,7 +363,24 @@ double targetValue(const model::Session& session, const model::EnvTarget& target
     return scale.reference();
 }
 
-std::string envTitle(const model::Envelope& env, const model::Session& session) {
+std::string envTitle(const model::Envelope& env, const model::Session& session,
+                     const EnvScale* scale) {
+    if (env.target.object.kind == model::Kind::Fx) {
+        const bool named = scale && scale->param && !scale->param->name.empty();
+        const std::string param = named ? scale->param->name : env.target.param;
+        std::string title = param;
+        if (const model::FxInstance* fx = session.fx.find(env.target.object)) {
+            const std::string& effect = fx->label.empty() ? fx->plugin.name : fx->label;
+            if (!effect.empty()) title = effect + " \u00b7 " + param;
+        }
+        // A take's effect (its lane is under the item's track): said so,
+        // after the name, which a narrow lane header keeps.
+        for (const auto& tk : session.takes)
+            if (std::find(tk.value->chain.begin(), tk.value->chain.end(), env.target.object) !=
+                tk.value->chain.end())
+                return title + " (take)";
+        return title;
+    }
     // A rack module's knob: "Bells » Osc · fine".
     if (env.target.object.kind == model::Kind::Module)
         if (const model::RackModule* m = session.modules.find(env.target.object)) {

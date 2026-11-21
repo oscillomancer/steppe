@@ -142,6 +142,18 @@ std::pair<std::size_t, std::size_t> midiSizing(const ClipPlayer& pl, double beat
     return {most, window + 1};
 }
 
+// The tape table the launched players' readers share (PlayerReader).
+const std::shared_ptr<const TapeTable>& launchTapeTable() {
+    static const auto table = std::make_shared<const TapeTable>();
+    return table;
+}
+
+// A reader on the playrate path (PlayerReader): its sources are read as
+// stereo (playerFrame's channels), by the tape converter.
+void makeReader(PlayerReader& r, const Plan& p) {
+    if (!r.state) r.state = std::make_unique<RateClipState>(launchTapeTable(), 2, p.rate, false);
+}
+
 }  // namespace
 
 void compileClipPlayers(Plan& p, Node& n, const Session& s) {
@@ -153,22 +165,25 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
     for (const auto& e : s.clips)
         if (e.value->track == n.id) clips.push_back(e.id);
     if (clips.empty() || track->freeze) return;  // a frozen track plays its print
-    if (p.rateEnabled) {
-        // Staged (engine.md §1.4.2): clip audio is not yet on the playrate path.
-        p.warnings.push_back(n.id.str() +
-                             ": launch.playrate: its clips cannot play while a master playrate "
-                             "is active; set the playrate to 1 to launch them");
-        return;
-    }
     std::int32_t nextId = 0;
     for (const TimedEvent& e : n.events) nextId = std::max(nextId, e.event.noteId + 1);
     const time::TimeMap& tm = *s.timeMap;
     double fastest = 0;
     for (const auto& t : tm.tempo()) fastest = std::max(fastest, t.bpm);
-    const double blockBeats = double(p.block) / p.rate * fastest / 60.0;
+    // A playrate plan's block covers up to four times the song.
+    const double blockBeats =
+        double(p.block) / p.rate * fastest / 60.0 * (p.rateEnabled ? model::kMaxPlayrate : 1.0);
     const auto& prepared = p.preparedSources;
     for (const Id id : clips) {
         const model::Clip& clip = *s.clips.find(id);
+        // The playrate path reads launched audio by tape only (S3 step 1):
+        // with the pitch preserved, an audio clip has no player yet.
+        if (p.rateStretch && clip.kind != model::ClipKind::Midi) {
+            p.warnings.push_back(id.str() +
+                                 ": launch.playrate: an audio clip cannot be launched while the "
+                                 "master playrate preserves the pitch");
+            continue;
+        }
         ClipPlayer pl;
         pl.clip = id;
         pl.midi = clip.kind == model::ClipKind::Midi;
@@ -256,6 +271,14 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
     n.launchFadeFrames = std::max<std::int64_t>(1, time::samplesAt(kLaunchFadeSeconds, p.rate));
     n.arrangementGains.assign(p.block, 1.0f);
     n.launchBuf.init(p.block);
+    // On a playrate plan, the readers its audio is played through (S3).
+    if (!p.rateEnabled) return;
+    if (std::any_of(n.players.begin(), n.players.end(),
+                    [](const ClipPlayer& pl) { return !pl.midi; }))
+        for (PlayerReader& r : n.launchReaders) makeReader(r, p);
+    for (TakeChain& tc : n.takeChains)
+        if (tc.clipChain && tc.player >= 0 && !n.players[static_cast<std::size_t>(tc.player)].midi)
+            makeReader(tc.clipReader, p);
 }
 
 int playerOf(const Node& n, Id clip) SUPPLE_RT {
@@ -264,14 +287,16 @@ int playerOf(const Node& n, Id clip) SUPPLE_RT {
     return -1;
 }
 
-void applyLaunch(Plan&, Node& n, const LaunchAction& a) SUPPLE_RT {
+void applyLaunch(Plan& p, Node& n, const LaunchAction& a, std::int64_t device) SUPPLE_RT {
     LaunchState& L = n.launch;
     L.fadeFrom = L.kind == LaunchState::Kind::Arrangement ? -1
                  : L.kind == LaunchState::Kind::Clip      ? L.player
                                                           : -2;
     L.fadeAnchorSample = L.anchorSample;
     L.fadeAnchorBeat = L.anchorBeat;
-    L.fadeStart = a.anchorSample;
+    // The crossfade's clock (launchClock): the anchor's song sample, or on
+    // a playrate plan the node's frame here, 5 ms as heard.
+    L.fadeStart = p.rateEnabled ? device : a.anchorSample;
     // Its early half (prelaunch) is done; a later launch's may already be
     // waiting, launches closer together than the lead.
     const LaunchAction& next = n.launchNext;
@@ -284,6 +309,7 @@ void applyLaunch(Plan&, Node& n, const LaunchAction& a) SUPPLE_RT {
     L.anchorBeat = a.anchorBeat;
     L.unanchored = false;
     n.releaseHeld = true;  // what was left's notes end at this block's start
+    n.launchFresh = true;
 }
 
 void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
@@ -320,6 +346,7 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
         }
     }
     n.launch = L;
+    n.launchFresh = old.launchFresh;
     // A launch reaching it early (prelaunch), by clip id too.
     n.launchNext = old.launchNext;
     n.launchNextValid = old.launchNextValid && !n.players.empty();
@@ -372,8 +399,12 @@ void launchRelocated(Node& n) SUPPLE_RT {
     // where it began, is over.
     n.launch.unanchored = true;
     n.launch.fadeFrom = -2;
+    n.launchFresh = false;
     if (n.rack)
-        for (NotesFeed& feed : n.rack->notes) feed.launch.unanchored = true;
+        for (NotesFeed& feed : n.rack->notes) {
+            feed.launch.unanchored = true;
+            feed.launchFresh = false;
+        }
 }
 
 namespace {
@@ -418,23 +449,128 @@ void playerFrame(const ClipPlayer& pl, std::int64_t anchor, bool unanchored, std
     into.r[i] += static_cast<float>(static_cast<double>(r) * (raw ? 1.0 : c.gainR) * weight);
 }
 
+// --- The playrate path (S3) ---
+
+// What a launched audio clip's tape converter reads. Its frames are
+// unwrapped song samples (the rate timeline's phase): each folds over the
+// transport loop as the song does, then maps to the clip by playerFrame's
+// rule from `anchor`. Before the anchor it is silent unless `unanchored`,
+// or folded into a later loop pass than the output's (`pass`), as a clip
+// chain's input reading ahead of a wrap is (foldInput).
+struct PlayerSource {
+    const ClipPlayer& pl;
+    const PlayrateTimeline& timeline;
+    std::int64_t anchor, pass;
+    bool unanchored;
+    float sample(std::size_t channel, std::int64_t f) const SUPPLE_RT {
+        const double song = double(f);
+        const std::int64_t s =
+            f + static_cast<std::int64_t>(std::llround(timeline.wrapped(song) - song));
+        const bool anywhere = unanchored || timeline.cycle(song) > pass;
+        const std::int64_t q = s - anchor;
+        if ((q < 0 && (pl.once || !anywhere)) || (pl.once && q >= pl.periodFrames)) return 0;
+        const std::int64_t phase = (q % pl.periodFrames + pl.periodFrames) % pl.periodFrames;
+        const std::int64_t content = pl.loopOn ? pl.loopStartFrames + phase % pl.loopFrames : phase;
+        const auto& ch = pl.audio.data->channels;
+        const auto& data = ch[channel > 0 && ch.size() > 1 ? 1 : 0];
+        const std::int64_t frame = pl.audio.offset + content;
+        if (frame < 0 || frame >= static_cast<std::int64_t>(data.size())) return 0;
+        return data[static_cast<std::size_t>(frame)];
+    }
+    static const float* read(const void* context, std::size_t channel, std::int64_t first,
+                             std::span<float> scratch) noexcept {
+        const auto& self = *static_cast<const PlayerSource*>(context);
+        for (std::size_t i = 0; i < scratch.size(); ++i)
+            scratch[i] = self.sample(channel, first + static_cast<std::int64_t>(i));
+        return scratch.data();
+    }
+};
+
+// The player's output in rate quantum `q` (device frames of `timeline`),
+// converted once per quantum and reading.
+const RateClipState& playerQuantum(PlayerReader& r, const ClipPlayer& pl, std::int64_t anchor,
+                                   bool unanchored, std::int64_t pass,
+                                   const PlayrateTimeline& timeline, std::int64_t q) SUPPLE_RT {
+    RateClipState& st = *r.state;
+    if (st.quantum == q && r.player == &pl && r.anchor == anchor && r.unanchored == unanchored &&
+        r.pass == pass)
+        return st;
+    r.player = &pl;
+    r.anchor = anchor;
+    r.unanchored = unanchored;
+    r.pass = pass;
+    const PlayerSource source{pl, timeline, anchor, pass, unanchored};
+    std::array<double, kRateQuantum + 1> positions;
+    for (std::size_t j = 0; j < positions.size(); ++j)
+        positions[j] = timeline.phase(q + static_cast<std::int64_t>(j));
+    if (!st.tape.process({&source, PlayerSource::read, 2}, positions, st.pointers)) {
+        st.failed = true;
+        for (auto& channel : st.output) channel.fill(0);
+    }
+    st.quantum = q;
+    return st;
+}
+
+// playerFrame for a block on a playrate plan: frame i reads the song
+// position at the node's device frame `pos + i + ahead` (a clip chain's
+// input reads its lead ahead), through `reader`, weighted by `weight(i)`.
+template <class Weight>
+void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPlayer& pl,
+                std::int64_t anchor, bool unanchored, std::int64_t pos, std::int64_t ahead,
+                std::uint32_t frames, Weight&& weight, Stereo& into, bool raw) SUPPLE_RT {
+    const Clip& c = pl.audio;
+    if (!c.data || c.data->channels.empty() || pl.muted || pl.periodFrames <= 0 || !reader.state)
+        return;
+    const PlayrateTimeline& timeline = *p.timelines[n.live ? 1 : 0];
+    // The output's loop pass: a later one read ahead plays before the anchor.
+    const std::int64_t pass = timeline.cycle(timeline.phase(pos - n.timelineShift));
+    for (std::uint32_t i = 0; i < frames; ++i) {
+        const double w = weight(i);
+        if (w == 0.0) continue;
+        const std::int64_t device = pos + i + ahead - n.timelineShift;
+        const std::int64_t q = quantumAt(p, device);
+        const RateClipState& st = playerQuantum(reader, pl, anchor, unanchored, pass, timeline, q);
+        const auto k = static_cast<std::size_t>(device - q);
+        float l = st.output[0][k], r = st.output[1][k];
+        switch (c.mode) {
+            case model::ChannelMode::Normal:
+                break;
+            case model::ChannelMode::ReverseStereo:
+                std::swap(l, r);
+                break;
+            case model::ChannelMode::MonoMix:
+                l = r = 0.5f * (l + r);
+                break;
+            case model::ChannelMode::Left:
+                r = l;
+                break;
+            case model::ChannelMode::Right:
+                l = r;
+                break;
+        }
+        into.l[i] += static_cast<float>(static_cast<double>(l) * (raw ? 1.0 : c.gainL) * w);
+        into.r[i] += static_cast<float>(static_cast<double>(r) * (raw ? 1.0 : c.gainR) * w);
+    }
+}
+
 }  // namespace
 
-void launchAudio(Plan&, Node& n, Stereo& into, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
+void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
     n.arrangementGain = nullptr;
     const std::int64_t song0 = pos - n.timelineShift;
-    if (n.launch.fadeFrom == -3 && n.launch.fadeStart == kFadeAtNext) n.launch.fadeStart = song0;
+    const std::int64_t clock0 = launchClock(p, n, pos);
+    if (n.launch.fadeFrom == -3 && n.launch.fadeStart == kFadeAtNext) n.launch.fadeStart = clock0;
     // A frozen node fades its print in after writing it (retiringIntoPrint).
     if (n.players.empty() && (n.launch.fadeFrom != -3 || n.frozenAudio)) return;
     const LaunchState& L = n.launch;
     const std::int64_t F = n.launchFadeFrames;
-    const bool fading = L.fadeFrom != -2 && song0 < L.fadeStart + F;
+    const bool fading = L.fadeFrom != -2 && clock0 < L.fadeStart + F;
     const bool arrangement = L.kind == LaunchState::Kind::Arrangement;
     if (arrangement && !fading) return;  // the arrangement alone: nothing changes
     // x: how far into the crossfade frame i is, 0 to 1 (1 past it).
     const auto x = [&](std::uint32_t i) {
         if (!fading) return 1.0;
-        const double k = double(song0 + i - L.fadeStart) / double(F);
+        const double k = double(clock0 + i - L.fadeStart) / double(F);
         return std::clamp(k, 0.0, 1.0);
     };
     for (std::uint32_t i = 0; i < frames; ++i) {
@@ -443,29 +579,37 @@ void launchAudio(Plan&, Node& n, Stereo& into, std::int64_t pos, std::uint32_t f
                                                    (fading && L.fadeFrom == -1 ? 1.0 - in : 0.0));
     }
     n.arrangementGain = n.arrangementGains.data();
+    // A player's block: by song sample, or on a playrate plan through one
+    // of the node's readers (0 what plays, 1 what fades out).
+    const auto play = [&](const ClipPlayer& pl, std::size_t reader, std::int64_t anchor,
+                          bool unanchored, auto&& weight) SUPPLE_RT {
+        if (p.rateEnabled)
+            playerRate(p, n, n.launchReaders[reader], pl, anchor, unanchored, pos, 0, frames,
+                       weight, into, false);
+        else
+            for (std::uint32_t i = 0; i < frames; ++i)
+                playerFrame(pl, anchor, unanchored, song0 + i, weight(i), into, i);
+    };
     // (A player with a take chain plays through it: processTake.)
     if (L.kind == LaunchState::Kind::Clip && L.player >= 0) {
         const ClipPlayer& pl = n.players[static_cast<std::size_t>(L.player)];
-        if (!pl.midi && pl.chain < 0)
-            for (std::uint32_t i = 0; i < frames; ++i)
-                playerFrame(pl, L.anchorSample, L.unanchored, song0 + i, x(i), into, i);
+        if (!pl.midi && pl.chain < 0) play(pl, 0, L.anchorSample, L.unanchored, x);
     }
+    const auto out = [&](std::uint32_t i) { return 1.0 - x(i); };
     if (fading && L.fadeFrom >= 0) {
         const ClipPlayer& pl = n.players[static_cast<std::size_t>(L.fadeFrom)];
-        if (!pl.midi && pl.chain < 0)
-            for (std::uint32_t i = 0; i < frames; ++i)
-                playerFrame(pl, L.fadeAnchorSample, false, song0 + i, 1.0 - x(i), into, i);
+        if (!pl.midi && pl.chain < 0) play(pl, 1, L.fadeAnchorSample, false, out);
     }
     if (fading && L.fadeFrom == -3) {
         const ClipPlayer& pl = n.retiring[static_cast<std::size_t>(L.fadeRetiring)];
-        for (std::uint32_t i = 0; i < frames; ++i)
-            playerFrame(pl, L.fadeAnchorSample, L.fadeUnanchored, song0 + i, 1.0 - x(i), into, i);
+        play(pl, 1, L.fadeAnchorSample, L.fadeUnanchored, out);
     }
 }
 
-void retiringIntoPrint(Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
+void retiringIntoPrint(const Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
     const LaunchState& L = n.launch;
-    if (L.fadeFrom != -3 || L.fadeStart == kFadeAtNext) return;
+    // A playrate plan cuts to the print (S3 step 1).
+    if (p.rateEnabled || L.fadeFrom != -3 || L.fadeStart == kFadeAtNext) return;
     const std::int64_t song0 = pos - n.timelineShift;
     const std::int64_t F = n.launchFadeFrames;
     if (F <= 0 || song0 >= L.fadeStart + F) return;
@@ -511,6 +655,8 @@ void addRetiring(Plan& to, const Plan& from) {
             n.arrangementGains.assign(to.block, 1.0f);
             n.launchBuf.init(to.block);
         }
+        if (!n.retiring.empty() && to.rateEnabled)
+            for (PlayerReader& r : n.launchReaders) makeReader(r, to);
     }
 }
 
@@ -551,7 +697,149 @@ void clipMidi(const Plan& p, const ClipPlayer& pl, const LaunchState& L, std::in
     }
 }
 
+// clipMidi on a playrate plan (S3): the events for frames [0, frames)
+// whose song positions are the rate timeline's at devices `dev0 + i` (the
+// input side). As rateEvents plays the timeline's: an event plays at the
+// first frame whose song position reaches it, and what `stage` holds ends
+// where the song enters a new loop pass. `pass`: the output's loop pass (a
+// later one, read ahead, plays before the anchor, as foldInput's fold
+// does). `pl` null: no notes, only those ends. Within capacity: never
+// allocates.
+void rateClipMidi(const Plan& p, const PlayrateTimeline& tl, const ClipPlayer* pl,
+                  const LaunchState& L, std::int64_t dev0, std::uint32_t frames, std::int64_t pass,
+                  ClipWindow from, Stage& stage) SUPPLE_RT {
+    if (frames == 0) return;
+    auto& out = stage.blockEvents;
+    auto& held = stage.pendingVoices;  // scratch (prepareNoteIds refills it)
+    held.clear();
+    for (const HeldVoice& v : stage.voices)
+        if (!v.live && v.sourceId >= 0 && held.size() < held.capacity()) held.push_back(v);
+    const auto emit = [&](const host::Event& e) SUPPLE_RT {
+        if (out.size() == out.capacity()) {
+            ++stage.voiceDropped;
+            return;
+        }
+        out.push_back(e);
+        if (e.kind == host::Event::Kind::NoteOn) {
+            if (held.size() < held.capacity()) {
+                HeldVoice v;
+                v.sourceId = e.noteId;
+                v.port = e.port;
+                v.channel = e.channel;
+                v.key = e.key;
+                held.push_back(v);
+            }
+        } else if (e.kind == host::Event::Kind::NoteOff || e.kind == host::Event::Kind::NoteChoke) {
+            std::erase_if(held, [&](const HeldVoice& v) { return v.sourceId == e.noteId; });
+        }
+    };
+    const double here = tl.phase(dev0);
+    double before = tl.phase(dev0 - 1);
+    if (from == ClipWindow::Here) {
+        before = here;
+    } else if (from == ClipWindow::Anchor) {
+        // The anchor in this pass, at most a frame's step behind (the
+        // switch is the first frame whose song position reaches it).
+        const double anchor = here - (tl.position(dev0) - double(L.anchorSample));
+        if (anchor < before && anchor >= here - model::kMaxPlayrate) before = anchor;
+    }
+    const double last = tl.phase(dev0 + frames - 1);
+    const std::int64_t c0 = tl.cycle(before), c1 = tl.cycle(last);
+    const double length = tl.looping() ? tl.cycleLength() : 0.0;
+    const bool notes = pl && pl->midi && !pl->muted && !pl->events.empty() && pl->periodBeats > 0;
+    const time::TimeMap& tm = *p.timeMap;
+    const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
+    constexpr double kSlack = 1e-6;  // beats: the sample decides
+    for (std::int64_t c = c0; c <= c1; ++c) {
+        std::uint32_t start = 0;
+        if (c != c0) {
+            // The frame where the song enters pass c: what is held ends there.
+            std::uint32_t lo = 0, hi = frames - 1;
+            while (lo < hi) {
+                const auto mid = lo + (hi - lo) / 2;
+                if (tl.cycle(tl.phase(dev0 + mid)) < c)
+                    lo = mid + 1;
+                else
+                    hi = mid;
+            }
+            start = lo;
+            while (!held.empty()) {
+                const HeldVoice v = held.back();
+                held.pop_back();
+                host::Event off;
+                off.kind = host::Event::Kind::NoteOff;
+                off.time = start;
+                off.noteId = v.sourceId;
+                off.port = v.port;
+                off.channel = v.channel;
+                off.key = v.key;
+                if (out.size() < out.capacity())
+                    out.push_back(off);
+                else
+                    ++stage.voiceDropped;
+            }
+        }
+        if (!notes) continue;
+        const double offset = double(c) * length;
+        const double a = before - offset, b = last - offset;
+        const bool inclusive = from != ClipWindow::After && c == c0;
+        // Before the anchor: unanchored, or a later pass than the output's.
+        const bool anywhere = (L.unanchored || c > pass) && !pl->once;
+        const double b0 = tm.beatAt((a + double(origin)) / p.rate);
+        const double b1 = tm.beatAt((b + double(origin)) / p.rate);
+        const double period = pl->periodBeats;
+        auto kLo = static_cast<std::int64_t>(std::floor((b0 - L.anchorBeat) / period)) - 1;
+        auto kHi = static_cast<std::int64_t>(std::floor((b1 - L.anchorBeat) / period)) + 1;
+        if (!anywhere) kLo = std::max<std::int64_t>(kLo, 0);
+        if (pl->once) kHi = std::min<std::int64_t>(kHi, 0);
+        for (std::int64_t k = kLo; k <= kHi; ++k) {
+            const double base = L.anchorBeat + double(k) * period;
+            auto it = std::lower_bound(pl->events.begin(), pl->events.end(), b0 - base - kSlack,
+                                       [](const ClipEvent& e, double x) { return e.beat < x; });
+            for (; it != pl->events.end() && it->beat <= b1 - base + kSlack; ++it) {
+                const std::int64_t at =
+                    time::samplesAt(tm.secondsAt(base + it->beat), p.rate) - origin;
+                const double x = double(at);
+                if ((inclusive ? x < a : x <= a) || x > b) continue;
+                if (!anywhere && at < L.anchorSample) continue;
+                if (tl.looping() && (x >= tl.loopEnd() || (c > 0 && x < tl.loopStart()))) continue;
+                // Its frame: the first whose song position (in pass c) reaches it.
+                std::uint32_t lo = start, hi = frames - 1;
+                while (lo < hi) {
+                    const auto mid = lo + (hi - lo) / 2;
+                    if (tl.phase(dev0 + mid) - offset < x)
+                        lo = mid + 1;
+                    else
+                        hi = mid;
+                }
+                host::Event e = it->event;
+                e.time = lo;
+                emit(e);
+            }
+        }
+    }
+}
+
 }  // namespace
+
+void rateLaunchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
+    const LaunchState& L = n.launch;
+    const ClipPlayer* pl = nullptr;
+    if (L.kind == LaunchState::Kind::Clip && L.player >= 0) {
+        pl = &n.players[static_cast<std::size_t>(L.player)];
+        // An instrument in its take chain plays its notes there.
+        if (pl->chain >= 0 && n.takeChains[static_cast<std::size_t>(pl->chain)].noteTarget >= 0)
+            pl = nullptr;
+    }
+    const PlayrateTimeline& tl = *p.timelines[n.live ? 1 : 0];
+    const std::int64_t dev0 = pos - n.timelineShift;
+    const ClipWindow from = n.launchFresh      ? ClipWindow::Anchor
+                            : n.rateEventFresh ? ClipWindow::Here
+                                               : ClipWindow::After;
+    n.launchFresh = false;
+    n.rateEventFresh = false;
+    rateClipMidi(p, tl, pl, L, dev0, frames, tl.cycle(tl.phase(dev0)), from, n.midiStage);
+}
 
 void launchMidi(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
     const LaunchState& L = n.launch;
@@ -590,18 +878,18 @@ ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT {
     return in;
 }
 
-bool clipChainHeard(const Node& n, int player, std::int64_t song) SUPPLE_RT {
+bool clipChainHeard(const Node& n, int player, std::int64_t clock) SUPPLE_RT {
     const LaunchState& L = n.launch;
     if (player < 0) return false;
     if (L.kind == LaunchState::Kind::Clip && L.player == player) return true;
-    return L.fadeFrom == player && song < L.fadeStart + n.launchFadeFrames;
+    return L.fadeFrom == player && clock < L.fadeStart + n.launchFadeFrames;
 }
 
-double launchWeight(const Node& n, int player, std::int64_t song) SUPPLE_RT {
+double launchWeight(const Node& n, int player, std::int64_t clock) SUPPLE_RT {
     const LaunchState& L = n.launch;
     const std::int64_t F = n.launchFadeFrames;
-    const bool fading = L.fadeFrom != -2 && song < L.fadeStart + F;
-    const double x = fading ? std::clamp(double(song - L.fadeStart) / double(F), 0.0, 1.0) : 1.0;
+    const bool fading = L.fadeFrom != -2 && clock < L.fadeStart + F;
+    const double x = fading ? std::clamp(double(clock - L.fadeStart) / double(F), 0.0, 1.0) : 1.0;
     double w = 0;
     if (L.kind == LaunchState::Kind::Clip && L.player == player) w += x;
     if (fading && L.fadeFrom == player) w += 1.0 - x;
@@ -622,11 +910,17 @@ bool foldInput(const LoopRange* loop, std::int64_t pos, std::int64_t lead, std::
 
 }  // namespace
 
-void clipChainAudio(const Node& n, int player, const ClipChainInput& in, std::int64_t pos,
-                    std::int64_t lead, const LoopRange* loop, std::uint32_t frames,
-                    Stereo& into) SUPPLE_RT {
-    if (!in.on || player < 0) return;
-    const ClipPlayer& pl = n.players[static_cast<std::size_t>(player)];
+void clipChainAudio(const Plan& p, const Node& n, TakeChain& tc, const ClipChainInput& in,
+                    std::int64_t pos, std::int64_t lead, const LoopRange* loop,
+                    std::uint32_t frames, Stereo& into) SUPPLE_RT {
+    if (!in.on || tc.player < 0) return;
+    const ClipPlayer& pl = n.players[static_cast<std::size_t>(tc.player)];
+    if (p.rateEnabled) {  // `lead` device frames ahead, through its reader (S3)
+        playerRate(
+            p, n, tc.clipReader, pl, in.anchorSample, in.unanchored, pos, lead, frames,
+            [](std::uint32_t) { return 1.0; }, into, true);
+        return;
+    }
     for (std::uint32_t i = 0; i < frames; ++i) {
         std::int64_t t = 0;
         const bool folded = foldInput(loop, pos, lead, i, t);
@@ -637,7 +931,7 @@ void clipChainAudio(const Node& n, int player, const ClipChainInput& in, std::in
 
 void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInput& in,
                    std::int64_t pos, std::int64_t lead, const LoopRange* loop, std::uint32_t frames,
-                   Stage& target) SUPPLE_RT {
+                   Stage& target, ClipWindow from) SUPPLE_RT {
     if (!in.on || player < 0) return;
     const ClipPlayer& pl = n.players[static_cast<std::size_t>(player)];
     auto& events = target.blockEvents;
@@ -647,18 +941,24 @@ void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInpu
     L.anchorSample = in.anchorSample;
     L.anchorBeat = in.anchorBeat;
     L.unanchored = in.unanchored;
+    if (p.rateEnabled) {  // the input side, `lead` device frames ahead (S3)
+        const PlayrateTimeline& tl = *p.timelines[n.live ? 1 : 0];
+        rateClipMidi(p, tl, &pl, L, pos + lead - n.timelineShift, frames,
+                     tl.cycle(tl.phase(pos - n.timelineShift)), from, target);
+        return;
+    }
     // Where the input folds over the loop within this block (frames: none).
     std::uint32_t fold = frames;
     if (loop && loop->active() && pos < loop->end && pos + frames + lead > loop->end)
         fold = static_cast<std::uint32_t>(std::max<std::int64_t>(0, loop->end - lead - pos));
-    const auto window = [&](std::uint32_t from, std::uint32_t to, bool folded) SUPPLE_RT {
-        if (to <= from) return;
+    const auto window = [&](std::uint32_t first, std::uint32_t to, bool folded) SUPPLE_RT {
+        if (to <= first) return;
         std::int64_t t = 0;
-        foldInput(loop, pos, lead, from, t);
+        foldInput(loop, pos, lead, first, t);
         L.unanchored = in.unanchored || folded;
         const std::size_t before = events.size();
-        clipMidi(p, pl, L, t - n.timelineShift, to - from, events);
-        for (std::size_t k = before; k < events.size(); ++k) events[k].time += from;
+        clipMidi(p, pl, L, t - n.timelineShift, to - first, events);
+        for (std::size_t k = before; k < events.size(); ++k) events[k].time += first;
     };
     window(0, fold, false);
     if (fold >= frames) return;
@@ -698,7 +998,7 @@ void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInpu
     window(fold, frames, true);
 }
 
-bool clipChainTicks(const Plan& p, const Node& n, int player, std::int64_t song,
+bool clipChainTicks(const Plan& p, const Node& n, int player, double song,
                     std::int64_t& ticks) SUPPLE_RT {
     if (player < 0) return false;
     const LaunchState& L = n.launch;
@@ -716,14 +1016,14 @@ bool clipChainTicks(const Plan& p, const Node& n, int player, std::int64_t song,
     const ClipPlayer& pl = n.players[static_cast<std::size_t>(player)];
     if (!pl.midi) {  // the phase in its period, as playerFrame reads it
         if (pl.periodFrames <= 0) return false;
-        const std::int64_t q = song - anchorSample;
+        const auto q = static_cast<std::int64_t>(std::floor(song - double(anchorSample)));
         ticks = (q % pl.periodFrames + pl.periodFrames) % pl.periodFrames;
         return true;
     }
     if (!(pl.periodBeats > 0)) return false;
     const time::TimeMap& tm = *p.timeMap;
     const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
-    const double beat = tm.beatAt(double(song + origin) / p.rate);
+    const double beat = tm.beatAt((song + double(origin)) / p.rate);
     const double base =
         anchorBeat + std::floor((beat - anchorBeat) / pl.periodBeats) * pl.periodBeats;
     ticks = std::llround((beat - base) * kClipBeatTicks);
@@ -734,21 +1034,32 @@ bool clipLanePosition(const ClipLaneSource& c, std::uint32_t frame, std::int64_t
     if (!c.in.on || c.player < 0) return false;
     const Node& n = *c.node;
     const ClipPlayer& pl = n.players[static_cast<std::size_t>(c.player)];
-    std::int64_t t = 0;
-    const bool folded = foldInput(c.loop, c.pos, c.ahead, frame, t);
-    const std::int64_t song = t - n.timelineShift;
+    const Plan& p = *c.plan;
+    double song = 0;
+    bool folded = false;
+    if (p.rateEnabled) {
+        // The song position its input reads (S3), folded when that is a
+        // later loop pass than the output's.
+        const PlayrateTimeline& tl = *p.timelines[n.live ? 1 : 0];
+        const std::int64_t device = c.pos + frame + c.ahead - n.timelineShift;
+        song = tl.position(device);
+        folded = tl.cycle(tl.phase(device)) > tl.cycle(tl.phase(c.pos + frame - n.timelineShift));
+    } else {
+        std::int64_t t = 0;
+        folded = foldInput(c.loop, c.pos, c.ahead, frame, t);
+        song = double(t - n.timelineShift);
+    }
     const bool before = (c.in.unanchored || folded) && !pl.once;
     if (!pl.midi) {
         if (pl.periodFrames <= 0) return false;
-        const std::int64_t q = song - c.in.anchorSample;
+        const auto q = static_cast<std::int64_t>(std::floor(song - double(c.in.anchorSample)));
         if (q < 0 && !before) return false;
         at = (q % pl.periodFrames + pl.periodFrames) % pl.periodFrames;
         return true;
     }
     if (!(pl.periodBeats > 0)) return false;
-    const Plan& p = *c.plan;
     const std::int64_t origin = time::samplesAt(p.startSeconds, p.rate);
-    const double beat = p.timeMap->beatAt(double(song + origin) / p.rate);
+    const double beat = p.timeMap->beatAt((song + double(origin)) / p.rate);
     if (beat < c.in.anchorBeat && !before) return false;
     const double base =
         c.in.anchorBeat + std::floor((beat - c.in.anchorBeat) / pl.periodBeats) * pl.periodBeats;
@@ -762,7 +1073,7 @@ void compileFeedClips(Plan& p, NotesFeed& feed, const Session& s) {
     feed.players.clear();
     feed.launch = {};
     feed.follows = false;
-    if (!p.clipPlayers || p.rateEnabled || !feed.source) return;
+    if (!p.clipPlayers || !feed.source) return;
     const model::Track* track = s.tracks.find(*feed.source);
     if (!track || track->type != model::StripType::Channel || track->freeze) return;
     // The same tracks as compileClipPlayers: a channel with clips, not frozen.
@@ -775,7 +1086,8 @@ void compileFeedClips(Plan& p, NotesFeed& feed, const Session& s) {
     const time::TimeMap& tm = *s.timeMap;
     double fastest = 0;
     for (const auto& t : tm.tempo()) fastest = std::max(fastest, t.bpm);
-    const double blockBeats = double(p.block) / p.rate * fastest / 60.0;
+    const double blockBeats =
+        double(p.block) / p.rate * fastest / 60.0 * (p.rateEnabled ? model::kMaxPlayrate : 1.0);
     for (const auto& e : s.clips) {
         const model::Clip& clip = *e.value;
         if (clip.track != *feed.source || clip.kind != model::ClipKind::Midi) continue;
@@ -797,6 +1109,12 @@ void compileFeedClips(Plan& p, NotesFeed& feed, const Session& s) {
     }
     feed.clipEvents.reserve(window + 1);
     feed.block.reserve(feed.block.capacity() + window + 1);
+    if (p.rateEnabled) {  // the playrate path plays them through its stage (feedRateMidi)
+        Stage& st = feed.midiStage;
+        st.blockEvents.reserve(st.blockEvents.capacity() + window + voices + 1);
+        st.voices.reserve(st.voices.capacity() + voices);
+        st.pendingVoices.reserve(st.pendingVoices.capacity() + voices);
+    }
 }
 
 int playerOf(const NotesFeed& feed, Id clip) SUPPLE_RT {
@@ -815,6 +1133,23 @@ void applyFeedLaunch(NotesFeed& feed, LaunchState::Kind kind, Id clip, std::int6
     L.unanchored = false;
     L.fadeFrom = -2;
     feed.releaseHeld = true;  // what the track source holds ends at the switch
+    feed.launchFresh = true;
+}
+
+void feedRateMidi(Plan& p, const Node& rack, NotesFeed& feed, std::int64_t pos,
+                  std::uint32_t frames) SUPPLE_RT {
+    const LaunchState& L = feed.launch;
+    const ClipPlayer* pl = L.kind == LaunchState::Kind::Clip && L.player >= 0
+                               ? &feed.players[static_cast<std::size_t>(L.player)]
+                               : nullptr;
+    const PlayrateTimeline& tl = *p.timelines[rack.live ? 1 : 0];
+    const std::int64_t dev0 = pos - rack.timelineShift;
+    const ClipWindow from = feed.launchFresh ? ClipWindow::Anchor
+                            : feed.rateFresh ? ClipWindow::Here
+                                             : ClipWindow::After;
+    feed.launchFresh = false;
+    feed.rateFresh = false;
+    rateClipMidi(p, tl, pl, L, dev0, frames, tl.cycle(tl.phase(dev0)), from, feed.midiStage);
 }
 
 void feedClipMidi(Plan& p, const Node& rack, NotesFeed& feed, std::int64_t pos,
