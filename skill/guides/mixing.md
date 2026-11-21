@@ -106,7 +106,9 @@ env.add {"track": "tr_2", "param": "volume",
 Mixer targets: track `volume` (dB), `pan` (%), `mute`;
 route `volume`, `pan`, `mute`. Plugin targets: the semantic keys
 `fx.describe` lists (values in their unit; a cutoff sweep moves evenly in
-pitch), or a CLAP id/name for other plugins. `env.points.set` replaces
+pitch), or a parameter id or name (any case) for other plugins; a name two
+parameters share is refused with their ids, and the envelope stores the id.
+One parameter takes one envelope. `env.points.set` replaces
 points (or a beat range of them); `env.set {env, active: false}` bypasses an
 envelope; render and `analyze.compare` to hear what it did.
 

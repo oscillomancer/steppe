@@ -6018,6 +6018,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "points": {
       "type": "integer"
     },
+    "param": {
+      "type": "string",
+      "description": "A plug-in parameter's canonical reference: its semantic key or decimal id."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in parameter's display name."
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -6089,7 +6097,9 @@ Result:
 ```json
 {
   "env": "en_1",
-  "points": 2
+  "points": 2,
+  "param": "gain",
+  "param_name": "<any>"
 }
 
 ```
@@ -6229,6 +6239,10 @@ Kind: `query`. Exposure: `mcp-exec`.
           "visible": {
             "type": "boolean"
           },
+          "param_name": {
+            "type": "string",
+            "description": "A plug-in parameter's display name."
+          },
           "mode": {
             "type": "string"
           }
@@ -6271,7 +6285,8 @@ Result:
       "points": 2,
       "active": true,
       "visible": true,
-      "mode": "read"
+      "mode": "read",
+      "param_name": "<any>"
     }
   ]
 }
@@ -12063,6 +12078,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "modulation": {
       "type": "string"
     },
+    "param": {
+      "type": "string",
+      "description": "A plug-in target's canonical reference."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in target's display name."
+    },
     "rack": {
       "type": "string"
     },
@@ -12123,6 +12146,8 @@ Result:
 ```json
 {
   "modulation": "mr_1",
+  "param": "gain",
+  "param_name": "<any>",
   "rack": "rk_1",
   "module": "mo_3",
   "mod_out": "mo_2",
@@ -12165,6 +12190,14 @@ Kind: `edit`. Exposure: `mcp-exec`.
     "modulation": {
       "type": "string"
     },
+    "param": {
+      "type": "string",
+      "description": "A plug-in target's canonical reference: its semantic key or decimal id."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in target's display name."
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -12201,7 +12234,9 @@ Result:
 
 ```json
 {
-  "modulation": "mr_1"
+  "modulation": "mr_1",
+  "param": "gain",
+  "param_name": "<any>"
 }
 
 ```
@@ -12318,6 +12353,10 @@ Kind: `query`. Exposure: `mcp-exec`.
           },
           "inert": {
             "type": "string"
+          },
+          "param_name": {
+            "type": "string",
+            "description": "A plug-in target's display name."
           }
         },
         "required": [
@@ -12375,7 +12414,8 @@ Result:
       "lane": true,
       "range": "bipolar",
       "fed_by": [],
-      "inert": "source"
+      "inert": "source",
+      "param_name": "<any>"
     }
   ]
 }

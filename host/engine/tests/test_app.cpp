@@ -3661,14 +3661,18 @@ TEST_CASE("automation timebases preserve plugin output positions through branch 
     };
     call("track.add", "{}");
     call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})");
-    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
     const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
-    auto setup = app->beginTransaction(kTest, "Timed editor output");
-    REQUIRE(setup);
+    // The mode first: parameter 7 is automatable only in it (env.add checks).
+    auto mode = app->beginTransaction(kTest, "Editor output mode");
+    REQUIRE(mode);
     std::vector<std::uint8_t> state{35, 0, 0, 0};
     const auto hash = "sha256:" + sha256Hex(state);
     app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{state}));
     app->txn().modify<model::FxInstance>(fx, [&](auto& f) { f.state = hash; });
+    REQUIRE(app->commitTransaction(*mode));
+    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
+    auto setup = app->beginTransaction(kTest, "Timed editor output");
+    REQUIRE(setup);
     app->txn().modify<model::Envelope>(env, [](auto& e) {
         e.timebase = model::Timebase::Time;
         e.mode = model::EnvMode::Touch;
@@ -3717,14 +3721,18 @@ TEST_CASE("a touch over a parameter modulated through its envelope records the h
     };
     call("track.add", "{}");
     call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})");
-    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
     const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
-    auto setup = app->beginTransaction(kTest, "Editor output mode");
-    REQUIRE(setup);
+    // The mode first: parameter 7 is automatable only in it (env.add checks).
+    auto mode = app->beginTransaction(kTest, "Editor output mode");
+    REQUIRE(mode);
     std::vector<std::uint8_t> state{35, 0, 0, 0};
     const auto hash = "sha256:" + sha256Hex(state);
     app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{state}));
     app->txn().modify<model::FxInstance>(fx, [&](auto& f) { f.state = hash; });
+    REQUIRE(app->commitTransaction(*mode));
+    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
+    auto setup = app->beginTransaction(kTest, "Touch mode");
+    REQUIRE(setup);
     app->txn().modify<model::Envelope>(env, [](auto& e) { e.mode = model::EnvMode::Touch; });
     REQUIRE(app->commitTransaction(*setup));
     DummyBackend backend({.mode = DummyBackend::Mode::Manual});

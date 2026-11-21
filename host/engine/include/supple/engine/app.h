@@ -510,6 +510,13 @@ class EngineApp : public cmd::Host {
     Result<json::Value> fxFactoryPatches(model::Id id, const model::FxInstance& fx);
     // The plugin's CLAP parameters (from a scratch instance).
     Result<std::vector<host::ParamInfo>> fxParams(const model::FxInstance& fx);
+    // Its parameters in its own state: the live instance's, else a probe's
+    // with the fx's patch, state and parameters restored (a plug-in's list
+    // and flags may depend on its state).
+    Result<std::vector<host::ParamInfo>> fxStateParams(model::Id id, const model::FxInstance& fx);
+    // At open: stored plug-in parameter references that resolve to nothing
+    // or ambiguously, and two envelopes on one parameter.
+    void warnStoredParamRefs(const model::Session& s, std::vector<schema::Warning>& warnings);
     Result<std::uint32_t> fxSidechainChannels(const model::FxInstance& fx);  // 0: no key input
     // It sends notes or MIDI (ADR-0068): the live instance's answer, else a scratch's.
     Result<bool> fxOutputsNotes(model::Id id, const model::FxInstance& fx);
@@ -533,9 +540,12 @@ class EngineApp : public cmd::Host {
         std::map<const model::FxInstance*, Error> failures = {};
     };
     // Cable checks use the live FX or a private probe restored from its saved state.
+    // `canonical`, when given, receives the reference a new cable stores
+    // (session-model "Plug-in parameter references").
     Status validatePluginMod(model::Id id, const model::FxInstance& fx, const std::string& key,
                              const std::string& path, std::shared_ptr<const model::Blob> blob = {},
-                             PluginModValidation* validation = nullptr);
+                             PluginModValidation* validation = nullptr,
+                             std::string* canonical = nullptr);
     Result<std::uint32_t> fxLatencySamples(model::Id id, const model::FxInstance& fx,
                                            bool compensated = false);
     // fx's patch after applying `patch` (a merge patch, or a complete patch

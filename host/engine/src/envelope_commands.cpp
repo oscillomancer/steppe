@@ -29,6 +29,9 @@ struct EnvAddArgs {
 struct EnvAddResult {
     std::string env;
     std::int64_t points = 0;
+    // A plug-in parameter's canonical reference and display name
+    // (session-model "Plug-in parameter references").
+    std::optional<std::string> param, param_name;
 };
 
 struct EnvPointsSetArgs {
@@ -59,6 +62,7 @@ struct EnvEntry {
     std::string env, target, param, mode;
     std::int64_t points = 0;
     bool active = true, visible = true;
+    std::optional<std::string> param_name;  // a plug-in parameter's display name
 };
 
 struct EnvList {
@@ -208,6 +212,11 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
         c.result = schema::object<EnvAddResult>("env_add")
                        .field("env", &EnvAddResult::env, schema::string())
                        .field("points", &EnvAddResult::points, schema::integer())
+                       .field("param", &EnvAddResult::param,
+                              schema::string().doc("A plug-in parameter's canonical reference: "
+                                                   "its semantic key or decimal id."))
+                       .field("param_name", &EnvAddResult::param_name,
+                              schema::string().doc("A plug-in parameter's display name."))
                        .build();
         c.examples = {
             {"Fade a track out over bar 2",
@@ -215,7 +224,8 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
              j(R"({"env": "en_1", "points": 2})"), "song"},
             {"Sweep a plugin parameter",
              j(R"({"fx": "fx_2", "param": "gain", "points": [{"beat": 0, "value": "-12 dB", "shape": "slow"}, {"beat": 4, "value": 0}]})"),
-             j(R"({"env": "en_1", "points": 2})"), "song_with_fx"},
+             j(R"({"env": "en_1", "points": 2, "param": "gain", "param_name": "<any>"})"),
+             "song_with_fx"},
             {"Duck a take halfway through its item",
              j(R"({"take": "tk_1", "param": "volume", "points": [{"beat": 0, "value": 0}, {"beat": 2, "value": "-12 dB"}]})"),
              j(R"({"env": "en_1", "points": 2})"), "song_with_audio"},
@@ -276,12 +286,38 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                 env.target.object = *id;
             }
             env.target.param = a.param;
-            for (const auto& e : s.envelopes)
-                if (e.value->target.object == env.target.object && e.value->target.param == a.param)
-                    return Error("env.exists", "an envelope already automates this parameter",
-                                 "/param", "env.points.set " + e.id.str());
-            auto domain = envDomain(app, s, env.target, "/param");
+            auto domain = envDomain(app, s, env.target, "/param", detail::Ambiguity::Refuse);
             if (!domain) return std::move(domain).error();
+            if (env.target.object.kind == model::Kind::Fx) {
+                // Stored canonical, and one envelope per parameter whatever
+                // the spellings (review round 72 D1, D3).
+                env.target.param = domain->canonical;
+                // Not automatable in the fx's own state (review round 72 D4).
+                if (domain->paramId)
+                    if (auto list =
+                            app.fxStateParams(env.target.object, *s.fx.find(env.target.object)))
+                        for (const host::ParamInfo& p : *list)
+                            if (p.id == *domain->paramId && !(p.flags & CLAP_PARAM_IS_AUTOMATABLE))
+                                return Error("env.param",
+                                             domain->paramName +
+                                                 " is not automatable: the plug-in does not let "
+                                                 "a host automate it",
+                                             "/param",
+                                             "set its value with fx.param.set {fx, values}");
+            }
+            for (const auto& e : s.envelopes) {
+                if (e.value->target.object != env.target.object) continue;
+                bool same = e.value->target.param == env.target.param;
+                if (!same && domain->paramId)
+                    if (auto other = envDomain(app, s, e.value->target, "/param"))
+                        same = other->paramId == domain->paramId;
+                if (same)
+                    return Error(
+                        "env.exists",
+                        e.id.str() + " already automates " +
+                            (domain->paramName.empty() ? env.target.param : domain->paramName),
+                        "/param", "edit its points with env.points.set " + e.id.str());
+            }
             // On a clip take's FX: clip-relative, an audio clip's in seconds.
             const auto clipFx = clipKindOfFx(s, env.target.object);
             if (clipFx == model::ClipKind::Audio) env.timebase = model::Timebase::Time;
@@ -293,7 +329,13 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                 env.points = std::move(*pts);
             }
             const Id id = app.txn().create(env);
-            return EnvAddResult{id.str(), static_cast<std::int64_t>(env.points.size())};
+            EnvAddResult out{id.str(), static_cast<std::int64_t>(env.points.size()), std::nullopt,
+                             std::nullopt};
+            if (env.target.object.kind == model::Kind::Fx) {
+                out.param = env.target.param;
+                out.param_name = domain->paramName;
+            }
+            return out;
         };
         addChecked(registry, std::move(c));
     }();
@@ -477,6 +519,8 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                          .field("points", &EnvEntry::points, schema::integer())
                          .field("active", &EnvEntry::active, schema::boolean())
                          .field("visible", &EnvEntry::visible, schema::boolean())
+                         .field("param_name", &EnvEntry::param_name,
+                                schema::string().doc("A plug-in parameter's display name."))
                          .field("mode", &EnvEntry::mode, schema::string())
                          .build();
         c.result = schema::object<EnvList>("env_list")
@@ -484,7 +528,7 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
                        .build();
         c.examples = {
             {"All", j("{}"),
-             j(R"({"envelopes": [{"env": "en_1", "target": "fx_2", "param": "gain", "points": 2, "active": true, "visible": true, "mode": "read"}]})"),
+             j(R"({"envelopes": [{"env": "en_1", "target": "fx_2", "param": "gain", "points": 2, "active": true, "visible": true, "mode": "read", "param_name": "<any>"}]})"),
              "song_with_env"}};
         c.run = [](const EnvListArgs& a, Context& ctx) -> Result<EnvList> {
             const model::Session s = app(ctx).view();
@@ -494,10 +538,18 @@ void registerEnvelopeCommands(cmd::Registry& registry) {
             for (const auto& e : s.envelopes) {
                 const model::Envelope& env = *e.value;
                 if (a.object && env.target.object.str() != *a.object) continue;
-                out.envelopes.push_back({e.id.str(), env.target.object.str(), env.target.param,
-                                         kModes[static_cast<int>(env.mode)],
-                                         static_cast<std::int64_t>(env.points.size()), env.active,
-                                         env.visible});
+                EnvEntry row{e.id.str(),
+                             env.target.object.str(),
+                             env.target.param,
+                             kModes[static_cast<int>(env.mode)],
+                             static_cast<std::int64_t>(env.points.size()),
+                             env.active,
+                             env.visible,
+                             std::nullopt};
+                if (env.target.object.kind == model::Kind::Fx)
+                    if (auto domain = envDomain(app(ctx), s, env.target, "/object"))
+                        row.param_name = domain->paramName;
+                out.envelopes.push_back(std::move(row));
             }
             return out;
         };

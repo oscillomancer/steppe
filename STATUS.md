@@ -716,6 +716,17 @@ instructions are in `docs/guides/installing.md`.
   validate the actual FX state and require canonical numeric ids. Loading
   restores one validation probe per FX, and open skips it when warnings are
   not requested.
+  Plug-in parameter references (session-model): envelopes, modulation
+  routes, `fx.param.set` and cables into plugin modules name a parameter
+  through one resolver: a semantic key, a canonical decimal id, or a display
+  name in any letter case. An ambiguous name is refused with the ids, new
+  references are stored canonical, and answers give `param_name` beside
+  them. One parameter takes one envelope whatever the spellings
+  (`env.exists`). A parameter the plug-in does not mark automatable takes
+  neither an envelope nor a route. Older files that stored a name still
+  play; opening warns of one that resolves to nothing or ambiguously, and of
+  two active envelopes on one parameter (`param.unresolved`,
+  `param.ambiguous`, `env.duplicate`). Tested on CLAP fixtures and a VST3.
   Modulation routes (ADR-0096, schema 2.16): a Mod Out module's inputs
   drive plug-in parameters outside the rack (`modulation.add/set/remove/
   list`; `fx.describe` marks the parameters a route can take), a track's
@@ -1400,6 +1411,10 @@ Engine and hosting:
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
   post-fader sends into an In module take the linear path.
+- Opening a project checks stored plug-in parameter references against the
+  plug-in's parameter list in its default state, so a plug-in whose names
+  follow its state can be warned of wrongly (`param.unresolved`); the
+  engine binds them against the running instance.
 - Modulation routes (ADR-0096): `modulation.add`, `modulate`,
   `modulation.list` and `fx.describe` judge a plug-in parameter from a fresh
   copy of the plug-in in its default state, not the running instance, while

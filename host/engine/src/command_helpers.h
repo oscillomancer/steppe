@@ -18,6 +18,7 @@
 #include "command_validation.h"
 #include "freeze_commands.h"
 #include "media_files.h"
+#include "param_ref.h"
 #include "render_commands.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/files.h"
@@ -134,10 +135,16 @@ struct EnvDomain {
     std::unique_ptr<params::DescribedParam> semantic;
     std::optional<std::pair<double, double>> clapRange;
     std::optional<script::detail::ParamModel> knob;  // a rack module's (physical units)
+    // A plug-in parameter (param_ref.h): its canonical reference, id and
+    // display name.
+    std::string canonical;
+    std::optional<std::uint32_t> paramId;
+    std::string paramName;
 };
 
 inline Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s,
-                                   const model::EnvTarget& t, const char* path) {
+                                   const model::EnvTarget& t, const char* path,
+                                   detail::Ambiguity ambiguity = detail::Ambiguity::First) {
     EnvDomain d;
     if (t.object.kind == model::Kind::Track && (t.param == "width" || t.param == "pan_left" ||
                                                 t.param == "pan_right" || t.param == "pan_boost")) {
@@ -193,30 +200,42 @@ inline Result<EnvDomain> envDomain(EngineApp& app, const model::Session& s,
     const model::FxInstance& fx = *s.fx.find(t.object);
     auto schema = app.fxSchema(fx);
     if (!schema) return std::move(schema).error();
-    if (const json::Value* ps = schema->isObject() ? schema->find("params") : nullptr) {
-        if (const json::Value* entry = ps->find(t.param)) {
-            auto spec = params::fromDescription(t.param, *entry);
-            if (!spec) return std::move(spec).error();
-            if ((*spec)->spec.flags & params::kReadonly)
-                return Error("env.param", t.param + " is read-only", path,
-                             "choose a writable parameter from fx.describe instead of automating a "
-                             "read-only output");
-            d.semantic = std::move(*spec);
-            return d;
-        }
-    }
     auto list = app.fxParams(fx);
     if (!list) return std::move(list).error();
-    for (const host::ParamInfo& p : *list)
-        if (std::to_string(p.id) == t.param || p.name == t.param) {
-            d.clapRange = std::pair{p.min, p.max};
-            return d;
+    auto info = app.findPlugin(fx.plugin.id);
+    const std::string plugin = info && !info->name.empty() ? info->name : fx.plugin.id;
+    // The one resolver (session-model "Plug-in parameter references").
+    auto ref = detail::resolveParam(*list, schema->isObject() ? &*schema : nullptr, t.param, plugin,
+                                    ambiguity);
+    if (!ref) {
+        Error e = detail::recodeParamError(std::move(ref).error(), "env.param");
+        if (e.code == "param.unknown") {
+            e.code = "env.param";
+            std::string keys;
+            if (const json::Value* ps = schema->isObject() ? schema->find("params") : nullptr)
+                for (const auto& m : ps->asObject()) keys += (keys.empty() ? "" : ", ") + m.key;
+            e.hint = keys.empty()
+                         ? "use a parameter id or name from fx.describe"
+                         : "keys: " + keys + "; or a parameter id or name from fx.describe";
         }
-    std::string keys;
-    if (const json::Value* ps = schema->isObject() ? schema->find("params") : nullptr)
-        for (const auto& m : ps->asObject()) keys += (keys.empty() ? "" : ", ") + m.key;
-    return Error("env.param", fx.plugin.id + " has no parameter \"" + t.param + "\"", path,
-                 keys.empty() ? "use a CLAP id or parameter name (fx.describe)" : "keys: " + keys);
+        e.path = path;
+        return e;
+    }
+    d.canonical = ref->canonical;
+    d.paramId = ref->id;
+    d.paramName = ref->name();
+    if (ref->semantic) {
+        auto spec = params::fromDescription(ref->canonical, *ref->semantic);
+        if (!spec) return std::move(spec).error();
+        if ((*spec)->spec.flags & params::kReadonly)
+            return Error("env.param", t.param + " is read-only", path,
+                         "choose a writable parameter from fx.describe instead of automating a "
+                         "read-only output");
+        d.semantic = std::move(*spec);
+        return d;
+    }
+    d.clapRange = std::pair{ref->info->min, ref->info->max};
+    return d;
 }
 
 inline Result<double> envValue(const EnvDomain& d, const json::Value& v, const std::string& path) {

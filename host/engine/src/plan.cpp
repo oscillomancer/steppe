@@ -365,7 +365,7 @@ void bindModulation(Plan& p, std::map<host::Instance*, json::Value>& schemas) {
         const bool vst3 = in.info().format == "vst3";
         auto target =
             resolvePluginMod(params, schema->second.isObject() ? &schema->second : nullptr,
-                             me.target.param, vst3, true);
+                             me.target.param, vst3, true, Ambiguity::First, in.info().name);
         if (!target) {
             inert(target.error().message);
             continue;
@@ -488,50 +488,48 @@ Result<ResolvedLane> paramLane(host::Instance& in, const std::string& param,
                                std::map<host::Instance*, json::Value>& schemas) {
     ResolvedLane r;
     const auto list = in.params();
+    // The one resolver (session-model "Plug-in parameter references"); a
+    // stored ambiguous name binds its first match, as it always did.
+    json::Value* described = nullptr;
     if (in.info().semantic) {
         auto it = schemas.find(&in);
         if (it == schemas.end()) {
             auto schema = in.semanticSchema();
             it = schemas.emplace(&in, schema ? std::move(*schema) : json::Value()).first;
         }
-        const json::Value* entry = nullptr;
-        if (const json::Value* ps = it->second.isObject() ? it->second.find("params") : nullptr)
-            entry = ps->find(param);
-        if (entry) {
-            auto d = params::fromDescription(param, *entry);
-            if (!d) return std::move(d).error();
-            if ((*d)->spec.flags & params::kReadonly)
-                return Error("engine.automation", param + " is read-only", {},
-                             "choose a writable parameter from fx.describe or remove the obsolete "
-                             "envelope with env.remove");
-            if (std::none_of(list.begin(), list.end(),
-                             [&](const auto& info) { return info.id == (*d)->spec.id; }))
-                return Error("engine.automation",
-                             param + " is absent from the current parameter list", {},
-                             "choose a writable parameter from fx.describe or remove the obsolete "
-                             "envelope with env.remove");
-            r.lane.clapId = (*d)->spec.id;
-            r.lane.spec = std::shared_ptr<const params::DescribedParam>(std::move(*d));
-            return r;
-        }
+        described = &it->second;
     }
-    const bool numeric = !param.empty() && std::all_of(param.begin(), param.end(),
-                                                       [](char c) { return c >= '0' && c <= '9'; });
-    for (const host::ParamInfo& pi : list) {
-        const bool match = numeric ? std::to_string(pi.id) == param : pi.name == param;
-        if (!match) continue;
-        if (pi.flags & CLAP_PARAM_IS_READONLY)
+    auto ref = resolveParam(list, described, param, in.info().name, Ambiguity::First);
+    if (!ref)
+        return Error("engine.automation", ref.error().message, {},
+                     "choose a writable parameter from fx.describe or remove the obsolete "
+                     "envelope with env.remove");
+    if (ref->semantic) {
+        auto d = params::fromDescription(ref->canonical, *ref->semantic);
+        if (!d) return std::move(d).error();
+        if ((*d)->spec.flags & params::kReadonly)
             return Error("engine.automation", param + " is read-only", {},
                          "choose a writable parameter from fx.describe or remove the obsolete "
                          "envelope with env.remove");
-        r.lane.clapId = pi.id;
-        r.lo = pi.min;
-        r.hi = pi.max;
+        if (std::none_of(list.begin(), list.end(),
+                         [&](const auto& info) { return info.id == (*d)->spec.id; }))
+            return Error("engine.automation", param + " is absent from the current parameter list",
+                         {},
+                         "choose a writable parameter from fx.describe or remove the obsolete "
+                         "envelope with env.remove");
+        r.lane.clapId = (*d)->spec.id;
+        r.lane.spec = std::shared_ptr<const params::DescribedParam>(std::move(*d));
         return r;
     }
-    return Error("engine.automation", in.info().name + " has no parameter \"" + param + "\"", {},
-                 "choose a writable parameter from fx.describe or remove the obsolete envelope "
-                 "with env.remove");
+    const host::ParamInfo& pi = *ref->info;
+    if (pi.flags & CLAP_PARAM_IS_READONLY)
+        return Error("engine.automation", param + " is read-only", {},
+                     "choose a writable parameter from fx.describe or remove the obsolete "
+                     "envelope with env.remove");
+    r.lane.clapId = pi.id;
+    r.lo = pi.min;
+    r.hi = pi.max;
+    return r;
 }
 
 Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, std::uint32_t block,

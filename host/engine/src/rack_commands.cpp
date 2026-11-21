@@ -1629,7 +1629,8 @@ void registerRackCommands(cmd::Registry& registry) {
                 if (!owner)
                     return Error("rack.port", to->object.str() + " is not a plugin module's", "/to",
                                  "cables reach the plug-ins of plugin modules");
-                SUPPLE_TRY(e.validatePluginMod(to->object, *s.fx.find(to->object), to->key, "/to"));
+                SUPPLE_TRY(e.validatePluginMod(to->object, *s.fx.find(to->object), to->key, "/to",
+                                               {}, nullptr, &cable.to.key));
                 cable.amount = a.amount.value_or(0.5);
             } else {
                 auto toId = moduleId(s, to->object.str(), "/to");

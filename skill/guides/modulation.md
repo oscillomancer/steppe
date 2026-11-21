@@ -21,8 +21,10 @@ exec {"command": "modulate", "args": {"target": {"fx": "fx_4", "param": "gain"},
 | `macro` | a Macro's first knob; it sits at 0 until you move it, so it does nothing at first |
 | `follower` + `from: "tr_1"` | the level of another track, so a bass can duck from the drums |
 
-`target` is a plug-in parameter `{fx, param}` (key, name or CLAP id), a track's
-`{track, param: volume | pan | width}` or a send's `{route, param: volume}`.
+`target` is a plug-in parameter `{fx, param}` (key, id, or name in any case), a
+track's `{track, param: volume | pan | width}` or a send's `{route, param: volume}`.
+A name that two parameters share is refused with their ids; the route stores the
+key or id, and answers give `param_name` beside it.
 
 It finds or makes the rack that does the work (the first rack on the target's
 track with a Mod Out, else one named Modulators on a new channel), adds the
