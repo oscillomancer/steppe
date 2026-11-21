@@ -258,6 +258,8 @@ def scenes(j):
                                    "name": name, "follow": follow, **where},
                       f"{name}: written against its own key and chords, follow {follow}.")
         assert made["kind"] == "midi" and made["length"] == 16.0, made
+        # Chord symbols for the notes and context_at for the harmony agree: nothing to say.
+        assert not [w for w in made.get("warnings", []) if w["code"] == "clip.chords_ignored"], made
     # A clip knows the harmony it was written against: the lead sheet of bars 1-4 and 9-12.
     verse_keys = j.exec("midi.get", {"item": "cl_3"}, "The Verse keys clip.")
     assert verse_keys["context"]["text"] == "1: key A minor {Am}:w\n2: {F}:w\n3: {G}:w\n4: {Am}:w\n"
@@ -398,6 +400,13 @@ def modulation(j):
                      "The same parameter by its name in lower case.")
     assert (by_name["param"], by_id["param"], by_case["param"]) == ("0", "0", "0"), \
         "a plug-in without keys stores the id"
+    # Three routes from LFOs onto one parameter are allowed, and each answer names the routes
+    # already there: their offsets add.
+    def stacked(answer):
+        return [w["message"] for w in answer.get("warnings", []) if w["code"] == "modulation.stacked"]
+    assert not stacked(by_name), by_name
+    assert by_name["modulation"] in stacked(by_id)[0], stacked(by_id)
+    assert by_name["modulation"] in stacked(by_case)[0] and by_id["modulation"] in stacked(by_case)[0]
     assert by_name["param_name"] == by_id["param_name"] == by_case["param_name"] == "Gain"
     macro = j.exec("modulate", {"target": {"fx": "fx_7", "param": "gain"}, "source": "macro",
                                 "depth": 0.5}, "A plug-in with a key: by its key.")
@@ -405,6 +414,7 @@ def modulation(j):
                                          "source": "lfo"}, "The same one by its CLAP id.")
     by_semantic_name = j.exec("modulate", {"target": {"fx": "fx_7", "param": "Gain"},
                                            "source": "lfo"}, "... and by its name.")
+    assert not stacked(macro), "a first route"
     assert macro["param"] == by_semantic_id["param"] == by_semantic_name["param"] == "gain", \
         "a plug-in with keys stores the key, whichever way it was named"
     # Keep one route a target: the three spellings were to see that they agree.
@@ -591,6 +601,19 @@ def song_heard(j):
     assert all(bass_ok) and all(keys_ok), ("the song as heard, by bar", bass_ok, keys_ok)
 
 
+def stems_skip_the_modulators(j):
+    """The Modulators channel `modulate` made holds a rack with only control outputs: a default
+    stems render leaves it out and says so; naming it renders it."""
+    answer = j.exec("render.stems", {"start_beat": 0, "end_beat": 4, "bounds": "custom"},
+                    "Stems of everything: the Modulators channel makes no sound.")
+    skipped = answer["skipped"]
+    assert [(row["track"], row["reason"]) for row in skipped] == [("tr_6", "no_audio")], skipped
+    assert len(answer["files"]) == 5, answer["files"]  # drums, bass, keys, lead, the buss
+    named = j.exec("render.stems", {"tracks": ["tr_6"], "start_beat": 0, "end_beat": 4,
+                                    "bounds": "custom"}, "Named, it is rendered anyway.")
+    assert len(named["files"]) == 1 and "skipped" not in named, named
+
+
 def copied_as_written_heard(j):
     """The same measurement over the Verse copied as written seven times: it tells the
     modes apart by ear, not only by notes."""
@@ -685,6 +708,7 @@ def main():
             built = song(j)
             song_heard(j)
             modulation_heard(j, mods)
+            stems_skip_the_modulators(j)
             other_direction(j, built)
             edit_after(j, built)
             client.close()
