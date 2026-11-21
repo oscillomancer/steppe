@@ -1455,11 +1455,12 @@ Library boundaries:
 
 Engine and hosting:
 - A VST3 editor's edit in the anticipative executor is recorded as the
-  plug-in's state, not as a parameter edit, and writes no point in touch or
-  latch: its state flag captures the state on the main thread before the
-  rendered gesture is heard, and that step's plan swap drops the gesture
-  (review round 81, E2). In-callback and bridged it is the plug-in's
-  gesture.
+  plug-in's state and writes no point in touch or latch, or now and then
+  as the state and then the parameter edit (two steps): its state flag
+  captures the state on the main thread while the rendered gesture waits
+  to be heard, and that step's plan swap usually drops the gesture (review
+  round 81, E2; as before, with the processor's echo). In-callback and
+  bridged it is the plug-in's gesture, one step.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue

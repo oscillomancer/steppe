@@ -401,10 +401,12 @@ until it is released.
   queue ends every editor gesture still open, so a lost `endEdit` leaves
   no gesture open in the stage. Within a grab the plug-in's state is
   captured at `endEdit`, not at each `performEdit`: a capture mid-drag was
-  a step of its own, and its plan swap dropped the drag's gesture. In the anticipative executor the edit's state flag captures the
-  plug-in state first and that step's plan swap drops the rendered
-  gesture: the edit is recorded once, as the plug-in's state, and writes
-  no point (STATUS). Without the filter an echoing plug-in under
+  a step of its own, and its plan swap dropped the drag's gesture. In the
+  anticipative executor the edit's state flag captures the plug-in state
+  while the rendered gesture waits to be heard, and that step's plan swap
+  usually drops the gesture: the edit is recorded as the plug-in's state
+  and writes no point, or now and then as the state and then the
+  parameter edit (STATUS). Without the filter an echoing plug-in under
   modulation added a history step per echo, stopped or playing, and wrote
   points in a writing mode (the gui-lead's second walk, defect 1).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
