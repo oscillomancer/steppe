@@ -837,6 +837,36 @@ TEST_CASE("launcher: the Capture cell is lit by an agent's capture; a click ends
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: with a master playrate on the cells dim, and a launch's refusal is reported") {
+    LauncherFixture f;
+    f.song();
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    views::LauncherPane& pane = f.view->launcherPane();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    f.root->damageAll();
+    f.root->frame(false);
+    CHECK_FALSE(pane.stats.refused);
+    CHECK_FALSE(header.stats.refused);
+    f.exec("transport.playrate.set", R"({"rate":1.5})");
+    CHECK(views::launchesRefused(f.app->head()));
+    f.root->damageAll();
+    f.root->frame(false);
+    CHECK(pane.stats.refused);
+    CHECK(header.stats.refused);
+    f.golden("launcher-refused-dark.png");
+    // A click on a ▶ still asks, and the refusal reaches the app's error
+    // hook (the status line), naming why.
+    f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_1"), 0))));
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors.back().code == "launch.playrate");
+    // Back at 1: launchable, drawn as before.
+    f.exec("transport.playrate.set", R"({"rate":1.0})");
+    f.root->damageAll();
+    f.root->frame(false);
+    CHECK_FALSE(pane.stats.refused);
+    f.exec("engine.stop", "{}");
+}
+
 TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inserts it") {
     LauncherFixture f;
     f.song();
