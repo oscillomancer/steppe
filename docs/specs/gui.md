@@ -1630,6 +1630,44 @@ editable by the human. The event list edits notes and CC events;
 double-click editing requires a row hit and edits that row. Roll gesture
 anchors use exact model timing rather than the rounded `midi.notes` query.
 
+**Lanes.** One menu owns every lane under the roll: **Lanes** in the header
+(it replaced the CC button). It shows Velocity and five controllers (CC 1
+mod, 7 volume, 10 pan, 11 expression, 64 sustain), checked when shown;
+picking another controller switches the CC lane, and picking the shown one,
+or Velocity, hides it, and the roll takes the room.
+
+**Clip-time lanes** (the clip-lane proposal, mock 92). A launcher clip's take
+envelopes and the envelopes on its take FX are in clip time, so they are
+edited in its roll, not on the timeline. For a MIDI clip:
+- a visible envelope on its active take (volume, pan, mute) or on one of
+  its take FX has a lane under the CC lane, on the roll's axis in clip beats,
+  in that order (volume, pan, mute, then the take FX in chain order). It is
+  titled "Volume (take)" or "Teasel · Drive (take)", with the parameter's
+  name and **hide** (`env.set {visible: false}`; the envelope still plays) at
+  the left. An item's roll shows none: its take lanes are on the timeline
+  (§4.3);
+- a click adds a point and drags it; a point drags in beat (snapped to the
+  grid, kept between its neighbours and inside the clip) and value; a right-
+  or Alt-click removes one. Each is one `env.points.set`. Before the clip's
+  start and past its end the lane is dimmed as the roll is, and the curve
+  holds its end value there, dashed. Clip time takes no writing mode and no
+  automation items, so a lane has no read/write cell;
+- the Lanes menu adds Take volume, Take pan and Take mute (disabled, with a
+  row saying why, while the take FX hold no instrument: `env.take_midi`),
+  then for each take effect its envelopes and **parameters…**, the list of
+  the parameters it describes (`fx.describe`; a plain plug-in describes
+  none, as on the timeline). Ticking one without an envelope makes one with
+  a point at the clip's start at the parameter's value now (a take
+  envelope's: 0 dB, centre, unmuted); unticking hides it. Refusals go to the
+  status line.
+
+An audio clip has no roll yet; its pane (mock 93) comes after X3 of
+ADR-0098.
+
+Tests: test_midi_editor "the Lanes menu shows and hides the velocity and CC
+lanes", "a clip's take envelopes and take FX parameters get lanes in clip
+beats", and the CC lane case.
+
 **Roll appearance.** The notes are drawn in the colour their item has in
 the arrangement (`views::Lanes::itemColor`: the item's own, else its
 track's, else its strip type's), so the roll and the item it edits look
@@ -1700,8 +1738,9 @@ drags do not scroll.
 The panel's top border is a drag handle: dragging resizes the panel (up is
 taller; up to nearly the whole window, always leaving the transport and a strip
 of arrange, and clamped again whenever the window shrinks or a neighbouring
-dock grows), double-clicking resets it to the default height. The height is
-UI state (the `midi` section of the sidecar, §1.2). Wheel in the roll, as over
+dock grows), double-clicking resets it to the default height. The height and the lanes
+shown (`velocity`, and `cc`: the controller, 0 for none) are UI state (the
+`midi` section of the sidecar, §1.2). Wheel in the roll, as over
 the arrangement: zooms time around the pointer (a sideways wheel scrolls time);
 Shift scrolls time; Ctrl scrolls pitch; **Alt zooms the key/row height** around the pointer's pitch (4–48 px per key), and also works
 over the keys, lanes and header. Row height is not persisted. These are the

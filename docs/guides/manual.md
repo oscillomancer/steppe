@@ -608,8 +608,17 @@ Under the roll, the **Vel** lane has a stem for each note: drag near a
 note's start to set its velocity, and the other selected notes change by
 the same amount. Below it is a controller lane. Drag in it to draw values,
 one for each grid step; drag with the right button, or with Alt, to erase.
-The **CC** button in the header steps the lane through mod wheel, volume,
-pan, expression and sustain.
+The **Lanes** menu in the header picks the lanes: Velocity, and the
+controller (mod wheel, volume, pan, expression or sustain). Pick the shown
+one again to hide it.
+
+On a launcher clip, the Lanes menu also offers the clip's take envelopes
+(Take volume, pan and mute, once the take FX hold an instrument) and the
+parameters of each effect in its take FX (**parameters…**). Their lanes
+appear under the controller lane in clip beats, from the clip's start:
+click to add a point, drag one to move it, right-click one to remove it,
+and **hide** at the lane's left hides it. The envelope keeps playing while
+hidden.
 
 ### Moving around
 
