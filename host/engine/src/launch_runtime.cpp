@@ -908,6 +908,13 @@ Status Engine::captureLaunches(bool on) {
         if (rateActive())
             return Error("launch.playrate", "a master playrate is active", "",
                          "set the master playrate to 1 and turn off its envelope, then capture");
+        // Set to 1, a rate still gliding there is heard (the builder's song
+        // journey 2, D2): the capture's running time would not be the song's.
+        if (const double heard = effectivePlayrate(); heard != 1)
+            return Error(
+                "launch.playrate",
+                "the master playrate is still gliding to 1 (heard: " + std::to_string(heard) + ")",
+                "", "capture again once transport.playrate says effective_rate 1");
         capture_ = {};
         capture_.on = capture_.any = capture_.pending = true;
         placeCapture();

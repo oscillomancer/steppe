@@ -661,7 +661,10 @@ class Engine {
         return backend_ ? backend_->midiPorts() : std::vector<std::string>{};
     }
     TransportState transport() const;
-    double effectivePlayrate() const { return effectivePlayrate_.load(std::memory_order_relaxed); }
+    // Main thread: the master playrate as heard. Stopped, nothing is heard,
+    // and a steady scalar is the rate the play starts at (the builder's song
+    // journey 2, F8); an envelope or a sync chase reads as last heard.
+    double effectivePlayrate() const;
 
     // --- external sync (ADR-0071) ----------------------------------------------------
     // Main thread. The configuration the callback runs (now if running, else
