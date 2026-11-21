@@ -241,6 +241,9 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
                           o.toKey ? keyText(*o.toKey) : std::string(), interval, transpose};
             bars[way].insert(o.bar);
         }
+    // A bar where no note starts (a rest, or a note held over it) does not end a run.
+    std::set<int> onsets;
+    for (const auto& entry : bars) onsets.insert(entry.second.begin(), entry.second.end());
     std::vector<FollowRegion> regions;
     for (const auto& [way, set] : bars) {
         std::vector<int> run;
@@ -257,7 +260,11 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
             run.clear();
         };
         for (const int bar : set) {
-            if (!run.empty() && bar != run.back() + 1) flush();
+            if (!run.empty()) {
+                bool gap = false;  // a bar between the run and this one holds a note's start
+                for (int b = run.back() + 1; b < bar && !gap; ++b) gap = onsets.count(b) > 0;
+                if (gap) flush();
+            }
             run.push_back(bar);
         }
         flush();

@@ -1866,3 +1866,21 @@ TEST_CASE("a held-in fragment does not unroll an item whose whole passes map ali
     CHECK(row.find("followed")->find("unrolled") == nullptr);
     CHECK(l.head().items.find(id(row.find("item")->asString().c_str()))->loop);
 }
+
+TEST_CASE("followed.regions run across a bar where no note starts") {
+    // session-model: a region is a maximal run of project bars over which the keys and the
+    // way notes were mapped stay the same. A rest bar between two notes does not split it.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "E", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "follow": "key",
+                          "notation": "voice bass; 1: A1:w; 2: r:w; 3: A1:w",
+                          "context": "1: key D minor ~:w"})");
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(regionsOf(*laid.find("followed")) == "5-7 transpose D minor>E minor 2");
+    // A key change inside the rest bar still splits the run: the keys differ.
+    l.run("history.undo", "{}");
+    l.run("key.set", R"({"at": 20, "tonic": "F", "scale": "minor"})");  // bar 6
+    auto split = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(regionsOf(*split.find("followed")) ==
+          "5-5 transpose D minor>E minor 2, 7-7 transpose D minor>F minor 3");
+}

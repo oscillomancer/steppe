@@ -2304,7 +2304,9 @@ bars.
   to_bar, from_key?, to_key?, by, interval?}], folded?, unrolled?,
   copied?}`.
   - A region is a maximal run of project bars over which the clip's key, the
-    place's key and the way notes were mapped stay the same.
+    place's key and the way notes were mapped stay the same. Regions are read
+    from the bars where notes start; a bar where none does (a rest, a held
+    note) does not end a run.
   - `from_bar` and `to_bar` are project bars, and `to_bar` is inclusive.
   - `by` is `transpose`, `degree`, `chords` or `copy`; `interval` is in
     semitones, for `transpose`.
