@@ -807,7 +807,11 @@ instructions are in `docs/guides/installing.md`.
   lane sends the base plus the offset, clamped, on the same grid; it needs
   an active envelope (`modulate` adds a one-point one). A write pass holds
   the lane, so it records the hand's values and the modulation pauses on
-  that parameter until release (ADR-0061, amended). Depth and enabled are mix values (no
+  that parameter until release (ADR-0061, amended). A plug-in that repeats
+  on its output the values it is sent (automation, or the lane's base plus
+  offset) is not recording edits: the executor drops those echoes outside
+  the plug-in's own gesture, so a modulated parameter adds no undo step and
+  writes no point; its own editor edits are recorded as before. Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both

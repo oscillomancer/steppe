@@ -2878,6 +2878,55 @@ void holdGestures(Stage& st, bool playing) SUPPLE_RT {
     }
 }
 
+// The parameter values this block sends the plug-in (Stage::sentParam).
+void noteSentValues(Stage& st) SUPPLE_RT {
+    for (const host::Event& e : st.blockEvents) {
+        if (e.kind != host::Event::Kind::Param) continue;
+        st.sentParam[st.sentNext] = e.paramId;
+        st.sentValue[st.sentNext] = e.value;
+        st.sentNext = (st.sentNext + 1) % Stage::kSentValues;
+        st.sentCount = std::min(st.sentCount + 1, Stage::kSentValues);
+    }
+}
+
+// Drops the plug-in's echoes of what the host sent it (Stage::sentParam):
+// a global parameter value equal to a recent sent one, outside the plug-in's
+// own gesture on that parameter. Gestures, other parameters and notes stay.
+// Equal within float precision: a plug-in may keep values as floats.
+void dropEchoes(Stage& st) SUPPLE_RT {
+    using Kind = host::OutputEvent::Kind;
+    const auto open = [&](std::uint32_t id) {
+        for (std::size_t g = 0; g < st.openGestures; ++g)
+            if (st.openGesture[g] == id) return true;
+        return false;
+    };
+    const auto sent = [&](std::uint32_t id, double value) {
+        for (std::size_t k = 0; k < st.sentCount; ++k)
+            if (st.sentParam[k] == id &&
+                std::abs(st.sentValue[k] - value) <= 1e-6 * std::max(1.0, std::abs(value)))
+                return true;
+        return false;
+    };
+    std::size_t kept = 0;
+    for (std::size_t k = 0; k < st.outEvents.count; ++k) {
+        const host::OutputEvent e = st.outEvents.storage[k];
+        if (e.kind == Kind::GestureBegin && !open(e.paramId)) {
+            if (st.openGestures < Stage::kOpenGestures)
+                st.openGesture[st.openGestures++] = e.paramId;
+        } else if (e.kind == Kind::GestureEnd) {
+            for (std::size_t g = 0; g < st.openGestures; ++g)
+                if (st.openGesture[g] == e.paramId) {
+                    st.openGesture[g] = st.openGesture[--st.openGestures];
+                    break;
+                }
+        } else if (e.kind == Kind::ParamValue && e.noteId == -1 && e.port == -1 &&
+                   e.channel == -1 && e.key == -1 && !open(e.paramId) && sent(e.paramId, e.value))
+            continue;  // the host's own value, repeated
+        st.outEvents.storage[kept++] = e;
+    }
+    st.outEvents.count = kept;
+}
+
 // Clears what a stage carries from block to block outside its plug-in.
 void clearStageDelays(Stage& st) SUPPLE_RT {
     st.dry.clear();
@@ -2981,7 +3030,9 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
     }
     b.transport = &mappedTransport;
     b.steadyTime = pos * os;
+    noteSentValues(st);
     const bool processed = st.instance->process(b, &st.outEvents);
+    dropEchoes(st);
     if (os > 1) {
         for (host::Event& e : st.blockEvents) e.time /= os;
         for (std::size_t k = 0; k < st.outEvents.count; ++k) st.outEvents.storage[k].time /= os;

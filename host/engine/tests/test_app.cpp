@@ -4884,3 +4884,170 @@ TEST_CASE("modulate: a follower listens through a send, and not to the track it 
     CHECK(app->view().modulations.find(*model::Id::parse(direct["modulation"].asString()))->depth ==
           50.0);
 }
+
+namespace {
+// An app with a track, a plug-in modulated through its envelope by a fast LFO
+// (ADR-0096 M4), the plug-in echoing each value it is sent (the gui-lead's
+// second walk, defect 1). `clap`: the edge fixture in its echo mode (36), its
+// parameter 7 (automatable, not modulatable); else Test VST3 Gain's Gain.
+struct EchoRig {
+    Root root;
+    std::unique_ptr<EngineApp> app;
+    std::unique_ptr<cmd::Registry> registry;
+    std::unique_ptr<cmd::Dispatcher> bus;
+    model::Id fx{model::Kind::Fx, 1}, env;
+    std::string modulation;
+    json::Value call(const char* command, const json::Value& args) {
+        auto result = bus->execute({command, args, kTest});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    }
+    EchoRig(bool clap, const char* mode, const char* isolation) {
+        AppOptions options;
+        options.workdir = root.path;
+        options.pluginPath = {kFixture, FIXTURE_VST3_PATH};
+        auto made = EngineApp::create(options, {.console9 = false});
+        REQUIRE(made);
+        app = std::move(*made);
+        registry = std::make_unique<cmd::Registry>();
+        registerEngineCommands(*registry);
+        bus = std::make_unique<cmd::Dispatcher>(*registry, *app);
+        call("track.add", j("{}"));
+        if (clap) {
+            call("fx.add", j(R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})"));
+            auto echo = app->beginTransaction(kTest, "Echo mode");
+            REQUIRE(echo);
+            std::vector<std::uint8_t> state{36, 0, 0, 0};
+            const auto hash = "sha256:" + sha256Hex(state);
+            app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{state}));
+            app->txn().modify<model::FxInstance>(fx, [&](auto& f) { f.state = hash; });
+            REQUIRE(app->commitTransaction(*echo));
+            call("env.add", j(R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":500}]})"));
+            // The LFO (built on the pan: the commands read the fixture in its
+            // default state, where 7 is read-only), and a route from it into 7.
+            const json::Value made2 =
+                call("modulate", j(R"({"target":{"track":"tr_1","param":"pan"},"source":"lfo"})"));
+            const model::Modulation& pan = *app->head().modulations.find(
+                *model::Id::parse(made2.find("modulation")->asString()));
+            auto routing = app->beginTransaction(kTest, "Route into the envelope");
+            REQUIRE(routing);
+            model::Modulation into;
+            into.source = pan.source;
+            into.target = {fx, "7"};
+            into.depth = 1e-7;
+            modulation = app->txn().create(into).str();
+            REQUIRE(app->commitTransaction(*routing));
+            json::Value fast = json::Value::object();
+            fast["module"] = made2.find("module")->asString();
+            fast["params"] = j(R"({"rate": 5})");
+            call("module.set", fast);
+        } else {
+            call("fx.add", j(R"({"track":"tr_1","plugin":"Test VST3 Gain"})"));
+            const json::Value made2 =
+                call("modulate", j(R"({"target":{"fx":"fx_1","param":"Gain"},"source":"lfo"})"));
+            modulation = made2.find("modulation")->asString();
+            json::Value fast = json::Value::object();
+            fast["module"] = made2.find("module")->asString();
+            fast["params"] = j(R"({"rate": 5})");
+            call("module.set", fast);
+        }
+        for (const auto& e : app->head().envelopes)
+            if (e.value->target.object == fx) env = e.id;
+        REQUIRE(env.n != 0);
+        json::Value set = json::Value::object();
+        set["env"] = env.str();
+        set["mode"] = mode;
+        call("env.set", set);
+        if (isolation) {
+            json::Value iso = json::Value::object();
+            iso["fx"] = "fx_1";
+            iso["isolation"] = isolation;
+            call("fx.set", iso);
+        }
+    }
+};
+}  // namespace
+
+TEST_CASE("the values the host sends a plug-in are not its edits, though it echoes them") {
+    // The gui-lead's second walk, defect 1: a VST3 parameter modulated through
+    // its envelope (ADR-0096 M4) flooded the history with "Plug-in parameter
+    // edit" entries, playing or stopped, and a writing mode wrote points. Both
+    // fixtures echo each value they are sent; over seconds of modulated
+    // running, stopped and playing: no version, no point, the history as it
+    // was. In both executors, and bridged (the bridge carries the outputs).
+    struct Run {
+        bool anticipative;
+        const char* isolation;
+    };
+    for (const bool clap : {false, true})
+        for (const char* mode : {"read", "touch", "latch"})
+            for (const Run run :
+                 {Run{false, nullptr}, Run{true, nullptr}, Run{false, "shared_bridge"}}) {
+                CAPTURE(clap);
+                CAPTURE(std::string(mode));
+                CAPTURE(run.anticipative);
+                CAPTURE(run.isolation != nullptr);
+                EchoRig rig(clap, mode, run.isolation);
+                EngineApp& app = *rig.app;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+                REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                        {.anticipative = run.anticipative}));
+                const auto seconds = [&](double s) {
+                    for (int i = 0; i < int(s * 48000 / 512); ++i) {
+                        if (run.anticipative) (void)app.engine()->awaitRendered(4096);
+                        backend.run(1);
+                        app.tick();
+                    }
+                };
+                seconds(0.5);
+                const auto version = app.head().version;
+                // The newest history entry (a flood adds "Plug-in parameter edit"s).
+                const auto newest = [&] { return app.versions().history(1).front()->id; };
+                const auto history = newest();
+                const auto points = app.head().envelopes.find(rig.env)->points.size();
+                REQUIRE(app.modulationOffsets().count(*model::Id::parse(rig.modulation)));
+                seconds(2);  // stopped: the LFO runs on
+                CHECK(app.head().version == version);
+                REQUIRE(app.transport("play"));
+                seconds(2);
+                CHECK(app.head().version == version);
+                CHECK(newest() == history);
+                CHECK(app.head().envelopes.find(rig.env)->points.size() == points);
+                REQUIRE(app.transport("stop"));
+                app.stopEngine();
+            }
+}
+
+TEST_CASE("a plug-in's own edit during modulation is still recorded, once") {
+    // The echo filter drops only values the host sent: the edge fixture's
+    // editor (its gesture, 5 then 10, in its echo mode) is the plug-in's own
+    // edit, recorded as one step with the hand's last value, while the LFO
+    // keeps sending and the fixture keeps echoing.
+    for (const char* mode : {"read", "touch"}) {
+        CAPTURE(std::string(mode));
+        EchoRig rig(true, mode, nullptr);
+        EngineApp& app = *rig.app;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                {.anticipative = false}));
+        const auto cycles = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                backend.run(1);
+                app.tick();
+            }
+        };
+        REQUIRE(app.transport("play"));
+        cycles(50);
+        const auto version = app.head().version;
+        auto* instance = app.instanceOf(rig.fx);
+        REQUIRE(instance);
+        REQUIRE(instance->openEditor(1234, 1));
+        cycles(50);
+        instance->closeEditor();
+        cycles(50);
+        CHECK(app.head().version == version + 1);
+        CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
+        REQUIRE(app.transport("stop"));
+        app.stopEngine();
+    }
+}

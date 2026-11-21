@@ -746,6 +746,19 @@ struct Stage {
     std::uint64_t modDeferred = 0;
     std::vector<host::OutputEvent> outStorage;
     host::OutputEvents outEvents;
+    // Echoes (the gui-lead's second walk, defect 1): the parameter values
+    // the host sent this plug-in lately (automation, modulation through an
+    // envelope, any Param event of its blocks), newest at `sentNext - 1`,
+    // and the parameters whose own gesture it has open. An output value
+    // equal to a sent one outside such a gesture is the plug-in repeating
+    // the host, never its edit: it is dropped before the main thread
+    // (`dropEchoes`). Fixed sizes: nothing allocates on the audio path.
+    static constexpr std::size_t kSentValues = 64, kOpenGestures = 16;
+    std::array<std::uint32_t, kSentValues> sentParam{};
+    std::array<double, kSentValues> sentValue{};
+    std::size_t sentNext = 0, sentCount = 0;
+    std::array<std::uint32_t, kOpenGestures> openGesture{};
+    std::size_t openGestures = 0;
     // PDC policy (fx.pdc): an ignored stage keeps its own dry delay but adds
     // nothing to its chain's compensation.
     bool pdcIgnore = false;

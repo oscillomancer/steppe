@@ -978,10 +978,25 @@ void edgeHostInput(const clap_plugin_t* pl, const clap_input_events_t* in) {
         }
     }
 }
+// Mode 36: each parameter value the host sends comes straight back as the
+// plug-in's output, as some plug-ins echo them (the gui-lead's second walk,
+// defect 1): the host must not take it for the plug-in's own edit.
+void edgeEcho(const clap_plugin_t* pl, const clap_input_events_t* in,
+              const clap_output_events_t* out) {
+    if (E(pl)->config[0] != 36 || !out) return;
+    for (uint32_t i = 0; i < in->size(in); ++i) {
+        const auto* h = in->get(in, i);
+        if (h->space_id != CLAP_CORE_EVENT_SPACE_ID || h->type != CLAP_EVENT_PARAM_VALUE) continue;
+        clap_event_param_value_t echo = *reinterpret_cast<const clap_event_param_value_t*>(h);
+        echo.header.flags = CLAP_EVENT_IS_LIVE;
+        out->try_push(out, &echo.header);
+    }
+}
 void CLAP_ABI edgeFlush(const clap_plugin_t* pl, const clap_input_events_t* in,
                         const clap_output_events_t* out) {
     const auto value = ++E(pl)->flushes;
     edgeHostInput(pl, in);
+    edgeEcho(pl, in, out);
     if (E(pl)->config[0] >= 30 && !E(pl)->processing) edgeEditorOutput(pl, out, true);
     if (E(pl)->config[0] != 9 && E(pl)->config[0] != 10) return;
     const int repeats = E(pl)->config[0] == 10 ? 600 : 1;
@@ -1282,6 +1297,7 @@ clap_process_status CLAP_ABI edgeProcess(const clap_plugin_t* pl, const clap_pro
     if (E(pl)->config[0] == 42 || E(pl)->config[0] == 44)
         E(pl)->host->request_callback(E(pl)->host);
     edgeHostInput(pl, p->in_events);
+    edgeEcho(pl, p->in_events, p->out_events);
     if (E(pl)->config[0] >= 30) edgeEditorOutput(pl, p->out_events, false);
     clap_event_param_value_t param{};
     param.header = {sizeof(param), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE,

@@ -57,7 +57,9 @@ Which parameters take it: `fx.describe` with full detail marks a parameter
 `modulatable` (taken directly) or `modulatable_by_envelope` (continuous and
 automatable but not modulatable by itself, as Drumlin's pads' tune is: `modulate`
 adds a one-point envelope first and the route rides on it, so keep that envelope
-on). A parameter that is neither is refused with `modulation.target`, and its
+on). Some plug-ins repeat on their output every value they are sent; those repeats are
+dropped, so a modulated parameter adds nothing to the undo history and writes no
+envelope points. Only the plug-in's own edits (its editor, with its gesture) are recorded. A parameter that is neither is refused with `modulation.target`, and its
 hint says what the plug-in does take.
 
 ## Reading it back

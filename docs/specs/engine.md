@@ -380,7 +380,16 @@ until it is released.
   plug-in's gesture (§1.4), so what the plug-in reports is the hand's value,
   recorded as it is. Outside a held pass (stopped, or a reading mode) the
   route's current offset is taken off what the plug-in reports
-  (`commitOutputGesture`), so the static value keeps the base.
+  (`commitOutputGesture`), so the static value keeps the base. What a
+  plug-in merely repeats of the values it was sent never gets that far:
+  each stage keeps the last 64 parameter values its blocks sent the
+  plug-in, and the executor drops, before the main thread, an output
+  value equal to one of them (within float precision) for that parameter
+  outside the plug-in's own gesture on it. That holds for every format,
+  bridged or not, and for plain automation as for this lane. Without it an
+  echoing plug-in under modulation added a history step per echo, stopped
+  or playing, and wrote points in a writing mode (the gui-lead's second
+  walk, defect 1).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
   that its target cannot take it: the parameter is gone, read-only, bypass,
   neither modulatable nor reachable through an active envelope, or the
