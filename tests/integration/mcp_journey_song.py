@@ -121,6 +121,7 @@ BASS_PATCH = {"params": {"osc1.wave": "saw", "filter1.type": "ladder",
                          "amp.release": "120 ms"}}
 
 SONG = [("sc_1", 4), ("sc_2", 8), ("sc_3", 8), ("sc_4", 4)]  # Intro Verse Chorus Break
+TRACK_NAMES = {"tr_1": "Drums", "tr_2": "Bass", "tr_3": "Keys"}
 
 
 class Wav:
@@ -187,8 +188,11 @@ def build(j):
     for track, plugin in (("tr_1", "drumlin"), ("tr_2", "marram"), ("tr_3", "marram"),
                           ("tr_4", "ghyll")):
         j.exec("fx.add", {"track": track, "plugin": PLUGIN + plugin})
-    j.exec("fx.patch.merge", {"fx": "fx_3", "patch": KEYS_PATCH}, "Keys: a saw through a ladder.")
-    j.exec("fx.patch.merge", {"fx": "fx_2", "patch": BASS_PATCH}, "Bass: a darker saw.")
+    for fx, patch, note in (("fx_3", KEYS_PATCH, "Keys: a saw through a ladder."),
+                            ("fx_2", BASS_PATCH, "Bass: a darker saw.")):
+        merged = j.exec("fx.patch.merge", {"fx": fx, "patch": patch}, note)
+        # A first merge into a fresh instance reports what it changed, not every default.
+        assert 1 <= len(merged["changed"]["params"]) <= len(patch["params"]), merged["changed"]
     j.exec("route.add", {"from": "tr_3", "to": "tr_4"}, "Send the keys to the reverb buss.")
     for track, volume in (("tr_1", -8), ("tr_2", -6), ("tr_3", -10)):
         j.exec("track.set", {"track": track, "volume_db": volume}, "Mix: levels in dB.")
@@ -218,7 +222,8 @@ def scenes(j):
         if name != "Intro":
             cells.insert(1, ("tr_2", bass(name)))
         for track, notation in cells:
-            made = j.exec("clip.add", {"track": track, "scene": scene, "notation": notation},
+            made = j.exec("clip.add", {"track": track, "scene": scene, "notation": notation,
+                                       "name": f"{name} {TRACK_NAMES[track]}"},
                           f"The {name} clip on {track}, written over its four chords.")
             assert made["kind"] == "midi" and made["length"] == 16.0, made
             count += 1
@@ -251,8 +256,8 @@ def modulation(j):
     j.exec("module.set", {"module": send["module"],
                           "params": {"sync": True, "division": "d2_1", "shape": "triangle"}},
            "The send LFO: synced, one cycle in two bars.")
-    j.exec("module.set", {"module": macro["module"], "params": {macro["knob"]: 80}},
-           "Move the macro to 80 % (its knobs run 0 to 100).")
+    j.exec("module.set", {"module": macro["module"], "params": {macro["knob"]: "80 %"}},
+           "Move the macro to 80 %: a knob takes text in its unit (its knobs run 0 to 100).")
     listed = j.exec("modulation.list", {}, "The routes, each fed by its module.")["modulations"]
     assert [m["modulation"] for m in listed] == ["mr_1", "mr_2", "mr_3"], listed
     assert all(not m.get("inert") and m["fed_by"] and m["enabled"] for m in listed), listed
@@ -366,6 +371,11 @@ def song(j, mods):
     assert re.sub(r"rg_\d+ ", "", regions) == (
         '"Intro" bar 1–bar 5 "Verse" bar 5–bar 13 "Chorus" bar 13–bar 21 "Break" bar 21–bar 25'
     ), regions
+    # A clip's name is the name of the item laid from it.
+    text = j.described()
+    for needle in ('"Verse Bass" bar 5–bar 13', '"Chorus Keys" bar 13–bar 21',
+                   '"Break Drums" bar 21–bar 25'):
+        assert needle in text, (needle, text)
     for bar, section, symbol in ((3, "Intro", "Abmaj7"), (8, "Verse", "G7"),
                                  (14, "Chorus", "Bb"), (22, "Break", "Bbmaj7")):
         at = j.exec("context.at", {"bar": bar}, f"Bar {bar}: section and chord.")
@@ -447,6 +457,8 @@ def other_direction(j, built):
                                         "name": "Chorus again"},
                       "A scene from the Chorus section.")
     assert [c["track"] for c in captured["clips"]] == ["tr_1", "tr_2", "tr_3"], captured
+    scenes_block = j.described().split("Scenes (")[1]
+    assert scenes_block.count('"Chorus Bass"') == 2, "the captured clip keeps the name"
     for row in captured["clips"]:
         copy = j.exec("midi.get", {"item": row["clip"]}, "A captured clip.")["text"]
         source = j.exec("midi.get", {"item": row["source_item"]}, "Its item.")["text"]
