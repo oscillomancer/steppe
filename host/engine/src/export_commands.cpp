@@ -239,7 +239,8 @@ void registerExportCommands(cmd::Registry& registry) {
                    .field("notes", &ExportResult::notes, schema::integer())
                    .build();
     c.errors = {
-        {"item.unknown", "no such item", "use an id from session.query {kind: \"item\"}"},
+        {"item.unknown", "no such item",
+         "use an item id from session.describe (items are listed under their tracks)"},
         {"item.export_empty", "an empty take, or no source audio under the item",
          "pick a take with material (take.activate) or move the item onto its audio"},
         {"item.export_source", "the source file cannot be read", "restore or relink the source"},
@@ -276,8 +277,9 @@ void registerExportCommands(cmd::Registry& registry) {
         }
         const model::Item* it = id && id->kind == model::Kind::Item ? s.items.find(*id) : nullptr;
         if (!it)
-            return Error("item.unknown", "no " + a.item, "/item",
-                         "use an id from session.query {kind: \"item\"}");
+            return Error(
+                "item.unknown", "no " + a.item, "/item",
+                "use an item id from session.describe (items are listed under their tracks)");
         const model::Take* take = it->activeTake ? s.takes.find(*it->activeTake) : nullptr;
         if (!take || !take->source)
             return Error("item.export_empty", a.item + " has no material to export", "/item",

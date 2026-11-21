@@ -66,8 +66,9 @@ SymbolChords chordsFromSymbols(const model::Session& s,
 
 // A stated context (text, or taken from a place) and the symbols of a notation, by
 // precedence: a stated context holding chords wins, and the symbols are ignored
-// (`clip.chords_ignored`); otherwise the stated points and the symbols' chords. Nothing
-// stated: the symbols' chords alone. Sorted by beat then type.
+// (`clip.chords_ignored`, only when some symbol is not the chord the stated points hold at its
+// beat: symbols that say the same are not news); otherwise the stated points and the symbols'
+// chords. Nothing stated: the symbols' chords alone. Sorted by beat then type.
 std::vector<model::ContextPoint> composeContext(
     std::optional<std::vector<model::ContextPoint>> stated, SymbolChords symbols,
     std::vector<ClipNote>& notes);
@@ -77,8 +78,10 @@ std::vector<model::ContextPoint> composeContext(
 // the clip's key (at its clip beat: the beat from the item's start through the clip's
 // period, `phase` beats into it at the start) and the project's key both hold and differ in
 // tonic pitch class or scale. It names the clip, both keys and the first project bar where
-// they differ. A clip with no note off channel 10 (drums, or empty) gives none, and neither
-// does an enharmonic spelling.
+// they differ. In the same key (or with none to compare) it is also given for the first beat
+// at which the clip's chord and the project's both hold and differ (root, quality or bass),
+// naming both chords. A clip with no note off channel 10 (drums, or empty) gives none, and
+// neither does an enharmonic spelling.
 std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
                                      const model::Clip& clip, double start, double length,
                                      double phase = 0, const std::string& path = "/clip");

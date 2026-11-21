@@ -43,6 +43,7 @@ q = nil
 ---@field bar? integer Start bar, 1-based [1].
 ---@field pooled? boolean (default: false)
 ---@field follow? "none"|"key"|"chords" How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow.
+---@field write_context? boolean Write the scene's clips' own key and chords onto the context track under each section that has none (shifted to the section, repeating with a loop clip), in the same undo step, before the clips are laid. Left alone: a section with points under it; not written: one whose clips disagree. The answer's context says which (default false). (default: false)
 
 ---@class Steppe.arrangement_build_result
 ---@field segments table[]
@@ -2030,12 +2031,14 @@ q = nil
 ---@field name? string
 ---@field pooled? boolean (default: false)
 ---@field follow? "none"|"key"|"chords" How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow.
+---@field write_context? boolean Write the scene's clips' own key and chords onto the context track under each section that has none (shifted to the section, repeating with a loop clip), in the same undo step, before the clips are laid. Left alone: a section with points under it; not written: one whose clips disagree. The answer's context says which (default false). (default: false)
 
 ---@class Steppe.scene_insert_result
 ---@field items table[]
 ---@field region string
 ---@field start number The span's start, in beats.
 ---@field end number The span's end, in beats.
+---@field context? table
 ---@field warnings? table[]
 
 ---@class Steppe.scene_list_result

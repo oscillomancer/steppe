@@ -513,8 +513,8 @@ void registerItemCommands(cmd::Registry& registry) {
             "the clip's own) maps the clip's notes from the key or chords it was written against "
             "to those under the item (ADR-0098): notes on channel 10 and clips that cannot follow "
             "are copied, and the answer's followed says what was done, by bar. With none the "
-            "notes are copied as they are and context.mismatch warns when the clip's key is not "
-            "the project's under the item. A master holds "
+            "notes are copied as they are and context.mismatch warns when the clip's key, or in "
+            "the same key its chord, is not the project's under the item. A master holds "
             "audio items only (prints, played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =

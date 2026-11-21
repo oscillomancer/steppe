@@ -1356,6 +1356,22 @@ TEST_CASE("clip.add records the chord symbols of its notation, by precedence") {
                               R"x("voice a; 1: {Dm}:w; voice b; 1: {Gm}:w"})x");
     CHECK(pointsOf(clipOf(l, "cl_6")) == "chord@0 Dm");
     CHECK(warningCodes(conflict).find("clip.chord_conflict") != std::string::npos);
+    // Symbols that say what the stated chords say are not news: no warning when every symbol
+    // is the chord holding at its beat (a stated chord may hold across several symbols).
+    l.run("scene.add", R"({"name": "Same"})");
+    const auto agreeing =
+        l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_7", "notation": )") +
+                              R"x("voice bass; 1: {Dm}:w; 2: {Dm}:h {Dm}:h", )x" +
+                              R"x("context": "1: key D minor {Dm}:w\n2: ~:w"})x");
+    CHECK(pointsOf(clipOf(l, "cl_7")) == "key@0 D minor, chord@0 Dm");
+    CHECK(warningCodes(agreeing).find("clip.chords_ignored") == std::string::npos);
+    // One symbol that differs from the chord holding at its beat brings the warning back.
+    l.run("scene.add", R"({"name": "Differ"})");
+    const auto differing =
+        l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_8", "notation": )") +
+                              R"x("voice bass; 1: {Dm}:w; 2: {Dm}:h {Gm}:h", )x" +
+                              R"x("context": "1: key D minor {Dm}:w\n2: ~:w"})x");
+    CHECK(warningCodes(differing).find("clip.chords_ignored") != std::string::npos);
 }
 
 TEST_CASE("clip.set: context, follow, and the edits that keep the invariants in the same step") {
@@ -1583,6 +1599,41 @@ std::string regionsOf(const json::Value& followed) {
 }
 
 }  // namespace
+
+TEST_CASE("laying a clip as written warns when its chords are not the project's, key or no key") {
+    Launcher l;
+    // The project: D minor over Dm | Gm | A7 | Dm.
+    l.run("context.write", R"({"text": "1: key D minor {Dm}:w\n2: {Gm}:w\n3: {A7}:w\n4: {Dm}:w"})");
+    // A clip written over Dm | Dm | A7 | Dm, in the same key.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "name": "Verse bass",
+                          "notation": "voice bass; 1: D2:w; 2: D2:w; 3: A1:w; 4: D2:w",
+                          "context": "1: key D minor {Dm}:w\n2: ~:w\n3: {A7}:w\n4: {Dm}:w"})");
+    const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 1, "clip": "cl_1"})");
+    REQUIRE(laid.find("warnings") != nullptr);
+    const std::string message = laid.find("warnings")->at(0).find("message")->asString();
+    CHECK(warningCodes(laid) == "context.mismatch ");
+    CHECK(message.find("cl_1 \"Verse bass\" was written over Dm and sits under Gm from bar 2") !=
+          std::string::npos);
+    // One warning for the item, whatever the number of bars that differ; the same chords do not.
+    l.run("item.remove", R"({"item": ")" + laid.find("item")->asString() + R"("})");
+    l.run("context.write", R"({"text": "2: {Dm}:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 1, "clip": "cl_1"})")).empty());
+    // A clip with chords and no key says it too; one with no chords does not.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "name": "Keyless",
+                          "notation": "voice bass; 1: {Gm}:w; 2: {Gm}:w"})");
+    CHECK(warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_2"})")) ==
+          "context.mismatch ");
+    l.run("scene.add", R"({"name": "Plain"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "notation": "voice bass; 1: D2:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 13, "clip": "cl_3"})")).empty());
+    // A clip that follows the chords is mapped, so there is nothing to warn of.
+    l.run("context.write", R"({"text": "2: {Gm}:w"})");
+    l.run("clip.set", R"({"clip": "cl_1", "follow": "chords"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 17, "clip": "cl_1"})")).empty());
+}
 
 TEST_CASE("item.add {clip} maps a clip to the key under it, by bar, and says how") {
     Launcher l;
