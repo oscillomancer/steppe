@@ -8,6 +8,7 @@
 #include "plugin_scales.h"
 #include "supple/harmony/harmony.h"
 #include "supple/ui/shortcut.h"
+#include "take_follow.h"
 
 #include <algorithm>
 #include <cmath>
@@ -99,6 +100,23 @@ int nearestDegrees(int pitch, const harmony::Key& key, int semitones) {
     return best;
 }
 
+// The same for a following take's sounding view (gui.md §4.7): the written
+// pitch steps by degrees of the take's own key (what midi.edit does), and
+// the step chosen is the one whose result sounds nearest `target`, the
+// row under the pointer. `sounds` is what a written pitch sounds as there.
+int nearestSoundingDegrees(int written, const harmony::Key& key, int from, int target,
+                           const std::function<int(int)>& sounds) {
+    int best = 0, distance = std::abs(target - from);
+    for (int d = 1; d <= 84 && distance > 0; ++d)
+        for (int step : {d, -d})
+            if (const auto moved = harmony::transposeDegrees(written, key, step);
+                moved && std::abs(sounds(*moved) - target) < distance) {
+                best = step;
+                distance = std::abs(sounds(*moved) - target);
+            }
+    return best;
+}
+
 }  // namespace
 
 namespace {
@@ -149,6 +167,12 @@ std::optional<int> RollState::soundingPitch(std::size_t i, const RollNote& n) co
     // A preview: the note as it would be, at the place it would start (the start rule).
     if (!soundsAt) return std::nullopt;
     return soundsAt(n.pitch, n.channel, itemPosition + n.start + sounds[i].shift);
+}
+
+std::optional<harmony::Key> RollState::degreeKeyAt(std::size_t i, double projectBeat) const {
+    if (!following || !writtenKeyAt) return keyAt(projectBeat);
+    const double shift = i < sounds.size() && sounds[i].pitch >= 0 ? sounds[i].shift : passShift;
+    return writtenKeyAt(projectBeat + shift);
 }
 
 int RollState::drawnPitch(std::size_t i, const RollNote& n) const {
@@ -203,7 +227,7 @@ struct Geometry {
                 if (!s.degrees) {
                     n.pitch = std::clamp(n.pitch + s.dPitch, 0, 127);
                 } else if (s.dDegrees != 0) {  // by the key where the note lands
-                    if (const auto key = s.keyAt(s.itemPosition + n.start))
+                    if (const auto key = s.degreeKeyAt(i, s.itemPosition + n.start))
                         n.pitch =
                             harmony::transposeDegrees(n.pitch, *key, s.dDegrees).value_or(n.pitch);
                 }
@@ -662,9 +686,25 @@ class Roll : public ui::Node {
                     // many degrees.
                     s_.dDegrees = 0;
                     const RollNote& anchor = s_.notes[anchor_];
+                    const double at = s_.itemPosition + anchor.start + s_.dBeats;
                     if (s_.degrees && s_.dPitch != 0)
-                        if (const auto key = s_.keyAt(s_.itemPosition + anchor.start + s_.dBeats))
-                            s_.dDegrees = nearestDegrees(anchor.pitch, *key, s_.dPitch);
+                        if (const auto key = s_.degreeKeyAt(anchor_, at)) {
+                            if (s_.soundingView()) {
+                                // Steps of the written pitch in the take's key,
+                                // the one that sounds nearest the pointer's row
+                                // where the note lands.
+                                RollNote moved = anchor;
+                                moved.start += s_.dBeats;
+                                const int from = s_.drawnPitch(anchor_, anchor);
+                                s_.dDegrees = nearestSoundingDegrees(
+                                    anchor.pitch, *key, from, from + s_.dPitch, [&](int w) {
+                                        moved.pitch = w;
+                                        return s_.soundingPitch(anchor_, moved).value_or(w);
+                                    });
+                            } else {
+                                s_.dDegrees = nearestDegrees(anchor.pitch, *key, s_.dPitch);
+                            }
+                        }
                     break;
                 }
                 case RollState::Drag::ResizeEnd:
@@ -727,9 +767,38 @@ class Roll : public ui::Node {
             } else if (drag == RollState::Drag::Move && !moved_ && !(e.mods & ui::kShift)) {
                 s_.selected = {anchor_};  // a click on a selected note selects just it
             }
+            // The sounding view, by semitones: where the note in hand lands on
+            // a pitch that a neighbouring written pitch also sounds as there,
+            // say so (the mapping merges them, gui.md §4.7). A degree step
+            // lands in the scale, where a merge is with an alteration only.
+            std::string merged;
+            if (drag == RollState::Drag::Move && moved_ && !s_.degrees && s_.dPitch != 0 &&
+                s_.soundingView()) {
+                s_.drag = drag;  // the preview as it was drawn
+                const RollNote landed = g.shown(anchor_);
+                s_.drag = RollState::Drag::None;
+                if (const auto heard = s_.soundingPitch(anchor_, landed))
+                    for (const int other : {landed.pitch - 1, landed.pitch + 1}) {
+                        RollNote twin = landed;
+                        twin.pitch = std::clamp(other, 0, 127);
+                        if (twin.pitch == landed.pitch || s_.soundingPitch(anchor_, twin) != heard)
+                            continue;
+                        // The written pitches in the take's key, the sounding
+                        // one in the song's, as each view names them.
+                        const double at = s_.itemPosition + landed.start;
+                        const auto own = s_.degreeKeyAt(anchor_, at);
+                        const int lo = std::min(landed.pitch, twin.pitch);
+                        const int hi = std::max(landed.pitch, twin.pitch);
+                        merged = harmony::spell(lo, own) + " and " + harmony::spell(hi, own) +
+                                 " both sound as " + harmony::spell(*heard, s_.keyAt(at)) + " here";
+                        break;
+                    }
+            }
             s_.dBeats = s_.dLength = s_.dStart = 0;
             s_.dPitch = s_.dDegrees = 0;
-            if (ops.size() > 0) (void)editor_.edit(std::move(ops), s_.gestureVersion);
+            if (ops.size() > 0 && editor_.edit(std::move(ops), s_.gestureVersion) &&
+                !merged.empty())
+                editor_.notice(merged);
             repaintAll();
             return true;
         }
@@ -812,6 +881,11 @@ class Keys : public ui::Node {
 // least), set by the zoom and the narrowest bar around the item (barLines),
 // never by the scroll; no two numbers ever touch.
 class BarStrip : public ui::Node {
+    struct ChordHit {
+        double beat = 0;  // the chord point's project beat
+        ui::Rect label;   // its start and name, as the last paint drew them
+    };
+
   public:
     static constexpr float kHeight = 16, kGap = 12;
     BarStrip(const RollState& s, MidiEditor& editor, std::vector<int>& labelled,
@@ -858,10 +932,14 @@ class BarStrip : public ui::Node {
                 const Held held = held_;
                 held_ = Held::None;
                 invalidate();
-                if (moved_ && draft_ != from_)
-                    editor_.moveClipPoint(
-                        held == Held::Chord ? model::ContextType::Chord : model::ContextType::Key,
-                        from_, draft_, copy_ && held == Held::Chord);
+                if (moved_ && draft_ != from_) {
+                    const model::ContextType type =
+                        held == Held::Chord ? model::ContextType::Chord : model::ContextType::Key;
+                    if (takeHeld_)
+                        editor_.moveTakePoint(type, from_, draft_, copy_ && held == Held::Chord);
+                    else
+                        editor_.moveClipPoint(type, from_, draft_, copy_ && held == Held::Chord);
+                }
                 return true;
             }
         }
@@ -876,7 +954,43 @@ class BarStrip : public ui::Node {
             const double at = std::max(0.0, s_.itemPosition + g.beatOf(e.pos.x));
             return s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
         };
+        // A timeline item's take (gui.md §4.7): its own row's chords are
+        // dragged, double-clicked and right-clicked as a clip's, each edit
+        // one take.set {context}.
+        if (!s_.clip) {
+            std::optional<double> takeHit;
+            for (const ChordHit& h : takeHits_)
+                if (h.label.contains(e.pos)) takeHit = h.beat;
+            const bool onTakeRow = takeRow_.h > 0 && takeRow_.contains(e.pos);
+            // The take's row, or anywhere while the take has no context of
+            // its own (no row yet): the song's row is edited on the ruler.
+            if (e.button == 3 && (onTakeRow || s_.rowLabel.empty())) {
+                editor_.openTakeContextMenu(gridBeat(), takeHit, e.pos);
+                return true;
+            }
+            if (onTakeRow && e.button == 1 && e.clicks == 1 && takeHit) {
+                held_ = Held::Chord;
+                takeHeld_ = true;
+                from_ = draft_ = *takeHit;
+                pressX_ = e.pos.x;
+                moved_ = false;
+                copy_ = (e.mods & ui::kAlt) != 0;
+                heldText_ = "r";
+                for (const auto* marks : {&s_.chords, &s_.otherChords})
+                    if ((marks == &s_.chords) == (s_.rowLabel == "take"))
+                        for (const RollState::ChordMark& m : *marks)
+                            if (std::abs(m.beat - from_) < 1e-6 && !m.text.empty())
+                                heldText_ = m.text;
+                if (ui::Root* r = root()) r->capture(this);
+                return true;
+            }
+            if (onTakeRow && e.button == 1 && e.clicks == 2) {
+                editor_.editTakeChord(takeHit ? *takeHit : gridBeat(), e.pos);
+                return true;
+            }
+        }
         if (s_.clip && e.button == 1 && e.clicks == 1 && (hit || keyHit)) {
+            takeHeld_ = false;
             held_ = hit ? Held::Chord : Held::Key;
             from_ = draft_ = hit ? *hit : *keyHit;
             pressX_ = e.pos.x;
@@ -895,8 +1009,8 @@ class BarStrip : public ui::Node {
         }
         // A double-click edits the chord there; on a clip with no chords yet,
         // anywhere on the strip starts its first.
-        // The first row is the project's (or a clip's own); a take's row is
-        // read-only here (take.set comes with X4d), and so is the second row.
+        // The first row is the project's (or a clip's own) unless it is the
+        // take's, handled above; the second row is the take's or read-only.
         const bool chordRow = !s_.chords.empty() && e.pos.y >= b.y + kHeight &&
                               s_.rowLabel != "take" &&
                               (s_.clip || e.pos.y < b.y + kHeight + kChordRowHeight);
@@ -922,6 +1036,8 @@ class BarStrip : public ui::Node {
         chordLabels_.clear();
         otherLabels_.clear();
         chordHits_.clear();
+        takeHits_.clear();
+        takeRow_ = {};
         c.fillRect(whole, t.color("raised"));
         c.fillRect({whole.x, whole.bottom() - 1, whole.w, 1}, t.color("rule"));
         c.fillRect({area.x - 1, whole.y, 1, whole.h}, t.color("rule"));
@@ -938,7 +1054,9 @@ class BarStrip : public ui::Node {
                                                  : std::nullopt;
             if (chordH > 0 && whole.bottom() > y) {
                 const ui::Rect row{area.x, y, area.w, std::min(chordH, whole.bottom() - y)};
-                paintChords(c, row, s_.chords, end, false);
+                const bool take = s_.rowLabel == "take";
+                paintChords(c, row, s_.chords, end, false, take ? &takeHits_ : &chordHits_);
+                if (take) takeRow_ = row;
                 rowLabel(c, row, s_.rowLabel);
             }
             y += chordH;
@@ -951,10 +1069,12 @@ class BarStrip : public ui::Node {
             if (!s_.otherChords.empty() && whole.bottom() > y) {
                 const ui::Rect row{area.x, y, area.w,
                                    std::min(kChordRowHeight, whole.bottom() - y)};
+                const bool take = s_.otherLabel == "take";
                 paintChords(
                     c, row, s_.otherChords,
-                    s_.otherEnd ? std::optional<float>(rowG.xOf(*s_.otherEnd)) : std::nullopt,
-                    true);
+                    s_.otherEnd ? std::optional<float>(rowG.xOf(*s_.otherEnd)) : std::nullopt, true,
+                    take ? &takeHits_ : nullptr);
+                if (take) takeRow_ = row;
                 rowLabel(c, row, s_.otherLabel);
             }
             // A point in hand: where it lands.
@@ -964,9 +1084,9 @@ class BarStrip : public ui::Node {
                 c.save();
                 c.clip(rows);
                 c.fillRect({x, rows.y, 1.5f, rows.h}, t.color("focus"));
-                c.text({x + 4, held_ == Held::Chord ? b.bottom() : y, 160, kChordRowHeight - 1},
-                       heldText_, ui::Font::Ui, t.type("caption"), t.color("focus"),
-                       ui::kLeft | ui::kMiddle);
+                const float textY = takeHeld_ ? takeRow_.y : held_ == Held::Chord ? b.bottom() : y;
+                c.text({x + 4, textY, 160, kChordRowHeight - 1}, heldText_, ui::Font::Ui,
+                       t.type("caption"), t.color("focus"), ui::kLeft | ui::kMiddle);
                 c.restore();
             }
         }
@@ -1039,10 +1159,11 @@ class BarStrip : public ui::Node {
     // Each chord a cell from its beat to the next chord point, in the
     // ruler's cell and letters; a "no chord" point a short faint tick. The
     // last cell ends at `lastEnd` when given, else runs on. A `dim` row is
-    // drawn quieter and is not hit or counted.
+    // drawn quieter and counted apart; each cell's start and name go to
+    // `hits` when given (the row that takes edits).
     void paintChords(ui::Canvas& c, const ui::Rect& row,
                      const std::vector<RollState::ChordMark>& marks, std::optional<float> lastEnd,
-                     bool dim) {
+                     bool dim, std::vector<ChordHit>* hits) {
         const ui::Theme& t = c.theme();
         const Geometry g{s_, row};
         const float size = t.type("caption");
@@ -1058,7 +1179,7 @@ class BarStrip : public ui::Node {
             if (end < row.x) continue;
             if (m.text.empty()) {
                 c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint"));
-                if (!dim) chordHits_.push_back({m.beat, {x - 4, row.y, 8, row.h}});
+                if (hits) hits->push_back({m.beat, {x - 4, row.y, 8, row.h}});
                 continue;
             }
             const ui::Rect cell{x + 1, row.y + 2, std::max(0.0f, end - x - 2), row.h - 5};
@@ -1072,8 +1193,8 @@ class BarStrip : public ui::Node {
             const float shown = std::min(room, cell.right() - 4 - textX);
             const std::string fit = c.elide(m.text, ui::Font::Ui, size, std::max(0.0f, shown));
             const float fitW = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
-            if (!dim)
-                chordHits_.push_back(
+            if (hits)
+                hits->push_back(
                     {m.beat, {x - 4, row.y, std::max(8.0f, textX + fitW + 8 - (x - 4)), row.h}});
             if (fit.empty()) continue;
             c.text({textX, row.y, shown + 4, row.h - 1}, fit, ui::Font::Ui, size,
@@ -1111,10 +1232,6 @@ class BarStrip : public ui::Node {
         }
         c.restore();
     }
-    struct ChordHit {
-        double beat = 0;  // the chord point's project beat
-        ui::Rect label;   // its start and name, as the last paint drew them
-    };
     enum class Held { None, Chord, Key };
     Held held_ = Held::None;
     double from_ = 0, draft_ = 0;  // the held point's beat, and where it would land
@@ -1127,6 +1244,9 @@ class BarStrip : public ui::Node {
     std::vector<int>& labelled_;
     std::vector<std::string>& chordLabels_;
     std::vector<ChordHit> chordHits_;
+    std::vector<ChordHit> takeHits_;  // the take's row, wherever it is drawn
+    ui::Rect takeRow_{};              // that row as last painted; empty without one
+    bool takeHeld_ = false;           // the point in hand is the take's
 
   public:
     std::vector<std::string> otherLabels_;  // the dim row's names, as last painted (tests)
@@ -2538,6 +2658,7 @@ Status MidiEditor::reload() {
         state_.following = false;
         state_.sounds.clear();
         state_.soundsAt = nullptr;
+        state_.writtenKeyAt = nullptr;
         state_.otherChords.clear();
         state_.rowLabel.clear();
         state_.otherLabel.clear();
@@ -2582,6 +2703,7 @@ Status MidiEditor::reload() {
     state_.following = false;
     state_.sounds.clear();
     state_.soundsAt = nullptr;
+    state_.writtenKeyAt = nullptr;
     state_.passes = 1;
     state_.passShift = 0;
     state_.passesDiffer = false;
@@ -2619,6 +2741,10 @@ Status MidiEditor::reload() {
             const auto place = model::placeAt(app_.head(), id, beat);
             if (!place) return pitch;
             return model::soundsAt(*place, channel - 1, pitch).pitch;
+        };
+        state_.writtenKeyAt = [this, id = *itemId](double beat) -> std::optional<harmony::Key> {
+            const auto place = model::placeAt(app_.head(), id, beat);
+            return place ? place->take.key : std::nullopt;
         };
         // Where each pass starts sounding: its first heard note's song beat.
         passStarts_.assign(static_cast<std::size_t>(state_.passes), -1.0);
@@ -3035,6 +3161,10 @@ const std::vector<std::string>& MidiEditor::otherChordLabels() const {
 
 void MidiEditor::refuse(const std::string& message) {
     if (actions_.onError) actions_.onError(message);
+}
+
+void MidiEditor::notice(const std::string& message) {
+    if (actions_.onNotice) actions_.onNotice(message);
 }
 
 std::uint64_t MidiEditor::beginGesture() {
@@ -3456,6 +3586,173 @@ Status MidiEditor::setClipContext(const std::vector<model::ContextPoint>& points
     return command("clip.set", std::move(args), {}, "Context");
 }
 
+std::optional<double> MidiEditor::takeBeatAt(double projectBeat) const {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    const auto id = owner && owner->item ? model::Id::parse(state_.item) : std::nullopt;
+    if (!id || !owner->take) return std::nullopt;
+    const auto place = model::placeAt(app_.head(), *id, projectBeat);
+    if (!place) return std::nullopt;
+    double beat = std::max(0.0, std::round(place->contextBeat * 960.0) / 960.0);
+    if (owner->take->contextPeriod && beat >= *owner->take->contextPeriod - 1e-9) beat = 0;
+    return beat;
+}
+
+Status MidiEditor::setTakeContext(const std::vector<model::ContextPoint>& points) {
+    const model::Session& head = app_.head();
+    const auto owner = midiOwner(head, state_.item);
+    if (!owner || !owner->item || !owner->take || !owner->item->activeTake)
+        return Error("gui.midi", "no item take is open", "/take");
+    json::Value args = json::Value::object();
+    args["take"] = owner->item->activeTake->str();
+    args["context"] = takeLeadSheet(head, *owner->item, *owner->take, points);
+    return command("take.set", std::move(args), {}, "Context");
+}
+
+void MidiEditor::editTakeChord(double projectBeat, ui::Point at) {
+    views::ChordFieldHost host{
+        [this]() -> const model::Session& { return app_.head(); },
+        [](const std::string&, json::Value) { return false; },
+        [this](double b) { return bars_ ? static_cast<BarStrip*>(bars_)->chordX(b) : 0.0f; }};
+    // The take's chord holding at that place: the field starts from it.
+    host.symbolAt = [this](double b) {
+        const auto owner = midiOwner(app_.head(), state_.item);
+        const auto beat = takeBeatAt(b);
+        if (!owner || !owner->take || !beat) return std::string();
+        const model::ContextPoint* p = model::contextChordPointAt(owner->take->context, *beat);
+        return p ? p->symbol : std::string();
+    };
+    host.run = [this](const std::string& command, json::Value args) {
+        const auto owner = midiOwner(app_.head(), state_.item);
+        if (command != "chord.set" || !owner || !owner->take) return false;
+        const auto beat = takeBeatAt(args["at"].asDouble());
+        if (!beat) return false;
+        // The chord the field was opened on is replaced where it stands.
+        model::ContextPoint p;
+        p.type = model::ContextType::Chord;
+        p.beat = *beat;
+        if (const model::ContextPoint* held =
+                model::contextChordPointAt(owner->take->context, *beat);
+            held && std::abs(held->beat - *beat) < 1.0 / 960.0)
+            p.beat = held->beat;
+        p.symbol = args["symbol"].asString();
+        return static_cast<bool>(setTakeContext(withContextPoint(owner->take->context, p)));
+    };
+    views::openChordField(root_, std::move(host), projectBeat, at);
+}
+
+void MidiEditor::editTakeKey(double projectBeat, ui::Point at) {
+    const model::Session& head = app_.head();
+    const auto owner = midiOwner(head, state_.item);
+    const auto beat = takeBeatAt(projectBeat);
+    if (!owner || !owner->take || !beat) return;
+    // It starts from the take's key there, else the song's, else C major.
+    std::string text = "C major";
+    if (const model::ContextPoint* p = model::contextKeyPointAt(owner->take->context, *beat))
+        text = model::keyWords(*p);
+    else if (const auto id = model::keyPointAt(head, projectBeat))
+        if (const model::ContextPoint* song = head.context.find(*id)) text = model::keyWords(*song);
+    auto field = std::make_unique<ui::TextField>("midi-key-field", text);
+    field->layout.width = ui::SizeRule::fixed(200);
+    field->selectAll();
+    const double contextBeat = *beat;
+    field->onSubmit = [this, contextBeat](const std::string& typed) {
+        const auto parts = views::splitKeyText(typed);
+        if (!parts) {
+            if (actions_.onError)
+                actions_.onError("Key: '" + typed +
+                                 "' is not a key: a tonic and a scale, "
+                                 "Eb major or F# dorian");
+            return;
+        }
+        const auto o = midiOwner(app_.head(), state_.item);
+        if (!o || !o->take) return;
+        model::ContextPoint p;
+        p.type = model::ContextType::Key;
+        p.beat = contextBeat;
+        p.tonic = parts->first;
+        p.scale = parts->second;
+        if (setTakeContext(withContextPoint(o->take->context, p))) root_.closePopup();
+    };
+    root_.openPopup(std::move(field), {at.x, at.y, 1, 1});
+}
+
+void MidiEditor::openTakeContextMenu(double projectBeat, std::optional<double> chord,
+                                     ui::Point at) {
+    const model::Session& head = app_.head();
+    const auto owner = midiOwner(head, state_.item);
+    if (!owner || !owner->item || !owner->take || !model::takeIsMidi(*owner->take)) return;
+    const model::Take& take = *owner->take;
+    const time::TimeMap& tm = *head.timeMap;
+    // A key goes at the start of the bar under the pointer, or at the item's
+    // start when that bar began before it.
+    const double barStart =
+        std::max(state_.itemPosition, tm.beatOfBar(tm.barBeat(std::max(0.0, projectBeat)).bar));
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, bool enabled, std::function<void()> run) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.enabled = enabled;
+        m.run = std::move(run);
+        items.push_back(std::move(m));
+    };
+    const bool atStart = barStart <= state_.itemPosition + 1e-9;
+    add(atStart ? "Key\u2026" : "Key at bar " + std::to_string(tm.barBeat(barStart).bar) + "\u2026",
+        true, [this, barStart, at] { editTakeKey(barStart, at); });
+    add("Chord\u2026", true,
+        [this, at, beat = chord.value_or(projectBeat)] { editTakeChord(beat, at); });
+    const auto keyBeat = takeBeatAt(barStart);
+    for (const model::ContextPoint& p : take.context)
+        if (keyBeat && p.type == model::ContextType::Key &&
+            std::abs(p.beat - *keyBeat) < 1.0 / 960.0) {
+            const model::ContextPoint gone = p;
+            add("Remove key " + model::keyWords(gone), true, [this, gone] {
+                if (const auto o = midiOwner(app_.head(), state_.item); o && o->take)
+                    (void)setTakeContext(withContextPoint(o->take->context, gone, true));
+            });
+        }
+    if (chord)
+        if (const auto beat = takeBeatAt(*chord))
+            if (const model::ContextPoint* p = model::contextChordPointAt(take.context, *beat)) {
+                const model::ContextPoint gone = *p;
+                add("Remove chord" + (gone.symbol.empty() ? std::string() : " " + gone.symbol),
+                    true, [this, gone] {
+                        if (const auto o = midiOwner(app_.head(), state_.item); o && o->take)
+                            (void)setTakeContext(withContextPoint(o->take->context, gone, true));
+                    });
+            }
+    ui::MenuItem rule;
+    rule.separator = true;
+    items.push_back(rule);
+    // The song's key and chords under the item: what a part written on the
+    // timeline was written against.
+    model::Id itemId = *model::Id::parse(state_.item);
+    add("From the song's key and chords", true,
+        [this, itemId] { (void)setTakeContext(songContextUnder(app_.head(), itemId)); });
+    add("Clear the take's context", !take.context.empty(), [this] { (void)setTakeContext({}); });
+    root_.openPopup(
+        ui::makeMenu("midi.take.context.menu", std::move(items), [this] { root_.closePopup(); }),
+        ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::moveTakePoint(model::ContextType type, double fromProject, double toProject,
+                               bool copy) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->take) return;
+    const auto from = takeBeatAt(fromProject);
+    const auto to = takeBeatAt(std::max(state_.itemPosition, toProject));
+    if (!from || !to) return;
+    const std::vector<model::ContextPoint>& context = owner->take->context;
+    const model::ContextPoint* held = type == model::ContextType::Chord
+                                          ? model::contextChordPointAt(context, *from)
+                                          : model::contextKeyPointAt(context, *from);
+    if (!held) return;
+    std::vector<model::ContextPoint> points =
+        copy ? context : withContextPoint(context, *held, true);
+    model::ContextPoint moved = *held;
+    moved.beat = *to;
+    (void)setTakeContext(withContextPoint(std::move(points), moved));
+}
+
 namespace {
 json::Value selectionOf(const RollState& s) {
     json::Value sel = json::Value::array();
@@ -3529,13 +3826,10 @@ void MidiEditor::refreshKeyButton() {
     const bool known = point && model::parseKey(*point);
     std::string text = point ? model::keyWords(*point) : "No key";
     // An audio clip's button sets its key (it has no degrees), with or
-    // without one. A following take has no degree mode yet: midi.edit's
-    // degrees read the project's key on an item until X4d.
-    keyButton_->enabled = (known && !state_.following) || state_.audio;
-    if (state_.following && state_.degrees) {
-        state_.degrees = false;
-        keyButton_->setOn(false);
-    }
+    // without one. On a following take degrees count in the take's own key
+    // (midi.edit reads it, X4d); the sounding view picks the step that
+    // sounds nearest the pointer.
+    keyButton_->enabled = known || state_.audio;
     if (!known && state_.degrees) {  // nothing to count degrees in
         state_.degrees = false;
         keyButton_->setOn(false);

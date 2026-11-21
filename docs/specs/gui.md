@@ -1780,9 +1780,18 @@ compiles) and, for a place no note has yet, `model::placeAt` and
   view **song** (the project's chords, as on any item) then **take** (the
   take's own: each point at every repeat of its context beat on the roll's
   axis, the chord holding at the left carried in, the last ending with the
-  item); in the written view **take** first and **song** second. Only the
-  song's row is edited here (a double-click, as on the ruler); the take's
-  becomes editable with `take.set {context}` (X4d).
+  item); in the written view **take** first and **song** second. The
+  song's row is edited as on the ruler (a double-click). The take's row is
+  edited with the clip strip's gestures, each edit one `take.set {context}`
+  with the lead sheet in bars of the meter at the item (`gui::takeLeadSheet`)
+  and each point at the context beat of its place (`model::placeAt`, so a
+  repeating context's repeats edit its one period): a drag moves a chord
+  (Alt copies it); a double-click opens the chord field on the take's chord
+  there; a right-click opens its menu (`midi.take.context.menu`): Key… or
+  Key at bar N…, Chord…, Remove key, Remove chord, From the song's key and
+  chords (`gui::songContextUnder`: the song's under the item, replacing the
+  take's), Clear the take's context. A take with no context has no row; a
+  right-click anywhere on the strip opens the same menu, to give it one.
 - **Key, shading, spelling, title.** The sounding view reads the song's
   key; the written view the take's own at each note's context beat, and
   its key button names the take's key where the content starts. The title
@@ -1792,15 +1801,25 @@ compiles) and, for a place no note has yet, `model::placeAt` and
 - **Notation and List** always show and edit written notes, the take's
   text: the notation pane's title reads "Notation · written" and the list's
   header says "written" while the take follows.
-- **Edits act on written notes**, through `midi.edit`. In the sounding
-  view a pitch drag steps the written pitch by semitones and previews where
-  it will sound (the place it lands, the start rule); a move in time keeps
-  the written pitch and follows the new place. A double-click writes the
-  written pitch nearest the row that sounds as it there (within an
-  octave); where none does, it writes nothing and the status line says
-  "MIDI: nothing written sounds as G#4 here: draw it in Written". Degree
-  mode is off on a following take until `midi.edit`'s degrees read the
-  take's own context (X4d), when a sounding-view drag steps by degrees.
+- **Edits act on written notes**, through `midi.edit`, which on a following
+  take reads the take's own context. In the sounding view a pitch drag
+  previews where the note will sound (the place it lands, the start rule);
+  a move in time keeps the written pitch and follows the new place.
+  - **With the key button lit** (degree mode) the written pitch steps by
+    degrees of the take's own key at the note's place, and the note in hand
+    takes the step whose result sounds nearest the row under the pointer;
+    the commit is `transpose_degrees` by that count, so for in-scale notes
+    in key mode one step up sounds one step up. In the written view the
+    steps are counted from the row as on any item, in the take's key.
+  - **By semitones** it steps the written pitch. Where the note lands on a
+    pitch that a neighbouring written pitch also sounds as there (the
+    mapping merges an alteration into the next degree), the status line
+    says "Eb4 and E4 both sound as G4 here" (the written pitches named in
+    the take's key, the sounding one in the song's).
+  - A double-click writes the written pitch nearest the row that sounds as
+    it there (within an octave); where none does, it writes nothing and the
+    status line says "MIDI: nothing written sounds as G#4 here: draw it in
+    Written".
 - **Passes.** A looped item whose passes sound differently shows the pass
   chosen in **Pass 1 of 4** (`midi.pass`, shown only then; its menu lists
   "Pass 2 · bar 3"...), the first by default; edits change every pass.

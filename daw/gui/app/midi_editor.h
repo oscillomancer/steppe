@@ -207,6 +207,13 @@ struct RollState {
     // What a note written as `pitch` on `channel` (1..16) sounds as at song
     // beat `beat` (model::placeAt and soundsAt); set for a following take.
     std::function<int(int pitch, int channel, double beat)> soundsAt;
+    // The take's own key at song beat `beat` (model::placeAt), which
+    // midi.edit's degrees read on a following take; set with soundsAt.
+    std::function<std::optional<harmony::Key>(double beat)> writtenKeyAt;
+    // The key a degree step of note `i` counts in, at roll-project beat
+    // `projectBeat` (itemPosition + start): a following take's own at the
+    // note's place (writtenKeyAt, in the pass shown), else the view's.
+    std::optional<harmony::Key> degreeKeyAt(std::size_t i, double projectBeat) const;
     // What note `i` sounds as, as `n` (the note or its drag preview) has it;
     // none when the take does not follow or the note is not heard.
     std::optional<int> soundingPitch(std::size_t i, const RollNote& n) const;
@@ -312,6 +319,9 @@ class MidiEditor {
     // A refusal the roll gives itself (the pencil in the sounding view), to
     // the actions' error hook, so the status line says it.
     void refuse(const std::string& message);
+    // News an edit made (a sounding-view drag that lands on a pitch another
+    // written pitch also sounds as), to the actions' notice hook.
+    void notice(const std::string& message);
     Status edit(json::Value ops, std::optional<std::uint64_t> expectedVersion =
                                      {});  // midi.edit on the open item, keeping the selection
     void selectAll();
@@ -338,6 +348,23 @@ class MidiEditor {
     // The clip's point of `type` at roll beat `rollFrom` moved to `rollTo`
     // (`copy`: a second one there, the first kept), as a strip drag does.
     void moveClipPoint(model::ContextType type, double rollFrom, double rollTo, bool copy = false);
+    // A timeline item's take's own context (ADR-0098 amended, gui.md §4.7),
+    // each edit one take.set {context} with the lead sheet in bars of the
+    // meter at the item (takeLeadSheet). Beats here are project beats on the
+    // strip; a point goes at the context beat of the place (model::placeAt),
+    // so a looped context's repeats edit its one period. The chord field for
+    // the take's chord there; its key field; the strip's right-click menu
+    // (`chord`: a take chord's project beat under the pointer); a point
+    // moved, as a strip drag does; the context replaced.
+    void editTakeChord(double projectBeat, ui::Point at);
+    void editTakeKey(double projectBeat, ui::Point at);
+    void openTakeContextMenu(double projectBeat, std::optional<double> chord, ui::Point at);
+    void moveTakePoint(model::ContextType type, double fromProject, double toProject,
+                       bool copy = false);
+    Status setTakeContext(const std::vector<model::ContextPoint>& points);
+    // The context beat of a project beat in the open item's heard take, on
+    // the 1/960 grid and inside its period; nothing without a MIDI take.
+    std::optional<double> takeBeatAt(double projectBeat) const;
     // The clip beat of a roll beat on the clip's strip, or nothing (with the
     // reason in the status line) when a looped clip's point would fall
     // outside the first pass the strip shows.
