@@ -965,6 +965,38 @@ TEST_CASE("scene.insert lays a clip take's FX envelope in timeline beats, pass a
         }
 }
 
+TEST_CASE("scene.insert lays a clip take's own envelope pass after pass over a looped item") {
+    // cl_1, a four-beat loop, has a volume envelope on its take from beat 0 to
+    // beat 3, in clip time, which the clip plays from the start of each pass.
+    // Laid at bar 3 for two bars as one looped item, whose take envelopes run
+    // once from its start, the copy repeats it each pass, as its FX's are
+    // (item-relative beats).
+    Song l;
+    l.verseClips();  // cl_1: four beats, loop mode
+    const model::Id take = *l.head().clips.find(id("cl_1"))->activeTake;
+    auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");  // a MIDI take's envelope needs one
+    fx["take"] = take.str();
+    l.runArgs("fx.add", fx);
+    auto env = j(R"({"param": "volume", "points": [{"beat": 0, "value": 0},
+                                                   {"beat": 3, "value": "-12 dB"}]})");
+    env["take"] = take.str();
+    l.runArgs("env.add", env);
+    auto r = l.run("scene.insert", R"({"scene": "sc_1", "bar": 3, "bars": 2})");
+    const model::Id bass = id(at(r["items"], 0)["item"].asString().c_str());
+    const model::Item& item = *l.head().items.find(bass);
+    REQUIRE(item.loop);
+    const model::Envelope* laid = nullptr;
+    for (const auto& e : l.head().envelopes)
+        if (e.value->target.object == *item.activeTake) laid = &*e.value;
+    REQUIRE(laid);
+    std::string positions;
+    for (const auto& p : laid->points) positions += json::formatDouble(p.pos) + " ";
+    CHECK(positions == "0.0 3.0 4.0 4.0 7.0 8.0 8.0 11.0 ");
+    REQUIRE(laid->points.size() == 8);
+    CHECK(laid->points[3].value == laid->points[0].value);  // each pass from its start
+    CHECK(laid->points[2].value == laid->points[1].value);  // the end held to the boundary
+}
+
 // --- names ---------------------------------------------------------------------------
 
 // An item's name is its active take's: the model has no name on an item.

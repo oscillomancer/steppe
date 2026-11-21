@@ -176,6 +176,18 @@ FxEnvelopeMap fxEnvelopesFromClip(const model::Session& s, model::ClipKind kind,
     };
 }
 
+FxEnvelopeMap takeEnvelopesFromClip(const model::Session& s, model::ClipKind kind, double pos,
+                                    double phase, double period, double length) {
+    FxEnvelopeMap timeline = fxEnvelopesFromClip(s, kind, pos, phase, period, length);
+    return [timeline, pos](model::Envelope& env) {
+        const model::Timebase kept = env.timebase;
+        timeline(env);  // timeline beats, pass after pass
+        for (auto& p : env.points) p.pos -= pos;
+        fromZero(env.points);  // from the item's start
+        env.timebase = kept;
+    };
+}
+
 void convertTakeFxEnvelopes(model::EditTxn& t, const model::Session& s, Id take,
                             const FxEnvelopeMap& map) {
     const model::Take* tk = s.takes.find(take);
@@ -189,19 +201,20 @@ void convertTakeFxEnvelopes(model::EditTxn& t, const model::Session& s, Id take,
 Result<std::vector<Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
                                      const std::vector<Id>& takes, bool pooled,
                                      const std::function<double(double)>& envelopePos,
-                                     const std::string& path, const FxEnvelopeMap& fxEnvelope) {
+                                     const std::string& path, const FxEnvelopeMap& fxEnvelope,
+                                     const FxEnvelopeMap& takeEnvelope) {
     std::vector<Id> out;
     for (Id old : takes) {
         const model::Take* tk = s.takes.find(old);
         if (!tk)
             return Error("item.take", old.str() + " is missing", path,
                          "use a current take id from take.list");
-        if (envelopePos || fxEnvelope) {
+        if (envelopePos || fxEnvelope || takeEnvelope) {
             // Its own envelopes are measured from its owner's start, and so
             // are its FX's on a clip (C2): none of them can map automation
             // items.
             for (const auto& e : s.envelopes)
-                if ((envelopePos && e.value->target.object == old) ||
+                if (((envelopePos || takeEnvelope) && e.value->target.object == old) ||
                     (fxEnvelope && std::find(tk->chain.begin(), tk->chain.end(),
                                              e.value->target.object) != tk->chain.end()))
                     for (const auto& ai : s.autoItems)
@@ -223,7 +236,15 @@ Result<std::vector<Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
         }
         auto fresh = copyTake(s, t, old, std::move(copy));
         if (!fresh) return std::move(fresh).error();
-        if (envelopePos) convertTakeEnvelopes(t, t.preview(), *fresh, envelopePos);
+        if (takeEnvelope) {
+            const model::Session now = t.preview();
+            for (const auto& e : now.envelopes)
+                if (e.value->target.object == *fresh)
+                    t.modify<model::Envelope>(e.id,
+                                              [&](model::Envelope& env) { takeEnvelope(env); });
+        } else if (envelopePos) {
+            convertTakeEnvelopes(t, t.preview(), *fresh, envelopePos);
+        }
         if (fxEnvelope) convertTakeFxEnvelopes(t, t.preview(), *fresh, fxEnvelope);
         out.push_back(*fresh);
     }
@@ -484,9 +505,13 @@ Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const m
     }
     // Its take FX's envelopes, in clip time, onto the timeline pass after
     // pass over the item (ADR-0097, amended, C2).
+    // Over more than one period, its take envelopes repeat as its FX's do.
+    const bool passes = item.loop && length > clip.length + tolerance;
     auto copied =
         copyTakesFor(t, s, clip.takes, pooled, shaped->envelopePos, path,
-                     fxEnvelopesFromClip(s, clip.kind, startBeat, 0, clip.length, length));
+                     fxEnvelopesFromClip(s, clip.kind, startBeat, 0, clip.length, length),
+                     passes ? takeEnvelopesFromClip(s, clip.kind, startBeat, 0, clip.length, length)
+                            : FxEnvelopeMap{});
     if (!copied) return std::move(copied).error();
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)

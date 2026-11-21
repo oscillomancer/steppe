@@ -1347,6 +1347,41 @@ TEST_CASE("a clip take's FX envelope commits as it was heard, pass after pass (C
         }
 }
 
+TEST_CASE("a clip take's own envelope commits as it was heard, pass after pass" *
+          doctest::description("rt")) {
+    // A period that is its content's pass commits as one looped item: its
+    // take's volume envelope, heard from the start of each pass, is repeated
+    // pass after pass over the item, where it would otherwise run once.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        latentClip(p);
+        p.run("clip.set", R"({"clip": "cl_1", "length": 1})");  // the ramp's 48000 frames
+        auto env = j(R"({"param": "volume", "points": [{"seconds": 0, "value": 0},
+                                                       {"seconds": 1, "value": "-24 dB"}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+        live.until(48000 * 5);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const std::int64_t end = std::min(std::int64_t(done["to"].asDouble() * double(kBeat)),
+                                          live.cycles * 128 - std::int64_t(live.latency));
+        CHECK(end > 96000 + 2 * 48000);  // two passes and more
+        const std::vector<float> committed = arrangement(p, 5.0);
+        const auto [worst, first] = compare(heard, live.latency, committed, 0, end, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+        // The second pass starts near 0 dB again (through the take's -6 dB).
+        CHECK(double(committed[std::size_t(96000 + 48000 + 600)]) > 0.8 * chained(600));
+        CHECK(double(committed[std::size_t(96000 + 48000 - 600)]) < 0.1 * chained(48000 - 600));
+    }
+}
+
 TEST_CASE("launch.commit: history, undo, pooling and refusals") {
     Project p;
     twoTracks(p);

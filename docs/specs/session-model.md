@@ -1243,7 +1243,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   running time; on each track that left the arrangement its clip,
   stopped and held stretches replace the arrangement, each clip as
   copies of its takes at the phase heard, MIDI copied unless `pooled`,
-  the envelopes on their FX repeated pass after pass over each copy; a
+  the envelopes on their FX repeated pass after pass over each copy, and
+  the takes' own envelopes too over a looped copy of more than one period
+  (on an item they would run once from its start); a
   scene launched whole (every clip of it that could play, on a track not
   frozen, started on one frame) writes a section (a region with `section`
   true) named after the scene and in its colour, from that boundary until
@@ -2084,7 +2086,10 @@ nothing.
     - `loop` and the clip at least as long as the span: one item for the span.
   - The takes are copied, and a MIDI source with them unless `pooled`. The
     envelopes on their FX, in clip time, are written in timeline position
-    pass after pass over the item (schema 2.19).
+    pass after pass over the item (schema 2.19); the takes' own envelopes
+    (volume, pan, mute), in item-relative beats, pass after pass too when
+    the item loops over more than one period, since on an item they run
+    once from its start.
   - An item already on a track that receives a clip and overlapping the span
     is `scene.insert.occupied` (named in the message); other tracks' items are
     not touched. A scene with no clip is `scene.empty`. A frozen track or one
