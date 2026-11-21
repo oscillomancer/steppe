@@ -2427,7 +2427,8 @@ whose start rule is the only rule.)*
 
 *Not built. Steps X4b (model) and X4d (commands) build it; X4c (engine) is in
 `engine.md` "Following at playback". Revised after review round 82 with the
-co-director's decisions (A1 to A5, B1 to B9).*
+co-director's decisions (A1 to A5, B1 to B9), and after round 82b (C1, C2,
+D1 to D4).*
 
 Writers emit `supple.project/2.21`. A take gains four members; earlier files
 load unchanged and nothing migrates. An item an X2 build laid (its notes baked)
@@ -2438,21 +2439,24 @@ unknown-field warnings, and the take then sounds as written there.
 |---|---|
 | `context` | Key and chord points, the clip `context` shapes, with `beat` in **context beats** (below), rounded to 1/960, sorted by beat and then type (key first). Written only when not empty. |
 | `context_period` | Context beats after which the context repeats; absent for a context that does not repeat. Laid from a clip, the clip's length in context beats. Written only when present. |
-| `context_phase` | The context beat at the item's start, before any repeat (default 0, not written). |
+| `context_phase` | Added to a note's unwrapped source beat to give its place in the context (below; default 0, not written). Only placement, `launch.commit`, `take.extract` from a clip, `item.consolidate` and `take.set {context}` set it. |
 | `follow` | `none` (default, not written), `key` or `chords`: what the take's notes sound as (below). |
 
-Only a take whose source is MIDI holds any of them; a pooled source may be read
-by takes with different contexts and follow modes.
+Only a timeline item's take whose source is MIDI holds any of them; a clip's
+takes hold none (a clip's context and `follow` are the clip's). A pooled source
+may be read by takes with different contexts and follow modes.
 
 **A note's place.** A heard note occurrence (one note in one pass of the item)
 has a place of two numbers, computed by one helper (below) and by nothing else:
-- its **context beat**, where its start falls in the take's context: with
-  `u = context_phase + (s − item start) × playrate`, where `s` is the song beat
-  of the note's start and `playrate` the take's, the context beat is
-  `u mod context_period` when the context repeats, else `u`. It is a function
-  of the item's time, unwrapped, and never of the content's position: the
-  item's loop does not wrap it, and a slip (`start_offset`) moves the notes
-  under the context, as it moves a clip's notes under the clip's context.
+- its **context beat**, where its start falls in the take's context:
+  `u = context_phase + b`, where `b` is the note's **unwrapped source beat**,
+  `start_offset + (s − item start) × playrate` (`s` the song beat of the note's
+  start, `start_offset` as stored and `playrate` the take's), never reduced
+  modulo the source's or the loop's length; the context beat is
+  `u mod context_period` when the context repeats, else `u`. So the context is
+  anchored to the source material and travels with the notes: in an unlooped
+  take a note's `b` is its own source beat whatever the item's position,
+  offset or playrate, and in a looped one each pass adds the source's length.
 - its **song beat** `s`, where its start sounds, or would have sounded.
 
 **The start rule is the only rule.** A note sounds by the place of its own start
@@ -2521,6 +2525,7 @@ std::vector<ContextPoint> contextOver(const Take& take, double u0, double u1);
   key holds before it). A clip keeps its own rule, a readable key at 0
   (`clip.no_key`).
 - **Audio.** An audio take, or an empty one, holds none of the four.
+- **Clips.** A clip's takes hold none of the four.
 
 **Edits that would break an invariant** keep it in the same step; the answer says
 what changed; undo restores it. A context edit that leaves no readable key resets
@@ -2533,31 +2538,46 @@ does not repeat) and a `context_phase` that is not finite reads as 0, each with
 no readable key reads as `none` with `take.follow_reset`. The open never fails
 for any of this.
 
-**Invariance.** Edits not meant to change what a note follows do not change any
-surviving note's context beat: `item.split` (the right part's `context_phase`
-becomes the left's plus the split's distance from the left's start times the
-playrate, so `u` is continuous), trims from either side (a left trim moves
-`context_phase` by the trim times the playrate), loop on and off, `item.move`,
-`item.duplicate`, `item.paste`, `track.duplicate`, `item.explode-takes` and
-`take.extract`. Split, trims and loop changes keep the song beat too, so the
-surviving notes sound as before; a move, duplicate or paste changes the song
-beat, so the note follows its new place, by design. A slip and a playrate change
-move the notes against an unchanged context, as on a clip.
+**Invariance.** Because `u` is the context phase plus the note's unwrapped
+source beat, no edit that moves, cuts or copies a take touches its phase, and
+none changes any surviving note's context beat: `item.move`, trims from either
+side (as `item.set {position, length}` with `take.set {start_offset}` or
+`{rebase_seconds}`, in one call or several), `item.split`, loop on and off, a
+playrate change, a slip, `item.duplicate`, `item.paste`, `track.duplicate`,
+`item.explode-takes` and `take.extract`. Only placement, `launch.commit`,
+`take.extract` from a clip, `item.consolidate` and `take.set {context}` set a
+phase.
+- Split, trims and loop changes keep each surviving note's song beat too, so
+  it sounds as before.
+- A move, duplicate or paste changes the song beat, so the note follows its new
+  place, by design.
+- A slip and a playrate change keep each note's context beat (the context moves
+  with the notes) and move the notes against the song, unlike a clip's slip,
+  which moves its notes under its context.
+- A command that stores a take's `start_offset` wrapped modulo the source's
+  length adds the amount it took off to the take's `context_phase`, so `u`
+  stays continuous. `item.split` does not wrap today: it adds the split's
+  distance times the playrate to the right part's offset as it is.
 
 **Converting between a clip and a take.** A clip's context is in clip beats
 (played beats); a take's in context beats, which run at the take's playrate `r`.
 - **Clip to take** (placement, `launch.commit`, `take.extract` from a clip): the
   laid take's `context` is the clip's with each beat times `r`,
-  `context_period` the clip's length times `r`, and `context_phase` the clip
-  beat at the item's start times `r` (0 for placement; for `launch.commit`,
-  where the laid stretch begins in the clip's period). So a clip of length 8
-  over 4 beats of looping content, with C at clip beat 0 and Eb at 4, reads Eb
-  in its second pass on the timeline exactly as in the launcher.
+  `context_period` the clip's length times `r`, and `context_phase`
+  `c0 × r − o`, where `c0` is the clip beat at the item's start (0 for
+  placement; for `launch.commit`, where the laid stretch begins in the clip's
+  period) and `o` the laid take's `start_offset`. A note heard `d` beats after
+  the item's start then reads context beat `(c0 + d) × r`, modulo the period:
+  its clip beat, as the launcher reads it (`engine.md`, "Following at
+  playback"). So a clip of length 8 over 4 beats of looping content, with C at
+  clip beat 0 and Eb at 4, reads Eb in its second pass on the timeline exactly
+  as in the launcher, at any playrate.
 - **Take to clip** (`clip.add {item}`, `scene.capture`): the clip's context is
   `contextOver(take, u0, u1)` over the span copied, beats divided by `r`, and
   its `follow` the take's. The key in force at the span's start is carried in
   at 0, so `clip.no_key` cannot break. From a take whose `follow` is `none`,
-  the context under the item, as today.
+  the context under the item, as today. The clip's copied take holds none of
+  the four: they are cleared after the clip's context is built.
 
 **Commands that create, copy, merge or rewrite a MIDI take (X4d).** A command
 missing from this table is a defect of this contract.
@@ -2566,14 +2586,15 @@ missing from this table is a defect of this contract.
 |---|---|
 | `item.add {clip}`, `scene.insert`, `arrangement.build` | Copy notes as written; each laid take gets the clip's context converted as above and `follow`: the argument, else the clip's own. `pooled: true` is allowed with any `follow`. Nothing is unrolled (`unrolled` leaves the answer; `clip.follow_pooled` is no longer given). `followed: {mode, regions?, folded?, copied?}` stays, from `soundingNotes`. |
 | `item.add` (notation, file, empty), `take.add` (new) | A take with no context, `follow: none`. |
-| `take.add {from}` | The copy takes the source take's four members. |
+| `take.add {from}` | On an item, the copy takes the source take's four members; on a clip, neither holds any. |
 | `launch.commit` | Lays notes as written, each take with its clip's context converted as above and `follow` the outcome the plan used for that clip (`none`, `key` or `chords`, after the budget: `engine.md`). `pooled` allowed. |
 | `take.set {take, context?, follow?}` | Below. |
 | `take.bake {take}` | Below. |
-| `item.split`, `item.set` (trim, loop, length), `item.move`, `item.duplicate`, `item.paste`, `track.duplicate` | The four members go with each take, the phase adjusted as in "Invariance". |
-| `item.explode-takes`, `take.extract` (from an item) | The four members go with the take; the phase adjusted to the new item's start, so `u` is unchanged. |
+| `item.split`, `item.set` (position, length, loop), `take.set {start_offset, rebase_seconds, playrate}`, `item.move`, `item.duplicate`, `item.paste`, `track.duplicate` | The four members go with each take unchanged ("Invariance"; a wrapped offset adds to the phase). |
+| `item.explode-takes`, `take.extract` (from an item) | The four members go with the take unchanged. |
 | `take.extract` (from a clip) | As placement lays the clip, with the clip's `follow`. |
-| `item.consolidate` (MIDI) | What sounds is preserved. Items of one track into one item: when the heard takes all follow in one mode, the result follows in it, its context each source's `contextOver` its span, re-based onto the result (not repeating), `context_phase` 0; when none follow, as today; mixed modes (some following, some not, or different modes) are refused (`item.follow_merge`, hint: bake the following takes first with `take.bake`). A lone item's takes layered into one take: allowed when none follow, or when all follow in one mode with the same `contextOver` the item's span; else `item.follow_merge`. |
+| `item.consolidate` (MIDI) | What sounds is preserved, and checked. Items of one track into one item: when the heard takes all follow in one mode, the result follows in it; its context, in the result's source beats, is each source's `contextOver` its span, beats divided by that source's playrate (onto the result's axis, which runs at the result's playrate of 1), placed where the source sat, not repeating; the result's `context_phase` is 0. A note chased at the first source's start keeps its true start in the result's source, before the result's start (its `start_offset` positive), so it is chased there and maps as before. A note chased at a later source's start is written, as today, as a note at that source's old start, where its place changes. The command computes every heard note's sounding key before and after with `soundingNotes`, and refuses (`item.follow_merge`, naming the item and the note's song beat; hint: `take.bake` the following takes first) when any would differ. When none follow, as today; mixed modes (some following, some not, or different modes) are refused with the same error. A lone item's takes layered into one take: allowed when none follow, or when all follow in one mode with the same `contextOver` the item's span; else `item.follow_merge`. |
+| `item.glue` | Named in §4 but not registered (not built). When built, as `item.consolidate` (MIDI). |
 | `item.heal` | Audio pieces only; MIDI takes are not healed. |
 | `midi.write` (on a take) | Replaces the written notes; the context and `follow` stay, and the answer carries `follows: "key" | "chords"` when the take follows. Chord symbols in the text do not change a take's context (`take.set` does). |
 | `midi.edit` | Below. |
@@ -2599,7 +2620,9 @@ its `follow` to `none`; its context stays, for display.
   takes repeated alike, as X2 laid items; the answer says `unrolled: true`. So a
   render after the bake equals the render before it.
 - The answer is the `followed` block of what was baked. On a take whose
-  `follow` is `none`: `take.not_following`.
+  `follow` is `none`: `take.not_following`. On a take that is not its item's
+  active take (what sounds is the active take's): `take.not_active`, hint:
+  `take.activate` it first.
 - One undo step, with the copy and the unroll. Its history step records the
   notes it wrote (resolved), so a replay on another branch writes what the user
   heard.
@@ -2628,7 +2651,12 @@ notes are committed as `midi_replace` commits them, as new items (one per run,
 or one on the loop with a take per pass), with `follow: none` and no context;
 overlapping MIDI items on a track are layered, so the following item sounds as
 before under them. The commit warns `record.follow_kept`, naming the item.
-Nothing is refused at `transport.record`.
+Nothing is refused at `transport.record`. Fixed and comp lanes are not built
+(items carry a `lane` that playback does not read): the new items get no
+`lane`, as recorded items do today. When
+lanes are built, the new items go on a lane that plays beside the following
+item's, never on one that replaces it; in comp mode they are a new lane outside
+the comp.
 
 **Comps and take lanes.** A lane item's takes keep their own members; a comp
 plays each piece by its take, as a split does.
@@ -2651,13 +2679,20 @@ after the take's name.
 - `soundingKey` against `harmony::follow` over the `harmony.md` §5 list, plus
   channel 10; `soundingNotes` for a chased note, a note before song beat 0, a
   crossing note, and both halves of a split note.
-- Invariance: for split, trims from each side, loop on and off, move,
-  duplicate, paste, explode and extract, the sounding pitches of the surviving
-  notes before equal those after (moves at their new place).
+- Invariance: for split (also of a looped item past its first pass), trims
+  from each side done as two separate calls, loop on and off, a slip, a
+  playrate change, move, duplicate, paste, explode and extract, each surviving
+  note's context beat before equals that after, and for split, trims and loop
+  changes its sounding pitch too. A command that wraps a stored offset keeps
+  `u` continuous.
 - Timeline equals launcher for the same clip: the clip of length 8 over 4 beats
   of content with C at 0 and Eb at 4, laid and launched; and with a take
   playrate of 2.
-- A split, then `scene.capture` of the right part: the clip has a key at 0.
+- A split, then `scene.capture` of the right part: the clip has a key at 0,
+  and its take holds none of the four.
+- Consolidate keeps a first-source chased note's pitch, and refuses when a
+  later source's chased note would change; `take.bake` of an inactive take is
+  `take.not_active`.
 - Consolidate in one mode, and refused for mixed modes; an overdub over a
   following item lands as its own item and the following item sounds as
   before.
