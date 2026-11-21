@@ -772,6 +772,97 @@ TEST_CASE("automation lanes: a plugin parameter's lane uses the plugin's range a
     CHECK(params::toNormalized(spec->spec, pts[1].value) == doctest::Approx(0.75).epsilon(0.05));
 }
 
+TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item's track") {
+    Fixture f;
+    if (!f.ok) return;
+    auto listed = f.dispatcher->execute({"plugin.list", json::Value::object(), kUi});
+    REQUIRE(listed);
+    const model::Id item = f.itemOnRow(0);
+    const model::Id track = f.item(item).track;
+    const model::Id take = *f.item(item).activeTake;
+    // A stock effect with a continuous semantic parameter, on the take's chain.
+    std::string fxId, key;
+    std::shared_ptr<params::DescribedParam> spec;
+    for (const json::Value& p : (*listed)["plugins"].asArray()) {
+        if (p.find("instrument") && p.find("instrument")->asBool()) continue;
+        auto added =
+            f.dispatcher->execute({"fx.add",
+                                   json::parse(R"({"take":")" + take.str() + R"(","plugin":")" +
+                                               p.find("id")->asString() + R"("})")
+                                       .value(),
+                                   kUi});
+        if (!added) continue;
+        const std::string id = (*added)["fx"].asString();
+        auto described = f.dispatcher->execute(
+            {"fx.describe", json::parse(R"({"fx":")" + id + R"(","full":true})").value(), kUi});
+        if (described)
+            if (const json::Value* ps = described->find("params"); ps && ps->isObject())
+                for (const auto& m : ps->asObject()) {
+                    auto d = params::fromDescription(m.key, m.value);
+                    if (!d || (*d)->spec.type != params::Type::Float ||
+                        ((*d)->spec.flags & (params::kReadonly | params::kHidden)))
+                        continue;
+                    fxId = id;
+                    key = m.key;
+                    spec = std::shared_ptr<params::DescribedParam>(std::move(*d));
+                    break;
+                }
+        if (spec) break;
+    }
+    if (!spec) {
+        MESSAGE("skipped: no stock effect with a continuous parameter (partial build)");
+        return;
+    }
+    auto scales = std::make_shared<gui::PluginScales>(*f.dispatcher);
+    f.view->trackLayout().pluginScales = [scales](const model::Envelope& e) {
+        return (*scales)(e);
+    };
+    // An item's take FX envelope is in timeline position (session-model).
+    const double high = params::fromNormalized(spec->spec, 0.9);
+    auto added = f.dispatcher->execute(
+        {"env.add",
+         json::parse(R"({"fx":")" + fxId + R"(","param":")" + key +
+                     R"(","points":[{"beat":0,"value":)" + std::to_string(spec->spec.def) +
+                     R"(},{"beat":16,"value":)" + std::to_string(high) + "}]}")
+             .value(),
+         kUi});
+    REQUIRE_MESSAGE(added, (added ? std::string() : added.error().toString()));
+    const model::Id env = *model::Id::parse((*added)["env"].asString());
+    (void)f.dispatcher->execute(
+        {"env.set", json::parse(R"({"env":")" + env.str() + R"(","visible":true})").value(), kUi});
+    f.sync();
+    // Visible, it has a lane under the item's track, as a track effect's has.
+    auto lane = f.view->trackLayout().indexOfEnv(env);
+    REQUIRE(lane);
+    CHECK(*lane == *f.view->trackLayout().indexOf(track) + 1);
+    {
+        const model::Envelope* e = f.app->head().envelopes.find(env);
+        const auto scale = f.view->trackLayout().scaleOf(*e);
+        REQUIRE(scale);
+        CHECK(views::envTitle(*e, f.app->head(), &*scale).ends_with(" (take)"));
+    }
+    // Editable: a click in the lane's upper quarter adds a point.
+    const ui::Rect area = views::Lanes::envArea(f.view->rowRect(*lane));
+    const float x = f.view->xAt(f.app->head().timeMap->secondsAt(8)) + 1;
+    f.click({x, area.y + area.h * 0.25f});
+    const auto& pts = f.app->head().envelopes.find(env)->points;
+    REQUIRE(pts.size() == 3);
+    CHECK(params::toNormalized(spec->spec, pts[1].value) == doctest::Approx(0.75).epsilon(0.05));
+    // The item moved to another track takes its take's lane along.
+    const model::Id other = f.view->trackLayout().rows()[*lane + 1].track;
+    REQUIRE(other != track);
+    auto moved = f.dispatcher->execute(
+        {"item.move",
+         json::parse(R"({"item":")" + item.str() + R"(","track":")" + other.str() + R"("})")
+             .value(),
+         kUi});
+    REQUIRE_MESSAGE(moved, (moved ? std::string() : moved.error().toString()));
+    f.sync();
+    lane = f.view->trackLayout().indexOfEnv(env);
+    REQUIRE(lane);
+    CHECK(*lane == *f.view->trackLayout().indexOf(other) + 1);
+}
+
 TEST_CASE(
     "arrange gestures: a double-click on empty channel space makes an empty MIDI item there") {
     Fixture f;

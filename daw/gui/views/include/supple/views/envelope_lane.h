@@ -49,7 +49,8 @@ std::optional<EnvScale> envScale(const model::Envelope& env);
 std::string envTitle(const model::Envelope& env);
 // With a send's destination: "Send → Reverb · Volume"; a plug-in parameter
 // with its effect and the name its description gives (the scale's), else its
-// key: "Marram · Filter 1 Cutoff" (others as above).
+// key: "Marram · Filter 1 Cutoff", and "(take)" after a take's effect's
+// (others as above).
 std::string envTitle(const model::Envelope& env, const model::Session& session,
                      const EnvScale* scale = nullptr);
 // The envelope's value at a beat (points are in beats), with the segment
