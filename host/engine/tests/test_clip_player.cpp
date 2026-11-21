@@ -2176,6 +2176,47 @@ TEST_CASE("a launch under a master playrate switches where the song reaches its 
     CHECK(edited.log[0].runningFrame > 200 * 128);
 }
 
+TEST_CASE("a launch while a playrate change is in flight says so, and lands once it is not") {
+    // Review round 78 K1: right after a rate edit reaches the engine, and
+    // before the executors take it, placement answers launch.later with the
+    // rate's own message, not the relocation one.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.6, "preserve_pitch": false})");
+    const model::Session slow = p.app->head();
+    // A rate envelope changes the trajectory through a plan handover (a
+    // scalar alone is published to the running plan at once).
+    p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                     R"({"beat": 0, "value": 1}, {"beat": 8, "value": 0.6}]})");
+    const model::Session fast = p.app->head();
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    REQUIRE(engine.load(slow, p.app->projectDir()));
+    engine.play();
+    backend.run(20);
+    engine.service();
+    REQUIRE(engine.load(fast, p.app->projectDir()));
+    const std::vector<Engine::LaunchRequest> one{request("tr_1", "cl_1")};
+    auto inFlight = engine.launch(one, model::LaunchQuantize::Bar);
+    REQUIRE_FALSE(inFlight);
+    CHECK(inFlight.error().code == "launch.later");
+    CHECK(inFlight.error().message == "the master playrate is changing");
+    CHECK(inFlight.error().hint == "launch again in a moment");
+    // Once the executors take the new plan, it is placed.
+    auto placed = engine.launch(one, model::LaunchQuantize::Bar);
+    for (int cycle = 0; cycle < 2000 && !placed; ++cycle) {
+        CHECK(placed.error().code == "launch.later");
+        backend.run(1);
+        engine.service();
+        placed = engine.launch(one, model::LaunchQuantize::Bar);
+    }
+    REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
+    engine.stop();
+}
+
 TEST_CASE("launches of clips with take chains under a master playrate play as the replay" *
           doctest::description("rt")) {
     // As the unity test: an audio clip through a latent chain on tr_1, a
