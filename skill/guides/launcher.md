@@ -31,9 +31,11 @@ clip has no place in time, so `midi.get` spells pitches by the key at the
 project's start and gives no `context`.
 
 Timeline commands refuse a clip with `item.kind` (`item.set`, `item.remove` …) and say
-which command to use instead. `env.add` on an effect in a clip take's chain is
-refused with `clip.unsupported`: a clip take's FX and envelopes do not play yet, so
-automate the clip take's volume, pan or mute, or the track's FX.
+which command to use instead. A clip take has its own FX chain (`fx.add {take}`) and
+envelopes on it (`env.add {fx}`): they play with the clip, and an envelope's points are in
+**clip time** (beats on a MIDI clip, seconds on an audio one), so a clip launched at two
+places, or on its second pass, hears the same values. `modulate` does not reach a clip
+take's FX yet (`modulation.target`): modulate the track's FX instead.
 
 ## Launching
 
@@ -62,8 +64,8 @@ make bars short.
 A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.scene` skips it with a warning. `launch.stop` on a track with no clips is
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
-master playrate refuses launches (`launch.playrate`). A clip's FX and envelopes do
-not play yet; a rack's Notes module and the track's MIDI sends do follow launches.
+master playrate refuses launches (`launch.playrate`). A clip's take FX and
+their envelopes play, and so do a rack's Notes module and the track's MIDI sends.
 
 Two things to expect when polling. A launch given just as the transport started (the
 first launch while stopped, or right after a seek) can be refused with `launch.later`
