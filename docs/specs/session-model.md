@@ -2106,6 +2106,12 @@ bars.
   - `clip.add {item}` takes the context under the item the same way, from
     the item's start, unless `context` or `context_at` is given, which wins.
     An audio clip takes the key only.
+  - **Unreadable points.** A key or chord this build cannot read (an unknown
+    scale or chord quality from a later build) is absent here as everywhere:
+    `context_at`, an item and `scene.capture` do not take it, the answer warns
+    `clip.context_dropped` naming it and its bar, and nothing unreadable is ever
+    written into a resolved text, so a replay of the step is never refused for
+    it.
   - `follow` is accepted under the invariant (`clip.no_key`, hint: give the
     clip a context with a key at its start).
 - **Chord symbols in a `notation` source** are recorded as chord points

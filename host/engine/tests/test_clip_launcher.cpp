@@ -1233,6 +1233,73 @@ TEST_CASE(
     CHECK(pointsOf(*s.clips.find(*fromPlace)) == "key@0 C minor, chord@0 Cm");
 }
 
+TEST_CASE(
+    "a key or chord this build cannot read is not taken, and nothing unreadable is recorded") {
+    // ADR-0098: unreadable is absent. The clip does not take the point, the answer names it
+    // (clip.context_dropped), and the resolved text history keeps holds none of it, so a
+    // merge replays it.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Cm"})");
+    auto tx = l.app->beginTransaction(kOrigin, "a later build's points");
+    REQUIRE(tx);
+    model::ContextPoint key;  // a scale from a later build, at beat 16 (bar 5)
+    key.beat = 16;
+    key.tonic = "D";
+    key.scale = "zz_future_scale";
+    l.app->txn().create(key);
+    model::ContextPoint chord;  // a chord quality from a later build, at beat 20
+    chord.beat = 20;
+    chord.type = model::ContextType::Chord;
+    chord.symbol = "Cm11";
+    l.app->txn().create(chord);
+    REQUIRE(l.app->commitTransaction(*tx));
+    const auto dropped = [](const json::Value& r) {
+        std::string out;
+        if (const auto* w = r.find("warnings"))
+            for (const auto& e : w->asArray())
+                if (e.find("code")->asString() == "clip.context_dropped")
+                    out += e.find("message")->asString() + "\n";
+        return out;
+    };
+    l.run("branch.create", R"({"name": "agent/test/later"})");
+    // The span from beat 14 holds both: C minor and Cm are taken, the later build's two named.
+    const auto spanned = l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") +
+                                               kTwoBars + R"(, "context_at": {"at": 14}})");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm");
+    CHECK(dropped(spanned).find("zz_future_scale") != std::string::npos);
+    CHECK(dropped(spanned).find("Cm11") != std::string::npos);
+    const std::string text = lastRecorded(l).find("context")->asString();
+    CHECK(text.find("zz_future_scale") == std::string::npos);
+    CHECK(text.find("Cm11") == std::string::npos);
+    // The unreadable key holds at the start: the clip has no key (so it cannot follow), the
+    // answer names the key and the later chord, and no context.no_key is added to it.
+    const auto held = l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_2", )") +
+                                            kTwoBars + R"(, "context_at": {"bar": 5}})");
+    CHECK(pointsOf(clipOf(l, "cl_2")) == "chord@0 Cm");
+    CHECK(dropped(held).find("zz_future_scale") != std::string::npos);
+    CHECK(warningCodes(held).find("context.no_key") == std::string::npos);
+    // The same under an item, and by scene.capture: named, not taken.
+    l.run("item.add", R"({"track": "tr_1", "bar": 5, "notation": "voice bass; 1: C2:w"})");
+    l.run("scene.add", R"({"name": "Bridge"})");
+    const auto under = l.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "item": "it_2"})");
+    CHECK(pointsOf(clipOf(l, "cl_3")) == "chord@0 Cm");
+    CHECK(dropped(under).find("zz_future_scale") != std::string::npos);
+    l.run("region.add", R"({"start": 16, "end": 20, "name": "Bridge"})");
+    l.run("scene.add", R"({"name": "Take"})");
+    const auto captured = l.run("scene.capture", R"({"region": "rg_1", "name": "Taken"})");
+    CHECK(dropped(captured).find("zz_future_scale") != std::string::npos);
+    // The merge replays the branch's steps on a main that moved, with none refused.
+    l.run("branch.switch", R"({"name": "main"})");
+    l.run("key.set", R"({"at": 0, "tonic": "E", "scale": "minor"})");
+    const auto merged =
+        l.bus->execute({"branch.merge", j(R"({"from": "agent/test/later"})"), kOrigin});
+    REQUIRE_MESSAGE(merged, (merged ? "" : merged.error().toString()));
+    const auto first = model::clipAt(l.head(), id("tr_1"), id("sc_1"));
+    REQUIRE(first);
+    CHECK(pointsOf(*l.head().clips.find(*first)) == "key@0 C minor, chord@0 Cm");  // as it saw
+}
+
 TEST_CASE("clip.add records the chord symbols of its notation, by precedence") {
     Launcher l;
     const std::string base = R"({"track": "tr_1", "scene": "sc_1", "notation": )";

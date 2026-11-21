@@ -764,6 +764,8 @@ Result<Stated> statedContext(Context& ctx, const model::Session& s, model::ClipK
             span = underItem->second;
         }
         auto taken = detail::contextUnder(s, from, span, audio);
+        for (const auto& n : detail::unreadableNotes(taken, at ? "/context_at" : "/item"))
+            ctx.warn(n.code, n.message, n.path);
         if (at && !taken.key)
             ctx.warn("context.no_key",
                      "no key holds at " + std::string("bar ") +

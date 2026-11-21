@@ -369,3 +369,10 @@ there. Not in X1 or X2.
   And `context.no_key` is warned for an explicit `context_at` only: an item
   (`clip.add {item}`) or `scene.capture` takes what lies under the item
   without a warning.
+- *(2026-11-21, X1 review round 73, F5.)* "Unreadable reads as absent" holds
+  where a clip takes the context too: a key or chord this build cannot read,
+  met by `context_at` or taken under an item (`clip.add {item}`,
+  `scene.capture`), is not taken. The answer warns `clip.context_dropped`
+  naming the point and its project bar, and no unreadable text enters a
+  resolved `context`, so `branch.merge` can replay the step.
+
