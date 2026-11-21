@@ -222,7 +222,10 @@ instructions are in `docs/guides/installing.md`.
   project's under it. Not built: a launched clip following live (X4:
   `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
   clip plays as written), `write_context` (X5). The roll shows and edits a
-  clip's context, and the clip inspector sets Follow (X3).
+  clip's context, and the clip inspector sets Follow (X3). A clip or scene
+  laid from the clip launcher says in the status line how its keys were
+  followed or why a clip was copied (`followed.mismatch` names the keys that
+  differ).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

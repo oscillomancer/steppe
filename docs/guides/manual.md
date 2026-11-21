@@ -1693,8 +1693,11 @@ marks clips to move, and the next paste moves them. Copied clips stay in
 their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
 colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
 chords) says how the clip's notes are to be mapped onto the song's key when
-it is laid; it needs a key at the clip's start, and until following is built
-a laid clip is copied as it is. Clips launch under a master playrate, but
+it is laid; it needs a key at the clip's start. When you lay a clip or a
+scene on the timeline, the status line at the bottom says what happened to
+its keys: "Bass followed to D minor, +2" for a clip that was moved to the
+song's key, or "Keys copied: its key C minor differs from D minor at bar 21"
+for one laid as written under a different key. Clips launch under a master playrate, but
 while it keeps the pitch an audio clip can't be launched: the pane draws
 those clips (and the scenes holding one) dimmed, and a click says why in
 the status line.

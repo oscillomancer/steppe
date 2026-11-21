@@ -2823,6 +2823,28 @@ same heights, scroll and colours.
   while the item is over it (an occupied one in `meter-clip`, refusing it).
   A refused drop shows the error's message in the status line (a warped
   take, `clip.unsupported`).
+- **What laying did with the keys.** A clip or scene laid on the timeline
+  from the pane (a drag, Lay on timeline at playhead, Insert at playhead or
+  at end) says in the status line, without a dialog, what its clips' keys
+  did, read from the answer's `followed` blocks (`views::followNotice`,
+  routed from `ArrangeView::runLauncher` through
+  `LauncherCallbacks::onNotice`):
+  - a clip that followed: "Bass followed to D minor, +2" (each run of bars
+    the notes moved over: its key and the interval, or "by degree", "by
+    chord"; a second run "then F minor, +3 from bar 7", more counted;
+    notes folded into range counted);
+  - a clip copied under another key (`followed.mismatch`, with the
+    `context.mismatch` warning): "Keys copied: its key C minor differs from
+    D minor at bar 21";
+  - a clip that could not follow (`copied`): "Drums copied: drums don't
+    follow", "… audio doesn't follow", "… it has no key to follow from",
+    "… it has no notes to move";
+  - a scene: "Verse at bar 21: " and each such clip's phrase, joined by
+    "; ", or, past 110 characters, how many followed and how many were
+    copied, with up to three names each.
+
+  A clip with nothing to say (no key change, its key the song's, or
+  already in the key) says nothing, so the last note stays.
 - **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
   Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
   empty cell to its right; none left is an error in the status line), Lay on
@@ -2891,6 +2913,14 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
 - A scene dragged onto the lanes (its ghost, the command, the section and
   items after), refused on an occupied span; the menu's inserts at the
   playhead and the end; an empty scene refused; the bar arithmetic.
+- Laying with following: a clip dragged to the timeline that followed the
+  key, one copied under another key from its menu, one with nothing to say,
+  and a scene inserted from its menu, each as the status line's words
+  ("laying clips on the timeline says in the status line what their keys
+  did"); `followNotice`'s wording of runs, degrees, chords, folding,
+  copied reasons and a scene too long for the line; and in `test_app.cpp`
+  the app's status line after a scene insert (snapshot
+  `launcher-follow-status.png`).
 - Paste in the clipboard's layout, refused past the last channel and onto
   occupied cells, and a cut's paste moving the clip; a diagonal cut pasted
   over its own cells; the clipboard emptied by another project.
