@@ -619,12 +619,16 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                 audio |= made->kind == model::ClipKind::Audio;
                 // The clip remembers the key and chords the item sat under (ADR-0098); an
                 // audio clip takes the key only.
-                auto taken =
-                    detail::contextUnder(s, model::itemSpan(s, *s.items.find(pick.item)).startBeat,
-                                         length, made->kind == model::ClipKind::Audio);
-                for (const auto& n : detail::unreadableNotes(taken, "/region"))
-                    ctx.warn(n.code, n.message, n.path);
-                made->context = std::move(taken.points);
+                // An item whose take follows keeps that take's context and follow (clipFromItem
+                // took them); any other takes the project's under it.
+                if (made->follow == model::ClipFollow::None) {
+                    auto taken = detail::contextUnder(
+                        s, model::itemSpan(s, *s.items.find(pick.item)).startBeat, length,
+                        made->kind == model::ClipKind::Audio);
+                    for (const auto& n : detail::unreadableNotes(taken, "/region"))
+                        ctx.warn(n.code, n.message, n.path);
+                    made->context = std::move(taken.points);
+                }
                 model::fitClipContext(*made);
                 const Id clip = t.create(std::move(*made));
                 r.clips.push_back({clip.str(), pick.item.str(), pick.track.str(), std::nullopt});
