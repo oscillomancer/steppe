@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "buffer_pool.h"
+#include "follow_tables.h"
 #include "midi_order.h"
 #include "playrate_timeline.h"
 #include "recording.h"
@@ -564,6 +565,8 @@ struct ParamLane {
 
 // Held input notes (not release tails). Preserve the full CLAP address: a
 // NoteEnd with id -1 uses the tuple, and each -1 field is a wildcard.
+// NoteOrigin::item's mark for a launched clip's note (its clip's id beside it).
+inline constexpr std::uint64_t kClipOrigin = std::uint64_t{1} << 63;
 struct NoteOrigin {
     std::uint64_t item = 0, take = 0, source = 0;
     std::int64_t tick = 0;
@@ -852,6 +855,9 @@ struct TimedEvent {
 // a MIDI clip and timeline samples for an audio clip.
 struct ClipEvent {
     double beat = 0;  // within the period, [0, period]; note-offs may sit at the period
+    // Where its note began (a note-on's own beat, a note-off's note-on's): a
+    // following clip maps both by that start (ADR-0098 X4).
+    double start = 0;
     host::Event event;
     NoteOrigin origin{};
 };
@@ -867,6 +873,8 @@ struct ClipPlayer {
     // a beat), every pass of the loop window already laid out.
     double periodBeats = 0;
     std::vector<ClipEvent> events;
+    // A following clip's pitch tables (ADR-0098 X4); none: it plays as written.
+    std::optional<ClipFollowTables> follow;
     // Its take's chain (Node::takeChains), or -1: it plays straight into the
     // track (ADR-0097, amended 2026-11-20).
     int chain = -1;
@@ -1323,6 +1331,9 @@ struct Plan {
     // Channels compile their clips' players (ADR-0097). Off for an offline
     // render with no launch log: renders play the arrangement only.
     bool clipPlayers = true;
+    // The project's context as following clips read it (ADR-0098 X4), built
+    // with the first such clip.
+    std::optional<ProjectFollow> follow;
     // A real-time plan: a plug-in's own gesture holds its writing lanes
     // (ADR-0061, amended 2026-11-20). Offline renders have no hand.
     bool gestureHolds = false;

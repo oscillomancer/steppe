@@ -77,7 +77,13 @@ instances (ADR-0092, §1.6).
 - **ItemPlayer** (inside a TrackNode): per active item on the track's lanes,
   per take: source reader (audio: disk-streamed decoded+resampled blocks
   from the media cache; MIDI: event generator from the source with playrate
-  and loop), take FX chain, take envelopes, item gain/fades/crossfades.
+  and loop), take FX chain, take envelopes, item gain/fades/crossfades. As
+  built, a take's envelopes are `volume`, `pan` and `mute`. An envelope with
+  `param: "pitch"` can only come from a file (`env.add` refuses it with
+  `env.param`): the plan has no slot for it, so it is never played, on an item
+  or a clip, and nothing warns. The take's own `pitch` (a constant, in
+  semitones) plays. Playing the envelope needs the stretch path to take a
+  varying ratio (the lead's decision, with clips; ADR-0097).
 - **FxInstance** wrappers around `host::Instance` (in-process) or a bridge
   proxy (§5), with wet/dry, bypass, pins, oversampling, parallel groups and
   containers compiled into a small per-chain program. As built: containers
@@ -1095,6 +1101,9 @@ handles changed, so an edit that changes nothing they handle falls through
 them to a compile. A context edit that comes with any other change compiles
 as that change does. When something in the plan reads the context (a note
 source, a rack module), an edit compiles only if the plan reads it.
+*(Amended 2026-11-21, ADR-0098 "Amendment: following is playback": while a take
+or a clip in the session follows, the plan reads the context, and a context-only
+edit compiles; see "Following at playback".)*
 
 What the tests pin, and what they do not (the reader of `loadContextOnly`'s guards
 should know which is which). `a context-only edit compiles nothing and the same
@@ -1145,6 +1154,60 @@ before the patches are applied and by one after; every executor reads it
 before processing a block and stamps that block's plug-in outputs with it,
 and the app drops outputs stamped with any value other than the current
 one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
+
+### Following at playback (ADR-0098 amended; the contract for X4a and X4c)
+
+*X4a is built apart from `launch.state`'s `followed` and the context-edit
+compile (the live tables, the budget, the note identity rules below for clip
+notes); X4c is not built.* What a note sounds as is `model::soundingKey`
+(`session-model.md`, "Take context and follow"); the engine only places its
+results.
+
+- **Timeline items: at compile.** Item notes are compiled into each stage's
+  timed events at plan time, as now. A following take's note-ons take their
+  keys from `model::soundingNotes` (`session-model.md`): its places, by the
+  start rule, for every pass, chased note and crossing note the compile
+  emits, with the 128-key table memoised per pair of places (the take's key
+  and chord at the note's context beat, the project's at its song beat).
+  Each note-off takes its note-on's key. Nothing is added to the audio path,
+  and there is no budget.
+- **Launched clips: the live tables.** X4's tables move into one pool per plan,
+  deduplicated by pair of places across all clip players. The budget stays per
+  clip: its own pairs, counted before deduplication, at most `kFollowPairs`
+  (1024); past it a `chords` clip follows its key, and past that it plays as
+  written. A clip's outcome so depends only on the clip and the project, never
+  on what else is launched. `launch.follow_budget` is a compile warning, given
+  once per clip each time a compile changes that clip's outcome (not on every
+  compile): `launch.clip` and `launch.scene` return it for the clips they
+  launch, and `launch.state` marks the clip's entry `follow_budget: true`
+  while the budget forces its outcome.
+- **`launch.state`** (X4a): each listed track gains `followed: "none" | "key" |
+  "chords"`, the outcome the plan uses for the clip it plays or has queued,
+  omitted when it plays the arrangement or nothing. `launch.unfollowed` goes.
+- **Note identity.** A note origin gains `followed` (today the rule keys on
+  `kClipOrigin`). For a followed note:
+  - a plan swap carries a held voice by its address without the key;
+  - `prepareNoteIds` pairs its note-off by source id, port and channel, taking
+    the held voice's key.
+  So a context edit while a note sounds lets it play on to its note-off at the
+  pitch it started with, and no note sticks.
+- **Context edits.** A context-only edit takes the compile path whenever a take
+  or a clip in the session has `follow` other than `none`; otherwise the
+  shortcut above stays. The compile time on the song journey is measured in the
+  X4 hand-back.
+- **Everything downstream reads compiled events:** offline renders, freeze,
+  stems, rack Notes feeds, MIDI sends and plug-in MIDI inputs take the sounding
+  pitches with no change of their own.
+- **Invariants.** Real-time output stays bit-identical to the offline render in
+  both executors and bridged. Tests (X4c): a render of a following item equals
+  `take.bake` and then a render as written; live equals offline across a
+  context edit, in both executors; a note held across a context edit ends at
+  its note-off, at its start's pitch; a looped item whose passes sound
+  differently; a pooled source read by a following and a written take; a clip
+  over its budget beside one within it, each with its own outcome; timeline
+  equals launcher for the same clip (a clip of length 8 over 4 beats of looping
+  content, C at clip beat 0 and Eb at 4, laid and launched, also at a take
+  playrate of 2); a chased note maps by its own start.
 
 ## 2. Real-time execution
 
@@ -1632,10 +1695,20 @@ first use, and no plug-in code runs early to warm it.
   - `analysis` and `warnings`.
 
   `skipped: [{track?, region?, reason}]` lists files left out by
-  `skip_silent` or `if_exists: skip`. `render.dry-run` lists each file with
+  `skip_silent`, `if_exists: skip` or, for stems with no `tracks` named, a
+  channel that can produce no audio (`reason: "no_audio"`, with a `detail`; a
+  track named in `tracks`, or in `stems.tracks`, is always rendered). That
+  is a channel that has a rack, none of whose Out modules (the only way audio
+  leaves a rack; Mod Out carries control and Notes Out plays an instrument
+  elsewhere) has an audio output cabled into it, and that nothing else feeds: no
+  items, FX, print, children, MIDI input, hardware input or send into it, and
+  no rack Out with audio patched to it (`modulate`'s Modulators channel, whose
+  Out `rack.add` made and nothing is patched to). A cable from a source this
+  build does not know counts as audio. It leaves the file counter alone. `render.dry-run` lists each file with
   `path` (where `if_exists` sends it), `exists` (its destination is already
   there), `skip: true` when `if_exists: skip` leaves it out, `seconds` and
-  `outputs: [{path, format}]`. With no `operation` it plans the settings'
+  `outputs: [{path, format}]`; a skipped no-audio channel is `{track, reason,
+  skip: true}`. With no `operation` it plans the settings'
   `source`. `render.mix` answers with its file's entry at the top level
   (plus `peak_dbfs`, `render`, `output_latency` and `skipped`), as before.
   The mix renders the `masters` setting, a file each in that order

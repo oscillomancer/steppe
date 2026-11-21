@@ -17,10 +17,6 @@ namespace supple::engine::detail {
 
 namespace {
 
-// A clip note's origin is flagged so that it never shares an item's
-// address (an item and a clip may have the same number).
-constexpr std::uint64_t kClipOrigin = std::uint64_t{1} << 63;
-
 int rank(const host::Event& e) {
     return e.kind == host::Event::Kind::NoteOff ? 0 : e.kind == host::Event::Kind::NoteOn ? 2 : 1;
 }
@@ -86,7 +82,7 @@ void midiEvents(ClipPlayer& pl, const model::Clip& clip, Id clipId, const model:
             const double off = std::min(base + offContent - from, period);
             if (!(off - at > 1e-9)) continue;
             ClipEvent a;
-            a.beat = at;
+            a.beat = a.start = at;
             a.origin = {kClipOrigin | clipId.n, clip.activeTake->n, take.source->n, n.start, r};
             a.event.kind = host::Event::Kind::NoteOn;
             a.event.channel = n.channel;
@@ -106,7 +102,7 @@ void midiEvents(ClipPlayer& pl, const model::Clip& clip, Id clipId, const model:
             const double at = base + t - from;
             if (at >= period) continue;
             ClipEvent ev;
-            ev.beat = at;
+            ev.beat = ev.start = at;
             ev.event = control(c);
             pl.events.push_back(ev);
         }
@@ -197,6 +193,23 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
                     ? s.midi.find(*take->source)
                     : nullptr;
             if (src) midiEvents(pl, clip, id, *take, *src, nextId);
+            // Following live (ADR-0098 X4): what placement would follow, by
+            // tables within the budget, else by its key, else as written.
+            if (clip.follow != model::ClipFollow::None) {
+                const bool pitched =
+                    std::any_of(pl.events.begin(), pl.events.end(), [](const ClipEvent& e) {
+                        return e.event.kind == host::Event::Kind::NoteOn && e.event.channel != 9;
+                    });
+                if (!p.follow) p.follow = projectFollow(s);
+                ClipFollowBuild built = buildClipFollow(clip, pitched, *p.follow);
+                if (built.overBudget)
+                    p.warnings.push_back(
+                        id.str() + ": launch.follow_budget: its context and the project's make " +
+                        "too many pairs of places to follow " +
+                        (built.outcome == FollowOutcome::Key ? "the chords; it follows the key"
+                                                             : "live; it plays as written"));
+                pl.follow = std::move(built.tables);
+            }
             const auto [voices, window] = midiSizing(pl, blockBeats);
             n.clipVoices = std::max(n.clipVoices, voices);
             n.clipWindow = std::max(n.clipWindow, window);
@@ -662,6 +675,17 @@ void addRetiring(Plan& to, const Plan& from) {
 
 namespace {
 
+// A following clip's note (ADR-0098 X4): its key as the tables map it, by
+// the clip beat where it began and the song beat where that start sounds
+// (`base` the pass's song beat), a note-off as its note-on.
+void followEvent(const Plan& p, const ClipPlayer& pl, const ClipEvent& ce, double base,
+                 host::Event& e) SUPPLE_RT {
+    if (!pl.follow || !p.follow) return;
+    if (e.kind != host::Event::Kind::NoteOn && e.kind != host::Event::Kind::NoteOff) return;
+    e.key = static_cast<std::int16_t>(
+        followedKey(*pl.follow, *p.follow, ce.start, base + ce.start, e.channel, e.key));
+}
+
 // A MIDI player's events in the song frames [song0, song0 + frames) under
 // launch state L, each with its frame in `time`, into `target` (within its
 // capacity: never allocates).
@@ -691,6 +715,7 @@ void clipMidi(const Plan& p, const ClipPlayer& pl, const LaunchState& L, std::in
             const std::int64_t at = time::samplesAt(tm.secondsAt(base + it->beat), p.rate) - origin;
             if (at < song0 || at >= song1 || (!before && at < L.anchorSample)) continue;
             host::Event e = it->event;
+            followEvent(p, pl, *it, base, e);
             e.time = static_cast<std::uint32_t>(at - song0);
             if (target.size() < target.capacity()) target.push_back(e);  // never allocate here
         }
@@ -813,6 +838,7 @@ void rateClipMidi(const Plan& p, const PlayrateTimeline& tl, const ClipPlayer* p
                         hi = mid;
                 }
                 host::Event e = it->event;
+                followEvent(p, *pl, *it, base, e);
                 e.time = lo;
                 emit(e);
             }

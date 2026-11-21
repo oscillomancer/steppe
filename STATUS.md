@@ -178,7 +178,7 @@ instructions are in `docs/guides/installing.md`.
   the oldest steps. Incremental unique-payload accounting measures only new or
   changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.20` with migration from
+  Project format `supple.project/2.21` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
   work… or at start, ADR-0078), crash recovery of recordings, a per-project
   UI sidecar.
@@ -219,15 +219,30 @@ instructions are in `docs/guides/installing.md`.
   `followed` says how, by bar, and a looped item whose passes map differently
   is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
   that cannot follow is copied with its reason, and `launch.commit` copies
-  what was heard and warns `context.mismatch` when a clip's key is not the
-  project's under it. Not built: a launched clip following live (X4:
-  `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
-  clip plays as written), `write_context` (X5). The roll shows and edits a
-  clip's context, and the clip inspector sets Follow (X3). A clip or scene
+  what was heard and warns `context.mismatch` when a clip's key (or, in the same key, chord) is not the
+  project's under it. `scene.insert` and `arrangement.build` take
+  `write_context` (X5): the scenes' own harmony is written to the context
+  track under each section that has none. Not built: a launched clip
+  following live (X4: `launch.clip` and `launch.scene` warn
+  `launch.unfollowed`, and a launched clip plays as written). The roll shows
+  and edits a clip's context, and the clip inspector sets Follow (X3). A clip or scene
   laid from the clip launcher, or written by Capture (`launch.commit`'s
   `mismatches`), says in the status line how its keys were followed or why a
   clip was copied (`followed.mismatch` names the keys that differ); a
   launcher cell shows its clip's key, marked "→" when the clip follows.
+- **Take context and follow** (ADR-0098 amended, "following is playback"; step
+  X4b, the model only; session-model "Take context and follow", schema 2.21): a
+  MIDI take of an item carries `context`, `context_period`, `context_phase` and
+  `follow`, loaded and saved with every older file unchanged (the open drops a
+  point against the rules with `take.context_dropped` and resets a follow
+  without a readable key with `take.follow_reset`; a clip's takes and audio
+  takes hold none of the four). `model/follow.h` has a note's place (its context
+  beat is the take's phase plus its unwrapped source beat, so the context
+  travels with the notes), `soundingNotes`, `soundingKey`, `contextOver` and
+  `placeAt`. Not built: the commands (placement, `take.set`, `take.bake`,
+  `midi.get {sounding}` and the rest of the contract's table, X4d) and the
+  engine's use of it (X4c): a take's `follow` is stored and nothing plays by it
+  yet.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

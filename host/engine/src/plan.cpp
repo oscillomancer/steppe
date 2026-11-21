@@ -2701,14 +2701,20 @@ void prepareNoteIds(Stage& st) SUPPLE_RT {
         } else if (event.kind == host::Event::Kind::NoteOff ||
                    event.kind == host::Event::Kind::NoteChoke) {
             if (event.noteId >= 0 && i >= st.releases) {
+                // A launched clip's note ends the key its note-on sounded,
+                // whatever the pitch tables now say (ADR-0098 X4).
+                const bool clip = static_cast<std::size_t>(source) < st.noteSources.size() &&
+                                  (st.noteSources[static_cast<std::size_t>(source)].origin.item &
+                                   kClipOrigin) != 0;
                 const auto voice = std::find_if(
                     st.pendingVoices.begin(), st.pendingVoices.end(), [&](const HeldVoice& v) {
-                        return v.sourceId == source &&
-                               matchesVoice(v, event.port, event.channel, event.key, -1);
+                        return v.sourceId == source && matchesVoice(v, event.port, event.channel,
+                                                                    clip ? -1 : event.key, -1);
                     });
                 // Its onset was dropped or NoteEnd already finished it.
                 if (voice == st.pendingVoices.end()) continue;
                 event.noteId = voice->noteId;
+                event.key = voice->key;
             }
             std::erase_if(st.pendingVoices, [&](const HeldVoice& v) {
                 return matchesVoice(v, event.port, event.channel, event.key, event.noteId);
@@ -4744,13 +4750,32 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                                 source.channel = carried.channel;
                                 source.key = carried.key;
                                 source.ordinal = carried.sourceOrdinal;
-                                const auto found = std::lower_bound(
-                                    st.noteSourceIndex.begin(), st.noteSourceIndex.end(), source,
-                                    [](const auto& a, const auto& b) {
-                                        return a.address() < b.address();
-                                    });
+                                const bool clip = (carried.origin.item & kClipOrigin) != 0;
+                                // A launched clip's note sounds at the key its
+                                // pitch tables gave it, not its source's (ADR-0098
+                                // X4): it is found by the rest of its address.
+                                if (clip) source.key = std::numeric_limits<std::int16_t>::min();
+                                auto found = std::lower_bound(st.noteSourceIndex.begin(),
+                                                              st.noteSourceIndex.end(), source,
+                                                              [](const auto& a, const auto& b) {
+                                                                  return a.address() < b.address();
+                                                              });
+                                if (clip)
+                                    for (;
+                                         found != st.noteSourceIndex.end() &&
+                                         std::tuple_cat(found->origin.address(),
+                                                        std::tuple{found->port, found->channel}) ==
+                                             std::tuple_cat(
+                                                 source.origin.address(),
+                                                 std::tuple{source.port, source.channel});
+                                         ++found)
+                                        if (found->ordinal == source.ordinal) break;
                                 if (found != st.noteSourceIndex.end() &&
-                                    found->address() == source.address())
+                                    (clip ? found->origin.address() == source.origin.address() &&
+                                                found->port == source.port &&
+                                                found->channel == source.channel &&
+                                                found->ordinal == source.ordinal
+                                          : found->address() == source.address()))
                                     carried.sourceId = found->id;
                                 else
                                     carried.release = true;

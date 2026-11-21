@@ -122,7 +122,7 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
         if (copiedBecause) info.copied = copiedBecause;
         KeyMismatch what;
         if (auto note = mismatchNote(s, clipId, clip, itemStart, itemBeats, 0.0, path, &what)) {
-            info.mismatch = what;
+            if (!what.clipKey.empty()) info.mismatch = what;  // a key mismatch names its keys
             notes.push_back(std::move(*note));
         }
         return info;

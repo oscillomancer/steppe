@@ -678,6 +678,187 @@ TEST_CASE("arrangement.build lays scenes one after the other, each with its sect
     CHECK(l.head().items.size() == 6);
 }
 
+// --- write_context (ADR-0098 X5) -------------------------------------------------------
+
+namespace {
+
+std::string codesOf(const json::Value& result) {
+    std::string out;
+    if (const json::Value* w = result.find("warnings"))
+        for (const auto& e : w->asArray()) out += e.find("code")->asString() + " ";
+    return out;
+}
+
+// "D minor Dm" for the key and chord holding at a bar.
+std::string holding(Song& l, int bar) {
+    auto at = l.run("context.at", "{\"bar\": " + std::to_string(bar) + "}");
+    std::string out;
+    if (const json::Value* key = at.find("key"))
+        out += key->find("tonic")->asString() + " " + key->find("scale")->asString();
+    if (const json::Value* chord = at.find("chord")) out += " " + chord->find("symbol")->asString();
+    return out;
+}
+
+// Verse (sc_1): a two-bar bass line and a two-bar pad, both written in D minor over Dm | A7
+// (the same points from two clips are written once); Chorus (sc_2): a bass in F major over F.
+void harmonyScenes(Song& l) {
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1",
+        "notation": "voice bass; 1: D2:w; 2: A1:w", "context": "1: key D minor {Dm}:w\n2: {A7}:w"})");
+    l.run("clip.add", R"({"track": "tr_2", "scene": "sc_1",
+        "notation": "voice pad; 1: D3:w; 2: A3:w", "context": "1: key D minor {Dm}:w\n2: {A7}:w"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2",
+        "notation": "voice bass; 1: F2:w; 2: F2:w", "context": "1: key F major {F}:w\n2: ~:w"})");
+}
+
+}  // namespace
+
+TEST_CASE("write_context writes each scene's harmony under its section, in one undo step") {
+    Song l;
+    harmonyScenes(l);
+    const std::string empty = l.run("context.get", R"({"from": 0, "to": 64})")["text"].asString();
+    auto built = l.run("arrangement.build", R"({"bar": 3, "write_context": true, "sequence": [
+        {"scene": "sc_1", "bars": 4}, {"scene": "sc_2", "bars": 2}, {"scene": "sc_1", "bars": 2}]})");
+    // Verse over bars 3-6 repeats its two bars: a key, then Dm A7 Dm A7; the Chorus a key and a
+    // chord; the Verse again, after the Chorus, its key and Dm A7.
+    const struct {
+        int keys, chords;
+    } expect[] = {{1, 4}, {1, 1}, {1, 2}};
+    for (std::size_t k = 0; k < 3; ++k) {
+        CAPTURE(k);
+        auto note = at(built["segments"], k)["context"];
+        CHECK(note["written"].asBool());
+        CHECK(note["keys"].asInt() == expect[k].keys);
+        CHECK(note["chords"].asInt() == expect[k].chords);
+        CHECK(note.find("reason") == nullptr);
+    }
+    const char* heard[] = {"D minor Dm", "D minor A7", "D minor Dm", "D minor A7",
+                           "F major F",  "F major F",  "D minor Dm", "D minor A7"};
+    for (int k = 0; k < 8; ++k) {
+        CAPTURE(k);
+        CHECK(holding(l, 3 + k) == heard[k]);
+    }
+    const std::string text = l.run("context.get", R"({"from": 8, "to": 40})")["text"].asString();
+    CHECK(text ==
+          "3: key D minor {Dm}:w\n4: {A7}:w\n5: {Dm}:w\n6: {A7}:w\n7: key F major "
+          "{F}:w\n8: ~:w\n9: key D minor {Dm}:w\n10: {A7}:w\n");
+    CHECK(l.head().context.size() == 3 + 7);  // three keys, seven chords
+    // One undo step takes the points and the items back; redo restores both.
+    l.run("history.undo", "{}");
+    CHECK(l.head().context.empty());
+    CHECK(l.head().items.size() == 1);
+    CHECK(l.run("context.get", R"({"from": 0, "to": 64})")["text"].asString() == empty);
+    l.run("history.redo", "{}");
+    CHECK(l.head().context.size() == 10);
+    CHECK(l.run("context.get", R"({"from": 8, "to": 40})")["text"].asString() == text);
+    // The harmony is part of the project: save and reopen keep it, and the sections.
+    auto file = json::Value::object();
+    file["path"] = (l.root / "song.json").string();
+    l.runArgs("project.save", file);
+    l.runArgs("project.open", file);
+    CHECK(l.run("context.get", R"({"from": 8, "to": 40})")["text"].asString() == text);
+    CHECK(l.head().regions.size() == 3);
+}
+
+TEST_CASE("write_context leaves out what the context track already says") {
+    Song l;
+    harmonyScenes(l);
+    // The Verse twice in a row: the second one's key is what already holds, so only its
+    // chords are written.
+    auto built = l.run("arrangement.build", R"({"bar": 3, "write_context": true, "sequence": [
+        {"scene": "sc_1", "bars": 4}, {"scene": "sc_1", "bars": 2}]})");
+    CHECK(at(built["segments"], 0)["context"]["keys"].asInt() == 1);
+    CHECK(at(built["segments"], 1)["context"]["keys"].asInt() == 0);
+    CHECK(at(built["segments"], 1)["context"]["chords"].asInt() == 2);
+    CHECK(at(built["segments"], 1)["context"]["written"].asBool());
+    // Laid again over what is already there, nothing is left to write: it says it holds.
+    l.run("history.undo", "{}");
+    l.run("key.set", R"({"at": 4, "tonic": "D", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 4, "symbol": "Dm"})");
+    l.run("chord.set", R"({"at": 8, "symbol": "A7"})");
+    // Bars 3 and 4 (beats 8-16) hold the points of a section laid earlier: left alone.
+    auto again = l.run("scene.insert", R"({"scene": "sc_1", "bar": 3, "bars": 2,
+        "write_context": true})");
+    CHECK_FALSE(again["context"]["written"].asBool());
+    CHECK(again["context"]["reason"].asString() == "present");
+}
+
+TEST_CASE("write_context: clips that disagree write nothing, and say which") {
+    Song l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2",
+        "notation": "voice bass; 1: F2:w", "context": "1: key F major {F}:w"})");
+    l.run("clip.add", R"({"track": "tr_2", "scene": "sc_2",
+        "notation": "voice pad; 1: D3:w", "context": "1: key F major {Dm}:w"})");
+    auto built = l.run("arrangement.build", R"({"bar": 3, "write_context": true,
+        "sequence": [{"scene": "sc_2", "bars": 2}]})");
+    auto note = at(built["segments"], 0)["context"];
+    CHECK_FALSE(note["written"].asBool());
+    CHECK(note["reason"].asString() == "disagree");
+    CHECK(note["bar"].asInt() == 3);
+    CHECK(note["clips"].size() == 2);
+    CHECK(note["message"].asString().find("different chords") != std::string::npos);
+    CHECK(codesOf(built).find("context.not_written") != std::string::npos);
+    CHECK(l.head().context.empty());                       // the context track is untouched,
+    CHECK(at(built["segments"], 0)["items"].size() == 2);  // and the clips are laid as ever
+    // The same scene alone, its clips agreeing (one names the key only): written.
+    l.run("clip.set", R"({"clip": "cl_2", "context": "1: key F major ~:w"})");
+    auto agreed = l.run("scene.insert", R"({"scene": "sc_2", "bar": 6, "bars": 1,
+        "write_context": true})");
+    CHECK(agreed["context"]["written"].asBool());
+    CHECK(agreed["context"]["keys"].asInt() == 1);
+    CHECK(agreed["context"]["chords"].asInt() == 1);
+}
+
+TEST_CASE("write_context: a section with points under it is left alone, with a warning") {
+    Song l;
+    harmonyScenes(l);
+    l.run("chord.set", R"({"at": 10, "symbol": "Gm"})");  // inside bar 3 (beats 8-12)
+    auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 3, "bars": 2,
+        "write_context": true})");
+    CHECK_FALSE(laid["context"]["written"].asBool());
+    CHECK(laid["context"]["reason"].asString() == "present");
+    CHECK(codesOf(laid).find("context.not_written") != std::string::npos);
+    CHECK(l.head().context.size() == 1);
+    // A key holding into the span is not "under" it: bar 7's section is written.
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    auto later = l.run("scene.insert", R"({"scene": "sc_1", "bar": 7, "bars": 2,
+        "write_context": true})");
+    CHECK(later["context"]["written"].asBool());
+    CHECK(later["context"]["keys"].asInt() == 1);  // D minor replaces the C major that held
+}
+
+TEST_CASE("write_context writes before the clips are laid, so a following clip finds its key") {
+    Song l;
+    harmonyScenes(l);
+    l.run("clip.set", R"({"clip": "cl_1", "follow": "chords"})");
+    // Without the flag the project has no key under the item: the notes are copied.
+    auto plain = l.run("scene.insert", R"({"scene": "sc_1", "bar": 3, "bars": 2})");
+    CHECK(codesOf(plain).find("context.no_key") != std::string::npos);
+    l.run("history.undo", "{}");
+    auto written = l.run("scene.insert", R"({"scene": "sc_1", "bar": 3, "bars": 2,
+        "write_context": true})");
+    CHECK(codesOf(written).find("context.no_key") == std::string::npos);
+    CHECK(codesOf(written).find("context.mismatch") == std::string::npos);
+    auto bass = at(written["items"], 0);
+    CHECK(bass["followed"]["mode"].asString() == "chords");
+    CHECK(bass["followed"]["regions"].size() == 1);
+    CHECK(bass["followed"]["regions"].asArray()[0]["to_key"].asString() == "D minor");
+}
+
+TEST_CASE(
+    "write_context: nothing to write when no clip has a context, and without the flag no answer") {
+    Song l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "notation": "voice bass; 1: F2:w"})");
+    auto laid = l.run("scene.insert", R"({"scene": "sc_2", "bar": 3, "bars": 1,
+        "write_context": true})");
+    CHECK_FALSE(laid["context"]["written"].asBool());
+    CHECK(laid["context"]["reason"].asString() == "no_context");
+    CHECK(codesOf(laid).find("context.not_written") == std::string::npos);
+    l.run("history.undo", "{}");
+    auto plain = l.run("scene.insert", R"({"scene": "sc_2", "bar": 3, "bars": 1})");
+    CHECK(plain.find("context") == nullptr);
+    CHECK(l.head().context.empty());
+}
+
 TEST_CASE("arrangement.build refuses an entry, with its index, and changes nothing") {
     Song l;
     l.verseClips();

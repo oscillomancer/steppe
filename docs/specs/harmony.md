@@ -132,6 +132,13 @@ against a brute-force scan.
 
 ## 5. Following (ADR-0098; the contract for step X2, built)
 
+*(Amended 2026-11-21, ADR-0098 "Amendment: following is playback": `follow` is
+unchanged, and its callers change. Placement no longer writes its results into
+notes. `model::soundingKey` (`session-model.md`, "Take context and follow"), in
+the model library, calls it for every note that sounds: the engine's compile,
+`take.bake`, `midi.get {sounding}` and `item.export`. This library still does not
+see the model.)*
+
 ```cpp
 struct Place { std::optional<Key> key; std::optional<Chord> chord; };
 enum class FollowMode { Key, Chords };

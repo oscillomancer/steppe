@@ -1007,11 +1007,12 @@ void registerClipCommands(cmd::Registry& registry) {
             "the key and chords it was written against (context): as a lead sheet in clip bars "
             "(\"1: key D minor {Dm}:w\"), read from the project at a place (context_at), under "
             "the item it copies, or from the {SYMBOL} chords of its notation (a stated context "
-            "holding chords wins over them, clip.chords_ignored). follow (none, key or chords) "
+            "holding chords wins over them; clip.chords_ignored warns when they differ from it). "
+            "follow (none, key or chords) "
             "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying "
             "the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the "
-            "key or chords under it (their follow argument), and a launched clip plays as "
-            "written until ADR-0098's X4 (launch.unfollowed).";
+            "key or chords under it (their follow argument); a launched clip is not followed, it "
+            "plays as written (launch.unfollowed says so and what to do instead).";
         c.tags = {"clip launcher", "clip"};
         c.args = clipAddArgsSchema();
         c.result =

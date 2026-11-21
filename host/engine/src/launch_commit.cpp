@@ -426,9 +426,11 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                     if (auto note = detail::mismatchNote(now, clipId, clip, beat0, beat1 - beat0,
                                                          phase, path, &what)) {
                         ctx.warn(note->code, note->message, note->path);
-                        if (!done.mismatches) done.mismatches.emplace();
-                        done.mismatches->push_back(
-                            {clipId.str(), std::move(what.clipKey), std::move(what.key), what.bar});
+                        if (!what.clipKey.empty()) {  // a key mismatch names its keys
+                            if (!done.mismatches) done.mismatches.emplace();
+                            done.mismatches->push_back({clipId.str(), std::move(what.clipKey),
+                                                        std::move(what.key), what.bar});
+                        }
                         mismatchGiven = true;
                     }
                 }

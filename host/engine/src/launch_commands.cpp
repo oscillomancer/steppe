@@ -248,7 +248,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             " Launching while stopped starts the transport. The track leaves the "
             "arrangement (or the clip it played) there: its sounding notes end and "
             "audio crossfades over 5 ms. A clip whose follow is not none warns launch.unfollowed: "
-            "a launched clip plays as written until ADR-0098's X4.";
+            "a launched clip is not followed, it plays as written; to hear it followed lay it "
+            "with item.add {clip}, scene.insert or arrangement.build.";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<ClipArg>("launch_clip_args")
                      .field("clip", &ClipArg::clip, idArg("cl", "Clip"))
@@ -272,12 +273,14 @@ void registerLaunchCommands(cmd::Registry& registry) {
             auto done = launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
                                   quantizeOf(s, &clip), "/clip");
             if (done && clip.follow != model::ClipFollow::None)
-                ctx.warn("launch.unfollowed",
-                         id->str() + " follows the " +
-                             (clip.follow == model::ClipFollow::Key ? "key" : "chords") +
-                             " when it is laid on the timeline, but a launched clip plays as "
-                             "it was written until ADR-0098's X4",
-                         "/clip");
+                ctx.warn(
+                    "launch.unfollowed",
+                    id->str() + " follows the " +
+                        (clip.follow == model::ClipFollow::Key ? "key" : "chords") +
+                        " when it is laid on the timeline, but a launched clip is not followed: it "
+                        "plays as it was written (to hear it followed, lay it with "
+                        "item.add {clip}, scene.insert or arrangement.build)",
+                    "/clip");
             return done;
         };
         addChecked(registry, std::move(c));
@@ -294,7 +297,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "Tracks with no clip in the scene keep playing what they play. A frozen track is "
             "skipped with a track.frozen warning, a clip past the memory budget with a "
             "launch.memory warning, and clips whose follow is not none with one "
-            "launch.unfollowed warning (launched clips play as written until ADR-0098's X4).";
+            "launch.unfollowed warning (launched clips are not followed: they play as written; to "
+            "hear a scene followed, lay it with scene.insert or arrangement.build).";
         c.tags = {"clip launcher", "transport", "scene"};
         c.args = schema::object<SceneArg>("launch_scene_args")
                      .field("scene", &SceneArg::scene, idArg("sc", "Scene"))
@@ -347,8 +351,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
                 ctx.warn("launch.unfollowed",
                          (followers == 1 ? "the clip " : "the clips ") + following +
                              (followers == 1 ? " follows" : " follow") +
-                             " the context when laid on the timeline, but launched clips play "
-                             "as they were written until ADR-0098's X4",
+                             " the context when laid on the timeline, but launched clips are not "
+                             "followed: they play as they were written (to hear them followed, "
+                             "lay the scene with scene.insert or arrangement.build)",
                          "/scene");
             return done;
         };
@@ -523,9 +528,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "every clip that could play started on one boundary) also writes a section named "
             "after it, from that boundary until one of its tracks is launched again or the "
             "capture ends, as scene.insert does; clips launched singly write none. A launched "
-            "clip is not followed (until ADR-0098's X4): its items copy what was heard, and "
-            "context.mismatch warns once for each launched clip whose key is not the project's "
-            "under it, however many periods it is laid as. "
+            "clip is not followed: its items copy what was heard (to have them followed, lay the "
+            "scenes with scene.insert or arrangement.build instead), and "
+            "context.mismatch warns once for each launched clip whose key (or, in the same "
+            "key, chord) is not the project's under it, however many periods it is laid as. "
             "A running "
             "capture ends first; the "
             "capture stays, so committing again writes it again over itself. performance is "

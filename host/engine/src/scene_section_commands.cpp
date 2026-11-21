@@ -26,10 +26,20 @@ struct LaidClip {
     std::string clip, item, track;
     std::optional<detail::FollowedInfo> followed;  // scene.insert, arrangement.build
 };
+// What write_context did for a section (session-model "Writing the context from scenes").
+struct ContextWritten {
+    bool written = false;
+    std::int64_t keys = 0, chords = 0;
+    std::optional<std::string> reason;  // present, disagree, holds, no_context
+    std::vector<std::string> clips;     // disagree: the two clips
+    std::optional<std::int64_t> bar;    // disagree: the project bar
+    std::optional<std::string> message;
+};
 struct Segment {
     std::string scene, region;
     double start = 0, end = 0;
     std::vector<LaidClip> items;
+    std::optional<ContextWritten> context;
 };
 
 struct SceneInsertArgs {
@@ -40,11 +50,13 @@ struct SceneInsertArgs {
     std::optional<std::string> name;
     bool pooled = false;
     std::optional<model::ClipFollow> follow;
+    bool writeContext = false;
 };
 struct SceneInsertResult {
     std::vector<LaidClip> items;
     std::string region;
     double start = 0, end = 0;
+    std::optional<ContextWritten> context;
 };
 struct SceneCaptureArgs {
     std::string region;
@@ -65,6 +77,7 @@ struct BuildArgs {
     std::optional<std::int64_t> bar;
     bool pooled = false;
     std::optional<model::ClipFollow> follow;
+    bool writeContext = false;
 };
 struct BuildResult {
     std::vector<Segment> segments;
@@ -119,6 +132,174 @@ std::vector<std::pair<model::Id, const model::Clip*>> clipsOf(const model::Sessi
         if (const auto clip = model::clipAt(s, track, scene))
             out.emplace_back(*clip, s.clips.find(*clip));
     return out;
+}
+
+schema::Schema<ContextWritten> contextWrittenSchema() {
+    return schema::object<ContextWritten>("context_written")
+        .field("written", &ContextWritten::written, schema::boolean())
+        .field("keys", &ContextWritten::keys,
+               schema::integer().doc("Key points written under the section."))
+        .field("chords", &ContextWritten::chords,
+               schema::integer().doc("Chord points written under the section."))
+        .field("reason", &ContextWritten::reason,
+               schema::enumeration<std::string>({{"present", "present"},
+                                                 {"disagree", "disagree"},
+                                                 {"holds", "holds"},
+                                                 {"no_context", "no_context"}})
+                   .doc("Why nothing was written: the context track already has points under "
+                        "the section, the clips disagree, it already says the same, or no clip "
+                        "has a context."))
+        .field("clips", &ContextWritten::clips, schema::arrayOf(schema::string()))
+        .field("bar", &ContextWritten::bar, schema::integer())
+        .field("message", &ContextWritten::message, schema::string())
+        .build();
+}
+
+constexpr const char* kWriteContextDoc =
+    "Write the scene's clips' own key and chords onto the context track under each section that "
+    "has none (shifted to the section, repeating with a loop clip), in the same undo step, "
+    "before the clips are laid. Left alone: a section with points under it; not written: one "
+    "whose clips disagree. The answer's context says which (default false).";
+
+constexpr double kGrid = 960.0;
+double onGrid(double beat) { return std::round(beat * kGrid) / kGrid; }
+
+// The same key or chord: points are canonical, so the strings say it.
+bool samePoint(const model::ContextPoint& a, const model::ContextPoint& b) {
+    return a.type == b.type &&
+           (a.type == model::ContextType::Key ? a.tonic == b.tonic && a.scale == b.scale
+                                              : a.symbol == b.symbol);
+}
+
+// What write_context decided for one section: the points to write (none unless
+// note.written) and the answer.
+struct ContextPlan {
+    ContextWritten note;
+    std::vector<model::ContextPoint> points;
+};
+
+// Plans the context written under [start, end) for a scene's `clips`. `written` holds the
+// points this call has already planned for earlier sections.
+Result<ContextPlan> planSectionContext(
+    const model::Session& s, const std::vector<std::pair<model::Id, const model::Clip*>>& clips,
+    double start, double end, const std::vector<model::ContextPoint>& written) {
+    ContextPlan plan;
+    ContextWritten& note = plan.note;
+    // Points already under the section are left alone.
+    std::size_t present = 0;
+    for (const auto& e : s.context)
+        if (e.value->beat > start - kEps && e.value->beat < end - kEps) ++present;
+    if (present) {
+        note.reason = "present";
+        note.message = "the context track already has " + std::to_string(present) +
+                       (present == 1 ? " point" : " points") + " under this section: left alone";
+        return plan;
+    }
+    // The clips' points on the timeline, with the clip that says each.
+    struct Event {
+        std::int64_t tick;
+        model::ContextPoint point;
+        model::Id clip;
+    };
+    std::vector<Event> events;
+    for (const auto& [clipId, clip] : clips) {
+        if (clip->context.empty()) continue;
+        const bool midi = clip->kind == model::ClipKind::Midi && clip->length > 0;
+        for (int pass = 0; pass < 100000; ++pass) {
+            const double origin = start + pass * (midi ? clip->length : 0.0);
+            if (origin >= end - kEps) break;
+            for (const model::ContextPoint& p : clip->context) {
+                const double at = onGrid(origin + p.beat);
+                if (at >= end - kEps) continue;
+                model::ContextPoint q = p;
+                q.beat = at;
+                events.push_back({std::llround(at * kGrid), std::move(q), clipId});
+            }
+            // An audio clip holds a key at its start only, and a once clip plays one pass.
+            if (!midi || clip->mode == model::ClipMode::Once) break;
+        }
+    }
+    if (events.empty()) {
+        note.reason = "no_context";
+        note.message = "no clip of the scene has a key or chords";
+        return plan;
+    }
+    // An empty chord ("no chord from here") says nothing, so a real chord of another clip at its
+    // beat wins and the two do not disagree: they sort after the real ones.
+    const auto saysNothing = [](const model::ContextPoint& p) {
+        return p.type == model::ContextType::Chord && p.symbol.empty();
+    };
+    std::stable_sort(events.begin(), events.end(), [&](const Event& a, const Event& b) {
+        if (a.tick != b.tick) return a.tick < b.tick;
+        if (a.point.type != b.point.type) return a.point.type < b.point.type;
+        return !saysNothing(a.point) && saysNothing(b.point);
+    });
+    // Two clips saying different things of one type at one beat disagree.
+    for (std::size_t i = 0; i < events.size(); ++i)
+        for (std::size_t k = i + 1; k < events.size() && events[k].tick == events[i].tick; ++k)
+            if (events[k].point.type == events[i].point.type && !saysNothing(events[i].point) &&
+                !saysNothing(events[k].point) && !samePoint(events[i].point, events[k].point) &&
+                events[k].clip != events[i].clip) {
+                note.reason = "disagree";
+                note.clips = {events[i].clip.str(), events[k].clip.str()};
+                note.bar = s.timeMap->barBeat(events[i].point.beat).bar;
+                note.message =
+                    events[i].clip.str() + " and " + events[k].clip.str() +
+                    " were written over different " +
+                    (events[i].point.type == model::ContextType::Key ? "keys" : "chords") +
+                    " at bar " + std::to_string(*note.bar) + ": nothing written for this section";
+                return plan;
+            }
+    // What holds now: the context track at the start, then the points planned so far.
+    const auto heldIn = [&](model::ContextType type) -> std::optional<model::ContextPoint> {
+        std::optional<model::ContextPoint> held;
+        const auto id = type == model::ContextType::Key ? model::keyPointAt(s, start)
+                                                        : model::chordPointAt(s, start);
+        if (id)
+            if (const auto* p = s.context.find(*id)) held = *p;
+        for (const auto& w : written)
+            if (w.type == type && w.beat <= start + kEps && (!held || w.beat >= held->beat))
+                held = w;
+        return held;
+    };
+    std::optional<model::ContextPoint> heldKey = heldIn(model::ContextType::Key),
+                                       heldChord = heldIn(model::ContextType::Chord);
+    for (const Event& e : events) {
+        auto& held = e.point.type == model::ContextType::Key ? heldKey : heldChord;
+        const bool noChord = e.point.type == model::ContextType::Chord && e.point.symbol.empty() &&
+                             (!held || held->symbol.empty());
+        if (noChord || (held && samePoint(*held, e.point))) continue;
+        if (!plan.points.empty() && plan.points.back().beat == e.point.beat &&
+            plan.points.back().type == e.point.type)
+            continue;  // the same point from another clip
+        plan.points.push_back(e.point);
+        held = e.point;
+        (e.point.type == model::ContextType::Key ? note.keys : note.chords) += 1;
+    }
+    std::size_t keys = note.keys, chords = note.chords;
+    for (const auto& e : s.context) (e.value->type == model::ContextType::Key ? keys : chords) += 1;
+    for (const auto& w : written) (w.type == model::ContextType::Key ? keys : chords) += 1;
+    if (keys > model::kMaxContextPoints || chords > model::kMaxContextPoints)
+        return Error("context.limit",
+                     "a project holds at most " + std::to_string(model::kMaxContextPoints) +
+                         " key points and as many chord points",
+                     "/write_context", "write_context less, or remove points you no longer need");
+    if (plan.points.empty()) {
+        note.reason = "holds";
+        note.message = "the context track already says what the clips say";
+        return plan;
+    }
+    note.written = true;
+    return plan;
+}
+
+// The warning for a section that was asked for and not written for a reason the caller
+// should know of.
+void warnNotWritten(Context& ctx, const ContextWritten& note, const std::string& scene,
+                    const std::string& path) {
+    if (note.written || !note.reason || *note.reason == "no_context" || *note.reason == "holds")
+        return;
+    ctx.warn("context.not_written", scene + ": " + note.message.value_or(""), path);
 }
 
 std::string barLabel(const model::Session& s, double beat) {
@@ -217,10 +398,12 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "pass, and copied why a clip that cannot follow was left as it is; pooled with a "
             "mapping that moves a note is refused (clip.follow_pooled). With none the notes are "
             "copied as they are, and context.mismatch warns once for each item whose clip's key "
-            "is not the project's under it. An item already in "
+            "(or, in the same key, chord) is not the project's under it. An item already in "
             "the span on a track that receives a clip is refused (scene.insert.occupied), and "
             "an empty scene (scene.empty). A section named after the scene (name overrides) "
-            "is added over the span. One undo step.";
+            "is added over the span. write_context writes the clips' own key and chords onto the "
+            "context track under the span first (context in the answer says what happened). One "
+            "undo step.";
         c.tags = {"clip launcher", "scene", "arrangement"};
         c.args = schema::object<SceneInsertArgs>("scene_insert_args")
                      .field("scene", &SceneInsertArgs::scene, idArg("sc", "Scene"))
@@ -233,6 +416,9 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                      .field("pooled", &SceneInsertArgs::pooled, schema::boolean())
                      .defaultValue(false)
                      .field("follow", &SceneInsertArgs::follow, detail::followArgSchema())
+                     .field("write_context", &SceneInsertArgs::writeContext,
+                            schema::boolean().doc(kWriteContextDoc))
+                     .defaultValue(false)
                      .build();
         c.result =
             schema::object<SceneInsertResult>("scene_insert")
@@ -242,6 +428,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                        schema::number().doc("The span's start, in beats."))
                 .field("end", &SceneInsertResult::end,
                        schema::number().doc("The span's end, in beats."))
+                .field("context", &SceneInsertResult::context, contextWrittenSchema())
                 .build();
         c.errors = {
             {"scene.at", "at is not on a bar line, or neither or both of at and bar",
@@ -265,13 +452,27 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             auto bar = startBar(s, a.at, a.bar, "");
             if (!bar) return std::move(bar).error();
             model::EditTxn& t = app.txn();
-            auto seg = insertScene(ctx, t, s, *scene, *bar, a.bars, a.name, a.pooled, a.follow, "");
+            std::optional<ContextWritten> note;
+            std::optional<model::Session> after;  // the session with the context written
+            if (a.writeContext && a.bars >= 1 && a.bars <= kMaxBars) {
+                const double start = s.timeMap->beatOfBar(*bar);
+                const double end = s.timeMap->beatOfBar(static_cast<int>(*bar + a.bars));
+                auto plan = planSectionContext(s, clipsOf(s, *scene), start, end, {});
+                if (!plan) return std::move(plan).error();
+                for (auto& p : plan->points) t.create(std::move(p));
+                warnNotWritten(ctx, plan->note, a.scene, "/scene");
+                note = std::move(plan->note);
+                if (note->written) after = app.view();
+            }
+            auto seg = insertScene(ctx, t, after ? *after : s, *scene, *bar, a.bars, a.name,
+                                   a.pooled, a.follow, "");
             if (!seg) return std::move(seg).error();
             SceneInsertResult r;
             r.items = std::move(seg->items);
             r.region = seg->region;
             r.start = seg->start;
             r.end = seg->end;
+            r.context = std::move(note);
             return r;
         };
         addChecked(registry, std::move(c));
@@ -452,7 +653,10 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "than once. Every entry's refusal (scene.empty, scene.insert.period, "
             "scene.insert.occupied) names its index in path, and changes nothing; an empty "
             "sequence or one of more than 256 entries is scene.sequence. follow, pooled and each "
-            "item's followed and context.mismatch are as scene.insert's. One undo step.";
+            "item's followed and context.mismatch are as scene.insert's. write_context writes each "
+            "section's harmony from its scene's clips where the context track has none: a section "
+            "with points under it is left alone, one whose clips disagree gets nothing, and each "
+            "segment's context says which. One undo step.";
         c.tags = {"clip launcher", "scene", "arrangement"};
         auto entry = schema::object<SequenceEntry>("sequence_entry")
                          .field("scene", &SequenceEntry::scene, idArg("sc", "Scene"))
@@ -467,6 +671,9 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                      .field("pooled", &BuildArgs::pooled, schema::boolean())
                      .defaultValue(false)
                      .field("follow", &BuildArgs::follow, detail::followArgSchema())
+                     .field("write_context", &BuildArgs::writeContext,
+                            schema::boolean().doc(kWriteContextDoc))
+                     .defaultValue(false)
                      .build();
         auto segment = schema::object<Segment>("arrangement_segment")
                            .field("scene", &Segment::scene, schema::string())
@@ -474,6 +681,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                            .field("start", &Segment::start, schema::number())
                            .field("end", &Segment::end, schema::number())
                            .field("items", &Segment::items, schema::arrayOf(laidSchema("item")))
+                           .field("context", &Segment::context, contextWrittenSchema())
                            .build();
         c.result = schema::object<BuildResult>("arrangement_build")
                        .field("segments", &BuildResult::segments, schema::arrayOf(segment))
@@ -513,6 +721,37 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                 scenes.push_back(*scene);
             }
             model::EditTxn& t = app.txn();
+            // write_context: each section's harmony first, so the clips that follow find it.
+            std::vector<std::optional<ContextWritten>> notes(a.sequence.size());
+            std::optional<model::Session> after;
+            if (a.writeContext) {
+                std::vector<model::ContextPoint> written;
+                std::int64_t at = *first;
+                bool any = false;
+                for (std::size_t i = 0; i < a.sequence.size(); ++i) {
+                    if (at + a.sequence[i].bars > kMaxBars) break;  // the laying refuses it below
+                    const double start = s.timeMap->beatOfBar(static_cast<int>(at));
+                    const double end =
+                        s.timeMap->beatOfBar(static_cast<int>(at + a.sequence[i].bars));
+                    auto plan = planSectionContext(s, clipsOf(s, scenes[i]), start, end, written);
+                    if (!plan) {
+                        Error e = std::move(plan).error();
+                        e.path = "/sequence/" + std::to_string(i) + e.path;
+                        return e;
+                    }
+                    for (auto& p : plan->points) {
+                        written.push_back(p);
+                        t.create(std::move(p));
+                        any = true;
+                    }
+                    warnNotWritten(ctx, plan->note, a.sequence[i].scene,
+                                   "/sequence/" + std::to_string(i) + "/scene");
+                    notes[i] = std::move(plan->note);
+                    at += a.sequence[i].bars;
+                }
+                if (any) after = app.view();
+            }
+            const model::Session& placed = after ? *after : s;
             BuildResult r;
             std::int64_t bars = 0;
             for (std::size_t i = 0; i < a.sequence.size(); ++i) {
@@ -522,9 +761,10 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                     return Error("scene.bars",
                                  "the sequence runs past bar " + std::to_string(kMaxBars),
                                  at + "/bars", "give fewer bars");
-                auto seg = insertScene(ctx, t, s, scenes[i], static_cast<int>(where),
+                auto seg = insertScene(ctx, t, placed, scenes[i], static_cast<int>(where),
                                        a.sequence[i].bars, std::nullopt, a.pooled, a.follow, at);
                 if (!seg) return std::move(seg).error();
+                seg->context = std::move(notes[i]);
                 r.segments.push_back(std::move(*seg));
                 bars += a.sequence[i].bars;
             }
