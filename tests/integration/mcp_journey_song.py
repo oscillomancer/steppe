@@ -17,8 +17,12 @@ comes from an offline render of the project (stems and the mix), read back as sa
 or through `analyze.track`, and is compared with what the commands said (a launch's
 `beat`, a track's volume in dB, a modulation's depth, the commit's items).
 
-It documents the limits of today's build as refusals (a clip has no chords, a clip
-take's FX take no modulation), and it plays only the path that works. Nothing here
+It documents the limits of today's build as refusals (a clip with no key of its own has
+none to snap to, a clip take's FX take no modulation), and it plays only the path that
+works. A clip keeps the key and chords it was written against (ADR-0098): the drums and
+the bass are written with `context_at` where their scene sits in the song, the keys with
+chord symbols, and the Break's bass snaps within D minor though the project starts in
+C minor. Nothing here
 decides by a wall clock: the live stage polls the transport and the modulation
 telemetry, and the timeout only turns a hang into a failure.
 
@@ -121,6 +125,8 @@ BASS_PATCH = {"params": {"osc1.wave": "saw", "filter1.type": "ladder",
                          "amp.release": "120 ms"}}
 
 SONG = [("sc_1", 4), ("sc_2", 8), ("sc_3", 8), ("sc_4", 4)]  # Intro Verse Chorus Break
+# The bar each scene starts at in the song above.
+SCENE_BAR = {"Intro": 1, "Verse": 5, "Chorus": 13, "Break": 21}
 TRACK_NAMES = {"tr_1": "Drums", "tr_2": "Bass", "tr_3": "Keys"}
 
 
@@ -222,8 +228,13 @@ def scenes(j):
         if name != "Intro":
             cells.insert(1, ("tr_2", bass(name)))
         for track, notation in cells:
-            made = j.exec("clip.add", {"track": track, "scene": scene, "notation": notation,
-                                       "name": f"{name} {TRACK_NAMES[track]}"},
+            args = {"track": track, "scene": scene, "notation": notation,
+                    "name": f"{name} {TRACK_NAMES[track]}"}
+            if track != "tr_3":
+                # The drums and the bass are written against the song's own harmony where
+                # the scene will sit: the clip keeps that key and those chords.
+                args["context_at"] = {"bar": SCENE_BAR[name]}
+            made = j.exec("clip.add", args,
                           f"The {name} clip on {track}, written over its four chords.")
             assert made["kind"] == "midi" and made["length"] == 16.0, made
             count += 1
@@ -231,11 +242,47 @@ def scenes(j):
     # The clip holds the chords as notes: Verse keys bar 1 is Cm7.
     text = j.exec("midi.get", {"item": "cl_5"}, "Read the Verse keys back.")
     assert "[C4 Eb4 G4 Bb4]:w" in text["text"], text
-    assert "context" not in text, "a clip has no place in time, so no context"
-    # What a clip does not know: it has no chords to fit to, and the refusal says so.
-    error = j.refused("midi.edit", {"item": "cl_8", "ops": [{"op": "fit_to_chord"}]},
-                      "midi.no_chord", "fit_to_chord on a clip has no chord to read.")
-    assert "chord" in error["hint"], error
+    # ... and, written with chord symbols, it also holds them as chords: midi.get shows
+    # them by clip bar, and the lead sheet of the clip is the same chords.
+    context_of = text["context"]
+    assert [c["what"] for c in context_of["chords"]] == CHORDS["Verse"], context_of
+    assert [c["item_bar"] for c in context_of["chords"]] == [1, 2, 3, 4], context_of
+    assert "project_bar" not in context_of["chords"][0], "a clip has no project bar"
+    assert not context_of["keys"], "the notation named no key"
+    assert context_of["text"] == "".join(
+        f"{bar}: {{{chord}}}:w\n" for bar, chord in enumerate(CHORDS["Verse"], 1)), context_of
+    assert text["follow"] == "none", text
+    # The bass was written against the song's harmony at its bar: Verse in C minor, the
+    # Break in D minor, though the project starts in C minor.
+    verse_bass = j.exec("midi.get", {"item": "cl_4"}, "The Verse bass: C minor.")
+    assert [k["what"] for k in verse_bass["context"]["keys"]] == ["C minor"], verse_bass
+    assert [c["what"] for c in verse_bass["context"]["chords"]] == CHORDS["Verse"], verse_bass
+    break_bass = j.exec("midi.get", {"item": "cl_10"}, "The Break bass: D minor.")
+    assert [k["what"] for k in break_bass["context"]["keys"]] == ["D minor"], break_bass
+    assert "A1:e" in break_bass["text"], break_bass
+    assert 'cl_10 "Break Bass" in D minor' in j.described(), "describe names the clip's key"
+    # D1: the Break bass snaps to D minor, the scale it was written in, and its A1 stays
+    # (read in the project's C minor it became Ab1).
+    snapped = j.exec("midi.edit", {"item": "cl_10", "ops": [{"op": "snap_to_scale"}]},
+                     "Snap the Break bass to its own key: nothing moves.")
+    assert snapped["notes"] == [], snapped  # only the notes an op moved are returned
+    pitches = [n["pitch"] for n in j.exec("midi.notes", {"item": "cl_10"},
+                                          "Its notes.")["notes"]]
+    assert 33 in pitches and 32 not in pitches, pitches  # A1 stays, no Ab1
+    forced = j.exec("midi.edit", {"item": "cl_10",
+                                  "ops": [{"op": "snap_to_scale", "key": "C minor"}]},
+                    "The same in C minor, asked for: what D1 used to do by itself.")
+    assert forced["notes"], forced
+    assert 32 in [n["pitch"] for n in j.exec("midi.notes", {"item": "cl_10"},
+                                             "Its notes.")["notes"]]
+    j.undo()
+    # What a clip with no key says: the Verse keys were written without one.
+    error = j.refused("midi.edit", {"item": "cl_5", "ops": [{"op": "snap_to_scale"}]},
+                      "midi.no_key", "A clip with no key of its own has none to read.")
+    assert "clip.set" in error["hint"], error
+    # The keys' chords are its own: fit_to_chord reads them.
+    j.exec("midi.edit", {"item": "cl_5", "ops": [{"op": "fit_to_chord"}]},
+           "Fit the Verse keys to their chords: they are in them already.")
 
 
 def modulation(j):
@@ -482,6 +529,16 @@ def other_direction(j, built):
     assert digest(render) == digest(reopened), "a reopened project renders the same"
     for route in ("mr_1", "mr_2", "mr_3"):
         assert route in after, route
+    # A scene laid under another key says so: the Verse was written in C minor, and from the
+    # Break on the song is in D minor. Its notes are copied as they are.
+    mismatched = j.exec("scene.insert", {"scene": "sc_2", "bars": 4, "bar": 40},
+                        "The Verse, written in C minor, laid under D minor.")
+    warnings = [w for w in mismatched.get("warnings", []) if w["code"] == "context.mismatch"]
+    # Only the bass: the drums have no pitch to move, and the keys clip names no key.
+    assert len(warnings) == 1 and "cl_4" in warnings[0]["message"], mismatched.get("warnings")
+    assert all("C minor" in w["message"] and "D minor" in w["message"] and "bar 40" in w["message"]
+               for w in warnings), warnings
+    j.undo()
 
 
 def main():
