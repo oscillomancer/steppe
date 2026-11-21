@@ -1003,6 +1003,52 @@ TEST_CASE("inspector: a launcher clip's fields each run clip.set; several clips 
     CHECK_FALSE(f.inView("inspector.clip"));
 }
 
+TEST_CASE("inspector: a clip's Follow needs a MIDI clip with a key at its start") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::string track = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string cl =
+        f.exec("clip.add", R"({"track":")" + track +
+                               R"(","scene":"sc_1","name":"Riff","notation":"voice k; 1: C4:w"})")
+            .find("clip")
+            ->asString();
+    const auto clip = [&]() -> const model::Clip& {
+        return *f.app->head().clips.find(*model::Id::parse(cl));
+    };
+    f.side->show("inspector");
+    f.ui.selectedClips = {cl};
+    f.ui.clipsFocused = true;
+    f.pass();
+    REQUIRE(f.inView("inspector.clip"));
+    auto* follow = dynamic_cast<ui::Dropdown*>(f.node("inspector.clip.follow"));
+    REQUIRE(follow);
+    // No context: None only; Key and Chords say what they need.
+    CHECK(f.text("inspector.clip.follow") == "None");
+    REQUIRE(follow->choices().size() == 3);
+    CHECK_FALSE(follow->choices()[1].enabled);
+    CHECK(follow->choices()[1].label == "Key (needs a key at its start)");
+    CHECK_FALSE(follow->choices()[2].enabled);
+    // A key at its start: all three, and a pick is one clip.set.
+    f.exec("clip.set", R"({"clip":")" + cl + R"(","context":"1: key A minor ~:w"})");
+    f.pass();
+    CHECK(follow->choices()[1].enabled);
+    CHECK(follow->choices()[1].label == "Key");
+    const auto before = f.steps();
+    follow->choose("chords");
+    f.pass();
+    CHECK(clip().follow == model::ClipFollow::Chords);
+    CHECK(f.text("inspector.clip.follow") == "Chords");
+    CHECK(f.steps() == before + 1);
+    // The context cleared: follow goes back to none (clip.follow_reset), and
+    // the dropdown follows.
+    f.exec("clip.set", R"({"clip":")" + cl + R"(","context":""})");
+    f.pass();
+    CHECK(clip().follow == model::ClipFollow::None);
+    CHECK(f.text("inspector.clip.follow") == "None");
+    CHECK_FALSE(follow->choices()[1].enabled);
+}
+
 TEST_CASE("the status line counts scenes beside tracks only when there are some") {
     Fixture f;
     if (!f.ok) return;
