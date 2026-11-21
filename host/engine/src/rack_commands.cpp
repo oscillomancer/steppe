@@ -247,9 +247,9 @@ std::optional<double> knobFromText(const sd::ParamModel& p, const std::string& t
     std::string suffix(end);
     const auto b = suffix.find_first_not_of(" \t"), e = suffix.find_last_not_of(" \t");
     suffix = b == std::string::npos ? std::string() : suffix.substr(b, e - b + 1);
-    const auto same = [&](std::string_view a, std::string_view b) {
-        return a.size() == b.size() &&
-               std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+    const auto same = [&](std::string_view left, std::string_view right) {
+        return left.size() == right.size() &&
+               std::equal(left.begin(), left.end(), right.begin(), [](char x, char y) {
                    return std::tolower(static_cast<unsigned char>(x)) ==
                           std::tolower(static_cast<unsigned char>(y));
                });

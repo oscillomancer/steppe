@@ -160,8 +160,8 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
     {
         const model::Session s = app.view();
         const auto beatOfEntry = [&](std::int64_t frame, const CapturedLaunch& e) {
-            const std::int64_t at = song(frame);
-            return at == e.anchor ? e.anchorBeat : beatAt(double(at));
+            const std::int64_t songFrame = song(frame);
+            return songFrame == e.anchor ? e.anchorBeat : beatAt(double(songFrame));
         };
         std::map<std::int64_t, std::vector<const CapturedLaunch*>> holding;  // by frame
         for (const auto& [track, launches] : byTrack) {
