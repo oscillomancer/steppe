@@ -129,3 +129,65 @@ edges and out of scale; the pitch classes of keys and chords (a slash bass count
 snapping in each mode, ties, the range edges and a one-class set, and every pitch of
 every scale in every key landing in the scale within six semitones; the index
 against a brute-force scan.
+
+## 5. Following (ADR-0098; the contract for step X2)
+
+```cpp
+struct Place { std::optional<Key> key; std::optional<Chord> chord; };
+enum class FollowMode { Key, Chords };
+enum class FollowedBy { Transpose, Degree, Chords };
+struct Followed { int pitch; FollowedBy by; bool scaleShape = false; };
+// A MIDI pitch written against `from`, mapped to `to`. Errors: `follow.no_key`
+// (Key mode, or Chords mode falling back to it, without both keys),
+// `follow.pitch_range` (the result is outside 0..127).
+Result<Followed> follow(int pitch, const Place& from, const Place& to, FollowMode mode);
+```
+
+Notation: `pc(x)` is `pitchClassNumber`; `I(scale)` is `scaleIntervals`;
+`tones(chord)` is the root followed by each interval of its quality as
+`chordQualities` lists them, as classes relative to the root (mod 12).
+
+1. **Tonic interval** `iv(a, b)`: `d = (pc(b) − pc(a)) mod 12`; `d` when
+   `d < 6`, `d − 12` when `d > 6`, and `−6` when `d = 6` (a tie goes down).
+2. **Key mode, same scale:** `pitch + iv(from.tonic, to.tonic)`, by
+   `Transpose`.
+3. **Key mode, different scales with as many degrees:**
+   - Let `s` be the highest pitch `≤ pitch` whose class is in `from`'s
+     scale, and `alt = pitch − s`.
+   - Let `r = s − pc(from.tonic)`, `o = floor(r / 12)`, and `k` the index
+     with `I(from)[k] = r − 12·o`.
+   - The result is `pc(from.tonic) + iv(from.tonic, to.tonic) + 12·o +
+     I(to)[k] + alt`, by `Degree`.
+4. **Key mode, different degree counts:** as step 2, with `scaleShape`
+   true. The caller warns `context.scale_shape`.
+5. **Chords mode, both chords present.**
+   - Let `c = (pc(pitch) − pc(from.root)) mod 12`.
+   - If `c` is `tones(from)[i]` (the first such `i`), the target class is
+     `(pc(to.root) + tones(to)[i mod n]) mod 12`, where `n` is the size of
+     `tones(to)`.
+   - Else, if `pc(pitch)` is `from`'s slash bass, the target is `to`'s bass,
+     or its root.
+   - Else, if both keys are present and each root's class is in its key's
+     scale, the target is step 3's arithmetic with the roots in place of the
+     tonics (degrees counted from the root's degree).
+   - Else the target is `pitch + iv(from.root, to.root)`.
+   - The result is the pitch of the target class nearest to `follow(pitch,
+     from, to, Key)` when both keys are present, else nearest to `pitch +
+     iv(from.root, to.root)`; a tie goes down. By `Chords`.
+   - With a chord missing on either side, Key mode.
+6. Deterministic, no allocation beyond the result, no model or engine
+   dependency. X4 builds the engine's pitch tables from it.
+
+**Tests (X2):**
+- C major → D major is +2 for every pitch 0..125;
+- C major → F# major is −6;
+- C major E4 → D minor is F4;
+- C major F#4 → D minor is G#4;
+- A minor → C major by degree;
+- C major → C minor pentatonic is a transpose with `scaleShape`;
+- Cmaj7 → Dm7 tone by tone, in each octave;
+- C/E's bass → G/B;
+- Cadd9's ninth over a D triad (`i mod n`);
+- an octave tie;
+- `follow.no_key`;
+- `follow.pitch_range` at both edges.

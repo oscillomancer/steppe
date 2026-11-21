@@ -1594,6 +1594,7 @@ take are `midi.args`. Only the notes an op actually moved are returned as change
 On a launcher clip, which has no place in time, the ops read the key at the
 project's start and no chord: without `key`, `midi.no_key` when none holds there;
 `fit_to_chord` without `chord` is `midi.no_chord` (ADR-0095 amendment C-e).
+Step X1 replaces this: a clip's own context is read ("Clip context", ADR-0098).
 
 ### Rack sends (schema 2.13, ADR-0075)
 
@@ -1801,6 +1802,7 @@ present, and the project field `launch_quantize`, written only when not
 | `mode` | `loop` (default) or `once`. |
 | `quantize` | Overrides `launch_quantize` for this clip: `bar`, `beat`, `1/2` … `1/32`, `none`. |
 | `name`, `color`, `mute`, `gain_db` | As an item's. |
+| `context`, `follow` | Schema 2.20: the key and chords the clip was written against, and how it follows the context track when laid ("Clip context", the contract for X1 and X2). |
 
 **The clip's kind and unit.** A clip's `kind` is set when it is made and
 never changes. `length`, `loop` and the clip's take envelopes are in beats
@@ -2014,3 +2016,116 @@ Scenes (2):
     tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · -6 dB · muted
   sc_2 Chorus (no clips)
 ```
+
+### Clip context (schema 2.20, ADR-0098; the contract for steps X1 and X2)
+
+*Not built yet: X1 and X2 implement this section as written.*
+
+Writers emit `supple.project/2.20`. A clip gains two members; earlier files
+load unchanged and nothing migrates. A 2.19 build drops both members with its
+unknown-field warnings.
+
+| Clip field | Meaning |
+|---|---|
+| `context` | The key and chord points the clip was written against: `[{beat, type, tonic, scale}` or `{beat, type, symbol}]`, the context point's shapes ("Context track"), `beat` from the clip's start in beats, rounded to 1/960, sorted by beat and then type (key first). Written only when not empty. |
+| `follow` | `none` (default, not written), `key` or `chords`: how the clip's notes are mapped when it is laid on the timeline. |
+
+**Rules.**
+- A MIDI clip's points lie in `[0, length)`. Whenever it has a key, there is
+  a key at 0. At most one point of a type at a beat, and at most 4096 of a
+  type. Before the first chord point no chord holds.
+- An audio clip holds at most one point, a key at 0, and only `follow:
+  none`.
+- An unknown scale or chord symbol is kept as data and reads as unreadable,
+  as on the context track.
+
+**Load.**
+- A point out of range or against the rules is dropped with
+  `clip.context_dropped` (naming the clip and the point).
+- A key point after 0 with none at 0 is kept: the clip has no key before it.
+- `follow` with an unknown value reads as `none`, with `clip.follow_unknown`.
+- The open never fails for any of this.
+
+**Text form.** The lead sheet ("Lead sheet" under "Context track") in clip
+bars:
+- bar 1 is the clip's start, and bars run in the project's meters from bar 1
+  (as the clip's notation compiles);
+- the text covers the clip or less.
+
+**Commands (X1).**
+- `clip.add` takes at most one of `context` (text) and `context_at: {bar}`
+  (`clip.context_args` for both).
+  - `context_at` reads the project's context from that bar for the clip's
+    length: the key and the chord holding at the bar's start become points
+    at 0, and the points inside the span follow, shifted. With no key there,
+    the clip gets no key and the answer warns `context.no_key`.
+  - `clip.add {item}` takes the context under the item the same way, from the
+    item's start. An audio clip takes the key only.
+  - A `notation` source records its chord symbols (`notation.md`, "Chord
+    symbols in the compiled result") as chord points at their beats.
+    - A different symbol at the same tick in a later voice is dropped with
+      `clip.chord_conflict`.
+    - Equal neighbours collapse.
+    - A rest does not end a chord.
+    - With a stated `context` holding chords, or with `context_at`, the
+      symbols are ignored with `clip.chords_ignored`.
+    - A stated `context` holding only a key takes the symbols' chords too.
+- `clip.set {context?, context_at?, follow?}`: `context: ""` clears it.
+- `midi.write` on a clip whose text holds chord symbols replaces the clip's
+  chord points and keeps its keys. A text without symbols leaves the context.
+- `scene.capture` gives each clip the context under its item.
+- `clip.get` and `midi.get` on a clip answer `context: {text, keys:
+  [{beat, key}], chords: [{beat, chord}]}` and `follow`.
+- `session.describe` writes a clip's key after its name.
+- Errors:
+  - `clip.context_syntax` and the lead sheet's own errors, naming the clip bar;
+  - `clip.context_range` (a point at or past the clip's length);
+  - `clip.context_key_first` (a key after 0 with none at 0);
+  - `clip.context_audio` (chords, or a key not at 0, on an audio clip);
+  - `clip.follow_audio`;
+  - `context.limit` (more than 4096 of a type).
+
+**Scale ops on a clip (X1).**
+- `transpose_degrees`, `snap_to_scale` and `fit_to_chord` on a clip read the
+  clip's own context at each note's beat in the clip: for a looping clip,
+  every pass's beat inside `[0, length)`, and `midi.context_varies` when
+  they disagree.
+- Without a key: `midi.no_key`, hint "give the clip a context (clip.set
+  {context} or {context_at}) or pass key".
+- Without a chord: `midi.no_chord`, likewise.
+- The project's context is never read for a clip. This replaces the reading
+  at the project's start (ADR-0095 amendment C-e).
+
+**Laying a clip (X1: the warning; X2: following).**
+- `item.add {clip}`, `scene.insert` and `arrangement.build` take `follow?:
+  none | key | chords`, defaulting to each clip's `follow`. `launch.commit`
+  copies, as heard (ADR-0098).
+- A note's place is the item's start, plus its beat in the source, plus the
+  pass offset.
+- Notes on MIDI channel 10 are never mapped (`drums_kept` in the answer).
+- Controllers, bend and pressure copy unchanged.
+- **`none`:** copied. When the clip has a key and a key region under the item
+  differs from it, one `context.mismatch` warning per item names the clip,
+  both keys and the first project bar where they differ.
+- **`key` (X2):** each note goes through `harmony::follow` (`harmony.md` §5)
+  from the clip's key at its clip beat to the key at its place.
+  - A clip without a key: `clip.no_key`.
+  - No key at the place: the note is copied, with one `context.no_key`
+    warning per item.
+- **`chords` (X2):** from the clip's chord at the note's clip beat to the
+  chord at its place.
+  - A note with either chord missing follows by key.
+  - A clip with neither chords nor a key: `clip.no_key`.
+- **Looped items:**
+  - If every pass maps every note alike, the item stays looped over the
+    mapped source.
+  - Otherwise it is laid unrolled (loop off, its passes written out and
+    each mapped at its place), and the answer says `unrolled: true`.
+  - `pooled: true` with a mapping that moves any note: `clip.follow_pooled`.
+- **Range:** a mapped pitch outside 0..127 is refused with
+  `midi.pitch_range`, naming the clip and the note's beat, and nothing is
+  laid.
+- **The answer** gains per laid item `followed: {mode, regions: [{from_bar,
+  to_bar, from_key, to_key, by, interval?}]}` (`by`: `transpose`, `degree`,
+  `chords`) and `context.scale_shape` warnings where step 4 of the mapping
+  applied.
