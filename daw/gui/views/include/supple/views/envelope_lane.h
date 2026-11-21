@@ -60,6 +60,17 @@ double envValueAt(const model::Envelope& env, double beat, double fallback);
 // then its sends' (volume, pan, mute).
 int envOrder(const model::Envelope& env);
 
+// The modulation mark (gui.md §2), drawn in `signal-cv` wherever something
+// is modulated: a plug-in's slot, a chain's "fx". The one place it is
+// spelled.
+inline constexpr std::string_view kModMark = "~";
+// The routes on `target`, enabled or not, in id order.
+std::vector<model::Id> routesOn(const model::Session& session, const model::EnvTarget& target);
+// Whether some route, enabled or not, moves a parameter of the effect `fx`.
+bool fxModulated(const model::Session& session, model::Id fx);
+// Whether some plug-in in the track's chain or input chain is modulated.
+bool chainModulated(const model::Session& session, model::Id track);
+
 // Modulation (ADR-0096). Whether a route's source input carries 0..1 (every
 // cable into it from a unipolar, gate or phase output); the app supplies it
 // from the rack catalog, and without it every source counts as -1..1.

@@ -297,6 +297,15 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   `modulation.set`, one undo step per drag (Origin gesture). The FX window
   holds its rows still while a bar is dragged (`Slider::depthDragging`) and
   redraws that slider's bar from each new depth.
+- **The modulation mark.** "~" (`views::kModMark`, spelled once) in
+  `signal-cv` says that a plug-in parameter is modulated, by any route,
+  enabled or not (`views::fxModulated`): at the right of the plug-in's slot
+  in a mixer strip (the name centred in the room left of it; the slot's
+  accessible text ends "(modulated)"), and after "fx" in the track panel and
+  the mixer strip alike when a plug-in in the track's chain or input chain
+  is (`views::chainModulated`, drawn by `ui::Button::setMark`). It is
+  static: what moves is the controls' bars and the lane's curve. A strip's
+  own fader and pan carry their bars, not the mark.
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
@@ -559,7 +568,8 @@ track's groups are small colour tabs under the name's start.
 
 "fx" and "+" are quiet buttons (`ui::Button::quiet`): their text alone in
 quiet ink, a box under the pointer; "fx" is in full ink when the track's
-chain or input chain holds a plug-in. The input, "env" and "out" are boxed,
+chain or input chain holds a plug-in, and carries the modulation mark (§2)
+when one of those plug-ins is modulated. The input, "env" and "out" are boxed,
 as the input and "out" are on a mixer strip, so the routing buttons look
 the same in both views.
 A master that is armed or holds items has a row too, its **lane** (ADR-0057):

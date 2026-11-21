@@ -50,14 +50,21 @@ class Button : public Node {
     // one feature that has a colour (a chain holding a disabled plug-in, `meter-hot`).
     void setTextColor(std::string token);
     const std::string& textColor() const { return textColor_; }
+    // A short mark after the text, in its own theme colour, the two centred
+    // together ("fx" and the modulation mark in `signal-cv`); "" for none.
+    // Not part of valueText().
+    void setMark(std::string mark, std::string token = {});
+    const std::string& mark() const { return mark_; }
 
   protected:
     bool pressed() const { return pressed_; }
 
   private:
+    // The text, and the mark after it when there is one, centred in `b`.
+    void paintText(Canvas& canvas, const Rect& b, Color ink) const;
     std::string text_;
     bool pressed_ = false, emphasis_ = false;
-    std::string textColor_;
+    std::string textColor_, mark_, markColor_;
 };
 
 }  // namespace supple::ui

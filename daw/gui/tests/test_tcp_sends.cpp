@@ -16,6 +16,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_field.h"
+#include "supple/ui/widgets.h"
 
 using namespace supple;
 
@@ -988,6 +989,27 @@ TEST_CASE("a strip's envelope menu automates its sends; their lanes sit under th
     REQUIRE(lane);
     REQUIRE(strip);
     CHECK(*lane == *strip + 1);
+}
+
+TEST_CASE("modulation helpers: routes on a target, a modulated effect and chain") {
+    SendsFixture f;
+    const model::EnvTarget vol{f.a, "volume"};
+    CHECK(views::routesOn(f.app->head(), vol).empty());
+    auto modulate = [&](const model::Id& track, const char* param) {
+        json::Value target = json::Value::object(), args = json::Value::object();
+        target["track"] = track.str();
+        target["param"] = param;
+        args["target"] = target;
+        args["source"] = "lfo";
+        return *model::Id::parse(f.exec("modulate", args)["modulation"].asString());
+    };
+    const model::Id first = modulate(f.a, "volume");
+    const model::Id second = modulate(f.a, "volume");
+    modulate(f.a, "pan");
+    CHECK(views::routesOn(f.app->head(), vol) == std::vector<model::Id>{first, second});
+    // A strip's own controls are no plug-in: its chain is not marked.
+    CHECK_FALSE(views::chainModulated(f.app->head(), f.a));
+    CHECK_FALSE(views::fxModulated(f.app->head(), f.a));
 }
 
 TEST_CASE("TCP: a modulated fader shows its route, and a drag on its bar sets the depth") {

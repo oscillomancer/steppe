@@ -241,6 +241,47 @@ TEST_CASE("a label sizes to its text; a button sizes to its label plus padding")
     CHECK(label.bounds().w > 120);  // content size follows the text
 }
 
+TEST_CASE("a button's mark sits after its text, in its own colour, and widens it") {
+    REQUIRE_GL();
+    Root root(*fixture().window, fixture().fonts, Theme::dark());
+    auto content = std::make_unique<Node>("root");
+    content->layout.dir = Layout::Dir::Row;
+    auto& plain = content->emplace<Button>("plain", "fx");
+    auto& marked = content->emplace<Button>("marked", "fx");
+    marked.setMark("~", "signal-cv");
+    root.setContent(std::move(content));
+    root.frame(false);
+    CHECK(marked.bounds().w > plain.bounds().w);
+    CHECK(marked.valueText() == "fx");  // the mark is not the text
+    CHECK(marked.mark() == "~");
+    // The mark's colour is drawn: some pixel of the button is signal-cv's.
+    const gui::Image img = root.readBack();
+    const float ratio = static_cast<float>(img.width) / fixture().window->width();
+    const Color cv = Theme::dark().color("signal-cv");
+    // signal-cv is the only violet here; the mark's thin strokes blend into
+    // the ground, so its hue is what is looked for, not its exact value.
+    (void)cv;
+    auto near = [&](float x, float y) {
+        const std::size_t i =
+            (static_cast<std::size_t>(y * ratio) * static_cast<std::size_t>(img.width) +
+             static_cast<std::size_t>(x * ratio)) *
+            4;
+        const int r = img.rgba[i], g = img.rgba[i + 1], b = img.rgba[i + 2];
+        return b - g > 25 && r - g > 10;
+    };
+    auto hasCv = [&](const Rect& b) {
+        for (float y = b.y; y < b.bottom(); y += 0.5f)
+            for (float x = b.x; x < b.right(); x += 0.5f)
+                if (near(x, y)) return true;
+        return false;
+    };
+    CHECK(hasCv(marked.bounds()));
+    CHECK_FALSE(hasCv(plain.bounds()));
+    marked.setMark("");
+    root.frame(false);
+    CHECK(marked.bounds().w == plain.bounds().w);
+}
+
 TEST_CASE("damage repaints only what changed") {
     REQUIRE_GL();
     Root root(*fixture().window, fixture().fonts, Theme::dark());

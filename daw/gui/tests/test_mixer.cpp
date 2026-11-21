@@ -3367,6 +3367,51 @@ TEST_CASE("mixer: a channel fed by a rack shows a rack slot above its plug-ins")
     CHECK(f.strip(track).racks.front()->valueText() == "Pad");
 }
 
+// The first parameter of `fx` that fx.describe marks modulatable, or "".
+static std::string modulatableParam(Fixture& f, const std::string& fx) {
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject())
+            if (const json::Value* mod = m.value.find("modulatable"); mod && mod->asBool())
+                return m.key;
+    return {};
+}
+
+TEST_CASE("mixer: a modulated plug-in's slot and its strip's fx carry the modulation mark") {
+    // gui.md §4.4: views::kModMark in signal-cv; the same "fx" as the TCP's.
+    Fixture f;
+    if (!f.ok) return;
+    const auto keys = f.addTrack("channel", "Keys");
+    const auto plain = f.addFx(keys, "Hickory");
+    const auto moved = f.addFx(keys, "Hickory");
+    const std::string param = modulatableParam(f, moved);
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    f.refresh();
+    CHECK(f.strip(keys).fx->mark().empty());
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory");
+    const std::string route = f.exec("modulate", R"({"target":{"fx":")" + moved + R"(","param":")" +
+                                                     param + R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    f.refresh();
+    CHECK(f.strip(keys).fx->mark() == views::kModMark);
+    CHECK(f.strip(keys).fx->valueText() == "fx");
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory (modulated)");
+    CHECK(f.node("mixer.fx." + plain)->valueText() == "Hickory");
+    f.snapshot("mixer-modulated-slot.png");
+    // A disabled route still names the parameter as modulated (its lane stays).
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory (modulated)");
+    // Without its route, no mark.
+    f.exec("modulation.remove", R"({"modulation":")" + route + R"("})");
+    f.refresh();
+    CHECK(f.strip(keys).fx->mark().empty());
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory");
+}
+
 TEST_CASE("mixer: a strip's modulator racks show as mod slots") {
     Fixture f;
     if (!f.ok) return;

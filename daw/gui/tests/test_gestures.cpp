@@ -24,6 +24,7 @@
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/tcp.h"
@@ -820,6 +821,45 @@ TEST_CASE("automation lanes: a plug-in described by a list (a VST3) gets its par
         CHECK(keyed->param->spec.max == doctest::Approx(24.0));
     }
     std::filesystem::remove_all(options.workdir);
+}
+
+TEST_CASE("TCP: a chain with a modulated plug-in marks its fx as the mixer does") {
+    // gui.md §4.2: views::kModMark after "fx", in signal-cv.
+    Fixture f;
+    if (!f.ok) return;
+    auto run = [&](const char* command, const std::string& args) {
+        return f.dispatcher->execute({command, json::parse(args).value(), kUi});
+    };
+    const model::Id track = f.item(f.itemOnRow(0)).track;
+    auto added = run("fx.add", R"({"track":")" + track.str() + R"(","plugin":"Hickory"})");
+    if (!added) {
+        MESSAGE("skipped: Hickory is not built (partial build)");
+        return;
+    }
+    const std::string fx = (*added)["fx"].asString();
+    f.sync();
+    auto fxButton = [&] {
+        auto* b = dynamic_cast<ui::Button*>(f.view->tcpPanel().controlNode(track, "fx"));
+        REQUIRE(b);
+        return b;
+    };
+    CHECK(fxButton()->mark().empty());
+    auto d = run("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    REQUIRE(d);
+    std::string param;
+    for (const auto& m : d->find("params")->asObject())
+        if (const json::Value* mod = m.value.find("modulatable"); mod && mod->asBool()) {
+            param = m.key;
+            break;
+        }
+    REQUIRE(!param.empty());
+    REQUIRE(run("modulate",
+                R"({"target":{"fx":")" + fx + R"(","param":")" + param + R"("},"source":"lfo"})"));
+    f.sync();
+    CHECK(fxButton()->mark() == views::kModMark);
+    CHECK(fxButton()->valueText() == "fx");
+    CHECK(views::fxModulated(f.app->head(), *model::Id::parse(fx)));
+    CHECK(views::chainModulated(f.app->head(), track));
 }
 
 TEST_CASE("automation lanes: twin lanes' titles say their chain place or their item") {
