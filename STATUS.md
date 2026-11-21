@@ -227,7 +227,7 @@ instructions are in `docs/guides/installing.md`.
   laid from the clip launcher, or written by Capture (`launch.commit`'s
   `mismatches`), says in the status line how its keys were followed or why a
   clip was copied (`followed.mismatch` names the keys that differ); a
-  launcher cell shows its clip's key, marked "≈" when the clip follows.
+  launcher cell shows its clip's key, marked "→" when the clip follows.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

@@ -135,8 +135,8 @@ std::optional<std::string> followNotice(const model::Session& session, const std
                                         const json::Value& args, const json::Value& answer);
 
 // The mark before a following clip's key (gui.md §4.15): the one place it
-// is spelled.
-inline constexpr std::string_view kFollowMark = "\u2248";
+// is spelled. An arrow: "~" is the modulation mark.
+inline constexpr std::string_view kFollowMark = "\u2192";
 
 // A clip's key at its start, short, for its launcher cell (gui.md §4.15):
 // "Dm", "G", "D dor", "A hm"; with kFollowMark before it when the clip

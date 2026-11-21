@@ -2807,7 +2807,7 @@ same heights, scroll and colours.
   (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A clip
   with a key at its start shows it short (`views::clipKeyMark`: "Dm", "F#",
   "G dor", "Eb hm") right-aligned in a 12-unit strip at the foot of its
-  body, under the preview, with "≈" before it in full ink when the clip
+  body, under the preview, with "→" before it in full ink when the clip
   follows the key or the chords, in quiet ink when it plays as written; a
   body lower than two strips shows no key. A muted clip is dimmed, as a
   muted item is. Clips launch under a master
