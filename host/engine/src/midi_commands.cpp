@@ -14,6 +14,7 @@
 
 #include "supple/engine/app.h"
 #include "supple/harmony/harmony.h"
+#include "supple/model/follow.h"
 #include "supple/model/schemas.h"
 #include "supple/model/source_mapping.h"
 
@@ -80,6 +81,13 @@ struct EditArgs {
     std::string item;
     std::vector<MidiOp> ops;
 };
+
+// Whether `owner` is an item whose active take follows the project's key or chords.
+bool followingTake(const model::Session& s, model::Id owner) {
+    const model::Item* item = s.items.find(owner);
+    const model::Take* take = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+    return take && take->follow != model::ClipFollow::None;
+}
 
 struct Frame {  // item beats <-> source ticks
     double ppq = 960, offset = 0, rate = 1, itemPosition = 0;
@@ -469,6 +477,13 @@ Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, st
                                                 needKey, needChord, here + "/notes");
                     if (!read) return std::move(read).error();
                     context = *read;
+                } else if ((needKey || needChord) && followingTake(session, owner)) {
+                    // A following take reads its own context at the note's context beat
+                    // (ADR-0098, following is playback).
+                    auto read = detail::takeNoteContext(session, owner, n.start, needKey,
+                                                        needChord, here + "/notes");
+                    if (!read) return std::move(read).error();
+                    context = *read;
                 } else if (needKey || needChord) {
                     auto read = detail::noteContext(session, source, n.start,
                                                     f.itemPosition + f.beatOf(n.start), needKey,
@@ -737,7 +752,10 @@ void registerMidiCommands(cmd::Registry& registry) {
             "different key or chord is refused with midi.context_varies; none holding is "
             "midi.no_key or midi.no_chord. On a clip they read the clip's own context (the key "
             "and chords it was written against, clip.set {context}) at the clip beat each note "
-            "sounds, never the project's. Returns the new indices of the notes the ops added "
+            "sounds, never the project's. On an item whose take follows (take.set {follow}) they "
+            "read the take's own context at each note's context beat, and act on the notes as "
+            "written: the answer says acts_on: \"written\" when some heard note sounds "
+            "otherwise (take.bake writes what sounds). Returns the new indices of the notes the ops added "
             "or changed (to keep a selection).";
         c.tags = {"midi"};
         auto point = schema::object<CcPoint>("cc_point")
@@ -835,6 +853,20 @@ void registerMidiCommands(cmd::Registry& registry) {
             app.txn().put<model::MidiSource>(t->source, std::move(src));
             json::Value out = json::Value::object();
             out["notes"] = std::move(selected);
+            // The pitch-reading ops act on the notes as written; on a following take, say so
+            // when some heard note sounds otherwise (what the user hears is not what was edited).
+            if (followingTake(s, t->item)) {
+                bool reads = false;
+                for (const MidiOp& op : a.ops)
+                    reads |= op.op == OpKind::TransposeDegrees || op.op == OpKind::SnapToScale ||
+                             op.op == OpKind::FitToChord;
+                if (reads)
+                    for (const auto& h : model::soundingNotes(s, t->item, -1e18, 1e18))
+                        if (h.channel != 9 && h.sounds.pitch != h.written) {
+                            out["acts_on"] = "written";
+                            break;
+                        }
+            }
             return out;
         };
         addChecked(registry, std::move(c));

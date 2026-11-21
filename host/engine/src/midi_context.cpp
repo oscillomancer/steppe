@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "supple/model/context.h"
+#include "supple/model/follow.h"
 #include "supple/model/source_mapping.h"
 
 namespace supple::engine::detail {
@@ -157,6 +158,77 @@ Result<NoteContext> clipNoteContext(const model::Clip& clip, const model::Take& 
                          "it at " +
                              beatWords(beats.front()) + " and " + beatWords(beat) + ")",
                          path, "pass chord to say which one, or loop the clip over one chord");
+    }
+    return out;
+}
+
+Result<NoteContext> takeNoteContext(const model::Session& s, model::Id itemId, std::int64_t tick,
+                                    bool needKey, bool needChord, const std::string& path) {
+    const model::Item* item = s.items.find(itemId);
+    const model::Take* take = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+    const model::MidiSource* source =
+        take && take->source ? s.midi.find(*take->source) : nullptr;
+    if (!source)
+        return Error("midi.no_key", "the item's MIDI is missing from the model", path,
+                     "reload the project");
+    // The context beat of each place the note is heard, by pass; one that is never heard reads
+    // where its content sits.
+    std::vector<double> beats;
+    for (const model::SoundingNote& h : model::soundingNotes(s, itemId, -1e18, 1e18))
+        if (source->sequence.notes[h.note].start == tick) beats.push_back(h.contextBeat);
+    if (beats.empty() && source->sequence.ppq > 0)
+        beats.push_back(model::contextBeatOf(
+            *take, static_cast<double>(tick) / source->sequence.ppq));
+    const auto words = [](double beat) {
+        char text[48];
+        std::snprintf(text, sizeof text, "beat %.4g of the take's context", beat);
+        return std::string(text);
+    };
+    NoteContext out;
+    bool first = true;
+    for (const double beat : beats) {
+        std::optional<harmony::Key> key;
+        std::optional<harmony::Chord> chord;
+        if (needKey) {
+            const model::ContextPoint* point = model::contextKeyPointAt(take->context, beat);
+            key = point ? model::parseKey(*point) : std::nullopt;
+            if (!key)
+                return Error("midi.no_key",
+                             point ? "the take's key at " + words(beat) + " is '" +
+                                         model::keyWords(*point) + "', which this build cannot read"
+                                   : "the take's context holds no key at " + words(beat),
+                             path,
+                             "give the take a context (take.set {context}) or pass key");
+        }
+        if (needChord) {
+            const model::ContextPoint* point = model::contextChordPointAt(take->context, beat);
+            chord = point ? model::parseChordPoint(*point) : std::nullopt;
+            if (!chord)
+                return Error("midi.no_chord",
+                             point && !point->symbol.empty()
+                                 ? "the take's chord at " + words(beat) + " is '" + point->symbol +
+                                       "', which this build cannot read"
+                                 : "the take's context holds no chord at " + words(beat),
+                             path,
+                             "give the take a context with chords (take.set {context}) or pass "
+                             "chord");
+        }
+        if (first) {
+            out.key = key;
+            out.chord = chord;
+            first = false;
+            continue;
+        }
+        if (needKey && key != out.key)
+            return Error("midi.context_varies",
+                         "this note reads different keys of the take's context (a loop pass puts "
+                         "it at " + words(beats.front()) + " and " + words(beat) + ")",
+                         path, "pass key to say which one, or loop the item over one key");
+        if (needChord && chord != out.chord)
+            return Error("midi.context_varies",
+                         "this note reads different chords of the take's context (a loop pass "
+                         "puts it at " + words(beats.front()) + " and " + words(beat) + ")",
+                         path, "pass chord to say which one, or loop the item over one chord");
     }
     return out;
 }
