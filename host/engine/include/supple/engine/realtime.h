@@ -661,7 +661,10 @@ class Engine {
         return backend_ ? backend_->midiPorts() : std::vector<std::string>{};
     }
     TransportState transport() const;
-    double effectivePlayrate() const { return effectivePlayrate_.load(std::memory_order_relaxed); }
+    // Main thread: the master playrate as heard. Stopped, nothing is heard,
+    // and a steady scalar is the rate the play starts at (the builder's song
+    // journey 2, F8); an envelope or a sync chase reads as last heard.
+    double effectivePlayrate() const;
 
     // --- external sync (ADR-0071) ----------------------------------------------------
     // Main thread. The configuration the callback runs (now if running, else
@@ -1262,6 +1265,23 @@ class Engine {
     // Main thread (service): collects acks, re-places missed launches and
     // those of an old epoch.
     void serviceLaunches();
+    // Main thread: places again the missed launches and those of an ended
+    // epoch (from serviceLaunches, and from play()).
+    void placeLaunchesAgain();
+    // Main thread, inside play() only: the epoch its seek to the play
+    // position begins, and that position. While set, a stopped launch
+    // clock reads the start of that epoch, so a launch placed while
+    // stopped still starts at the play start (the builder's song journey
+    // 2, D1).
+    std::optional<std::pair<std::uint64_t, std::int64_t>> playStart_;
+    // Main thread, from play() and playCountIn(): under rate scheduling,
+    // the seek to the play position, unless transport.stop prepared it and
+    // it is not stale, then the stopped launches placed again (D1). False:
+    // the seek failed (a warning says why).
+    bool seekToPlayStart();
+    // Main thread: a scalar playrate edit while stopped made the seek
+    // transport.stop prepared stale (it holds the old rate: D2).
+    bool preparedSeekStale_ = false;
     struct LaunchClock;
     bool launchClock(LaunchClock& out) const;
     // Main thread: the capture (captureLaunches). `pending`: its start is
