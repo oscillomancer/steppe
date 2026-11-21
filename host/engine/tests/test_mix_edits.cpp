@@ -912,6 +912,23 @@ DummyBackend::Options sawInput(std::int64_t frames) {
 // whole render-ahead and waits for the callback, so every run takes the
 // edit from the same renderer position.
 constexpr std::size_t kEditFrame = 100 * 256, kEditFrames = 300 * 256;
+
+// Decided by state alone (a wait that never ends is the runner's timeout):
+// the anticipative renderer has rendered its whole render-ahead.
+void awaitFull(Engine& engine) {
+    while (!engine.awaitRendered(std::numeric_limits<std::int64_t>::max())) {
+    }
+}
+
+// After a load that compiled: the renderer has taken the plan. It takes a
+// plan at the top of its next pass, so one still finishing the pass that
+// filled it when the load lands would find room once the callback plays on
+// and render one more block from the old plan (round 65 F1). Waiting here,
+// with the renderer full, makes it take the plan where it stands.
+void awaitAdopted(Engine& engine) {
+    while (!engine.awaitPlan()) {
+    }
+}
 std::vector<float> playEdit(const model::Session& base, const model::Session& next,
                             const EngineOptions& options, int run, bool valueEdit = true) {
     auto pool = makePool();
@@ -928,11 +945,11 @@ std::vector<float> playEdit(const model::Session& base, const model::Session& ne
             backend.run(n);
     };
     cycles(100);
-    if (options.anticipative)
-        REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+    if (options.anticipative) awaitFull(engine);
     const auto generation = engine.planGeneration();
     if (run == 0) REQUIRE(engine.load(next));
     if (run == 1) REQUIRE(engine.load(withMarker(next, next.version + 1)));
+    if (options.anticipative) awaitAdopted(engine);
     const bool fast = run == 0 && valueEdit;
     CHECK(engine.planGeneration() == generation + (run == 2 || fast ? 0 : 1));
     CHECK(engine.mixEdits() == (fast ? 1u : 0u));
@@ -1034,8 +1051,7 @@ TwoEdits playTwo(const model::Session& base, const model::Session& first,
             runAhead(engine, backend, n, 256);
         else
             backend.run(n);
-        if (options.anticipative)
-            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
+        if (options.anticipative) awaitFull(engine);
     };
     cycles(100);
     TwoEdits r;
@@ -1045,6 +1061,7 @@ TwoEdits playTwo(const model::Session& base, const model::Session& first,
         if (i == 1) cycles(gap);
         const model::Session& s = *edits[i];
         REQUIRE(engine.load(compiled ? withMarker(s, s.version + 1) : s));
+        if (options.anticipative) awaitAdopted(engine);
         r.mixEdits[i] = engine.mixEdits();
         r.plans[i] = engine.planGeneration() - generation;
     }
@@ -1192,9 +1209,7 @@ TEST_CASE(
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2}));
         REQUIRE(engine.load(base));
         engine.play();
-        auto full = [&] {
-            REQUIRE(engine.awaitRendered(std::numeric_limits<std::int64_t>::max()));
-        };
+        auto full = [&] { awaitFull(engine); };
         runAhead(engine, backend, 100, 256);
         full();
         const auto generation = engine.planGeneration();
@@ -1212,6 +1227,7 @@ TEST_CASE(
         full();
         REQUIRE(
             engine.load(compiled ? withMarker(vocalMuted, vocalMuted.version + 1) : vocalMuted));
+        awaitAdopted(engine);
         r.mixEdits[1] = engine.mixEdits();
         r.plans[1] = engine.planGeneration() - generation;
         runAhead(engine, backend, 300 - 148, 256);

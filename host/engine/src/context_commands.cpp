@@ -290,7 +290,7 @@ void registerContextCommands(cmd::Registry& registry) {
         c.name = "key.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set the key from a beat: tonic and scale, until the next key point.";
+        c.summary = "Set the key from a beat: tonic and scale.";
         c.description =
             "Adds a key point at `at` (project beats, rounded to 1/960) or changes the one "
             "there. `to` moves the point at `at` to another beat and keeps its id. tonic is a "
@@ -319,7 +319,7 @@ void registerContextCommands(cmd::Registry& registry) {
         c.name = "key.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Remove the key point at a beat: the key before it continues.";
+        c.summary = "Remove the key point at a beat.";
         c.tags = {"context"};
         c.args = schema::object<AtArgs>("key_remove_args")
                      .field("at", &AtArgs::at, schema::number().min(0))
@@ -343,7 +343,7 @@ void registerContextCommands(cmd::Registry& registry) {
         c.name = "chord.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set the chord from a beat, until the next chord point; \"\" ends it.";
+        c.summary = "Set the chord from a beat; \"\" ends it.";
         c.description =
             "Adds a chord point at `at` (project beats, rounded to 1/960) or changes the one "
             "there. `to` moves the point at `at` to another beat and keeps its id. symbol is "
@@ -370,7 +370,7 @@ void registerContextCommands(cmd::Registry& registry) {
         c.name = "chord.remove";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Remove the chord point at a beat: the chord before it continues.";
+        c.summary = "Remove the chord point at a beat.";
         c.tags = {"context"};
         c.args = schema::object<AtArgs>("chord_remove_args")
                      .field("at", &AtArgs::at, schema::number().min(0))
@@ -540,7 +540,7 @@ void registerContextCommands(cmd::Registry& registry) {
         c.name = "context.write";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Write key and chord points from a lead sheet over the bars it names.";
+        c.summary = "Write key and chord points from a lead sheet.";
         c.description =
             "text is context.get's lead sheet: one line per project bar, 'N: ' then "
             "{SYMBOL}:DUR (a chord point at the cursor), r:DUR (a chord point with no "

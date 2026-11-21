@@ -152,6 +152,7 @@ class Ruler : public ui::Node {
             case Drag::RegionMove:
             case Drag::Marker:
             case Drag::Chord:
+            case Drag::Key:
                 return moved_ ? ui::Cursor::Move : ui::Cursor::Arrow;
             case Drag::LoopNew:
                 return ui::Cursor::Arrow;
@@ -365,6 +366,7 @@ class Ruler : public ui::Node {
                    t.type("caption"), t.color("master"), ui::kLeft | ui::kMiddle);
         }
         paintKeys(c, tempoRow);
+        paintKeyGhost(c, tempoRow);
 
         // Regions on their own row, markers below it.
         for (const auto& e : s.regions) {
@@ -451,6 +453,21 @@ class Ruler : public ui::Node {
                                 {left, y, textX + std::max(shown, 8.0f) - left, h}});
         }
     }
+    // A key change being dragged: a tick and its words in the focus colour
+    // where it would land.
+    void paintKeyGhost(ui::Canvas& c, const ui::Rect& tempoRow) {
+        if (drag_ != Drag::Key || !moved_) return;
+        const model::Session& s = view_.session();
+        const auto id = model::keyPointAt(s, originalStart_);
+        const model::ContextPoint* p = id ? s.context.find(*id) : nullptr;
+        if (!p) return;
+        const ui::Theme& t = c.theme();
+        const float x = view_.xAt(s.timeMap->secondsAt(draftStart_));
+        const float y = tempoRow.y + tempoRow.h / 2.0f, h = tempoRow.h / 2.0f - 1;
+        c.fillRect({x, y, 1, h}, t.color("focus"));
+        c.text({x + 3, y, 120, h}, model::keyWords(*p), ui::Font::Ui, t.type("caption"),
+               t.color("focus"), ui::kLeft | ui::kMiddle);
+    }
     const KeyFlag* keyFlagAt(ui::Point p) const {
         for (const KeyFlag& k : keyFlags)
             if (k.rect.contains(p)) return &k;
@@ -517,6 +534,7 @@ class Ruler : public ui::Node {
         for (const auto& entry : s.contextView->chords)
             if (const model::ContextPoint* p = s.context.find(entry.id)) {
                 const bool ghost = drag_ == Drag::Chord && moved_ && entry.beat == originalStart_;
+                if (ghost && copy_) shown.push_back({entry.beat, p, false});  // it stays
                 shown.push_back({ghost ? draftStart_ : entry.beat, p, ghost});
             }
         std::stable_sort(shown.begin(), shown.end(),
@@ -587,7 +605,8 @@ class Ruler : public ui::Node {
         RegionMove,
         RegionLeft,
         RegionRight,
-        Chord
+        Chord,
+        Key
     };
     bool isLoop() const {
         return drag_ == Drag::LoopNew || drag_ == Drag::LoopMove || drag_ == Drag::LoopLeft ||
@@ -749,6 +768,14 @@ class Ruler : public ui::Node {
                 add("Rename region\u2026",
                     [this, id = entry.id, name = rg.name, at] { rename("region", id, name, at); });
                 add("Delete region", [this, id = entry.id] { remove("region", id); });
+                // A section's items as a new launcher scene (scene.capture);
+                // a refusal names what is in the way.
+                if (rg.section)
+                    add("Capture as scene", [this, id = entry.id] {
+                        json::Value args = json::Value::object();
+                        args["region"] = id.str();
+                        execute("scene.capture", std::move(args));
+                    });
                 break;
             }
         } else if (y >= rows.markerTop()) {
@@ -882,6 +909,8 @@ class Ruler : public ui::Node {
     bool moved_ = false, loopEnabled_ = false;
     bool punch_ = false;       // the range gesture edits the punch range (time row), not the loop
     bool markerFree_ = false;  // a marker/region drag the mouse map frees from the grid
+    bool copy_ = false;        // a chord dragged with Alt: a copy lands, the chord stays
+    std::string copySymbol_;   // the chord being copied
     std::string_view markerMods(unsigned mods) {
         const std::string_view b = view_.gestures().mouse.behaviour("ruler.marker", mods);
         markerFree_ = b == "move_free";
@@ -931,6 +960,11 @@ bool Ruler::handle(const ui::PointerEvent& e) {
                     drag_ = Drag::LoopMove;
             }
             if (drag_ == Drag::LoopNew) originalStart_ = originalEnd_ = position(e.pos.x, free);
+        } else if (y < rows.regionTop() && y >= rows.tempoTop() + rows.tempo / 2.0f &&
+                   e.clicks == 1 && keyFlagAt(e.pos)) {
+            // A key change's flag drags it to another beat (key.set {to}).
+            originalStart_ = originalEnd_ = keyFlagAt(e.pos)->beat;
+            drag_ = Drag::Key;
         } else if (y < rows.regionTop() && y >= rows.tempoTop() + rows.tempo / 2.0f) {
             // The meter half: a double-click edits the key change or the meter
             // change under the pointer, or starts a meter change at the bar
@@ -1012,6 +1046,8 @@ bool Ruler::handle(const ui::PointerEvent& e) {
                 }
                 originalStart_ = originalEnd_ = cell->beat;
                 drag_ = Drag::Chord;
+                copy_ = (e.mods & ui::kAlt) != 0;
+                copySymbol_ = cell->symbol;
             } else if (e.clicks == 2) {
                 chordField(gridBeat(e.pos.x), e.pos);
                 return true;
@@ -1133,9 +1169,18 @@ bool Ruler::handle(const ui::PointerEvent& e) {
             } else if (moved_ && (drag_ == Drag::LoopLeft || drag_ == Drag::LoopRight)) {
                 clearRange(punch_);  // an edge dragged onto the other: the range is gone
             } else if (moved_ && drag_ == Drag::Chord && draftStart_ != originalStart_) {
+                if (copy_) {  // Alt: the same chord again where it is dropped
+                    args["at"] = draftStart_;
+                    args["symbol"] = copySymbol_;
+                } else {
+                    args["at"] = originalStart_;
+                    args["to"] = draftStart_;
+                }
+                execute("chord.set", std::move(args));
+            } else if (moved_ && drag_ == Drag::Key && draftStart_ != originalStart_) {
                 args["at"] = originalStart_;
                 args["to"] = draftStart_;
-                execute("chord.set", std::move(args));
+                execute("key.set", std::move(args));
             } else if (moved_ && (drag_ == Drag::Marker || isRegion()) &&
                        (draftStart_ != originalStart_ || draftEnd_ != originalEnd_)) {
                 args["id"] = id_.str();
@@ -1232,6 +1277,8 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
     headerRow_ = &header;
     header_ = &header.emplace<TcpHeader>(*this);
     header_->layout.width = ui::SizeRule::fixed(kTcpWidth);
+    launcherHeader_ = &header.emplace<LauncherHeader>(*this);
+    launcherHeader_->visible = false;
     ruler_ = &header.emplace<Ruler>(*this);
     ruler_->layout.width = ui::SizeRule::fraction();
     auto& corner = header.emplace<Corner>("arrange-corner");
@@ -1313,7 +1360,10 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
 
     tcp_ = &body.emplace<TcpPanel>(layout_, view_, std::move(forward));
     tcp_->layout.width = ui::SizeRule::fixed(kTcpWidth);
+    launcherPane_ = &body.emplace<LauncherPane>(*this, peaks_, resolve_);
+    launcherPane_->visible = false;
     auto& lanesCol = body.emplace<Node>("lanes-column");
+    lanesColumn_ = &lanesCol;
     lanesCol.layout.dir = ui::Layout::Dir::Column;
     lanesCol.layout.width = ui::SizeRule::fraction();
     lanes_ = &lanesCol.emplace<Lanes>(peaks_, resolve_, layout_, view_);
@@ -1358,6 +1408,7 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     generation_ = generation;
     const bool rebuilt = layout_.show(session, changes, generation);
     syncChordRow();
+    syncLauncher();
     if (rebuilt) {
         lanes_->rebuild();
         tcp_->setSession(session);
@@ -1613,9 +1664,11 @@ double ArrangeView::totalSeconds() const {
 
 void ArrangeView::damageViews() {
     ui::Rect r;
-    for (ui::Node* n : {static_cast<ui::Node*>(lanes_), static_cast<ui::Node*>(ruler_),
-                        static_cast<ui::Node*>(hbar_), static_cast<ui::Node*>(vbar_)})
-        if (n) r = r.unite(n->bounds());
+    for (ui::Node* n :
+         {static_cast<ui::Node*>(lanes_), static_cast<ui::Node*>(ruler_),
+          static_cast<ui::Node*>(hbar_), static_cast<ui::Node*>(vbar_),
+          static_cast<ui::Node*>(launcherPane_), static_cast<ui::Node*>(launcherHeader_)})
+        if (n && n->visible) r = r.unite(n->bounds());
     if (!r.empty()) invalidate(r);
 }
 
@@ -1678,6 +1731,108 @@ void ArrangeView::syncChordRow() {
     rows.chord = shown ? RulerRows::kChordHeight : 0;
     setRulerRows(rows);
 }
+bool ArrangeView::launcherShown() const {
+    return launcherChoice_.value_or(!session().scenes.empty());
+}
+void ArrangeView::setLauncherShown(std::optional<bool> shown) {
+    launcherChoice_ = shown;
+    syncLauncher();
+}
+float ArrangeView::launcherWidth() const {
+    return launcherPane_ && launcherPane_->visible ? launcherPane_->bounds().w : 0.0f;
+}
+float ArrangeView::launcherRoom() const {
+    // The lanes keep at least this much before the pane takes the view.
+    constexpr float kMinLanes = 120;
+    return std::max(LauncherColumns::kMinWidth,
+                    bounds().w - kTcpWidth - ui::ScrollBar::kThickness - kMinLanes);
+}
+void ArrangeView::setLauncherWidth(float width, bool full) {
+    launcherWidth_ = width > 0 ? std::max(width, LauncherColumns::kMinWidth) : 0.0f;
+    launcherFull_ = full;
+    syncLauncher();
+}
+void ArrangeView::dragLauncherWidth(float width) {
+    // Past the room the lanes need, the pane fills the view; back under it,
+    // the lanes return at the dragged width.
+    const float room = launcherRoom();
+    if (width >= room)
+        setLauncherWidth(launcherWidth_ > 0 ? launcherWidth_ : room, true);
+    else
+        setLauncherWidth(width, false);
+}
+void ArrangeView::syncLauncher() {
+    if (!launcherPane_) return;
+    const bool shown = launcherShown();
+    const bool full = shown && launcherFull_;
+    LauncherColumns cols = launcherColumns(session());
+    const float fit = std::max(LauncherColumns::kMinWidth, cols.contentWidth());
+    const float width = launcherWidth_ > 0 ? launcherWidth_ : fit;
+    const ui::SizeRule rule = full ? ui::SizeRule::fraction() : ui::SizeRule::fixed(width);
+    const bool changed = launcherPane_->visible != shown || lanesColumn_->visible == full ||
+                         launcherPane_->layout.width.value != rule.value ||
+                         launcherPane_->layout.width.kind != rule.kind;
+    launcherPane_->visible = launcherHeader_->visible = shown;
+    launcherPane_->layout.width = launcherHeader_->layout.width = rule;
+    lanesColumn_->visible = ruler_->visible = !full;
+    // The scene columns scroll no further than their content needs.
+    const float span = cols.contentWidth() - LauncherColumns::kArr;
+    launcherScroll_ =
+        std::clamp(launcherScroll_, 0.0f, std::max(0.0f, span - (width - LauncherColumns::kArr)));
+    if (changed) relayout();
+    if (shown) {
+        launcherPane_->invalidate();
+        launcherHeader_->invalidate();
+    }
+}
+void ArrangeView::selectClips(std::vector<model::Id> clips) {
+    selectedCell_.reset();
+    if (clips != selectedClips_) {
+        selectedClips_ = std::move(clips);
+        if (launcherCallbacks_.onSelection) launcherCallbacks_.onSelection(selectedClips_);
+    }
+    if (launcherPane_) launcherPane_->invalidate();
+}
+void ArrangeView::selectCell(std::optional<Cell> cell) {
+    // Always told, cell or none: with a cell, a launcher cell was clicked last
+    // (the app's Delete then takes clips only, and there are none).
+    selectedClips_.clear();
+    selectedCell_ = cell;
+    if (launcherCallbacks_.onSelection) launcherCallbacks_.onSelection(selectedClips_);
+    if (launcherPane_) launcherPane_->invalidate();
+}
+void ArrangeView::clearLauncherSelection() {
+    if (selectedClips_.empty() && !selectedCell_) return;
+    selectCell(std::nullopt);
+}
+Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::Value args) {
+    if (!launcherCallbacks_.run)
+        return Error("gui.launcher", "the clip launcher has no command path", {},
+                     "wire ArrangeView::setLauncherCallbacks");
+    auto r = launcherCallbacks_.run(command, std::move(args));
+    if (!r && launcherCallbacks_.onError) launcherCallbacks_.onError(r.error());
+    return r;
+}
+void ArrangeView::setCaptureArmed(bool armed) {
+    if (armed == captureArmed_) return;
+    captureArmed_ = armed;
+    if (launcherHeader_) launcherHeader_->invalidate();
+}
+void ArrangeView::setLaunchState(LaunchViews views) {
+    if (views == launchViews_) return;
+    std::set<model::Id> held;
+    for (const auto& [track, v] : views)
+        if (v.plays != LaunchView::Plays::Arrangement) held.insert(track);
+    if (held != layout_.heldTracks) {
+        layout_.heldTracks = std::move(held);
+        damageViews();
+    }
+    launchViews_ = std::move(views);
+    if (launcherPane_ && launcherPane_->visible) {
+        launcherPane_->invalidate();
+        launcherHeader_->invalidate();
+    }
+}
 void ArrangeView::addMarker() { ruler_->addMarker(); }
 void ArrangeView::addRegion() { ruler_->addRegion(); }
 const RulerStats& ArrangeView::rulerStats() const { return ruler_->stats; }
@@ -1699,6 +1854,15 @@ json::Value ArrangeView::saveLayout() const {
     v["row_height"] = static_cast<double>(trackLayout().globalHeight());
     v["follow"] = std::string(views::followName(follow()));
     if (chordRowChoice_) v["chords"] = *chordRowChoice_;  // View > Chords chose
+    // The clip launcher (gui.md §4.15): what View > Clip launcher chose, its
+    // dragged width and whether it fills the view.
+    if (launcherChoice_ || launcherWidth_ > 0 || launcherFull_) {
+        json::Value clips = json::Value::object();
+        if (launcherChoice_) clips["shown"] = *launcherChoice_;
+        if (launcherWidth_ > 0) clips["width"] = static_cast<double>(launcherWidth_);
+        if (launcherFull_) clips["full"] = true;
+        v["clips"] = std::move(clips);
+    }
     json::Value heights = json::Value::object();
     for (const auto& [track, h] : trackLayout().heights())
         heights[track.str()] = static_cast<double>(h);
@@ -1734,6 +1898,17 @@ void ArrangeView::loadLayout(const json::Value& v) {
         const json::Value* chords = v.find("chords");
         setChordRow(chords && chords->isBool() ? std::optional<bool>(chords->asBool())
                                                : std::nullopt);
+    }
+    {
+        // The clip launcher's entry (gui.md §4.15); none: the project decides.
+        const json::Value* clips = v.find("clips");
+        const json::Value* shown = clips && clips->isObject() ? clips->find("shown") : nullptr;
+        const json::Value* width = clips && clips->isObject() ? clips->find("width") : nullptr;
+        const json::Value* full = clips && clips->isObject() ? clips->find("full") : nullptr;
+        launcherChoice_ =
+            shown && shown->isBool() ? std::optional<bool>(shown->asBool()) : std::nullopt;
+        setLauncherWidth(width && width->isNumber() ? static_cast<float>(width->asDouble()) : 0.0f,
+                         full && full->isBool() && full->asBool());
     }
     trackLayout().clearTakesExpanded();
     if (const json::Value* ex = v.find("expanded_takes"); ex && ex->isArray())
@@ -1796,6 +1971,9 @@ bool ArrangeView::autoScroll(double seconds) {
 }
 
 bool ArrangeView::onPointer(const ui::PointerEvent& e) {
+    // A press on the lanes clears the launcher's selection (gui.md §4.15).
+    if (e.type == ui::PointerEvent::Type::Down && lanes_ && lanes_->bounds().contains(e.pos))
+        clearLauncherSelection();
     if (e.type != ui::PointerEvent::Type::Wheel) {
         const bool handled = gestures_->pointer(e);
         noteDrag(e, false);
@@ -1808,7 +1986,9 @@ bool ArrangeView::onPointer(const ui::PointerEvent& e) {
     // Alt resizes every track). A sideways wheel scrolls in time where the
     // wheel would zoom.
     Viewport v = view_;
-    const bool overTracks = tcp_ && tcp_->bounds().contains(e.pos);
+    const bool overTracks =
+        (tcp_ && tcp_->bounds().contains(e.pos)) ||
+        (launcherPane_ && launcherPane_->visible && launcherPane_->bounds().contains(e.pos));
     const std::string_view behaviour =
         gestures_->mouse.behaviour(overTracks ? "tcp.wheel" : "arrange.wheel", e.mods);
     if (behaviour == "resize_all") {

@@ -9,6 +9,11 @@ shares. It is built in steps L1 to L4 (below). The engine's "Playing"
 section was written from the core design and the lead's core check, and
 the lead revised it with L2 (2026-11-19).
 
+**Amended 2026-11-20** (below, "Amendment: a clip take's chain"): a clip
+take's FX and envelopes play, and a launch's floor grows by the latency of
+the track's clip chains; envelopes on a clip take's FX are in clip time
+(C2, schema 2.19).
+
 Contracts: `specs/session-model.md` "Scenes and clips (schema 2.18,
 ADR-0097)", `specs/engine.md` §1.4.2, `specs/gui.md` §4.15.
 
@@ -107,7 +112,9 @@ a `cl_*` where they take an item today (the same `item` field, whose ID
 pattern becomes `^(it|cl)_[0-9]+$` so that merges remap it), or a clip's
 take:
 - `midi.get`, `midi.write`, `midi.edit` and `midi.notes`. A clip keeps its
-  length under `midi.write`, as an item keeps its position and length.
+  length under `midi.write`, as an item keeps its position and length; notation
+  longer than it is kept but does not play, and `midi.write` warns
+  (`midi.beyond_length`).
 - `item.export`: the clip's raw audio or its MIDI, as the item it would
   make at the project's start (one period, looped as an item loops).
 - `take.list`, `take.add`, `take.activate`, `take.set` and `take.remove`.
@@ -333,7 +340,9 @@ Clips replace that with an **ordered budget**:
   by node id and clip id (§1.6 of engine.md). A clip the new plan no
   longer has (removed, or now past the memory budget) ends at that swap
   and its track returns to the arrangement, without the switch fade: the
-  new plan holds no player to fade out.
+  new plan holds no player to fade out. (Amended 2026-11-20: an audio
+  clip without a take chain now fades out from a copy the new plan keeps;
+  see engine.md §1.4.2.)
 - **A launch is a timed message (L-a, B1).** Its target is `{epoch,
   stream sample}`, the coordinate plan handoffs use (`handAt`,
   `handEpoch`). A scene launch has one target for all its tracks: the
@@ -362,6 +371,29 @@ Clips replace that with an **ordered budget**:
     pending entry from the new position (B4).
   - Each applied entry comes back to the main thread with its stream
     sample, its running frame and its song position.
+  - *(2026-11-20, revised with the co-director: several targets per
+    launch; engine.md §1.4.2.)* A launch has one target node per thing
+    that follows the track: its channel, and every rack Notes module whose
+    source is that track. Each switches at the launch's stream sample plus
+    its own node's timeline shift, by the executor that runs that node, so
+    a track and the rack it feeds may switch on two executors. Whether the
+    launch is taken is decided once, for all of them:
+    - The main thread publishes the entry, then reads every executor's
+      published horizon (the furthest its current block may reach,
+      stored before it reads the queue). If each executor that runs a
+      target is at or before the target, the entry is committed: each
+      will read it before it passes its frames. Otherwise it is missed.
+    - An executor that reaches a frame of an entry still undecided marks
+      it missed. Nothing of a missed entry switches anywhere; the main
+      thread places it again, as before.
+    - The first target of a committed entry to switch takes it by
+      compare-and-swap, against the main thread voiding an entry whose
+      epoch ended first. Every other target then switches at its own
+      frame, or, if its executor relocated before reaching it, at that
+      executor's next block, as at a relocation. The slot is reused only
+      once each executor is done with it.
+    This replaces "Who applies it" above: an entry is no longer taken by
+    the track's executor alone.
 - **While stopped,** a launch is not quantized. It starts the transport
   and applies at the play start's first sample, so the clip's anchor is
   the play position.
@@ -395,6 +427,9 @@ Clips replace that with an **ordered budget**:
   only, and the dialog says so in one line while any track is held by a
   clip. An internal offline replay applies a log at its logged running
   frames. The tests use it, and L4's capture will.
+  *(2026-11-20, the lead with L4's engine half: seeks and wraps are not
+  logged yet; capture and commit as built are in engine.md §1.4.2, and a
+  capture lives in one transport epoch.)*
 - **Memory (L-e).** The prepared-source budget counts sample values
   across channels: the decoded source plus each converted variant, with
   a source or variant shared by several takes counted once. A clip on
@@ -441,6 +476,14 @@ A scene is a section you can play before it has a place in the song.
   - The performance is laid out linearly from the position where capture
     began, by running time, whatever the transport loop did (L-f).
   - MIDI content is copied, not pooled, unless `pooled` is asked.
+  - *(2026-11-20, as built by the lead, engine.md §1.4.2.)* Each piece of
+    a clip is laid at the phase the song gave it, so a loop wrap
+    restarts a piece where the phase jumped. On each track that left the
+    arrangement, its clip, stopped and held stretches replace the
+    arrangement there; the 5 ms switch crossfades become item fades. A
+    stop, seek or loop change ends a capture that has run.
+    `launch.commit` records the performance it laid out in history
+    (`performance`), so a merge replays it without an engine.
 - **`scene.insert {scene, at, bars}`** lays the scene's clips on the
   timeline as items for that length and names a region after the scene.
 - **`scene.capture {region, name?}`** makes a scene from the items inside a
@@ -451,6 +494,79 @@ A scene is a section you can play before it has a place in the song.
   - several items of one track inside the region (`scene.capture.items`);
   - an item straddling the region's edge (`scene.capture.edge`);
   - a looped clip or item whose take is warped (`clip.unsupported`).
+
+#### Scene ↔ section: the rules (L4a, 2026-11-20)
+
+These three commands touch the model only: no launch, no player. Each is one
+undo step, and a refusal changes nothing. The contract is in
+`specs/session-model.md`, "Scene ↔ section"; the rules and why:
+
+- **A section is a region, and a scene is its columns of clips.** `scene.insert`
+  and `arrangement.build` go from scene to timeline; `scene.capture` from
+  timeline to scene. Going there and back lands where it started (below).
+- **Spans are whole bars from a bar line.** `scene.insert {scene, at | bar,
+  bars}` takes the span from the start of the bar (`bar`, or `at` in beats,
+  which must be on a bar line) for `bars` bars, counted through the meter map.
+  An `at` between bar lines is refused (`scene.at`), because "n bars from the
+  middle of a bar" has two readings.
+- **Where an item stops.** Each clip of the scene becomes one item on its own
+  track at the span's start, converted as `item.add {clip}` converts it:
+  - `once`: one item as long as the clip, or as the span if that is shorter.
+    The rest of the span is silent on that track.
+  - `loop`, clip no longer than the span: the item loops its content over the
+    span (the same sound as the clip repeating) when the clip's period is the
+    content: its loop off and its length the content, or its loop on over the
+    whole content (start 0) with a length of whole repeats of it. A loop window
+    that is not the whole content cannot be an item and is `clip.unsupported`,
+    as `item.add {clip}` refuses it. A clip whose period is anything else (a gap
+    after the content, a length shorter than the content) cannot be one item
+    without a guess about the gap, and is refused (`scene.insert.period`, hint:
+    set the clip's length to its content or its loop on over the whole content,
+    clip.set, or ask for no more bars than the clip is long).
+  - `loop`, clip at least as long as the span: one item for the span, the first
+    part of the clip.
+- **Existing items in the span.** An item on a track that receives a clip and
+  overlaps the span is refused (`scene.insert.occupied`, naming the items; the
+  hint says to move or remove them). Items on other tracks are left alone. The
+  command never overwrites, trims or splits.
+- **An empty scene.** A scene with no clip is refused (`scene.empty`) by all
+  three commands that read one; a region with no item to capture is
+  `scene.capture.empty`.
+- **MIDI is copied, not pooled,** unless `pooled: true`; the conversion is the
+  one `clip.add {item}` and `item.add {clip}` already use (audio media are
+  shared, fades are not kept).
+- **The region.** `scene.insert` adds a section named after the scene (or
+  `name`), the scene's colour, over the span. It adds a new region every time
+  and never edits an existing one.
+- **Capture is one clip per track, with nothing guessed.** `scene.capture
+  {region, name?}` reads the items of each channel that lie wholly inside the
+  region:
+  - an item that starts before the region or ends after it:
+    `scene.capture.edge` (checked first);
+  - more than one item of one track inside it: `scene.capture.items`;
+  - the one item starting after the region's start: `scene.capture.offset` (a
+    clip begins at its own start, so the entry point would be lost);
+  - a warped take: `clip.unsupported`, as `clip.add {item}`;
+  - items on a master (they belong to no channel) are skipped, and a warning
+    `scene.capture.skipped` names them.
+  The clip is `loop` when its item fills the region and `once` when it is
+  shorter (it played once and fell silent in the section); the item's own loop
+  becomes the clip's. The new scene is appended after the last, named after the
+  region unless `name` is given, and takes its colour. The region and the
+  items are untouched.
+- **A song from scenes.** `arrangement.build {sequence: [{scene, bars}…], at |
+  bar?}` is `scene.insert` for each entry, one after the other from the start
+  (default: bar 1), a region for each. It checks every entry before changing
+  anything, and refuses an empty sequence, one past 256 entries, or `bars` < 1.
+- **Round trip.** `scene.capture` of a section that `scene.insert` laid gives a
+  scene whose clips play the same material, with these differences, each held
+  by a test: a clip as long as the span, or a `once` clip shorter than it, comes
+  back the same (length, loop, mode); a looped clip laid over a longer span
+  comes back as one looped clip as long as the span; a clip longer than the span
+  comes back cut to the span, as a `loop` clip.
+- **Limits and memory.** `scene.limit` and `clip.limit` apply to capture, and
+  `clip.memory` to audio it adds; items laid on the timeline are in the
+  arrangement's budget as `item.add`'s are.
 
 ### GUI (L3)
 
@@ -496,6 +612,89 @@ A scene is a section you can play before it has a place in the song.
 | L2 | lead | The clip player, the launch queue, the phase rules, state carry, `launch.*`, telemetry, the render dialog's line. |
 | L3 | gui-lead | The launcher pane (gui.md §4.15). |
 | L4 | lead and gui-lead | Capture and commit; scene ↔ section; `arrangement.build`. |
+
+## Amendment (2026-11-20): a clip take's chain
+
+**Context.** L2 staged a clip take's FX and envelopes: a clip played dry
+and the plan warned with `launch.take_chain`. A timeline item's take with
+FX plays through a chain whose input runs its latency ahead, so it is
+heard on time; a clip needs the same, but its start is a launch decided at
+run time, not a position in the timeline.
+
+**Decision.**
+- **A clip's take chain** is compiled like an item's (the take's FX, its
+  volume, pan and mute envelopes), linked to the clip's player. The clip's
+  audio, or its notes for an instrument in the chain, go into the chain;
+  the chain's output goes where the player's went, weighed by the switch's
+  crossfade, with the clip's and the take's gain and pan after the chain.
+- **Latency and run-ahead.** A track's launch lead is the most latency
+  among its clips' chains. Every clip chain on the track reads its input
+  that far ahead and is delayed back by the lead less its own latency, so
+  the clip is heard at its switch frame. The incoming clip's chain must
+  therefore know of the launch the lead before the frame. A launch reaches
+  such a track twice: its early half at the frame less the lead (from
+  there the chains' input takes it) and the switch at the frame, as
+  before.
+- **C1: the floor grows by the lead.** The target is fixed when queued, at
+  or after every owning executor's horizon *plus the target track's
+  launch lead*. The decision is still made once, at the first frame of
+  any target, which for such a track is its early half; the horizon check
+  uses that frame. An early half before the epoch's first frame (a launch
+  placed while stopped, whose target is the play start) is that first
+  frame, so the chain warms up through its first frames *(review round 69:
+  it counted as passed, and a chained track started a bar after a dry
+  one)*. The alternative, keeping the floor and starting the
+  chain at the switch, would make the clip heard its chain's latency late,
+  or lose its first frames to compensation: a clip would no longer sound
+  at its boundary, and a capture would not commit as it played. Quantize
+  `none` waits that much longer on such a track. The lead is the track's
+  (the most of all its clip chains), not only the clips a launch
+  switches: the outgoing chain needs the early half too, so its notes end
+  where the switch is heard.
+- **Running.** A chain runs while its clip is coming in, plays or fades
+  out. It starts afresh at each launch that starts its clip, and runs on,
+  unreset, across the clip's passes and a relaunch of the playing clip.
+  At the switch away its tail is cut after the crossfade, as an item's is
+  at its end.
+- **Envelopes.** The take's own envelopes are already in clip time in the
+  model (beats on a MIDI clip, seconds on an audio clip): they play from
+  the clip's start, pass after pass, as `launch.commit` lays out the
+  copies.
+- **C2: envelopes on a clip take's FX** move to clip time too, relative
+  to the clip's start and looping with it. (It changes the meaning of those
+  points in the model, schema 2.19, with a migration; no project has them,
+  since L1 shipped with this limit stated.) Landed 2026-11-20:
+  - In the model they are beats on a MIDI clip and seconds
+    (`timebase: time`) on an audio clip, from its start, as the take's own
+    envelopes are; they take no automation items and no writing mode. The conversions between
+    an item and a clip carry them across point by point.
+  - The engine compiles their lanes in the clip's domain (the domain of
+    the take envelopes' clip position), unshifted by the chain's latency,
+    and evaluates them at the clip position each stage's input reads: the
+    running lead less the stages before it. A lane sends on the absolute
+    automation grid, at each point it crosses and afresh at each new pass
+    or anchor; while the input reads nothing it holds.
+  - `launch.commit` writes each copy's FX envelopes in timeline position,
+    repeated pass after pass over the copy, so a looped item of many passes
+    keeps one chain as the clip did. Each pass's value at the period is
+    held to the boundary and the next pass starts from its first value
+    there; a copy ending on a boundary also takes the next pass's start,
+    which a latent FX hears within its latency, as it did live.
+- **Freeze is unchanged:** a frozen track plays its print and refuses
+  launches, so its clip chains never play.
+- **Neither C1 nor C2 changes** the single decision, the launch log (the
+  early half follows from the entry's frame and the plan's lead), or the
+  phase rules.
+
+**Consequences.**
+- Live equals the offline replay with clip chains, in both executors,
+  through the bridge.
+- A launch on a track with a latent clip chain is placed that much later;
+  a rendered track's floor was already about the render-ahead.
+- A plan swap that raises a track's lead after a launch was queued starts
+  the incoming chain's input late for that launch (its first frames go
+  through the chain's warm-up). It is the rare case of a latency change
+  racing a queued launch, and live and the replay agree on it.
 
 ## Consequences
 

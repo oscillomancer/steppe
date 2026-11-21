@@ -154,7 +154,7 @@ void registerTransportCommands(cmd::Registry& registry) {
         c.name = "transport.playrate.apply-to-tempo";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Scale every tempo-point BPM by master playrate, then reset the rate to 1.";
+        c.summary = "Scale every tempo BPM by the master playrate, then reset it to 1.";
         c.description =
             "One version: multiply every BPM by the saved scalar rate, preserving beat "
             "positions, ramp flags and meter changes, and reset rate to 1. Require stopped "

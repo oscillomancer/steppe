@@ -150,7 +150,7 @@ void registerHistoryCommands(cmd::Registry& registry) {
         c.name = "branch.create";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Start a branch from a branch's head or an earlier version, and switch to it.";
+        c.summary = "Start a branch from a head or an earlier version and switch to it.";
         c.description =
             "Agents: work on agent/<you>/<topic> branches, then branch.diff and branch.merge into "
             "main. "
@@ -235,8 +235,7 @@ void registerHistoryCommands(cmd::Registry& registry) {
         c.name = "branch.diff";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary =
-            "What differs between two branch heads: objects added, removed, changed (fields).";
+        c.summary = "What differs between two branch heads: added, removed, changed objects.";
         c.tags = {"branch"};
         c.args = schema::object<BranchDiffArgs>("branch_diff_args")
                      .field("a", &BranchDiffArgs::a, branchName())

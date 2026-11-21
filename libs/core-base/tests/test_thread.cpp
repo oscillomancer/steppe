@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -181,7 +182,10 @@ TEST_CASE("page faults are counted for a thread on Linux and for the process eve
     std::int64_t own = 0;
 #endif
     std::optional<supple::PageFaults> first, last;
-    std::thread worker([&] {
+    // The worker lives until the main thread has read its id: the thread's
+    // CPU clock, which kernelThreadId reads, is gone once it has exited.
+    std::promise<void> read;
+    std::thread worker([&, done = read.get_future()] {
 #if defined(__linux__)
         own = static_cast<std::int64_t>(::gettid());
 #endif
@@ -189,8 +193,10 @@ TEST_CASE("page faults are counted for a thread on Linux and for the process eve
         first = supple::threadPageFaults(seen);
         touch();
         last = supple::threadPageFaults(seen);
+        done.wait();
     });
     const std::int64_t outside = supple::kernelThreadId(worker.native_handle());
+    read.set_value();
     worker.join();
     const supple::PageFaults after = supple::processPageFaults();
     // macOS maps fresh anonymous memory in clusters (and Apple silicon pages

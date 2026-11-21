@@ -20,6 +20,7 @@
 #include "supple/ui/widgets.h"
 #include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
+#include "supple/views/launcher.h"
 #include "supple/views/mouse_map.h"
 
 namespace supple::gui {
@@ -1000,18 +1001,43 @@ class Panel : public ui::Node {
 
 // ----------------------------------------------------------------- MidiEditor
 
+std::optional<MidiOwner> midiOwner(const model::Session& s, const std::string& text) {
+    const auto id = model::Id::parse(text);
+    if (!id) return std::nullopt;
+    MidiOwner o;
+    std::optional<model::Id> take;
+    if (const model::Item* item = s.items.find(*id)) {
+        o.item = item;
+        o.track = item->track;
+        take = item->activeTake;
+    } else if (const model::Clip* clip = s.clips.find(*id)) {
+        o.clip = clip;
+        o.track = clip->track;
+        take = clip->activeTake;
+    } else {
+        return std::nullopt;
+    }
+    o.take = take ? s.takes.find(*take) : nullptr;
+    o.source = o.take && o.take->source ? s.midi.find(*o.take->source) : nullptr;
+    if (!o.source) return std::nullopt;
+    return o;
+}
+
 MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                        engine::EngineApp& app, UiState& ui)
     : root_(root), actions_(actions), dispatcher_(dispatcher), app_(app), ui_(ui) {
     // The notes take the colour their item has in the arrangement.
     state_.color = [this](const ui::Theme& theme) {
         const model::Session& s = app_.head();
-        if (auto id = model::Id::parse(state_.item))
+        if (auto id = model::Id::parse(state_.item)) {
             if (const model::Item* item = s.items.find(*id)) {
                 const model::Track* track = s.tracks.find(item->track);
                 return views::Lanes::itemColor(theme, *item, track,
                                                track ? track->type : model::StripType::Channel);
             }
+            if (const model::Clip* clip = s.clips.find(*id))
+                return views::clipColor(theme, s, *clip);  // as its launcher cell
+        }
         return theme.color("accent");
     };
     // The selected MIDI item, or the one a caller names.
@@ -1024,24 +1050,22 @@ MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dis
                       });
     actions_.addUi("ui.midi.close", "MIDI: close editor", [this] { close(); });
     // Alt+E: hide the editor, or show it on the item it had last (else the
-    // selected MIDI item, else the first); nothing when there is no MIDI item.
+    // selected clip after a launcher click, the selected MIDI item, the first
+    // MIDI item, the first MIDI clip); nothing when there is no MIDI.
     actions_.addUi("ui.midi.toggle", "MIDI: show or hide the editor", [this] {
         if (isOpen()) {
             close();
             return;
         }
         const model::Session& s = app_.head();
-        auto isMidi = [&s](const std::string& text) {
-            const auto id = model::Id::parse(text);
-            const model::Item* it = id ? s.items.find(*id) : nullptr;
-            const model::Take* take =
-                it && it->activeTake ? s.takes.find(*it->activeTake) : nullptr;
-            return take && take->source && s.midi.find(*take->source);
-        };
+        auto isMidi = [&s](const std::string& text) { return midiOwner(s, text).has_value(); };
         std::vector<std::string> candidates;
         if (!lastItem_.empty()) candidates.push_back(lastItem_);
+        if (ui_.clipsFocused)  // a launcher cell was clicked last
+            for (const std::string& c : ui_.selectedClips) candidates.push_back(c);
         for (const std::string& it : ui_.selectedItems) candidates.push_back(it);
         for (const auto& e : s.items) candidates.push_back(e.id.str());
+        for (const auto& e : s.clips) candidates.push_back(e.id.str());  // none: a clip
         for (const std::string& it : candidates)
             if (isMidi(it) && open(it)) return;
     });
@@ -1331,15 +1355,15 @@ Status MidiEditor::reload() {
     // A reload replaces note indices and CC data; an old preview cannot be
     // committed against the new sequence (including undo and item switches).
     state_.cancelGesture();
-    const auto itemId = model::Id::parse(state_.item);
-    const auto* item = itemId ? app_.head().items.find(*itemId) : nullptr;
-    const auto* take =
-        item && item->activeTake ? app_.head().takes.find(*item->activeTake) : nullptr;
-    const auto* source = take && take->source ? app_.head().midi.find(*take->source) : nullptr;
-    if (!item || !take || !source) return Error("gui.midi", "no MIDI source", "/item");
-    const auto span = model::itemSpan(app_.head(), *item);
-    state_.itemPosition = span.startBeat;
-    state_.itemLength = model::itemLengthBeats(app_.head(), *item);
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner) return Error("gui.midi", "no MIDI source", "/item");
+    const model::Take* take = owner->take;
+    const model::MidiSource* source = owner->source;
+    // A clip sits at beat 0 for the roll: its bars count from its start.
+    state_.clip = owner->clip != nullptr;
+    state_.itemPosition = owner->item ? model::itemSpan(app_.head(), *owner->item).startBeat : 0.0;
+    state_.itemLength =
+        owner->item ? model::itemLengthBeats(app_.head(), *owner->item) : owner->clip->length;
     const double rate = take->playrate > 0 ? take->playrate : 1.0;
     state_.notes.clear();
     for (const auto& n : source->sequence.notes) {
@@ -1371,10 +1395,17 @@ Status MidiEditor::reload() {
         state_.barLines.push_back(at);
     }
     // The context in the same window (ADR-0095): what holds at its start and
-    // the changes in it.
+    // the changes in it. A clip has no place in time: it reads the key at the
+    // project's start, as midi.edit does, and no chords.
     state_.keys.clear();
     state_.chords.clear();
-    {
+    if (state_.clip) {
+        std::optional<harmony::Key> key;
+        if (const auto id = model::keyPointAt(app_.head(), 0.0))
+            if (const model::ContextPoint* p = app_.head().context.find(*id))
+                key = model::parseKey(*p);
+        state_.keys.push_back({0.0, key});
+    } else {
         const model::Session& head = app_.head();
         const double lo = state_.itemPosition - 64;
         const double hi = state_.itemPosition + state_.itemLength + 64;
@@ -1407,6 +1438,11 @@ Status MidiEditor::reload() {
     version_ = app_.head().version;
     if (title_) {
         std::string name = state_.item;
+        if (owner->clip) {
+            const model::Track* t = app_.head().tracks.find(owner->track);
+            name = (t && !t->name.empty() ? t->name : owner->track.str()) + " — " +
+                   (owner->clip->name.empty() ? state_.item : owner->clip->name) + " · clip";
+        }
         if (auto id = model::Id::parse(state_.item))
             if (const model::Item* it = app_.head().items.find(*id))
                 if (const model::Track* t = app_.head().tracks.find(it->track)) {
@@ -1450,15 +1486,12 @@ std::function<midi::Meter(int)> meterAtItem(const model::Session& session, doubl
 }  // namespace
 
 std::optional<std::string> MidiEditor::modelText() const {
-    const auto itemId = model::Id::parse(state_.item);
-    const auto* item = itemId ? app_.head().items.find(*itemId) : nullptr;
-    const auto* take =
-        item && item->activeTake ? app_.head().takes.find(*item->activeTake) : nullptr;
-    const auto* source = take && take->source ? app_.head().midi.find(*take->source) : nullptr;
-    if (!item || !source) return std::nullopt;
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner) return std::nullopt;
     notation::DecompileOptions options;
-    options.meterAt = meterAtItem(app_.head(), model::itemSpan(app_.head(), *item).startBeat);
-    auto text = notation::decompile(source->sequence, options);
+    options.meterAt = meterAtItem(
+        app_.head(), owner->item ? model::itemSpan(app_.head(), *owner->item).startBeat : 0.0);
+    auto text = notation::decompile(owner->source->sequence, options);
     if (!text) return std::nullopt;
     return std::move(*text);
 }
@@ -1728,8 +1761,9 @@ void MidiEditor::cutSelected() {
 
 void MidiEditor::paste(std::optional<double> itemBeat) {
     if (!isOpen() || clipboard_.empty()) return;
-    const double at =
-        itemBeat.value_or(std::max(0.0, actions_.context().playheadBeats - state_.itemPosition));
+    const double at = itemBeat.value_or(
+        state_.clip ? std::max(0.0, state_.playheadBeat)
+                    : std::max(0.0, actions_.context().playheadBeats - state_.itemPosition));
     json::Value ops = json::Value::array();
     for (const RollNote& n : clipboard_) {
         json::Value op = json::Value::object();
@@ -1804,8 +1838,7 @@ void MidiEditor::follow(std::optional<std::chrono::steady_clock::time_point> pas
             root_.releaseWithin(panel_);
         }
         // The item went away (undo, delete): close; otherwise reload both views.
-        auto id = model::Id::parse(state_.item);
-        if (!id || !app_.head().items.find(*id)) {
+        if (!midiOwner(app_.head(), state_.item)) {
             close();
             return;
         }
@@ -1827,7 +1860,18 @@ void MidiEditor::follow(std::optional<std::chrono::steady_clock::time_point> pas
         }
     }
     if (eventList_ && listPane_ && listPane_->visible) eventList_->sync();
-    if (auto t = app_.transport("get")) {
+    if (state_.clip) {  // a clip's playhead: where the launcher plays it
+        double beat = -1;
+        const auto id = model::Id::parse(state_.item);
+        for (const auto& t : app_.launchState())
+            if (id && t.clip == *id && t.plays == engine::Engine::TrackLaunch::Plays::Clip &&
+                t.position)
+                beat = *t.position;
+        if (beat != state_.playheadBeat) {
+            state_.playheadBeat = beat;
+            root_.requestAnimationFrame();
+        }
+    } else if (auto t = app_.transport("get")) {
         const double beat = t->playing ? t->beat : -1;
         if (beat != state_.playheadBeat) {
             state_.playheadBeat = beat;

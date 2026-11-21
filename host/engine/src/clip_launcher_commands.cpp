@@ -4,7 +4,10 @@
 // clip.*. Launching (launch.*) is the engine's, step L2.
 #include "clip_launcher.h"
 
+#include <algorithm>
+
 #include "command_helpers.h"
+#include "supple/model/env_shape.h"
 #include "supple/model/launcher.h"
 #include "supple/model/take_owner.h"
 
@@ -79,21 +82,127 @@ Status checkClipTakeUnwarped(const model::Session& s, Id take, const std::string
     return {};
 }
 
+namespace {
+
+// Points from 0 on: what lay before goes, its value at 0 kept as a point.
+void fromZero(std::vector<model::EnvPoint>& pts) {
+    std::stable_sort(
+        pts.begin(), pts.end(),
+        [](const model::EnvPoint& a, const model::EnvPoint& b) { return a.pos < b.pos; });
+    const auto first =
+        std::find_if(pts.begin(), pts.end(), [](const model::EnvPoint& p) { return p.pos >= 0; });
+    if (first == pts.begin()) return;
+    model::EnvPoint at0 = *(first - 1);
+    if (first != pts.end() && first->pos > 0) {
+        const model::EnvPoint& a = *(first - 1);
+        const model::EnvPoint& b = *first;
+        const double k = (0 - a.pos) / (b.pos - a.pos);
+        at0.value = a.value + (b.value - a.value) * model::shapeCurve(a.shape, a.tension, k);
+    }
+    at0.pos = 0;
+    const bool keep = first == pts.end() || first->pos > 0;
+    pts.erase(pts.begin(), first);
+    if (keep) pts.insert(pts.begin(), at0);
+}
+
+}  // namespace
+
+FxEnvelopeMap fxEnvelopesToClip(const model::Session& s, model::ClipKind kind, double startBeat,
+                                double startSec) {
+    const auto map = s.timeMap;
+    return [map, kind, startBeat, startSec](model::Envelope& env) {
+        const bool time = env.timebase == model::Timebase::Time;
+        for (auto& p : env.points)
+            p.pos = kind == model::ClipKind::Midi
+                        ? (time ? map->beatAt(p.pos) : p.pos) - startBeat
+                        : (time ? p.pos : map->secondsAt(p.pos)) - startSec;
+        env.timebase =
+            kind == model::ClipKind::Midi ? model::Timebase::Beats : model::Timebase::Time;
+        fromZero(env.points);
+    };
+}
+
+FxEnvelopeMap fxEnvelopesFromClip(const model::Session& s, model::ClipKind kind, double pos,
+                                  double phase, double period, double length) {
+    const auto map = s.timeMap;
+    const double startSec = map->secondsAt(pos);
+    return [map, kind, pos, phase, period, length, startSec](model::Envelope& env) {
+        // A span that ends on a boundary takes the next pass's start too:
+        // its FX hears what follows within its latency, as the clip did.
+        const double reach = phase + length;
+        const double tolerance = 1e-9 * std::max(1.0, period);
+        if (period > 0 && !env.points.empty() && reach >= period - tolerance) {
+            // The passes the item spans, in clip time from the first pass's start.
+            std::vector<model::EnvPoint> one = env.points;
+            std::stable_sort(
+                one.begin(), one.end(),
+                [](const model::EnvPoint& a, const model::EnvPoint& b) { return a.pos < b.pos; });
+            // The curve's value at the period, approached from before it.
+            double atEnd = one.back().value;
+            for (std::size_t k = 0; k + 1 < one.size(); ++k)
+                if (one[k].pos < period && one[k + 1].pos >= period) {
+                    const double t = (period - one[k].pos) / (one[k + 1].pos - one[k].pos);
+                    atEnd = one[k].value + (one[k + 1].value - one[k].value) *
+                                               model::shapeCurve(one[k].shape, one[k].tension, t);
+                }
+            std::vector<model::EnvPoint> out;
+            for (int k = 0; k * period <= reach + tolerance; ++k) {
+                const double base = k * period;
+                const bool last = (k + 1) * period > reach + tolerance;
+                if (k > 0 && one.front().pos > 0) {
+                    model::EnvPoint first = one.front();
+                    first.pos = base;
+                    out.push_back(first);
+                }
+                for (const auto& p : one) {
+                    if (!last && p.pos >= period) break;
+                    model::EnvPoint q = p;
+                    q.pos += base;
+                    out.push_back(q);
+                }
+                if (!last) {
+                    model::EnvPoint held{base + period, atEnd, model::PointShape::Linear, 0.0};
+                    out.push_back(held);
+                }
+            }
+            env.points = std::move(out);
+        }
+        for (auto& p : env.points)
+            p.pos = kind == model::ClipKind::Midi ? pos + p.pos - phase
+                                                  : map->beatAt(startSec + p.pos - phase);
+        env.timebase = model::Timebase::Beats;
+        fromZero(env.points);
+    };
+}
+
+void convertTakeFxEnvelopes(model::EditTxn& t, const model::Session& s, Id take,
+                            const FxEnvelopeMap& map) {
+    const model::Take* tk = s.takes.find(take);
+    if (!tk) return;
+    for (const auto& e : s.envelopes)
+        if (std::find(tk->chain.begin(), tk->chain.end(), e.value->target.object) !=
+            tk->chain.end())
+            t.modify<model::Envelope>(e.id, [&](model::Envelope& env) { map(env); });
+}
+
 Result<std::vector<Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
                                      const std::vector<Id>& takes, bool pooled,
                                      const std::function<double(double)>& envelopePos,
-                                     const std::string& path) {
+                                     const std::string& path, const FxEnvelopeMap& fxEnvelope) {
     std::vector<Id> out;
     for (Id old : takes) {
         const model::Take* tk = s.takes.find(old);
         if (!tk)
             return Error("item.take", old.str() + " is missing", path,
                          "use a current take id from take.list");
-        if (envelopePos) {
-            // Only the take's own envelopes are measured from its owner's
-            // start; take FX parameters follow the timeline.
+        if (envelopePos || fxEnvelope) {
+            // Its own envelopes are measured from its owner's start, and so
+            // are its FX's on a clip (C2): none of them can map automation
+            // items.
             for (const auto& e : s.envelopes)
-                if (e.value->target.object == old)
+                if ((envelopePos && e.value->target.object == old) ||
+                    (fxEnvelope && std::find(tk->chain.begin(), tk->chain.end(),
+                                             e.value->target.object) != tk->chain.end()))
                     for (const auto& ai : s.autoItems)
                         if (ai.value->envelope == e.id)
                             return Error("clip.unsupported",
@@ -114,6 +223,7 @@ Result<std::vector<Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
         auto fresh = copyTake(s, t, old, std::move(copy));
         if (!fresh) return std::move(fresh).error();
         if (envelopePos) convertTakeEnvelopes(t, t.preview(), *fresh, envelopePos);
+        if (fxEnvelope) convertTakeFxEnvelopes(t, t.preview(), *fresh, fxEnvelope);
         out.push_back(*fresh);
     }
     return out;
@@ -188,6 +298,14 @@ std::optional<model::ClipKind> clipKindOfTake(const model::Session& s, Id take) 
     return s.clips.find(*owner)->kind;
 }
 
+std::optional<model::ClipKind> clipKindOfFx(const model::Session& s, Id fx) {
+    if (fx.kind != model::Kind::Fx) return std::nullopt;
+    for (const auto& e : s.takes)
+        if (std::find(e.value->chain.begin(), e.value->chain.end(), fx) != e.value->chain.end())
+            return clipKindOfTake(s, e.id);
+    return std::nullopt;
+}
+
 Result<ClipItem> itemFromClip(const model::Session& s, const model::Clip& clip,
                               const model::Take& take, Id track, double pos,
                               const std::string& path) {
@@ -224,6 +342,7 @@ Result<ClipItem> itemFromClip(const model::Session& s, const model::Clip& clip,
         SUPPLE_TRY(model::checkedBeat(s, pos + clip.length, path));
         model::placeItem(s, item, pos, clip.length);  // in the track's timebase
     }
+    out.fxEnvelope = fxEnvelopesFromClip(s, clip.kind, pos);
     return out;
 }
 
@@ -249,6 +368,121 @@ Status checkClipMemory(EngineApp& app, const model::Session& after, const std::s
                  path,
                  "use shorter audio or fewer distinct files in clips, or lay clips on the "
                  "timeline (item.add {clip}) and remove them");
+}
+
+Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id itemId, bool pooled,
+                                 const std::string& path) {
+    const model::Item& it = *s.items.find(itemId);
+    model::Clip clip;
+    std::optional<model::ClipKind> kind;
+    for (Id tk : it.takes) {
+        SUPPLE_TRY(checkClipTakeUnwarped(s, tk, path));
+        const model::Take* take = s.takes.find(tk);
+        const auto k = take ? model::clipKindOf(*take) : std::nullopt;
+        if (k && kind && *k != *kind)
+            return Error("clip.mixed", itemId.str() + " holds MIDI and audio takes", path,
+                         "a clip holds one kind: remove the other takes from the item, or "
+                         "copy them into clips of their own");
+        if (k) kind = k;
+    }
+    clip.kind = kind.value_or(model::ClipKind::Midi);
+    const auto span = model::itemSpan(s, it);
+    std::function<double(double)> envelopePos;
+    if (clip.kind == model::ClipKind::Midi) {
+        clip.length = model::itemLengthBeats(s, it);
+    } else {
+        clip.length = span.endSec - span.startSec;
+        const auto map = s.timeMap;
+        envelopePos = [map, span](double beats) {
+            return map->secondsAt(span.startBeat + beats) - span.startSec;
+        };
+    }
+    // Its take FX's envelopes go into clip time (ADR-0097, amended, C2).
+    auto copied = copyTakesFor(t, s, it.takes, pooled, envelopePos, path,
+                               fxEnvelopesToClip(s, clip.kind, span.startBeat, span.startSec));
+    if (!copied) return std::move(copied).error();
+    clip.takes = *copied;
+    for (std::size_t k = 0; k < it.takes.size(); ++k)
+        if (it.activeTake == it.takes[k]) clip.activeTake = clip.takes[k];
+    if (!clip.activeTake && !clip.takes.empty()) clip.activeTake = clip.takes.front();
+    if (it.loop && it.activeTake)
+        if (const model::Take* active = s.takes.find(*it.activeTake))
+            if (const double content = contentLength(s, *active); content > 0)
+                clip.loop = {true, 0.0, content};
+    clip.mute = it.mute;
+    clip.gainDb = it.gainDb;
+    clip.color = it.color;
+    return clip;
+}
+
+Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const model::Clip& clip,
+                             double startBeat, double endBeat, bool pooled,
+                             const std::string& path) {
+    const std::string name = "a clip of " + s.tracks.find(clip.track)->name;
+    if (clip.takes.empty() || !clip.activeTake)
+        return Error("item.source", name + " has no take to lay on the timeline", path,
+                     "give the clip a take first (take.add), or remove it");
+    SUPPLE_TRY(checkItemTrack(s, clip.track, clip.takes, path));
+    const model::Take* active = s.takes.find(*clip.activeTake);
+    if (!active)
+        return Error("item.take", clip.activeTake->str() + " is missing", path,
+                     "use a current take id from take.list");
+    auto shaped = itemFromClip(s, clip, *active, clip.track, startBeat, path);
+    if (!shaped) return std::move(shaped).error();
+    model::Item item = std::move(shaped->item);
+    const auto map = s.timeMap;
+    const double startSec = map->secondsAt(startBeat);
+    const bool audio = clip.kind == model::ClipKind::Audio;
+    const double span = audio ? map->secondsAt(endBeat) - startSec : endBeat - startBeat;
+    const double tolerance = 1e-9 * std::max(1.0, span);
+    // How long the item lasts, in the clip's unit (ADR-0097 "Scene <-> section").
+    double length = clip.length;
+    if (clip.mode == model::ClipMode::Once) {
+        length = std::min(clip.length, span);
+    } else if (clip.length >= span - tolerance) {
+        length = span;
+    } else {
+        // The clip repeats its period; one looping item reproduces that only when the
+        // period is the content (loop off, length = content) or whole repeats of it (loop
+        // on over the whole content).
+        const double content = contentLength(s, *active);
+        const double times = content > 0 ? clip.length / content : 0;
+        const bool whole = times >= 1 - 1e-9 && std::abs(times - std::round(times)) < 1e-9;
+        const bool repeats = item.loop ? whole : std::abs(times - 1) < 1e-9;
+        if (!repeats)
+            return Error("scene.insert.period",
+                         "the clip of " + s.tracks.find(clip.track)->name + " repeats every " +
+                             json::formatDouble(clip.length) + (audio ? " s" : " beats") +
+                             " but its content is " + json::formatDouble(content) +
+                             (audio ? " s" : " beats") +
+                             ", which no single looping item "
+                             "reproduces",
+                         path,
+                         "set the clip's length to its content (clip.set), or its loop on over "
+                         "the whole content with a length of whole repeats, or ask for no more "
+                         "bars than the clip is long");
+        item.loop = true;
+        length = span;
+    }
+    if (std::abs(length - clip.length) > tolerance) {
+        if (audio) {
+            SUPPLE_TRY(model::checkedBeat(s, map->beatAt(startSec + length), path));
+            model::placeItemSeconds(s, item, startSec, startSec + length);
+        } else {
+            SUPPLE_TRY(model::checkedBeat(s, startBeat + length, path));
+            model::placeItem(s, item, startBeat, length);
+        }
+    }
+    // Its take FX's envelopes, in clip time, onto the timeline pass after
+    // pass over the item (ADR-0097, amended, C2).
+    auto copied =
+        copyTakesFor(t, s, clip.takes, pooled, shaped->envelopePos, path,
+                     fxEnvelopesFromClip(s, clip.kind, startBeat, 0, clip.length, length));
+    if (!copied) return std::move(copied).error();
+    item.takes = *copied;
+    for (std::size_t k = 0; k < clip.takes.size(); ++k)
+        if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+    return t.create(std::move(item));
 }
 
 namespace {
@@ -414,7 +648,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.add";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Add a scene (a launcher column) at the end or at an index.";
+        c.summary = "Add a scene (launcher column) at the end or an index.";
         c.description =
             "at is the column (0-based, default: after the last); the scenes from there on "
             "move one column right. A project holds at most 1024 scenes.";
@@ -554,7 +788,7 @@ void registerSceneCommands(cmd::Registry& registry) {
         c.name = "scene.list";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "List the scenes in column order with their clip counts.";
+        c.summary = "List scenes in column order with clip counts.";
         c.tags = {"clip launcher", "scene"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto entry = schema::object<SceneEntry>("scene_entry")
@@ -673,43 +907,12 @@ void registerClipCommands(cmd::Registry& registry) {
             if (a.item) {
                 auto item = existing<model::Item>(s, *a.item, "/item");
                 if (!item) return std::move(item).error();
-                const model::Item& it = *s.items.find(*item);
-                std::optional<model::ClipKind> kind;
-                for (Id tk : it.takes) {
-                    SUPPLE_TRY(checkClipTakeUnwarped(s, tk, "/item"));
-                    const model::Take* take = s.takes.find(tk);
-                    const auto k = take ? model::clipKindOf(*take) : std::nullopt;
-                    if (k && kind && *k != *kind)
-                        return Error("clip.mixed", *a.item + " holds MIDI and audio takes", "/item",
-                                     "a clip holds one kind: remove the other takes from the "
-                                     "item, or copy them into clips of their own");
-                    if (k) kind = k;
-                }
-                clip.kind = kind.value_or(model::ClipKind::Midi);
-                const auto span = model::itemSpan(s, it);
-                std::function<double(double)> envelopePos;
-                if (clip.kind == model::ClipKind::Midi) {
-                    clip.length = model::itemLengthBeats(s, it);
-                } else {
-                    clip.length = span.endSec - span.startSec;
-                    const auto map = s.timeMap;
-                    envelopePos = [map, span](double beats) {
-                        return map->secondsAt(span.startBeat + beats) - span.startSec;
-                    };
-                }
-                auto copied = copyTakesFor(t, s, it.takes, a.pooled, envelopePos, "/item");
-                if (!copied) return std::move(copied).error();
-                clip.takes = *copied;
-                for (std::size_t k = 0; k < it.takes.size(); ++k)
-                    if (it.activeTake == it.takes[k]) clip.activeTake = clip.takes[k];
-                if (!clip.activeTake && !clip.takes.empty()) clip.activeTake = clip.takes.front();
-                if (it.loop && it.activeTake)
-                    if (const model::Take* active = s.takes.find(*it.activeTake))
-                        if (const double content = contentLength(s, *active); content > 0)
-                            clip.loop = {true, 0.0, content};
-                clip.mute = it.mute;
-                clip.gainDb = it.gainDb;
-                clip.color = it.color;
+                auto made = clipFromItem(t, s, *item, a.pooled, "/item");
+                if (!made) return std::move(made).error();
+                made->track = clip.track;
+                made->scene = clip.scene;
+                made->name = clip.name;
+                clip = std::move(*made);
             } else if (a.audioFile) {
                 auto imported = importAudioFile(app, t, s, *a.audioFile);
                 if (!imported) return std::move(imported).error().at("/audio_file");
@@ -1007,6 +1210,7 @@ std::string describeScenes(const model::Session& s) {
             if (clip.takes.size() > 1) line += " · " + std::to_string(clip.takes.size()) + " takes";
             if (clip.quantize)
                 line += " · quantize " + std::string(model::launchQuantizeName(*clip.quantize));
+            if (clip.gainDb != 0.0) line += " · " + number(clip.gainDb) + " dB";
             if (clip.mute) line += " · muted";
             lines += line + "\n";
         }

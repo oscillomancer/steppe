@@ -9,6 +9,7 @@
 #include <SDL3/SDL_keycode.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -17,9 +18,11 @@
 #include "app_actions.h"
 #include "history_panel.h"
 #include "inspector.h"
+#include "shell.h"
 #include "side_panel.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
+#include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
@@ -923,4 +926,89 @@ TEST_CASE("inspector: a track's notes are typed over several lines and applied o
     f.ui.selectedTracks = {bass, keys};
     f.pass();
     CHECK_FALSE(f.inView("inspector.track.notes"));
+}
+
+TEST_CASE("inspector: a launcher clip's fields each run clip.set; several clips are a count") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    const std::string track = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    f.exec("scene.add", R"({"name":"Verse"})");
+    f.exec("scene.add", R"({"name":"Chorus"})");
+    const std::string cl =
+        f.exec("clip.add",
+               R"({"track":")" + track +
+                   R"(","scene":"sc_1","name":"Root","notation":"voice b; 1: C2:h r:h"})")
+            .find("clip")
+            ->asString();
+    const std::string cl2 =
+        f.exec("clip.add",
+               R"({"track":")" + track + R"(","scene":"sc_2","notation":"voice b; 1: D2:h r:h"})")
+            .find("clip")
+            ->asString();
+    const auto clip = [&]() -> const model::Clip& {
+        return *f.app->head().clips.find(*model::Id::parse(cl));
+    };
+    f.side->show("inspector");
+    // Items selected; a launcher click hands the inspector the clip.
+    f.ui.selectedClips = {cl};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.clip"));  // not focused: the clips wait
+    f.ui.clipsFocused = true;
+    f.pass();
+    REQUIRE(f.inView("inspector.clip"));
+    CHECK_FALSE(f.inView("inspector.item"));
+    CHECK(f.text("inspector.title") == "Root");
+    CHECK(f.text("inspector.detail") == "MIDI clip on Bass, Verse");
+    CHECK(f.field("inspector.clip.length").text() == "4 beats");
+    CHECK(f.field("inspector.clip.gain_db").text() == "0.0 dB");
+    CHECK(f.text("inspector.clip.mode") == "Loop");
+    CHECK(f.text("inspector.clip.quantize") == "Project's quantize");
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {  // a look, not a golden
+        f.root->damageAll();
+        f.root->frame(false);
+        (void)gui::writePng(std::filesystem::path(out) / "inspector-clip.png", f.root->readBack());
+    }
+    auto before = f.steps();
+    f.type("inspector.clip.name", "Pedal");
+    CHECK(clip().name == "Pedal");
+    CHECK(f.text("inspector.title") == "Pedal");
+    CHECK(f.steps() == before + 1);
+    f.type("inspector.clip.length", "8");
+    CHECK(clip().length == 8);
+    f.type("inspector.clip.gain_db", "-3 dB");
+    CHECK(clip().gainDb == -3);
+    dynamic_cast<ui::Dropdown*>(f.node("inspector.clip.mode"))->choose("once");
+    f.pass();
+    CHECK(clip().mode == model::ClipMode::Once);
+    dynamic_cast<ui::Dropdown*>(f.node("inspector.clip.quantize"))->choose("beat");
+    f.pass();
+    CHECK(clip().quantize == model::LaunchQuantize::Beat);
+    dynamic_cast<ui::Dropdown*>(f.node("inspector.clip.quantize"))->choose("");
+    f.pass();
+    CHECK_FALSE(clip().quantize);  // back to the project's
+    REQUIRE(f.root->click("inspector.clip.mute"));
+    f.pass();
+    CHECK(clip().mute);
+    // A length that is not positive is refused, and the field shows the clip's.
+    f.type("inspector.clip.length", "0");
+    CHECK(clip().length == 8);
+    CHECK(f.field("inspector.clip.length").text() == "8 beats");
+    REQUIRE(errors.size() == 1);
+    // Several clips: a count, no fields.
+    f.ui.selectedClips = {cl, cl2};
+    f.pass();
+    CHECK(f.text("inspector.title") == "2 clips");
+    CHECK_FALSE(f.inView("inspector.clip"));
+}
+
+TEST_CASE("the status line counts scenes beside tracks only when there are some") {
+    Fixture f;
+    if (!f.ok) return;
+    CHECK(gui::countsText(f.app->head()).find("scene") == std::string::npos);
+    f.exec("scene.add", "{}");
+    CHECK(gui::countsText(f.app->head()).find("  1 scene  version") != std::string::npos);
+    f.exec("scene.add", "{}");
+    CHECK(gui::countsText(f.app->head()).find("  2 scenes  version") != std::string::npos);
 }

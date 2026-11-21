@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // Item commands: item.add/remove/move/set/duplicate/paste/split, midi.write and midi.get.
+#include <cstdio>
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "supple/model/context.h"
@@ -346,7 +347,8 @@ Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, m
     auto shaped = itemFromClip(s, clip, *active, track, pos, "/clip");
     if (!shaped) return std::move(shaped).error();
     model::Item item = std::move(shaped->item);
-    auto copied = copyTakesFor(t, s, clip.takes, false, shaped->envelopePos, "/clip");
+    auto copied =
+        copyTakesFor(t, s, clip.takes, false, shaped->envelopePos, "/clip", shaped->fxEnvelope);
     if (!copied) return std::move(copied).error();
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)
@@ -656,6 +658,10 @@ void registerItemCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpTool;
         c.summary =
             "Replace an item's or clip's MIDI with notation (keeping its place and length).";
+        c.description =
+            "The item or clip keeps its length: notation longer than it is stored but does not "
+            "play past its end, and midi.beyond_length warns. Lengthen it first (item.set "
+            "length, clip.set length), or write the notation to fit.";
         c.tags = {"midi"};
         c.args = schema::object<MidiWriteArgs>("midi_write_args")
                      .field("item", &MidiWriteArgs::item, ownerIdArg())
@@ -684,6 +690,22 @@ void registerItemCommands(cmd::Registry& registry) {
             txn.put<model::MidiSource>(*take->source, std::move(compiled->first));
             if (!old || !old->pooled)
                 txn.modify<model::Take>(*active, [](model::Take& tk) { tk.startOffset = 0; });
+            // The owner keeps its length, so notation that runs past it is stored and
+            // never plays: say so rather than let the caller think it did.
+            const model::Clip* clip = s.clips.find(*id);
+            const model::Item* item = clip ? nullptr : s.items.find(*id);
+            const double room = clip ? clip->length : item ? model::itemLengthBeats(s, *item) : 0;
+            const double rate = take->playrate > 0 ? take->playrate : 1.0;
+            const auto& seq = txn.preview().midi.find(*take->source)->sequence;
+            const double written = seq.ppq > 0 ? double(seq.length) / seq.ppq / rate : 0;
+            if (room > 0 && written > room + 1e-6) {
+                char buf[240];
+                std::snprintf(buf, sizeof buf,
+                              "the notation runs %.4g beats and %s is %.4g beats long: what lies "
+                              "past its end is kept but does not play",
+                              written, a.item.c_str(), room);
+                ctx.warn("midi.beyond_length", buf, "/notation");
+            }
             return Empty{};
         };
         addChecked(registry, std::move(c));
@@ -839,8 +861,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.name = "item.duplicate";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary =
-            "Copy an item and its takes to a new beat position (default: immediately after).";
+        c.summary = "Copy an item and its takes to a new position (default: right after).";
         c.tags = {"item"};
         c.args = schema::object<ItemDuplicateArgs>("item_duplicate_args")
                      .field("bypass_groups", &ItemDuplicateArgs::bypassGroups, schema::boolean())
@@ -888,7 +909,7 @@ void registerItemCommands(cmd::Registry& registry) {
         c.name = "item.paste";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Copy items as they were in a version (a clipboard) to tracks and beats.";
+        c.summary = "Copy items as they were in a version to tracks and beats.";
         c.description =
             "version: where the items are read (default: now) — a GUI copy or cut remembers the "
             "version, so a paste reproduces the items as copied even after they were removed or "

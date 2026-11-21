@@ -706,6 +706,28 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             for (Id fxId : take->chain) tc.chain.push_back(makeStage(fxId));
             n.takeChains.push_back(std::move(tc));
         }
+        // So does a clip launcher clip's (ADR-0097, amended 2026-11-20).
+        // prepare links it to its player (compileClipPlayers); a render
+        // without launches drops it (dropClipChains).
+        if (t.type == model::StripType::Channel)
+            for (const auto& e : s.clips) {
+                const model::Clip& clip = *e.value;
+                if (clip.track != n.id || !clip.activeTake) continue;
+                const model::Take* take = s.takes.find(*clip.activeTake);
+                if (!take) continue;
+                const bool enveloped =
+                    std::any_of(s.envelopes.begin(), s.envelopes.end(), [&](auto& en) {
+                        return en.value->target.object == *clip.activeTake && en.value->active &&
+                               !en.value->points.empty();
+                    });
+                if (take->chain.empty() && !enveloped) continue;
+                TakeChain tc;
+                tc.item = e.id;
+                tc.take = *clip.activeTake;
+                tc.clipChain = true;
+                for (Id fxId : take->chain) tc.chain.push_back(makeStage(fxId));
+                n.takeChains.push_back(std::move(tc));
+            }
     }
     for (const Node& n : p.nodes)
         forEachStage(n, [&](const Stage& st) {
@@ -1018,6 +1040,24 @@ Result<Plan> compile(const Session& s, InstancePool& pool, double startSeconds, 
             for (Node& n : p.nodes)
                 for (TakeChain& tc : n.takeChains) {
                     if (tc.take != o) continue;
+                    if (tc.clipChain) {
+                        // A clip's, wherever it plays (ADR-0097, amended
+                        // 2026-11-20): from its start, in beats on a MIDI
+                        // clip (kClipBeatTicks) and seconds on an audio one
+                        // (samples).
+                        const model::Clip* clip = s.clips.find(tc.item);
+                        const bool midi = clip && clip->kind == model::ClipKind::Midi;
+                        a.points.clear();
+                        for (const model::EnvPoint& pt : env.points)
+                            a.points.push_back({midi ? std::llround(pt.pos * kClipBeatTicks)
+                                                     : time::samplesAt(pt.pos, p.rate),
+                                                pt.value, pt.shape, pt.tension});
+                        slot = param == "volume" ? &tc.volume
+                               : param == "pan"  ? &tc.pan
+                               : param == "mute" ? &tc.mute
+                                                 : nullptr;
+                        continue;
+                    }
                     const model::Item* item = s.items.find(tc.item);
                     if (!item) continue;
                     const double startBeat = model::itemSpan(s, *item).startBeat;
@@ -1431,6 +1471,16 @@ Status prepare(Plan& p, const Session& s) {
             tc.latency = layoutChain(tc.chain, true, block);
             tc.buf.init(block);
         }
+        // Clip chains run the node's launch lead ahead, each delayed back by
+        // the rest (ADR-0097, amended 2026-11-20).
+        n.launchLead = 0;
+        for (const TakeChain& tc : n.takeChains)
+            if (tc.clipChain) n.launchLead = std::max(n.launchLead, tc.latency);
+        for (TakeChain& tc : n.takeChains)
+            if (tc.clipChain) {
+                tc.delay.init(static_cast<std::size_t>(n.launchLead - tc.latency));
+                tc.delayAt = 0;
+            }
         int stageIndex = 0;
         for (Stage& st : n.chain) {
             SUPPLE_TRY(prepareStage(st));
@@ -1483,10 +1533,19 @@ Status prepare(Plan& p, const Session& s) {
         forEachStage(node, [&](Stage& st) {
             st.lanes.clear();
             if (!st.instance) return;
+            // On a clip's take FX its lanes are in clip time (ADR-0097,
+            // amended 2026-11-20, C2): beats on a MIDI clip, seconds on an
+            // audio one, from the clip's start.
+            const model::Clip* clipOf = nullptr;
+            for (const TakeChain& tc : node.takeChains)
+                if (tc.clipChain && &st >= tc.chain.data() &&
+                    &st < tc.chain.data() + tc.chain.size())
+                    clipOf = s.clips.find(tc.item);
             for (const auto& entry : s.envelopes) {
                 const auto& env = *entry.value;
                 if (env.target.object != st.fx || !env.active) continue;
-                auto points = model::effectivePoints(s, entry.id);
+                // (Clip time takes no automation items: they sit on the timeline.)
+                auto points = clipOf ? env.points : model::effectivePoints(s, entry.id);
                 if (points.empty()) continue;
                 auto resolved = paramLane(*st.instance, env.target.param, schemas);
                 if (!resolved) {
@@ -1504,16 +1563,30 @@ Status prepare(Plan& p, const Session& s) {
                     const double sec = env.timebase == model::Timebase::Time
                                            ? pt.pos
                                            : s.timeMap->secondsAt(pt.pos);
+                    std::int64_t at = time::samplesAt(sec, p.rate) - laneOrigin;
+                    if (clipOf && clipOf->kind == model::ClipKind::Midi)
+                        at = std::llround((env.timebase == model::Timebase::Time
+                                               ? s.timeMap->beatAt(pt.pos)
+                                               : pt.pos) *
+                                          kClipBeatTicks);
+                    else if (clipOf)
+                        at = time::samplesAt(sec, p.rate);
                     resolved->lane.curve.points.push_back(
-                        {time::samplesAt(sec, p.rate) - laneOrigin,
-                         resolved->toLaneDomain(pt.value), pt.shape, pt.tension});
+                        {at, resolved->toLaneDomain(pt.value), pt.shape, pt.tension});
                 }
+                resolved->lane.clipTime = clipOf != nullptr;
                 if (!resolved->lane.spec && st.instance->paramsNormalized() &&
                     !toNormalizedDomain(*st.instance, resolved->lane)) {
                     p.warnings.push_back(st.fx.str() + ": " + env.target.param +
                                          " cannot be automated by this plugin");
                     continue;
                 }
+                resolved->lane.envelope = entry.id;
+                resolved->lane.writes =
+                    !clipOf && p.gestureHolds &&
+                    (env.mode == model::EnvMode::Touch || env.mode == model::EnvMode::Latch ||
+                     env.mode == model::EnvMode::LatchPreview || env.mode == model::EnvMode::Write);
+                resolved->lane.latches = env.mode != model::EnvMode::Touch;
                 st.lanes.push_back(std::move(resolved->lane));
             }
         });
@@ -1671,17 +1744,21 @@ Status prepare(Plan& p, const Session& s) {
         // A take chain's output lines up with the track's input; its stages
         // run its latency ahead of it.
         for (TakeChain& tc : n.takeChains) {
-            for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->shift(n.itemShift);
-            const std::int64_t ahead = n.itemShift - tc.latency;
+            // (A clip chain's are from the clip's start, as heard.)
+            if (!tc.clipChain)
+                for (Automation* a : {&tc.volume, &tc.pan, &tc.mute}) a->shift(n.itemShift);
+            const std::int64_t ahead = n.itemShift - (tc.clipChain ? n.launchLead : tc.latency);
             for (Stage& st : tc.chain) {
                 st.inputLatency = ahead + st.before;
-                for (ParamLane& ln : st.lanes) ln.curve.shift(st.inputLatency);
+                for (ParamLane& ln : st.lanes)
+                    if (!ln.clipTime) ln.curve.shift(st.inputLatency);
             }
         }
     }
     // Take chains: the item's span, gain, pan and fades (applied after the chain).
     for (Node& n : p.nodes)
         for (TakeChain& tc : n.takeChains) {
+            if (tc.clipChain) continue;  // compileClipPlayers: the clip's gain and pan
             const model::Item& it = *s.items.find(tc.item);
             const model::Take& take = *s.takes.find(tc.take);
             const model::ItemSpan span = model::itemSpan(s, it);
@@ -1850,6 +1927,14 @@ Status prepare(Plan& p, const Session& s) {
         }
         for (auto& ev : n.events) ev.sample += n.timelineShift;
         if (p.clipPlayers) compileClipPlayers(p, n, s);  // the clip launcher (ADR-0097)
+        // A clip chain's instrument takes the clip's notes (clipChainMidi):
+        // a block's window on each side of a loop fold, and what it held.
+        for (TakeChain& tc : n.takeChains)
+            if (tc.clipChain && tc.player >= 0 && tc.noteTarget >= 0) {
+                Stage& st = tc.chain[static_cast<std::size_t>(tc.noteTarget)];
+                st.blockEvents.reserve(st.blockEvents.capacity() + 2 * n.clipWindow +
+                                       st.voices.capacity() + 2);
+            }
         // Reserve the most events any block-long window holds (events are
         // sorted; after a seek, blocks start anywhere), so processBlock never
         // allocates.
@@ -2103,6 +2188,14 @@ Status prepare(Plan& p, const Session& s) {
         forEachStage(n, [&](const Stage& st) { mix.stageFx.push_back(st.fx); });
     }
     mix.stages = std::make_unique<MixSlots::StageValue[]>(mix.stageFx.size());
+    // Lane holds (ADR-0061, amended): none until a write pass publishes them.
+    mix.laneEnvelopes.clear();
+    for (Node& n : p.nodes)
+        forEachStage(n, [&](Stage& st) {
+            st.laneSlot = static_cast<std::uint32_t>(mix.laneEnvelopes.size());
+            for (const ParamLane& ln : st.lanes) mix.laneEnvelopes.push_back(ln.envelope);
+        });
+    mix.lanes = std::make_unique<std::atomic<bool>[]>(mix.laneEnvelopes.size());
     for (const Node& n : p.nodes) {
         std::size_t k = n.stageSlot;
         forEachStage(n, [&](const Stage& st) {
@@ -2238,7 +2331,7 @@ namespace {
 bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Transport& transport,
               std::int64_t pos, const void* self) SUPPLE_RT;
 void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
-                   const Plan* p = nullptr) SUPPLE_RT;
+                   const Plan* p = nullptr, const ClipLaneSource* clip = nullptr) SUPPLE_RT;
 // Audio edges carry only the encoded signal and PDC; key controls are conventional.
 void addEdge(Plan& p, Edge& e, Stereo& into, std::int64_t pos, std::uint32_t n) SUPPLE_RT {
     if (e.midi) return;
@@ -2365,8 +2458,8 @@ void playSpan(Clip& c, Stereo& into, std::int64_t pos, std::int64_t from, std::i
 // Plugin parameter automation: an initial value, the absolute timeline
 // kAutomationStep grid and each point, in time order (the lane's
 // cursor only moves forward), merged into the block's sorted events.
-void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin,
-                   const Plan* p) SUPPLE_RT {
+void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t origin, const Plan* p,
+                   const ClipLaneSource* clip) SUPPLE_RT {
     if (st.lanes.empty()) return;
     const std::size_t before = st.blockEvents.size();
     // The value a lane sends at `sample`, frame `frame` of the block: its
@@ -2394,6 +2487,37 @@ void automateStage(Stage& st, std::int64_t pos, std::uint32_t n, std::int64_t or
         return std::clamp(base + sum, ln.lo, ln.hi);
     };
     for (ParamLane& ln : st.lanes) {
+        // Held by a write pass (ADR-0061, amended): the plug-in keeps the
+        // hand's value. Released, the lane sends its value at once.
+        if (ln.holding()) {
+            ln.lastSent = std::numeric_limits<double>::quiet_NaN();
+            continue;
+        }
+        if (ln.clipTime) {
+            // Clip time (C2): the clip position its input will be heard at,
+            // at each point it crosses, on the absolute grid, and afresh at
+            // each new pass or anchor; nothing while its input reads nothing.
+            for (std::uint32_t i = 0; clip && i < n; ++i) {
+                std::int64_t at = 0;
+                if (!clipLanePosition(*clip, i, at)) continue;
+                const std::size_t cursor = ln.curve.cursor;
+                const double value = valueAt(ln, at, i);
+                const bool moved = at < ln.clipLast || ln.curve.cursor != cursor;
+                ln.clipLast = at;
+                if (std::isnan(ln.lastSent) || moved || (pos + i + origin) % kAutomationStep == 0) {
+                    if (value != ln.lastSent && st.blockEvents.size() < st.blockEvents.capacity()) {
+                        host::Event event;
+                        event.kind = host::Event::Kind::Param;
+                        event.time = i;
+                        event.paramId = ln.clapId;
+                        event.value = value;
+                        st.blockEvents.push_back(event);
+                        ln.lastSent = value;
+                    }
+                }
+            }
+            continue;
+        }
         if (ln.curve.timeline) {
             const auto& pts = ln.curve.points;
             const auto& timeline = *ln.curve.timeline;
@@ -2725,6 +2849,29 @@ void leaveGroup(std::vector<Stage>& chain, Stage& st, Stereo& sum, std::uint32_t
     if (st.groupEnd) sum.copyFrom(first.groupOut, n);
 }
 
+// Write holds (ADR-0061, amended 2026-11-20): the plug-in's own gesture on
+// a writing lane holds it from the next block, until the gesture ends or,
+// latching, until the transport stops. A stop ends every hold of the pass.
+void holdGestures(Stage& st, bool playing) SUPPLE_RT {
+    for (ParamLane& ln : st.lanes) {
+        if (!ln.writes) continue;
+        if (!playing) {
+            ln.gesture = ln.latched = false;
+            continue;
+        }
+        for (std::size_t k = 0; k < st.outEvents.count; ++k) {
+            const host::OutputEvent& e = st.outEvents.storage[k];
+            if (e.paramId != ln.clapId) continue;
+            if (e.kind == host::OutputEvent::Kind::GestureBegin) {
+                ln.gesture = true;
+            } else if (e.kind == host::OutputEvent::Kind::GestureEnd && ln.gesture) {
+                ln.gesture = false;
+                ln.latched = ln.latches;
+            }
+        }
+    }
+}
+
 // Clears what a stage carries from block to block outside its plug-in.
 void clearStageDelays(Stage& st) SUPPLE_RT {
     st.dry.clear();
@@ -2738,6 +2885,7 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
               std::int64_t pos, const void* self) SUPPLE_RT {
     st.outEvents.clear();
     st.auxWritten = false;
+    holdGestures(st, transport.playing);  // a stop ends holds even where the plug-in idles
     // A stage whose plugin is not processing (start_processing failed)
     // passes audio through, delay-compensated, like a bypass.
     if (st.callbackBypass || !st.instance || (self && st.instance->owner() != self) ||
@@ -2838,6 +2986,7 @@ bool runStage(Plan& p, Stage& st, Stereo& sum, std::uint32_t n, const host::Tran
                            c == 0 ? st.out.l.data() : st.out.r.data(), n, os);
         }
     }
+    holdGestures(st, transport.playing);
     if (!processed) return false;
     st.processed = true;
     st.auxWritten = true;
@@ -3129,9 +3278,112 @@ void locateTake(Node& n, TakeChain& tc, std::int64_t pos, bool wrap, bool keepPl
 // the item's span with the item and take gain, pan, fades and the take's
 // envelopes, is added to the track's sum. Outside its span it does not run;
 // it starts fresh (plugins reset) each time it is entered.
+// A clip launcher clip's chain (ADR-0097, amended 2026-11-20): its input,
+// the node's launch lead ahead, reads the player as the launch state stands
+// on that side (prelaunch); its output, delayed back to the switch, is
+// weighed as launchAudio weighs a player's, with the clip's and take's gain
+// and pan and the take's envelopes at the clip position heard. It runs while
+// its clip is coming in, plays or fades out, fresh each time it starts.
+bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint32_t n,
+                      const host::Transport& transport, const void* self,
+                      const LoopRange* loop) SUPPLE_RT {
+    for (Stage& st : tc.chain) {
+        st.blockEvents.clear();
+        st.outEvents.clear();
+    }
+    const std::int64_t song0 = pos - node.timelineShift;
+    const ClipChainInput in =
+        transport.playing ? clipChainInput(node, tc.player) : ClipChainInput{};
+    if (!transport.playing || (!in.on && !clipChainHeard(node, tc.player, song0))) {
+        tc.active = false;
+        tc.inputPlayer = -1;
+        tc.inputAnchor = INT64_MIN;
+        return true;
+    }
+    if (!tc.active) {
+        tc.active = true;
+        for (Stage& st : tc.chain) {
+            st.voices.clear();
+            st.sleeping = false;
+            clearStageDelays(st);
+            if (!st.callbackBypass && st.instance && st.instance->processing() &&
+                (!self || st.instance->owner() == self))
+                st.instance->reset();
+        }
+        tc.held.fill(0);
+        tc.delay.clear(static_cast<std::uint32_t>(tc.delay.l.size()));
+        tc.delayAt = 0;
+        tc.inputPlayer = -1;
+        tc.inputAnchor = INT64_MIN;
+        tc.releaseHeld = false;
+    }
+    const ClipPlayer& pl = node.players[static_cast<std::size_t>(tc.player)];
+    const std::int64_t lead = node.launchLead;
+    const int inputPlayer = in.on ? tc.player : -1;
+    const std::int64_t inputAnchor = in.on ? in.anchorSample : INT64_MIN;
+    const bool switched = inputPlayer != tc.inputPlayer || inputAnchor != tc.inputAnchor;
+    tc.buf.clear(n);
+    if (!pl.midi) clipChainAudio(node, tc.player, in, pos, lead, loop, n, tc.buf);
+    if (tc.noteTarget >= 0 && pl.midi) {
+        Stage& target = tc.chain[static_cast<std::size_t>(tc.noteTarget)];
+        // What it held ends where its input switched (heard at the switch),
+        // or at a wrap it did not run ahead of.
+        const bool wrapped = tc.releaseHeld && lead == 0;
+        if ((switched && tc.inputPlayer >= 0) || wrapped) {
+            releaseVoices(target, true);
+            tc.held.fill(0);
+        }
+        clipChainMidi(p, node, tc.player, in, pos, lead, loop, n, target);
+    }
+    tc.releaseHeld = false;
+    tc.inputPlayer = inputPlayer;
+    tc.inputAnchor = inputAnchor;
+    // Its plug-ins' envelopes, in clip time (C2), on each stage's input side.
+    for (Stage& st : tc.chain) {
+        const ClipLaneSource source{&p, &node, tc.player, in, pos, lead - st.before, loop};
+        automateStage(st, pos, n, time::samplesAt(p.startSeconds, p.rate), nullptr, &source);
+    }
+    for (Stage& st : tc.chain) {
+        enterGroup(tc.chain, st, tc.buf, n);
+        if (!runStage(p, st, tc.buf, n, transport, pos, self)) return false;
+        leaveGroup(tc.chain, st, tc.buf, n);
+    }
+    if (tc.noteTarget >= 0)
+        trackVoices(tc.chain[static_cast<std::size_t>(tc.noteTarget)], &tc.held);
+    const bool enveloped = tc.volume.active() || tc.pan.active() || tc.mute.active();
+    const std::size_t d = tc.delay.l.size();
+    Stereo& into = node.postItems ? node.items : node.sum;  // ADR-0057
+    for (std::uint32_t i = 0; i < n; ++i) {
+        float l = tc.buf.l[i], r = tc.buf.r[i];
+        if (d > 0) {  // back to the switch: the lead less its own latency
+            std::swap(l, tc.delay.l[tc.delayAt]);
+            std::swap(r, tc.delay.r[tc.delayAt]);
+            tc.delayAt = tc.delayAt + 1 == d ? 0 : tc.delayAt + 1;
+        }
+        const std::int64_t song = song0 + i;
+        double g = launchWeight(node, tc.player, song);
+        if (g == 0.0) continue;
+        double gl = tc.gainL, gr = tc.gainR;
+        std::int64_t ticks = 0;
+        if (enveloped && clipChainTicks(p, node, tc.player, song, ticks)) {
+            if (tc.volume.active()) g *= dbToGain(tc.volume.at(ticks));
+            if (tc.mute.active() && tc.mute.at(ticks) >= .5) g = 0.0;
+            if (tc.pan.active()) {
+                const auto [sl, sr] = balanceSides(tc.pan.at(ticks) / 100.0);
+                gl *= sl;
+                gr *= sr;
+            }
+        }
+        into.l[i] += static_cast<float>(static_cast<double>(l) * gl * g);
+        into.r[i] += static_cast<float>(static_cast<double>(r) * gr * g);
+    }
+    return true;
+}
+
 bool processTake(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std::uint32_t n,
                  const host::Transport& transport, const void* self,
                  const LoopRange* loop) SUPPLE_RT {
+    if (tc.clipChain) return processClipChain(p, node, tc, pos, n, transport, self, loop);
     for (Stage& st : tc.chain) {
         st.blockEvents.clear();
         st.outEvents.clear();
@@ -3621,6 +3873,7 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
                         ? node.frozenAudio->channels[c][static_cast<std::size_t>(frame)]
                         : 0.f;
         }
+        if (transport.playing) retiringIntoPrint(node, pos, n);  // after a freeze (ADR-0097)
     } else {
         node.utility.set(node.phaseInvert, node.mono, p.smoothFrames);
         if (!node.utility.transparent())
@@ -3901,6 +4154,7 @@ void locateTake(Node& n, TakeChain& tc, std::int64_t pos, bool wrap, bool keepPl
         for (ParamLane& ln : st.lanes) {
             ln.curve.cursor = 0;
             ln.lastSent = std::numeric_limits<double>::quiet_NaN();
+            if (!wrap && !keepPlaying) ln.gesture = ln.latched = false;  // see locateNode
         }
     }
     if (wrap) {
@@ -3936,6 +4190,7 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
                                [](const TimedEvent& e, std::int64_t x) { return e.sample < x; });
     n.nextEvent = static_cast<std::size_t>(it - n.events.begin());
     n.rateEventFresh = restartConsole;
+    if (restartConsole) launchRelocated(n);  // not a handoff, which continues in place
     if (restartConsole) {
         resetTrackMidi(n);
         n.encoder.reset();
@@ -3973,6 +4228,10 @@ void locateNode(Plan& p, Node& n, std::int64_t pos, bool restartConsole) SUPPLE_
         for (ParamLane& ln : st.lanes) {
             ln.curve.cursor = 0;
             ln.lastSent = std::numeric_limits<double>::quiet_NaN();
+            // A start or a seek ends this executor's own write holds (ADR-0061,
+            // amended): a stopped renderer never ran the stage to see the stop.
+            // The main thread's hold (`held`) stands until it lets go.
+            if (restartConsole) ln.gesture = ln.latched = false;
         }
     }
     // Modulation delays, as an edge's: fresh unless a swap just carried them,
@@ -4058,6 +4317,7 @@ void locate(Plan& p, std::int64_t pos, bool restartConsole) SUPPLE_RT {
             for (ParamLane& ln : st.lanes) {
                 ln.curve.cursor = 0;
                 ln.lastSent = std::numeric_limits<double>::quiet_NaN();  // resend at once
+                if (restartConsole) ln.gesture = ln.latched = false;     // as locateNode
             }
         }
     }
@@ -4329,7 +4589,7 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         }
         n.releaseLive = n.releaseLive || old.releaseLive;
         // The modulation memo, by instance and CLAP id (ADR-0096).
-        auto carryMemo = [](Stage& st, const Stage& os) {
+        auto carryMemo = [&to](Stage& st, const Stage& os) {
             st.modHeard = os.modHeard;
             st.modEpoch = os.modEpoch;
             for (ModParam& m : st.mods)
@@ -4348,6 +4608,21 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                         ln.modSum = ol.modSum;
                         break;
                     }
+            // Its write hold (ADR-0061, amended), by CLAP id: a gesture still
+            // open, and a latch the main thread has not let go of. The new
+            // plan's slots are published before any executor adopts it.
+            for (std::size_t j = 0; j < st.lanes.size(); ++j) {
+                ParamLane& ln = st.lanes[j];
+                const bool slotHeld =
+                    to.mix->lanes[st.laneSlot + j].load(std::memory_order_relaxed);
+                for (const ParamLane& ol : os.lanes)
+                    if (ol.clapId == ln.clapId) {
+                        ln.gesture = ln.writes && ol.gesture;
+                        ln.latched =
+                            ln.writes && ln.latches && ol.latched && !(ol.held && !slotHeld);
+                        break;
+                    }
+            }
         };
         auto carryStages = [&](std::vector<Stage>& chain, std::vector<Stage>& oldChain) {
             for (Stage& st : chain)
@@ -4456,6 +4731,15 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                         tc.aheadFrom = otc.aheadFrom;
                         tc.aheadLoop = otc.aheadLoop;
                     }
+                    // A clip chain: what its input last read, and its delay
+                    // back to the switch while that keeps its length.
+                    tc.inputPlayer = otc.inputPlayer >= 0 ? tc.player : -1;
+                    tc.inputAnchor = tc.inputPlayer >= 0 ? otc.inputAnchor : INT64_MIN;
+                    if (tc.delay.l.size() == otc.delay.l.size()) {
+                        tc.delay.copyFrom(otc.delay,
+                                          static_cast<std::uint32_t>(otc.delay.l.size()));
+                        tc.delayAt = otc.delayAt;
+                    }
                     carryStages(tc.chain, otc.chain);
                     break;
                 }
@@ -4547,6 +4831,10 @@ void publishMix(Plan& p, const model::Session& s, std::span<const model::EnvTarg
             mix.modulations[i].depth.store(m->depth, relaxed);
             mix.modulations[i].enabled.store(m->enabled, relaxed);
         }
+    for (std::size_t k = 0; k < mix.laneEnvelopes.size(); ++k) {
+        const model::Envelope* env = s.envelopes.find(mix.laneEnvelopes[k]);
+        mix.lanes[k].store(env && held(holds, env->target.object, env->target.param), relaxed);
+    }
     mix.sequence.store(sequence + 2, std::memory_order_release);
 }
 
@@ -4618,6 +4906,18 @@ ExecutorChanges changedExecutors(const Plan& p, const model::Session& s) {
     return {live, rendered};
 }
 
+void dropClipChains(Plan& p) {
+    for (Node& n : p.nodes)
+        std::erase_if(n.takeChains, [](const TakeChain& tc) { return tc.clipChain; });
+    p.instances.clear();
+    for (const Node& n : p.nodes)
+        forEachStage(n, [&](const Stage& st) {
+            if (st.instance) p.instances.push_back(st.instance);
+        });
+    std::sort(p.instances.begin(), p.instances.end());
+    p.instances.erase(std::unique(p.instances.begin(), p.instances.end()), p.instances.end());
+}
+
 void syncMix(Plan& p, int liveClass) SUPPLE_RT {
     MixSlots& mix = *p.mix;
     std::uint64_t& seen = mix.seen[liveClass == 1 ? 1 : 0];
@@ -4658,6 +4958,13 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT {
             st.wet = mix.stages[k].wet.load(relaxed);
             st.bypass = mix.stages[k].bypass.load(relaxed);
             ++k;
+            for (std::size_t j = 0; j < st.lanes.size(); ++j) {
+                ParamLane& ln = st.lanes[j];
+                const bool slotHeld = mix.lanes[st.laneSlot + j].load(relaxed);
+                // The main thread let go (the pass started again): so does a latch.
+                if (ln.held && !slotHeld) ln.latched = false;
+                ln.held = slotHeld;
+            }
         });
     }
     // An edge belongs to whoever reads it: a key route to its destination

@@ -27,6 +27,7 @@
 #include "supple/ui/node.h"
 #include "supple/views/item_gestures.h"
 #include "supple/views/lanes.h"
+#include "supple/views/launcher.h"
 #include "supple/views/tcp.h"
 #include "supple/views/track_layout.h"
 
@@ -174,6 +175,50 @@ class ArrangeView : public ui::Node {
     void setChordRow(std::optional<bool> shown);
     std::optional<bool> chordRowChoice() const { return chordRowChoice_; }
     bool chordRowShown() const { return rulerRows_.chord > 0; }
+    // The clip launcher pane (gui.md §4.15): shown while View > Clip launcher
+    // chose it (`shown`, saved in the UI file) or, with no choice, while the
+    // project has scenes.
+    void setLauncherShown(std::optional<bool> shown);
+    std::optional<bool> launcherChoice() const { return launcherChoice_; }
+    bool launcherShown() const;
+    // Its width as laid out; set by dragging its right edge (0: wide enough
+    // for its columns). Dragged all the way it fills the view and the lanes
+    // and ruler hide; dragged back, they return.
+    float launcherWidth() const;
+    bool launcherFull() const { return launcherFull_; }
+    void dragLauncherWidth(float width);
+    void setLauncherWidth(float width, bool full = false);  // 0: fit the columns
+    // The scene columns scrolled left under the Arr column.
+    float launcherScroll() const { return launcherScroll_; }
+    void setLauncherCallbacks(LauncherCallbacks callbacks) {
+        launcherCallbacks_ = std::move(callbacks);
+    }
+    const LauncherCallbacks& launcherCallbacks() const { return launcherCallbacks_; }
+    // What each track with clips plays (EngineApp::launchState), each pass:
+    // the pane's playing, queued and held cells and Arr dots, and the held
+    // tracks' dimmed lanes. Redraws only when it changes.
+    void setLaunchState(LaunchViews views);
+    const LaunchViews& launchState() const { return launchViews_; }
+    // The launcher header's Capture toggle, lit while the app has it armed
+    // (set each pass).
+    void setCaptureArmed(bool armed);
+    bool captureArmed() const { return captureArmed_; }
+    // The launcher's selection (gui.md §4.15): clips (a click on a body; Ctrl
+    // adds), or one empty cell (a click beside its square) where a clip can
+    // be made or pasted. A click on the lanes clears it.
+    const std::vector<model::Id>& selectedClips() const { return selectedClips_; }
+    void selectClips(std::vector<model::Id> clips);
+    struct Cell {
+        model::Id track, scene;
+        bool operator==(const Cell&) const = default;
+    };
+    const std::optional<Cell>& selectedCell() const { return selectedCell_; }
+    void selectCell(std::optional<Cell> cell);
+    void clearLauncherSelection();
+    // Runs a launcher command through its callbacks; a failure goes to onError.
+    Result<json::Value> runLauncher(const std::string& command, json::Value args);
+    LauncherPane& launcherPane() { return *launcherPane_; }
+    LauncherHeader& launcherHeader() { return *launcherHeader_; }
     void addMarker();  // at the playhead, through marker.add
     void addRegion();  // over the loop range, through region.add
     // What the panel needs from the app (selection, commands, meters). Call
@@ -240,6 +285,20 @@ class ArrangeView : public ui::Node {
     RulerRows rulerRows_;
     std::optional<bool> chordRowChoice_;
     void syncChordRow();
+    LauncherPane* launcherPane_ = nullptr;
+    LauncherHeader* launcherHeader_ = nullptr;
+    ui::Node* lanesColumn_ = nullptr;
+    std::optional<bool> launcherChoice_;
+    float launcherWidth_ = 0;  // 0: fit the columns
+    bool launcherFull_ = false;
+    float launcherScroll_ = 0;
+    LauncherCallbacks launcherCallbacks_;
+    LaunchViews launchViews_;
+    bool captureArmed_ = false;
+    std::vector<model::Id> selectedClips_;
+    std::optional<Cell> selectedCell_;
+    float launcherRoom() const;  // the widest the pane is before it fills the view
+    void syncLauncher();
     std::unique_ptr<ItemGestures> gestures_;
     TcpCallbacks tcpCallbacks_;
     ui::ScrollBar* hbar_ = nullptr;

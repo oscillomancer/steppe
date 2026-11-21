@@ -64,7 +64,7 @@ target_include_directories(gui-actions PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/action
 # Views (gui.md §4): the arrange view (ruler, lanes, TCP column) now; mixer,
 # editors follow.
 supple_add_library(gui-views SOURCES views/src/lanes.cpp views/src/item_body.cpp views/src/track_layout.cpp
-                                        views/src/arrange.cpp views/src/item_gestures.cpp views/src/tcp.cpp views/src/envelope_lane.cpp views/src/envelope_edit.cpp views/src/mouse_map.cpp views/src/chord_field.cpp
+                                        views/src/arrange.cpp views/src/item_gestures.cpp views/src/tcp.cpp views/src/envelope_lane.cpp views/src/envelope_edit.cpp views/src/mouse_map.cpp views/src/chord_field.cpp views/src/launcher.cpp
   DEPS supple::gui-ui supple::gui-peaks supple::model supple::timeline supple::core-params SDL3::SDL3)
 target_include_directories(gui-views PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/views/include)
 
@@ -81,7 +81,7 @@ target_include_directories(gui-persistence PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ap
 
 # The app's pieces (shell, generator, actions UI, chrome), shared with tests.
 add_library(gui-app STATIC app/shell.cpp app/crash_banner.cpp app/crash_report_text.cpp app/crash_viewer.cpp app/safe_load.cpp app/generate.cpp app/app_actions.cpp app/actions_list.cpp app/chrome.cpp
-  app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/hardware_audio_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/param_menu.cpp app/modulation_status.cpp app/mixer.cpp
+  app/plugin_windows.cpp app/floating_panel.cpp app/screensets.cpp app/file_actions.cpp app/midi_editor.cpp app/routing_matrix.cpp app/hardware_audio_matrix.cpp app/strip_learn.cpp app/pan_menu.cpp app/param_menu.cpp app/modulation_status.cpp app/launch_capture.cpp app/mixer.cpp
   app/fx_params.cpp app/plugin_browser.cpp app/fx_window.cpp app/fx_attention.cpp app/render_dialog.cpp app/history_panel.cpp app/side_panel.cpp app/inspector.cpp app/plugin_drag.cpp app/side_browser.cpp app/transport_bar.cpp app/plugin_scales.cpp
   app/midi_event_list.cpp app/appearance.cpp app/track_menu.cpp app/mouse_dialog.cpp app/selection_edit.cpp app/preferences.cpp app/audio_device.cpp app/timecode_dialog.cpp app/sync_dialog.cpp
   app/control_map.cpp app/learn_dialog.cpp app/help_actions.cpp app/help_support.cpp
@@ -156,7 +156,7 @@ if(SUPPLE_BUILD_TESTS)
   # One CTest entry per file: the whole suite takes most of the timeout on
   # the slower CI runners.
   set(gui_app_sources tests/test_app.cpp tests/test_help.cpp tests/test_plugin_windows.cpp tests/test_gestures.cpp
-                      tests/test_midi_editor.cpp tests/test_fx_render.cpp tests/test_ruler.cpp tests/test_tcp_sends.cpp
+                      tests/test_midi_editor.cpp tests/test_fx_render.cpp tests/test_ruler.cpp tests/test_launcher.cpp tests/test_tcp_sends.cpp
                       tests/test_mixer.cpp tests/test_racks.cpp tests/test_sync.cpp tests/test_side_panel.cpp)
   supple_add_tests(gui-app SOURCES ${gui_app_sources} DEPS supple::script-compiler LABELS gui SPLIT)
   target_compile_definitions(gui-app.tests PRIVATE SUPPLE_GUI_FONTS_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"

@@ -115,7 +115,7 @@ void registerEngineAnalysisCommands(cmd::Registry& registry) {
         c.name = "analyze.render";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary = "Analyze a render id or audio path: loudness, spectrum, envelope and stereo.";
+        c.summary = "Analyze a render or audio file: loudness, spectrum, envelope, stereo.";
         c.tags = {"analysis"};
         c.args = schema::object<RenderArgs>("analyze_render_args")
                      .field("render", &RenderArgs::render, schema::string().minLength(1))

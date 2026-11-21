@@ -423,6 +423,7 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
         // Only the parameters a route can take: naming another would lead to
         // the next refusal. Those an envelope reaches are named as such.
         std::string routed, enveloped;
+        std::size_t routedCount = 0, envelopedCount = 0;
         const auto add = [](std::string& to, const std::string& text) {
             to += (to.empty() ? "" : ", ") + text;
         };
@@ -439,23 +440,37 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
                     if (entry.value.isObject())
                         if (const auto* v = entry.value.find("id"); v && v->isNumber())
                             sort(static_cast<std::uint32_t>(v->asInt()), entry.key);
-        for (const auto& info : list) sort(info.id, std::to_string(info.id));
+        for (const auto& info : list) {
+            sort(info.id, std::to_string(info.id));
+            routedCount += direct(info) ? 1 : 0;
+            envelopedCount += byEnvelope(info) ? 1 : 0;
+        }
         const std::string message = "the plug-in has no parameter " + key;
-        if (routed.empty() && enveloped.empty())
+        if (routedCount == 0 && envelopedCount == 0)
             return Error("rack.port", message, "",
                          allowEnvelope
                              ? "no parameter of this plug-in can take a route; automate it with "
                                "envelope points instead (env.add {fx, param, points})"
                              : "no parameter of this plug-in is modulatable; automate it instead "
                                "(env.add {fx})");
+        // Past a few parameters a list is a wall an agent reads past (a drum
+        // machine has a hundred): count them, and leave the names to
+        // fx.describe, which marks each.
+        constexpr std::size_t kNamed = 8;
         std::string hint;
-        if (!routed.empty()) hint = "modulatable parameter keys and numeric ids: " + routed + "; ";
-        if (!enveloped.empty())
+        if (routedCount > kNamed)
+            hint = std::to_string(routedCount) + " parameters are modulatable; ";
+        else if (routedCount > 0)
+            hint = "modulatable parameter keys and numeric ids: " + routed + "; ";
+        if (envelopedCount > kNamed)
+            hint += std::to_string(envelopedCount) +
+                    " parameters take a route through an active envelope (modulate adds one); ";
+        else if (envelopedCount > 0)
             hint += "through an active envelope (modulate adds one): " + enveloped + "; ";
         hint += "fx.describe marks them (" +
-                std::string(routed.empty()      ? "modulatable_by_envelope"
-                            : enveloped.empty() ? "modulatable"
-                                                : "modulatable, modulatable_by_envelope") +
+                std::string(routedCount == 0      ? "modulatable_by_envelope"
+                            : envelopedCount == 0 ? "modulatable"
+                                                  : "modulatable, modulatable_by_envelope") +
                 ") and lists their ranges";
         return Error("rack.port", message, "", hint);
     }
@@ -893,6 +908,7 @@ void prepareRack(Plan& p, Node& n, const Session& s) {
         feed.midiStage.pendingVoices.reserve(voices);
         feed.block.reserve(std::max(window, rateWindow) +
                            (feed.device || feed.sourceDevice ? kMaxMidiInputEvents : 0) + 1);
+        compileFeedClips(p, feed, s);  // its source track's launches (ADR-0097)
     }
     for (auto& curve : r.curves) curve->curve.cursor = 0;
 }
@@ -1020,9 +1036,27 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
                     feed.block.push_back(event);
             }
         }
+        // A launch on the source track (ADR-0097): what its notes held ends
+        // at the switch, the block's start; while a clip, a stop or a held
+        // clip holds the track, the timeline's events pass unplayed and the
+        // clip's play instead.
+        if (feed.releaseHeld) {
+            feed.notes->endSource(0);
+            feed.releaseHeld = false;
+        }
+        const bool arrangement = feed.launch.kind == LaunchState::Kind::Arrangement;
+        if (playing && !p.rateEnabled && !arrangement) {
+            feedClipMidi(p, n, feed, pos, frames);
+            for (const auto& e : feed.clipEvents) {
+                rack::host::MidiEvent event;
+                if (feed.block.size() < feed.block.capacity() && toMidi(e, e.time, event))
+                    feed.block.push_back(event);
+            }
+        }
         while (playing && !p.rateEnabled && feed.next < feed.events.size() &&
                feed.events[feed.next].sample < pos + static_cast<std::int64_t>(frames)) {
             const TimedEvent& te = feed.events[feed.next++];
+            if (!arrangement) continue;
             rack::host::MidiEvent m;
             const auto frame = static_cast<std::uint32_t>(
                 std::clamp<std::int64_t>(te.sample - pos, 0, frames - 1));

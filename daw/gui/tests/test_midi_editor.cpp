@@ -3413,3 +3413,46 @@ TEST_CASE("routing matrix: hardware MIDI replaces audio and rack inputs") {
         CHECK_FALSE(f.app->head().tracks.find(id)->record.midiInput);
     }
 }
+
+TEST_CASE("MIDI editor: a launcher clip opens at beat 0, keyed by the project's start, no chords") {
+    Fixture f;
+    if (!f.ok) return;
+    // Eb major from the start, A major later; chords over the start. A clip
+    // has no place in time: the roll reads only the key at the start.
+    f.exec("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+    f.exec("key.set", R"({"at":2,"tonic":"A","scale":"major"})");
+    f.exec("chord.set", R"({"at":0,"symbol":"Ebmaj7"})");
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const json::Value made = f.exec(
+        "clip.add",
+        R"({"track":")" + track +
+            R"(","scene":"sc_1","name":"Riff","notation":"voice v; 1: D4:q F4:q r:h | 2: G4:w"})");
+    const std::string clip = made.find("clip")->asString();
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    auto& s = f.editor->state();
+    CHECK(s.clip);
+    CHECK(s.itemPosition == 0);
+    CHECK(s.itemLength == doctest::Approx(8));  // two 4/4 bars
+    CHECK(s.notes.size() == 3);
+    REQUIRE(s.keys.size() == 1);
+    REQUIRE(s.keyAt(5.0));
+    CHECK(harmony::spell(63, s.keyAt(5.0)) == "Eb4");  // Eb major's spelling, not A major's
+    CHECK(s.keyAt(5.0)->scale == harmony::Scale::Major);
+    CHECK(s.chords.empty());
+    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(16));  // no chord row
+    CHECK(f.editor->keyButton()->enabled);  // degrees count in Eb major
+    // Edits go to the clip's own take.
+    REQUIRE(
+        f.editor->edit(json::parse(R"([{"op":"add","pitch":72,"start":4,"length":1}])").value()));
+    f.frame();
+    CHECK(s.notes.size() == 4);
+    const auto owner = gui::midiOwner(f.app->head(), clip);
+    REQUIRE(owner);
+    CHECK(owner->source->sequence.notes.size() == 4);
+    // The clip removed: the editor closes, as for an item.
+    f.exec("clip.remove", R"({"clip":")" + clip + R"("})");
+    f.frame();
+    CHECK_FALSE(f.editor->isOpen());
+}

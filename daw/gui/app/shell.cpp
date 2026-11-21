@@ -172,6 +172,12 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
                   [this] { arrange_->setChordRow(!arrange_->chordRowShown()); });
     actions.setChecked("ui.view.chords",
                        [this](const actions::Context&) { return arrange_->chordRowShown(); });
+    // The clip launcher (gui.md §4.15): shown while the project has scenes;
+    // this chooses for the project (the UI file keeps the choice).
+    actions.addUi("ui.clips", "View: clip launcher",
+                  [this] { arrange_->setLauncherShown(!arrange_->launcherShown()); });
+    actions.setChecked("ui.clips",
+                       [this](const actions::Context&) { return arrange_->launcherShown(); });
     arrange_->gestures().projectGeneration = [this] { return app_.projectGeneration(); };
     // The TCP talks to the app through these: selection state, commands (with
     // a drag's gesture) and the meters it pools with its rows.
@@ -361,9 +367,7 @@ void Shell::sync(bool event) {
             changes = &previous->changes;
         shownVersion_ = s.version;
         projectGeneration_ = app_.projectGeneration();
-        const std::size_t tracks = views::countTracks(s);
-        counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
-                         "version " + std::to_string(s.version));
+        counts_->setText(countsText(s));
         arrange_->show(s, changes, projectGeneration_);
     }
     // A named control under the pointer is said in the note's place, until
@@ -377,9 +381,7 @@ void Shell::sync(bool event) {
                       : app_.preparingAudio()            ? std::string("Preparing audio…")
                       : !app_.preparationError().empty() ? app_.preparationError()
                                                          : editStatus_;
-    const std::size_t tracks = views::countTracks(s);
-    counts_->setText(std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ") +
-                     "version " + std::to_string(s.version) + (note.empty() ? "" : " · " + note));
+    counts_->setText(countsText(s) + (note.empty() ? "" : " · " + note));
     std::vector<model::Id> selected;
     for (const auto& text : ui_.selectedItems)
         if (auto id = model::Id::parse(text); id && s.items.find(*id)) selected.push_back(*id);
@@ -388,11 +390,52 @@ void Shell::sync(bool event) {
     // Modulation telemetry (ADR-0096, M2): live values on the modulated
     // controls and lanes (nothing is redrawn while it holds still).
     arrange_->setModulationOffsets(liveModulation_.read(dispatcher_, app_));
+    // What each track with clips plays (ADR-0097): the launcher's playing,
+    // queued and held cells, its Arr dots and the held tracks' lanes.
+    arrange_->setLaunchState(launchViews(app_.launchState()));
+    // Capture (L4): a capture the transport ended is committed, and the
+    // toggle shows whether it is armed.
+    capture_.service();
+    arrange_->setCaptureArmed(capture_.armed());
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);
     // The input names track the engine (started or stopped), not the model.
     if (moved || app_.engine()) inputs();
+}
+
+std::string countsText(const model::Session& s) {
+    const std::size_t tracks = views::countTracks(s);
+    const std::size_t scenes = s.scenes.size();
+    std::string text = std::to_string(tracks) + (tracks == 1 ? " track  " : " tracks  ");
+    if (scenes > 0)  // the launcher's, only when there are some (gui.md §4.15)
+        text += std::to_string(scenes) + (scenes == 1 ? " scene  " : " scenes  ");
+    return text + "version " + std::to_string(s.version);
+}
+
+views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& state) {
+    using Plays = engine::Engine::TrackLaunch::Plays;
+    using Action = engine::LaunchLogEntry::Action;
+    views::LaunchViews out;
+    for (const auto& t : state) {
+        views::LaunchView v;
+        v.plays = t.plays == Plays::Clip      ? views::LaunchView::Plays::Clip
+                  : t.plays == Plays::Held    ? views::LaunchView::Plays::Held
+                  : t.plays == Plays::Stopped ? views::LaunchView::Plays::Stopped
+                                              : views::LaunchView::Plays::Arrangement;
+        if (t.plays == Plays::Clip || t.plays == Plays::Held) v.clip = t.clip;
+        v.position = t.position;
+        if (t.queued) {
+            const auto& request = t.queued->request;
+            v.queued = request.action == Action::Clip ? views::LaunchView::Queued::Clip
+                       : request.action == Action::Arrangement
+                           ? views::LaunchView::Queued::Arrangement
+                           : views::LaunchView::Queued::Stop;
+            if (request.action == Action::Clip) v.queuedClip = request.clip;
+        }
+        out[t.track] = v;
+    }
+    return out;
 }
 
 std::optional<std::chrono::steady_clock::time_point> Shell::nextDeadline() const {
@@ -628,6 +671,7 @@ void Shell::addStrip(std::string_view type) {
     ui_.trackAnchor = created;
     ui_.tracksFocused = true;
     ui_.envelopeFocused = false;
+    ui_.clipsFocused = false;
 }
 
 Status Shell::openColorMenu(const model::Id& track, const ui::Rect& anchor) {

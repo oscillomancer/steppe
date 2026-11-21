@@ -40,8 +40,7 @@ void registerTempoCommands(cmd::Registry& registry) {
         c.name = "tempo.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
-        c.summary =
-            "Replace the tempo map: points {beat, bpm, ramp?}; the first must be at beat 0.";
+        c.summary = "Replace the tempo map: points {beat, bpm, ramp?}, the first at beat 0.";
         c.description =
             "ramp: true changes the tempo linearly (in beats) to the next point; otherwise it "
             "steps.";

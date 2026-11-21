@@ -106,7 +106,7 @@ TEST_CASE("launcher: sc and cl ids parse and allocate") {
 TEST_CASE("launcher: scenes and clips save, reopen and serialize the same") {
     const Fixture f = fixture();
     const std::string bytes = serializeProject(f.s);
-    CHECK(bytes.find("\"supple.project/2.18\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.19\"") != std::string::npos);
     auto doc = json::parse(bytes).value();
     json::Value& sc = doc["scenes"]["sc_2"];
     CHECK(sc["name"] == "Chorus");
@@ -201,7 +201,7 @@ TEST_CASE("launcher: a project without scenes writes no sections or counters") {
     CHECK_FALSE(doc["project"]["next_ids"].find("cl"));
 }
 
-TEST_CASE("launcher: a 2.17 file loads unchanged and saves as 2.18") {
+TEST_CASE("launcher: a 2.17 file loads unchanged and saves as the current schema") {
     EditTxn t(Session::create(), 1);
     addTrack(t);
     const Session s = t.commit().value();
@@ -214,6 +214,45 @@ TEST_CASE("launcher: a 2.17 file loads unchanged and saves as 2.18") {
     CHECK(opened->next[Kind::Scene] == 1);
     CHECK(opened->next[Kind::Clip] == 1);
     CHECK(serializeProject(*opened) == serializeProject(s));
+}
+
+TEST_CASE("launcher: a 2.18 file's envelopes on a clip take's FX load in clip time") {
+    // ADR-0097, amended 2026-11-20 (C2): they were timeline positions; they
+    // convert with the clip's anchor at 0. An item take's FX keeps its own.
+    Fixture f = fixture();
+    EditTxn t(f.s, f.s.version + 1);
+    FxInstance fx;
+    fx.plugin.id = "com.example.gain";
+    const Id onClip = t.create(fx), onItem = t.create(fx);
+    t.modify<Take>(f.clipTake, [&](Take& k) { k.chain.push_back(onClip); });
+    t.modify<Take>(f.itemTake, [&](Take& k) { k.chain.push_back(onItem); });
+    Envelope seconds;  // a MIDI clip's, written in seconds: 2 s is 4 beats at 120 BPM
+    seconds.target = {onClip, "gain"};
+    seconds.timebase = Timebase::Time;
+    seconds.points = {{0.5, -6.0}, {2.0, 0.0}};
+    const Id clipEnv = t.create(seconds);
+    Envelope beats;
+    beats.target = {onItem, "gain"};
+    beats.points = {{1.0, -6.0}, {3.0, 0.0}};
+    const Id itemEnv = t.create(beats);
+    const Session s = t.commit().value();
+    auto doc = json::parse(serializeProject(s)).value();
+    doc["schema"] = "supple.project/2.18";
+    std::vector<schema::Warning> warnings;
+    auto opened = parseProject(json::writeCompact(doc), &warnings);
+    REQUIRE_MESSAGE(opened, (opened ? "" : opened.error().toString()));
+    const Envelope& c = *opened->envelopes.find(clipEnv);
+    CHECK(c.timebase == Timebase::Beats);
+    REQUIRE(c.points.size() == 2);
+    CHECK(c.points[0].pos == doctest::Approx(1.0));
+    CHECK(c.points[1].pos == doctest::Approx(4.0));
+    const Envelope& i = *opened->envelopes.find(itemEnv);
+    CHECK(i.timebase == Timebase::Beats);
+    CHECK(i.points == beats.points);
+    // Saved again, it reads back as it is.
+    auto again = parseProject(serializeProject(*opened));
+    REQUIRE(again);
+    CHECK(serializeProject(*again) == serializeProject(*opened));
 }
 
 // --- the take owner --------------------------------------------------------------
