@@ -10842,7 +10842,7 @@ Result:
 
 Write the captured performance onto the timeline as items.
 
-One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start. On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A running capture ends first; the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
+One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start. On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A scene launched whole (launch.scene: every clip that could play started on one boundary) also writes a section named after it, from that boundary until one of its tracks is launched again or the capture ends, as scene.insert does; clips launched singly write none. A running capture ends first; the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -10877,6 +10877,29 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "type": "string"
       }
     },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "committed_section",
+        "properties": {
+          "scene": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "start": {
+            "type": "number"
+          },
+          "end": {
+            "type": "number"
+          }
+        },
+        "required": ["scene", "region", "start", "end"],
+        "additionalProperties": false
+      }
+    },
     "from": {
       "type": "number"
     },
@@ -10890,7 +10913,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["tracks", "items", "from", "to"],
+  "required": ["tracks", "items", "sections", "from", "to"],
   "additionalProperties": false
 }
 
@@ -10935,6 +10958,14 @@ Result:
 {
   "tracks": ["tr_1"],
   "items": ["<any>"],
+  "sections": [
+    {
+      "scene": "sc_1",
+      "region": "<any>",
+      "start": 0,
+      "end": 4
+    }
+  ],
   "from": 0,
   "to": 4
 }

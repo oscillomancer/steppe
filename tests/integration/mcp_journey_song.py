@@ -314,6 +314,16 @@ def perform(j):
     assert committed["tracks"] == ["tr_1", "tr_2", "tr_3"], committed
     assert len(committed["items"]) == 11, committed  # 3 + 2 + 3 + 3 clips played
     assert (committed["from"], committed["to"]) == (end["from"], end["to"]), committed
+    # Each scene launched whole is a section named after it, from its launch to the next
+    # one's (the last to the capture's end), as scene.insert makes one.
+    sections = committed["sections"]
+    assert [(x["scene"], x["start"]) for x in sections] == [
+        ("sc_1", 0.0), ("sc_2", 8.0), ("sc_3", 16.0), ("sc_4", 24.0)], sections
+    assert [x["end"] for x in sections][:3] == [8.0, 16.0, 24.0], sections
+    assert abs(sections[3]["end"] - end["to"]) < 1e-9, sections
+    for bar, name in ((1, "Intro"), (3, "Verse"), (5, "Chorus"), (7, "Break")):
+        at = j.exec("context.at", {"bar": bar}, f"The section over bar {bar} of the performance.")
+        assert at["section"]["name"] == name, at
 
     # What the timeline now holds is what was launched: the bass enters with the Verse
     # (beat 8, 3.2 s), the drums fill out there, and the keys play louder in the Chorus.

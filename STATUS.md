@@ -281,7 +281,12 @@ instructions are in `docs/guides/installing.md`.
   arrangement where a track left it, the switch crossfades as item fades.
   The tests capture live in both executors at two block sizes, over a loop
   wrap too, and render the committed arrangement offline: it matches what
-  played exactly away from the switches and to 1e-6 through the fades.
+  played exactly away from the switches and to 1e-6 through the fades. A
+  scene launched whole also writes a section named after it, as
+  `scene.insert` does. Known limit: the capture logs clips, not the command
+  that launched them, so a scene is recognised by every clip of it starting
+  together; a clip launched alone is taken for a scene launch only when it
+  is the scene's only clip.
   History records the performance, so merges replay it. A stop, seek or
   loop change ends a capture; the arrangement a loop repeated is not
   copied; under a tempo change a MIDI piece laid where the loop repeated

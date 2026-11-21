@@ -1153,8 +1153,14 @@ and naming. All `edit` unless marked (q) query or (a) action.
   running time; on each track that left the arrangement its clip,
   stopped and held stretches replace the arrangement, each clip as
   copies of its takes at the phase heard, MIDI copied unless `pooled`,
-  the envelopes on their FX repeated pass after pass over each copy;
-  answers `{tracks, items, from, to}`. `performance` is filled from the
+  the envelopes on their FX repeated pass after pass over each copy; a
+  scene launched whole (every clip of it that could play, on a track not
+  frozen, started on one frame) writes a section (a region with `section`
+  true) named after the scene and in its colour, from that boundary until
+  one of its tracks is launched again or the capture ends, in the same
+  undo step; a clip launched alone, or some of a scene's, writes none, and
+  committing again keeps a section already there; answers `{tracks, items,
+  sections: [{scene, region, start, end}], from, to}`. `performance` is filled from the
   capture and recorded in history: `{sample_rate, start, frames, loop?,
   launches: [{frame, track, action, clip?, anchor, anchor_beat}]}`.
   Errors `launch.capture` (nothing captured), `launch.commit` (a captured

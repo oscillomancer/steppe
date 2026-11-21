@@ -1140,6 +1140,7 @@ q = nil
 ---@class Steppe.launch_commit_result
 ---@field tracks string[]
 ---@field items string[]
+---@field sections table[]
 ---@field from number
 ---@field to number
 ---@field warnings? table[]

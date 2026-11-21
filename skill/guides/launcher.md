@@ -88,9 +88,13 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   arrangement, its clips and its stopped or held stretches replace what the timeline
   had there; tracks that stayed on the arrangement are untouched. Each clip becomes
   copies of its takes at the phase heard, MIDI copied (shared with `pooled: true`),
-  and the 5 ms switches are item fades. It answers `{tracks, items, from, to}`.
-  Nothing captured is `launch.capture`. Committing again writes the same performance
-  over itself.
+  and the 5 ms switches are item fades. A scene launched whole (`launch.scene`, every
+  clip that could play started on one boundary) also writes a **section** named after
+  the scene, from that boundary until one of its tracks is launched again or the capture
+  ends, so `context.at` names it as it does a built song's; clips launched one by one
+  write none. It answers `{tracks, items, sections, from, to}`. Nothing captured is
+  `launch.capture`. Committing again writes the same performance over itself (a section
+  already there stays).
 - A committed performance renders as what was launched: unlike a clip playing live,
   its items are on the timeline. To check, render the span, or lay the same scenes
   with `arrangement.build` and compare away from the switches.
