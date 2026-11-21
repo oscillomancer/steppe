@@ -180,9 +180,10 @@ class Fixture final : public SingleComponentEffect {
     // each value the host sends Steps or Level comes back in the processor's
     // output, a Steps value as the step it lands on, as a stepped plug-in
     // reports what it plays. Setting "Edit" (id 2) to v > 0 is the editor
-    // moving the continuous "Level" (id 3) to v (beginEdit, performEdit,
-    // endEdit through the component handler, on the main thread, as a real
-    // editor's callback).
+    // acting on the continuous "Level" (id 3) through the component handler,
+    // on the main thread, as a real editor's callback: below 0.1 it grabs
+    // Level (beginEdit), from 0.9 it lets go (endEdit), and in between it
+    // moves Level to v (performEdit: within a grab, or alone).
     enum Kind {
         Gain,
         Sine,
@@ -304,10 +305,14 @@ class Fixture final : public SingleComponentEffect {
         if (EditControllerEx1::setParamNormalized(id, value) != kResultOk) return kResultFalse;
         if (kind_ == SteppedEcho) {
             if (id == 2 && value > 0 && componentHandler) {
-                EditControllerEx1::setParamNormalized(3, value);
-                componentHandler->beginEdit(3);
-                componentHandler->performEdit(3, value);
-                componentHandler->endEdit(3);
+                if (value < 0.1) {
+                    componentHandler->beginEdit(3);
+                } else if (value >= 0.9) {
+                    componentHandler->endEdit(3);
+                } else {
+                    EditControllerEx1::setParamNormalized(3, value);
+                    componentHandler->performEdit(3, value);
+                }
             }
             return kResultOk;
         }

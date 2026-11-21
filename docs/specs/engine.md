@@ -395,7 +395,13 @@ until it is released.
   reach the executor as the plug-in's gesture (a `performEdit` outside
   `beginEdit` is one of its own), after what the processor reports in that
   block, so they are recorded and hold a writing lane as a CLAP gesture
-  does. In the anticipative executor the edit's state flag captures the
+  does; what the processor reports in that block for a parameter the
+  editor moved is that edit repeated and is not passed on (review round
+  81b, E5). A barrier that drops queued edits, a deactivation or a full
+  queue ends every editor gesture still open, so a lost `endEdit` leaves
+  no gesture open in the stage. Within a grab the plug-in's state is
+  captured at `endEdit`, not at each `performEdit`: a capture mid-drag was
+  a step of its own, and its plan swap dropped the drag's gesture. In the anticipative executor the edit's state flag captures the
   plug-in state first and that step's plan swap drops the rendered
   gesture: the edit is recorded once, as the plug-in's state, and writes
   no point (STATUS). Without the filter an echoing plug-in under

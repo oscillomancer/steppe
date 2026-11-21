@@ -5167,6 +5167,96 @@ TEST_CASE("a stepped VST3 parameter on a ramp reports its steps, and they are no
     }
 }
 
+TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, its points once") {
+    // Review round 81b, E5: with no lane sending the parameter, the
+    // processor's report of the editor's edit was kept as a second,
+    // gestureless edit: playing in touch or latch, one edit made two steps
+    // and two points, and a drag wrote each point twice. A one-shot edit
+    // (performEdit alone) and a drag of two moves (beginEdit, performEdit
+    // twice, endEdit), in-callback and bridged. Within the drag the plug-in
+    // state is not captured as a step of its own (its plan swap dropped the
+    // drag's gesture): that waits for endEdit. The anticipative executor
+    // records a VST3 editor's edit as the plug-in's state (STATUS).
+    for (const char* mode : {"touch", "latch"})
+        for (const char* isolation : {static_cast<const char*>(nullptr), "shared_bridge"})
+            for (const bool drag : {false, true}) {
+                CAPTURE(std::string(mode));
+                CAPTURE(isolation != nullptr);
+                CAPTURE(drag);
+                Root root;
+                AppOptions options;
+                options.workdir = root.path;
+                options.pluginPath = {FIXTURE_VST3_PATH};
+                auto made = EngineApp::create(options, {.console9 = false});
+                REQUIRE(made);
+                EngineApp& app = **made;
+                cmd::Registry registry;
+                registerEngineCommands(registry);
+                cmd::Dispatcher bus(registry, app);
+                const auto call = [&](const char* command, json::Value args) {
+                    auto result = bus.execute({command, std::move(args), kTest});
+                    REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+                    return *result;
+                };
+                call("track.add", j("{}"));
+                call("fx.add", j(R"({"track":"tr_1","plugin":"Test VST3 Stepped Echo"})"));
+                const json::Value added =
+                    call("env.add",
+                         j(R"({"fx":"fx_1","param":"Level","points":[{"beat":0,"value":0.5}]})"));
+                const auto env = *model::Id::parse(added.find("env")->asString());
+                json::Value set = json::Value::object();
+                set["env"] = env.str();
+                set["mode"] = mode;
+                call("env.set", set);
+                if (isolation) {
+                    json::Value iso = j(R"({"fx":"fx_1"})");
+                    iso["isolation"] = isolation;
+                    call("fx.set", iso);
+                }
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+                REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                        {.anticipative = false}));
+                const auto cycles = [&](int n) {
+                    for (int i = 0; i < n; ++i) {
+                        backend.run(1);
+                        app.tick();
+                    }
+                };
+                REQUIRE(app.transport("play"));
+                cycles(50);
+                const auto version = app.head().version;
+                const auto points = app.head().envelopes.find(env)->points.size();
+                auto* instance = app.instanceOf(*model::Id::parse("fx_1"));
+                REQUIRE(instance);
+                // Edit: below 0.1 grabs Level, from 0.9 lets go, else moves it.
+                if (drag) {
+                    REQUIRE(instance->setParam(2, 0.05));
+                    cycles(10);
+                    REQUIRE(instance->setParam(2, 0.3));
+                    cycles(10);
+                    REQUIRE(instance->setParam(2, 0.5));
+                    cycles(10);
+                    REQUIRE(instance->setParam(2, 0.95));
+                } else
+                    REQUIRE(instance->setParam(2, 0.7));
+                cycles(50);
+                CHECK(app.head().version == version + 1);
+                CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
+                // A write is a step: the value held just before, then each
+                // move once (one-shot: 0.7; the drag: 0.3, then 0.5).
+                const auto& now = app.head().envelopes.find(env)->points;
+                REQUIRE(now.size() == points + (drag ? 3 : 2));
+                CHECK(now[points].value == doctest::Approx(0.5));
+                if (drag) {
+                    CHECK(now[points + 1].value == doctest::Approx(0.3));
+                    CHECK(now[points + 2].value == doctest::Approx(0.5));
+                } else
+                    CHECK(now[points + 1].value == doctest::Approx(0.7));
+                REQUIRE(app.transport("stop"));
+                app.stopEngine();
+            }
+}
+
 TEST_CASE("a VST3 editor's edit during modulation is the plug-in's, recorded once") {
     // Review round 81, E2: the editor's beginEdit, performEdit and endEdit
     // reach the engine as the plug-in's gesture (as a CLAP plug-in's), so its
