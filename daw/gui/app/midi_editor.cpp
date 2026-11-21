@@ -1606,7 +1606,17 @@ Status MidiEditor::open(const std::string& item) {
         hi = std::max(hi, n.pitch);
     }
     const double center = state_.notes.empty() ? 60 : (lo + hi) / 2.0;
-    const float rows = roll_ && roll_->bounds().h > 0 ? roll_->bounds().h / state_.rowHeight : 22;
+    // The roll's height as the panel will lay it out for this item: the
+    // panel's, less its grip, header, bar strip (which may have grown a
+    // chord or key row) and the lanes shown under the roll, all fixed. Its
+    // bounds may be stale or, on a first open, empty.
+    float rollH = (panel_ ? panel_->layout.height.value : height_) - kGripHeight - 32;
+    if (bars_) rollH -= bars_->layout.height.value;
+    for (const ui::Node* lane : {velocity_, ccLane_})
+        if (lane && lane->visible) rollH -= lane->layout.height.value;
+    if (envColumn_)
+        for (const auto& lane : envColumn_->children()) rollH -= lane->layout.height.value;
+    const float rows = rollH > state_.rowHeight ? rollH / state_.rowHeight : 22;
     state_.topPitch =
         std::clamp(center + static_cast<double>(rows) / 2.0, static_cast<double>(rows), 127.0);
     state_.scrollBeat = -0.25;

@@ -3918,6 +3918,31 @@ TEST_CASE("MIDI editor: a clip's chords and keys drag to another beat in its str
     CHECK(f.root->find("chord-field")->valueText() == "G7");
 }
 
+TEST_CASE("MIDI editor: a clip opens with all its notes in view under its taller strip") {
+    // The strip grows a chord row and a key row for a clip with a context;
+    // the roll centres the notes in the height it will have, not the height
+    // it had before the strip grew (the lowest note was cut off once).
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip = f.exec("clip.add", R"({"track":")" + track +
+                                                    R"(","scene":"sc_1","name":"Wide",)"
+                                                    R"("notation":"voice v; 1: D4:q F#5:q r:h",)"
+                                                    R"("context":"1: key C major {C}:h {Am}:h"})")
+                                 .find("clip")
+                                 ->asString();
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    const auto& s = f.editor->state();
+    const ui::Rect roll = f.root->find("midi.roll")->bounds();
+    const double rows = static_cast<double>(roll.h / s.rowHeight);
+    INFO("top " << s.topPitch << " rows " << rows);
+    // F#5 (78) and D4 (62) both have their whole row inside the roll.
+    CHECK(s.topPitch >= 78);
+    CHECK(s.topPitch - rows + 1 <= 62);
+}
+
 TEST_CASE("clip context edit: the printed lead sheet covers the clip's bars in the meters") {
     model::ContextPoint key;
     key.type = model::ContextType::Key;
