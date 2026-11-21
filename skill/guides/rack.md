@@ -109,7 +109,7 @@ patch's drive, envelopes and feedback.
 ```
 
 - A module is what `module.add` takes: `type` (a key from the reference,
-  `"vco"`, or an id) or `plugin` (an `fx.scan` id), and `params`,
+  `"vco"`, or an id) or `plugin` (a `plugin.list` id), and `params`,
   `preset`, `label`, `x`, `y`, `source`, `device`.
 - A cable is `[from, to]` or `[from, to, amount]`, or `{from, to, amount,
   color}`. An end is `"name.port"` or `"name.knob"`, or `"mo_N.port"` for

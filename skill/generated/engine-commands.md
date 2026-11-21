@@ -9857,7 +9857,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Errors
 
-- `item.unknown`: no such item Hint: use an id from session.query {kind: "item"}
+- `item.unknown`: no such item Hint: use an item id from session.describe (items are listed under their tracks)
 - `item.export_empty`: an empty take, or no source audio under the item Hint: pick a take with material (take.activate) or move the item onto its audio
 - `item.export_source`: the source file cannot be read Hint: restore or relink the source
 - `item.export_path`: no path, or it names the project's media Hint: choose another file
@@ -12868,7 +12868,7 @@ Result:
 
 Add a module to a rack: a type with knob values.
 
-type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin (instead of type): a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. preset: a factory preset (module.describe), params on top. Returns its size and keys.
+type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin (instead of type): a plug-in id (plugin.list) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. preset: a factory preset (module.describe), params on top. Returns its size and keys.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
