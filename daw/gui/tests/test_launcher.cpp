@@ -772,6 +772,57 @@ TEST_CASE("launcher: a refused capture commit keeps the performance; a click com
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: the Capture cell is lit by an agent's capture; a click ends and commits it") {
+    LauncherFixture f;
+    f.song();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    views::LauncherCallbacks callbacks = f.view->launcherCallbacks();
+    callbacks.capture = [&](bool on) { REQUIRE(capture.set(on)); };
+    f.view->setLauncherCallbacks(callbacks);
+    auto show = [&] {  // as the shell does once a pass
+        capture.service();
+        f.view->setCaptureArmed(capture.lit());
+        f.sync();
+    };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    show();
+    CHECK_FALSE(header.stats.captureLit);
+    // Another caller arms it: the cell lights, though the toggle did not.
+    f.exec("launch.capture", R"({"on":true})");
+    show();
+    CHECK_FALSE(capture.armed());
+    CHECK(capture.lit());
+    CHECK(header.stats.captureLit);
+    f.exec("launch.clip", R"({"clip":"cl_1"})");
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    for (int k = 0; k < 3000 && !playing(); ++k) {  // a hang guard only
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        show();
+    }
+    REQUIRE(playing());
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // A click on the lit cell ends that capture and commits it.
+    const std::uint64_t before = f.app->head().version;
+    f.click(centre(header.captureRect()));
+    show();
+    CHECK_FALSE(f.app->launchCapturing());
+    CHECK_FALSE(capture.lit());
+    CHECK_FALSE(header.stats.captureLit);
+    CHECK(f.app->head().version == before + 1);
+    bool laid = false;
+    for (const auto& e : f.app->head().items) laid = laid || e.value->track == drums;
+    CHECK(laid);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inserts it") {
     LauncherFixture f;
     f.song();

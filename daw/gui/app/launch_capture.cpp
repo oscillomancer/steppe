@@ -26,7 +26,7 @@ Error CaptureControl::keep(Error refusal) {
 }
 
 Status CaptureControl::set(bool on) {
-    if (on == armed_) return {};
+    if (on ? armed_ : !lit()) return {};
     if (on) {
         // A kept performance belongs to its project and its engine.
         if (kept_ != Kept::None && (!app_.engine() || app_.projectGeneration() != keptGeneration_))

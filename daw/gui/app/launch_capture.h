@@ -28,11 +28,14 @@ class CaptureControl {
   public:
     CaptureControl(engine::EngineApp& app, cmd::Dispatcher& dispatcher);
     bool armed() const { return armed_; }
+    // What the header's cell shows: lit while the toggle is armed or the
+    // engine captures, whoever armed it (an agent's launch.capture too).
+    bool lit() const { return armed_ || app_.launchCapturing(); }
     // A performance whose commit was refused waits for another try.
     bool kept() const { return kept_ != Kept::None; }
     // On commits a kept performance first, then arms (launch.capture {on:
     // true}: from the position heard now, or where playing starts); off ends
-    // the capture and commits what it holds.
+    // the capture and commits what it holds, also one another caller armed.
     Status set(bool on);
     // Once a pass: a capture the engine ended (a stop, a seek, a loop change)
     // is committed and the toggle, still lit, arms the next one; a refused

@@ -408,7 +408,7 @@ void Shell::sync(bool event) {
     // Capture (L4): a capture the transport ended is committed, and the
     // toggle shows whether it is armed.
     capture_.service();
-    arrange_->setCaptureArmed(capture_.armed());
+    arrange_->setCaptureArmed(capture_.lit());
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);
