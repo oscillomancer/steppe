@@ -3843,6 +3843,81 @@ TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {
     CHECK(f.exec("history.list", "{}")["versions"].size() == versions + 1);
 }
 
+TEST_CASE("MIDI editor: a clip's chords and keys drag to another beat in its strip") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add", R"({"track":")" + track +
+                               R"(","scene":"sc_1","name":"Riff",)"
+                               R"("notation":"voice v; 1: D4:w | 2: G4:w",)"
+                               R"("context":"1: key D dorian {Dm7}:h {G7}:h\n2: ~:w"})")
+            .find("clip")
+            ->asString();
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.scrollBeat = -0.25;
+    s.grid = 0.5;
+    f.frame();
+    ui::Node* strip = f.root->find("midi.bars");
+    REQUIRE(strip);
+    // The bar numbers, the chord row and the key row.
+    CHECK(strip->bounds().h == doctest::Approx(16 + 18 + 18));
+    REQUIRE(s.keyMarks.size() == 1);
+    CHECK(s.keyMarks[0].text == "D dorian");
+    const float chordRow = strip->bounds().y + 16 + 9, keyRow = strip->bounds().y + 16 + 18 + 9;
+    const auto x = [&](double beat) { return f.at(beat, 60).x; };
+    const auto points = [&] {
+        std::vector<std::pair<double, std::string>> out;
+        for (const model::ContextPoint& p :
+             f.app->head().clips.find(*model::Id::parse(clip))->context)
+            out.emplace_back(p.beat,
+                             p.type == model::ContextType::Key ? "key " + p.tonic : p.symbol);
+        return out;
+    };
+    auto drag = [&](double from, double to, float y, unsigned mods = 0) {
+        f.pointer(ui::PointerEvent::Type::Down, {x(from + 0.1), y}, 1, mods);
+        f.pointer(ui::PointerEvent::Type::Move, {x(from + 0.1 + (to - from) / 2), y}, 1, mods);
+        f.pointer(ui::PointerEvent::Type::Move, {x(to + 0.1), y}, 1, mods);
+        f.pointer(ui::PointerEvent::Type::Up, {x(to + 0.1), y}, 1, mods);
+        f.frame();
+    };
+    const auto versions = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+    // G7 from beat 2 to beat 5, on the grid: one step.
+    auto v = versions();
+    drag(2, 5, chordRow);
+    CHECK(points() ==
+          std::vector<std::pair<double, std::string>>{{0, "key D"}, {0, "Dm7"}, {5, "G7"}});
+    CHECK(versions() == v + 1);
+    // Alt copies: Dm7 again at beat 4, the first kept.
+    drag(0, 4, chordRow, ui::kAlt);
+    CHECK(points() == std::vector<std::pair<double, std::string>>{
+                          {0, "key D"}, {0, "Dm7"}, {4, "Dm7"}, {5, "G7"}});
+    // The key from the clip's start to its second bar: no key at the start
+    // now, so the key button has none.
+    drag(0, 4, keyRow);
+    CHECK(points() == std::vector<std::pair<double, std::string>>{
+                          {0, "Dm7"}, {4, "key D"}, {4, "Dm7"}, {5, "G7"}});
+    CHECK(f.editor->keyText() == "No key");
+    // Past the clip's end it is refused into the status line, nothing moved.
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    v = versions();
+    drag(5, 9, chordRow);
+    CHECK(versions() == v);
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].rfind("Context: ", 0) == 0);
+    CHECK(points().size() == 4);
+    // A click without a move changes nothing, and a double-click still edits.
+    drag(5, 5, chordRow);
+    CHECK(versions() == v);
+    f.pointer(ui::PointerEvent::Type::Down, {x(5.1), chordRow}, 2);
+    f.pointer(ui::PointerEvent::Type::Up, {x(5.1), chordRow}, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText() == "G7");
+}
+
 TEST_CASE("clip context edit: the printed lead sheet covers the clip's bars in the meters") {
     model::ContextPoint key;
     key.type = model::ContextType::Key;

@@ -135,6 +135,9 @@ struct RollState {
         bool known = true;
     };
     std::vector<ChordMark> chords;
+    // A clip's key points (text: "D dorian"), drawn and dragged in the
+    // strip's key row (ADR-0098 X3); none for an item.
+    std::vector<ChordMark> keyMarks;
     std::optional<harmony::Key> keyAt(double projectBeat) const;
     // A note off channel 10 whose pitch is not in the key holding at its
     // start (none holding: false). The roll outlines it, and the title
@@ -230,6 +233,9 @@ class MidiEditor {
     // (clip.set {context}, printed as the lead sheet in clip bars).
     void editClipKey(double beat, ui::Point at);
     void openContextMenu(double beat, std::optional<double> chord, ui::Point at);
+    // The clip's point of `type` at clip beat `from` moved to `to` (`copy`:
+    // a second one there, the first kept), as a strip drag does.
+    void moveClipPoint(model::ContextType type, double from, double to, bool copy = false);
     Status setClipContext(const std::vector<model::ContextPoint>& points);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.

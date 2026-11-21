@@ -628,16 +628,63 @@ class BarStrip : public ui::Node {
     // under it, as the ruler's chord row does; elsewhere it starts a chord at
     // the grid beat there.
     bool onPointer(const ui::PointerEvent& e) override {
+        using T = ui::PointerEvent::Type;
         const ui::Rect b = bounds();
-        if (e.type != ui::PointerEvent::Type::Down || e.pos.x < b.x + kKeysWidth) return false;
+        const Geometry g{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}};
+        auto snap = [&](double at) {
+            at = std::max(0.0, at);
+            return s_.snap && s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
+        };
+        // A clip's chord or key in hand (ADR-0098 X3, as the ruler's): it
+        // lands on the grid beat it is dragged to, Alt copies a chord.
+        if (held_ != Held::None) {
+            if (e.type == T::Cancel) {
+                held_ = Held::None;
+                invalidate();
+                return true;
+            }
+            if (e.type == T::Move) {
+                const double to = snap(from_ + g.beatOf(e.pos.x) - g.beatOf(pressX_));
+                moved_ = moved_ || std::abs(e.pos.x - pressX_) >= 3;
+                if (to != draft_ || moved_) invalidate();
+                draft_ = to;
+                return true;
+            }
+            if (e.type == T::Up) {
+                if (ui::Root* r = root()) r->capture(nullptr);
+                const Held held = held_;
+                held_ = Held::None;
+                invalidate();
+                if (moved_ && draft_ != from_)
+                    editor_.moveClipPoint(
+                        held == Held::Chord ? model::ContextType::Chord : model::ContextType::Key,
+                        from_, draft_, copy_ && held == Held::Chord);
+                return true;
+            }
+        }
+        if (e.type != T::Down || e.pos.x < b.x + kKeysWidth) return false;
         std::optional<double> hit;
         for (const ChordHit& h : chordHits_)
             if (h.label.contains(e.pos)) hit = h.beat;
+        std::optional<double> keyHit;
+        for (const ChordHit& h : keyHits_)
+            if (h.label.contains(e.pos)) keyHit = h.beat;
         auto gridBeat = [&] {
-            const Geometry g{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}};
             const double at = std::max(0.0, s_.itemPosition + g.beatOf(e.pos.x));
             return s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
         };
+        if (s_.clip && e.button == 1 && e.clicks == 1 && (hit || keyHit)) {
+            held_ = hit ? Held::Chord : Held::Key;
+            from_ = draft_ = hit ? *hit : *keyHit;
+            pressX_ = e.pos.x;
+            moved_ = false;
+            copy_ = (e.mods & ui::kAlt) != 0;
+            heldText_.clear();
+            for (const RollState::ChordMark& m : hit ? s_.chords : s_.keyMarks)
+                if (std::abs(m.beat - from_) < 1e-6) heldText_ = m.text.empty() ? "r" : m.text;
+            if (ui::Root* r = root()) r->capture(this);
+            return true;
+        }
         // A clip's own context (ADR-0098 X3): its menu on a right-click.
         if (s_.clip && e.button == 3) {
             editor_.openContextMenu(gridBeat(), hit, e.pos);
@@ -653,7 +700,10 @@ class BarStrip : public ui::Node {
     }
     // The strip's height: the bar numbers, and the chord row while chords
     // hold over the roll (ADR-0095).
-    float wanted() const { return kHeight + (s_.chords.empty() ? 0 : kChordRowHeight); }
+    float wanted() const {
+        return kHeight + (s_.chords.empty() ? 0 : kChordRowHeight) +
+               (s_.keyMarks.empty() ? 0 : kChordRowHeight);
+    }
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
         const ui::Rect whole = bounds();
@@ -666,7 +716,28 @@ class BarStrip : public ui::Node {
         c.fillRect(whole, t.color("raised"));
         c.fillRect({whole.x, whole.bottom() - 1, whole.w, 1}, t.color("rule"));
         c.fillRect({area.x - 1, whole.y, 1, whole.h}, t.color("rule"));
-        if (whole.h > kHeight) paintChords(c, {area.x, b.bottom(), area.w, whole.h - kHeight});
+        keyHits_.clear();
+        {
+            float y = b.bottom();
+            const float chordH = s_.chords.empty() ? 0.0f : kChordRowHeight;
+            if (chordH > 0 && whole.bottom() > y)
+                paintChords(c, {area.x, y, area.w, std::min(chordH, whole.bottom() - y)});
+            y += chordH;
+            if (!s_.keyMarks.empty() && whole.bottom() > y)
+                paintKeys(c, {area.x, y, area.w, std::min(kChordRowHeight, whole.bottom() - y)});
+            // A point in hand: where it lands.
+            if (held_ != Held::None && moved_) {
+                const float x = chordX(draft_);
+                const ui::Rect rows{area.x, b.bottom(), area.w, whole.bottom() - b.bottom()};
+                c.save();
+                c.clip(rows);
+                c.fillRect({x, rows.y, 1.5f, rows.h}, t.color("focus"));
+                c.text({x + 4, held_ == Held::Chord ? b.bottom() : y, 160, kChordRowHeight - 1},
+                       heldText_, ui::Font::Ui, t.type("caption"), t.color("focus"),
+                       ui::kLeft | ui::kMiddle);
+                c.restore();
+            }
+        }
         if (s_.barLines.empty()) return;
         const float size = t.type("caption");
         const int last = s_.firstBar + static_cast<int>(s_.barLines.size()) - 1;
@@ -746,10 +817,43 @@ class BarStrip : public ui::Node {
         }
         c.restore();
     }
+    // A clip's key points: a tick at each and its name, as the ruler's key
+    // row draws them; a name this build cannot read is quiet.
+    void paintKeys(ui::Canvas& c, const ui::Rect& row) {
+        const ui::Theme& t = c.theme();
+        const Geometry g{s_, row};
+        const float size = t.type("caption");
+        c.save();
+        c.clip(row);
+        for (std::size_t i = 0; i < s_.keyMarks.size(); ++i) {
+            const RollState::ChordMark& m = s_.keyMarks[i];
+            const float x = g.xOf(m.beat - s_.itemPosition);
+            if (x > row.right()) break;
+            const float next = i + 1 < s_.keyMarks.size()
+                                   ? g.xOf(s_.keyMarks[i + 1].beat - s_.itemPosition)
+                                   : row.right();
+            const float room = std::max(0.0f, next - x - 8);
+            const std::string fit = c.elide(m.text, ui::Font::Ui, size, room);
+            const float w = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
+            c.fillRect({x, row.y + 3, 1, row.h - 6}, t.color("ink-quiet"));
+            if (!fit.empty())
+                c.text({x + 4, row.y, w + 4, row.h - 1}, fit, ui::Font::Ui, size,
+                       t.color(m.known ? "ink-quiet" : "ink-faint"), ui::kLeft | ui::kMiddle);
+            keyHits_.push_back({m.beat, {x - 4, row.y, std::max(8.0f, w + 12), row.h}});
+        }
+        c.restore();
+    }
     struct ChordHit {
         double beat = 0;  // the chord point's project beat
         ui::Rect label;   // its start and name, as the last paint drew them
     };
+    enum class Held { None, Chord, Key };
+    Held held_ = Held::None;
+    double from_ = 0, draft_ = 0;  // the held point's beat, and where it would land
+    float pressX_ = 0;
+    bool moved_ = false, copy_ = false;
+    std::string heldText_;
+    std::vector<ChordHit> keyHits_;
     const RollState& s_;
     MidiEditor& editor_;
     std::vector<int>& labelled_;
@@ -1924,12 +2028,15 @@ Status MidiEditor::reload() {
     // commits. Without one no key holds.
     state_.keys.clear();
     state_.chords.clear();
+    state_.keyMarks.clear();
     if (state_.clip) {
         const model::Clip& clip = *owner->clip;
         state_.keys.push_back({0.0, model::keyAt(clip, 0.0)});
         for (const model::ContextPoint& p : clip.context) {
             if (p.type == model::ContextType::Key) {
                 if (p.beat > 0) state_.keys.push_back({p.beat, model::parseKey(p)});
+                state_.keyMarks.push_back(
+                    {p.beat, model::keyWords(p), model::parseKey(p).has_value()});
                 continue;
             }
             const bool known = p.symbol.empty() || model::parseChordPoint(p).has_value();
@@ -2269,6 +2376,20 @@ void MidiEditor::openContextMenu(double beat, std::optional<double> chord, ui::P
     root_.openPopup(
         ui::makeMenu("midi.context.menu", std::move(items), [this] { root_.closePopup(); }),
         ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::moveClipPoint(model::ContextType type, double from, double to, bool copy) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip) return;
+    std::optional<model::ContextPoint> held;
+    for (const model::ContextPoint& p : owner->clip->context)
+        if (p.type == type && std::abs(p.beat - from) < 1e-6) held = p;
+    if (!held) return;
+    std::vector<model::ContextPoint> points =
+        copy ? owner->clip->context : withContextPoint(owner->clip->context, *held, true);
+    model::ContextPoint moved = *held;
+    moved.beat = to;
+    (void)setClipContext(withContextPoint(std::move(points), moved));
 }
 
 Status MidiEditor::setClipContext(const std::vector<model::ContextPoint>& points) {
