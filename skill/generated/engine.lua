@@ -1226,11 +1226,17 @@ q = nil
 
 ---@class Steppe.midi_get_args
 ---@field item string Item or clip id, e.g. "it_1" or "cl_1".
+---@field sounding? boolean Answer what sounds (a following take's notes as they play), in item time, not what is written. A clip is refused: midi.sounding_clip. (default: false)
+---@field from? number With sounding: the first song beat; the heard notes of from..to answer, passes as they fall.
+---@field to? number With sounding: the end song beat.
 
 ---@class Steppe.midi_get_result
 ---@field text string
 ---@field context? table
 ---@field follow? string
+---@field take_context? string
+---@field sounding_differs? integer
+---@field differs_by_pass? boolean
 ---@field warnings? table[]
 
 ---@class Steppe.midi_inputs_set_args
@@ -1240,6 +1246,7 @@ q = nil
 
 ---@class Steppe.midi_notes_args
 ---@field item string Item or clip id, e.g. "it_1" or "cl_1".
+---@field sounding? boolean Add each note's sounding pitch as `sounds` (a following take's notes as they play; the first pass of a looped item, and differs_by_pass when later passes differ). `pitch` stays the written one. A clip is refused: midi.sounding_clip. (default: false)
 
 ---@class Steppe.midi_outputs_set_args
 ---@field port string
@@ -1257,6 +1264,7 @@ q = nil
 ---@field notation string
 
 ---@class Steppe.midi_write_result
+---@field follows? string
 ---@field warnings? table[]
 
 ---@class Steppe.modulate_args
@@ -2122,6 +2130,15 @@ q = nil
 ---@field id string
 ---@field warnings? table[]
 
+---@class Steppe.take_bake_args
+---@field take string Take id, e.g. "tk_1".
+---@field pitches? integer[]
+
+---@class Steppe.take_bake_result
+---@field followed table
+---@field unrolled boolean
+---@field warnings? table[]
+
 ---@class Steppe.take_extract_args
 ---@field take string Take id, e.g. "tk_1".
 ---@field track? string Default: the item's or clip's track.
@@ -2173,6 +2190,8 @@ q = nil
 ---@field preserve_pitch? boolean Keep the source's pitch when the playrate changes (the default). With pitch_mode "resample" the pitch follows the speed.
 ---@field pitch? number|string Pitch offset in semitones. Stretched when the pitch is preserved, otherwise a further speed factor of 2^(pitch/12). Quantity strings are range-checked by the server.
 ---@field pitch_mode? "resample"|"signalsmith" Time-stretch algorithm: "signalsmith" (pitch-preserving, the default) or "resample" (varispeed).
+---@field context? string A MIDI take's lead sheet, as context.write's text: bars of the meter at its item's position, bar 1 at context beat 0, in context beats (the take's playrate does not scale them); "" clears it. A point at or past the context's period is take.context_range.
+---@field follow? "none"|"key"|"chords" How the take's notes sound against the project's context (ADR-0098, following is playback): none plays them as written, key or chords maps them as they play. Needs a MIDI take with a readable key in its context. The notes stay as written; take.bake writes them.
 
 ---@class Steppe.take_set_result
 ---@field warnings? table[]
@@ -2947,6 +2966,7 @@ q = nil
 ---@class Steppe.take
 ---@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item or clip.
 ---@field add fun(args: Steppe.take_add_args): Steppe.take_add_result Add a take to an item or clip, optionally copied from one of its takes.
+---@field bake fun(args: Steppe.take_bake_args): Steppe.take_bake_result Write a following take's sounding pitches into its notes, and stop following.
 ---@field extract fun(args: Steppe.take_extract_args): Steppe.take_extract_result Take a take out of its item or clip into an item of its own on any channel.
 ---@field list fun(args: Steppe.take_list_args): Steppe.take_list_result List the takes of an item or clip and identify its active take.
 ---@field remove fun(args: Steppe.take_remove_args): Steppe.take_remove_result Delete a take from its item or clip (which goes with its last take).

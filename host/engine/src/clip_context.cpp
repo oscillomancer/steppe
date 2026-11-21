@@ -87,6 +87,69 @@ Result<std::vector<model::ContextPoint>> clipContextFromText(const model::Sessio
     return points;
 }
 
+time::TimeMap takeBarMap(const model::Session& s, std::optional<double> itemStartBeat) {
+    const int bar = itemStartBeat ? s.timeMap->barBeat(std::max(0.0, *itemStartBeat)).bar : 1;
+    const time::MeterChange m = s.timeMap->meterAt(bar);
+    return time::TimeMap::constant(120.0, m.numerator, m.denominator);
+}
+
+std::string takeContextText(const time::TimeMap& map, const model::Take& take) {
+    if (take.context.empty()) return {};
+    int last = 1;
+    if (take.contextPeriod)
+        last = map.barBeat(std::max(0.0, *take.contextPeriod - 1.0 / 960.0)).bar;
+    for (const model::ContextPoint& p : take.context)
+        last = std::max(last, map.barBeat(p.beat).bar);
+    return printLeadSheetPoints(take.context, map, 1, last);
+}
+
+Result<std::vector<model::ContextPoint>> takeContextFromText(const time::TimeMap& map,
+                                                             const std::string& text,
+                                                             std::optional<double> period,
+                                                             const std::string& path) {
+    if (text.find_first_not_of(" \t\r\n") == std::string::npos)
+        return std::vector<model::ContextPoint>{};
+    auto sheet = parseLeadSheet(map, text);
+    if (!sheet) {
+        Error e = std::move(sheet).error();
+        const auto fix = [&](Error& x) {
+            if (x.code == "context.syntax") x.code = "take.context_syntax";
+            x.path = path;
+        };
+        fix(e);
+        for (auto& d : e.details) fix(d);
+        return e;
+    }
+    std::vector<model::ContextPoint> points;
+    std::size_t keys = 0, chords = 0;
+    for (const LeadPoint& p : sheet->points) {
+        const bool key = p.type == model::ContextType::Key;
+        if (period && p.beat >= *period - 1e-9)
+            return Error("take.context_range",
+                         "bar " + std::to_string(map.barBeat(p.beat).bar) + ": the " +
+                             (key ? "key" : "chord") + " lies at or past the context's period (" +
+                             json::formatDouble(*period) + " beats)",
+                         path,
+                         "move it earlier: the context repeats every " +
+                             json::formatDouble(*period) + " beats, so points belong before that");
+        (key ? keys : chords)++;
+        model::ContextPoint q;
+        q.beat = p.beat;
+        q.type = p.type;
+        q.tonic = p.tonic;
+        q.scale = p.scale;
+        q.symbol = p.symbol;
+        points.push_back(std::move(q));
+    }
+    if (keys > model::kMaxContextPoints || chords > model::kMaxContextPoints)
+        return Error("context.limit",
+                     "a take holds at most " + std::to_string(model::kMaxContextPoints) +
+                         " key points and as many chord points",
+                     path, "write fewer changes");
+    sortPoints(points);
+    return points;
+}
+
 ContextTaken contextUnder(const model::Session& s, double fromBeat, double lengthBeats,
                           bool keyOnly) {
     ContextTaken out;

@@ -355,11 +355,12 @@ Result<Segment> insertScene(Context& ctx, model::EditTxn& t, const model::Sessio
     for (const auto& [clipId, clip] : clips) {
         auto item = layClipOnTimeline(t, s, *clip, start, end, pooled, base + "/scene");
         if (!item) return std::move(item).error();
-        // The notes follow the context under the item when asked to (ADR-0098); otherwise they
-        // are copied, and context.mismatch says when the clip's key is not the project's.
+        // The laid takes carry the clip's context and follow (ADR-0098): the notes sound as the
+        // context under the item says when asked to; otherwise as written, and context.mismatch
+        // says when the clip's key is not the project's.
         std::vector<detail::ClipNote> notes;
-        auto followed = detail::followPlacedItem(s, t, clipId, *clip, *item, follow, pooled,
-                                                 base + "/scene", notes);
+        auto followed =
+            detail::followPlacedItem(s, t, clipId, *clip, *item, follow, base + "/scene", notes);
         if (!followed) return std::move(followed).error();
         for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
         seg.items.push_back({clipId.str(), item->str(), clip->track.str(), std::move(*followed)});
@@ -392,12 +393,14 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "whole content with a length of whole repeats (scene.insert.period otherwise). Takes "
             "are copied, MIDI with them unless pooled; an item takes its clip's name (its active "
             "take's) when the clip has one. follow (none, key or chords; default: each clip's own) "
-            "maps a MIDI clip's notes from the key or chords it was written against to those "
-            "under the item (ADR-0098), as item.add {clip} does: each item's followed says what "
-            "was done, by bar, unrolled: true when a looped item had to be written out pass by "
-            "pass, and copied why a clip that cannot follow was left as it is; pooled with a "
-            "mapping that moves a note is refused (clip.follow_pooled). With none the notes are "
-            "copied as they are, and context.mismatch warns once for each item whose clip's key "
+            "is set on each laid MIDI take with the clip's context, so its notes sound as the key "
+            "or chords under the item say, mapped from those they were written against "
+            "(ADR-0098, \"following is playback\"): the notes stay as written, a context edit "
+            "moves "
+            "them, and take.bake writes the sounding pitches. Each item's followed says how they "
+            "sound, by bar, and copied why a clip that cannot follow was left as it is; pooled "
+            "may follow too. With none the notes sound as written, and context.mismatch warns "
+            "once for each item whose clip's key "
             "(or, in the same key, chord) is not the project's under it. An item already in "
             "the span on a track that receives a clip is refused (scene.insert.occupied), and "
             "an empty scene (scene.empty). A section named after the scene (name overrides) "
@@ -437,8 +440,6 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             {"scene.empty", "the scene has no clips", "add clips with clip.add"},
             {"scene.insert.occupied", "an item is already in the span on a track that gets a clip",
              "move or remove it, or choose another bar"},
-            {"clip.follow_pooled", "pooled with a mapping that moves a note",
-             "leave pooled off, or place the clip with follow: none"},
             {"scene.insert.period", "a repeating clip no single looping item reproduces",
              "loop the clip over its whole content, or ask for no more bars than it is long"}};
         c.examples = {{"A verse at bar 5", j(R"({"scene": "sc_1", "bar": 5, "bars": 4})"),
@@ -619,12 +620,16 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                 audio |= made->kind == model::ClipKind::Audio;
                 // The clip remembers the key and chords the item sat under (ADR-0098); an
                 // audio clip takes the key only.
-                auto taken =
-                    detail::contextUnder(s, model::itemSpan(s, *s.items.find(pick.item)).startBeat,
-                                         length, made->kind == model::ClipKind::Audio);
-                for (const auto& n : detail::unreadableNotes(taken, "/region"))
-                    ctx.warn(n.code, n.message, n.path);
-                made->context = std::move(taken.points);
+                // An item whose take follows keeps that take's context and follow (clipFromItem
+                // took them); any other takes the project's under it.
+                if (made->follow == model::ClipFollow::None) {
+                    auto taken = detail::contextUnder(
+                        s, model::itemSpan(s, *s.items.find(pick.item)).startBeat, length,
+                        made->kind == model::ClipKind::Audio);
+                    for (const auto& n : detail::unreadableNotes(taken, "/region"))
+                        ctx.warn(n.code, n.message, n.path);
+                    made->context = std::move(taken.points);
+                }
                 model::fitClipContext(*made);
                 const Id clip = t.create(std::move(*made));
                 r.clips.push_back({clip.str(), pick.item.str(), pick.track.str(), std::nullopt});
@@ -692,8 +697,6 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             {"scene.empty", "a scene in the sequence has no clips", "add clips with clip.add"},
             {"scene.insert.occupied", "items are already in an entry's span",
              "move or remove them, or start at another bar"},
-            {"clip.follow_pooled", "pooled with a mapping that moves a note",
-             "leave pooled off, or place the clips with follow: none"},
             {"scene.insert.period", "a repeating clip no single looping item reproduces",
              "loop the clip over its whole content, or ask for fewer bars"}};
         c.examples = {{"A verse for four bars from bar 5",

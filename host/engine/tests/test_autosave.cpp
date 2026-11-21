@@ -658,6 +658,7 @@ TEST_CASE("every edit command a saved branch may replay has been audited") {
         "render.preset.load", "route.add", "route.learn.remove", "route.learn.set", "route.remove",
         "route.set", "scene.add", "scene.capture", "scene.insert", "scene.move", "scene.remove",
         "scene.set", "take.activate", "take.add", "take.extract", "take.hits.set", "take.remove",
+        "take.bake",  // records the pitches it wrote
         "take.set", "take.stretch.add", "take.stretch.move", "take.stretch.remove", "tempo.set",
         "timesig.remove", "timesig.set", "track.add", "track.duplicate", "track.freeze.commit",
         "track.learn.remove", "track.learn.set", "track.move", "track.remove", "track.set",

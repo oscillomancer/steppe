@@ -48,6 +48,8 @@ struct LeadSheet {
 // (`context.syntax`, `context.bar_length`, `context.bar_order`, `context.empty`,
 // `context.too_long`, and the chord and key errors the commands give).
 Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text);
+// The same against a time map alone (a take's bars, ADR-0098 amendment: the meter at its item).
+Result<LeadSheet> parseLeadSheet(const time::TimeMap& map, std::string_view text);
 
 inline constexpr int kLeadSheetMaxBars = 4096;
 inline constexpr std::size_t kLeadSheetMaxBytes = 1u << 20;

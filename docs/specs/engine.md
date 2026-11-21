@@ -1165,7 +1165,7 @@ clip notes, `launch.state`'s `followed` and `follow_budget`, and the
 context-edit compile while a launched clip follows. X4c (the timeline mapping,
 the plan-wide pool, the tables read as the model reads a context, the budget
 warning in the launch answer, `followed` note origins and the context-edit
-compile while a take follows) is written and waits for its runs.* What a note sounds as is `model::soundingKey`
+compile while a take follows) is built too.* What a note sounds as is `model::soundingKey`
 (`session-model.md`, "Take context and follow"); the engine only places its
 results.
 

@@ -39,7 +39,7 @@ from pathlib import Path
 
 from mcp_arrangement import Client
 from mcp_journey import digest
-from mcp_journey_launcher import Launcher, difference, samples
+from mcp_journey_launcher import TIMEOUT, Launcher, difference, samples
 
 PLUGIN = "com.suppleaudio."
 
@@ -328,7 +328,7 @@ def live(j, mods):
     j.launch_when_ready("launch.scene", {"scene": "sc_2"}, "Launch the Verse.")
     j.wait("the Verse plays", lambda s: all(r["plays"] == "clip" for r in s.values()))
     start = j.telemetry()["mr_1"]["offset"]
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + TIMEOUT
     while True:
         now = j.telemetry()
         if abs(now["mr_1"]["offset"] - start) > 0.05 and abs(now["mr_2"]["offset"]) > 0.5:
@@ -343,66 +343,80 @@ def live(j, mods):
 
 
 def perform(j):
-    """Scenes launched on bars, captured and committed: the timeline holds what was heard."""
+    """Scenes launched on bars, captured and committed: the timeline holds what was heard.
+
+    Nothing here depends on how fast the machine is: a launch lands on the next bar line after
+    the call, and the capture ends whenever its off call arrives, so every expectation below is
+    derived from the beats the answers give (on a quick machine they are 0, 8, 16 and 24)."""
     before = j.described()
     j.exec("launch.capture", {"on": True}, "Start capturing launches.")
     assert j.exec("launch.state", {}, "Capturing?")["capturing"]
     beats = []
+    clips_launched = 0
     for scene in ("sc_1", "sc_2", "sc_3", "sc_4"):
         launched = j.launch_when_ready("launch.scene", {"scene": scene}, f"Launch {scene}.")
         beats.append(launched["beat"])
-        # Into the second bar of the scene, so the next launch lands on the bar after.
-        deadline = time.monotonic() + 60
+        clips_launched += len(launched["tracks"])
+        # Into the second bar of the scene, so the next launch lands on a later bar line.
+        deadline = time.monotonic() + TIMEOUT
         while j.beat() < launched["beat"] + 4.5:
             assert time.monotonic() < deadline, f"the transport never reached {launched}"
             time.sleep(0.02)
-    assert beats == [0.0, 8.0, 16.0, 24.0], "each launch lands on the next bar line"
+    assert beats[0] == 0.0 and all(b % 4 == 0 for b in beats), \
+        ("each launch lands on a bar line", beats)
+    assert all(a < b for a, b in zip(beats, beats[1:])), ("in order", beats)
     end = j.exec("launch.capture", {"on": False}, "End the capture.")
-    assert end["from"] == 0.0 and 28.0 <= end["to"] < 29.0, end
+    # The capture ends when the call lands: it ran at least until the last scene had played a
+    # bar (the transport was past it when the call was made), and no longer than that is claimed.
+    assert end["from"] == 0.0 and end["to"] >= beats[3] + 4.0, end
     j.exec("launch.arrangement", {}, "Back to the arrangement.")
     j.wait("the arrangement again", lambda s: all(r["plays"] == "arrangement"
                                                   for r in s.values()))
     j.exec("transport.stop", {}, "Stop.")
     committed = j.exec("launch.commit", {}, "Lay the performance on the timeline.")
     assert committed["tracks"] == ["tr_1", "tr_2", "tr_3"], committed
-    assert len(committed["items"]) == 11, committed  # 3 + 2 + 3 + 3 clips played
+    # One item for each clip launched (3 + 2 + 3 + 3), however late each launch landed.
+    assert len(committed["items"]) == clips_launched == 11, (clips_launched, committed)
     assert (committed["from"], committed["to"]) == (end["from"], end["to"]), committed
     # Each scene launched whole is a section named after it, from its launch to the next
     # one's (the last to the capture's end), as scene.insert makes one.
     sections = committed["sections"]
     assert [(x["scene"], x["start"]) for x in sections] == [
-        ("sc_1", 0.0), ("sc_2", 8.0), ("sc_3", 16.0), ("sc_4", 24.0)], sections
-    assert [x["end"] for x in sections][:3] == [8.0, 16.0, 24.0], sections
+        ("sc_1", beats[0]), ("sc_2", beats[1]), ("sc_3", beats[2]), ("sc_4", beats[3])], sections
+    assert [x["end"] for x in sections][:3] == beats[1:], sections
     assert abs(sections[3]["end"] - end["to"]) < 1e-9, sections
-    for bar, name in ((1, "Intro"), (3, "Verse"), (5, "Chorus"), (7, "Break")):
-        at = j.exec("context.at", {"bar": bar}, f"The section over bar {bar} of the performance.")
+    for beat, name in zip(beats, ("Intro", "Verse", "Chorus", "Break")):
+        at = j.exec("context.at", {"bar": int(beat // 4) + 1},
+                    f"The section over bar {int(beat // 4) + 1} of the performance.")
         assert at["section"]["name"] == name, at
 
-    # What the timeline now holds is what was launched: the bass enters with the Verse
-    # (beat 8, 3.2 s), the drums fill out there, and the keys play louder in the Chorus.
-    stems = j.stems(["tr_1", "tr_2", "tr_3"], 0, 28, "Render the performance, a file a track.")
+    # What the timeline now holds is what was launched: the bass enters with the Verse, the
+    # drums fill out there, and the keys play louder in the Chorus. The Break is measured over
+    # its first four beats (the capture ran at least that far).
+    stop = beats[3] + 4.0
+    stems = j.stems(["tr_1", "tr_2", "tr_3"], 0, stop, "Render the performance, a file a track.")
     drums_wav, bass_wav, keys_wav = (stems[n][0] for n in ("Drums", "Bass", "Keys"))
-    intro, verse, chorus, brk = (8 * BEAT_S * k for k in range(4))
-    assert bass_wav.db(0, intro + 8 * BEAT_S - 0.05) < -100, "no bass in the Intro"
+    intro, verse, chorus, brk = (b * BEAT_S for b in beats)
+    assert bass_wav.db(0, verse - 0.05) < -100, "no bass in the Intro"
     onset = bass_wav.first_above(1e-3)
-    assert abs(onset - 8 * BEAT_S) < 0.02, ("the bass enters on the Verse's bar", onset)
+    assert abs(onset - verse) < 0.02, ("the bass enters on the Verse's bar", onset)
     assert drums_wav.db(verse, chorus) - drums_wav.db(intro, verse) > 15, "full kit from the Verse"
     assert 0.5 < keys_wav.db(chorus, brk) - keys_wav.db(verse, chorus) < 3.0, "Chorus keys louder"
-    assert 2.0 < drums_wav.db(verse, chorus) - drums_wav.db(brk, 28 * BEAT_S) < 6.0, "the Break is lighter"
+    assert 2.0 < drums_wav.db(verse, chorus) - drums_wav.db(brk, stop * BEAT_S) < 6.0, \
+        "the Break is lighter"
     performed = stems
 
     # The same scenes laid out with arrangement.build over the same bars render the same
     # stems away from the 5 ms switch fades, modulation included: a launched clip is
     # modulated as the timeline is.
     j.undo_to(before)
-    j.exec("arrangement.build", {"sequence": [{"scene": "sc_1", "bars": 2},
-                                              {"scene": "sc_2", "bars": 2},
-                                              {"scene": "sc_3", "bars": 2},
-                                              {"scene": "sc_4", "bars": 2}]},
-           "The same four scenes, two bars each, laid by hand.")
-    by_hand = j.stems(["tr_1", "tr_2", "tr_3"], 0, 28, "Render them.")
-    spans = [(0.05, 8 * BEAT_S - 0.05), (8 * BEAT_S + 0.05, 16 * BEAT_S - 0.05),
-             (16 * BEAT_S + 0.05, 24 * BEAT_S - 0.05), (24 * BEAT_S + 0.05, 28 * BEAT_S - 0.05)]
+    bars = [int((b - a) // 4) for a, b in zip(beats, beats[1:])] + [2]
+    j.exec("arrangement.build", {"sequence": [{"scene": f"sc_{k + 1}", "bars": n}
+                                              for k, n in enumerate(bars)]},
+           "The same four scenes, the bars that were launched, laid by hand.")
+    by_hand = j.stems(["tr_1", "tr_2", "tr_3"], 0, stop, "Render them.")
+    spans = [(0.05, verse - 0.05), (verse + 0.05, chorus - 0.05),
+             (chorus + 0.05, brk - 0.05), (brk + 0.05, stop * BEAT_S - 0.05)]
     for name in ("Drums", "Bass", "Keys"):
         worst = difference({"path": performed[name][1]["path"]},
                            {"path": by_hand[name][1]["path"]}, spans)
@@ -559,8 +573,11 @@ def other_direction(j, built):
                                     "to_key": "D minor", "by": "transpose", "interval": 2}], bass_row
     assert rows["cl_3"]["followed"]["copied"] == "drums", rows["cl_3"]
     assert rows["cl_5"]["followed"]["copied"] == "no_key", rows["cl_5"]
-    laid_bass = j.exec("midi.notes", {"item": rows["cl_4"]["item"]}, "The bass as laid.")
-    assert {n["pitch"] for n in laid_bass["notes"]} == {38, 43, 34, 33}, laid_bass["notes"]
+    # Notes are laid as written (ADR-0098, following is playback); they sound as D minor says.
+    laid_bass = j.exec("midi.notes", {"item": rows["cl_4"]["item"], "sounding": True},
+                       "The bass as laid: written, and as it sounds.")
+    assert {n["pitch"] for n in laid_bass["notes"]} == {36, 41, 32, 31}, laid_bass["notes"]
+    assert {n["sounds"] for n in laid_bass["notes"]} == {38, 43, 34, 33}, laid_bass["notes"]
     clip_bass = j.exec("midi.notes", {"item": "cl_4"}, "The bass clip, unchanged.")
     assert {n["pitch"] for n in clip_bass["notes"]} == {36, 41, 32, 31}, clip_bass["notes"]
     clip_drums = j.exec("midi.notes", {"item": "cl_3"}, "The drums clip.")

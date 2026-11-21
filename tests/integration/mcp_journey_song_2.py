@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 
 from mcp_arrangement import Client
+from mcp_journey_launcher import TIMEOUT
 from mcp_journey_song import Song, Wav
 
 PLUGIN = "com.suppleaudio."
@@ -278,9 +279,11 @@ def scenes(j):
 # --- reading a laid item against the lead sheet ----------------------------------------
 
 def laid_notes(j, item, base_beat):
-    """An item's notes as (project beat, pitch class, pitch), pitch-sorted within a start."""
-    return [(base_beat + n["start"], n["pitch"] % 12, n["pitch"])
-            for n in j.exec("midi.notes", {"item": item}, "An item's notes.")["notes"]]
+    """An item's sounding notes as (project beat, pitch class, pitch)."""
+    # What sounds: the notes are laid as written and mapped as they play (ADR-0098).
+    return [(base_beat + n["start"], n["sounds"] % 12, n["sounds"])
+            for n in j.exec("midi.notes", {"item": item, "sounding": True},
+                            "An item's notes, as they sound.")["notes"]]
 
 
 def bar_matches(notes, first_bar, bars):
@@ -471,7 +474,7 @@ def modulation_heard(j, mods):
 
 # --- launching under a playrate, capturing, committing ---------------------------------
 
-def poll(what, condition, limit=60):
+def poll(what, condition, limit=TIMEOUT):
     deadline = time.monotonic() + limit
     while not condition():
         assert time.monotonic() < deadline, f"timed out: {what}"
@@ -510,29 +513,41 @@ def perform(j):
     before = j.described()
     j.exec("launch.capture", {"on": True}, "Capture.")
     beats = []
+    clips_launched = 0
     for scene in ("sc_1", "sc_2", "sc_3"):
         launched = j.launch_when_ready("launch.scene", {"scene": scene}, f"Launch {scene}.")
         beats.append(launched["beat"])
+        clips_launched += len(launched["tracks"])
         poll(f"the transport passes {launched['beat'] + 4.5}",
              lambda: j.beat() >= launched["beat"] + 4.5)
-    assert beats == [0.0, 8.0, 16.0], beats
+    # A launch lands on the next bar line after its call, so a slow call lands later: the
+    # expectations below come from the beats the answers give (0, 8, 16 on a quick machine).
+    assert beats[0] == 0.0 and all(b % 4 == 0 for b in beats), beats
+    assert all(a < b for a, b in zip(beats, beats[1:])), beats
     end = j.exec("launch.capture", {"on": False}, "End the capture.")
     j.exec("launch.arrangement", {}, "Back to the arrangement.")
     j.exec("transport.stop", {}, "Stop.")
     committed = j.exec("launch.commit", {}, "Lay the performance on the timeline.")
     assert [(s["scene"], s["start"]) for s in committed["sections"]] == [
-        ("sc_1", 0.0), ("sc_2", 8.0), ("sc_3", 16.0)], committed
+        ("sc_1", beats[0]), ("sc_2", beats[1]), ("sc_3", beats[2])], committed
     assert committed["sections"][2]["end"] == end["to"], committed
-    assert len(committed["items"]) == 12, committed  # four clips in each of three scenes
-    for bar, name in ((1, "Verse"), (3, "Hook"), (5, "Bridge")):
+    # One item for each clip launched (four in each of three scenes), however late.
+    assert len(committed["items"]) == clips_launched == 12, (clips_launched, committed)
+    for beat, name in zip(beats, ("Verse", "Hook", "Bridge")):
+        bar = int(beat // 4) + 1
         found = j.exec("context.at", {"bar": bar}, f"The section over bar {bar}.")
         assert found["section"]["name"] == name, found
-    # A launched clip is not followed: the commit lays what was heard and says where it sits
-    # under another key than it was written in (the Hook was written in C major, the Bridge's
-    # bass and keys in F# minor; the lead sheet says A minor for these bars).
+    # The commit lays notes as written with each clip's context and the follow the plan used
+    # (ADR-0098, following is playback): the clips that follow the chords or the key keep
+    # following where they are laid, so nothing sits under a key it was not written in; the
+    # drums and the Bridge lead (follow none, written in A minor, which the lead sheet says
+    # for those bars) were not mapped when heard and are not now.
     mismatched = sorted(re.match(r"(cl_\d+)", w["message"]).group(1)
-                        for w in committed["warnings"] if w["code"] == "context.mismatch")
-    assert mismatched == ["cl_10", "cl_11", "cl_6", "cl_7", "cl_8"], committed["warnings"]
+                        for w in committed.get("warnings", []) if w["code"] == "context.mismatch")
+    assert mismatched == [], committed.get("warnings")
+    follows = [j.exec("midi.get", {"item": i}, "A committed item.").get("follow")
+               for i in committed["items"]]
+    assert sorted(f for f in follows if f) == ["chords"] * 6 + ["key"] * 2, follows
     hook_bass = [i for i in committed["items"]
                  if j.exec("midi.get", {"item": i}, "A committed item.")["text"].count("C2:e") > 0]
     assert hook_bass, "the Hook's bass was committed as written (C2 first)"

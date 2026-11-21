@@ -216,6 +216,17 @@ void checkTakeContext(const Session& s, std::vector<Error>& errors) {
     }
 }
 
+void takeContextFromClip(Take& take, const Clip& clip, double clipBeatAtStart, ClipFollow follow) {
+    if (clip.context.empty() || !takeIsMidi(take)) return;
+    const double rate = take.playrate > 0 ? take.playrate : 1.0;
+    take.context = clip.context;
+    for (ContextPoint& p : take.context) p.beat *= rate;
+    take.contextPeriod = clip.length * rate;
+    take.contextPhase = clipBeatAtStart * rate - take.startOffset;
+    take.follow = follow;
+    fitTakeContext(take, TakeHome::Item);
+}
+
 // --- a note's place -----------------------------------------------------------------------
 
 double contextBeatOf(const Take& take, double unwrappedSourceBeat) {
@@ -361,7 +372,37 @@ std::vector<SoundingNote> soundingNotes(const Session& s, Id itemId, double from
             if (follows)
                 note.sounds = soundingKey(take->context, take->follow, *s.contextView,
                                           place.contextBeat, place.songBeat, n.channel, n.pitch);
+            note.endBeat = std::min(
+                endBeat,
+                startBeat + mapping.itemBeat(static_cast<double>(n.start + n.length) / seq.ppq,
+                                             static_cast<double>(k), looping));
             out.push_back(note);
+        }
+    }
+    return out;
+}
+
+LeadPitches leadPitches(const std::vector<SoundingNote>& heard,
+                        const std::vector<std::int64_t>& sounded, double itemStartBeat,
+                        std::size_t noteCount) {
+    constexpr double kEdge = 1e-9;
+    LeadPitches out;
+    out.keep.assign(noteCount, std::nullopt);
+    std::vector<bool> whole(noteCount, false);
+    for (std::size_t k = 0; k < heard.size() && k < sounded.size(); ++k) {
+        const SoundingNote& h = heard[k];
+        if (h.note >= noteCount) continue;
+        const bool chased = h.songBeat < itemStartBeat - kEdge;
+        if (!out.keep[h.note]) {
+            out.keep[h.note] = sounded[k];
+            whole[h.note] = !chased;
+        } else if (!chased) {
+            if (!whole[h.note]) {  // the first whole pass beats a held-in fragment
+                out.keep[h.note] = sounded[k];
+                whole[h.note] = true;
+            } else if (out.keep[h.note] != sounded[k]) {
+                out.alike = false;
+            }
         }
     }
     return out;

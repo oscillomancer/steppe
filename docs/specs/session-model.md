@@ -2434,9 +2434,8 @@ whose start rule is the only rule.)*
 
 ### Take context and follow (schema 2.21, ADR-0098 amended; the contract for X4b and X4d)
 
-*X4b (the model: the four members, schema 2.21, `model/follow.h`) is built;
-X4d (the commands) is not. X4c (engine) is in `engine.md` "Following at
-playback". Revised after review round 82 with the
+*Built: X4b (model), X4c (engine, in `engine.md` "Following at playback") and
+X4d (commands); X4e (the roll and take inspector) is not. Revised after review round 82 with the
 co-director's decisions (A1 to A5, B1 to B9), and after round 82b (C1, C2,
 D1 to D4).*
 
@@ -2646,6 +2645,9 @@ its `follow` to `none`; its context stays, for display.
   of heard notes in what was answered whose key differs from the written one.
 - On a clip, `sounding` is refused (`midi.sounding_clip`): what a clip sounds as
   depends on where it is launched; `launch.state` says how it follows.
+- `midi.notes {sounding: true}` lists the same notes with `pitch` as written and
+  `sounds` as each sounds (its first whole pass; `differs_by_pass` when later passes
+  differ), for callers that need numbers; clips are refused alike.
 
 **`midi.edit`** ops act on written notes. The pitch-reading ops (`snap_to_scale`,
 `fit_to_chord`, pitch filters, `transpose_degrees`) read, on a take that follows,
