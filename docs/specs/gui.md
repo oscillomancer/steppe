@@ -884,7 +884,12 @@ titled "Send → destination · Volume"). A plug-in parameter's lane is titled
 with its effect (the instance's label, else the plug-in's name) and the
 name the plug-in's description gives the parameter: "Marram · Filter 1
 Cutoff" (`views::envTitle` with the lane's scale); a parameter the plug-in
-does not describe shows its key after the effect. A send's visible lanes sit under the
+does not describe shows its key after the effect. An item's take FX
+automate on the item's track, in timeline position as the model keeps them:
+a visible envelope (or a modulated parameter) on one has a lane there like
+any other, titled with "(take)" after it, and it follows the item to
+another track. A clip's take FX have none here: their envelopes are in clip
+time. A send's visible lanes sit under the
 strip it leaves, after the strip's own and its effects' lanes; `route.set`
 records into them in touch, latch and write like `track.set`.
 

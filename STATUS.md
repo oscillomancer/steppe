@@ -264,8 +264,9 @@ instructions are in `docs/guides/installing.md`.
   - an item dragged into a cell makes a clip of the pressed item only;
   - a double-click on an audio clip opens the inspector, as there is no
     audio clip editor;
-  - an envelope on a take's FX has no lane, on an item's take or a clip's
-    (clip time), so clip-time envelopes are edited by command only;
+  - an envelope on a clip take's FX (clip time) has no lane, so clip-time
+    envelopes are edited by command only; an item's take FX have lanes, drawn
+    across the whole timeline although only the item's span plays;
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole
