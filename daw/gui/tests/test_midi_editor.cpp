@@ -3697,6 +3697,42 @@ TEST_CASE("MIDI editor: a clip's take envelopes and take FX parameters get lanes
     CHECK(f.lanesMenu().size() == 6);
 }
 
+TEST_CASE("MIDI editor: a clip's roll marks its end as an audio clip's pane does") {
+    // gui.md §4.7: shaded past the end over the grid, a line and "end".
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add",
+               R"({"track":")" + track +
+                   R"(","scene":"sc_1","name":"Riff","notation":"voice v; 1: C4:q D4:q r:h"})")
+            .find("clip")
+            ->asString();
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 60;
+    s.scrollBeat = -0.25;
+    f.frame();
+    // One bar: the end at beat 4, in view.
+    REQUIRE(s.endMarkX);
+    CHECK(*s.endMarkX == doctest::Approx(static_cast<double>(f.at(4, 60).x)).epsilon(0.001));
+    f.golden("midi-clip-end-dark.png");
+    // Scrolled so the end is left of the view: no mark.
+    s.scrollBeat = 6;
+    f.root->damageAll();  // the state set from here: nothing asked for the repaint
+    f.frame();
+    CHECK_FALSE(s.endMarkX);
+    // An item's roll marks its end the same way.
+    REQUIRE(f.editor->open(f.item));
+    s.scrollBeat = s.itemLength - 2;
+    f.root->damageAll();
+    f.frame();
+    REQUIRE(s.endMarkX);
+    CHECK(*s.endMarkX ==
+          doctest::Approx(static_cast<double>(f.at(s.itemLength, 60).x)).epsilon(0.001));
+}
+
 TEST_CASE("MIDI editor: a clip in another key than the project's: degrees preview what commits") {
     // Review round 73, F4: the preview read the project's key while the
     // engine commits by the clip's own. Here the project is in C major and

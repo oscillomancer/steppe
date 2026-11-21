@@ -270,11 +270,6 @@ class Roll : public ui::Node {
         for (int p = std::min(127, top); p >= std::max(0, bottom); --p)
             if (p % 12 == 0)
                 c.fillRect({b.x, g.yOf(p) + s_.rowHeight - 1, b.w, 1}, t.color("rule"));
-        // Outside the item: shaded.
-        const float x0 = g.xOf(0), x1 = g.xOf(s_.itemLength);
-        if (x0 > b.x) c.fillRect({b.x, b.y, x0 - b.x, b.h}, t.color("ground").withAlpha(0.6f));
-        if (x1 < b.right())
-            c.fillRect({x1, b.y, b.right() - x1, b.h}, t.color("ground").withAlpha(0.6f));
         // Grid: project grid lines, beats, bars.
         const double first = g.beatOf(b.x), last = g.beatOf(b.right());
         if (s_.grid > 0 && s_.grid * s_.pixelsPerBeat >= 6) {
@@ -289,6 +284,9 @@ class Roll : public ui::Node {
             const float x = g.xOf(bar - s_.itemPosition);
             c.fillRect({x, b.y, 1, b.h}, t.color("ink-faint"));
         }
+        // Outside the item or clip: shaded over the grid, its end marked as an
+        // audio clip's is; notes stay bright over it.
+        paintBounds(c, g);
         // Notes (selected on top), names when there is room.
         std::vector<std::size_t> order(s_.notes.size());
         for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
@@ -382,13 +380,25 @@ class Roll : public ui::Node {
             for (double at = first; g.xOf(at) <= b.right(); at += step)
                 c.fillRect({g.xOf(at), b.y, 1, b.h}, t.color("rule").withAlpha(alpha));
         }
+        paintBounds(c, g);
+    }
+
+    // Before the start and past the end: shaded; the end a line with "end".
+    void paintBounds(ui::Canvas& c, const Geometry& g) {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
         const float x0 = g.xOf(0), x1 = g.xOf(s_.itemLength);
         if (x0 > b.x) c.fillRect({b.x, b.y, x0 - b.x, b.h}, t.color("ground").withAlpha(0.6f));
+        s_.endMarkX.reset();
         if (x1 < b.right()) {
-            c.fillRect({x1, b.y, b.right() - x1, b.h}, t.color("ground").withAlpha(0.6f));
-            c.fillRect({x1, b.y, 1, b.h}, t.color("ink-quiet"));
-            c.text({x1 + 4, b.y + 2, 60, 14}, "end", ui::Font::Ui, t.type("caption"),
-                   t.color("ink-quiet"), ui::kLeft | ui::kMiddle);
+            const float from = std::max(x1, b.x);
+            c.fillRect({from, b.y, b.right() - from, b.h}, t.color("ground").withAlpha(0.6f));
+            if (x1 >= b.x) {  // the end itself in view
+                c.fillRect({x1, b.y, 1, b.h}, t.color("ink-quiet"));
+                c.text({x1 + 4, b.y + 2, 60, 14}, "end", ui::Font::Ui, t.type("caption"),
+                       t.color("ink-quiet"), ui::kLeft | ui::kMiddle);
+                s_.endMarkX = x1;
+            }
         }
     }
 

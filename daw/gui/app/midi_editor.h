@@ -113,6 +113,8 @@ struct RollState {
     // The lane pressed last (none after a press on the roll): the editor's
     // copy and paste keys take its points.
     std::optional<model::Id> envLastLane;
+    // Where the roll's last paint drew the end mark ("end"), if in view.
+    std::optional<float> endMarkX;
     bool envSelected(model::Id env, const model::EnvPoint& p) const {
         if (env != envSelLane) return false;
         for (const auto& [pos, value] : envSel)
