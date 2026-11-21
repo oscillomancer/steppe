@@ -1158,17 +1158,23 @@ notes); X4c is not built.* What a note sounds as is `model::soundingKey`
 results.
 
 - **Timeline items: at compile.** Item notes are compiled into each stage's
-  timed events at plan time, as now. A following take's note-ons are mapped
-  there through `soundingKey`, with the 128-key table memoised per pair of
-  places (the take's key and chord at the note's source beat, the project's at
-  its place), and each note-off takes its note-on's mapped key. Nothing is
-  added to the audio path, and there is no budget.
+  timed events at plan time, as now. A following take's note-ons take their
+  keys from `model::soundingNotes` (`session-model.md`): its places, by the
+  start rule, for every pass, chased note and crossing note the compile
+  emits, with the 128-key table memoised per pair of places (the take's key
+  and chord at the note's context beat, the project's at its song beat).
+  Each note-off takes its note-on's key. Nothing is added to the audio path,
+  and there is no budget.
 - **Launched clips: the live tables.** X4's tables move into one pool per plan,
   deduplicated by pair of places across all clip players. The budget stays per
   clip: its own pairs, counted before deduplication, at most `kFollowPairs`
   (1024); past it a `chords` clip follows its key, and past that it plays as
-  written, with `launch.follow_budget` at compile. A clip's outcome so depends
-  only on the clip and the project, never on what else is launched.
+  written. A clip's outcome so depends only on the clip and the project, never
+  on what else is launched. `launch.follow_budget` is a compile warning, given
+  once per clip each time a compile changes that clip's outcome (not on every
+  compile): `launch.clip` and `launch.scene` return it for the clips they
+  launch, and `launch.state` marks the clip's entry `follow_budget: true`
+  while the budget forces its outcome.
 - **`launch.state`** (X4a): each listed track gains `followed: "none" | "key" |
   "chords"`, the outcome the plan uses for the clip it plays or has queued,
   omitted when it plays the arrangement or nothing. `launch.unfollowed` goes.
@@ -1192,7 +1198,10 @@ results.
   context edit, in both executors; a note held across a context edit ends at
   its note-off, at its start's pitch; a looped item whose passes sound
   differently; a pooled source read by a following and a written take; a clip
-  over its budget beside one within it, each with its own outcome.
+  over its budget beside one within it, each with its own outcome; timeline
+  equals launcher for the same clip (a clip of length 8 over 4 beats of looping
+  content, C at clip beat 0 and Eb at 4, laid and launched, also at a take
+  playrate of 2); a chased note maps by its own start.
 
 ## 2. Real-time execution
 
