@@ -100,6 +100,27 @@ int nearestDegrees(int pitch, const harmony::Key& key, int semitones) {
 
 }  // namespace
 
+namespace {
+// An audio clip's time ruler (gui.md §4.7): the seconds between labels at
+// `pixelsPerSecond`, the first step at least `room` pixels wide, and a
+// label as m:ss.d (two decimals for steps under a tenth).
+double timeStep(double pixelsPerSecond, double room) {
+    for (double step : {0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0,
+                        120.0, 300.0, 600.0})
+        if (step * pixelsPerSecond >= room) return step;
+    return 1200.0;
+}
+std::string timeLabel(double seconds, double step) {
+    const double s = std::max(0.0, seconds);
+    const int minutes = static_cast<int>(s / 60);
+    char text[32];
+    std::snprintf(text, sizeof text, step < 0.1 ? "%d:%05.2f" : "%d:%04.1f", minutes,
+                  s - minutes * 60.0);
+    return text;
+}
+
+}  // namespace
+
 std::optional<harmony::Key> RollState::keyAt(double projectBeat) const {
     std::optional<harmony::Key> key;
     for (const KeySpan& k : keys) {
@@ -118,9 +139,13 @@ bool RollState::outsideKey(const RollNote& note) const {
     return std::find(classes.begin(), classes.end(), pc) == classes.end();
 }
 
+double RollState::audioGrid() const { return timeStep(pixelsPerBeat, 20); }
+
 double RollState::snapBeat(double itemBeat) const {
-    // An audio clip's axis is seconds: the project grid is not on it.
-    if (!snap || grid <= 0 || audio) return itemBeat;
+    // An audio clip's axis is seconds: its grid is in seconds, set by the
+    // zoom (audioGrid), not the project's beats.
+    if (snap && audio) return std::round(itemBeat / audioGrid()) * audioGrid();
+    if (!snap || grid <= 0) return itemBeat;
     const double project = itemPosition + itemBeat;
     return std::round(project / grid) * grid - itemPosition;
 }
@@ -128,24 +153,6 @@ double RollState::snapBeat(double itemBeat) const {
 // ----------------------------------------------------------------- geometry
 
 namespace {
-
-// An audio clip's time ruler (gui.md §4.7): the seconds between labels at
-// `pixelsPerSecond`, the first step at least `room` pixels wide, and a
-// label as m:ss.d (two decimals for steps under a tenth).
-double timeStep(double pixelsPerSecond, double room) {
-    for (double step : {0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0,
-                        120.0, 300.0, 600.0})
-        if (step * pixelsPerSecond >= room) return step;
-    return 1200.0;
-}
-std::string timeLabel(double seconds, double step) {
-    const double s = std::max(0.0, seconds);
-    const int minutes = static_cast<int>(s / 60);
-    char text[32];
-    std::snprintf(text, sizeof text, step < 0.1 ? "%d:%05.2f" : "%d:%04.1f", minutes,
-                  s - minutes * 60.0);
-    return text;
-}
 
 struct Geometry {
     const RollState& s;
@@ -365,10 +372,13 @@ class Roll : public ui::Node {
         const ui::Theme& t = c.theme();
         const ui::Rect b = bounds();
         c.fillRect(b, t.color("panel"));
-        const double step = timeStep(s_.pixelsPerBeat, 56);
-        const double first = std::floor(std::max(0.0, g.beatOf(b.x)) / step) * step;
-        for (double at = first; g.xOf(at) <= b.right(); at += step)
-            c.fillRect({g.xOf(at), b.y, 1, b.h}, t.color("rule").withAlpha(0.6f));
+        // The snap grid faint, the ruler's labelled lines over it.
+        for (const auto& [step, alpha] :
+             {std::pair{s_.audioGrid(), 0.25f}, {timeStep(s_.pixelsPerBeat, 56), 0.6f}}) {
+            const double first = std::floor(std::max(0.0, g.beatOf(b.x)) / step) * step;
+            for (double at = first; g.xOf(at) <= b.right(); at += step)
+                c.fillRect({g.xOf(at), b.y, 1, b.h}, t.color("rule").withAlpha(alpha));
+        }
         const float x0 = g.xOf(0), x1 = g.xOf(s_.itemLength);
         if (x0 > b.x) c.fillRect({b.x, b.y, x0 - b.x, b.h}, t.color("ground").withAlpha(0.6f));
         if (x1 < b.right()) {
@@ -1697,10 +1707,11 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
                 if (roll_) roll_->invalidate();
             }));
     }
-    midiOnly_.push_back(&header.emplace<ui::Button>("midi.snap", "Snap", [this] {
+    // Snap stays for an audio clip: its lanes snap to a seconds grid.
+    header.emplace<ui::Button>("midi.snap", "Snap", [this] {
         state_.snap = !state_.snap;
         refreshTitle();
-    }));
+    });
     midiOnly_.push_back(
         &header.emplace<ui::Button>("midi.quantize", "Quantize", [this] { quantize(); }));
     // The key at the item's start; lit, pitch drags and arrows go by degrees.
@@ -2462,7 +2473,7 @@ void MidiEditor::peaksReady() {
 void MidiEditor::refreshTitle() {
     if (!title_) return;
     if (state_.audio) {
-        title_->setText(titleBase_);
+        title_->setText(titleBase_ + (state_.snap ? "" : " \u00b7 snap off"));
         return;
     }
     const double g = state_.grid;

@@ -3981,16 +3981,17 @@ TEST_CASE("MIDI editor: an audio clip opens as its take's waveform in seconds, i
     s.pixelsPerBeat = 300;  // seconds on this axis
     s.scrollBeat = -0.1;
     settleWave(f);
-    // Only what an audio clip has: the title, the key button, Lanes, Close;
-    // no grid, Snap, Quantize, notation, event list, velocity or CC.
+    // Only what an audio clip has: the title, Snap (its lanes' seconds grid),
+    // the key button, Lanes, Close; no grid lengths, Quantize, notation,
+    // event list, velocity or CC.
     const std::string title = f.root->find("midi.title")->valueText();
-    CHECK(title.rfind("Audio · Keys — Break · clip · 2.00 s", 0) == 0);
-    for (const char* id : {"midi.grid.1/4", "midi.snap", "midi.quantize", "midi.notation.toggle",
+    CHECK(title == "Audio · Keys — Break · clip · 2.00 s");
+    for (const char* id : {"midi.grid.1/4", "midi.quantize", "midi.notation.toggle",
                            "midi.list.toggle", "midi.notation", "midi.velocity", "midi.cc"}) {
         INFO(id);
         CHECK_FALSE(f.root->find(id)->visible);
     }
-    for (const char* id : {"midi.key", "midi.lanes", "midi.close", "midi.roll"}) {
+    for (const char* id : {"midi.snap", "midi.key", "midi.lanes", "midi.close", "midi.roll"}) {
         INFO(id);
         CHECK(f.root->find(id)->visible);
     }
@@ -4090,15 +4091,40 @@ TEST_CASE("MIDI editor: an audio clip's Lanes menu and clip-time lanes are in se
     const auto points = [&](model::Id env) { return f.app->head().envelopes.find(env)->points; };
     REQUIRE(points(volume).size() == 1);
     CHECK(points(volume)[0].pos == 0);
-    // A click at 1.25 s adds a point there: seconds, not snapped to beats.
+    // The lanes snap to a seconds grid set by the zoom: 0.1 s at 300 px a
+    // second, so a click at 1.23 s adds a point at 1.2 s, not on a beat.
     ui::Node* lane = f.root->find("midi.env." + volume.str());
     REQUIRE(lane);
     const ui::Rect r = lane->bounds();
     const float y = r.y + 14 + (r.bottom() - 4 - r.y - 14) / 2;
-    f.pointer(ui::PointerEvent::Type::Down, {f.at(1.25, 60).x, y});
-    f.pointer(ui::PointerEvent::Type::Up, {f.at(1.25, 60).x, y});
+    auto click = [&](double seconds) {
+        f.pointer(ui::PointerEvent::Type::Down, {f.at(seconds, 60).x, y});
+        f.pointer(ui::PointerEvent::Type::Up, {f.at(seconds, 60).x, y});
+        f.frame();
+    };
+    CHECK(s.audioGrid() == doctest::Approx(0.1));
+    click(1.23);
     REQUIRE(points(volume).size() == 2);
-    CHECK(points(volume)[1].pos == doctest::Approx(1.25).epsilon(0.005));
+    CHECK(points(volume)[1].pos == doctest::Approx(1.2));
+    // Zoomed in to 1000 px a second the grid is 0.02 s.
+    s.pixelsPerBeat = 1000;
+    s.scrollBeat = 1.0;
+    f.frame();
+    CHECK(s.audioGrid() == doctest::Approx(0.02));
+    click(1.333);
+    REQUIRE(points(volume).size() == 3);
+    CHECK(points(volume)[2].pos == doctest::Approx(1.34));
+    // Snap off (the title says so): a click lands where it is.
+    REQUIRE(f.root->click("midi.snap"));
+    f.frame();
+    CHECK(f.root->find("midi.title")->valueText().ends_with("· snap off"));
+    click(1.457);
+    REQUIRE(points(volume).size() == 4);
+    CHECK(points(volume)[3].pos == doctest::Approx(1.457).epsilon(0.002));
+    REQUIRE(f.root->click("midi.snap"));
+    s.pixelsPerBeat = 300;
+    s.scrollBeat = -0.1;
+    f.frame();
     // The effect's parameter: its envelope is in time (an audio clip's FX),
     // its lane under the take's.
     f.pickLane(effect + ": parameters…");

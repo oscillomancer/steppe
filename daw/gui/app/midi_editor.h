@@ -200,6 +200,9 @@ struct RollState {
         ccErasing = false;
     }
     double snapBeat(double itemBeat) const;  // to the project grid when snapping
+    // An audio clip's snap grid in seconds: the finest of 0.01, 0.02, 0.05,
+    // 0.1, 0.2, 0.5, 1 s... at least 20 px wide at the zoom.
+    double audioGrid() const;
 };
 
 class MidiEditor {
