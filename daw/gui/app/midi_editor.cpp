@@ -1529,15 +1529,21 @@ MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dis
             return;
         }
         const model::Session& s = app_.head();
-        // A MIDI take, or the audio clip it had last.
+        // A MIDI take; an audio clip only when it was open last or picked in
+        // the launcher.
+        std::set<std::string> picked;
+        if (!lastItem_.empty()) picked.insert(lastItem_);
         auto isMidi = [&](const std::string& text) {
             const auto o = midiOwner(s, text);
-            return o && (o->source || text == lastItem_);
+            return o && (o->source || picked.contains(text));
         };
         std::vector<std::string> candidates;
         if (!lastItem_.empty()) candidates.push_back(lastItem_);
         if (ui_.clipsFocused)  // a launcher cell was clicked last
-            for (const std::string& c : ui_.selectedClips) candidates.push_back(c);
+            for (const std::string& c : ui_.selectedClips) {
+                candidates.push_back(c);
+                picked.insert(c);
+            }
         for (const std::string& it : ui_.selectedItems) candidates.push_back(it);
         for (const auto& e : s.items) candidates.push_back(e.id.str());
         for (const auto& e : s.clips) candidates.push_back(e.id.str());  // none: a clip

@@ -4020,6 +4020,7 @@ TEST_CASE("MIDI editor: an audio clip opens as its take's waveform in seconds, i
     f.editor->close();
     f.actions->invoke("ui.midi.toggle");
     CHECK(f.editor->state().item == clip);
+
     f.editor->setPeaks(nullptr);
 }
 
@@ -4130,6 +4131,13 @@ TEST_CASE("MIDI editor: an audio clip's key button sets its one key point") {
     f.exec("key.set", R"({"at":0,"tonic":"A","scale":"minor"})");
     const std::string clip = audioClip(f);
     const model::Id id = *model::Id::parse(clip);
+    // Nothing open yet: Alt+E opens the audio clip picked in the launcher
+    // (before the MIDI item it would open otherwise).
+    f.ui.selectedClips = {clip};
+    f.ui.clipsFocused = true;
+    f.actions->invoke("ui.midi.toggle");
+    CHECK(f.editor->state().item == clip);
+    f.editor->close();
     REQUIRE(f.editor->open(clip));
     f.frame();
     auto& s = f.editor->state();
