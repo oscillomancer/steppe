@@ -322,7 +322,11 @@ codes (`fx.param_unknown`, `fx.param_ambiguous`, `fx.param_id`,
 - **What is stored** is the canonical reference: on a semantic plug-in the
   semantic key that describes the parameter, whichever spelling the caller
   used; on any other plug-in (or for a parameter no key describes) the
-  decimal id. So each parameter has one stored spelling.
+  decimal id. So each parameter has one stored spelling. A key is matched
+  to its parameter by its schema entry's `id`: the host refuses a semantic
+  schema whose entries lack unique ids from the plug-in's parameter list
+  (the plug-in then shows plain parameters), and the resolver takes no key
+  without one.
   - *Values.* A key's envelope points are physical (the schema's units),
     an id's or a name's plain (the plug-in's own range). `env.add` given a
     semantic plug-in's parameter by id or name reads its points as plain,

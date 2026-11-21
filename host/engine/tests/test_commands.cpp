@@ -3360,6 +3360,14 @@ TEST_CASE("plug-in parameter references: one resolver for keys, ids and names") 
     }
     // A parameter no key describes keeps its id.
     CHECK(resolveParam(list, &schema, "Drive", "P")->canonical == "0");
+    // Round 79 J2: an entry without an id is not a key (the host refuses
+    // such a schema; this keeps one spelling if one got through).
+    const auto idless = *json::parse(R"({"params":{"mix":{"name":"Mix"}}})");
+    auto bare = resolveParam(list, &idless, "mix", "P");
+    REQUIRE(bare);
+    CHECK(bare->canonical == "2");
+    CHECK_FALSE(bare->semantic);
+    CHECK(resolveParam(list, &idless, "2", "P")->canonical == "2");
 }
 
 TEST_CASE("plug-in parameter references: a VST3's parameter is one parameter however named") {
