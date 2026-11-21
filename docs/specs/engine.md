@@ -1599,10 +1599,20 @@ first use, and no plug-in code runs early to warm it.
   - `analysis` and `warnings`.
 
   `skipped: [{track?, region?, reason}]` lists files left out by
-  `skip_silent` or `if_exists: skip`. `render.dry-run` lists each file with
+  `skip_silent`, `if_exists: skip` or, for stems with no `tracks` named, a
+  channel that can produce no audio (`reason: "no_audio"`, with a `detail`; a
+  track named in `tracks`, or in `stems.tracks`, is always rendered). That
+  is a channel that has a rack, none of whose Out modules (the only way audio
+  leaves a rack; Mod Out carries control and Notes Out plays an instrument
+  elsewhere) has an audio output cabled into it, and that nothing else feeds: no
+  items, FX, print, children, MIDI input, hardware input or send into it, and
+  no rack Out with audio patched to it (`modulate`'s Modulators channel, whose
+  Out `rack.add` made and nothing is patched to). A cable from a source this
+  build does not know counts as audio. It leaves the file counter alone. `render.dry-run` lists each file with
   `path` (where `if_exists` sends it), `exists` (its destination is already
   there), `skip: true` when `if_exists: skip` leaves it out, `seconds` and
-  `outputs: [{path, format}]`. With no `operation` it plans the settings'
+  `outputs: [{path, format}]`; a skipped no-audio channel is `{track, reason,
+  skip: true}`. With no `operation` it plans the settings'
   `source`. `render.mix` answers with its file's entry at the top level
   (plus `peak_dbfs`, `render`, `output_latency` and `skipped`), as before.
   The mix renders the `masters` setting, a file each in that order

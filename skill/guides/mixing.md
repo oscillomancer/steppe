@@ -49,7 +49,11 @@ Use `plugin.list` to find a plugin id for `fx.add`; the returned `fx` (also show
 ## Exporting and comparing versions
 
 `render.stems {mode: "isolated", tap: "post_fader"}` writes each top-level
-track before master processing. Use `mode: "through_master"` to hear one stem
+track before master processing. By default it leaves out a channel that can make no sound (the
+Modulators channel `modulate` adds: its rack has only control outputs, no audio patched to its Out,
+and nothing feeds it) and
+says so in `skipped: [{track, reason: "no_audio", detail}]`; name the track in `tracks` to render
+it anyway. Use `mode: "through_master"` to hear one stem
 at a time through the master chain. `render.regions` writes named regions; a
 project's `render.matrix` can select tracks or master ids for each region.
 `render.dry-run {operation: "regions"}` lists the files and lengths first.
