@@ -951,14 +951,14 @@ void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInpu
     std::uint32_t fold = frames;
     if (loop && loop->active() && pos < loop->end && pos + frames + lead > loop->end)
         fold = static_cast<std::uint32_t>(std::max<std::int64_t>(0, loop->end - lead - pos));
-    const auto window = [&](std::uint32_t from, std::uint32_t to, bool folded) SUPPLE_RT {
-        if (to <= from) return;
+    const auto window = [&](std::uint32_t first, std::uint32_t to, bool folded) SUPPLE_RT {
+        if (to <= first) return;
         std::int64_t t = 0;
-        foldInput(loop, pos, lead, from, t);
+        foldInput(loop, pos, lead, first, t);
         L.unanchored = in.unanchored || folded;
         const std::size_t before = events.size();
-        clipMidi(p, pl, L, t - n.timelineShift, to - from, events);
-        for (std::size_t k = before; k < events.size(); ++k) events[k].time += from;
+        clipMidi(p, pl, L, t - n.timelineShift, to - first, events);
+        for (std::size_t k = before; k < events.size(); ++k) events[k].time += first;
     };
     window(0, fold, false);
     if (fold >= frames) return;
