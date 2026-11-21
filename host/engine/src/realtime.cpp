@@ -928,6 +928,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
             seekSample_.store(time::samplesAt(*recoverySeek, config_.sampleRate),
                               std::memory_order_relaxed);
             seekSeq_.fetch_add(1, std::memory_order_relaxed);
+            seekEpoch_.store(epoch_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
         });
     wakeRenderer();
     notifyMain();
@@ -994,6 +995,7 @@ Status Engine::prepareSeek(double seconds) {
         seekSample_.store(time::samplesAt(std::max(0., seconds), config_.sampleRate),
                           std::memory_order_relaxed);
         seekSeq_.fetch_add(1, std::memory_order_relaxed);
+        seekEpoch_.store(epoch_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
         if (rateLoopTarget_) {
             loopStart_.store(rateLoopTarget_->start, std::memory_order_relaxed);
             loopEnd_.store(rateLoopTarget_->end, std::memory_order_relaxed);
@@ -1054,6 +1056,20 @@ std::int64_t Engine::playedPosition(std::uint64_t epoch, std::int64_t epochStart
     return rtPosEpoch_.load(std::memory_order_acquire) == epoch ? rtPos_.load() : epochStart;
 }
 
+std::int64_t Engine::anticipativePosition(std::uint64_t epoch) const {
+    // Until the renderer has relocated for `epoch` (review round 70 P3: a
+    // pause and a launch or capture in one main-thread turn), the position
+    // relocate() will take: a seek's sample when a seek opened an epoch it
+    // has not relocated for, else where the epoch it last relocated for was
+    // heard (a pause or a loop change resumes there). Not that epoch's start.
+    const auto done = epochDone_.load(std::memory_order_acquire);
+    if (done < epoch) {
+        if (seekEpoch_.load(std::memory_order_acquire) > done) return seekSample_.load();
+        return playedPosition(done, epochStart_.load());
+    }
+    return playedPosition(epoch, epochStart_.load());
+}
+
 std::int64_t Engine::playedStream(std::uint64_t epoch) const {
     const auto stream = rtStream_.load();  // consumption/renderer-arm handshake
     return rtPosEpoch_.load(std::memory_order_acquire) == epoch ? stream : 0;
@@ -1070,8 +1086,7 @@ TransportState Engine::transport() const {
         t.sample = static_cast<std::int64_t>(std::llround(sample));
         t.seconds = sample / config_.sampleRate;
     } else {
-        t.sample =
-            options_.anticipative ? playedPosition(epoch, epochStart_.load()) : reportedPos_.load();
+        t.sample = options_.anticipative ? anticipativePosition(epoch) : reportedPos_.load();
         const auto* prepared = latestPlan_.load(std::memory_order_acquire);
         if (prepared && prepared->rateSeekSequence != 0 &&
             prepared->preparedRateBoundary.epoch == epoch)

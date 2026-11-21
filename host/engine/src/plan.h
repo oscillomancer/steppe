@@ -1427,7 +1427,8 @@ bool processBlock(Plan& p, std::int64_t pos, std::uint32_t frames, bool playing 
                   const LoopRange* loop = nullptr) SUPPLE_RT;
 // The same on the worker pool (the caller helps): bit-identical results.
 // Not SUPPLE_RT itself (it wakes the helpers); every node task is.
-bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t frames);
+bool processBlockOn(Workers& workers, Plan& p, std::int64_t pos, std::uint32_t frames,
+                    const LoopRange* loop = nullptr);
 // Callback fork-join; split selects the live subgraph, otherwise all nodes.
 // Transport/device input and buffers stay immutable until all helpers depart.
 bool processCallbackBlock(LiveWorkers* workers, Plan& p, std::int64_t pos, std::uint32_t frames,

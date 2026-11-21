@@ -104,10 +104,11 @@ struct Lfo : Module {
                 "between neighbours.");
     Param rate =
         frequency("Rate", 0.01, 100, 1).in("Time").help("Cycles a second while not synced.");
-    Param sync =
-        toggle("Sync", false)
-            .in("Time")
-            .help("Lock the cycle to the song's tempo and position, one cycle a division.");
+    Param sync = toggle("Sync", false)
+                     .in("Time")
+                     .help(
+                         "Lock the cycle to the song's tempo and position, one cycle a division; "
+                         "stopped, it holds the phase of the play position.");
     Param division =
         choice("Division",
                {"16/1", "8/1", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32",
@@ -170,8 +171,7 @@ struct Lfo : Module {
     };
     Array<Voice, 16> state;
     bool resetHigh = false;
-    double anchor = 0.0;     // the beat a synced reset started from
-    double freeBeats = 0.0;  // the song position, run on at tempo while stopped
+    double anchor = 0.0;  // the beat a synced reset started from
     int pulseFrames = 48;
     int salt = 0;
 
@@ -207,9 +207,9 @@ struct Lfo : Module {
         const bool unipolar = polarity.index() == 1;
         const bool driven = drive.connected();
         for (int i = 0; i < frames; ++i) {
-            const double beats =
-                t.playing ? t.beats + (t.offset + i) * beatStep : freeBeats + beatStep;
-            freeBeats = beats;
+            // The song position; stopped, the play position, so a synced
+            // cycle holds the phase it will start from (as glitch holds).
+            const double beats = t.playing ? t.beats + (t.offset + i) * beatStep : t.beats;
             const double r = reset[0][i];
             bool restart = false;
             if (!resetHigh && r >= 0.5) {

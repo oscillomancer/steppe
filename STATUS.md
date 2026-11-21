@@ -256,8 +256,9 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
-    - the engine logs no seeks or transport wraps, so the offline
-      replay plays one linear run and a capture ends at a relocation.
+    - a capture ends at a seek, a loop change or a stop, by design
+      (ADR-0097, revision 2026-11-20, batch 3); the offline replay
+      wraps at the loop as live does, but not under a master playrate.
 - **Clip launcher, pane** (ADR-0097, steps L3 and L4; gui.md §4.15): scenes as
   columns between the track panel and the lanes, on the arrange view's
   rows, with a resizable width, a full-view mode and a View menu toggle
