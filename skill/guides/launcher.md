@@ -82,8 +82,12 @@ keeps the harmony at a place. Say it when you make the clip:
 written against (or its chord at that beat) to the key (or chord) under the item. Write a
 clip once in D minor with `follow: key`, and it lands in C minor, or F minor from bar 7, with
 no second copy. Each laid item's answer has `followed: {mode, regions, folded?, unrolled?,
-copied?}`; `regions` read like `5-6 transpose D minor>C minor -2` (project bars, the keys, how
-the notes moved).
+copied?}`; `regions` is a list of runs, each `{from_bar, to_bar, from_key, to_key, by,
+interval?}` (project bars, inclusive; `by` is `transpose` with the `interval` in semitones,
+`degree`, `chords` or `copy`): the run `5-6 transpose D minor>C minor -2` is `{from_bar: 5,
+to_bar: 6, from_key: "D minor", to_key: "C minor", by: "transpose", interval: -2}`. A `chords`
+run names no chords and no interval, and is the same whether the chords under it differ from the
+clip's or match them: `midi.get` on the laid item says what it now holds.
 
 - Same scale: a transpose by the nearest interval. Scales of the same size (D minor to C
   major): by degree. Different sizes (a pentatonic): a transpose, with `context.scale_shape`.
@@ -93,7 +97,10 @@ the notes moved).
   copied, and `followed.copied` says why (`drums`, `no_notes`, `no_key`, `audio`).
 - Where no key holds under the item, the notes are copied with `context.no_key`.
 - A looped item stays looped when every pass maps alike; when the key changes between
-  passes the item is laid out pass by pass (`unrolled: true`).
+  passes, or in `chords` mode the chords under one pass differ from the next, the item is laid
+  out pass by pass (`unrolled: true`).
+- Under a bar the context track marks "no chord" (`""`), `chords` falls back to a transpose by
+  the key (`by: transpose` for that bar).
 - `pooled: true` with a mapping that moves a note is refused (`clip.follow_pooled`).
 - A launched clip is **not** followed yet: it plays as written, and `launch.clip` /
   `launch.scene` warn `launch.unfollowed` for a clip whose `follow` is not `none`.
@@ -125,7 +132,7 @@ make bars short.
 A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.scene` skips it with a warning. `launch.stop` on a track with no clips is
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
-master playrate does not stop launches, but while it keeps the pitch an audio clip's
+master playrate (`transport.playrate.set`) does not stop launches, but while it keeps the pitch an audio clip's
 launch is refused (`launch.playrate`), and `launch.capture` is refused under any active
 playrate. A clip's FX and envelopes play through its own chain; a rack's Notes module
 and the track's MIDI sends follow launches.
