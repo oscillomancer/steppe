@@ -1743,6 +1743,58 @@ midi.edit does", "a clip opens with all its notes in view under its taller strip
 clip laid in another key shows its notes outside the key", "a launcher clip opens at beat 0 in its own key and chords", and
 "clip context edit: the printed lead sheet …".
 
+**A following take** (ADR-0098 amended, "following is playback"; X4e,
+mocks 133 and 134). An item's heard MIDI take whose `follow` is key or
+chords sounds mapped from its own context to the song's; its notes stay as
+written. The roll shows both, from `model::soundingNotes` (what the engine
+compiles) and, for a place no note has yet, `model::placeAt` and
+`soundsAt`:
+- **The sounding view** is the default: each note drawn where it sounds,
+  its name spelled in the song's key; its written pitch a 1-unit outline in
+  the notes' colour at 60%, under the notes, with no name, only where the
+  two differ. A note not heard (outside the loop window, past the end), and
+  channel 10, have no outline. Clicks and the marquee hit a note where it is
+  drawn, never its outline.
+- **Written** (`midi.written`), a cell in the header shown only while the
+  take follows, turns the **written view** on: the written pitches drawn,
+  the sounding ones outlined. It is a view setting saved with the editor's
+  layout (`"written"`).
+- **The strip's rows.** A take with a context adds a second chord row,
+  dim and read-only, and the keyboard column names both: in the sounding
+  view **song** (the project's chords, as on any item) then **take** (the
+  take's own: each point at every repeat of its context beat on the roll's
+  axis, the chord holding at the left carried in, the last ending with the
+  item); in the written view **take** first and **song** second. Only the
+  song's row is edited here (a double-click, as on the ruler); the take's
+  becomes editable with `take.set {context}` (X4d).
+- **Key, shading, spelling, title.** The sounding view reads the song's
+  key; the written view the take's own at each note's context beat, and
+  its key button names the take's key where the content starts. The title
+  says "follows D major → E minor" (the take's key at its start, the
+  song's at the item's start) or "written in D major", and its "outside
+  the key" count counts the notes as drawn.
+- **Notation and List** always show and edit written notes, the take's
+  text: the notation pane's title reads "Notation · written" and the list's
+  header says "written" while the take follows.
+- **Edits act on written notes**, through `midi.edit`. In the sounding
+  view a pitch drag steps the written pitch by semitones and previews where
+  it will sound (the place it lands, the start rule); a move in time keeps
+  the written pitch and follows the new place. A double-click writes the
+  written pitch nearest the row that sounds as it there (within an
+  octave); where none does, it writes nothing and the status line says
+  "MIDI: nothing written sounds as G#4 here: draw it in Written". Degree
+  mode is off on a following take until `midi.edit`'s degrees read the
+  take's own context (X4d), when a sounding-view drag steps by degrees.
+- **Passes.** A looped item whose passes sound differently shows the pass
+  chosen in **Pass 1 of 4** (`midi.pass`, shown only then; its menu lists
+  "Pass 2 · bar 3"...), the first by default; edits change every pass.
+- A clip has no place: its roll stays as written (`midi.sounding_clip`).
+
+Tests: test_midi_editor "a following take's roll: where its notes sound,
+the written outlined, Written, two rows", "…: the pencil writes what
+sounds as the row, or says it cannot" and "a take that does not follow
+opens its roll as written, with no Written cell".
+
 **Lanes.** One menu owns every lane under the roll: **Lanes** in the header
 (it replaced the CC button). It shows Velocity and five controllers (CC 1
 mod, 7 volume, 10 pan, 11 expression, 64 sustain), checked when shown;

@@ -184,6 +184,44 @@ struct RollState {
     // gui::ClipContextAxis), its first pass only, the last chord ending at
     // contextEnd; `keys` are already in content beats (gui::clipKeySpans).
     double contextShift = 0, contextEnd = 0;
+    // A following take (ADR-0098 amended; gui.md §4.7 "A following take"): an
+    // item's heard take whose follow is key or chords. The roll draws each note
+    // where it sounds and outlines its written pitch, or, with `written` (the
+    // Written cell), the written pitches with the sounding ones outlined.
+    bool following = false;
+    bool written = false;
+    bool soundingView() const { return following && !written; }
+    // What each note sounds as in the pass shown, index for index with
+    // `notes` (model::soundingNotes): its pitch (-1: not heard in that pass,
+    // drawn as written) and that occurrence's song beat less the roll's
+    // (itemPosition + start), so a preview at a moved place reads the same
+    // pass.
+    struct Sounds {
+        int pitch = -1;
+        double shift = 0;
+    };
+    std::vector<Sounds> sounds;
+    int pass = 0, passes = 1;   // the pass shown, of the passes the item plays
+    double passShift = 0;       // its song beats less the roll's, for a new note
+    bool passesDiffer = false;  // some note sounds otherwise in another pass
+    // What a note written as `pitch` on `channel` (1..16) sounds as at song
+    // beat `beat` (model::placeAt and soundsAt); set for a following take.
+    std::function<int(int pitch, int channel, double beat)> soundsAt;
+    // What note `i` sounds as, as `n` (the note or its drag preview) has it;
+    // none when the take does not follow or the note is not heard.
+    std::optional<int> soundingPitch(std::size_t i, const RollNote& n) const;
+    // The pitch note `i` is drawn at (the view's), and its outline's: none
+    // where the two agree or the note is not heard.
+    int drawnPitch(std::size_t i, const RollNote& n) const;
+    std::optional<int> outlinePitch(std::size_t i, const RollNote& n) const;
+    // The strip's rows for a take with a context (gui.md §4.7): `chords` is
+    // the context the view reads, `otherChords` the other one, dim and
+    // read-only, each labelled in the keyboard column ("song", "take"). A
+    // take's chords end with the item (`chordsEnd`, `otherEnd`, roll beats);
+    // the song's run on.
+    std::vector<ChordMark> otherChords;
+    std::string rowLabel, otherLabel;
+    std::optional<double> chordsEnd, otherEnd;
     std::optional<harmony::Key> keyAt(double projectBeat) const;
     // A note off channel 10 whose pitch is not in the key holding at its
     // start (none holding: false). The roll outlines it, and the title
@@ -236,8 +274,8 @@ class MidiEditor {
     static constexpr float kDefaultHeight = 420, kMinHeight = 160;
     float height() const { return height_; }
     void setHeight(float height);
-    // {"height", "velocity", "cc"}: the UI sidecar's "midi" section ("cc" 0:
-    // the CC lane hidden).
+    // {"height", "velocity", "cc", "written"}: the UI sidecar's "midi" section
+    // ("cc" 0: the CC lane hidden; "written": a following take's Written cell).
     json::Value saveLayout() const;
     void loadLayout(const json::Value& v);
     // Row (key) height zoom, anchored at the window y whose pitch stays put.
@@ -260,6 +298,9 @@ class MidiEditor {
     // right, and the chords its chord row named (tests).
     const std::vector<int>& barLabels() const { return barLabels_; }
     const std::vector<std::string>& chordLabels() const { return chordLabels_; }
+    // The strip's second row's names (a take's context, or the song's in the
+    // written view), as last painted (tests).
+    const std::vector<std::string>& otherChordLabels() const;
     // Edge scroll in the piano roll (gui.md §4.7): true while a drag is held
     // at an edge of the roll; autoScroll advances it by `seconds` and is
     // true when the view moved (sync calls it with the frame's time).
@@ -268,6 +309,9 @@ class MidiEditor {
     ui::TextArea* notation() const { return text_; }
     MidiEventList* eventList() const { return eventList_.get(); }
     std::uint64_t beginGesture();
+    // A refusal the roll gives itself (the pencil in the sounding view), to
+    // the actions' error hook, so the status line says it.
+    void refuse(const std::string& message);
     Status edit(json::Value ops, std::optional<std::uint64_t> expectedVersion =
                                      {});  // midi.edit on the open item, keeping the selection
     void selectAll();
@@ -276,6 +320,8 @@ class MidiEditor {
     void transpose(int semitones);
     void transposeDegrees(int degrees);  // midi.edit transpose_degrees on the selection
     ui::Toggle* keyButton() const { return keyButton_; }
+    ui::Toggle* writtenButton() const { return writtenButton_; }
+    ui::Button* passButton() const { return passButton_; }
     const std::string& keyText() const { return keyText_; }  // the key button's words
     // The chord field (views/chord_field.h) for the chord point at the project
     // beat `beat`, opened at the window point `at` (the strip's double-click).
@@ -398,13 +444,18 @@ class MidiEditor {
                    std::optional<std::uint64_t> expectedVersion = {},
                    std::string_view what = "Lanes");
     std::unique_ptr<PluginScales> scales_;
-    ui::Node* envColumn_ = nullptr;    // the clip-time lanes, under the CC lane
-    std::vector<model::Id> envNodes_;  // the envelopes envColumn_ has lanes for
+    ui::Node* envColumn_ = nullptr;        // the clip-time lanes, under the CC lane
+    std::vector<model::Id> envNodes_;      // the envelopes envColumn_ has lanes for
+    ui::Toggle* writtenButton_ = nullptr;  // a following take's Written cell
+    ui::Button* passButton_ = nullptr;     // its Pass cell, while passes differ
+    std::vector<double> passStarts_;       // each pass's first heard song beat
+    void openPassMenu();
     ui::Toggle* keyButton_ = nullptr;
     std::string keyText_ = "No key";  // the key button's words (its width follows them)
     void refreshKeyButton();
     ui::Node* notationPane_ = nullptr;
     ui::Label* title_ = nullptr;
+    ui::Label* notationTitle_ = nullptr;  // "Notation", "· written" while the take follows
     ui::TextArea* text_ = nullptr;
     ui::TextBlock* diagnostics_ = nullptr;
     ui::Root::OverlayHandle playheadHandle_;

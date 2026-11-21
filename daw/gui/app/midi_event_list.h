@@ -56,6 +56,7 @@ class MidiEventList {
     MidiEditor& editor_;
     engine::EngineApp& app_;
     ui::List* list_ = nullptr;
+    ui::Node* columns_ = nullptr;  // the column header
     ui::TextField* field_ = nullptr;
     ui::Label* status_ = nullptr;
     std::vector<Row> rows_;

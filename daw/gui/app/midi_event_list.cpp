@@ -116,12 +116,21 @@ class EventRows : public ui::List {
 class Columns : public ui::Node {
   public:
     Columns() : Node("midi.list.columns") { layout.height = ui::SizeRule::fixed(24); }
+    // True while the take follows: the rows are its written notes, and the
+    // header says so at its right (gui.md §4.7).
+    std::function<bool()> written;
     void paint(ui::Canvas& c) override {
         static constexpr const char* labels[] = {"Position",   "Type",        "Length",
                                                  "Pitch / CC", "Vel / value", "Channel"};
         for (std::size_t i = 0; i < kColumns; ++i)
             c.text(cellRect(bounds(), i), labels[i], ui::Font::UiBold, c.theme().type("caption"),
                    c.theme().color("ink-quiet"));
+        if (written && written()) {
+            const ui::Rect b = bounds();
+            c.text({b.right() - 68, b.y, 60, b.h}, "written", ui::Font::Ui,
+                   c.theme().type("caption"), c.theme().color("ink-quiet"),
+                   ui::kRight | ui::kMiddle);
+        }
     }
 };
 }  // namespace
@@ -134,7 +143,9 @@ std::unique_ptr<ui::Node> MidiEventList::build() {
     panel->layout.dir = ui::Layout::Dir::Column;
     panel->layout.width = ui::SizeRule::fraction();
     panel->visible = false;
-    panel->emplace<Columns>();
+    auto& columns = panel->emplace<Columns>();
+    columns.written = [this] { return editor_.state().following; };
+    columns_ = &columns;
     auto& rows = panel->emplace<EventRows>();
     list_ = &rows;
     field_ = rows.field;
@@ -190,6 +201,7 @@ void MidiEventList::sync() {
         return;
     cancel();
     item_ = editor_.state().item;
+    if (columns_) columns_->invalidate();  // "written" comes and goes with following
     projectGeneration_ = app_.projectGeneration();
     version_ = s.version;
     rows_.clear();

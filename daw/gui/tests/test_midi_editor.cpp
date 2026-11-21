@@ -13,7 +13,9 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <set>
 #include <thread>
@@ -31,6 +33,7 @@
 #include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
+#include "supple/json/write.h"
 #include "supple/params/params.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
@@ -40,6 +43,7 @@
 #include "supple/ui/widgets.h"
 #include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
+#include "supple/views/launcher.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -4837,4 +4841,159 @@ TEST_CASE("MIDI editor: a launcher clip opens at beat 0 in its own key and chord
     f.exec("clip.remove", R"({"clip":")" + clip + R"("})");
     f.frame();
     CHECK_FALSE(f.editor->isOpen());
+}
+
+namespace {
+
+// The fixture item's heard take given its own context and follow (schema
+// 2.21) through a save and an open: no command sets them before X4d.
+// `context` is the points' JSON array, `follow` "key" or "chords".
+void followTake(Fixture& f, const std::string& context, const std::string& follow) {
+    const auto itemId = model::Id::parse(f.item);
+    REQUIRE(itemId);
+    const model::Item* item = f.app->head().items.find(*itemId);
+    REQUIRE(item);
+    REQUIRE(item->activeTake);
+    const std::string take = item->activeTake->str();
+    const auto path = f.dir / ("follow." + std::string(product::kSlug));
+    auto args = json::Value::object();
+    args["path"] = path.string();
+    REQUIRE(f.dispatcher->execute({"project.save", args, kTest}));
+    std::string bytes;
+    {
+        std::ifstream in(path, std::ios::binary);
+        bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    auto doc = json::parse(bytes);
+    REQUIRE(doc);
+    json::Value& tk = (*doc)["takes"][take];
+    tk["context"] = json::parse(context).value();
+    tk["follow"] = follow;
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << json::writeCompact(*doc);
+    }
+    REQUIRE(f.app->open(path));
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+}
+
+std::string labelText(Fixture& f, const char* id) {
+    auto* label = dynamic_cast<ui::Label*>(f.root->find(id));
+    REQUIRE(label);
+    return label->text();
+}
+
+}  // namespace
+
+// gui.md §4.7 "A following take" (ADR-0098 amended, X4e).
+TEST_CASE(
+    "a following take's roll: where its notes sound, the written outlined, Written, two rows") {
+    Fixture f;
+    if (!f.ok) return;
+    // The song in E minor, Em from the item's start (beat 4); the take written
+    // in C major over C then F, following the key: C4 E4 G4 C5 sound as E4 G4
+    // B4 E5 (harmony.md §5 step 4, C major degrees onto E minor's).
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    f.exec("chord.set", R"({"at":4,"symbol":"Em"})");
+    followTake(f,
+               R"([{"beat":0,"type":"key","tonic":"C","scale":"major"},
+                   {"beat":0,"type":"chord","symbol":"C"},
+                   {"beat":2,"type":"chord","symbol":"F"}])",
+               "key");
+    auto& s = f.editor->state();
+    REQUIRE(s.following);
+    REQUIRE(s.notes.size() == 4);
+    auto pitches = [&] {
+        std::vector<int> drawn, outlined;
+        for (std::size_t i = 0; i < s.notes.size(); ++i) {
+            drawn.push_back(s.drawnPitch(i, s.notes[i]));
+            outlined.push_back(s.outlinePitch(i, s.notes[i]).value_or(-1));
+        }
+        return std::pair{drawn, outlined};
+    };
+    // The sounding view by default: the notes where they sound, the written
+    // pitches outlined.
+    CHECK(s.soundingView());
+    CHECK(pitches().first == std::vector<int>{64, 67, 71, 76});
+    CHECK(pitches().second == std::vector<int>{60, 64, 67, 72});
+    REQUIRE(f.editor->writtenButton());
+    CHECK(f.editor->writtenButton()->visible);
+    CHECK_FALSE(f.editor->passButton()->visible);  // one pass
+    CHECK(f.editor->keyText() == "E minor");
+    CHECK_FALSE(f.editor->keyButton()->enabled);  // no degree mode on a following take yet
+    CHECK(labelText(f, "midi.title")
+              .find("follows C major " + std::string(views::kFollowMark) + " E minor") !=
+          std::string::npos);
+    // The notation is the take's text: written, and says so.
+    CHECK(labelText(f, "midi.notation.title") == "Notation \u00b7 written");
+    // The strip: the song's chords, then the take's, dim.
+    CHECK(f.editor->chordLabels() == std::vector<std::string>{"Em"});
+    CHECK(f.editor->otherChordLabels() == std::vector<std::string>{"C", "F"});
+    f.golden("midi-following-sounding.png");
+    // A click hits a note where it is drawn, not its outline.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 64));
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.5, 64));
+    CHECK(s.selected == std::set<std::size_t>{0});
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 60));
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.5, 60));
+    CHECK(s.selected.empty());
+
+    // Written: the written pitches, the sounding ones outlined, the take's
+    // key and chords first, the song's second; remembered with the layout.
+    REQUIRE(f.root->click("midi.written"));
+    f.frame();
+    CHECK(s.written);
+    CHECK_FALSE(s.soundingView());
+    CHECK(pitches().first == std::vector<int>{60, 64, 67, 72});
+    CHECK(pitches().second == std::vector<int>{64, 67, 71, 76});
+    CHECK(f.editor->keyText() == "C major");
+    CHECK(labelText(f, "midi.title").find("written in C major") != std::string::npos);
+    CHECK(f.editor->chordLabels() == std::vector<std::string>{"C", "F"});
+    CHECK(f.editor->otherChordLabels() == std::vector<std::string>{"Em"});
+    const json::Value layout = f.editor->saveLayout();
+    REQUIRE(layout.find("written"));
+    CHECK(layout.find("written")->asBool());
+    REQUIRE(f.root->click("midi.written"));
+    f.frame();
+    CHECK(s.soundingView());
+}
+
+TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or says it cannot") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"}])", "key");
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    // D5 sounds from B4 (C major's seventh degree onto E minor's).
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.6, 74), 2);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.6, 74), 2);
+    bool written = false;
+    const json::Value notes = f.notes();
+    for (const json::Value& n : notes.asArray())
+        if (n.find("pitch")->asInt() == 71 && std::abs(n.find("start")->asDouble() - 0.5) < 1e-9)
+            written = true;
+    CHECK(written);
+    CHECK(errors.empty());
+    // No written pitch sounds as G#4 here (C major's E and F go to G and A):
+    // nothing is written, and the status line says so.
+    const auto before = f.notes().asArray().size();
+    f.pointer(ui::PointerEvent::Type::Down, f.at(2.6, 68), 2);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(2.6, 68), 2);
+    CHECK(f.notes().asArray().size() == before);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0] == "MIDI: nothing written sounds as G#4 here: draw it in Written");
+}
+
+TEST_CASE("a take that does not follow opens its roll as written, with no Written cell") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    CHECK_FALSE(f.editor->state().following);
+    CHECK_FALSE(f.editor->writtenButton()->visible);
+    CHECK_FALSE(f.editor->passButton()->visible);
+    CHECK(labelText(f, "midi.notation.title") == "Notation");
+    CHECK(f.editor->otherChordLabels().empty());
 }
