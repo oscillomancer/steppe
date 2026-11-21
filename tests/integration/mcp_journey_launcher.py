@@ -96,7 +96,10 @@ SONG_CHORDS = """1: key C minor {Cm7}:w
 12: {Fm7}:h {G7}:h
 """
 
-TIMEOUT = 120.0
+# Only a hang ends a poll: every condition polled for here takes a few seconds on any machine
+# that plays in real time, so the limit is far above what a slow runner needs, and below
+# ctest's own test timeout (1500 s).
+TIMEOUT = 600.0
 
 
 class Launcher(Journey):
