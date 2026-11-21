@@ -857,9 +857,6 @@ int frontendMain(int argc, char** argv) {
         // The menu bar's Item menu: the item entries the right-click menu
         // leaves out (gui.md).
         chrome.setMenuSource("Item", [&] { return shell.arrange()->gestures().itemBarMenu(); });
-        g.onError = [](const Error& e) {
-            std::fprintf(stderr, "edit refused: %s\n", e.toString().c_str());
-        };
         g.keysFor = [&](std::string_view action) { return appActions.keysFor(action); };
         g.onSeek = [&dispatcher, ui](double seconds) {
             json::Value args = json::Value::object();
