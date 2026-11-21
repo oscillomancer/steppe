@@ -282,6 +282,13 @@ Result<ItemResult> extractFromClip(EngineApp& app, const model::Session& s,
     convertTakeFxEnvelopes(t, s, take, shaped->fxEnvelope);  // onto the timeline (C2)
     shaped->item.takes = {take};
     shaped->item.activeTake = take;
+    // The take is laid as placement lays a clip: it gets the clip's context in its own beats and
+    // the clip's follow (ADR-0098, following is playback); a clip with none leaves it as it is.
+    if (clip.kind == model::ClipKind::Midi && !clip.context.empty())
+        t.modify<model::Take>(take, [&](model::Take& k) {
+            model::takeContextFromClip(k, clip, 0.0, clip.follow);
+            model::fitTakeContext(k, model::TakeHome::Item);
+        });
     if (clip.takes.size() == 1) {
         t.remove<model::Clip>(clipId);
     } else {

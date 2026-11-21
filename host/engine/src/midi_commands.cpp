@@ -10,9 +10,12 @@
 // beats from the item's start, midi.edit applies ordered operations to them.
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <set>
+#include <tuple>
 
 #include "supple/engine/app.h"
+#include "supple/json/write.h"
 #include "supple/harmony/harmony.h"
 #include "supple/model/follow.h"
 #include "supple/model/schemas.h"
@@ -614,22 +617,139 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
             last = id;
         }
     }
+    // Following (ADR-0098, following is playback): what sounds is preserved, and checked. Takes
+    // that all follow in one mode merge into a take that follows in it, with the context of each
+    // source carried over onto the result's source beats; mixed or different modes are refused.
+    const auto followRefusal = [](std::string message) {
+        return Error("item.follow_merge", std::move(message), "/items",
+                     "take.bake the following takes first, then consolidate");
+    };
+    const bool lone = ids.size() == 1;
+    std::size_t following = 0;
+    for (const auto& [id, take] : parts)
+        if (s.takes.find(take)->follow != model::ClipFollow::None) ++following;
+    const model::ClipFollow mode = s.takes.find(parts.front().second)->follow;
+    if (following != 0) {
+        if (following != parts.size())
+            return followRefusal("some of the takes follow the project's context and some do not, "
+                                 "so merging would change how some notes sound");
+        for (const auto& [id, take] : parts)
+            if (s.takes.find(take)->follow != mode)
+                return followRefusal(id.str() + " follows by " +
+                                     (s.takes.find(take)->follow == model::ClipFollow::Chords
+                                          ? "chords"
+                                          : "key") +
+                                     " and the others by " +
+                                     (mode == model::ClipFollow::Chords ? "chords" : "key"));
+    }
+    // The result's context, in the result's source beats. A note of the first source that is
+    // chased at its start keeps its true start, before the result's start: `leadIn` beats.
+    double leadIn = 0.0;
+    std::vector<model::ContextPoint> mergedContext;
+    std::vector<model::SoundingNote> baseHeard;
+    if (following != 0) {
+        constexpr double kEdge = 1e-9;
+        if (!lone) {
+            baseHeard = model::soundingNotes(s, base, -1e18, 1e18);
+            for (const auto& h : baseHeard) leadIn = std::max(leadIn, start - h.songBeat);
+            leadIn = std::ceil(std::max(0.0, leadIn - kEdge) * 960.0) / 960.0;
+        }
+        // Each part's context over its span (the first from its lead-in), onto the result axis.
+        std::vector<std::pair<double, std::pair<Id, Id>>> order;
+        for (const auto& part : parts)
+            order.emplace_back(model::itemSpan(s, *s.items.find(part.first)).startBeat, part);
+        std::stable_sort(order.begin(), order.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<model::ContextPoint> first;  // a lone item's layered takes must all agree
+        bool seen = false;
+        for (const auto& [itemStart, part] : order) {
+            const model::Item& it = *s.items.find(part.first);
+            const model::Take& tk = *s.takes.find(part.second);
+            const double rate = tk.playrate > 0 ? tk.playrate : 1.0;
+            const bool lead = !lone && part.first == base;
+            const double u0 = tk.contextPhase + tk.startOffset - (lead ? leadIn * rate : 0.0);
+            const double u1 = tk.contextPhase + tk.startOffset + model::itemLengthBeats(s, it) * rate;
+            // Result source beat of the re-based beat 0: the lead-in for the first source (it
+            // starts there), else the lead-in plus the source's distance from the result start.
+            const double origin = lead ? 0.0 : (lone ? 0.0 : leadIn + (itemStart - start));
+            std::vector<model::ContextPoint> points = model::contextOver(tk, u0, u1);
+            for (model::ContextPoint& p : points)
+                p.beat = std::round((origin + p.beat / rate) * 960.0) / 960.0;
+            if (lone) {
+                const auto key = [](const model::ContextPoint& p) {
+                    return std::tie(p.beat, p.type, p.tonic, p.scale, p.symbol);
+                };
+                const bool same = seen && std::equal(points.begin(), points.end(), first.begin(),
+                                                     first.end(),
+                                                     [&](const auto& a, const auto& b) {
+                                                         return key(a) == key(b);
+                                                     });
+                if (seen && !same)
+                    return followRefusal(
+                        part.second.str() + " has a different context from the item's other takes "
+                                            "over its span, so layering them would change how "
+                                            "some notes sound");
+                if (!seen) first = points;
+                seen = true;
+                continue;
+            }
+            // A later source's point at a beat replaces an earlier one's of its type there.
+            for (model::ContextPoint& p : points) {
+                std::erase_if(mergedContext, [&](const model::ContextPoint& q) {
+                    return q.beat == p.beat && q.type == p.type;
+                });
+                mergedContext.push_back(std::move(p));
+            }
+        }
+        if (lone) mergedContext = std::move(first);
+        std::stable_sort(mergedContext.begin(), mergedContext.end(),
+                         [](const model::ContextPoint& a, const model::ContextPoint& b) {
+                             return a.beat != b.beat ? a.beat < b.beat : a.type < b.type;
+                         });
+    }
+
     midi::Sequence merged;
     merged.ppq = 960;
     for (const auto& [id, take] : parts) {
         const model::Item& it = *s.items.find(id);
         const model::Take& tk = *s.takes.find(take);
-        detail::heardMidi(s, it, tk, s.midi.find(*tk.source)->sequence,
-                          model::itemSpan(s, it).startBeat - start, merged);
+        const double shift = model::itemSpan(s, it).startBeat - start + leadIn;
+        if (following != 0 && !lone && id == base) {
+            // The first source's notes at their true starts (before the result's start when
+            // chased); its controls and sysex as heardMidi places them.
+            midi::Sequence scratch;
+            scratch.ppq = merged.ppq;
+            detail::heardMidi(s, it, tk, s.midi.find(*tk.source)->sequence, shift, scratch);
+            merged.controls.insert(merged.controls.end(), scratch.controls.begin(),
+                                   scratch.controls.end());
+            merged.sysex.insert(merged.sysex.end(), scratch.sysex.begin(), scratch.sysex.end());
+            const midi::Sequence& written = s.midi.find(*tk.source)->sequence;
+            for (const auto& h : baseHeard) {
+                midi::Note note = written.notes[h.note];
+                note.start = std::llround((h.songBeat - start + leadIn) * merged.ppq);
+                note.length = std::max<std::int64_t>(
+                    0, std::llround((h.endBeat - h.songBeat) * merged.ppq));
+                merged.notes.push_back(note);
+            }
+            continue;
+        }
+        detail::heardMidi(s, it, tk, s.midi.find(*tk.source)->sequence, shift, merged);
     }
-    merged.length = std::llround((end - start) * merged.ppq);
+    merged.length = std::llround((end - start + leadIn) * merged.ppq);
     merged.canonicalize();
     const model::Item& kept = *s.items.find(base);
     const Id heard = kept.activeTake ? *kept.activeTake : kept.takes.front();
     model::Take take = *s.takes.find(heard);
     take.source = txn.create(model::MidiSource{std::move(merged), false});
-    take.startOffset = 0;
+    take.startOffset = leadIn;
     take.playrate = 1;
+    // The result's context is the sources' as carried over (none when none follow, since the
+    // notes now sit at places the old context did not describe).
+    take.context = std::move(mergedContext);
+    take.contextPeriod.reset();
+    take.contextPhase = 0.0;
+    take.follow = following != 0 ? mode : model::ClipFollow::None;
+    model::fitTakeContext(take, model::TakeHome::Item);
     take.stretchMarkers.clear();
     take.transients.reset();
     take.warpPeers.clear();
@@ -646,6 +766,55 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
         if (id != base) txn.remove<model::Item>(id);
     }
     txn.put<model::Item>(base, std::move(item));
+    if (following == 0) return {};
+    // What sounds is preserved: every heard note's start, channel and sounding pitch before (the
+    // heard take of each merged item) and after (the result item). A lone item's layered takes
+    // add notes by design, so each of the heard take's must be among the result's.
+    struct Heard {
+        std::int64_t tick;
+        int channel, pitch;
+        Id item;
+        double beat;
+        bool operator<(const Heard& o) const {
+            return std::tie(tick, channel, pitch) < std::tie(o.tick, o.channel, o.pitch);
+        }
+    };
+    const auto collect = [](const model::Session& at, Id item) {
+        std::vector<Heard> out;
+        const double itemStart = model::itemSpan(at, *at.items.find(item)).startBeat;
+        for (const model::SoundingNote& h : model::soundingNotes(at, item, -1e18, 1e18)) {
+            const double beat = std::max(h.songBeat, itemStart);
+            out.push_back({std::llround(beat * 960.0), h.channel + 1,
+                           h.channel == 9 ? h.written : h.sounds.pitch, item, beat});
+        }
+        return out;
+    };
+    std::vector<Heard> before, after = collect(txn.preview(), base);
+    if (lone) {
+        before = collect(s, base);
+    } else {
+        for (const auto& part : parts) {
+            auto one = collect(s, part.first);
+            before.insert(before.end(), one.begin(), one.end());
+        }
+    }
+    std::sort(before.begin(), before.end());
+    std::sort(after.begin(), after.end());
+    std::vector<Heard> missing;
+    std::set_difference(before.begin(), before.end(), after.begin(), after.end(),
+                        std::back_inserter(missing));
+    if (!missing.empty())
+        return followRefusal("merging would change how the note at beat " +
+                             json::formatDouble(missing.front().beat) + " of " +
+                             missing.front().item.str() + " sounds");
+    if (!lone && before.size() != after.size()) {
+        std::vector<Heard> extra;
+        std::set_difference(after.begin(), after.end(), before.begin(), before.end(),
+                            std::back_inserter(extra));
+        if (!extra.empty())
+            return followRefusal("merging would add a sounding note at beat " +
+                                 json::formatDouble(extra.front().beat) + " of " + base.str());
+    }
     return {};
 }
 
