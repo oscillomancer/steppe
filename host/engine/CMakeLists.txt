@@ -162,7 +162,8 @@ if(SUPPLE_BUILD_TESTS)
     add_test(NAME engine.mcp-journey
       COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey.py
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
-    set_tests_properties(engine.mcp-journey PROPERTIES LABELS "engine;slow")
+    # The preset default is 600 s: a slow runner needs more (batch 3's Windows run took 599 s).
+    set_tests_properties(engine.mcp-journey PROPERTIES LABELS "engine;slow" TIMEOUT 1800)
     # Batch 2 acceptance: the clip launcher, driven as an agent would: scenes and clips,
     # launches on the dummy backend read back with launch.state, a song built from
     # scenes, renders compared with what the scenes hold. It decides nothing by a clock:
@@ -170,7 +171,7 @@ if(SUPPLE_BUILD_TESTS)
     add_test(NAME engine.mcp-journey-launcher
       COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey_launcher.py
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
-    set_tests_properties(engine.mcp-journey-launcher PROPERTIES LABELS "engine;slow")
+    set_tests_properties(engine.mcp-journey-launcher PROPERTIES LABELS "engine;slow" TIMEOUT 1800)
     # One song with all three features (the context track, modulation, the clip
     # launcher): chords in three keys, scenes written against them, three modulators,
     # a performance captured and committed, the song built over the chords, and every
@@ -178,7 +179,7 @@ if(SUPPLE_BUILD_TESTS)
     add_test(NAME engine.mcp-journey-song
       COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey_song.py
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
-    set_tests_properties(engine.mcp-journey-song PROPERTIES LABELS "engine;slow")
+    set_tests_properties(engine.mcp-journey-song PROPERTIES LABELS "engine;slow" TIMEOUT 1800)
   endif()
 endif()
 

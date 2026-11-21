@@ -44,7 +44,7 @@ LEAD_LINE = "voice lead; 1: E4:q A4:q C5:h | A4:q F4:q C5:h | B4:q G4:q D5:h | B
 # How long the harness waits in silence for the server's answer to one call. A wall-clock
 # guard must only turn a hang into a failure, never decide a test by how fast the machine
 # is: the default is for ordinary commands, and a render, an analysis, a freeze or a bounce
-# gets the long limit, which stays below ctest's own test timeout (1500 s by default).
+# gets the long limit, which stays below the journeys' ctest TIMEOUT (1800 s; the preset default is 600 s).
 SILENCE_LIMIT = 120
 HEAVY_LIMIT = 900
 HEAVY_COMMANDS = ("render.", "analyze.", "track.freeze", "item.apply-fx", "item.mix-to-track",
@@ -116,7 +116,7 @@ class Client:
 
     def close(self):
         self.process.stdin.close()
-        code = self.process.wait(timeout=20)
+        code = self.process.wait(timeout=HEAVY_LIMIT)  # the exit may follow a long render
         assert code == 0, self.process.stderr.read().decode(errors="replace")
 
 
