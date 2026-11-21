@@ -8,6 +8,7 @@
 #include <supple/engine/app.h>
 #include <supple/engine/offline.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -19,6 +20,14 @@
 #include "bridge_patience.h"
 #include "plan.h"
 #include "realtime_common.h"
+
+namespace supple::engine {
+// test_launch_access.cpp (EngineTestAccess): runs `hook` in launch() between
+// publishing a launch and deciding it.
+void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context);
+// The slots the executors still act on (Engine::launchesQueued_).
+std::uint32_t launchesQueuedForTests(const Engine& e);
+}  // namespace supple::engine
 
 namespace clip_player_test {
 using namespace supple;
@@ -261,4 +270,51 @@ inline void latentClip(Project& p) {
     patch["fx"] = fxId;
     p.runArgs("fx.patch.merge", patch);
 }
+// The ramp's frame k through latentClip's chain.
+inline double chained(std::int64_t k) { return double(rampAt(k)) * std::pow(10.0, -6.0 / 20.0); }
+// --- Under a master playrate (test_clip_player_rate*.cpp) ---
+
+// The master playrate the S3 tests play under, the pitch not kept: a
+// constant 0.75, or an envelope from 1 down to 0.6 over two bars.
+inline void underRate(Project& p, bool envelope) {
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+    if (envelope)
+        p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                         R"({"beat": 0, "value": 1}, {"beat": 8, "value": 0.6}]})");
+}
+
+// One session's offline renders, kept across its live runs: a render is a
+// pure function of the session and the log (the offline invariant), so a
+// log rendered before need not be rendered again, and the render without
+// launches is the same for every run. They took most of these cases' time.
+struct Replays {
+    std::vector<std::pair<std::vector<LaunchLogEntry>, std::vector<float>>> rendered;
+    std::optional<std::vector<float>> plain;
+};
+
+// The live run's output against the offline replay of its log, over the
+// first `frames` device frames; and the same without the launches, which
+// must differ for the equality to say something.
+inline void liveIsReplay(const model::Session& s, const fs::path& dir, const Live& live,
+                         double seconds, std::size_t frames, Replays& replays) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = seconds;
+    settings.projectDir = dir;
+    const auto render = [&](const std::vector<LaunchLogEntry>& log) {
+        settings.launches = log;
+        auto offline = renderOffline(s, pool, settings);
+        REQUIRE_MESSAGE(offline, (offline ? std::string() : offline.error().toString()));
+        REQUIRE(offline->audio.channels[0].size() >= frames);
+        return offline->audio.channels[0];
+    };
+    auto found = std::find_if(replays.rendered.begin(), replays.rendered.end(),
+                              [&](const auto& r) { return r.first == live.log; });
+    if (found == replays.rendered.end())
+        found = replays.rendered.insert(replays.rendered.end(), {live.log, render(live.log)});
+    CHECK(maxDiff(live.left, live.latency, found->second, frames) == 0.0);
+    if (!replays.plain) replays.plain = render({});
+    CHECK(maxDiff(live.left, live.latency, *replays.plain, frames) > 0.0);
+}
+
 }  // namespace clip_player_test
