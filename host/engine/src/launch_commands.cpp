@@ -336,14 +336,18 @@ void registerLaunchCommands(cmd::Registry& registry) {
                              "add clips to the scene with clip.add, or unfreeze their tracks");
             auto done = launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
             std::string following;
+            int followers = 0;
             for (const auto& r : requests)
-                if (s.clips.find(r.clip)->follow != model::ClipFollow::None)
+                if (s.clips.find(r.clip)->follow != model::ClipFollow::None) {
                     following += (following.empty() ? "" : ", ") + r.clip.str();
+                    ++followers;
+                }
             if (done && !following.empty())
                 ctx.warn("launch.unfollowed",
-                         "the clips " + following +
-                             " follow the context when they are laid on the timeline, but "
-                             "launched clips play as they were written until ADR-0098's X4",
+                         (followers == 1 ? "the clip " : "the clips ") + following +
+                             (followers == 1 ? " follows" : " follow") +
+                             " the context when laid on the timeline, but launched clips play "
+                             "as they were written until ADR-0098's X4",
                          "/scene");
             return done;
         };

@@ -893,6 +893,8 @@ TEST_CASE("launching a clip that follows the context warns launch.unfollowed, on
     CHECK(one["warnings"].at(0).find("message")->asString().find("cl_1") != std::string::npos);
     json::Value scene = p.run("launch.scene", R"({"scene": "sc_1"})");
     CHECK(unfollowed(scene) == 1);  // one for the scene, not one per clip
+    const std::string said = scene["warnings"].at(0).find("message")->asString();
+    CHECK(said.find("the clip cl_1 follows") != std::string::npos);  // one clip: singular
     p.app->stopEngine();
 }
 
