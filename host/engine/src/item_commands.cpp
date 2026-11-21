@@ -55,6 +55,10 @@ struct MidiWriteArgs {
     std::string notation;
 };
 
+struct MidiWriteResult {
+    std::optional<std::string> follows;  // key | chords, when the written take follows
+};
+
 struct MidiGetArgs {
     std::string item;
     bool sounding = false;  // what sounds, not what is written (ADR-0098, following is playback)
@@ -719,7 +723,7 @@ void registerItemCommands(cmd::Registry& registry) {
     }();
     // ---------------------------------------------------------------- midi.write / midi.get
     [&] {
-        Command<MidiWriteArgs, Empty> c;
+        Command<MidiWriteArgs, MidiWriteResult> c;
         c.name = "midi.write";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpTool;
@@ -728,17 +732,22 @@ void registerItemCommands(cmd::Registry& registry) {
         c.description =
             "The item or clip keeps its length: notation longer than it is stored but does not "
             "play past its end, and midi.beyond_length warns. Lengthen it first (item.set "
-            "length, clip.set length), or write the notation to fit.";
+            "length, clip.set length), or write the notation to fit. The notes are stored as "
+            "written: on a take that follows (take.set {follow}) its context and follow stay, "
+            "so the new notes sound as the context says, and the answer's follows says key or "
+            "chords. Chord symbols in the text do not change a take's context (take.set does).";
         c.tags = {"midi"};
         c.args = schema::object<MidiWriteArgs>("midi_write_args")
                      .field("item", &MidiWriteArgs::item, ownerIdArg())
                      .field("notation", &MidiWriteArgs::notation, schema::string())
                      .build();
-        c.result = emptySchema();
+        c.result = schema::object<MidiWriteResult>("midi_write_result")
+                       .field("follows", &MidiWriteResult::follows, schema::string())
+                       .build();
         c.examples = {{"Rewrite the bass line",
                        j(R"({"item": "it_1", "notation": "voice bass; 1: C2:e C2:e r:q G1:h"})"),
                        j("{}"), "song_with_item"}};
-        c.run = [](const MidiWriteArgs& a, Context& ctx) -> Result<Empty> {
+        c.run = [](const MidiWriteArgs& a, Context& ctx) -> Result<MidiWriteResult> {
             EngineApp& app = engine::app(ctx);
             const model::Session s = app.view();
             auto id = existingOwner(s, a.item, "/item");
@@ -758,7 +767,12 @@ void registerItemCommands(cmd::Registry& registry) {
             const int ppq = compiled->source.sequence.ppq;
             txn.put<model::MidiSource>(*take->source, std::move(compiled->source));
             if (!old || !old->pooled)
-                txn.modify<model::Take>(*active, [](model::Take& tk) { tk.startOffset = 0; });
+                txn.modify<model::Take>(*active, [](model::Take& tk) {
+                    // The new notes start at the item's start: its context beat stays what it
+                    // was there (ADR-0098, the context is anchored to the source).
+                    if (!tk.context.empty()) tk.contextPhase += tk.startOffset;
+                    tk.startOffset = 0;
+                });
             // A clip records the chord symbols the text holds as its chords (ADR-0098): they
             // replace the chords it had when they differ, and a text without symbols leaves
             // its context alone.
@@ -813,7 +827,10 @@ void registerItemCommands(cmd::Registry& registry) {
                               written, a.item.c_str(), room);
                 ctx.warn("midi.beyond_length", buf, "/notation");
             }
-            return Empty{};
+            MidiWriteResult result;
+            if (take->follow != model::ClipFollow::None)
+                result.follows = take->follow == model::ClipFollow::Chords ? "chords" : "key";
+            return result;
         };
         addChecked(registry, std::move(c));
     }();
