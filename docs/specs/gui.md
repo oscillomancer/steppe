@@ -1605,9 +1605,9 @@ Commands: `route.*`, `track.set {record_input}`.
 clip, Alt+E with a clip selected after a launcher click, or the first MIDI
 clip when the project has no MIDI item). A clip has no place in time: the
 roll places it at beat 0 with its own length, so its bars count from its
-start; it reads the key at the project's start for shading, spelling and
-the key button (`midi.edit` no longer does: it reads the clip's own context,
-ADR-0098, and step X3 brings the roll in line) and shows no chords; its notes take
+start; it reads the clip's own context (ADR-0098 X3), in clip beats, as
+`midi.edit` does, for the shading, the spelling, the key button, a degree
+drag's preview and the chord row, never the project's; its notes take
 its launcher colour; the title ends in "· clip"; and the playhead is where
 the launcher plays it, hidden while it does not play. Edits go to the
 clip's take through the same `midi.edit` and `midi.write` calls, and the
@@ -1630,6 +1630,41 @@ LLM-native differentiator: the same text an agent writes is visible and
 editable by the human. The event list edits notes and CC events;
 double-click editing requires a row hit and edits that row. Roll gesture
 anchors use exact model timing rather than the rounded `midi.notes` query.
+
+**A clip's own key and chords** (ADR-0098 X3). The roll is the one place a
+clip is edited, its context included:
+- What the roll shows on a clip is the clip's context: its key at the start
+  names the key button and its keys shade the rows and spell the notes; its
+  chord points fill the strip's chord row, the last cell ending with the
+  clip. A degree drag previews in the clip's key at the note's clip beat, as
+  `midi.edit` commits it. Without a key the key button is disabled ("No
+  key"); when degree mode was on it goes off and the status line says why
+  (`midi.edit` would refuse with `midi.no_key`).
+- A double-click on the chord row edits the clip's chord there (the chord
+  field, as on the project); on a clip without chords a double-click
+  anywhere on the strip starts its first.
+- A right-click on the strip opens the clip's context menu: **Key…** (the
+  key field, "D dorian", at the start of the bar under the pointer; it
+  starts from the clip's key there, else the project's), **Chord…**,
+  **Remove key** and **Remove chord** for the points under the pointer,
+  **Take from the project at bar N** (`clip.set {context_at}` at the
+  playhead) and **Clear context**.
+- Each edit is one `clip.set {context}`: the roll prints the clip's points
+  as the lead sheet in clip bars (`gui::clipLeadSheet`), which the engine
+  reads and checks. Refusals (a bad key, a point past the clip's end) go to
+  the status line.
+- **Notes outside the key.** A note off channel 10 whose pitch is not in
+  the key holding at its start is outlined in the warning amber
+  (`meter-hot`), and the title counts them ("· 3 outside the key"). An item
+  keeps no link to the clip it was laid from, so this is how a clip laid in
+  another key (the `context.mismatch` warning) shows on the item's roll; on a
+  clip's roll the key is the clip's own.
+
+Tests: test_midi_editor "a clip in another key than the project's: degrees
+preview what commits" (review round 73, F4), "a clip's key and chords are
+edited in its roll", "a clip laid in another key shows its notes outside
+the key", "a launcher clip opens at beat 0 in its own key and chords", and
+"clip context edit: the printed lead sheet …".
 
 **Lanes.** One menu owns every lane under the roll: **Lanes** in the header
 (it replaced the CC button). It shows Velocity and five controllers (CC 1
@@ -2755,8 +2790,10 @@ same heights, scroll and colours.
   tracks and items): its header (name; "MIDI clip on Bass, Verse"; its
   colour) and its fields, each one `clip.set`: Name, Colour, Length (beats,
   or seconds for an audio clip), Gain, Plays (Loop / Once), Launch (the
-  project's quantize, Bar … 1/32, At once) and Mute. Several clips show
-  only their count.
+  project's quantize, Bar … 1/32, At once), Follow (None / Key / Chords,
+  ADR-0098: Key and Chords are disabled, their labels saying why, unless the
+  clip is MIDI with a key at its start) and Mute. Several clips show only
+  their count.
 - **Status line.** It counts scenes beside tracks only when there are some
   ("4 tracks  2 scenes  version 9", `gui::countsText`).
 - **Sections.** A section's right-click menu captures it as a scene

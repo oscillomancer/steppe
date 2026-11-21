@@ -1686,14 +1686,25 @@ removes the selected clips. Ctrl+C copies the selected clips; click an empty
 cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
 marks clips to move, and the next paste moves them. Copied clips stay in
 their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
-colour, length, gain, mode, launch quantize and mute. While the master
+colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
+chords) says how the clip's notes are to be mapped onto the song's key when
+it is laid; it needs a key at the clip's start, and until following is built
+a laid clip is copied as it is. While the master
 playrate is not 1 (or its envelope is on), clips can't be launched: the
 pane draws them dimmed, and a click says why in the status line.
 
 In the piano roll a clip starts at its own bar 1. It has no place in the
-song, so the roll shades and spells it by the key at the project's start
-and shows no chords. (A clip also keeps the key and chords it was written against;
-agents set them with `clip.set`, and the roll does not show them yet.) While the clip plays, the playhead shows where.
+song, so it keeps the key and chords it was written against, and the roll
+shows those: the key button names its key, its chords are in the strip over
+the roll, and the rows and note names follow its key. Right-click the strip
+to set its key (**Key…**), add a chord, remove one, take the song's key and
+chords at the playhead, or clear them; double-click a chord to change it.
+Without a key the key button is off. While the clip plays, the playhead
+shows where.
+
+Notes outside the key at their place are outlined in amber, and the roll's
+title counts them. That is how you see a clip laid into a song in another
+key: its notes are copied as they are, and the ones that clash stand out.
 
 ### Playing clips
 

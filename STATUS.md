@@ -139,11 +139,12 @@ instructions are in `docs/guides/installing.md`.
   flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
-  (drags and arrows). The roll opens launcher clips (L3), shaded and spelled
-  by the key at the project's start, with no chord row; its degree mode on
-  a clip goes through `midi.edit`, which now reads the clip's own context, so
-  a clip with none refuses it with `midi.no_key` until the roll shows and
-  edits the clip's context (ADR-0098 step X3).
+  (drags and arrows). The roll opens launcher clips (L3) in their own
+  context (ADR-0098 X3): the clip's key shades, spells and drives degrees,
+  its chords fill the strip, both are edited there (`clip.set {context}`),
+  and a clip without a key has degree mode off. A roll outlines notes
+  outside the key at their beat and counts them in its title, which is how a
+  clip laid in another key shows (an item keeps no link to its clip).
   Native macOS and Windows CI has not run on C3.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
@@ -213,9 +214,10 @@ instructions are in `docs/guides/installing.md`.
   never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert`,
   `arrangement.build` and `launch.commit` copy a clip's notes as they are and
   warn `context.mismatch` when its key is not the project's under the item.
-  Not built: following (X2: the `follow` argument on placement and
-  `harmony::follow`), launching a followed clip (X4), the roll's view of a
-  clip's context (X3), `write_context` (X5). A clip with `follow` set is
+  The roll shows and edits a clip's context, and the clip inspector sets
+  Follow (X3). Not built: following (X2: the `follow` argument on placement
+  and `harmony::follow`), launching a followed clip (X4), `write_context`
+  (X5). A clip with `follow` set is
   copied as `none` until X2.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
