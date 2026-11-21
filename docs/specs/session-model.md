@@ -1600,10 +1600,9 @@ with `midi.context_varies`; no key or chord holding (or a point this build canno
 read) is `midi.no_key` or `midi.no_chord`; a result outside 0..127, or no scale
 pitch in the direction asked, is `midi.pitch_range`; arguments the op does not
 take are `midi.args`. Only the notes an op actually moved are returned as changed.
-On a launcher clip, which has no place in time, the ops read the key at the
-project's start and no chord: without `key`, `midi.no_key` when none holds there;
-`fit_to_chord` without `chord` is `midi.no_chord` (ADR-0095 amendment C-e).
-Step X1 replaces this: a clip's own context is read ("Clip context", ADR-0098).
+On a launcher clip, which has no place in time, the ops read the clip's own
+context at the clip beat each note sounds ("Clip context", ADR-0098, which
+replaced the reading at the project's start, ADR-0095 amendment C-e).
 
 ### Rack sends (schema 2.13, ADR-0075)
 
@@ -2036,7 +2035,12 @@ Scenes (2):
 
 ### Clip context (schema 2.20, ADR-0098; the contract for steps X1 and X2)
 
-*Not built yet: X1 and X2 implement this section as written.*
+*Step X1 is built: the fields and schema 2.20, the commands, `midi.get`,
+`midi.write` and the scale ops on a clip, `session.describe`, and the
+`context.mismatch` warning. Following itself (step X2, `follow` on
+`item.add {clip}`, `scene.insert` and `arrangement.build`) and launching a
+followed clip (X4) are not built: until then placement copies every clip as
+`none`, whatever its `follow`.*
 
 Writers emit `supple.project/2.20`. A clip gains two members; earlier files
 load unchanged and nothing migrates. A 2.19 build drops both members with its

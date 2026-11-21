@@ -133,14 +133,17 @@ instructions are in `docs/guides/installing.md`.
   `transpose_degrees`, `snap_to_scale` and `fit_to_chord` (key and chord from the
   context at each note's beat, or given; `midi.context_varies` over a loop or a
   pooled sharer in another key) are in; on a launcher clip they, and
-  `midi.get`, read the key at the project's start and no chord. In the app
+  `midi.get`, read the clip's own context (ADR-0098, below). In the app
   (C3): key changes in the ruler's meter half and a chord row (shown with the
   first chord, or by View > Chord row), both edited there (a key change's
   flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
   (drags and arrows). The roll opens launcher clips (L3), shaded and spelled
-  by the key at the project's start, with no chord row.
+  by the key at the project's start, with no chord row; its degree mode on
+  a clip goes through `midi.edit`, which now reads the clip's own context, so
+  a clip with none refuses it with `midi.no_key` until the roll shows and
+  edits the clip's context (ADR-0098 step X3).
   Native macOS and Windows CI has not run on C3.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
@@ -173,7 +176,7 @@ instructions are in `docs/guides/installing.md`.
   the oldest steps. Incremental unique-payload accounting measures only new or
   changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.18` with migration from
+  Project format `supple.project/2.20` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
   work… or at start, ADR-0078), crash recovery of recordings, a per-project
   UI sidecar.
@@ -195,6 +198,25 @@ instructions are in `docs/guides/installing.md`.
   `take.*`, `item.export`, take envelopes and take FX) take a clip as they
   take an item; timeline commands refuse one with `item.kind`; the
   envelopes on a clip take's FX are in clip time (schema 2.19).
+- **Clip context** (ADR-0098, step X1; session-model "Clip context", schema
+  2.20): a clip keeps the key and chords it was written against (`context`,
+  points in clip beats, as the context track's) and a `follow` (none, key or
+  chords). `clip.add` and `clip.set` take `context` (a lead sheet in clip
+  bars) or `context_at` (read from the project at a bar or beat) and `follow`;
+  `clip.add {item}` and `scene.capture` take the context under the item; the
+  `{SYMBOL}` chords of a clip's notation (`Compiled::chords`) and of
+  `midi.write` become chord points; history records the resolved text.
+  `midi.get` on a clip answers its context (runs by clip bar and beat, the lead
+  sheet as `context.text`) and `follow` and spells by the clip's own key;
+  `session.describe` names a clip's key and follow. The `midi.edit` scale ops
+  on a clip read the clip's own context at the clip beat each note sounds,
+  never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert`,
+  `arrangement.build` and `launch.commit` copy a clip's notes as they are and
+  warn `context.mismatch` when its key is not the project's under the item.
+  Not built: following (X2: the `follow` argument on placement and
+  `harmony::follow`), launching a followed clip (X4), the roll's view of a
+  clip's context (X3), `write_context` (X5). A clip with `follow` set is
+  copied as `none` until X2.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
