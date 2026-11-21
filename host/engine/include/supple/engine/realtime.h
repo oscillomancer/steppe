@@ -842,6 +842,14 @@ class Engine {
         bool followBudget = false;
     };
     std::vector<TrackLaunch> launchState() const;
+    // Main thread: what the running plan's player for `clip` on `track`
+    // follows by, and whether the follow budget forced that (ADR-0098 X4c);
+    // unset when the plan has no such player.
+    struct ClipFollowed {
+        TrackLaunch::Followed followed = TrackLaunch::Followed::None;
+        bool budget = false;
+    };
+    std::optional<ClipFollowed> clipFollowed(model::Id track, model::Id clip) const;
     // Main thread: the clips the running plan left out of the memory
     // budget (they cannot be launched; launch.memory).
     std::vector<model::Id> clipsSkipped() const;

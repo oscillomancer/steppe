@@ -10959,7 +10959,7 @@ Result:
 
 Play a clip on its track from the next quantize boundary.
 
-It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms. A clip whose follow is not none follows the project's key or chords live, as it would laid there (launch.state says how).
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms. A clip whose follow is not none follows the project's key or chords live, as it would laid there (launch.state says how); launch.follow_budget warns when its context and the project's are too varied to follow fully (a chords clip then follows its key, else it plays as written).
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -11196,7 +11196,7 @@ Result:
 
 Play every clip of a scene together at one boundary.
 
-It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning and a clip past the memory budget with a launch.memory warning. Clips whose follow is not none follow live.
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning and a clip past the memory budget with a launch.memory warning. Clips whose follow is not none follow live, with launch.follow_budget for each one the follow budget holds back.
 
 Kind: `action`. Exposure: `mcp-exec`.
 

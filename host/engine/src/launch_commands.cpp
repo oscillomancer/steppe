@@ -79,6 +79,21 @@ model::LaunchQuantize quantizeOf(const model::Session& s, const model::Clip* cli
     return s.project->launchQuantize;
 }
 
+// launch.follow_budget for a clip just launched whose follow the budget
+// forced (ADR-0098 X4c): the running plan's outcome for it.
+void warnFollowBudget(EngineApp& app, model::Id track, model::Id clip, Context& ctx,
+                      const std::string& path) {
+    const Engine* engine = app.engine();
+    const auto followed = engine ? engine->clipFollowed(track, clip) : std::nullopt;
+    if (!followed || !followed->budget) return;
+    ctx.warn("launch.follow_budget",
+             clip.str() + "'s context and the project's make too many pairs of places to follow " +
+                 (followed->followed == Engine::TrackLaunch::Followed::Key
+                      ? "the chords; it follows the key"
+                      : "live; it plays as written"),
+             path);
+}
+
 // Places the requests on one target and, for a clip launched while
 // stopped, starts the transport (ADR-0097: it applies at the play start).
 Result<LaunchDone> launchNow(EngineApp& app, Action action,
@@ -250,7 +265,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
             " Launching while stopped starts the transport. The track leaves the "
             "arrangement (or the clip it played) there: its sounding notes end and "
             "audio crossfades over 5 ms. A clip whose follow is not none follows the project's "
-            "key or chords live, as it would laid there (launch.state says how).";
+            "key or chords live, as it would laid there (launch.state says how); "
+            "launch.follow_budget warns when its context and the project's are too varied to "
+            "follow fully (a chords clip then follows its key, else it plays as written).";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<ClipArg>("launch_clip_args")
                      .field("clip", &ClipArg::clip, idArg("cl", "Clip"))
@@ -271,8 +288,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (!id) return std::move(id).error();
             const model::Clip& clip = *s.clips.find(*id);
             SUPPLE_TRY(refuseFrozen(s, clip.track, "/clip"));
-            return launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
-                             quantizeOf(s, &clip), "/clip");
+            auto done = launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
+                                  quantizeOf(s, &clip), "/clip");
+            if (done) warnFollowBudget(app, clip.track, *id, ctx, "/clip");
+            return done;
         };
         addChecked(registry, std::move(c));
     }();
@@ -287,7 +306,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             " All the scene's tracks switch at the same boundary, the project's launch_quantize. "
             "Tracks with no clip in the scene keep playing what they play. A frozen track is "
             "skipped with a track.frozen warning and a clip past the memory budget with a "
-            "launch.memory warning. Clips whose follow is not none follow live.";
+            "launch.memory warning. Clips whose follow is not none follow live, with "
+            "launch.follow_budget for each one the follow budget holds back.";
         c.tags = {"clip launcher", "transport", "scene"};
         c.args = schema::object<SceneArg>("launch_scene_args")
                      .field("scene", &SceneArg::scene, idArg("sc", "Scene"))
@@ -328,7 +348,11 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (requests.empty())
                 return Error("launch.scene", a.scene + " has no clip that can play", "/scene",
                              "add clips to the scene with clip.add, or unfreeze their tracks");
-            return launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
+            auto done = launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
+            if (done)
+                for (const auto& r : requests)
+                    warnFollowBudget(app, r.track, r.clip, ctx, "/scene");
+            return done;
         };
         addChecked(registry, std::move(c));
     }();

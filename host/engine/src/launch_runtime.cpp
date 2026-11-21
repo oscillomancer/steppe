@@ -889,6 +889,24 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
     return out;
 }
 
+std::optional<Engine::ClipFollowed> Engine::clipFollowed(model::Id track, model::Id clip) const {
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    if (!plan) return std::nullopt;
+    for (const detail::Node& n : plan->nodes) {
+        if (n.id != track) continue;
+        const int k = detail::playerOf(n, clip);
+        if (k < 0) return std::nullopt;
+        const detail::ClipPlayer& pl = n.players[static_cast<std::size_t>(k)];
+        ClipFollowed out;
+        out.followed = pl.followed == detail::FollowOutcome::Chords ? TrackLaunch::Followed::Chords
+                       : pl.followed == detail::FollowOutcome::Key  ? TrackLaunch::Followed::Key
+                                                                    : TrackLaunch::Followed::None;
+        out.budget = pl.followBudget;
+        return out;
+    }
+    return std::nullopt;
+}
+
 // --- Capturing a performance (ADR-0097 L4) -------------------------------------
 
 std::int64_t Engine::captureHeard() const {

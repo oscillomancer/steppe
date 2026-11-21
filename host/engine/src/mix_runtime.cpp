@@ -371,8 +371,14 @@ bool Engine::loadContextOnly(const model::Session& session, const std::filesyste
         return false;
     if (!contextOnly(*latest_, session)) return false;
     // A launched clip that follows reads the context through its pitch
-    // tables (ADR-0098 X4): the edit compiles them.
+    // tables (ADR-0098 X4), and a following take's notes are mapped at
+    // compile (X4c): the edit compiles them.
     if (p->follow) return false;
+    for (const auto& e : session.items)
+        if (e.value->activeTake)
+            if (const model::Take* take = session.takes.find(*e.value->activeTake);
+                take && take->follow != model::ClipFollow::None)
+                return false;
     latest_ = std::make_shared<const model::Session>(session);
     return true;
 }

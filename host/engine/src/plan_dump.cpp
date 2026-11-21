@@ -199,6 +199,7 @@ void dumpOrigin(Dump& d, std::string_view a, const NoteOrigin& o) {
           std::array<std::int64_t, 5>{static_cast<std::int64_t>(o.item),
                                       static_cast<std::int64_t>(o.take),
                                       static_cast<std::int64_t>(o.source), o.tick, o.pass});
+    if (o.followed) d.put(a, "followed", true);  // a following take's (ADR-0098 X4c)
 }
 
 void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& events) {
@@ -520,7 +521,7 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
         if (pl.follow)
             d.put(pa, "follow",
                   std::array<std::uint64_t, 3>{pl.follow->keyOnly, pl.follow->clip.place.size(),
-                                               pl.follow->pitch.size() / 128});
+                                               pl.follow->rows.size()});
     }
     // Its clip chains' lead (ADR-0097, amended 2026-11-20); launchNext is state.
     d.put(a, "launchLead", n.launchLead);
