@@ -325,7 +325,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
                       },
                       "required": ["clip_key", "key", "bar"],
                       "additionalProperties": false,
-                      "description": "Set with the context.mismatch warning: the notes were copied as they are under a key that is not the clip's."
+                      "description": "Set with the context.mismatch warning: the notes play as written under a key that is not the clip's."
                     }
                   },
                   "required": ["mode"],
@@ -9495,7 +9495,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
           },
           "required": ["clip_key", "key", "bar"],
           "additionalProperties": false,
-          "description": "Set with the context.mismatch warning: the notes were copied as they are under a key that is not the clip's."
+          "description": "Set with the context.mismatch warning: the notes play as written under a key that is not the clip's."
         }
       },
       "required": ["mode"],
@@ -18990,7 +18990,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
                 },
                 "required": ["clip_key", "key", "bar"],
                 "additionalProperties": false,
-                "description": "Set with the context.mismatch warning: the notes were copied as they are under a key that is not the clip's."
+                "description": "Set with the context.mismatch warning: the notes play as written under a key that is not the clip's."
               }
             },
             "required": ["mode"],
@@ -19954,6 +19954,27 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "copied": {
           "type": "string",
           "enum": ["drums", "audio", "no_key", "no_notes"]
+        },
+        "mismatch": {
+          "type": "object",
+          "title": "followed_mismatch",
+          "properties": {
+            "clip_key": {
+              "type": "string",
+              "description": "The clip's key."
+            },
+            "key": {
+              "type": "string",
+              "description": "The project's key there, which differs."
+            },
+            "bar": {
+              "type": "integer",
+              "description": "The first project bar where they differ."
+            }
+          },
+          "required": ["clip_key", "key", "bar"],
+          "additionalProperties": false,
+          "description": "Set with the context.mismatch warning: the notes play as written under a key that is not the clip's."
         }
       },
       "required": ["mode"],
