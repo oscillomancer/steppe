@@ -136,6 +136,9 @@ class AppActions {
                   std::function<Status(const json::Value& value)> run);
     // Shown by the app (status line): the last action's error, if any.
     std::function<void(const std::string&)> onError;
+    // Shown by the app (status line): what an edit did, when it is news (a
+    // bake's "Riff baked: 6 notes written as they sound").
+    std::function<void(const std::string&)> onNotice;
     // The action's first key binding ("Ctrl+Z", or ""), for menus; with
     // all, every binding ("Ctrl+Shift+Z, Ctrl+Y"), for the actions list.
     std::string keysFor(std::string_view action, bool all = false) const;

@@ -24,6 +24,7 @@
 #include "supple/ui/root.h"
 
 namespace supple::ui {
+class Button;
 class Dropdown;
 class Label;
 class List;
@@ -82,6 +83,10 @@ class Inspector {
     // One item.set or track.set on every selected item or track: one undo step.
     void set(const std::string& key, json::Value value);
     void setTake(const std::string& key, json::Value value);  // one take.set, the heard take
+    // The heard take's Follow (take.set {follow}, with the song's context
+    // when it has none: takeFollowArgs) and its Bake (take.bake).
+    void setFollow(const std::string& value);
+    void bake();
     void run(const char* command, json::Value args);
     void finish(const Result<json::Value>& result);
     void fail(const std::string& message);
@@ -112,6 +117,8 @@ class Inspector {
     std::map<std::string, ui::Toggle*> states_;
     ui::Dropdown* timebase_ = nullptr;
     ui::Label* writtenIn_ = nullptr;  // the heard take's own key (Written in)
+    ui::Dropdown* follow_ = nullptr;  // how the heard MIDI take sounds (take.set {follow})
+    ui::Button* bake_ = nullptr;      // take.bake, beside it
     ui::Node* clipBox_ = nullptr;     // one launcher clip's fields (clip.set)
     ui::Node* clipColors_ = nullptr;
     ui::Dropdown* clipMode_ = nullptr;

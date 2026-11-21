@@ -5792,8 +5792,9 @@ TEST_CASE("a scene inserted from the launcher says in the status line what its c
     CHECK(errors.empty());
     const ui::Node* status = a.root->find("status");
     REQUIRE(status);
-    CHECK(status->valueText().ends_with(
-        " · Verse at bar 1: Bass followed to D minor, +2; Keys copied: its key C minor differs "
-        "from D minor at bar 1"));
+    CHECK(
+        status->valueText().ends_with(" · Verse at bar 1: Bass sounds in D minor, +2; Keys is laid "
+                                      "as written: its key C minor differs "
+                                      "from D minor at bar 1"));
     a.snapshot("launcher-follow-status.png");
 }

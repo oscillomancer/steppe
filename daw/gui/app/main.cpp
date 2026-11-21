@@ -78,7 +78,9 @@
 #include "supple/rpc/model_loop.h"
 #include "supple/rpc/protocol.h"
 #include "supple/ui/root.h"
+#include "supple/views/launcher.h"
 #include "sync_dialog.h"
+#include "take_follow.h"
 #include "timecode_dialog.h"
 #include "ui_persistence.h"
 
@@ -429,6 +431,7 @@ int frontendMain(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", message.c_str());
         shell.setStatus(message);
     };
+    appActions.onNotice = [&shell](const std::string& message) { shell.setStatus(message); };
     // Before the chrome: the toolbar and menus list the actions it adds.
     gui::RackWindow racks(rackPanel, appActions, dispatcher, **app, uiState);
     auto chromeLayout = gui::ChromeLayout::load(gui::ChromeLayout::defaultFile(product::kSlug));
@@ -789,6 +792,27 @@ int frontendMain(int argc, char** argv) {
             audioEdit.run(items, operation, grid);
         };
         g.onConsolidate = [&](const auto& items) { audioEdit.consolidate(items); };
+        // A MIDI take's Follow and Bake from the Item menu (gui.md §6), as
+        // the inspector sends them.
+        g.followRefusal = [&app](model::Id item) {
+            return gui::followRefusal((*app)->head(), item);
+        };
+        g.onFollow = [&](model::Id item, model::ClipFollow follow) {
+            auto args = gui::takeFollowArgs((*app)->head(), item, follow);
+            if (args)
+                args = dispatcher.execute(
+                    {"take.set", std::move(*args), {cmd::Origin::Type::Ui, "gui", {}}});
+            if (!args && appActions.onError) appActions.onError("Follow: " + args.error().message);
+        };
+        g.onBake = [&](const std::vector<model::Id>& items) {
+            auto r = gui::bakeItems(dispatcher, {cmd::Origin::Type::Ui, "gui", {}}, (*app)->head(),
+                                    items);
+            if (!r) {
+                if (appActions.onError) appActions.onError("Bake: " + r.error().message);
+                return;
+            }
+            shell.setStatus(*r);
+        };
         g.onExport = [&](model::Id item) {
             fileActions.exportItem(item, [&](const std::string& text) { shell.setStatus(text); });
         };
@@ -938,9 +962,20 @@ int frontendMain(int argc, char** argv) {
     // What a commit copied under another key (gui.md §4.15), as a lay says it.
     shell.capture().onNotice = [&shell](const std::string& notice) { shell.setStatus(notice); };
     shell.arrange()->setRulerCallbacks(
-        {[&dispatcher](const std::string& command, json::Value args) {
-             return dispatcher.execute(
-                 {command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+        {[&](const std::string& command, json::Value args) {
+             // A key or chord edit: what it moved of the items that follow
+             // the song, in the status line (gui.md §4.15).
+             const bool context = command == "key.set" || command == "key.remove" ||
+                                  command == "chord.set" || command == "chord.remove";
+             std::optional<model::Session> before;
+             if (context) before = (*app)->head();
+             auto r =
+                 dispatcher.execute({command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+             if (r && before)
+                 if (const auto notice =
+                         views::contextFollowNotice(*before, (*app)->head(), command))
+                     shell.setStatus(*notice);
+             return r;
          },
          // A refusal (a tempo, a section captured as a scene) in the status line.
          [&appActions](const Error& e) {
@@ -1060,6 +1095,12 @@ int frontendMain(int argc, char** argv) {
     });
     appActions.addUi("ui.item.consolidate", "Item: consolidate selected items",
                      [&] { shell.arrange()->gestures().consolidateSelection(); });
+    // The selected items whose MIDI take follows the song: what they sound
+    // as written into their notes (take.bake), one undo step.
+    appActions.addUi("ui.take.bake", "Take: bake what the selected items sound as into notes", [&] {
+        auto& g = shell.arrange()->gestures();
+        if (g.onBake) g.onBake(g.selection());
+    });
     appActions.addUi("ui.item.export", "Item: export the selected item\u2019s audio or MIDI\u2026",
                      [&] {
                          const auto& g = shell.arrange()->gestures();

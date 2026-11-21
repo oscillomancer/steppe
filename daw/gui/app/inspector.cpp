@@ -31,6 +31,7 @@
 #include "supple/views/envelope_lane.h"
 #include "supple/views/lanes.h"
 #include "supple/views/launcher.h"
+#include "take_follow.h"
 
 namespace supple::gui {
 namespace {
@@ -515,6 +516,21 @@ std::unique_ptr<ui::Node> Inspector::build() {
     state(states, "mute", "Mute", "mute");
     state(states, "loop", "Loop", "accent");
     state(states, "locked", "Lock", "accent");
+    // How the heard MIDI take sounds (ADR-0098 amended, gui.md §4.14): as
+    // written, or following the song's key or chords; Bake writes what it
+    // sounds as into its notes.
+    auto& followRow = formRow(box, "follow", "Follow");
+    rows_["follow"] = &followRow;
+    follow_ = &followRow.emplace<ui::Dropdown>(
+        "inspector.follow",
+        std::vector<ui::Choice>{{"none", "None"}, {"key", "Key"}, {"chords", "Chords"}});
+    follow_->layout.width = ui::SizeRule::fraction();
+    follow_->layout.height = ui::SizeRule::fixed(22);
+    follow_->onChange = [this](const std::string& value) { setFollow(value); };
+    bake_ = &followRow.emplace<ui::Button>("inspector.bake", "Bake", [this] { bake(); });
+    bake_->layout.width = ui::SizeRule::content();
+    bake_->layout.height = ui::SizeRule::fixed(22);
+    followRow.visible = false;
     // The heard MIDI take's own key (ADR-0098 amended, gui.md §4.14): what its
     // notes were written in, while it has a context; read-only.
     auto& writtenIn = formRow(box, "written_in", "Written in");
@@ -747,8 +763,12 @@ void Inspector::readClip(bool force) {
 void Inspector::readItems(bool force) {
     const model::Session& s = app_.head();
     std::vector<const model::Item*> items;
+    model::Id itemId;  // the first's
     for (const model::Id& id : ids_)
-        if (const model::Item* item = s.items.find(id)) items.push_back(item);
+        if (const model::Item* item = s.items.find(id)) {
+            if (items.empty()) itemId = id;
+            items.push_back(item);
+        }
     if (items.empty()) return;
     const bool one = items.size() == 1;
     const model::Item* item = items.front();
@@ -811,6 +831,23 @@ void Inspector::readItems(bool force) {
                                   : own  ? model::keyWords(*own)
                                          : std::string("no key");
         if (writtenIn_->text() != words) writtenIn_->setText(words);
+    }
+    // One item whose heard take is MIDI: its Follow, and Bake while it
+    // follows. Key and Chords say why when the take cannot follow.
+    {
+        const bool shown = one && take && model::takeIsMidi(*take);
+        rows_["follow"]->visible = shown;
+        if (shown) {
+            const auto why = followRefusal(s, itemId);
+            const std::string tail = why ? " (" + *why + ")" : std::string();
+            follow_->setChoices(
+                {{"none", "None"}, {"key", "Key" + tail, !why}, {"chords", "Chords" + tail, !why}});
+            follow_->setValue(take->follow == model::ClipFollow::Key      ? "key"
+                              : take->follow == model::ClipFollow::Chords ? "chords"
+                                                                          : "none");
+            follow_->enabled = !locked;
+            bake_->enabled = !locked && take->follow != model::ClipFollow::None;
+        }
     }
     const model::MediaSource* media = take && take->source ? s.media.find(*take->source) : nullptr;
     takeBox_->visible = media != nullptr;
@@ -1014,6 +1051,31 @@ void Inspector::setTake(const std::string& key, json::Value value) {
     args["take"] = item->activeTake->str();
     args[key] = std::move(value);
     run("take.set", std::move(args));
+}
+
+void Inspector::setFollow(const std::string& value) {
+    if (kind_ != InspectorSubject::Kind::Item || ids_.empty()) return;
+    const model::ClipFollow follow = value == "key"      ? model::ClipFollow::Key
+                                     : value == "chords" ? model::ClipFollow::Chords
+                                                         : model::ClipFollow::None;
+    auto args = takeFollowArgs(app_.head(), ids_.front(), follow);
+    if (!args) {
+        fail(args.error().message);
+        return;
+    }
+    run("take.set", std::move(*args));
+}
+
+void Inspector::bake() {
+    if (kind_ != InspectorSubject::Kind::Item || ids_.empty()) return;
+    auto r = bakeItems(dispatcher_, kOrigin, app_.head(), {ids_.front()});
+    if (!r) {
+        fail(r.error().hint.empty() ? r.error().message
+                                    : r.error().message + ": " + r.error().hint);
+        return;
+    }
+    if (actions_.onNotice) actions_.onNotice(*r);
+    finish(json::Value::object());
 }
 
 void Inspector::commit(const std::string& key, const std::string& text) {

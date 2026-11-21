@@ -232,7 +232,7 @@ instructions are in `docs/guides/installing.md`.
   playback as `model::soundingNotes` maps it (X4c), so a clip launched and the
   same clip laid sound the same. The roll shows and edits a clip's context,
   and the clip inspector sets Follow (X3); the roll's sounding ghosts and the
-  take inspector's Follow are X4e. A clip or scene
+  take inspector's Follow are X4e (done: below). A clip or scene
   laid from the clip launcher, or written by Capture (`launch.commit`'s
   `mismatches`), says in the status line how its keys were followed or why a
   clip was copied (`followed.mismatch` names what differs: a key or a chord); a
@@ -260,13 +260,17 @@ instructions are in `docs/guides/installing.md`.
   a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
   `context.no_key` warning on every context edit, and `session.describe`. The
   engine plays a take's `follow` (X4c, engine.md "Following at playback"). Not
-  built: `item.glue` is not registered. The GUI shows it (X4e, the model's part): a following take's roll draws
-  its notes where they sound with the written pitches outlined, and a Written
-  cell; the strip shows the song's and the take's chords; the item carries
-  "→D" and a thumbnail at the sounding pitches; the inspector says what the
-  take was written in. Not yet: Follow and Bake in the inspector and the Item
-  menu, editing the take's context in the roll, and degree steps on a following
-  take.
+  built: `item.glue` is not registered. The GUI (X4e): a following
+  take's roll draws its notes where they sound with the written pitches outlined, and
+  a Written cell; the strip shows the song's chords and the take's, whose row is edited
+  as a clip's (`take.set {context}`); a degree drag steps the written pitch in the
+  take's key, as it sounds; the item carries "→D" and a thumbnail at the sounding
+  pitches; the inspector has Follow (None, Key, Chords; a take with no context takes
+  the song's under the item) and Bake, and says what the take was written in; the
+  Item menu has Play as written, Follow the song's key or chords and Bake into notes
+  (`ui.take.bake`); the status line words placement, a GUI key or chord edit that
+  moves following items, a bake, and a sounding-view drag that merges two written
+  pitches.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

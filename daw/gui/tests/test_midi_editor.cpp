@@ -4846,7 +4846,7 @@ TEST_CASE("MIDI editor: a launcher clip opens at beat 0 in its own key and chord
 namespace {
 
 // The fixture item's heard take given its own context and follow (schema
-// 2.21) through a save and an open: no command sets them before X4d.
+// 2.21) through a save and an open, as a file holds them.
 // `context` is the points' JSON array, `follow` "key" or "chords".
 void followTake(Fixture& f, const std::string& context, const std::string& follow) {
     const auto itemId = model::Id::parse(f.item);
@@ -4921,7 +4921,7 @@ TEST_CASE(
     CHECK(f.editor->writtenButton()->visible);
     CHECK_FALSE(f.editor->passButton()->visible);  // one pass
     CHECK(f.editor->keyText() == "E minor");
-    CHECK_FALSE(f.editor->keyButton()->enabled);  // no degree mode on a following take yet
+    CHECK(f.editor->keyButton()->enabled);  // degrees count in the take's key (X4d)
     CHECK(labelText(f, "midi.title")
               .find("follows C major " + std::string(views::kFollowMark) + " E minor") !=
           std::string::npos);
@@ -4984,6 +4984,151 @@ TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or
     CHECK(f.notes().asArray().size() == before);
     REQUIRE(errors.size() == 1);
     CHECK(errors[0] == "MIDI: nothing written sounds as G#4 here: draw it in Written");
+}
+
+TEST_CASE("a following take's roll: a degree drag steps the written pitch as it sounds") {
+    Fixture f;
+    if (!f.ok) return;
+    // The take in C major under E minor: C4 E4 G4 C5 sound as E4 G4 B4 E5.
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"}])", "key");
+    auto& s = f.editor->state();
+    REQUIRE(s.following);
+    std::vector<std::string> notices;
+    f.actions->onNotice = [&](const std::string& n) { notices.push_back(n); };
+    // Degrees count in the take's own key, as midi.edit does (X4d).
+    REQUIRE(f.editor->keyButton()->enabled);
+    REQUIRE(f.root->click("midi.key"));
+    f.frame();
+    REQUIRE(s.degrees);
+    // C4, sounding E4, dragged up to G4's row: two degrees of C major (E4),
+    // which sound as G4; the preview is the step that sounds nearest.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 64));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(0.5, 66));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(0.5, 67));
+    CHECK(s.dDegrees == 2);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.5, 67));
+    CHECK(f.notes().asArray()[0].find("pitch")->asInt() == 64);  // written E4
+    CHECK(s.drawnPitch(0, s.notes[0]) == 67);                    // sounding G4
+    CHECK(notices.empty());
+    // Semitones (degrees off): E4, sounding G4, dragged a row down is written
+    // Eb4 (C major spells it so), which sounds as G4 too (harmony counts it as
+    // D raised, so E minor's F# raised): the status line says the two merge.
+    REQUIRE(f.root->click("midi.key"));
+    f.frame();
+    REQUIRE_FALSE(s.degrees);
+    f.drag(f.at(1.5, 67), f.at(1.5, 66));
+    CHECK(f.notes().asArray()[1].find("pitch")->asInt() == 63);
+    CHECK(s.drawnPitch(1, s.notes[1]) == 67);
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0] == "Eb4 and E4 both sound as G4 here");
+}
+
+TEST_CASE("a following take's strip: its own row takes edits, each one take.set {context}") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    f.exec("chord.set", R"({"at":4,"symbol":"Em"})");
+    followTake(f,
+               R"([{"beat":0,"type":"key","tonic":"C","scale":"major"},
+                   {"beat":0,"type":"chord","symbol":"C"},
+                   {"beat":2,"type":"chord","symbol":"F"}])",
+               "key");
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 80;
+    s.scrollBeat = -0.25;
+    f.frame();
+    const auto takeId = *f.app->head().items.find(*model::Id::parse(f.item))->activeTake;
+    auto context = [&] {
+        std::string out;
+        for (const model::ContextPoint& p : f.app->head().takes.find(takeId)->context)
+            out +=
+                (out.empty() ? "" : " ") +
+                (p.type == model::ContextType::Key ? "key " + p.tonic + " " + p.scale : p.symbol) +
+                "@" + json::formatDouble(p.beat);
+        return out;
+    };
+    // The sounding view: bar numbers, the song's chords, then the take's.
+    const ui::Rect strip = f.root->find("midi.bars")->bounds();
+    const float takeRow = strip.y + 16 + 18 + 9;
+    auto x = [&](double projectBeat) { return f.at(projectBeat - 4, 60).x; };
+    // A drag of the take's F a beat on: it moves in the take's context beats.
+    f.drag({x(6.05), takeRow}, {x(7.05), takeRow});
+    CHECK(context() == "key C major@0.0 C@0.0 F@3.0");
+    CHECK(f.editor->otherChordLabels() == std::vector<std::string>{"C", "F"});
+    // A double-click on the take's row: the chord field, holding the take's
+    // chord there; Enter writes it in its place.
+    f.pointer(ui::PointerEvent::Type::Down, {x(4.02), takeRow}, 2);
+    f.pointer(ui::PointerEvent::Type::Up, {x(4.02), takeRow}, 2);
+    REQUIRE(f.root->find("chord-field"));
+    CHECK(f.root->find("chord-field")->valueText() == "C");
+    f.root->frame(false);
+    f.root->key(SDLK_A, ui::kCtrl);
+    f.root->text("Am");
+    f.root->key(SDLK_RETURN);
+    f.frame();
+    CHECK(context() == "key C major@0.0 Am@0.0 F@3.0");
+    // A double-click on the song's row still edits the song.
+    // A right-click on the take's row: its menu; the song's key and chords
+    // under the item replace the take's.
+    ui::PointerEvent e;
+    e.type = ui::PointerEvent::Type::Down;
+    e.pos = {x(5.5), takeRow};
+    e.button = 3;
+    f.root->pointer(e);
+    e.type = ui::PointerEvent::Type::Up;
+    f.root->pointer(e);
+    f.frame();
+    ui::Node* menu = f.root->find("midi.take.context.menu");
+    REQUIRE(menu);
+    std::vector<std::string> labels;
+    std::function<void()> fromSong;
+    for (const auto& m : ui::menuItems(*menu)) {
+        if (m.separator) continue;
+        labels.push_back(m.label);
+        if (m.label == "From the song's key and chords") fromSong = m.run;
+    }
+    CHECK(labels == std::vector<std::string>{"Key…", "Chord…", "Remove key C major",
+                                             "From the song's key and chords",
+                                             "Clear the take's context"});
+    REQUIRE(fromSong);
+    f.root->closePopup();
+    fromSong();
+    f.frame();
+    CHECK(context() == "key E minor@0.0 Em@0.0");
+    // Nothing moves now: the take is in the song's key and chords.
+    for (std::size_t i = 0; i < s.notes.size(); ++i)
+        CHECK(s.drawnPitch(i, s.notes[i]) == s.notes[i].pitch);
+}
+
+TEST_CASE("a context edit says which following items it moved; a bake says what it wrote") {
+    // gui.md §4.15 (ADR-0098 amended): the status line after a key or chord
+    // edit made in the GUI, and after a bake.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"}])", "key");
+    const std::string name = views::Lanes::itemLabel(
+        f.app->head(), *f.app->head().items.find(*model::Id::parse(f.item)));
+    auto after = [&](const std::string& command, const std::string& args) {
+        const model::Session before = f.app->head();
+        f.exec(command, args);
+        return views::contextFollowNotice(before, f.app->head(), command);
+    };
+    // The item lies over beats 4 to 8: a key from beat 8 moves nothing.
+    CHECK_FALSE(after("key.set", R"({"at":8,"tonic":"G","scale":"major"})"));
+    // From beat 6 (bar 2, beat 3) its last two notes sound in G major.
+    CHECK(after("key.set", R"({"at":6,"tonic":"G","scale":"major"})") ==
+          name + " follows the new key at bar 2: G major");
+    // A key follow reads no chords.
+    CHECK_FALSE(after("chord.set", R"({"at":5,"symbol":"Am"})"));
+    // The song's first key gone: its first two notes have no key to read.
+    CHECK(after("key.remove", R"({"at":0})") ==
+          name + " sounds as written from bar 2: no key there");
+    CHECK(views::bakeNotice("Riff", 6, 1, false) == "Riff baked: 6 notes written as they sound");
+    CHECK(views::bakeNotice("Riff", 1, 1, false) == "Riff baked: 1 note written as it sounds");
+    CHECK(views::bakeNotice("Riff", 6, 4, true) ==
+          "Riff baked: its 4 passes written out, each as it sounds");
 }
 
 TEST_CASE("a take that does not follow opens its roll as written, with no Written cell") {

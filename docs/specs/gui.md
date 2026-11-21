@@ -1021,7 +1021,14 @@ sequence on this track** (item.explode-takes, recording order; this ends
 the takes, Show all takes keeps them); **Delete take "name"** for the
 heard take (take.remove); and **Keep only the
 selected take**: every selected item with several takes keeps only its heard
-take (take.remove of the others, one undo step). The right-click menu's
+take (take.remove of the others, one undo step). For an item whose heard
+take is MIDI it adds how that take sounds against the song (ADR-0098
+amended), each checked as it is: **Play as written**, **Follow the song's
+key** and **Follow the song's chords** (`take.set {follow}` as the
+inspector's Follow sends it; greyed with the reason when the take cannot
+follow), and **Bake into notes** (`ui.take.bake`, a key-bindable action:
+`take.bake` on each selected item whose heard take follows, one undo step,
+and the status line says what it wrote). The right-click menu's
 renders act on every selected item with material that is not locked, audio
 and MIDI alike, one item.apply-fx each in one undo step (through the take and
 track FX; on the clicked item the take under the pointer is heard first):
@@ -1773,9 +1780,18 @@ compiles) and, for a place no note has yet, `model::placeAt` and
   view **song** (the project's chords, as on any item) then **take** (the
   take's own: each point at every repeat of its context beat on the roll's
   axis, the chord holding at the left carried in, the last ending with the
-  item); in the written view **take** first and **song** second. Only the
-  song's row is edited here (a double-click, as on the ruler); the take's
-  becomes editable with `take.set {context}` (X4d).
+  item); in the written view **take** first and **song** second. The
+  song's row is edited as on the ruler (a double-click). The take's row is
+  edited with the clip strip's gestures, each edit one `take.set {context}`
+  with the lead sheet in bars of the meter at the item (`gui::takeLeadSheet`)
+  and each point at the context beat of its place (`model::placeAt`, so a
+  repeating context's repeats edit its one period): a drag moves a chord
+  (Alt copies it); a double-click opens the chord field on the take's chord
+  there; a right-click opens its menu (`midi.take.context.menu`): Key… or
+  Key at bar N…, Chord…, Remove key, Remove chord, From the song's key and
+  chords (`gui::songContextUnder`: the song's under the item, replacing the
+  take's), Clear the take's context. A take with no context has no row; a
+  right-click anywhere on the strip opens the same menu, to give it one.
 - **Key, shading, spelling, title.** The sounding view reads the song's
   key; the written view the take's own at each note's context beat, and
   its key button names the take's key where the content starts. The title
@@ -1785,15 +1801,25 @@ compiles) and, for a place no note has yet, `model::placeAt` and
 - **Notation and List** always show and edit written notes, the take's
   text: the notation pane's title reads "Notation · written" and the list's
   header says "written" while the take follows.
-- **Edits act on written notes**, through `midi.edit`. In the sounding
-  view a pitch drag steps the written pitch by semitones and previews where
-  it will sound (the place it lands, the start rule); a move in time keeps
-  the written pitch and follows the new place. A double-click writes the
-  written pitch nearest the row that sounds as it there (within an
-  octave); where none does, it writes nothing and the status line says
-  "MIDI: nothing written sounds as G#4 here: draw it in Written". Degree
-  mode is off on a following take until `midi.edit`'s degrees read the
-  take's own context (X4d), when a sounding-view drag steps by degrees.
+- **Edits act on written notes**, through `midi.edit`, which on a following
+  take reads the take's own context. In the sounding view a pitch drag
+  previews where the note will sound (the place it lands, the start rule);
+  a move in time keeps the written pitch and follows the new place.
+  - **With the key button lit** (degree mode) the written pitch steps by
+    degrees of the take's own key at the note's place, and the note in hand
+    takes the step whose result sounds nearest the row under the pointer;
+    the commit is `transpose_degrees` by that count, so for in-scale notes
+    in key mode one step up sounds one step up. In the written view the
+    steps are counted from the row as on any item, in the take's key.
+  - **By semitones** it steps the written pitch. Where the note lands on a
+    pitch that a neighbouring written pitch also sounds as there (the
+    mapping merges an alteration into the next degree), the status line
+    says "Eb4 and E4 both sound as G4 here" (the written pitches named in
+    the take's key, the sounding one in the song's).
+  - A double-click writes the written pitch nearest the row that sounds as
+    it there (within an octave); where none does, it writes nothing and the
+    status line says "MIDI: nothing written sounds as G#4 here: draw it in
+    Written".
 - **Passes.** A looped item whose passes sound differently shows the pass
   chosen in **Pass 1 of 4** (`midi.pass`, shown only then; its menu lists
   "Pass 2 · bar 3"...), the first by default; edits change every pass.
@@ -2740,6 +2766,7 @@ inspector adds no command:
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
+| Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |
 | Written in (`inspector.written_in`) | One item whose heard MIDI take has a context (ADR-0098 amended): the take's own key where its content starts, "D major" ("no key" when that point is unreadable) | Read only | |
 
 When the heard take plays audio, its speed and pitch follow
@@ -2835,9 +2862,9 @@ same heights, scroll and colours.
   it off. A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
   item in the way) shows its message in the status line. A commit that
-  copied clips under another key (the answer's `mismatches`, with the
-  `context.mismatch` warning) says so there as laying does: "Committed:
-  Root copied: its key D minor differs from C minor at bar 1"
+  laid clips as written under another key (the answer's `mismatches`, with
+  the `context.mismatch` warning) says so there as laying does: "Committed:
+  Root is laid as written: its key D minor differs from C minor at bar 1"
   (`views::followNotice` with `launch.commit`, through
   `CaptureControl::onNotice`).
 - **After a commit made while stopped** (at stop, or the cell turned off
@@ -2970,24 +2997,40 @@ same heights, scroll and colours.
   at end) says in the status line, without a dialog, what its clips' keys
   did, read from the answer's `followed` blocks (`views::followNotice`,
   routed from `ArrangeView::runLauncher` through
-  `LauncherCallbacks::onNotice`):
-  - a clip that followed: "Bass followed to D minor, +2" (each run of bars
-    the notes moved over: its key and the interval, or "by degree", "by
-    chord"; a second run "then F minor, +3 from bar 7", more counted;
-    notes folded into range counted);
-  - a clip copied under another key (`followed.mismatch`, with the
-    `context.mismatch` warning): "Keys copied: its key C minor differs from
-    D minor at bar 21";
-  - a clip that could not follow (`copied`): "Drums copied: drums don't
-    follow", "… audio doesn't follow", "… it has no key to follow from",
-    "… it has no notes to move";
-  - a scene: "Verse at bar 21: " and each such clip's phrase, joined by
-    "; ", or, past 110 characters, how many followed and how many were
-    copied, with up to three names each.
+  `LauncherCallbacks::onNotice`). The notes are laid as written and sound
+  as the place says (ADR-0098 amended, "following is playback"):
+  - a clip that follows: "Riff follows: sounds in E minor, by degree"
+    (one run of bars whose notes sound moved: its key and the interval
+    "+2", or "by degree"); "Riff follows: sounds in E minor, then G major
+    from bar 9" for several runs (more counted); "Stabs follows the chords:
+    sounds in E minor"; notes folded into range counted;
+  - a clip laid as written under another key (`followed.mismatch`, with
+    the `context.mismatch` warning): "Keys is laid as written: its key C
+    minor differs from D minor at bar 21";
+  - a clip that could not follow (`copied`): "Beat is laid as written:
+    drums don't follow", "… audio doesn't follow", "… it has no key to
+    follow from", "… it has no notes to follow";
+  - a scene: "Verse at bar 21: " and each such clip's phrase ("Root sounds
+    in F minor, +3"), joined by "; ", or, past 110 characters, how many
+    follow and how many were laid as written, with up to three names each.
 
   A clip with nothing to say (no key change, its key the song's, or
   already in the key: a run moved by 0 or by degree into its own key) says
   nothing, so the last note stays.
+- **What a context edit moved.** A key or chord edit made in the GUI (the
+  ruler's `key.set`, `key.remove`, `chord.set`, `chord.remove`) says in the
+  status line which items that follow the song now sound otherwise, found
+  by comparing `model::soundingNotes` before and after
+  (`views::contextFollowNotice`): "Riff follows the new chord at bar 6",
+  "Bass and Keys follow the new key at bar 9: G major", "3 items follow the
+  new chord at bar 6"; where a following note now finds no key to read
+  (`context.no_key`), "Riff sounds as written from bar 17: no key there".
+  An edit that moves nothing says nothing, and an agent's edit only redraws.
+- **What a bake wrote** (`take.bake`, from the inspector or the Item menu):
+  "Riff baked: 6 notes written as they sound", or, when the answer says
+  `unrolled`, "Riff baked: its 4 passes written out, each as it sounds"
+  (`views::bakeNotice`); several items, "3 items baked: their notes written
+  as they sound".
 - **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
   Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
   empty cell to its right; none left is an error in the status line), Lay on

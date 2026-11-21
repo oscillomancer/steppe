@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <map>
 #include <memory>
 #include <utility>
 
@@ -69,13 +70,22 @@ std::string laidName(const model::Session& s, const std::string& clipId) {
 
 enum class Laid { Quiet, Followed, Copied };
 
-// One laid clip's phrase, and whether it was mapped or copied in another key.
-std::pair<Laid, std::string> laidPhrase(const std::string& name, const json::Value* followed) {
+// One laid clip's phrase, and whether it follows or was laid as written in another key.
+// The notes are stored as written and sound as the place says (ADR-0098, following is
+// playback): `followed` says where they sound. `alone` words it for one item ("Riff
+// follows: sounds in E minor, by degree"); in a list the name leads it ("Riff sounds in E
+// minor, by degree").
+std::pair<Laid, std::string> laidPhrase(const std::string& name, const json::Value* followed,
+                                        bool alone) {
     if (!followed || !followed->isObject()) return {Laid::Quiet, {}};
     const std::string mode = jsonText(followed->find("mode"));
     if (mode == "key" || mode == "chords") {
-        // Each run of bars the notes moved over: its key, and how far.
-        std::vector<std::string> runs;
+        // Each run of bars whose notes sound moved: its key, and how far.
+        struct Run {
+            std::string key, how;
+            std::int64_t bar = 1;
+        };
+        std::vector<Run> runs;
         const json::Value* regions = followed->find("regions");
         if (regions && regions->isArray())
             for (const json::Value& r : regions->asArray()) {
@@ -86,36 +96,39 @@ std::pair<Laid, std::string> laidPhrase(const std::string& name, const json::Val
                 if (by == "copy" || (by == "transpose" && iv && iv->asInt() == 0) ||
                     (by == "degree" && jsonText(r.find("from_key")) == jsonText(r.find("to_key"))))
                     continue;
-                std::string run = jsonText(r.find("to_key"));
-                if (run.empty()) run = "the chords";
+                Run run;
+                run.key = jsonText(r.find("to_key"));
+                if (run.key.empty()) run.key = "the chords";
                 if (by == "transpose" && iv)
-                    run += ", " + semitones(iv->asInt());
+                    run.how = ", " + semitones(iv->asInt());
                 else if (by == "degree")
-                    run += " by degree";
-                else if (by == "chords")
-                    run += " by chord";
-                if (!runs.empty())
-                    if (const json::Value* from = r.find("from_bar"))
-                        run += " from bar " + std::to_string(from->asInt());
+                    run.how = ", by degree";
+                if (const json::Value* from = r.find("from_bar")) run.bar = from->asInt();
                 runs.push_back(std::move(run));
             }
         if (runs.empty()) return {Laid::Quiet, {}};  // already in the key: nothing moved
-        std::string text = name + " followed to " + runs[0];
-        if (runs.size() > 1) text += ", then " + runs[1];
-        if (runs.size() > 2) text += ", and " + std::to_string(runs.size() - 2) + " more";
+        // One run says how; several say where each key begins.
+        std::string where = "sounds in " + runs[0].key;
+        if (runs.size() == 1) where += runs[0].how;
+        if (runs.size() > 1)
+            where += ", then " + runs[1].key + " from bar " + std::to_string(runs[1].bar);
+        if (runs.size() > 2) where += ", and " + std::to_string(runs.size() - 2) + " more";
         if (const json::Value* folded = followed->find("folded"); folded && folded->asInt() > 0)
-            text += " (" + std::to_string(folded->asInt()) + " folded into range)";
-        return {Laid::Followed, std::move(text)};
+            where += " (" + std::to_string(folded->asInt()) + " folded into range)";
+        if (!alone) return {Laid::Followed, name + " " + where};
+        return {Laid::Followed,
+                name + (mode == "chords" ? " follows the chords: " : " follows: ") + where};
     }
+    const std::string asWritten = name + " is laid as written: ";
     if (const json::Value* m = followed->find("mismatch"); m && m->isObject())
-        return {Laid::Copied, name + " copied: its key " + jsonText(m->find("clip_key")) +
+        return {Laid::Copied, asWritten + "its key " + jsonText(m->find("clip_key")) +
                                   " differs from " + jsonText(m->find("key")) + " at bar " +
                                   std::to_string(m->find("bar") ? m->find("bar")->asInt() : 1)};
     const std::string copied = jsonText(followed->find("copied"));
-    if (copied == "drums") return {Laid::Copied, name + " copied: drums don't follow"};
-    if (copied == "audio") return {Laid::Copied, name + " copied: audio doesn't follow"};
-    if (copied == "no_key") return {Laid::Copied, name + " copied: it has no key to follow from"};
-    if (copied == "no_notes") return {Laid::Copied, name + " copied: it has no notes to move"};
+    if (copied == "drums") return {Laid::Copied, asWritten + "drums don't follow"};
+    if (copied == "audio") return {Laid::Copied, asWritten + "audio doesn't follow"};
+    if (copied == "no_key") return {Laid::Copied, asWritten + "it has no key to follow from"};
+    if (copied == "no_notes") return {Laid::Copied, asWritten + "it has no notes to follow"};
     return {Laid::Quiet, {}};
 }
 
@@ -127,7 +140,7 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
     if (command == "item.add") {
         const std::string clip = jsonText(args.find("clip"));
         if (clip.empty()) return std::nullopt;
-        auto [laid, text] = laidPhrase(laidName(s, clip), answer.find("followed"));
+        auto [laid, text] = laidPhrase(laidName(s, clip), answer.find("followed"), true);
         if (laid == Laid::Quiet) return std::nullopt;
         return text;
     }
@@ -143,7 +156,7 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
             followedBlock["mode"] = "none";
             followedBlock["mismatch"] = m;
             const std::string name = laidName(s, jsonText(m.find("clip")));
-            auto [laid, text] = laidPhrase(name, &followedBlock);
+            auto [laid, text] = laidPhrase(name, &followedBlock, false);
             if (laid == Laid::Quiet) continue;
             phrases.push_back(std::move(text));
             copied.push_back(name);
@@ -154,7 +167,7 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
         if (!items || !items->isArray()) return std::nullopt;
         for (const json::Value& item : items->asArray()) {
             const std::string name = laidName(s, jsonText(item.find("clip")));
-            auto [laid, text] = laidPhrase(name, item.find("followed"));
+            auto [laid, text] = laidPhrase(name, item.find("followed"), false);
             if (laid == Laid::Quiet) continue;
             phrases.push_back(std::move(text));
             (laid == Laid::Followed ? followed : copied).push_back(name);
@@ -172,8 +185,8 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
     std::string all;
     for (const std::string& p : phrases) all += (all.empty() ? "" : "; ") + p;
     if (all.size() <= 110) return head + ": " + all;
-    // Too long for the line: how many followed and how many were copied in
-    // another key or for a reason, by name.
+    // Too long for the line: how many follow and how many were laid as
+    // written in another key or for a reason, by name.
     auto names = [](const std::vector<std::string>& v) {
         std::string out;
         for (std::size_t i = 0; i < v.size() && i < 3; ++i) out += (i ? ", " : "") + v[i];
@@ -182,12 +195,109 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
     };
     std::string text = head + ":";
     if (!followed.empty())
-        text +=
-            " " + std::to_string(followed.size()) + " followed the key (" + names(followed) + ")";
+        text += " " + std::to_string(followed.size()) + " follow (" + names(followed) + ")";
     if (!copied.empty())
         text += std::string(followed.empty() ? " " : "; ") + std::to_string(copied.size()) +
-                " copied as written (" + names(copied) + ")";
+                " laid as written (" + names(copied) + ")";
     return text;
+}
+
+namespace {
+
+// What each heard note of a following item sounds as, by (note, pass); empty
+// for an item whose heard take doesn't follow.
+struct Heard {
+    std::map<std::pair<std::uint32_t, std::int32_t>, const model::SoundingNote*> at;
+    std::vector<model::SoundingNote> notes;
+};
+Heard heardOf(const model::Session& s, model::Id id) {
+    Heard h;
+    const model::Item* item = s.items.find(id);
+    const model::Take* take = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+    if (!take || take->follow == model::ClipFollow::None) return h;
+    h.notes = model::soundingNotes(s, id, -1e18, 1e18);
+    for (const model::SoundingNote& n : h.notes) h.at[{n.note, n.pass}] = &n;
+    return h;
+}
+
+// "Riff", "Bass and Keys", "3 items", and whether the verb is singular.
+std::pair<std::string, bool> itemNames(const std::vector<std::string>& names) {
+    if (names.size() == 1) return {names[0], true};
+    if (names.size() == 2) return {names[0] + " and " + names[1], false};
+    return {std::to_string(names.size()) + " items", false};
+}
+
+}  // namespace
+
+std::optional<std::string> contextFollowNotice(const model::Session& before,
+                                               const model::Session& after,
+                                               const std::string& command) {
+    struct Moved {
+        std::string name;
+        double first = 0;             // the first song beat where a note sounds otherwise
+        std::optional<double> noKey;  // the first where one found no key
+    };
+    std::vector<Moved> moved;
+    for (const auto& e : after.items) {
+        const Heard was = heardOf(before, e.id), now = heardOf(after, e.id);
+        if (was.notes.empty() && now.notes.empty()) continue;
+        const model::Item& item = *e.value;
+        const double start = model::itemSpan(after, item).startBeat;
+        std::optional<double> first, noKey;
+        for (const model::SoundingNote& n : now.notes) {
+            const auto it = was.at.find({n.note, n.pass});
+            const bool differs = it == was.at.end() || it->second->sounds.pitch != n.sounds.pitch ||
+                                 it->second->sounds.by != n.sounds.by;
+            if (!differs) continue;
+            const double beat = std::max(start, n.songBeat);
+            if (!first || beat < *first) first = beat;
+            if (n.channel != 9 && n.sounds.by == harmony::FollowedBy::Copy &&
+                (!noKey || beat < *noKey))
+                noKey = beat;
+        }
+        if (!first) continue;
+        moved.push_back({views::Lanes::itemLabel(after, item), *first, noKey});
+    }
+    if (moved.empty()) return std::nullopt;
+    const time::TimeMap& tm = *after.timeMap;
+    auto barOf = [&](double beat) { return std::to_string(tm.barBeat(beat).bar); };
+    // Notes that found no key to read sound as written: that is the news.
+    std::vector<std::string> lost;
+    std::optional<double> lostAt;
+    for (const Moved& m : moved)
+        if (m.noKey) {
+            lost.push_back(m.name);
+            if (!lostAt || *m.noKey < *lostAt) lostAt = m.noKey;
+        }
+    if (!lost.empty()) {
+        const auto [who, one] = itemNames(lost);
+        return who + (one ? " sounds" : " sound") + " as written from bar " + barOf(*lostAt) +
+               ": no key there";
+    }
+    std::vector<std::string> names;
+    double at = moved.front().first;
+    for (const Moved& m : moved) {
+        names.push_back(m.name);
+        at = std::min(at, m.first);
+    }
+    const auto [who, one] = itemNames(names);
+    const std::string verb = one ? " follows" : " follow";
+    if (command.rfind("key.", 0) == 0) {
+        const auto key = model::keyPointAt(after, at);
+        const model::ContextPoint* point = key ? after.context.find(*key) : nullptr;
+        return who + verb + (command == "key.set" ? " the new key" : " the key") + " at bar " +
+               barOf(at) + (point ? ": " + model::keyWords(*point) : std::string());
+    }
+    return who + verb + (command == "chord.set" ? " the new chord" : " the chords") + " at bar " +
+           barOf(at);
+}
+
+std::string bakeNotice(const std::string& name, std::size_t notes, int passes, bool unrolled) {
+    if (unrolled)
+        return name + " baked: its " + std::to_string(passes) +
+               " passes written out, each as it sounds";
+    return name + " baked: " + std::to_string(notes) + (notes == 1 ? " note" : " notes") +
+           " written as " + (notes == 1 ? "it sounds" : "they sound");
 }
 
 namespace {

@@ -6,6 +6,7 @@
 #include "test_support.h"
 
 #include <filesystem>
+#include <map>
 #include <mutex>
 
 #include <cmath>
@@ -1768,6 +1769,77 @@ TEST_CASE("arrange gestures: the menus paste where they open; the menu bar's has
         if (!row.separator)
             CHECK_MESSAGE(std::find(clicked.begin(), clicked.end(), row.label) == clicked.end(),
                           row.label);
+}
+
+TEST_CASE("arrange gestures: the Item menu sets how a MIDI take sounds against the song") {
+    // gui.md §6 (ADR-0098 amended): Play as written, Follow the song's key
+    // or chords, and Bake into notes, for an item whose heard take is MIDI.
+    Fixture f;
+    if (!f.ok) return;
+    auto& g = f.view->gestures();
+    auto exec = [&](const std::string& command, const std::string& args) {
+        auto r = f.dispatcher->execute({command, json::parse(args).value(), kUi});
+        REQUIRE(r);
+        return *r;
+    };
+    const std::string track = exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    const model::Id midi = *model::Id::parse(
+        exec("item.add", R"({"track":")" + track +
+                             R"(","bar":1,"notation":"voice v; 1: C4:q E4:q G4:q C5:q"})")["item"]
+            .asString());
+    f.sync();
+    std::vector<std::pair<model::Id, model::ClipFollow>> followed;
+    std::vector<std::vector<model::Id>> baked;
+    std::optional<std::string> refusal;
+    g.onFollow = [&](model::Id item, model::ClipFollow follow) {
+        followed.emplace_back(item, follow);
+    };
+    g.onBake = [&](const std::vector<model::Id>& items) { baked.push_back(items); };
+    g.followRefusal = [&](model::Id) { return refusal; };
+    g.setSelection({midi});
+    auto rows = [&] {
+        std::map<std::string, const ui::MenuItem*> out;
+        static std::vector<ui::MenuItem> held;
+        held = g.itemBarMenu();
+        for (const ui::MenuItem& m : held) out[m.label] = &m;
+        return out;
+    };
+    {
+        const auto r = rows();
+        REQUIRE(r.contains("Play as written"));
+        CHECK(r.at("Play as written")->checked);
+        REQUIRE(r.contains("Follow the song's key"));
+        CHECK(r.at("Follow the song's key")->enabled);
+        CHECK(r.contains("Follow the song's chords"));
+        REQUIRE(r.contains("Bake into notes"));
+        CHECK_FALSE(r.at("Bake into notes")->enabled);  // nothing follows
+    }
+    barMenu(f, midi);
+    pick(f, "Follow the song's key");
+    REQUIRE(followed.size() == 1);
+    CHECK(followed[0] == std::pair{midi, model::ClipFollow::Key});
+    // A take that cannot follow says why, and Key and Chords are greyed.
+    refusal = "no key in the song here";
+    {
+        const auto r = rows();
+        REQUIRE(r.contains("Follow the song's key (no key in the song here)"));
+        CHECK_FALSE(r.at("Follow the song's key (no key in the song here)")->enabled);
+        CHECK(r.at("Play as written")->enabled);
+    }
+    refusal.reset();
+    // Following: its entry is checked and Bake bakes it.
+    const std::string take = f.app->head().items.find(midi)->activeTake->str();
+    exec("take.set", R"({"take":")" + take + R"(","context":"1: key C major ~:w","follow":"key"})");
+    f.sync();
+    barMenu(f, midi);
+    CHECK(ui::menuItems(*f.root->find("item.menu"))[menuIndex(f, "Follow the song's key")].checked);
+    pick(f, "Bake into notes");
+    REQUIRE(baked.size() == 1);
+    CHECK(baked[0] == std::vector<model::Id>{midi});
+    // An audio item has none of them.
+    g.setSelection({f.itemOnRow(0)});
+    f.sync();
+    CHECK_FALSE(rows().contains("Play as written"));
 }
 
 TEST_CASE("arrange gestures: the Item menu sets what items follow; a time item moves by beats") {
