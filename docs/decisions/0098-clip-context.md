@@ -1,7 +1,8 @@
 # ADR-0098: Clips know the context
 
-**Status:** Proposed, 2026-11-20, by the lead, from the co-director's outline
-(`designs/headline-core.md` §7), for the co-director's reading before X1.
+**Status:** Accepted, 2026-11-20. Written by the lead from the
+co-director's outline (`designs/headline-core.md` §7); the co-director
+accepted it with the seven differences listed below.
 It extends ADR-0095 (the context track) and ADR-0097 (the clip launcher).
 It is built in steps X1 to X5 (below); X1 and X2 are specified here and in
 the contracts precisely enough to build without asking.
@@ -263,6 +264,12 @@ contract):
      relative to the root.
    - If `pitch`'s class is tone `i`, the target class is the to chord's tone
      `i mod n`, where `n` is the to chord's tone count.
+   - A tone beyond the target chord's count wraps by design: the target
+     chord has no such tone, and the wrap gives every note a target among
+     the chord's own tones instead of inventing an extension it does not
+     have. So a seventh over a triad (Cmaj7's B, tone 3, to D) lands on the
+     triad's root (D), in the octave nearest the key-followed pitch. It is
+     not a bug.
    - If it is the slash bass of the from chord and not a tone, the target is
      the to chord's bass, or its root without one.
    - Any other note keeps its distance in scale degrees above the from root:
