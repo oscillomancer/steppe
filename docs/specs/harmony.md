@@ -156,12 +156,16 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
 1. **Tonic interval** `iv(a, b)`: `d = (pc(b) − pc(a)) mod 12`. It is `d` when
    `d < 6`, `d − 12` when `d > 6`, and `−6` when `d = 6` (a tie goes down, as
    in §2's snapping).
-2. **Key mode, no key on either side:** the pitch unchanged, by `Copy`.
+2. **Key mode, a key missing on one side or on both:** the pitch unchanged,
+   by `Copy`. Steps 3 to 5 need both keys. A clip key with no key at the
+   place is the ordinary case (placement's `context.no_key`).
 3. **Key mode, same scale:** `pitch + iv(from.tonic, to.tonic)`, by
    `Transpose`.
 4. **Key mode, different scales with `m(from) = m(to)`:**
    - Let `s` be the highest pitch `≤ pitch` whose class is in `from`'s
-     scale, and `alt = pitch − s`.
+     scale, and `alt = pitch − s`. `s` is an integer that may be below 0
+     (pitch 0 in B major gives `s = −1`); it is never searched for within
+     0..127 only.
    - Let `r = s − pc(from.tonic)`, `o = floor(r / 12)`, and `k` the index
      with `I(from)[k] = r − 12·o`.
    - The result is `pc(from.tonic) + iv(from.tonic, to.tonic) + 12·o +
@@ -192,7 +196,8 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
      (checked from the root's slot upward; the first match), the target
      class is `to`'s tone in slot S. When `to` has none:
      - for a ninth, eleventh or thirteenth, `to`'s root, third or fifth
-       respectively;
+       respectively, or, when `to` has no tone there either, its tone in
+       the highest slot below that one (C11 → D5 maps the eleventh F to D);
      - otherwise `to`'s tone in the highest slot below S that it has, its
        root at least.
 
@@ -239,7 +244,8 @@ X4 builds the engine's pitch tables from it.
   - A harmonic minor → C major: G4 → B4 and G#4 → B4;
   - C major pentatonic → A minor pentatonic: F#4 → E4;
   - C major → C minor pentatonic is a transpose with `scaleShape`;
-  - no key on either side is `Copy`.
+  - a key missing is `Copy`: on the `from` side only, on the `to` side
+    only, and on both.
 - **Chords mode:**
   - Cmaj7 → Dm7, tone by tone, in each octave; at the top, G9 (127) with
     keys C major → D major goes to A9 (129) by the nearest rule and folds to
@@ -247,6 +253,7 @@ X4 builds the engine's pitch tables from it.
   - C11 → Dm7;
   - C5 → Dm;
   - C13 → D;
+  - C11 → D5 (the eleventh F → D);
   - Cmaj7 → C5 (the duplicate rule);
   - C/D → G/A (D → A);
   - C/E → G/D (E → B);
