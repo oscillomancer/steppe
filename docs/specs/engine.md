@@ -2470,14 +2470,18 @@ harness. See the tooling README for schemas, limits and invocation details.
   Shutdown: `Backend::stop()` promises one final zero-frame callback on the
   audio thread (a manual driver makes it on its caller, which is its audio
   thread), and the engine stops every plugin there — no timeout, no stop from
-  the main thread however long the device's period. A device cycle that
-  runs after the request and before that callback stops the callback's
-  plug-ins and then plays silence: it adopts no plan and starts no plug-in,
-  not even a refused one's retry. The final callback stops whatever the
-  callback's executor still holds, and `Engine::stop()` stops any instance
-  still processing once every audio thread has joined. So a stop never
-  leaves an instance processing without an owner, which an engine
-  restarted on the same pool could never claim. Pause and
+  the main thread however long the device's period. In the in-callback
+  executor, a device cycle that runs after the request and before that
+  callback stops the callback's plug-ins and then plays silence: it adopts
+  no plan and starts no plug-in, not even a refused one's retry. In the
+  anticipative executor the renderer stops its share as it ends, and the
+  callback's live region may still adopt a plan and start its plug-ins in
+  such a cycle: the final callback stops every live instance whatever it
+  holds. The final callback also stops whatever the in-callback executor
+  still holds, and `Engine::stop()` stops any instance still processing
+  once every audio thread has joined. So a stop never leaves an instance
+  processing without an owner, which an engine restarted on the same pool
+  could never claim. Pause and
   seek `reset()` the plugins (no hanging notes); seek re-locates event and
   automation cursors and clears delay lines, a rack's plug-in stages' dry
   delays and oversampling filters as a chain's (`locateRackStages`). A
