@@ -105,7 +105,7 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
 double Engine::effectivePlayrate() const {
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     if (plan && plan->rateEnabled && !plan->syncRate && plan->timelines[0]->points().empty() &&
-        !wantPlaying_.load(std::memory_order_acquire) && !reportedPlaying_.load())
+        !wantPlaying_.load(std::memory_order_acquire))
         return plan->requestedScalar;
     return effectivePlayrate_.load(std::memory_order_relaxed);
 }
@@ -121,11 +121,6 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
         notificationReload_ || rateDeferred_ || rateDeferredFrom_ || dir != p->projectDir ||
         !scalarOnly(*latest_, session))
         return false;
-    // Stopped, nothing is heard, so there is nothing to glide from: the
-    // edit compiles, and the play starts at the new rate (a glide queued
-    // here would play out after the play start: the builder's song journey
-    // 2, D2).
-    if (!wantPlaying_.load(std::memory_order_acquire) && !reportedPlaying_.load()) return false;
     const auto saved = session.project->playrate.rate;
     // An unchanged session can be an explicit maintenance reload. Only value
     // edits (or retrying a coalesced value) qualify for the control shortcut.
@@ -213,6 +208,12 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
         // (S3): service places them again.
         voidRateLaunches(device);
         launchRateControls_.scalar = value;
+        // Stopped (the transport asked to stop: review round 81 E4), nothing
+        // is heard, so there is nothing to glide from. A seek transport.stop
+        // prepared holds the old rate, and the glide queued on it would play
+        // out after the play start (the builder's song journey 2, D2): the
+        // play prepares its seek again, at the new rate. The plan stays.
+        if (!wantPlaying_.load(std::memory_order_acquire)) preparedSeekStale_ = true;
     }
     scalarPending_ = false;
     latest_ = std::make_shared<const model::Session>(session);

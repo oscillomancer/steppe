@@ -954,7 +954,7 @@ void Engine::writeTransport(F&& change) {
 bool Engine::seekToPlayStart() {
     const auto* prepared = latestPlan_.load(std::memory_order_acquire);
     const bool preparedSeek =
-        prepared && prepared->rateSeekSequence != 0 &&
+        !preparedSeekStale_ && prepared && prepared->rateSeekSequence != 0 &&
         prepared->preparedRateBoundary.epoch == epoch_.load(std::memory_order_acquire) &&
         prepared->rateSeekSequence == seekSeq_.load(std::memory_order_acquire);
     if (wantPlaying_.load(std::memory_order_acquire) ||
@@ -1003,6 +1003,7 @@ Status Engine::prepareSeek(double seconds) {
         const auto status = load(*latest_, dir);
         rateSeekTarget_.reset();
         if (!status) return status;
+        preparedSeekStale_ = false;
     }
     writeTransport([&] {
         seekSample_.store(time::samplesAt(std::max(0., seconds), config_.sampleRate),

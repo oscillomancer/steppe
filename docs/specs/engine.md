@@ -3564,9 +3564,11 @@ are independent clients of the command API and the cached state accessor below.
   returning the same result. Rate is finite 0.25..4.0, and omitted fields retain
   their values. Empty arguments or unchanged settings make no version unless
   the call writes an automation point. While playing, a scalar edit glides
-  (the knob ramp and its low-pass); while stopped it compiles instead, so
-  playing starts at the new rate with no glide (D2: a glide queued while
-  stopped played out after the play start). GUI drags use `Origin.gesture` for the
+  (the knob ramp and its low-pass); while stopped (the transport asked to
+  stop) it keeps the plan and makes a seek transport.stop prepared stale,
+  so play and a count-in prepare the seek again and start at the new rate
+  with no glide (D2: a glide queued on the prepared seek played out after
+  the play start). GUI drags use `Origin.gesture` for the
   same live model updates and coalesced undo as strip faders. The range of a
   future knob is display state, never a model constraint.
 - `transport.playrate.apply-to-tempo {}` is an edit returning `{}`. It

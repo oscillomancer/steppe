@@ -183,64 +183,69 @@ TEST_CASE(
     // while stopped and glided for about 1.5 s after play, and a capture
     // armed at once was accepted and laid its sections off the bar lines.
     // Stopped, nothing is heard: the set rate is the one the play starts
-    // at, and the effective rate says so. Playing, a capture is refused
-    // while the audible rate is not 1.
-    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-        INFO("anticipative " << options.anticipative);
-        Project p;
-        twoTracks(p);
-        const auto rated = [&](double rate) {
-            json::Value set = j(R"({"preserve_pitch": false})");
-            set["rate"] = rate;
-            p.runArgs("transport.playrate.set", set);
-            return p.app->head();
-        };
-        const model::Session fast = rated(1.25);
-        const model::Session unity = rated(1.0);
-        constexpr std::uint32_t block = 128;
-        InstancePool pool = makePool();
-        MediaCache media;
-        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
-        Engine engine(pool, media, options);
-        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
-        REQUIRE(engine.load(fast, p.app->projectDir()));
-        const auto run = [&](std::int64_t cycles) {
-            if (options.anticipative)
-                runAheadOnState(engine, backend, cycles, block);
-            else
-                backend.run(cycles);
-            engine.service();
-        };
-        engine.play();
-        run(400);
-        CHECK(engine.effectivePlayrate() == 1.25);
-        engine.pause();  // transport.stop: the transport stops and returns to its start
-        REQUIRE(engine.prepareSeek(0.0));
-        run(10);
-        REQUIRE(engine.load(unity, p.app->projectDir()));
-        run(10);
-        CHECK(engine.effectivePlayrate() == 1.0);  // stopped: what the play starts at
-        engine.play();
-        run(2);
-        CHECK(engine.effectivePlayrate() == 1.0);
-        CHECK(engine.captureLaunches(true));
-        CHECK(engine.captureLaunches(false));
-        // Playing: a change of rate glides, and while it is audible a
-        // capture is refused.
-        REQUIRE(engine.load(fast, p.app->projectDir()));
-        for (int i = 0; i < 2000 && engine.effectivePlayrate() != 1.25; ++i) run(1);
-        REQUIRE(engine.effectivePlayrate() == 1.25);
-        REQUIRE(engine.load(unity, p.app->projectDir()));
-        run(2);
-        REQUIRE(engine.effectivePlayrate() != 1.0);
-        const Status gliding = engine.captureLaunches(true);
-        REQUIRE_FALSE(gliding);
-        CHECK(gliding.error().code == "launch.playrate");
-        for (int i = 0; i < 2000 && engine.effectivePlayrate() != 1.0; ++i) run(1);
-        CHECK(engine.effectivePlayrate() == 1.0);
-        CHECK(engine.captureLaunches(true));
-        engine.stop();
-    }
+    // at, and the effective rate says so; the edit keeps the plan, as any
+    // scalar edit. Stopped means the transport was asked to stop, also
+    // before a callback has heard it (review round 81 E4). Playing, a
+    // capture is refused while the audible rate is not 1.
+    for (const bool atOnce : {false, true})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("edit at once " << atOnce << ", anticipative " << options.anticipative);
+            Project p;
+            twoTracks(p);
+            const auto rated = [&](double rate) {
+                json::Value set = j(R"({"preserve_pitch": false})");
+                set["rate"] = rate;
+                p.runArgs("transport.playrate.set", set);
+                return p.app->head();
+            };
+            const model::Session fast = rated(1.25);
+            const model::Session unity = rated(1.0);
+            constexpr std::uint32_t block = 128;
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+            REQUIRE(engine.load(fast, p.app->projectDir()));
+            const auto run = [&](std::int64_t cycles) {
+                if (options.anticipative)
+                    runAheadOnState(engine, backend, cycles, block);
+                else
+                    backend.run(cycles);
+                engine.service();
+            };
+            engine.play();
+            run(400);
+            CHECK(engine.effectivePlayrate() == 1.25);
+            engine.pause();  // transport.stop: the transport stops and returns to its start
+            REQUIRE(engine.prepareSeek(0.0));
+            if (!atOnce) run(10);
+            const auto generation = engine.planGeneration();
+            REQUIRE(engine.load(unity, p.app->projectDir()));
+            CHECK(engine.planGeneration() == generation);
+            run(10);
+            CHECK(engine.effectivePlayrate() == 1.0);  // stopped: what the play starts at
+            engine.play();
+            run(2);
+            CHECK(engine.effectivePlayrate() == 1.0);
+            CHECK(engine.captureLaunches(true));
+            CHECK(engine.captureLaunches(false));
+            // Playing: a change of rate glides, and while it is audible a
+            // capture is refused.
+            REQUIRE(engine.load(fast, p.app->projectDir()));
+            for (int i = 0; i < 2000 && engine.effectivePlayrate() != 1.25; ++i) run(1);
+            REQUIRE(engine.effectivePlayrate() == 1.25);
+            REQUIRE(engine.load(unity, p.app->projectDir()));
+            run(2);
+            REQUIRE(engine.effectivePlayrate() != 1.0);
+            const Status gliding = engine.captureLaunches(true);
+            REQUIRE_FALSE(gliding);
+            CHECK(gliding.error().code == "launch.playrate");
+            for (int i = 0; i < 2000 && engine.effectivePlayrate() != 1.0; ++i) run(1);
+            CHECK(engine.effectivePlayrate() == 1.0);
+            CHECK(engine.captureLaunches(true));
+            engine.stop();
+        }
 }
 
 TEST_CASE("a launch while a playrate change is in flight says so, and lands once it is not") {
