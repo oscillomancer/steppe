@@ -139,11 +139,12 @@ instructions are in `docs/guides/installing.md`.
   flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
-  (drags and arrows). The roll opens launcher clips (L3), shaded and spelled
-  by the key at the project's start, with no chord row; its degree mode on
-  a clip goes through `midi.edit`, which now reads the clip's own context, so
-  a clip with none refuses it with `midi.no_key` until the roll shows and
-  edits the clip's context (ADR-0098 step X3).
+  (drags and arrows). The roll opens launcher clips (L3) in their own
+  context (ADR-0098 X3): the clip's key shades, spells and drives degrees,
+  its chords fill the strip, both are edited there (`clip.set {context}`),
+  and a clip without a key has degree mode off. A roll outlines notes
+  outside the key at their beat and counts them in its title, which is how a
+  clip laid in another key shows (an item keeps no link to its clip).
   Native macOS and Windows CI has not run on C3.
 - **Project timecode** (ADR-0071, schema 2.11): `project.timecode {rate,
   start}` (30 fps from 00:00:00:00 by default and for older projects),
@@ -220,8 +221,8 @@ instructions are in `docs/guides/installing.md`.
   what was heard and warns `context.mismatch` when a clip's key is not the
   project's under it. Not built: a launched clip following live (X4:
   `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
-  clip plays as written), the roll's view of a clip's context (X3),
-  `write_context` (X5).
+  clip plays as written), `write_context` (X5). The roll shows and edits a
+  clip's context, and the clip inspector sets Follow (X3).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
@@ -284,17 +285,26 @@ instructions are in `docs/guides/installing.md`.
   line. The piano roll opens MIDI clips. L4 adds the header's Capture
   toggle (armed while lit; a stop, seek or loop change commits the
   performance with `launch.commit` and arms the next; a refused commit
-  keeps the performance, dark, for the next click), a scene dragged onto
+  keeps the performance, dark, for the next click; a commit made while
+  stopped returns the tracks to the arrangement; the cell also lights for
+  an agent's capture), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for
   its longest clip's whole bars, with a drop marker while dragged), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
-  status line. Limits:
+  status line. The clip menu's Take FX… opens a clip's take chain, and with
+  a master playrate on the pane draws dimmed. Limits:
   - there is no dialog for `arrangement.build`;
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;
   - a double-click on an audio clip opens the inspector, as there is no
     audio clip editor;
+  - a MIDI clip's take envelopes and take FX envelopes are edited in its
+    roll (clip-time lanes, with point add, drag and remove; no shape menu or
+    point selection yet); an audio clip's have no lane until its pane is
+    built (after ADR-0098 X3), so they are edited by command only;
+  - an item's take FX have lanes on the timeline, drawn across the whole
+    timeline although only the item's span plays;
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole

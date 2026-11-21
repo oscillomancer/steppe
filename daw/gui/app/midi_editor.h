@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -21,6 +22,7 @@
 #include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
+#include "supple/views/envelope_lane.h"
 
 namespace supple::ui {
 class Button;
@@ -36,6 +38,7 @@ class MouseMap;
 namespace supple::gui {
 
 class MidiEventList;
+class PluginScales;
 
 // The MIDI take an editor opens (ADR-0097 "The take owner"): an item's active
 // take, or a launcher clip's. A clip has no place in time: its beats count
@@ -55,6 +58,18 @@ struct RollNote {
     int velocity = 96, channel = 1;
 };
 
+// A clip-time lane (gui.md §4.7): one of a MIDI clip take's envelopes
+// (volume, pan, mute) or one on its take FX, in clip beats from the clip's
+// start, shown while the envelope is visible.
+struct RollEnvLane {
+    model::Id env;
+    model::Envelope envelope;  // as the session had it at the last reload
+    views::EnvScale scale;
+    double fallback = 0;  // the value without points
+    std::string title;    // "Volume (take)", "Teasel · Drive (take)"
+    std::string name;     // the lane header's: "Volume", "Drive"
+};
+
 // What the roll, keyboard and velocity lane share.
 struct CcPoint {
     double beat = 0;  // from the item's start
@@ -64,7 +79,7 @@ struct CcPoint {
 struct RollState {
     std::uint64_t gestureVersion = 0;
     std::string item;         // "it_3", or a launcher clip "cl_2"; empty: closed
-    bool clip = false;        // the owner is a clip: it sits at beat 0, no chords
+    bool clip = false;        // the owner is a clip: it sits at beat 0, in its own context
     double itemPosition = 0;  // project beats
     double itemLength = 4;    // beats
     std::vector<RollNote> notes;
@@ -73,8 +88,14 @@ struct RollState {
     // own, else its track's, else its strip type's), so the roll and the
     // item it edits look alike. Unset: the accent.
     std::function<ui::Color(const ui::Theme&)> color;
-    // The CC lane: one controller at a time (channel 1).
+    // The CC lane: one controller at a time (channel 1). The Lanes menu
+    // shows or hides it and the velocity lane.
     int ccNumber = 1;
+    bool ccShown = true, velocityShown = true;
+    // A MIDI clip's take envelopes and take FX envelopes, in lane order
+    // (volume, pan, mute, then the take FX in chain order); none for an item,
+    // whose take lanes are on the timeline.
+    std::vector<RollEnvLane> envLanes;
     std::vector<CcPoint> cc;
     std::vector<CcPoint> ccDraft;  // a drag in progress (drawn, not yet committed)
     bool ccErasing = false;
@@ -115,6 +136,12 @@ struct RollState {
     };
     std::vector<ChordMark> chords;
     std::optional<harmony::Key> keyAt(double projectBeat) const;
+    // A note off channel 10 whose pitch is not in the key holding at its
+    // start (none holding: false). The roll outlines it, and the title
+    // counts them: a clip laid in another key than the place's (ADR-0098
+    // context.mismatch) shows on the item's roll, and a clip's notes outside
+    // its own key show on its.
+    bool outsideKey(const RollNote& note) const;
     // The key button (gui.md §4.7): a pitch drag and the arrow keys move the
     // selected notes by scale degrees of the key at each note's beat
     // (harmony::transposeDegrees, as midi.edit's transpose_degrees does).
@@ -157,7 +184,9 @@ class MidiEditor {
     static constexpr float kDefaultHeight = 420, kMinHeight = 160;
     float height() const { return height_; }
     void setHeight(float height);
-    json::Value saveLayout() const;  // {"height"}: the UI sidecar's "midi" section
+    // {"height", "velocity", "cc"}: the UI sidecar's "midi" section ("cc" 0:
+    // the CC lane hidden).
+    json::Value saveLayout() const;
     void loadLayout(const json::Value& v);
     // Row (key) height zoom, anchored at the window y whose pitch stays put.
     static constexpr float kMinRowHeight = 4, kMaxRowHeight = 48;
@@ -190,9 +219,18 @@ class MidiEditor {
     void transpose(int semitones);
     void transposeDegrees(int degrees);  // midi.edit transpose_degrees on the selection
     ui::Toggle* keyButton() const { return keyButton_; }
+    const std::string& keyText() const { return keyText_; }  // the key button's words
     // The chord field (views/chord_field.h) for the chord point at the project
     // beat `beat`, opened at the window point `at` (the strip's double-click).
+    // On a clip it edits the clip's own chord at that clip beat (ADR-0098).
     void editChord(double beat, ui::Point at);
+    // A clip's own context (ADR-0098 X3): the key field for the key at clip
+    // beat `beat`; the strip's right-click menu at clip beat `beat` (`chord`:
+    // the beat of a chord point under the pointer); the context replaced
+    // (clip.set {context}, printed as the lead sheet in clip bars).
+    void editClipKey(double beat, ui::Point at);
+    void openContextMenu(double beat, std::optional<double> chord, ui::Point at);
+    Status setClipContext(const std::vector<model::ContextPoint>& points);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.
     void removeSelected();
@@ -207,6 +245,15 @@ class MidiEditor {
     // The grid's right-click menu at a window point (`itemBeat` under it):
     // Delete, Copy, Cut, Paste (there), Duplicate.
     void openNoteMenu(ui::Point at, double itemBeat);
+    // A clip-time lane's edits (gui.md §4.7): its points replaced
+    // (env.points.set, clip beats), and an envelope on the clip's take or
+    // its take FX shown (made with one point at the parameter's value when it
+    // has none) or hidden. Refusals go to the actions' error hook.
+    Status setEnvPoints(model::Id env, const std::vector<model::EnvPoint>& points,
+                        std::optional<std::uint64_t> expectedVersion = {});
+    Status showEnvelope(const model::EnvTarget& target, bool shown);
+    // The Lanes menu's parameter list for one take effect, at a window point.
+    void openFxParamsMenu(model::Id fx, ui::Point at);
 
   private:
     // sync's work apart from the edge scroll. `pass`: the pass's time; none
@@ -244,7 +291,18 @@ class MidiEditor {
     std::vector<std::string> chordLabels_;
     ui::Node* velocity_ = nullptr;
     ui::Node* ccLane_ = nullptr;
-    ui::Button* ccButton_ = nullptr;
+    ui::Button* lanesButton_ = nullptr;
+    void openLanesMenu();
+    void applyLanes();       // the lanes' visibility from the state
+    void refreshEnvLanes();  // the clip-time lanes' nodes from state_.envLanes
+    // A command on the open item or clip, then a reload; a refusal goes to
+    // the error hook after `what` ("Lanes: …").
+    Status command(std::string_view name, json::Value args,
+                   std::optional<std::uint64_t> expectedVersion = {},
+                   std::string_view what = "Lanes");
+    std::unique_ptr<PluginScales> scales_;
+    ui::Node* envColumn_ = nullptr;    // the clip-time lanes, under the CC lane
+    std::vector<model::Id> envNodes_;  // the envelopes envColumn_ has lanes for
     ui::Toggle* keyButton_ = nullptr;
     std::string keyText_ = "No key";  // the key button's words (its width follows them)
     void refreshKeyButton();

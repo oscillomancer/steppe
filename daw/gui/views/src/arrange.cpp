@@ -68,31 +68,6 @@ std::string meterText(const time::MeterChange& m) {
     return std::to_string(m.numerator) + "/" + std::to_string(m.denominator);
 }
 
-// "Eb major", "C# harmonic minor": the ruler's key field as key.set's tonic
-// and scale (the scale's spaces become underscores). None without both.
-std::optional<std::pair<std::string, std::string>> splitKeyText(std::string_view text) {
-    auto trim = [](std::string_view v) {
-        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front())))
-            v.remove_prefix(1);
-        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
-        return v;
-    };
-    text = trim(text);
-    const auto space = text.find_first_of(" \t");
-    if (space == std::string_view::npos) return std::nullopt;
-    const std::string_view rest = trim(text.substr(space + 1));
-    if (rest.empty()) return std::nullopt;
-    std::string scale;
-    for (char ch : rest) {
-        if (std::isspace(static_cast<unsigned char>(ch))) {
-            if (!scale.empty() && scale.back() != '_') scale += '_';
-        } else {
-            scale += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        }
-    }
-    return std::pair{std::string(text.substr(0, space)), scale};
-}
-
 ui::Color parseColor(const std::string& text, ui::Color fallback) {
     return ui::parseColor(text).value_or(fallback);
 }

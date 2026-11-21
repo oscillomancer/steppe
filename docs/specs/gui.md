@@ -425,7 +425,11 @@ number. Then a note: "Preparing audio…", a preparation error, or the last
 message a view or an action reported. An action that fails (`AppActions`'
 `onError`: a menu entry, a key, a toolbar or transport button, an inspector
 field) puts its message there, and on stderr as before; the message stays
-until the next one.
+until the next one. So does a refused edit from the track panel and its
+menus (strip controls, the envelope, input and output menus), a plug-in
+window, or a timeline gesture (an item drag, an envelope point, the item and
+take menus): `Shell::onError`, which defaults to the status line, and the
+item gestures' `onError`, which the shell routes to it.
 While the pointer rests on a control that has a name (§2, Names), the name
 takes the note's place: "7 tracks  version 12 · Mute", and with the keys
 bound to the control's action after it, every binding, as the actions list
@@ -876,7 +880,16 @@ have none of these four lanes.
 
 A strip's envelope menu lists, after its own and its effects' envelopes, its
 sends' volume, pan and mute (`env.add {route}`, flat at the send's value;
-titled "Send → destination · Volume"). A send's visible lanes sit under the
+titled "Send → destination · Volume"). A plug-in parameter's lane is titled
+with its effect (the instance's label, else the plug-in's name) and the
+name the plug-in's description gives the parameter: "Marram · Filter 1
+Cutoff" (`views::envTitle` with the lane's scale); a parameter the plug-in
+does not describe shows its key after the effect. An item's take FX
+automate on the item's track, in timeline position as the model keeps them:
+a visible envelope (or a modulated parameter) on one has a lane there like
+any other, titled with "(take)" after it, and it follows the item to
+another track. A clip's take FX have none here: their envelopes are in clip
+time. A send's visible lanes sit under the
 strip it leaves, after the strip's own and its effects' lanes; `route.set`
 records into them in touch, latch and write like `track.set`.
 
@@ -1592,9 +1605,9 @@ Commands: `route.*`, `track.set {record_input}`.
 clip, Alt+E with a clip selected after a launcher click, or the first MIDI
 clip when the project has no MIDI item). A clip has no place in time: the
 roll places it at beat 0 with its own length, so its bars count from its
-start; it reads the key at the project's start for shading, spelling and
-the key button (`midi.edit` no longer does: it reads the clip's own context,
-ADR-0098, and step X3 brings the roll in line) and shows no chords; its notes take
+start; it reads the clip's own context (ADR-0098 X3), in clip beats, as
+`midi.edit` does, for the shading, the spelling, the key button, a degree
+drag's preview and the chord row, never the project's; its notes take
 its launcher colour; the title ends in "· clip"; and the playhead is where
 the launcher plays it, hidden while it does not play. Edits go to the
 clip's take through the same `midi.edit` and `midi.write` calls, and the
@@ -1617,6 +1630,79 @@ LLM-native differentiator: the same text an agent writes is visible and
 editable by the human. The event list edits notes and CC events;
 double-click editing requires a row hit and edits that row. Roll gesture
 anchors use exact model timing rather than the rounded `midi.notes` query.
+
+**A clip's own key and chords** (ADR-0098 X3). The roll is the one place a
+clip is edited, its context included:
+- What the roll shows on a clip is the clip's context: its key at the start
+  names the key button and its keys shade the rows and spell the notes; its
+  chord points fill the strip's chord row, the last cell ending with the
+  clip. A degree drag previews in the clip's key at the note's clip beat, as
+  `midi.edit` commits it. Without a key the key button is disabled ("No
+  key"); when degree mode was on it goes off and the status line says why
+  (`midi.edit` would refuse with `midi.no_key`).
+- A double-click on the chord row edits the clip's chord there (the chord
+  field, as on the project); on a clip without chords a double-click
+  anywhere on the strip starts its first.
+- A right-click on the strip opens the clip's context menu: **Key…** (the
+  key field, "D dorian", at the start of the bar under the pointer; it
+  starts from the clip's key there, else the project's), **Chord…**,
+  **Remove key** and **Remove chord** for the points under the pointer,
+  **Take from the project at bar N** (`clip.set {context_at}` at the
+  playhead) and **Clear context**.
+- Each edit is one `clip.set {context}`: the roll prints the clip's points
+  as the lead sheet in clip bars (`gui::clipLeadSheet`), which the engine
+  reads and checks. Refusals (a bad key, a point past the clip's end) go to
+  the status line.
+- **Notes outside the key.** A note off channel 10 whose pitch is not in
+  the key holding at its start is outlined in the warning amber
+  (`meter-hot`), and the title counts them ("· 3 outside the key"). An item
+  keeps no link to the clip it was laid from, so this is how a clip laid in
+  another key (the `context.mismatch` warning) shows on the item's roll; on a
+  clip's roll the key is the clip's own.
+
+Tests: test_midi_editor "a clip in another key than the project's: degrees
+preview what commits" (review round 73, F4), "a clip's key and chords are
+edited in its roll", "a clip laid in another key shows its notes outside
+the key", "a launcher clip opens at beat 0 in its own key and chords", and
+"clip context edit: the printed lead sheet …".
+
+**Lanes.** One menu owns every lane under the roll: **Lanes** in the header
+(it replaced the CC button). It shows Velocity and five controllers (CC 1
+mod, 7 volume, 10 pan, 11 expression, 64 sustain), checked when shown;
+picking another controller switches the CC lane, and picking the shown one,
+or Velocity, hides it, and the roll takes the room.
+
+**Clip-time lanes** (the clip-lane proposal, mock 92). A launcher clip's take
+envelopes and the envelopes on its take FX are in clip time, so they are
+edited in its roll, not on the timeline. For a MIDI clip:
+- a visible envelope on its active take (volume, pan, mute) or on one of
+  its take FX has a lane under the CC lane, on the roll's axis in clip beats,
+  in that order (volume, pan, mute, then the take FX in chain order). It is
+  titled "Volume (take)" or "Teasel · Drive (take)", with the parameter's
+  name and **hide** (`env.set {visible: false}`; the envelope still plays) at
+  the left. An item's roll shows none: its take lanes are on the timeline
+  (§4.3);
+- a click adds a point and drags it; a point drags in beat (snapped to the
+  grid, kept between its neighbours and inside the clip) and value; a right-
+  or Alt-click removes one. Each is one `env.points.set`. Before the clip's
+  start and past its end the lane is dimmed as the roll is, and the curve
+  holds its end value there, dashed. Clip time takes no writing mode and no
+  automation items, so a lane has no read/write cell;
+- the Lanes menu adds Take volume, Take pan and Take mute (disabled, with a
+  row saying why, while the take FX hold no instrument: `env.take_midi`),
+  then for each take effect its envelopes and **parameters…**, the list of
+  the parameters it describes (`fx.describe`; a plain plug-in describes
+  none, as on the timeline). Ticking one without an envelope makes one with
+  a point at the clip's start at the parameter's value now (a take
+  envelope's: 0 dB, centre, unmuted); unticking hides it. Refusals go to the
+  status line.
+
+An audio clip has no roll yet; its pane (mock 93) comes after X3 of
+ADR-0098.
+
+Tests: test_midi_editor "the Lanes menu shows and hides the velocity and CC
+lanes", "a clip's take envelopes and take FX parameters get lanes in clip
+beats", and the CC lane case.
 
 **Roll appearance.** The notes are drawn in the colour their item has in
 the arrangement (`views::Lanes::itemColor`: the item's own, else its
@@ -1688,8 +1774,9 @@ drags do not scroll.
 The panel's top border is a drag handle: dragging resizes the panel (up is
 taller; up to nearly the whole window, always leaving the transport and a strip
 of arrange, and clamped again whenever the window shrinks or a neighbouring
-dock grows), double-clicking resets it to the default height. The height is
-UI state (the `midi` section of the sidecar, §1.2). Wheel in the roll, as over
+dock grows), double-clicking resets it to the default height. The height and the lanes
+shown (`velocity`, and `cc`: the controller, 0 for none) are UI state (the
+`midi` section of the sidecar, §1.2). Wheel in the roll, as over
 the arrangement: zooms time around the pointer (a sideways wheel scrolls time);
 Shift scrolls time; Ctrl scrolls pitch; **Alt zooms the key/row height** around the pointer's pitch (4–48 px per key), and also works
 over the keys, lanes and header. Row height is not persisted. These are the
@@ -2552,6 +2639,16 @@ same heights, scroll and colours.
   it off. A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
   item in the way) shows its message in the status line.
+- **After a commit made while stopped** (at stop, or the cell turned off
+  while stopped) every track returns to the arrangement where playing
+  starts (`launch.arrangement`), so play plays the take just committed, not
+  the clips again. A commit made while playing (a seek or a loop change
+  ended the capture, or the cell went off mid-take) leaves the tracks
+  playing what they play.
+- **The cell follows the engine's capture**, whoever armed it: an agent's
+  `launch.capture` lights it too (`CaptureControl::lit`). A click on a cell
+  lit that way ends that capture and commits it, as the toggle's own; at
+  stop the app commits only a capture its toggle armed.
 - **A refused commit keeps the performance.** When `launch.commit` refuses
   (a locked item under a track that left the arrangement, a clip loop with
   no item equivalent, a captured track or clip deleted meanwhile), nothing
@@ -2611,7 +2708,12 @@ same heights, scroll and colours.
 - **A clip** is a small item: a name bar in its colour (the track's when it
   has none) and its content drawn by the shared item-body functions
   (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
-  muted clip is dimmed, as a muted item is.
+  muted clip is dimmed, as a muted item is. While the master playrate is
+  not 1 or its envelope is active the engine refuses every launch
+  (`launch.playrate`), so every clip and the scenes' ▶ draw dimmed the same
+  way (`views::launchesRefused`, the plan's condition read from the
+  session); a click still asks, and the refusal's message reaches the status
+  line.
   - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
     name bar's ink while idle).
   - **Playing:** the ▶, an outline, and a progress line along the bottom
@@ -2657,7 +2759,9 @@ same heights, scroll and colours.
 - **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
   Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
   empty cell to its right; none left is an error in the status line), Lay on
-  timeline at playhead (`item.add {clip}`), Delete (the selection, one undo
+  timeline at playhead (`item.add {clip}`), Take FX… (the FX window on the
+  active take's chain, which plays when the clip does; `FxWindow::openTake`
+  opens a clip's take on the clip's track), Delete (the selection, one undo
   step). A right-click on an unselected clip selects it first. A row that
   opens a second menu ends in "…", as elsewhere.
 - **Delete** removes the selected clips (`clip.remove`), one undo step,
@@ -2686,8 +2790,10 @@ same heights, scroll and colours.
   tracks and items): its header (name; "MIDI clip on Bass, Verse"; its
   colour) and its fields, each one `clip.set`: Name, Colour, Length (beats,
   or seconds for an audio clip), Gain, Plays (Loop / Once), Launch (the
-  project's quantize, Bar … 1/32, At once) and Mute. Several clips show
-  only their count.
+  project's quantize, Bar … 1/32, At once), Follow (None / Key / Chords,
+  ADR-0098: Key and Chords are disabled, their labels saying why, unless the
+  clip is MIDI with a key at its start) and Mute. Several clips show only
+  their count.
 - **Status line.** It counts scenes beside tracks only when there are some
   ("4 tracks  2 scenes  version 9", `gui::countsText`).
 - **Sections.** A section's right-click menu captures it as a scene
@@ -2705,7 +2811,14 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   engine; off with nothing played writing nothing. A commit refused by a
   locked item: dark, the performance kept in the engine, a click refused
   again and still kept, then after unlocking a click committing it in one
-  undo step and arming; refused twice, a third click drops it.
+  undo step and arming; refused twice, a third click drops it. After a
+  commit at stop the tracks are back on the arrangement, or queued to it.
+  An agent's capture lights the cell, and a click on it ends and commits it.
+- With a master playrate on: the pane and the scenes' ▶ dimmed (golden
+  `launcher-refused-dark.png`), a ▶ click refused with `launch.playrate`
+  through the launcher's error hook, undimmed again at rate 1.
+- The clip menu's Take FX… handing the app the active take, and the FX
+  window opening a clip's take chain.
 - A scene dragged onto the lanes (its ghost, the command, the section and
   items after), refused on an occupied span; the menu's inserts at the
   playhead and the end; an empty scene refused; the bar arithmetic.

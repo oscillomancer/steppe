@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "supple/base/chars.h"
+#include "supple/model/launcher.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
@@ -566,6 +567,12 @@ std::unique_ptr<ui::Node> Inspector::build() {
     clipQuantize_->onChange = [this](const std::string& value) {
         set("quantize", value.empty() ? json::Value() : json::Value(value));
     };
+    // How the clip's notes are mapped when it is laid (ADR-0098): its key or
+    // its chords onto the place's. Key and Chords need a MIDI clip with a
+    // key at its start; readClip says so in their labels.
+    clipFollow_ =
+        dropdown("clip.follow", "Follow", {{"none", "None"}, {"key", "Key"}, {"chords", "Chords"}});
+    clipFollow_->onChange = [this](const std::string& value) { set("follow", value); };
     auto& clipStates = formRow(clipBox, "clip.state", "State");
     state(clipStates, "clip.mute", "Mute", "mute");
 
@@ -665,6 +672,14 @@ void Inspector::readClip(bool force) {
     for (const auto& [q, name] : kNames)
         if (clip->quantize && *clip->quantize == q) quantize = name;
     clipQuantize_->setValue(quantize);
+    const bool can = model::clipCanFollow(*clip);
+    const std::string why = !midi ? " (an audio clip is copied)" : " (needs a key at its start)";
+    clipFollow_->setChoices({{"none", "None"},
+                             {"key", can ? "Key" : "Key" + why, can},
+                             {"chords", can ? "Chords" : "Chords" + why, can}});
+    clipFollow_->setValue(clip->follow == model::ClipFollow::Key      ? "key"
+                          : clip->follow == model::ClipFollow::Chords ? "chords"
+                                                                      : "none");
     states_["clip.mute"]->setOn(clip->mute);
     for (const char* key : {"clip.name", "clip.length", "clip.gain_db"})
         fields_[key].node->enabled = true;

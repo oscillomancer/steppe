@@ -3417,6 +3417,49 @@ TEST_CASE("input menu: No input clears channels in a mixed strip selection") {
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
+TEST_CASE("shell: a refused edit from the track panel or the timeline reaches the status line") {
+    App a;
+    if (!a.ok) return;
+    const cmd::Origin origin{cmd::Origin::Type::Test, "refusals", {}};
+    auto call = [&](const char* command, const std::string& text) {
+        auto r = a.dispatcher->execute({command, *json::parse(text), origin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto midi = call("track.add", R"({"name":"Keys"})")["track"].asString();
+    call("track.set", R"({"track":")" + midi + R"(","record_midi":"*"})");
+    a.ui.selectedTracks = {midi};
+    peaks::PeakService peaks(peaks::defaultCacheDir(gui::test::slug()),
+                             [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    // The app sets no hook of its own: the shell's default is the status line.
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    shell.sync();
+    a.root->frame(false);
+    auto* status = dynamic_cast<ui::Label*>(a.root->find("status"));
+    REQUIRE(status);
+    // The track panel's input menu, run after another project has opened:
+    // the shell refuses the stale edit, and says so.
+    const model::Id midiId = *model::Id::parse(midi);
+    shell.openInputMenu(midiId, {100, 100, 20, 20});
+    a.root->frame(false);
+    auto* menu = a.root->find("tcp.input." + midi);
+    REQUIRE(menu);
+    const auto clear = ui::menuItems(*menu).front().run;
+    a.root->closePopups();
+    call("project.new", "{}");
+    clear();
+    CHECK(status->text() == "the project changed; edit the control again");
+    // The timeline's gestures report there too.
+    shell.sync();
+    a.root->frame(false);
+    REQUIRE(shell.arrange()->gestures().onError);
+    shell.arrange()->gestures().onError(Error("item.locked", "it_1 is locked"));
+    CHECK(status->text() == "it_1 is locked");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
 TEST_CASE("input menu: replacing selected rack Outs reports the affected channels") {
     App a;
     if (!a.ok) return;

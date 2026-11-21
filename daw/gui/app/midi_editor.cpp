@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "midi_editor.h"
+#include "clip_context_edit.h"
 #include "midi_event_list.h"
 #include "panel_grip.h"
 #include "panel_height.h"
+#include "plugin_scales.h"
 #include "supple/harmony/harmony.h"
 #include "supple/ui/shortcut.h"
 
@@ -17,6 +19,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
+#include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
@@ -31,6 +34,28 @@ constexpr float kKeysWidth = 46;
 constexpr float kEdge = 5;  // px at a note's ends that resize it
 constexpr auto kCompileDelay = std::chrono::milliseconds(300);
 constexpr float kGripHeight = 6;  // the top border that resizes the panel
+// The controllers the Lanes menu offers: mod wheel, volume, pan, expression,
+// sustain.
+constexpr std::pair<int, const char*> kCcs[] = {
+    {1, "mod"}, {7, "volume"}, {10, "pan"}, {11, "expression"}, {64, "sustain"}};
+
+const char* shapeName(model::PointShape shape) {
+    switch (shape) {
+        case model::PointShape::Linear:
+            return "linear";
+        case model::PointShape::Square:
+            return "square";
+        case model::PointShape::Slow:
+            return "slow";
+        case model::PointShape::FastStart:
+            return "fast_start";
+        case model::PointShape::FastEnd:
+            return "fast_end";
+        case model::PointShape::Bezier:
+            return "bezier";
+    }
+    return "linear";
+}
 
 bool blackKey(int pitch) {
     const int pc = ((pitch % 12) + 12) % 12;
@@ -79,6 +104,15 @@ std::optional<harmony::Key> RollState::keyAt(double projectBeat) const {
         key = k.key;
     }
     return key;
+}
+
+bool RollState::outsideKey(const RollNote& note) const {
+    if (note.channel == 10) return false;  // General MIDI drums
+    const auto key = keyAt(itemPosition + note.start);
+    if (!key) return false;
+    const int pc = ((note.pitch % 12) + 12) % 12;
+    const std::vector<int> classes = harmony::keyPitchClasses(*key);
+    return std::find(classes.begin(), classes.end(), pc) == classes.end();
 }
 
 double RollState::snapBeat(double itemBeat) const {
@@ -231,7 +265,10 @@ class Roll : public ui::Node {
                 continue;
             const bool sel = s_.selected.contains(i);
             c.fillRound(r, 2, velocityColor(t, s_, n.velocity, sel));
-            c.strokeRound(r, 2, sel ? t.color("ink") : t.color("ground").withAlpha(0.7f));
+            c.strokeRound(r, 2,
+                          sel                ? t.color("ink")
+                          : s_.outsideKey(n) ? t.color("meter-hot")
+                                             : t.color("ground").withAlpha(0.7f));
             if (r.w > 34 && s_.rowHeight >= 11)
                 c.text({r.x + 3, r.y, r.w - 4, r.h},
                        harmony::spell(n.pitch, s_.keyAt(s_.itemPosition + n.start)), ui::Font::Ui,
@@ -592,18 +629,26 @@ class BarStrip : public ui::Node {
     // the grid beat there.
     bool onPointer(const ui::PointerEvent& e) override {
         const ui::Rect b = bounds();
-        if (e.type != ui::PointerEvent::Type::Down || e.button != 1 || e.clicks != 2 ||
-            e.pos.y < b.y + kHeight || e.pos.x < b.x + kKeysWidth || s_.chords.empty())
-            return false;
-        std::optional<double> beat;
-        for (const ChordHit& hit : chordHits_)
-            if (hit.label.contains(e.pos)) beat = hit.beat;
-        if (!beat) {
+        if (e.type != ui::PointerEvent::Type::Down || e.pos.x < b.x + kKeysWidth) return false;
+        std::optional<double> hit;
+        for (const ChordHit& h : chordHits_)
+            if (h.label.contains(e.pos)) hit = h.beat;
+        auto gridBeat = [&] {
             const Geometry g{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}};
             const double at = std::max(0.0, s_.itemPosition + g.beatOf(e.pos.x));
-            beat = s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
+            return s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
+        };
+        // A clip's own context (ADR-0098 X3): its menu on a right-click.
+        if (s_.clip && e.button == 3) {
+            editor_.openContextMenu(gridBeat(), hit, e.pos);
+            return true;
         }
-        editor_.editChord(*beat, e.pos);
+        // A double-click edits the chord there; on a clip with no chords yet,
+        // anywhere on the strip starts its first.
+        const bool chordRow = !s_.chords.empty() && e.pos.y >= b.y + kHeight;
+        const bool firstChord = s_.clip && s_.chords.empty();
+        if (e.button != 1 || e.clicks != 2 || !(chordRow || firstChord)) return false;
+        editor_.editChord(hit ? *hit : gridBeat(), e.pos);
         return true;
     }
     // The strip's height: the bar numbers, and the chord row while chords
@@ -669,9 +714,12 @@ class BarStrip : public ui::Node {
             const RollState::ChordMark& m = s_.chords[i];
             const float x = g.xOf(m.beat - s_.itemPosition);
             if (x > row.right()) break;
+            // A clip's last chord ends with the clip (ADR-0098: its points
+            // lie inside it); the project's runs on.
             const float end = i + 1 < s_.chords.size()
                                   ? g.xOf(s_.chords[i + 1].beat - s_.itemPosition)
-                                  : row.right() + 2;
+                              : s_.clip ? g.xOf(s_.itemLength)
+                                        : row.right() + 2;
             if (end < row.x) continue;
             if (m.text.empty()) {
                 c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint"));
@@ -952,6 +1000,199 @@ class CcLane : public ui::Node {
     double pressBeat_ = 0;
 };
 
+// ----------------------------------------------------------------- clip-time lanes
+
+// One of a MIDI clip take's envelopes, or one on its take FX (gui.md §4.7):
+// the curve in clip beats on the roll's axis, dimmed past the clip's end,
+// where it holds its last value (dashed). A click adds a point and drags it;
+// a point drags in beat (snapped to the grid) and value; a right- or
+// Alt-click removes one; each is one env.points.set on release. The header
+// at the left names the lane and hides it. Clip time takes no writing mode
+// and no automation items, so there is no read/write cell.
+class EnvLane : public ui::Node {
+  public:
+    static constexpr float kHeight = 56, kTitle = 14;
+    EnvLane(RollState& s, MidiEditor& editor, ui::Node*& roll, model::Id env)
+        : Node("midi.env." + env.str()), s_(s), editor_(editor), roll_(roll), env_(env) {
+        interactive = true;
+        layout.height = ui::SizeRule::fixed(kHeight);
+    }
+    ui::Rect area() const {
+        const ui::Rect b = bounds();
+        return {b.x + kKeysWidth, b.y + kTitle, std::max(0.0f, b.w - kKeysWidth),
+                std::max(1.0f, b.h - kTitle - 4)};
+    }
+    ui::Rect hideRect() const {
+        const ui::Rect b = bounds();
+        return {b.x + 4, b.y + 20, kKeysWidth - 8, 14};
+    }
+    const RollEnvLane* lane() const {
+        for (const RollEnvLane& l : s_.envLanes)
+            if (l.env == env_) return &l;
+        return nullptr;
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        c.fillRect(b, t.color("panel"));
+        c.fillRect({b.x, b.y, b.w, 1}, t.color("rule"));
+        const RollEnvLane* l = lane();
+        if (!l) return;
+        c.text({b.x + 4, b.y + 4, kKeysWidth - 6, 14}, l->name, ui::Font::Ui, t.type("caption"),
+               t.color("ink"));
+        c.text(hideRect(), "hide", ui::Font::Ui, t.type("caption"), t.color("ink-faint"));
+        const ui::Rect a = area();
+        c.text({a.x + 4, b.y + 1, std::max(0.0f, a.w - 8), kTitle}, l->title, ui::Font::Ui,
+               t.type("caption"), t.color("ink-quiet"));
+        const Geometry g{s_, roll_ ? roll_->bounds() : a};
+        model::Envelope env = l->envelope;
+        if (dragging_) env.points = draft_;
+        auto yOf = [&](double value) {
+            return a.bottom() -
+                   static_cast<float>(std::clamp(l->scale.toNorm(value), 0.0, 1.0)) * a.h;
+        };
+        c.save();
+        c.clip(a);
+        c.fillRect({a.x, yOf(l->scale.reference()), a.w, 1}, t.color("rule").withAlpha(0.5f));
+        const ui::Color ink = t.color("accent").withAlpha(env.active ? 1.0f : 0.4f);
+        const float end = g.xOf(s_.itemLength);
+        // The curve to the clip's end, then its value there held, dashed.
+        float px = a.x;
+        float py = yOf(views::envValueAt(env, std::max(0.0, g.beatOf(px)), l->fallback));
+        for (float x = a.x + 2; x <= std::min(a.right(), end) + 2; x += 2) {
+            const float cx = std::min(x, end);
+            const float y = yOf(views::envValueAt(env, std::max(0.0, g.beatOf(cx)), l->fallback));
+            c.line({px, py}, {cx, y}, ink, 1.5f);
+            px = cx;
+            py = y;
+            if (cx >= end) break;
+        }
+        if (end < a.right()) {
+            const float y = yOf(views::envValueAt(env, s_.itemLength, l->fallback));
+            for (float x = std::max(end, a.x); x < a.right(); x += 7)
+                c.line({x, y}, {std::min(x + 4, a.right()), y}, ink.withAlpha(0.45f), 1.2f);
+        }
+        for (std::size_t i = 0; i < env.points.size(); ++i) {
+            const model::EnvPoint& pt = env.points[i];
+            const float x = g.xOf(pt.pos), y = yOf(pt.value);
+            const bool held = dragging_ && i == index_;
+            c.fillRect({x - 3, y - 3, 6, 6}, held ? t.color("focus") : ink);
+            if (held)
+                c.text({x + 6, y - 14, 120, 12}, l->scale.text(pt.value), ui::Font::Ui,
+                       t.type("caption"), t.color("ink"));
+        }
+        // Before the clip's start and past its end: not played (as the roll).
+        if (const float start = g.xOf(0); start > a.x)
+            c.fillRect({a.x, a.y, std::min(start, a.right()) - a.x, a.h},
+                       t.color("ground").withAlpha(0.6f));
+        if (end < a.right())
+            c.fillRect({std::max(end, a.x), a.y, a.right() - std::max(end, a.x), a.h},
+                       t.color("ground").withAlpha(0.6f));
+        c.restore();
+    }
+    bool onPointer(const ui::PointerEvent& e) override {
+        using T = ui::PointerEvent::Type;
+        const RollEnvLane* l = lane();
+        if (e.type == T::Cancel) {
+            dragging_ = false;
+            invalidate();
+            return true;
+        }
+        if (!l) return false;
+        const ui::Rect a = area();
+        const Geometry g{s_, roll_ ? roll_->bounds() : a};
+        auto valueAt = [&](float y) {
+            return l->scale.fromNorm(
+                static_cast<double>(std::clamp((a.bottom() - y) / a.h, 0.0f, 1.0f)));
+        };
+        auto beatAt = [&](float x) {
+            return std::clamp(s_.snapBeat(g.beatOf(x)), 0.0, s_.itemLength);
+        };
+        auto hit = [&](ui::Point p) -> std::optional<std::size_t> {
+            const auto& pts = l->envelope.points;
+            for (std::size_t i = 0; i < pts.size(); ++i) {
+                const float x = g.xOf(pts[i].pos);
+                const float y =
+                    a.bottom() -
+                    static_cast<float>(std::clamp(l->scale.toNorm(pts[i].value), 0.0, 1.0)) * a.h;
+                if (std::abs(p.x - x) <= 5 && std::abs(p.y - y) <= 5) return i;
+            }
+            return std::nullopt;
+        };
+        if (e.type == T::Down && e.button == 1 && hideRect().contains(e.pos)) {
+            (void)editor_.showEnvelope(l->envelope.target, false);
+            return true;
+        }
+        if (e.type == T::Down && e.pos.x < a.x) return true;  // the header
+        if (e.type == T::Down && (e.button == 3 || (e.button == 1 && (e.mods & ui::kAlt)))) {
+            if (const auto i = hit(e.pos)) {
+                const std::uint64_t version = editor_.beginGesture();
+                std::vector<model::EnvPoint> pts = l->envelope.points;
+                pts.erase(pts.begin() + static_cast<std::ptrdiff_t>(*i));
+                (void)editor_.setEnvPoints(env_, pts, version);
+            }
+            return true;
+        }
+        if (e.type == T::Down && e.button == 1) {
+            version_ = editor_.beginGesture();
+            l = lane();  // the gesture starts from the session as it is
+            if (!l) return true;
+            draft_ = l->envelope.points;
+            if (const auto i = hit(e.pos)) {
+                index_ = *i;
+                grab_ = {e.pos.x - g.xOf(draft_[*i].pos), 0};
+            } else {
+                model::EnvPoint pt;
+                pt.pos = beatAt(e.pos.x);
+                pt.value = valueAt(e.pos.y);
+                const auto at = std::upper_bound(
+                    draft_.begin(), draft_.end(), pt.pos,
+                    [](double beat, const model::EnvPoint& p) { return beat < p.pos; });
+                index_ = static_cast<std::size_t>(at - draft_.begin());
+                draft_.insert(at, pt);
+                grab_ = {};
+            }
+            dragging_ = true;
+            moved_ = !hit(e.pos).has_value();  // a new point is an edit already
+            if (ui::Root* r = root()) r->capture(this);
+            invalidate();
+            return true;
+        }
+        if (e.type == T::Move && dragging_) {
+            model::EnvPoint pt = draft_[index_];
+            draft_.erase(draft_.begin() + static_cast<std::ptrdiff_t>(index_));
+            pt.pos = beatAt(e.pos.x - grab_.x);
+            pt.value = valueAt(e.pos.y);
+            // It stays between its neighbours' beats, so the order holds.
+            if (index_ > 0) pt.pos = std::max(pt.pos, draft_[index_ - 1].pos);
+            if (index_ < draft_.size()) pt.pos = std::min(pt.pos, draft_[index_].pos);
+            draft_.insert(draft_.begin() + static_cast<std::ptrdiff_t>(index_), pt);
+            moved_ = true;
+            invalidate();
+            return true;
+        }
+        if (e.type == T::Up && dragging_) {
+            if (ui::Root* r = root()) r->capture(nullptr);
+            dragging_ = false;
+            if (moved_) (void)editor_.setEnvPoints(env_, draft_, version_);
+            invalidate();
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    RollState& s_;
+    MidiEditor& editor_;
+    ui::Node*& roll_;
+    model::Id env_;
+    bool dragging_ = false, moved_ = false;
+    std::size_t index_ = 0;
+    ui::Point grab_{};
+    std::uint64_t version_ = 0;
+    std::vector<model::EnvPoint> draft_;
+};
+
 // ----------------------------------------------------------------- playhead (overlay)
 
 class RollPlayhead : public ui::Node {
@@ -1025,7 +1266,12 @@ std::optional<MidiOwner> midiOwner(const model::Session& s, const std::string& t
 
 MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                        engine::EngineApp& app, UiState& ui)
-    : root_(root), actions_(actions), dispatcher_(dispatcher), app_(app), ui_(ui) {
+    : root_(root),
+      actions_(actions),
+      dispatcher_(dispatcher),
+      app_(app),
+      ui_(ui),
+      scales_(std::make_unique<PluginScales>(dispatcher, &app)) {
     // The notes take the colour their item has in the arrangement.
     state_.color = [this](const ui::Theme& theme) {
         const model::Session& s = app_.head();
@@ -1148,17 +1394,8 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     keyButton_->textSize = "small";  // as the header's buttons
     keyButton_->offInk = "ink";
     keyButton_->enabled = false;
-    ccButton_ = &header.emplace<ui::Button>("midi.cc.number", "CC 1 mod", [this] {
-        // The common controllers in turn: mod wheel, volume, pan, expression, sustain.
-        static constexpr std::pair<int, const char*> kCcs[] = {
-            {1, "mod"}, {7, "volume"}, {10, "pan"}, {11, "expression"}, {64, "sustain"}};
-        std::size_t next = 0;
-        for (std::size_t i = 0; i < std::size(kCcs); ++i)
-            if (kCcs[i].first == state_.ccNumber) next = (i + 1) % std::size(kCcs);
-        state_.ccNumber = kCcs[next].first;
-        ccButton_->setText("CC " + std::to_string(kCcs[next].first) + " " + kCcs[next].second);
-        (void)reload();
-    });
+    // One menu owns every lane under the roll (gui.md §4.7).
+    lanesButton_ = &header.emplace<ui::Button>("midi.lanes", "Lanes", [this] { openLanesMenu(); });
     header.emplace<ui::Button>("midi.notation.toggle", "Notation", [this] {
         if (!notationPane_) return;
         notationPane_->visible = !notationPane_->visible;
@@ -1196,15 +1433,22 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     auto& vel = left.emplace<VelocityLane>(state_, *this, roll_);
     velocity_ = &vel;
     ccLane_ = &left.emplace<CcLane>(state_, *this, roll_);
+    // A MIDI clip's take envelopes and take FX envelopes (gui.md §4.7).
+    envColumn_ = &left.emplace<ui::Node>("midi.envlanes");
+    envColumn_->layout.dir = ui::Layout::Dir::Column;
+    envColumn_->layout.height = ui::SizeRule::content();
     auto repaint = [this] {
         if (roll_) roll_->invalidate();
         if (bars_) bars_->invalidate();
         if (keys_) keys_->invalidate();
         if (velocity_) velocity_->invalidate();
         if (ccLane_) ccLane_->invalidate();
+        if (envColumn_)
+            for (const auto& lane : envColumn_->children()) lane->invalidate();
     };
     roll.repaintAll = repaint;
     vel.repaintAll = repaint;
+    applyLanes();
 
     eventList_ = std::make_unique<MidiEventList>(root_, *this, app_);
     auto listPane = eventList_->build();
@@ -1289,6 +1533,8 @@ void MidiEditor::close() {
     state_.velocityNote.reset();
     state_.ccDraft.clear();
     state_.ccErasing = false;
+    state_.envLanes.clear();
+    refreshEnvLanes();
     if (eventList_) eventList_->sync();
     if (panel_ && panel_->visible) {
         root_.releaseWithin(panel_);
@@ -1317,6 +1563,8 @@ void MidiEditor::setHeight(float height) {
 json::Value MidiEditor::saveLayout() const {
     json::Value v = json::Value::object();
     v["height"] = static_cast<double>(height_);
+    v["velocity"] = state_.velocityShown;
+    v["cc"] = state_.ccShown ? state_.ccNumber : 0;
     return v;
 }
 
@@ -1328,6 +1576,239 @@ void MidiEditor::loadLayout(const json::Value& v) {
         height_ = std::clamp(static_cast<float>(h->asDouble()), kMinHeight, 4000.0f);
         applyHeight();
     }
+    if (const json::Value* vel = v.find("velocity"); vel && vel->isBool())
+        state_.velocityShown = vel->asBool();
+    // A controller the menu offers, or 0 for none; anything else is ignored.
+    if (const json::Value* cc = v.find("cc"); cc && cc->isNumber()) {
+        const double n = cc->asDouble();
+        if (n == 0) state_.ccShown = false;
+        for (const auto& [number, name] : kCcs)
+            if (n == number) {
+                state_.ccShown = true;
+                state_.ccNumber = number;
+            }
+    }
+    applyLanes();
+}
+
+void MidiEditor::applyLanes() {
+    bool changed = false;
+    auto show = [&](ui::Node* lane, bool shown) {
+        if (!lane || lane->visible == shown) return;
+        if (!shown) root_.releaseWithin(lane);  // a drag in it ends
+        lane->visible = shown;
+        changed = true;
+    };
+    show(velocity_, state_.velocityShown);
+    show(ccLane_, state_.ccShown);
+    if (!changed) return;
+    root_.relayout();
+    root_.damageAll();
+}
+
+void MidiEditor::openLanesMenu() {
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, bool checked, std::function<void()> run) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.checked = checked;
+        m.run = std::move(run);
+        items.push_back(std::move(m));
+    };
+    add("Velocity", state_.velocityShown, [this] {
+        state_.velocityShown = !state_.velocityShown;
+        applyLanes();
+    });
+    // The CC lane shows one controller: picking another switches it, picking
+    // the shown one hides the lane.
+    for (const auto& [number, name] : kCcs) {
+        const int n = number;
+        add("CC " + std::to_string(n) + " " + name, state_.ccShown && state_.ccNumber == n,
+            [this, n] {
+                if (state_.ccShown && state_.ccNumber == n) {
+                    state_.ccShown = false;
+                } else {
+                    state_.ccShown = true;
+                    state_.ccNumber = n;
+                    if (isOpen()) (void)reload();
+                }
+                applyLanes();
+            });
+    }
+    // A MIDI clip's take envelopes and its take FX's parameters, in clip time.
+    const auto owner = isOpen() ? midiOwner(app_.head(), state_.item) : std::nullopt;
+    const ui::Rect b = lanesButton_ ? lanesButton_->bounds() : ui::Rect{};
+    if (owner && owner->clip && owner->clip->activeTake) {
+        const model::Session& head = app_.head();
+        const model::Id take = *owner->clip->activeTake;
+        auto shown = [&](const model::EnvTarget& target) {
+            for (const auto& e : head.envelopes)
+                if (e.value->target == target) return e.value->visible;
+            return false;
+        };
+        // A MIDI take's envelope shapes what an instrument in its take FX
+        // plays (env.take_midi otherwise).
+        bool instrument = false;
+        for (model::Id fx : owner->take->chain)
+            if (const model::FxInstance* f = head.fx.find(fx))
+                if (auto info = app_.findPlugin(f->plugin.id)) instrument |= info->instrument;
+        ui::MenuItem rule;
+        rule.separator = true;
+        items.push_back(rule);
+        for (const auto& [param, label] :
+             {std::pair{"volume", "Take volume"}, {"pan", "Take pan"}, {"mute", "Take mute"}}) {
+            const model::EnvTarget target{take, param};
+            const bool on = shown(target);
+            add(label, on, [this, target, on] { (void)showEnvelope(target, !on); });
+            items.back().enabled = instrument;
+        }
+        if (!instrument) {
+            ui::MenuItem why;
+            why.label = "Take envelopes need an instrument in Take FX";
+            why.enabled = false;
+            items.push_back(why);
+        }
+        for (model::Id fx : owner->take->chain) {
+            const model::FxInstance* f = head.fx.find(fx);
+            if (!f) continue;
+            const std::string effect = f->label.empty() ? f->plugin.name : f->label;
+            items.push_back(rule);
+            // Its envelopes, then the whole parameter list.
+            for (const auto& e : head.envelopes) {
+                if (e.value->target.object != fx) continue;
+                const auto scale = (*scales_)(*e.value);
+                const std::string name = scale && scale->param && !scale->param->name.empty()
+                                             ? scale->param->name
+                                             : e.value->target.param;
+                const model::EnvTarget target = e.value->target;
+                const bool on = e.value->visible;
+                add(effect + " \u00b7 " + name, on,
+                    [this, target, on] { (void)showEnvelope(target, !on); });
+            }
+            const ui::Point at{b.x, b.bottom()};
+            add(effect + ": parameters\u2026", false, [this, fx, at] { openFxParamsMenu(fx, at); });
+        }
+    }
+    root_.openPopup(
+        ui::makeMenu("midi.lanes.menu", std::move(items), [this] { root_.closePopup(); }),
+        ui::Rect{b.x, b.bottom(), 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::openFxParamsMenu(model::Id fx, ui::Point at) {
+    json::Value args = json::Value::object();
+    args["fx"] = fx.str();
+    args["full"] = true;
+    auto described = dispatcher_.execute({"fx.describe", std::move(args), kOrigin});
+    if (!described) {
+        if (actions_.onError) actions_.onError("Lanes: " + described.error().message);
+        return;
+    }
+    const model::Session& head = app_.head();
+    std::vector<ui::MenuItem> items;
+    if (const json::Value* ps = described->find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject()) {
+            auto d = params::fromDescription(m.key, m.value);
+            if (!d || ((*d)->spec.flags & (params::kReadonly | params::kHidden))) continue;
+            const model::EnvTarget target{fx, m.key};
+            bool on = false;
+            for (const auto& e : head.envelopes)
+                if (e.value->target == target) on = e.value->visible;
+            ui::MenuItem item;
+            item.label = (*d)->name.empty() ? m.key : (*d)->name;
+            item.checked = on;
+            item.run = [this, target, on] { (void)showEnvelope(target, !on); };
+            items.push_back(std::move(item));
+        }
+    if (items.empty()) {
+        ui::MenuItem none;
+        none.label = "No described parameters";
+        none.enabled = false;
+        items.push_back(std::move(none));
+    }
+    root_.openPopup(
+        ui::makeMenu("midi.lanes.params", std::move(items), [this] { root_.closePopup(); }),
+        ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::refreshEnvLanes() {
+    if (!envColumn_) return;
+    std::vector<model::Id> wanted;
+    for (const RollEnvLane& l : state_.envLanes) wanted.push_back(l.env);
+    if (wanted == envNodes_) {
+        for (const auto& lane : envColumn_->children()) lane->invalidate();
+        return;
+    }
+    root_.releaseWithin(envColumn_);
+    envColumn_->clear();
+    for (model::Id env : wanted) envColumn_->emplace<EnvLane>(state_, *this, roll_, env);
+    envNodes_ = std::move(wanted);
+    root_.relayout();
+    root_.damageAll();
+}
+
+Status MidiEditor::command(std::string_view name, json::Value args,
+                           std::optional<std::uint64_t> expectedVersion, std::string_view what) {
+    if (expectedVersion && (*expectedVersion != app_.head().version ||
+                            gestureGeneration_ != app_.projectGeneration())) {
+        follow({});
+        return Error("gui.midi.stale", "the clip changed during the gesture", "/env",
+                     "start the gesture again against the current clip");
+    }
+    auto r = dispatcher_.execute({std::string(name), std::move(args), kOrigin});
+    if (!r) {
+        if (actions_.onError) actions_.onError(std::string(what) + ": " + r.error().message);
+        return std::move(r).error();
+    }
+    return reload();
+}
+
+Status MidiEditor::setEnvPoints(model::Id env, const std::vector<model::EnvPoint>& points,
+                                std::optional<std::uint64_t> expectedVersion) {
+    json::Value args = json::Value::object(), list = json::Value::array();
+    args["env"] = env.str();
+    for (const model::EnvPoint& pt : points) {
+        json::Value p = json::Value::object();
+        p["beat"] = pt.pos;
+        p["value"] = pt.value;
+        p["shape"] = shapeName(pt.shape);
+        if (pt.tension != 0) p["tension"] = pt.tension;
+        list.push_back(std::move(p));
+    }
+    args["points"] = std::move(list);
+    return command("env.points.set", std::move(args), expectedVersion);
+}
+
+Status MidiEditor::showEnvelope(const model::EnvTarget& target, bool shown) {
+    const model::Session& head = app_.head();
+    for (const auto& e : head.envelopes) {
+        if (e.value->target != target) continue;
+        if (e.value->visible == shown) return {};
+        json::Value args = json::Value::object();
+        args["env"] = e.id.str();
+        args["visible"] = shown;
+        return command("env.set", std::move(args));
+    }
+    if (!shown) return {};
+    // None yet: one point at the clip's start, at the parameter's value now.
+    model::Envelope probe;
+    probe.target = target;
+    const auto scale =
+        target.object.kind == model::Kind::Fx ? (*scales_)(probe) : views::envScale(probe);
+    if (!scale) {
+        Error error("gui.lanes", "the parameter has no lane", "/param",
+                    "pick a parameter the plug-in describes");
+        if (actions_.onError) actions_.onError("Lanes: " + error.message);
+        return error;
+    }
+    json::Value args = json::Value::object(), points = json::Value::array(),
+                point = json::Value::object();
+    args[target.object.kind == model::Kind::Fx ? "fx" : "take"] = target.object.str();
+    args["param"] = target.param;
+    point["beat"] = 0.0;
+    point["value"] = views::targetValue(head, target, *scale);
+    points.push_back(std::move(point));
+    args["points"] = std::move(points);
+    return command("env.add", std::move(args));
 }
 
 std::string_view MidiEditor::wheelBehaviour(unsigned mods) const {
@@ -1384,6 +1865,48 @@ Status MidiEditor::reload() {
         state_.cc.push_back(
             {c.find("beat")->asDouble(), static_cast<int>(c.find("value")->asInt())});
     }
+    // A clip's take lanes, in clip beats; an item's are on the timeline.
+    state_.envLanes.clear();
+    if (owner->clip && owner->clip->activeTake) {
+        const model::Session& head = app_.head();
+        const model::Id takeId = *owner->clip->activeTake;
+        std::vector<std::pair<std::pair<int, std::uint32_t>, RollEnvLane>> lanes;
+        for (const auto& e : head.envelopes) {
+            const model::Envelope& env = *e.value;
+            if (!env.visible) continue;
+            int order = 0;
+            std::optional<views::EnvScale> scale;
+            if (env.target.object == takeId) {
+                scale = views::envScale(env);
+                order = views::envOrder(env);
+            } else if (env.target.object.kind == model::Kind::Fx) {
+                const auto at =
+                    std::find(take->chain.begin(), take->chain.end(), env.target.object);
+                if (at == take->chain.end()) continue;
+                scale = (*scales_)(env);
+                order = 100 + static_cast<int>(at - take->chain.begin());
+            }
+            if (!scale) continue;
+            RollEnvLane lane;
+            lane.env = e.id;
+            lane.envelope = env;
+            lane.scale = *scale;
+            lane.fallback = views::targetValue(head, env.target, *scale);
+            if (env.target.object == takeId) {
+                lane.name = views::envTitle(env);
+                lane.title = lane.name + " (take)";
+            } else {
+                lane.title = views::envTitle(env, head, &*scale);
+                lane.name = scale->param && !scale->param->name.empty() ? scale->param->name
+                                                                        : env.target.param;
+            }
+            lanes.push_back({{order, e.id.n}, std::move(lane)});
+        }
+        std::sort(lanes.begin(), lanes.end(),
+                  [](const auto& x, const auto& y) { return x.first < y.first; });
+        for (auto& l : lanes) state_.envLanes.push_back(std::move(l.second));
+    }
+    refreshEnvLanes();
     // Bars in a generous window around the item.
     state_.barLines.clear();
     const auto& map = *app_.head().timeMap;
@@ -1395,16 +1918,23 @@ Status MidiEditor::reload() {
         state_.barLines.push_back(at);
     }
     // The context in the same window (ADR-0095): what holds at its start and
-    // the changes in it. A clip has no place in time: it reads the key at the
-    // project's start, as midi.edit does, and no chords.
+    // the changes in it. A clip has no place in time: it reads its own
+    // context (ADR-0098), in clip beats, as midi.edit does, so the shading,
+    // the spelling and a degree drag's preview agree with what the engine
+    // commits. Without one no key holds.
     state_.keys.clear();
     state_.chords.clear();
     if (state_.clip) {
-        std::optional<harmony::Key> key;
-        if (const auto id = model::keyPointAt(app_.head(), 0.0))
-            if (const model::ContextPoint* p = app_.head().context.find(*id))
-                key = model::parseKey(*p);
-        state_.keys.push_back({0.0, key});
+        const model::Clip& clip = *owner->clip;
+        state_.keys.push_back({0.0, model::keyAt(clip, 0.0)});
+        for (const model::ContextPoint& p : clip.context) {
+            if (p.type == model::ContextType::Key) {
+                if (p.beat > 0) state_.keys.push_back({p.beat, model::parseKey(p)});
+                continue;
+            }
+            const bool known = p.symbol.empty() || model::parseChordPoint(p).has_value();
+            state_.chords.push_back({p.beat, p.symbol + (known ? "" : "?"), known});
+        }
     } else {
         const model::Session& head = app_.head();
         const double lo = state_.itemPosition - 64;
@@ -1453,6 +1983,9 @@ Status MidiEditor::reload() {
                            (label.empty() ? state_.item : label);
                 }
         titleBase_ = "MIDI · " + name + " · " + std::to_string(state_.notes.size()) + " notes";
+        const auto outside = std::count_if(state_.notes.begin(), state_.notes.end(),
+                                           [&](const RollNote& n) { return state_.outsideKey(n); });
+        if (outside > 0) titleBase_ += " · " + std::to_string(outside) + " outside the key";
         refreshTitle();
     }
     if (roll_) roll_->invalidate();
@@ -1607,16 +2140,144 @@ Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVe
 }
 
 void MidiEditor::editChord(double beat, ui::Point at) {
-    views::openChordField(
-        root_,
-        {[this]() -> const model::Session& { return app_.head(); },
-         [this](const std::string& command, json::Value args) {
-             auto r = dispatcher_.execute({command, std::move(args), kOrigin});
-             if (!r && actions_.onError) actions_.onError("Chord: " + r.error().message);
-             return static_cast<bool>(r);
-         },
-         [this](double b) { return bars_ ? static_cast<BarStrip*>(bars_)->chordX(b) : 0.0f; }},
-        beat, at);
+    views::ChordFieldHost host{
+        [this]() -> const model::Session& { return app_.head(); },
+        [this](const std::string& command, json::Value args) {
+            auto r = dispatcher_.execute({command, std::move(args), kOrigin});
+            if (!r && actions_.onError) actions_.onError("Chord: " + r.error().message);
+            return static_cast<bool>(r);
+        },
+        [this](double b) { return bars_ ? static_cast<BarStrip*>(bars_)->chordX(b) : 0.0f; }};
+    if (state_.clip) {
+        // The clip's own chord at that clip beat: chord.set {at, symbol}
+        // becomes a point of the clip's context.
+        const std::string item = state_.item;
+        host.symbolAt = [this, item](double b) {
+            const auto owner = midiOwner(app_.head(), item);
+            if (!owner || !owner->clip) return std::string();
+            for (const model::ContextPoint& p : owner->clip->context)
+                if (p.type == model::ContextType::Chord && std::abs(p.beat - b) < 1e-6)
+                    return p.symbol;
+            return std::string();
+        };
+        host.run = [this, item](const std::string& command, json::Value args) {
+            const auto owner = midiOwner(app_.head(), item);
+            if (command != "chord.set" || !owner || !owner->clip) return false;
+            model::ContextPoint p;
+            p.type = model::ContextType::Chord;
+            p.beat = args["at"].asDouble();
+            p.symbol = args["symbol"].asString();
+            return static_cast<bool>(setClipContext(withContextPoint(owner->clip->context, p)));
+        };
+    }
+    views::openChordField(root_, std::move(host), beat, at);
+}
+
+void MidiEditor::editClipKey(double beat, ui::Point at) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip) return;
+    // It starts from the clip's key there, else the project's at its start,
+    // else C major.
+    std::string text = "C major";
+    if (const model::ContextPoint* p = model::keyPointAt(*owner->clip, beat))
+        text = model::keyWords(*p);
+    else if (const auto id = model::keyPointAt(app_.head(), 0.0))
+        if (const model::ContextPoint* project = app_.head().context.find(*id))
+            text = model::keyWords(*project);
+    auto field = std::make_unique<ui::TextField>("midi-key-field", text);
+    field->layout.width = ui::SizeRule::fixed(200);
+    field->selectAll();
+    const std::string item = state_.item;
+    field->onSubmit = [this, item, beat](const std::string& typed) {
+        const auto parts = views::splitKeyText(typed);
+        if (!parts) {
+            if (actions_.onError)
+                actions_.onError("Key: '" + typed +
+                                 "' is not a key: a tonic and a scale, "
+                                 "Eb major or F# dorian");
+            return;
+        }
+        const auto clip = midiOwner(app_.head(), item);
+        if (!clip || !clip->clip) return;
+        model::ContextPoint p;
+        p.type = model::ContextType::Key;
+        p.beat = beat;
+        p.tonic = parts->first;
+        p.scale = parts->second;
+        if (setClipContext(withContextPoint(clip->clip->context, p))) root_.closePopup();
+    };
+    root_.openPopup(std::move(field), {at.x, at.y, 1, 1});
+}
+
+void MidiEditor::openContextMenu(double beat, std::optional<double> chord, ui::Point at) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip) return;
+    const model::Clip& clip = *owner->clip;
+    const time::TimeMap& tm = *app_.head().timeMap;
+    // A key goes at the start of the bar under the pointer, inside the clip.
+    double barStart = tm.beatOfBar(tm.barBeat(std::max(0.0, beat)).bar);
+    if (barStart >= clip.length) barStart = 0;
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, bool enabled, std::function<void()> run) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.enabled = enabled;
+        m.run = std::move(run);
+        items.push_back(std::move(m));
+    };
+    const int bar = tm.barBeat(barStart).bar;
+    add(barStart == 0 ? "Key\u2026" : "Key at bar " + std::to_string(bar) + "\u2026", true,
+        [this, barStart, at] { editClipKey(barStart, at); });
+    add("Chord\u2026", true, [this, beat, at] { editChord(beat, at); });
+    const model::ContextPoint* key = nullptr;
+    for (const model::ContextPoint& p : clip.context)
+        if (p.type == model::ContextType::Key && std::abs(p.beat - barStart) < 1e-6) key = &p;
+    if (key) {
+        const model::ContextPoint gone = *key;
+        add("Remove key " + model::keyWords(gone), true, [this, gone] {
+            if (const auto o = midiOwner(app_.head(), state_.item); o && o->clip)
+                (void)setClipContext(withContextPoint(o->clip->context, gone, true));
+        });
+    }
+    if (chord) {
+        model::ContextPoint gone;
+        gone.type = model::ContextType::Chord;
+        gone.beat = *chord;
+        for (const model::ContextPoint& p : clip.context)
+            if (p.type == model::ContextType::Chord && std::abs(p.beat - *chord) < 1e-6)
+                gone.symbol = p.symbol;
+        add("Remove chord" + (gone.symbol.empty() ? std::string() : " " + gone.symbol), true,
+            [this, gone] {
+                if (const auto o = midiOwner(app_.head(), state_.item); o && o->clip)
+                    (void)setClipContext(withContextPoint(o->clip->context, gone, true));
+            });
+    }
+    ui::MenuItem rule;
+    rule.separator = true;
+    items.push_back(rule);
+    // The project's key and chords from the playhead, for the clip's length.
+    const auto t = app_.transport("get");
+    const double from = t ? t->beat : 0.0;
+    add("Take from the project at bar " + std::to_string(tm.barBeat(from).bar), true, [this, from] {
+        json::Value args = json::Value::object(), place = json::Value::object();
+        args["clip"] = state_.item;
+        place["at"] = std::max(0.0, from);
+        args["context_at"] = std::move(place);
+        (void)command("clip.set", std::move(args), {}, "Context");
+    });
+    add("Clear context", !clip.context.empty(), [this] { (void)setClipContext({}); });
+    root_.openPopup(
+        ui::makeMenu("midi.context.menu", std::move(items), [this] { root_.closePopup(); }),
+        ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+Status MidiEditor::setClipContext(const std::vector<model::ContextPoint>& points) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip) return Error("gui.midi", "no clip is open", "/clip");
+    json::Value args = json::Value::object();
+    args["clip"] = state_.item;
+    args["context"] = clipLeadSheet(points, *app_.head().timeMap, owner->clip->length);
+    return command("clip.set", std::move(args), {}, "Context");
 }
 
 namespace {
@@ -1676,14 +2337,25 @@ void MidiEditor::transposeDegrees(int degrees) {
 void MidiEditor::refreshKeyButton() {
     if (!keyButton_) return;
     const model::Session& head = app_.head();
-    const auto id = model::keyPointAt(head, state_.itemPosition);
-    const model::ContextPoint* point = id ? head.context.find(*id) : nullptr;
+    // An item's key at its start; a clip's own at its start (ADR-0098).
+    const model::ContextPoint* point = nullptr;
+    const auto owner = state_.clip ? midiOwner(head, state_.item) : std::nullopt;
+    if (owner && owner->clip) {
+        point = model::keyPointAt(*owner->clip, 0.0);
+    } else if (const auto id = model::keyPointAt(head, state_.itemPosition)) {
+        point = head.context.find(*id);
+    }
     const bool known = point && model::parseKey(*point);
     std::string text = point ? model::keyWords(*point) : "No key";
     keyButton_->enabled = known;
     if (!known && state_.degrees) {  // nothing to count degrees in
         state_.degrees = false;
         keyButton_->setOn(false);
+        // midi.edit refuses degrees on a clip without a key (midi.no_key).
+        if (state_.clip && actions_.onError)
+            actions_.onError(
+                "MIDI: degree mode is off: the clip has no key; give it a "
+                "context with a key at its start");
     }
     if (text == keyText_) return;
     keyText_ = text;

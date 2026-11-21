@@ -376,8 +376,8 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
         c.fillRect({bx0, y, std::max(0.0f, bx1 - bx0), 1}, t.color(typeToken(lane.type)));
         model::Envelope probe;  // named as an envelope on the target would be
         if (lane.target) probe.target = *lane.target;
-        c.text({r.x + 6, r.y, 200, 14}, envTitle(probe, s), ui::Font::Ui, t.type("caption"),
-               t.color("ink-quiet"));
+        c.text({r.x + 6, r.y, 200, 14}, envTitle(probe, s, &*scale), ui::Font::Ui,
+               t.type("caption"), t.color("ink-quiet"));
         return;
     }
     const model::Id envId = *lane.env;
@@ -461,8 +461,8 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
             continue;  // under an item: not what plays
         c.fillRect({x - 3, yOf(pt.value) - 3, 6, 6}, ink);
     }
-    c.text({r.x + 6, r.y, 200, 14}, envTitle(*env, s) + (env->active ? "" : " (off)"), ui::Font::Ui,
-           t.type("caption"), t.color("ink-quiet"));
+    c.text({r.x + 6, r.y, 200, 14}, envTitle(*env, s, &*scale) + (env->active ? "" : " (off)"),
+           ui::Font::Ui, t.type("caption"), t.color("ink-quiet"));
 }
 
 bool Lanes::showsTakeLanes(const ui::Rect& item, std::size_t takes) {

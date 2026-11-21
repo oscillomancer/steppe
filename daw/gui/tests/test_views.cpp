@@ -2649,6 +2649,38 @@ TEST_CASE("audit3: arrange and layout ignore version deltas across generations")
     CHECK(view->trackLayout().show(after, &emptyDelta, 3));
 }
 
+TEST_CASE("a plug-in parameter's lane is titled with its effect and the parameter's name") {
+    model::EditTxn txn(model::Session::create(), 1);
+    model::FxInstance fx;
+    fx.plugin.id = "com.example.synth";
+    fx.plugin.name = "Marram";
+    const auto synth = txn.create(fx);
+    fx.label = "Lead";
+    const auto labelled = txn.create(fx);
+    model::Track tr;
+    tr.parent = model::kMaster;
+    tr.chain = {synth, labelled};
+    const auto track = txn.create(tr);
+    txn.modify<model::Track>(model::kMaster, [&](auto& m) { m.children.push_back(track); });
+    auto s = txn.commit();
+    REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+    model::Envelope env;
+    env.target = {synth, "filter1.cutoff"};
+    // Described (the lane's scale): the name the plug-in gives it.
+    auto described = std::make_shared<params::DescribedParam>();
+    described->key = "filter1.cutoff";
+    described->name = "Filter 1 Cutoff";
+    views::EnvScale scale;
+    scale.kind = views::EnvScale::Kind::Plugin;
+    scale.param = described;
+    CHECK(views::envTitle(env, *s, &scale) == "Marram \u00b7 Filter 1 Cutoff");
+    // Not described: the key, still after the effect's name.
+    CHECK(views::envTitle(env, *s) == "Marram \u00b7 filter1.cutoff");
+    // The effect's own label wins over the plug-in's name.
+    env.target = {labelled, "filter1.cutoff"};
+    CHECK(views::envTitle(env, *s, &scale) == "Lead \u00b7 Filter 1 Cutoff");
+}
+
 TEST_CASE("playrate envelope scale: logarithmic ratios, unity and bounded editing") {
     model::Envelope env;
     env.target = {model::kMaster, "playrate"};
