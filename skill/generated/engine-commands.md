@@ -6087,7 +6087,7 @@ Result:
 
 Automate a parameter: a track's or route's mixer control, or a plugin's.
 
-Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item), or on a clip's take from the clip's start in beats (MIDI) or seconds (audio); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty.
+Target one of track (param volume|pan|mute; width|pan_left|pan_right|pan_boost on channels/busses; playrate only on tr_0), route (volume|pan|mute), group (VCA volume|mute), or fx (a semantic key such as "gain" or "filter1.cutoff", or for other plugins a CLAP id or parameter name; a semantic plugin's parameter named by id or name is stored by its key, its plain points converted to the key's units: converted), or module (a rack module's knob by key, values in its unit, a choice by its key; module.describe). points: [{beat|bar|seconds, value, shape?, tension?}]; values in the parameter's unit (dB, %, Hz… — text like "800 Hz" works for plugins); shapes linear, square, slow, fast_start, fast_end, bezier. Plugin values move along the parameter's curve (a log cutoff sweeps evenly in pitch). take (param volume|pan|mute): a take envelope, its points in beats from the item's start (it moves with the item), or on a clip's take from the clip's start in beats (MIDI) or seconds (audio); it shapes the take after its take FX (a MIDI take needs an instrument in its take FX). Master playrate points are finite numeric ratios 0.25..4.0; an active nonempty master curve replaces the saved scalar during playback and rendering. Audio sources convert before take FX/live mixing; MIDI and automation follow the same timeline clock. Width and dual pans use -100..100 percent; pan_boost uses 0..1 (on at 0.5), overriding the effective law's boost while the envelope is active and nonempty.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -6122,6 +6122,18 @@ Kind: `edit`. Exposure: `mcp-tool`.
     },
     "points": {
       "type": "integer"
+    },
+    "param": {
+      "type": "string",
+      "description": "A plug-in parameter's canonical reference: its semantic key or decimal id."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in parameter's display name."
+    },
+    "converted": {
+      "type": "boolean",
+      "description": "True when a semantic plugin's parameter was named by id or name: the points were plain values, stored converted to the key's units (env.list shows those)."
     },
     "warnings": {
       "type": "array",
@@ -6194,7 +6206,9 @@ Result:
 ```json
 {
   "env": "en_1",
-  "points": 2
+  "points": 2,
+  "param": "gain",
+  "param_name": "<any>"
 }
 
 ```
@@ -6334,6 +6348,10 @@ Kind: `query`. Exposure: `mcp-exec`.
           "visible": {
             "type": "boolean"
           },
+          "param_name": {
+            "type": "string",
+            "description": "A plug-in parameter's display name."
+          },
           "mode": {
             "type": "string"
           }
@@ -6376,7 +6394,8 @@ Result:
       "points": 2,
       "active": true,
       "visible": true,
-      "mode": "read"
+      "mode": "read",
+      "param_name": "<any>"
     }
   ]
 }
@@ -12270,6 +12289,14 @@ Kind: `edit`. Exposure: `mcp-tool`.
     "modulation": {
       "type": "string"
     },
+    "param": {
+      "type": "string",
+      "description": "A plug-in target's canonical reference."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in target's display name."
+    },
     "rack": {
       "type": "string"
     },
@@ -12330,6 +12357,8 @@ Result:
 ```json
 {
   "modulation": "mr_1",
+  "param": "gain",
+  "param_name": "<any>",
   "rack": "rk_1",
   "module": "mo_3",
   "mod_out": "mo_2",
@@ -12372,6 +12401,14 @@ Kind: `edit`. Exposure: `mcp-exec`.
     "modulation": {
       "type": "string"
     },
+    "param": {
+      "type": "string",
+      "description": "A plug-in target's canonical reference: its semantic key or decimal id."
+    },
+    "param_name": {
+      "type": "string",
+      "description": "A plug-in target's display name."
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -12408,7 +12445,9 @@ Result:
 
 ```json
 {
-  "modulation": "mr_1"
+  "modulation": "mr_1",
+  "param": "gain",
+  "param_name": "<any>"
 }
 
 ```
@@ -12526,6 +12565,10 @@ Kind: `query`. Exposure: `mcp-exec`.
           },
           "inert": {
             "type": "string"
+          },
+          "param_name": {
+            "type": "string",
+            "description": "A plug-in target's display name."
           }
         },
         "required": [
@@ -12583,7 +12626,8 @@ Result:
       "lane": true,
       "range": "bipolar",
       "fed_by": [],
-      "inert": "source"
+      "inert": "source",
+      "param_name": "<any>"
     }
   ]
 }

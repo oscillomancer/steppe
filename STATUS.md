@@ -758,6 +758,24 @@ instructions are in `docs/guides/installing.md`.
   validate the actual FX state and require canonical numeric ids. Loading
   restores one validation probe per FX, and open skips it when warnings are
   not requested.
+  Plug-in parameter references (session-model): envelopes, modulation
+  routes, `fx.param.set` and cables into plugin modules name a parameter
+  through one resolver: a semantic key, a canonical decimal id, or a display
+  name in any letter case. An ambiguous name is refused with the ids, new
+  references are stored canonical (one spelling per parameter: the semantic
+  key on a plug-in that has keys, whatever the caller wrote, else the
+  decimal id; `env.add` converts plain points to the key's units and
+  answers `converted`), and answers give `param_name` beside them. Every
+  lookup by parameter (one envelope per parameter, write, touch and latch
+  recording, gesture holds, the FX window's lanes) compares stored
+  references. A parameter the plug-in does not mark automatable takes
+  neither an envelope nor a route. Older files that stored a name, or an id
+  on a semantic plug-in, still play; opening warns of one that resolves to
+  nothing or ambiguously, of one in another spelling (`param.spelling`: not
+  recorded into, not found by the FX window; remove it and add it again),
+  and of two active envelopes on one parameter (`param.unresolved`,
+  `param.ambiguous`, `param.spelling`, `env.duplicate`). Tested on CLAP
+  fixtures and a VST3.
   Modulation routes (ADR-0096, schema 2.16): a Mod Out module's inputs
   drive plug-in parameters outside the rack (`modulation.add/set/remove/
   list`; `fx.describe` marks the parameters a route can take), a track's
@@ -1442,6 +1460,15 @@ Engine and hosting:
   (VST3 has no modulation), by their first voice, at most 16 per plug-in;
   parallel paths summed inside a patch remain unaligned (ADR-0064);
   post-fader sends into an In module take the linear path.
+- Renders are deterministic for plug-ins that keep no process-wide state. A
+  plug-in that does (Airwindows Consolidated, review round 72 O1) renders
+  one project differently run to run in process, from frame 0; bridged
+  (`fx.set {isolation: "dedicated"}`), each render is a fresh process and
+  identical. Nothing in the app points at the plug-in or at bridging.
+- Opening a project checks stored plug-in parameter references against the
+  plug-in's parameter list in its default state, so a plug-in whose names
+  follow its state can be warned of wrongly (`param.unresolved`); the
+  engine binds them against the running instance.
 - Modulation routes (ADR-0096): `modulation.add`, `modulate`,
   `modulation.list` and `fx.describe` judge a plug-in parameter from a fresh
   copy of the plug-in in its default state, not the running instance, while

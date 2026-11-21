@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "param_ref.h"
 #include "plan.h"
 #include "supple/engine/racks.h"
 #include "supple/model/session.h"
@@ -35,13 +36,19 @@ struct PluginModTarget {
     // modulatable (or a VST3's), so its lane sends the summed value. A
     // VST3's lane runs in the normalized domain: scale is then 1.
     bool envelope = false;
+    // The canonical reference (param_ref.h): what the model stores.
+    std::string canonical;
 };
 // Main-thread resolution shared by command validation and plan preparation.
 // `allowEnvelope`: a modulation route may take an automatable parameter
 // through its envelope; a rack cable into a plugin module may not.
+// `ambiguity`: a command refuses an ambiguous name; the plan binds a stored
+// one to its first match. `plugin` names the plug-in in messages.
 Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> params,
                                          const json::Value* schema, const std::string& key,
-                                         bool vst3 = false, bool allowEnvelope = false);
+                                         bool vst3 = false, bool allowEnvelope = false,
+                                         Ambiguity ambiguity = Ambiguity::Refuse,
+                                         std::string_view plugin = "the plug-in");
 
 // The module types every engine knows: the host modules (the rack runtime's
 // and the plugin module) and the stock ones.

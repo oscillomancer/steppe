@@ -575,6 +575,9 @@ q = nil
 ---@class Steppe.env_add_result
 ---@field env string
 ---@field points integer
+---@field param? string A plug-in parameter's canonical reference: its semantic key or decimal id.
+---@field param_name? string A plug-in parameter's display name.
+---@field converted? boolean True when a semantic plugin's parameter was named by id or name: the points were plain values, stored converted to the key's units (env.list shows those).
 ---@field warnings? table[]
 
 ---@class Steppe.env_list_args
@@ -1264,6 +1267,8 @@ q = nil
 
 ---@class Steppe.modulate_result
 ---@field modulation string
+---@field param? string A plug-in target's canonical reference.
+---@field param_name? string A plug-in target's display name.
 ---@field rack? string
 ---@field module? string
 ---@field mod_out? string
@@ -1282,6 +1287,8 @@ q = nil
 
 ---@class Steppe.modulation_add_result
 ---@field modulation string
+---@field param? string A plug-in target's canonical reference: its semantic key or decimal id.
+---@field param_name? string A plug-in target's display name.
 ---@field warnings? table[]
 
 ---@class Steppe.modulation_list_args
