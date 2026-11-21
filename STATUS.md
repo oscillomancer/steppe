@@ -220,7 +220,8 @@ instructions are in `docs/guides/installing.md`.
     heard at its boundary, starts afresh at each launch, and is cut at the
     switch away after the crossfade. The take's envelopes, and those on its
     FX, are from the clip's start, pass after pass (ADR-0097, amended
-    2026-11-20).
+    2026-11-20). Modulation routes do not reach a clip take's FX, as
+    they do not reach an item's (`modulation.target`: take FX come later).
   - Renders play the arrangement only. The render dialog says so while a
     clip holds a track, following launches while it is open.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
