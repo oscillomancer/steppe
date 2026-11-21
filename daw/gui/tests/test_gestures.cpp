@@ -772,6 +772,56 @@ TEST_CASE("automation lanes: a plugin parameter's lane uses the plugin's range a
     CHECK(params::toNormalized(spec->spec, pts[1].value) == doctest::Approx(0.75).epsilon(0.05));
 }
 
+TEST_CASE("automation lanes: a plug-in described by a list (a VST3) gets its parameter's scale") {
+    // fx.describe lists a non-semantic plug-in's parameters by numeric id,
+    // which is the envelope's param ("1"); a semantic one keys them by name.
+    engine::AppOptions options;
+    options.workdir = std::filesystem::temp_directory_path() /
+                      ("supple-scales-test-" + std::to_string(testProcessId()));
+    {
+        auto app = engine::EngineApp::create(options);
+        REQUIRE(app);
+        cmd::Registry registry;
+        cmd::Command<json::Value, json::Value> describe;
+        describe.name = "fx.describe";
+        describe.version = 2;
+        describe.kind = cmd::Kind::Query;
+        describe.exposure = cmd::Exposure::Internal;
+        describe.args = schema::any();
+        describe.result = schema::any();
+        describe.run = [](const json::Value& a, cmd::Context&) -> Result<json::Value> {
+            if (a.find("fx")->asString() == "fx_1")  // as Test VST3 Gain answers
+                return json::parse(
+                           R"({"name":"Test VST3 Gain","params":[{"id":1.0,"name":"Gain",)"
+                           R"("min":0.0,"max":1.0,"default":0.5,"modulatable_by_envelope":true}]})")
+                    .value();
+            return json::parse(
+                       R"({"name":"Semantic","params":{"gain":{"id":7,"name":"Gain","min":-24.0,)"
+                       R"("max":24.0,"default":0.0,"type":"float","unit":"dB"}}})")
+                .value();
+        };
+        registry.add(std::move(describe));
+        cmd::Dispatcher dispatcher(registry, **app);
+        gui::PluginScales scales(dispatcher);
+        model::Envelope vst3;
+        vst3.target = {*model::Id::parse("fx_1"), "1"};
+        const auto listed = scales(vst3);
+        REQUIRE(listed);
+        REQUIRE(listed->param);
+        CHECK(listed->param->name == "Gain");
+        CHECK(listed->param->spec.max == doctest::Approx(1.0));
+        model::Envelope missing;
+        missing.target = {*model::Id::parse("fx_1"), "2"};
+        CHECK_FALSE(scales(missing));
+        model::Envelope semantic;
+        semantic.target = {*model::Id::parse("fx_2"), "gain"};
+        const auto keyed = scales(semantic);
+        REQUIRE(keyed);
+        CHECK(keyed->param->spec.max == doctest::Approx(24.0));
+    }
+    std::filesystem::remove_all(options.workdir);
+}
+
 TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item's track") {
     Fixture f;
     if (!f.ok) return;
