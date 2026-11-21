@@ -4779,6 +4779,57 @@ TEST_CASE("modulate: the whole gesture in one undo step, reusing the rack it mad
     CHECK(app->view().modules.size() == modules);
 }
 
+TEST_CASE("modulate: a second route of the same kind onto one target is allowed and warns") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto stacked = [](const json::Value& result) {
+        std::string out;
+        if (const json::Value* w = result.find("warnings"))
+            for (const auto& e : w->asArray())
+                if (e.find("code")->asString() == "modulation.stacked")
+                    out += e.find("message")->asString();
+        return out;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+    const std::string target = R"("target": {"fx": "fx_1", "param": "gain"})";
+    // The first route, and one of another kind (a macro), are fine.
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "lfo"})")).empty());
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "macro"})")).empty());
+    // A second LFO onto the same parameter, spelled another way, is allowed and names mr_1.
+    const auto second =
+        run("modulate", R"({"target": {"fx": "fx_1", "param": "Gain"}, "source": "random"})");
+    const std::string message = stacked(second);
+    CHECK(message.find("mr_3") != std::string::npos);  // the new route
+    CHECK(message.find("mr_1") != std::string::npos);  // the existing lfo route
+    CHECK(message.find("mr_2") == std::string::npos);  // the macro is another kind
+    CHECK(message.find("offsets add") != std::string::npos);
+    CHECK(app->view().modulations.size() == 3);
+    // modulation.add says the same, for a Mod Out input fed by an LFO of its own.
+    const auto lfo = run("module.add", R"({"rack": "rk_1", "type": "lfo"})");
+    const std::string out = lfo.find("module")->asString();
+    run("cable.add", R"({"from": ")" + out + R"(.out", "to": "mo_2.in_9"})");
+    const auto added = run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_9"},
+        "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.1})");
+    CHECK(stacked(added).find("mr_1, mr_3") != std::string::npos);
+    // A disabled route adds nothing, so it is not named, and a disabled new one warns of nothing.
+    for (const char* id : {"mr_1", "mr_3", "mr_4"})
+        run("modulation.set", std::string(R"({"modulation": ")") + id + R"(", "enabled": false})");
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "lfo"})")).empty());
+    // Other targets are not stacked onto.
+    CHECK(stacked(run("modulate", R"({"target": {"track": "tr_1", "param": "volume"},
+        "source": "lfo"})"))
+              .empty());
+}
+
 TEST_CASE("modulate: a shared rack that would close a loop is passed over for another") {
     // ADR-0096 (2026-11-20): modulate refuses only a real cycle. The
     // Modulators rack drives Drums, so a follower on Drums cannot live in

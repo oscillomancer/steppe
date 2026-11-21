@@ -91,4 +91,8 @@ hint says what the plug-in does take.
   use an LFO.
 - Delete a route with `modulation.remove`; removing its Mod Out or the plug-in it
   targets removes it too, with a `modulation.removed` warning.
-- Do not stack many routes on one target to fake an envelope: automate it (`env.add`).
+- Do not stack many routes on one target to fake an envelope: automate it (`env.add`). A second
+  route onto a parameter that already has one from the same kind of source (two LFOs, say) is
+  allowed, and the answer warns `modulation.stacked` naming the routes already there: their
+  offsets add. Naming the same parameter by key, id or name finds the same one, so it stacks
+  too; remove the route you did not mean (`modulation.remove`).

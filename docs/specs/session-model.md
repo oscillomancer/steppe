@@ -1854,6 +1854,13 @@ keeps playing its print.
   `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
+- Stacking: an enabled route added (`modulation.add`, and `modulate`, which adds
+  through it) onto a target that another enabled route already reaches from the
+  same kind of source (the type of the module cabled into its Mod Out input; an
+  LFO and a Random source are both an LFO) is allowed, with the warning
+  `modulation.stacked` at `/target` naming the new route and the routes already
+  there: their offsets add. A route whose input nothing feeds has no kind and
+  does not warn.
 - `modulation.list` reports each route's signal range (`bipolar` −1..1 or
   `unipolar` 0..1, from the Mod Out input) and `inert` with its reason when
   the plan cannot apply it (`source`, `target`, `envelope` when the envelope
