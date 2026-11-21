@@ -874,6 +874,33 @@ TEST_CASE("ruler: an edge dragged onto the other removes a range; the menu delet
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("ruler: the key that holds at the view's left edge names itself there") {
+    // gui.md §4.3: a key change scrolled out of view, its key still holding.
+    RulerFixture f;
+    f.exec("key.set", json::parse(R"({"at": 0, "tonic": "F", "scale": "major"})").value());
+    f.exec("key.set", json::parse(R"({"at": 16, "tonic": "A", "scale": "minor"})").value());
+    const auto& stats = f.view->rulerStats();
+    const float left = f.view->ruler().bounds().x;
+    auto scrollTo = [&](double beat) {
+        auto v = f.view->viewport();
+        v.startSeconds = f.app->head().timeMap->secondsAt(beat);
+        f.view->setViewport(v);
+        f.sync();
+    };
+    // At bar 3, F major (from bar 1) holds: named at the edge, then A minor.
+    scrollTo(8);
+    REQUIRE(stats.keyLabels == std::vector<std::string>{"F major", "A minor"});
+    CHECK(stats.keyLabelXs[0] == doctest::Approx(static_cast<double>(left) + 3));
+    CHECK(stats.keyLabelXs[1] == doctest::Approx(static_cast<double>(f.at(16).x) + 3));
+    // At bar 7 only A minor holds; F major is not drawn.
+    scrollTo(24);
+    REQUIRE(stats.keyLabels == std::vector<std::string>{"A minor"});
+    CHECK(stats.keyLabelXs[0] == doctest::Approx(static_cast<double>(left) + 3));
+    // A change exactly at the edge is drawn as a flag, not as held.
+    scrollTo(16);
+    CHECK(stats.keyLabels == std::vector<std::string>{"A minor"});
+}
+
 TEST_CASE("ruler: the last chord holds to the project's end and keeps its name in view") {
     // gui.md §4.3: as the engine holds it, drawn as the other chords.
     RulerFixture f;

@@ -743,8 +743,11 @@ ink: "F major", "Eb harmonic minor", written with a trailing "?" when this
 build cannot read the point. A key that starts on a meter change's beat
 follows the meter's label; any other has its own tick. Each label stops short
 of the next flag in that half (a key or a meter change), ending in an
-ellipsis when the words do not fit, or showing none. A double-click on a
-key's label opens a field with its words: a tonic and a scale ("Eb major",
+ellipsis when the words do not fit, or showing none. The key that holds at
+the view's left edge, its change scrolled out of view, is named there
+without a tick, as the held chord is; it is not a flag (it does not drag,
+and the menus and double-click act on the beat under the pointer). A
+double-click on a key's label opens a field with its words: a tonic and a scale ("Eb major",
 "F# dorian"; the scale's spaces are its underscores), Enter runs `key.set` at
 its beat, and text that is not a key is a `key.text` message with the field
 kept. A right-click on a key's label offers Change key… and Delete key change

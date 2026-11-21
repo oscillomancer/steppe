@@ -379,6 +379,8 @@ class Ruler : public ui::Node {
     // Key changes (ADR-0095) in the meter half of the tempo row, in quiet
     // ink: a key that starts on a meter change's beat follows its label;
     // any other has its own tick. Each label stops short of the next flag.
+    // The key that holds at the view's left edge, its change scrolled out of
+    // view, names itself there, without a tick (nothing there to drag).
     struct KeyFlag {
         double beat = 0;
         std::string text;  // "Eb major", as written ("?") when this build cannot read it
@@ -394,35 +396,40 @@ class Ruler : public ui::Node {
         const float y = tempoRow.y + tempoRow.h / 2.0f, h = tempoRow.h / 2.0f - 1;
         const float size = t.type("caption");
         const ui::Color quiet = t.color("ink-quiet");
-        const float x1 = bounds().right();
+        const float x0 = bounds().x, x1 = bounds().right();
         for (std::size_t i = 0; i < keys.size(); ++i) {
             const model::ContextPoint* p = s.context.find(keys[i].id);
             if (!p) continue;
             const float x = view_.xAt(tm.secondsAt(keys[i].beat));
             if (x > x1) break;
-            float textX = x + 3, limit = x1;
+            const float next =
+                i + 1 < keys.size() ? view_.xAt(tm.secondsAt(keys[i + 1].beat)) : x1 + 1;
+            const bool held = x < x0 - 1;          // its change is left of the view
+            if (held && next <= x0 + 1) continue;  // and another holds by the edge
+            float textX = (held ? x0 : x) + 3, limit = x1;
             bool shared = false;
             for (const time::MeterChange& m : tm.meter()) {
                 const float mx = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
-                if (std::abs(mx - x) < 1) {
+                if (!held && std::abs(mx - x) < 1) {
                     textX += c.textWidth(meterText(m), ui::Font::Mono, size) + 6;
                     shared = true;
-                } else if (mx > x) {
+                } else if (mx > textX - 3) {
                     limit = std::min(limit, mx - 3);
                 }
             }
-            if (i + 1 < keys.size())
-                limit = std::min(limit, view_.xAt(tm.secondsAt(keys[i + 1].beat)) - 3);
+            if (i + 1 < keys.size()) limit = std::min(limit, next - 3);
             std::string text = model::keyWords(*p);
             // Words too long for the room end in an ellipsis, or go.
             const std::string fit =
                 c.elide(text, ui::Font::Ui, size, std::max(0.0f, limit - textX));
             const float shown = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
-            if (!shared) c.fillRect({x, y, 1, h}, quiet);
+            if (!shared && !held) c.fillRect({x, y, 1, h}, quiet);
             if (!fit.empty())
                 c.text({textX, y, shown + 4, h}, fit, ui::Font::Ui, size, quiet,
                        ui::kLeft | ui::kMiddle);
             stats.keyLabels.push_back(text);
+            stats.keyLabelXs.push_back(textX);
+            if (held) continue;
             const float left = shared ? textX - 2 : x - 5;
             keyFlags.push_back({keys[i].beat,
                                 std::move(text),
