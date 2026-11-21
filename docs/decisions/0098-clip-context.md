@@ -303,6 +303,12 @@ In short:
 under a section, the scene's clips' context (when they agree) is written
 there. Not in X1 or X2.
 
+*21 Nov 2026, X5 built:* `scene.insert` takes the flag too. Where the track
+already has points under the section they are left alone, where the clips
+disagree (one type, one beat, two values) nothing is written, and the answer
+says which; points equal to what holds are not written again. The contract is
+session-model "Writing the context from scenes".
+
 ### Steps
 
 | Step | Who | What |

@@ -201,7 +201,7 @@ Result:
 
 Lay a song out from scenes, each for some bars, in order.
 
-scene.insert for each entry of sequence in turn, each starting where the last ended, from bar or at (default bar 1), with a section for each. A scene may appear more than once. Every entry's refusal (scene.empty, scene.insert.period, scene.insert.occupied) names its index in path, and changes nothing; an empty sequence or one of more than 256 entries is scene.sequence. follow, pooled and each item's followed and context.mismatch are as scene.insert's. One undo step.
+scene.insert for each entry of sequence in turn, each starting where the last ended, from bar or at (default bar 1), with a section for each. A scene may appear more than once. Every entry's refusal (scene.empty, scene.insert.period, scene.insert.occupied) names its index in path, and changes nothing; an empty sequence or one of more than 256 entries is scene.sequence. follow, pooled and each item's followed and context.mismatch are as scene.insert's. write_context writes each section's harmony from its scene's clips where the context track has none: a section with points under it is left alone, one whose clips disagree gets nothing, and each segment's context says which. One undo step.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -216,6 +216,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `bar` | integer |  | 1.0..1e+05 |  | Start bar, 1-based [1]. |
 | `pooled` | boolean |  |  | false |  |
 | `follow` | string |  |  |  | How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow. One of: none, key, chords. |
+| `write_context` | boolean |  |  | false | Write the scene's clips' own key and chords onto the context track under each section that has none (shifted to the section, repeating with a loop clip), in the same undo step, before the clips are laid. Left alone: a section with points under it; not written: one whose clips disagree. The answer's context says which (default false). |
 
 ### Result
 
@@ -316,6 +317,42 @@ Kind: `edit`. Exposure: `mcp-exec`.
               "required": ["clip", "item", "track"],
               "additionalProperties": false
             }
+          },
+          "context": {
+            "type": "object",
+            "title": "context_written",
+            "properties": {
+              "written": {
+                "type": "boolean"
+              },
+              "keys": {
+                "type": "integer",
+                "description": "Key points written under the section."
+              },
+              "chords": {
+                "type": "integer",
+                "description": "Chord points written under the section."
+              },
+              "reason": {
+                "type": "string",
+                "enum": ["present", "disagree", "holds", "no_context"],
+                "description": "Why nothing was written: the context track already has points under the section, the clips disagree, it already says the same, or no clip has a context."
+              },
+              "clips": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bar": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": ["written", "keys", "chords", "clips"],
+            "additionalProperties": false
           }
         },
         "required": ["scene", "region", "start", "end", "items"],
@@ -18741,7 +18778,7 @@ Result:
 
 Lay a scene's clips on the timeline as items and a section.
 
-The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole bars. Each clip becomes an item on its track at the start, as item.add {clip} makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts the span, as one looping item when it repeats within it, which needs its period to be its content: loop off with its length (as clip.add makes it), or loop on over the whole content with a length of whole repeats (scene.insert.period otherwise). Takes are copied, MIDI with them unless pooled; an item takes its clip's name (its active take's) when the clip has one. follow (none, key or chords; default: each clip's own) maps a MIDI clip's notes from the key or chords it was written against to those under the item (ADR-0098), as item.add {clip} does: each item's followed says what was done, by bar, unrolled: true when a looped item had to be written out pass by pass, and copied why a clip that cannot follow was left as it is; pooled with a mapping that moves a note is refused (clip.follow_pooled). With none the notes are copied as they are, and context.mismatch warns once for each item whose clip's key (or, in the same key, chord) is not the project's under it. An item already in the span on a track that receives a clip is refused (scene.insert.occupied), and an empty scene (scene.empty). A section named after the scene (name overrides) is added over the span. One undo step.
+The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole bars. Each clip becomes an item on its track at the start, as item.add {clip} makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts the span, as one looping item when it repeats within it, which needs its period to be its content: loop off with its length (as clip.add makes it), or loop on over the whole content with a length of whole repeats (scene.insert.period otherwise). Takes are copied, MIDI with them unless pooled; an item takes its clip's name (its active take's) when the clip has one. follow (none, key or chords; default: each clip's own) maps a MIDI clip's notes from the key or chords it was written against to those under the item (ADR-0098), as item.add {clip} does: each item's followed says what was done, by bar, unrolled: true when a looped item had to be written out pass by pass, and copied why a clip that cannot follow was left as it is; pooled with a mapping that moves a note is refused (clip.follow_pooled). With none the notes are copied as they are, and context.mismatch warns once for each item whose clip's key (or, in the same key, chord) is not the project's under it. An item already in the span on a track that receives a clip is refused (scene.insert.occupied), and an empty scene (scene.empty). A section named after the scene (name overrides) is added over the span. write_context writes the clips' own key and chords onto the context track under the span first (context in the answer says what happened). One undo step.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -18756,6 +18793,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `name` | string |  |  |  |  |
 | `pooled` | boolean |  |  | false |  |
 | `follow` | string |  |  |  | How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow. One of: none, key, chords. |
+| `write_context` | boolean |  |  | false | Write the scene's clips' own key and chords onto the context track under each section that has none (shifted to the section, repeating with a loop clip), in the same undo step, before the clips are laid. Left alone: a section with points under it; not written: one whose clips disagree. The answer's context says which (default false). |
 
 ### Result
 
@@ -18849,6 +18887,42 @@ Kind: `edit`. Exposure: `mcp-exec`.
     "end": {
       "type": "number",
       "description": "The span's end, in beats."
+    },
+    "context": {
+      "type": "object",
+      "title": "context_written",
+      "properties": {
+        "written": {
+          "type": "boolean"
+        },
+        "keys": {
+          "type": "integer",
+          "description": "Key points written under the section."
+        },
+        "chords": {
+          "type": "integer",
+          "description": "Chord points written under the section."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["present", "disagree", "holds", "no_context"],
+          "description": "Why nothing was written: the context track already has points under the section, the clips disagree, it already says the same, or no clip has a context."
+        },
+        "clips": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bar": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": ["written", "keys", "chords", "clips"],
+      "additionalProperties": false
     },
     "warnings": {
       "type": "array",

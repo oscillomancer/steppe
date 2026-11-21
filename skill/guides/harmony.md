@@ -104,7 +104,10 @@ Regions are sections unless told otherwise. `region.add {"section": false}` or
 `region.set {"id": "rg_1", "section": false}` marks a region that is only a
 span to loop or label. `context.at` names the section at a beat: the region
 that starts latest and covers it. `scene.insert` and `arrangement.build` add a
-section for every scene they lay out, named after it (`guides/launcher.md`).
+section for every scene they lay out, named after it (`guides/launcher.md`). With
+`write_context: true` they also write the scenes' clips' key and chords onto the context
+track under each section that has none, so a song built from scenes gets its lead sheet
+without writing it twice.
 
 ## Rules of thumb
 

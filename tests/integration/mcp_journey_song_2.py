@@ -614,6 +614,27 @@ def stems_skip_the_modulators(j):
     assert len(named["files"]) == 1 and "skipped" not in named, named
 
 
+def song_from_scenes(j):
+    """A song built from scenes with no lead sheet under it: `write_context` writes the lead sheet
+    from the clips, and `context.get` reads it back."""
+    before = j.described()
+    built = j.exec("arrangement.build", {"bar": 101, "write_context": True,
+                                         "sequence": [{"scene": "sc_1", "bars": 4},
+                                                      {"scene": "sc_2", "bars": 4}]},
+                   "Two scenes far past the song, bars 101-108, writing their harmony: nothing "
+                   "is written on the context track first.")
+    notes = [seg["context"] for seg in built["segments"]]
+    # A minor still holds from the song, so the Verse writes only its chords (the Am it starts on
+    # holds too); the Hook's key and four chords are new.
+    assert [(n["written"], n["keys"], n["chords"]) for n in notes] == [
+        (True, 0, 3), (True, 1, 4)], notes
+    sheet = j.exec("context.get", {"from": 404, "to": 432},
+                   "The lead sheet it wrote, read back.")
+    assert sheet["text"] == ("102: {F}:w\n103: {G}:w\n104: {Am}:w\n105: key C major {C}:w\n"
+                             "106: {Am}:w\n107: {F}:w\n108: {G}:w\n"), sheet["text"]
+    j.undo_to(before)
+
+
 def copied_as_written_heard(j):
     """The same measurement over the Verse copied as written seven times: it tells the
     modes apart by ear, not only by notes."""
@@ -709,6 +730,7 @@ def main():
             song_heard(j)
             modulation_heard(j, mods)
             stems_skip_the_modulators(j)
+            song_from_scenes(j)
             other_direction(j, built)
             edit_after(j, built)
             client.close()

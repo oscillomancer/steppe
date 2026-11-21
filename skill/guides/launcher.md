@@ -184,6 +184,15 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   entry, one after another from `bar` (default 1), a scene as often as you like;
   one undo step, and an entry that cannot be laid changes nothing, with its
   index in the error's `path`.
+- `write_context: true` (on both): the scenes' clips' own key and chords are written onto the
+  context track under each section, in the same undo step and before the clips are laid, so
+  a song built from scenes has a lead sheet (`context.get` reads it back) and `follow` finds
+  the key. Each segment's (or the result's) `context` says `{written, keys, chords}` or why
+  not: `present` (the track already has points under that section: left alone), `disagree`
+  (two clips say different keys or chords at one beat: nothing written; `clips` and `bar` name
+  them, and `context.not_written` warns), `holds` (the track already says it), `no_context`
+  (no clip has any). A looping clip's points repeat at its length; a key that is already
+  holding is not written again.
 - `scene.capture {region, name?}`: the other way: a scene from the items in a
   section, one clip per channel, named after the region. Items are copied;
   the region and its items are unchanged.

@@ -2043,7 +2043,7 @@ commands move material between the launcher and the timeline. They change
 the model only (no launch), each is one undo step, and a refusal changes
 nothing.
 
-- `scene.insert {scene, at | bar, bars, name?, pooled?}` (edit): lays the
+- `scene.insert {scene, at | bar, bars, name?, pooled?, follow?, write_context?}` (edit): lays the
   scene's clips on the timeline as items and adds a section over them.
   - The span starts at `bar` (1-based) or at `at` (beats), which must be on a
     bar line (`scene.at`), and lasts `bars` whole bars (≥ 1; `scene.bars`)
@@ -2071,7 +2071,12 @@ nothing.
   - It adds one region over the span: `section` true, named after the scene
     (`name` overrides), with the scene's colour. Existing regions are never
     edited.
-  - Result: `{items: [{clip, item, track}], region, start, end}` (beats).
+  - `write_context: true` (ADR-0098 X5, "Writing the context from scenes" below)
+    writes the scene's own harmony onto the context track under the span, in the
+    same undo step, before the clips are laid, so a clip that follows finds the
+    context it was written against.
+  - Result: `{items: [{clip, item, track, followed?}], region, start, end,
+    context?}` (beats); `context` is present when `write_context` was true.
 - `scene.capture {region, name?, pooled?}` (edit): makes a scene from the items
   of a section.
   - For each channel, the items overlapping the region must be one item
@@ -2090,7 +2095,8 @@ nothing.
   - Errors beside the above: `scene.limit`, `clip.limit`, `clip.memory`
     (audio), as `scene.add` and `clip.add`.
   - Result: `{scene, clips: [{clip, source_item, track}]}`.
-- `arrangement.build {sequence: [{scene, bars}…], at | bar?, pooled?}` (edit):
+- `arrangement.build {sequence: [{scene, bars}…], at | bar?, pooled?, follow?,
+  write_context?}` (edit):
   `scene.insert` for each entry in turn, each starting where the last ended,
   from `bar` or `at` (default bar 1), and a region for each. Every entry is
   checked before anything changes. An empty sequence, one of more than 256
@@ -2099,9 +2105,42 @@ nothing.
   with the entry's index in `path` (`/sequence/2/scene`). A scene may appear
   more than once.
   - Result: `{segments: [{scene, region, start, end, items: [{clip, item,
-    track}]}]}`.
+    track, followed?}], context?}]}`.
 - Every one of these errors carries `code`, `message`, `path` and a `hint`
   that says how to fix the call.
+
+**Writing the context from scenes (ADR-0098 X5).** `write_context: true` on
+`scene.insert` and `arrangement.build` writes, for each section, the harmony the
+scene's clips were written against onto the context track, so a song built from
+scenes has a lead sheet without writing it twice.
+
+- *Where:* a section's span `[start, end)`. If the context track already holds
+  a key or chord point at a beat in the span, nothing is written for that section
+  and the points are left alone (`reason: "present"`). Points before the span do
+  not count: a key that holds into the span is held, not "under" it.
+- *What:* each clip's `context` points (a MIDI clip's keys and chords, an audio
+  clip's key at its start), shifted to the span: a `loop` clip repeats at its
+  length for the span (a point is written for every pass), a `once` clip's points
+  are laid once from the start; points at or past the span's end are dropped. Clips
+  with no context say nothing.
+- *Agreement:* two clips whose points of one type fall at the same timeline beat
+  and differ (another key, another chord) disagree. Then nothing is written for
+  that section: `reason: "disagree"`, `clips` the two clips (the first
+  disagreement, by beat) and `bar` its project bar. Clips that merely have
+  points the others lack agree: the union is written.
+- *Redundancy:* a point equal to what holds at its beat, from the context track
+  before the span or from points this call wrote for an earlier section, is not
+  written (a Verse that repeats writes its key once). If nothing remains,
+  `written` is false with `reason: "holds"`.
+- Nothing to write because no clip has a context: `reason: "no_context"`.
+- It is part of the command's one undo step. The points are created before
+  the clips are laid, so `follow` reads them: a clip written in the key it is laid
+  under maps by a transpose of 0. `context.limit` refuses when a type would
+  exceed 4096 points.
+- Result `context` (only when `write_context` is true): `{written, keys, chords,
+  reason?, clips?, bar?, message?}`, `keys` and `chords` the points written. A
+  section that was not written for a reason other than `no_context` and `holds`
+  (`present`, `disagree`) also gives the warning `context.not_written`.
 
 **What `session.describe` prints.** After the tracks, one line per scene in
 order with its clips under it. Each clip line has its track, length in its
