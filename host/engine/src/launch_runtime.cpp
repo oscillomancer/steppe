@@ -95,6 +95,13 @@ bool Engine::launchClock(LaunchClock& c) const {
     c.epoch = t.epoch;
     c.loop = t.loop;
     c.playing = wantPlaying_.load(std::memory_order_acquire);
+    if (!c.playing && playStart_) {
+        // play() is starting a new epoch at the play position.
+        c.epoch = playStart_->first;
+        c.stream = 0;
+        c.pos = playStart_->second;
+        return true;
+    }
     if (!c.playing) {
         // Stopped: the stream holds still at the play position.
         c.stream = playedStream(c.epoch);
@@ -773,8 +780,13 @@ void Engine::serviceLaunches() {
         warnings_.push_back("launch: " + r.track.str() +
                             "'s queued launch was dropped: the edit left nothing to play");
     }
+    placeLaunchesAgain();
+}
+
+void Engine::placeLaunchesAgain() {
     // Missed, or placed in an epoch that has ended: placed again, alone.
-    const std::uint64_t epoch = epoch_.load(std::memory_order_acquire);
+    const std::uint64_t epoch =
+        playStart_ ? playStart_->first : epoch_.load(std::memory_order_acquire);
     for (LaunchSlot& s : *launchSlots_) {
         std::uint64_t st = s.state.load(std::memory_order_acquire);
         // A committed launch of an ended epoch that nothing has switched yet
