@@ -1636,13 +1636,18 @@ clip is edited, its context included:
 - What the roll shows on a clip is the clip's context: its key at the start
   names the key button and its keys shade the rows and spell the notes; its
   chord points fill the strip's chord row, the last cell ending with the
-  clip. A degree drag previews in the clip's key at the note's clip beat, as
+  clip, and its key points a key row under it (a tick and the key's name at
+  each, as on the context track's ruler). A degree drag previews in the clip's key at the note's clip beat, as
   `midi.edit` commits it. Without a key the key button is disabled ("No
   key"); when degree mode was on it goes off and the status line says why
   (`midi.edit` would refuse with `midi.no_key`).
 - A double-click on the chord row edits the clip's chord there (the chord
   field, as on the project); on a clip without chords a double-click
   anywhere on the strip starts its first.
+- A chord cell or key name drags to another beat, as on the ruler: it lands
+  on the grid beat it is dragged to (free with Snap off), and Alt copies a
+  chord. While in hand a focus line and its name show where it would land; a
+  press without a move is no edit.
 - A right-click on the strip opens the clip's context menu: **Key…** (the
   key field, "D dorian", at the start of the bar under the pointer; it
   starts from the clip's key there, else the project's), **Chord…**,
@@ -1655,15 +1660,17 @@ clip is edited, its context included:
   the status line.
 - **Notes outside the key.** A note off channel 10 whose pitch is not in
   the key holding at its start is outlined in the warning amber
-  (`meter-hot`), and the title counts them ("· 3 outside the key"). An item
+  (`meter-hot`), and the title counts them, naming the key when one key holds
+  over all of them ("· 3 outside A minor", else "· 3 outside the key"). An item
   keeps no link to the clip it was laid from, so this is how a clip laid in
   another key (the `context.mismatch` warning) shows on the item's roll; on a
   clip's roll the key is the clip's own.
 
 Tests: test_midi_editor "a clip in another key than the project's: degrees
 preview what commits" (review round 73, F4), "a clip's key and chords are
-edited in its roll", "a clip laid in another key shows its notes outside
-the key", "a launcher clip opens at beat 0 in its own key and chords", and
+edited in its roll", "a clip's chords and keys drag to another beat in its
+strip", "a clip opens with all its notes in view under its taller strip", "a
+clip laid in another key shows its notes outside the key", "a launcher clip opens at beat 0 in its own key and chords", and
 "clip context edit: the printed lead sheet …".
 
 **Lanes.** One menu owns every lane under the roll: **Lanes** in the header
