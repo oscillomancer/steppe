@@ -20,6 +20,7 @@
 #include "app_actions.h"
 #include "launch_capture.h"
 #include "shell.h"
+#include "supple/audio/audio_file.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
@@ -874,33 +875,62 @@ TEST_CASE("launcher: the Capture cell is lit by an agent's capture; a click ends
     CHECK(f.errors.empty());
 }
 
-TEST_CASE("launcher: with a master playrate on the cells dim, and a launch's refusal is reported") {
+TEST_CASE("launcher: a pitch-keeping master playrate dims the audio clips the engine refuses") {
+    // The lead's b3af83f5: clips launch under a master playrate; only an
+    // audio clip while it keeps the pitch is refused (launch.playrate). The
+    // pane dims exactly those, and the scenes whose launch would start one.
     LauncherFixture f;
     f.song();
+    audio::AudioData tone;
+    tone.sampleRate = 48000;
+    tone.channels.assign(1, std::vector<float>(96000, 0.25f));
+    const auto wav = f.dir / "tone.wav";
+    REQUIRE(audio::writeWav(wav, tone));
+    json::Value add = json::Value::object();
+    add["track"] = "tr_3";
+    add["scene"] = "sc_3";
+    add["audio_file"] = wav.string();
+    const std::string pad = f.exec("clip.add", *json::write(add))["clip"].asString();
     f.exec("engine.start", R"({"backend":"dummy"})");
     views::LauncherPane& pane = f.view->launcherPane();
     views::LauncherHeader& header = f.view->launcherHeader();
-    f.root->damageAll();
-    f.root->frame(false);
-    CHECK_FALSE(pane.stats.refused);
-    CHECK_FALSE(header.stats.refused);
+    auto draw = [&] {
+        f.root->damageAll();
+        f.root->frame(false);
+    };
+    draw();
+    CHECK(pane.stats.refused == 0);
+    CHECK(header.stats.refused == 0);
+    // A rate that moves the pitch: every clip launches, nothing dims.
     f.exec("transport.playrate.set", R"({"rate":1.5})");
-    CHECK(views::launchesRefused(f.app->head()));
-    f.root->damageAll();
-    f.root->frame(false);
-    CHECK(pane.stats.refused);
-    CHECK(header.stats.refused);
+    draw();
+    CHECK(pane.stats.refused == 0);
+    CHECK(header.stats.refused == 0);
+    // Keeping the pitch: the audio clip and Chorus's ▶ dim, the MIDI clips
+    // and the other scenes do not.
+    f.exec("transport.playrate.set", R"({"rate":1.5,"preserve_pitch":true})");
+    const model::Session& s = f.app->head();
+    CHECK(views::launchRefused(s, *s.clips.find(*model::Id::parse(pad))));
+    CHECK_FALSE(views::launchRefused(s, *s.clips.find(*model::Id::parse("cl_1"))));
+    CHECK(views::sceneLaunchRefused(s, *model::Id::parse("sc_3")));
+    CHECK_FALSE(views::sceneLaunchRefused(s, *model::Id::parse("sc_2")));
+    draw();
+    CHECK(pane.stats.refused == 1);
+    CHECK(header.stats.refused == 1);
     f.golden("launcher-refused-dark.png");
-    // A click on a ▶ still asks, and the refusal reaches the app's error
+    // The audio clip's ▶ still asks, and the refusal reaches the app's error
     // hook (the status line), naming why.
-    f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_1"), 0))));
+    f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_3"), 2))));
     REQUIRE(f.errors.size() == 1);
     CHECK(f.errors.back().code == "launch.playrate");
-    // Back at 1: launchable, drawn as before.
+    // A MIDI clip's launches.
+    f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_1"), 0))));
+    CHECK(f.errors.size() == 1);
+    // Back at 1: nothing dims.
     f.exec("transport.playrate.set", R"({"rate":1.0})");
-    f.root->damageAll();
-    f.root->frame(false);
-    CHECK_FALSE(pane.stats.refused);
+    draw();
+    CHECK(pane.stats.refused == 0);
+    CHECK(header.stats.refused == 0);
     f.exec("engine.stop", "{}");
 }
 
