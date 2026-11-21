@@ -177,7 +177,7 @@ instructions are in `docs/guides/installing.md`.
   the oldest steps. Incremental unique-payload accounting measures only new or
   changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.20` with migration from
+  Project format `supple.project/2.21` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
   work… or at start, ADR-0078), crash recovery of recordings, a per-project
   UI sidecar.
@@ -225,6 +225,19 @@ instructions are in `docs/guides/installing.md`.
   following live (X4: `launch.clip` and `launch.scene` warn
   `launch.unfollowed`, and a launched clip plays as written). The roll shows
   and edits a clip's context, and the clip inspector sets Follow (X3).
+- **Take context and follow** (ADR-0098 amended, "following is playback"; step
+  X4b, the model only; session-model "Take context and follow", schema 2.21): a
+  MIDI take of an item carries `context`, `context_period`, `context_phase` and
+  `follow`, loaded and saved with every older file unchanged (the open drops a
+  point against the rules with `take.context_dropped` and resets a follow
+  without a readable key with `take.follow_reset`; a clip's takes and audio
+  takes hold none of the four). `model/follow.h` has a note's place (its context
+  beat is the take's phase plus its unwrapped source beat, so the context
+  travels with the notes), `soundingNotes`, `soundingKey`, `contextOver` and
+  `placeAt`. Not built: the commands (placement, `take.set`, `take.bake`,
+  `midi.get {sounding}` and the rest of the contract's table, X4d) and the
+  engine's use of it (X4c): a take's `follow` is stored and nothing plays by it
+  yet.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

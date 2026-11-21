@@ -665,7 +665,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.19`)
+## 5. Project file (`supple.project/2.21`)
 
 ### 5.1 Shape
 
@@ -684,9 +684,12 @@ route is dropped, with a `project.hw_output_route` warning.
 Schema 2.16 adds modulation routes (ADR-0096); 2.17 adds the context
 track's points (ADR-0095); 2.18 adds scenes, clips and
 `launch_quantize` (ADR-0097, "Scenes and clips"); 2.19 puts the envelopes
-on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2).
+on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2); 2.20
+adds a clip's `context` and `follow` (ADR-0098); 2.21 adds a MIDI take's
+`context`, `context_period`, `context_phase` and `follow` ("Take context and
+follow").
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.19,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.21,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
