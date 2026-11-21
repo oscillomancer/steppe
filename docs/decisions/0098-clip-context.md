@@ -375,4 +375,8 @@ there. Not in X1 or X2.
   `scene.capture`), is not taken. The answer warns `clip.context_dropped`
   naming the point and its project bar, and no unreadable text enters a
   resolved `context`, so `branch.merge` can replay the step.
+- *(2026-11-21, X1 review round 73, suggestion.)* In `launch.commit` a clip
+  laid as one item per period gave the mismatch warning once per period, each
+  naming a later bar. It is given once for each launched stretch of the clip,
+  naming the first bar: one launch, one warning.
 

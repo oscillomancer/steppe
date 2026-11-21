@@ -350,6 +350,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const model::Session s = app.view();
             const Id clipId = *Id::parse(*x.e->clip);
             const model::Clip& clip = *s.clips.find(clipId);
+            bool mismatchGiven = false;  // one context.mismatch per launched stretch of the clip
             const model::Take& take = *s.takes.find(*clip.activeTake);
             const bool midi = clip.kind == model::ClipKind::Midi;
             const bool once = clip.mode == model::ClipMode::Once;
@@ -418,11 +419,14 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                     if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
                 nameItemFromClip(t, clip, item);
                 // The notes are copied as they were played (a launched clip is not followed
-                // until X4): say when the clip's key is not the project's under the item.
-                if (midi)
+                // until X4): say when the clip's key is not the project's under the item, once
+                // for the stretch however many periods (items) it is laid as.
+                if (midi && !mismatchGiven)
                     if (auto note = detail::mismatchNote(now, clipId, clip, beat0, beat1 - beat0,
-                                                         phase, path))
+                                                         phase, path)) {
                         ctx.warn(note->code, note->message, note->path);
+                        mismatchGiven = true;
+                    }
                 done.items.push_back(t.create(std::move(item)).str());
                 return {};
             };
