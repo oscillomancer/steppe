@@ -369,6 +369,40 @@ TEST_CASE("timeline equals launcher for the same clip, its context read pass for
         }
 }
 
+TEST_CASE("a following item renders as take.bake writes it, then as written") {
+    // X4c: the compile maps a following take as model::soundingNotes does, and
+    // take.bake writes those pitches. cl_1 (D minor, {Dm} then {Gm}) laid
+    // looped over bars 2 to 4 follows C minor, then E minor: its passes sound
+    // differently, so the bake unrolls it. The render before the bake and the
+    // render after it, as written, are the same samples.
+    for (const char* follow : {"key", "chords"}) {
+        CAPTURE(follow);
+        Project p;
+        followingClip(p, follow, "voice bass; 1: D3:q F3:q A3:q Bb3:q");
+        const json::Value laid = p.run("scene.insert", R"({"scene": "sc_1", "bar": 2, "bars": 3})");
+        const auto item =
+            *model::Id::parse(laid.find("items")->asArray().at(0).find("item")->asString());
+        const model::Id take = *p.app->head().items.find(item)->activeTake;
+        REQUIRE(p.app->head().takes.find(take)->follow != model::ClipFollow::None);
+        const auto following = p.render(9.0, {});
+        json::Value bake = json::Value::object();
+        bake["take"] = take.str();
+        const json::Value baked = p.runArgs("take.bake", bake);
+        CHECK(baked.find("unrolled")->asBool());
+        CHECK(p.app->head().takes.find(take)->follow == model::ClipFollow::None);
+        const auto written = p.render(9.0, {});
+        CHECK(sameFrom(following, written, 0, 9 * 48000));
+        // It moved: undone, and played as written without following, it differs.
+        p.run("history.undo", "{}");
+        auto txn = p.app->beginTransaction({cmd::Origin::Type::Test, "x4c", {}}, "Off");
+        REQUIRE(txn);
+        p.app->txn().modify<model::Take>(
+            take, [](model::Take& t) { t.follow = model::ClipFollow::None; });
+        REQUIRE(p.app->commitTransaction(*txn));
+        CHECK_FALSE(sameFrom(following, p.render(9.0, {}), 0, 9 * 48000));
+    }
+}
+
 TEST_CASE("a following take's notes compile to the keys model::soundingNotes gives") {
     // The compile maps each note-on of a following take by the place of its
     // start, as soundingNotes walks the same passes: a note chased at the
