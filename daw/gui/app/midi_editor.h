@@ -9,6 +9,7 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -103,6 +104,17 @@ struct RollState {
     // (volume, pan, mute, then the take FX in chain order); none for an item,
     // whose take lanes are on the timeline.
     std::vector<RollEnvLane> envLanes;
+    // The clip-time lanes' point selection (gui.md §4.7, as the timeline's):
+    // one lane's at a time, its points named by position and value, so
+    // points an edit removed simply leave it.
+    model::Id envSelLane;
+    std::vector<std::pair<double, double>> envSel;
+    bool envSelected(model::Id env, const model::EnvPoint& p) const {
+        if (env != envSelLane) return false;
+        for (const auto& [pos, value] : envSel)
+            if (std::abs(pos - p.pos) < 1e-9 && std::abs(value - p.value) < 1e-9) return true;
+        return false;
+    }
     // An audio clip (gui.md §4.7, mock 93): the roll draws its active take's
     // waveform and the axis is in seconds of played time from the clip's
     // start (the clip's own unit), not beats: itemLength, scrollBeat,
@@ -278,6 +290,14 @@ class MidiEditor {
     // An audio clip's key button: its menu (Key…, Remove key, Take from the
     // project at the playhead).
     void openAudioKeyMenu();
+    // A clip-time lane's menu at window point `at` (`pos`, `value`: the
+    // lane's position and value there): Insert point, Select all points,
+    // Delete points, Point shape…, Hide.
+    void openEnvLaneMenu(model::Id env, ui::Point at, double pos, double value);
+    // The selected points of state_.envSelLane removed, or given `shape`.
+    void deleteEnvSelection();
+    void repaintLanes();  // the clip-time lanes, after their selection changed
+    void shapeEnvSelection(model::PointShape shape);
     Status setClipContext(const std::vector<model::ContextPoint>& points);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.

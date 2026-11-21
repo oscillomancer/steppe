@@ -347,6 +347,10 @@ class Roll : public ui::Node {
     bool onPointer(const ui::PointerEvent& e) override {
         // An audio clip's waveform is not edited: the wheel zooms and
         // scrolls it, as the roll.
+        if (e.type == ui::PointerEvent::Type::Down && !s_.envSel.empty()) {
+            s_.envSel.clear();  // a press on the roll takes the lanes' selection away
+            editor_.repaintLanes();
+        }
         if (s_.audio && e.type != ui::PointerEvent::Type::Wheel) return false;
         const bool handled = handle(e);
         if (s_.audio) return handled;
@@ -1267,8 +1271,14 @@ class EnvLane : public ui::Node {
         c.text({a.x + 4, b.y + 1, std::max(0.0f, a.w - 8), kTitle}, l->title, ui::Font::Ui,
                t.type("caption"), t.color("ink-quiet"));
         const Geometry g{s_, roll_ ? roll_->bounds() : a};
+        // The points as dragged (in the press's order, as moving_ names
+        // them), and the curve through them in position order.
         model::Envelope env = l->envelope;
         if (dragging_) env.points = draft_;
+        model::Envelope curve = env;
+        std::stable_sort(
+            curve.points.begin(), curve.points.end(),
+            [](const model::EnvPoint& x, const model::EnvPoint& y) { return x.pos < y.pos; });
         auto yOf = [&](double value) {
             return a.bottom() -
                    static_cast<float>(std::clamp(l->scale.toNorm(value), 0.0, 1.0)) * a.h;
@@ -1280,17 +1290,17 @@ class EnvLane : public ui::Node {
         const float end = g.xOf(s_.itemLength);
         // The curve to the clip's end, then its value there held, dashed.
         float px = a.x;
-        float py = yOf(views::envValueAt(env, std::max(0.0, g.beatOf(px)), l->fallback));
+        float py = yOf(views::envValueAt(curve, std::max(0.0, g.beatOf(px)), l->fallback));
         for (float x = a.x + 2; x <= std::min(a.right(), end) + 2; x += 2) {
             const float cx = std::min(x, end);
-            const float y = yOf(views::envValueAt(env, std::max(0.0, g.beatOf(cx)), l->fallback));
+            const float y = yOf(views::envValueAt(curve, std::max(0.0, g.beatOf(cx)), l->fallback));
             c.line({px, py}, {cx, y}, ink, 1.5f);
             px = cx;
             py = y;
             if (cx >= end) break;
         }
         if (end < a.right()) {
-            const float y = yOf(views::envValueAt(env, s_.itemLength, l->fallback));
+            const float y = yOf(views::envValueAt(curve, s_.itemLength, l->fallback));
             for (float x = std::max(end, a.x); x < a.right(); x += 7)
                 c.line({x, y}, {std::min(x + 4, a.right()), y}, ink.withAlpha(0.45f), 1.2f);
         }
@@ -1298,7 +1308,12 @@ class EnvLane : public ui::Node {
             const model::EnvPoint& pt = env.points[i];
             const float x = g.xOf(pt.pos), y = yOf(pt.value);
             const bool held = dragging_ && i == index_;
-            c.fillRect({x - 3, y - 3, 6, 6}, held ? t.color("focus") : ink);
+            const bool picked = dragging_ ? moving_.contains(i) : s_.envSelected(env_, pt);
+            // Selected: the timeline's filled 8 px square in the focus colour.
+            if (held || picked)
+                c.fillRect({x - 4, y - 4, 8, 8}, t.color("focus"));
+            else
+                c.fillRect({x - 3, y - 3, 6, 6}, ink);
             if (held)
                 c.text({x + 6, y - 14, 120, 12}, l->scale.text(pt.value), ui::Font::Ui,
                        t.type("caption"), t.color("ink"));
@@ -1346,7 +1361,14 @@ class EnvLane : public ui::Node {
             return true;
         }
         if (e.type == T::Down && e.pos.x < a.x) return true;  // the header
-        if (e.type == T::Down && (e.button == 3 || (e.button == 1 && (e.mods & ui::kAlt)))) {
+        if (e.type == T::Down) s_.selected.clear();           // a lane's press leaves the notes
+        // A right-click opens the lane's menu (as the timeline's).
+        if (e.type == T::Down && e.button == 3) {
+            editor_.openEnvLaneMenu(env_, e.pos, beatAt(e.pos.x), valueAt(e.pos.y));
+            return true;
+        }
+        // Alt+click deletes the point under it.
+        if (e.type == T::Down && e.button == 1 && (e.mods & ui::kAlt)) {
             if (const auto i = hit(e.pos)) {
                 const std::uint64_t version = editor_.beginGesture();
                 std::vector<model::EnvPoint> pts = l->envelope.points;
@@ -1355,40 +1377,83 @@ class EnvLane : public ui::Node {
             }
             return true;
         }
+        // Ctrl+click adds a point to the selection or takes it out.
+        if (e.type == T::Down && e.button == 1 && (e.mods & ui::kCtrl)) {
+            if (const auto i = hit(e.pos)) {
+                const model::EnvPoint& pt = l->envelope.points[*i];
+                if (s_.envSelLane != env_) s_.envSel.clear();
+                s_.envSelLane = env_;
+                if (s_.envSelected(env_, pt))
+                    std::erase_if(s_.envSel, [&](const auto& sel) {
+                        return std::abs(sel.first - pt.pos) < 1e-9 &&
+                               std::abs(sel.second - pt.value) < 1e-9;
+                    });
+                else
+                    s_.envSel.push_back({pt.pos, pt.value});
+                invalidate();
+            }
+            return true;
+        }
         if (e.type == T::Down && e.button == 1) {
             version_ = editor_.beginGesture();
             l = lane();  // the gesture starts from the session as it is
             if (!l) return true;
-            draft_ = l->envelope.points;
+            draft_ = original_ = l->envelope.points;
+            moving_.clear();
             if (const auto i = hit(e.pos)) {
+                // A point: the selection moves with it (it alone when it was
+                // not selected).
+                if (!s_.envSelected(env_, original_[*i])) {
+                    s_.envSelLane = env_;
+                    s_.envSel = {{original_[*i].pos, original_[*i].value}};
+                }
+                for (std::size_t k = 0; k < original_.size(); ++k)
+                    if (s_.envSelected(env_, original_[k])) moving_.insert(k);
                 index_ = *i;
-                grab_ = {e.pos.x - g.xOf(draft_[*i].pos), 0};
+                grab_ = {e.pos.x - g.xOf(original_[*i].pos), 0};
+                moved_ = false;
             } else {
+                // Empty space: a new point there, selected, in hand.
                 model::EnvPoint pt;
                 pt.pos = beatAt(e.pos.x);
                 pt.value = valueAt(e.pos.y);
                 const auto at = std::upper_bound(
-                    draft_.begin(), draft_.end(), pt.pos,
+                    original_.begin(), original_.end(), pt.pos,
                     [](double beat, const model::EnvPoint& p) { return beat < p.pos; });
-                index_ = static_cast<std::size_t>(at - draft_.begin());
-                draft_.insert(at, pt);
+                index_ = static_cast<std::size_t>(at - original_.begin());
+                original_.insert(at, pt);
+                draft_ = original_;
+                moving_ = {index_};
+                s_.envSelLane = env_;
+                s_.envSel = {{pt.pos, pt.value}};
                 grab_ = {};
+                moved_ = true;  // a new point is an edit already
             }
             dragging_ = true;
-            moved_ = !hit(e.pos).has_value();  // a new point is an edit already
-            if (ui::Root* r = root()) r->capture(this);
+            if (ui::Root* r = root()) {
+                r->capture(this);
+                if (roll_) r->focus(roll_);  // the editor's keys: Delete takes the points
+            }
             invalidate();
             return true;
         }
         if (e.type == T::Move && dragging_) {
-            model::EnvPoint pt = draft_[index_];
-            draft_.erase(draft_.begin() + static_cast<std::ptrdiff_t>(index_));
-            pt.pos = beatAt(e.pos.x - grab_.x);
-            pt.value = valueAt(e.pos.y);
-            // It stays between its neighbours' beats, so the order holds.
-            if (index_ > 0) pt.pos = std::max(pt.pos, draft_[index_ - 1].pos);
-            if (index_ < draft_.size()) pt.pos = std::min(pt.pos, draft_[index_].pos);
-            draft_.insert(draft_.begin() + static_cast<std::ptrdiff_t>(index_), pt);
+            // Every selected point moves by the anchor's time (on the grid
+            // unless Shift) and the same share of the lane's height.
+            const model::EnvPoint& anchor = original_[index_];
+            const double to = (e.mods & ui::kShift)
+                                  ? std::clamp(g.beatOf(e.pos.x - grab_.x), 0.0, s_.itemLength)
+                                  : beatAt(e.pos.x - grab_.x);
+            double dt = to - anchor.pos;
+            for (std::size_t k : moving_)
+                dt = std::clamp(dt, -original_[k].pos, s_.itemLength - original_[k].pos);
+            const double dn = l->scale.toNorm(valueAt(e.pos.y)) - l->scale.toNorm(anchor.value);
+            draft_ = original_;
+            for (std::size_t k : moving_) {
+                draft_[k].pos = original_[k].pos + dt;
+                draft_[k].value = l->scale.fromNorm(
+                    std::clamp(l->scale.toNorm(original_[k].value) + dn, 0.0, 1.0));
+            }
             moved_ = true;
             invalidate();
             return true;
@@ -1396,7 +1461,20 @@ class EnvLane : public ui::Node {
         if (e.type == T::Up && dragging_) {
             if (ui::Root* r = root()) r->capture(nullptr);
             dragging_ = false;
-            if (moved_) (void)editor_.setEnvPoints(env_, draft_, version_);
+            if (moved_) {
+                // The selection follows its points; the order is by position.
+                s_.envSel.clear();
+                for (std::size_t k : moving_) s_.envSel.push_back({draft_[k].pos, draft_[k].value});
+                std::stable_sort(draft_.begin(), draft_.end(),
+                                 [](const model::EnvPoint& x, const model::EnvPoint& y) {
+                                     return x.pos < y.pos;
+                                 });
+                (void)editor_.setEnvPoints(env_, draft_, version_);
+            } else if (moving_.size() > 1) {
+                // A click on one of several selected points selects it alone.
+                s_.envSel = {{original_[index_].pos, original_[index_].value}};
+            }
+            moving_.clear();
             invalidate();
             return true;
         }
@@ -1409,10 +1487,11 @@ class EnvLane : public ui::Node {
     ui::Node*& roll_;
     model::Id env_;
     bool dragging_ = false, moved_ = false;
-    std::size_t index_ = 0;
+    std::size_t index_ = 0;         // the point in hand, in original_
+    std::set<std::size_t> moving_;  // the selected points it moves, in original_
     ui::Point grab_{};
     std::uint64_t version_ = 0;
-    std::vector<model::EnvPoint> draft_;
+    std::vector<model::EnvPoint> original_, draft_;  // at the press, and as dragged
 };
 
 // ----------------------------------------------------------------- playhead (overlay)
@@ -2708,6 +2787,124 @@ void MidiEditor::openAudioKeyMenu() {
                     ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
 }
 
+void MidiEditor::openEnvLaneMenu(model::Id env, ui::Point at, double pos, double value) {
+    const RollEnvLane* lane = nullptr;
+    for (const RollEnvLane& l : state_.envLanes)
+        if (l.env == env) lane = &l;
+    if (!lane) return;
+    const bool picked = state_.envSelLane == env && !state_.envSel.empty();
+    const std::vector<model::EnvPoint> points = lane->envelope.points;
+    const model::EnvTarget target = lane->envelope.target;
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, std::function<void()> run, bool enabled = true,
+                   std::string shortcut = {}) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.run = std::move(run);
+        m.enabled = enabled;
+        m.shortcut = std::move(shortcut);
+        items.push_back(std::move(m));
+    };
+    auto rule = [&] {
+        ui::MenuItem m;
+        m.separator = true;
+        items.push_back(std::move(m));
+    };
+    add("Insert point", [this, env, points, pos, value] {
+        model::EnvPoint pt;
+        pt.pos = pos;
+        pt.value = value;
+        std::vector<model::EnvPoint> next = points;
+        next.insert(
+            std::upper_bound(next.begin(), next.end(), pos,
+                             [](double at, const model::EnvPoint& p) { return at < p.pos; }),
+            pt);
+        state_.envSelLane = env;
+        state_.envSel = {{pos, value}};
+        (void)setEnvPoints(env, next);
+    });
+    rule();
+    add(
+        "Select all points",
+        [this, env, points] {
+            state_.envSelLane = env;
+            state_.envSel.clear();
+            for (const model::EnvPoint& p : points) state_.envSel.push_back({p.pos, p.value});
+            refreshEnvLanes();
+        },
+        !points.empty());
+    add("Delete points", [this] { deleteEnvSelection(); }, picked, "Delete");
+    add(
+        "Point shape\u2026",
+        [this, at] {
+            std::vector<ui::MenuItem> shapes;
+            const RollEnvLane* l = nullptr;
+            for (const RollEnvLane& x : state_.envLanes)
+                if (x.env == state_.envSelLane) l = &x;
+            for (auto [label, shape] : {std::pair{"Linear", model::PointShape::Linear},
+                                        {"Square", model::PointShape::Square},
+                                        {"Slow start/end", model::PointShape::Slow},
+                                        {"Fast start", model::PointShape::FastStart},
+                                        {"Fast end", model::PointShape::FastEnd},
+                                        {"Bezier", model::PointShape::Bezier}}) {
+                ui::MenuItem m;
+                m.label = label;
+                bool all = l != nullptr, any = false;
+                if (l)
+                    for (const model::EnvPoint& p : l->envelope.points)
+                        if (state_.envSelected(l->env, p)) {
+                            any = true;
+                            all = all && p.shape == shape;
+                        }
+                m.checked = any && all;
+                const model::PointShape s = shape;
+                m.run = [this, s] { shapeEnvSelection(s); };
+                shapes.push_back(std::move(m));
+            }
+            // Opened from the lane's menu as it closes.
+            root_.openPopup(ui::makeMenu("midi.env.shape.menu", std::move(shapes),
+                                         [this] { root_.closePopup(); }),
+                            {at.x, at.y, 1, 1});
+        },
+        picked);
+    rule();
+    add("Hide", [this, target] { (void)showEnvelope(target, false); });
+    root_.openPopup(ui::makeMenu("midi.env.menu", std::move(items), [this] { root_.closePopup(); }),
+                    ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::repaintLanes() {
+    if (envColumn_)
+        for (const auto& lane : envColumn_->children()) lane->invalidate();
+}
+
+void MidiEditor::deleteEnvSelection() {
+    for (const RollEnvLane& l : state_.envLanes) {
+        if (l.env != state_.envSelLane) continue;
+        std::vector<model::EnvPoint> next;
+        for (const model::EnvPoint& p : l.envelope.points)
+            if (!state_.envSelected(l.env, p)) next.push_back(p);
+        state_.envSel.clear();
+        if (next.size() != l.envelope.points.size()) (void)setEnvPoints(l.env, next);
+        return;
+    }
+}
+
+void MidiEditor::shapeEnvSelection(model::PointShape shape) {
+    for (const RollEnvLane& l : state_.envLanes) {
+        if (l.env != state_.envSelLane) continue;
+        std::vector<model::EnvPoint> next = l.envelope.points;
+        bool changed = false;
+        for (model::EnvPoint& p : next)
+            if (state_.envSelected(l.env, p) && p.shape != shape) {
+                p.shape = shape;
+                changed = true;
+            }
+        if (changed) (void)setEnvPoints(l.env, next);
+        return;
+    }
+}
+
 std::optional<double> MidiEditor::clipBeatAt(double rollBeat) {
     const auto owner = midiOwner(app_.head(), state_.item);
     if (!owner || !owner->clip) return std::nullopt;
@@ -2851,6 +3048,10 @@ void MidiEditor::nudge(int steps) {
 
 void MidiEditor::removeSelected() {
     if (!isOpen()) return;
+    if (!state_.envSel.empty()) {  // a clip-time lane was clicked last
+        deleteEnvSelection();
+        return;
+    }
     if (eventList_ && listPane_ && listPane_->visible) {  // its notes and controls
         eventList_->removeSelected();
         return;

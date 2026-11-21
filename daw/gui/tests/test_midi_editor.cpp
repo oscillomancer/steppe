@@ -3648,11 +3648,9 @@ TEST_CASE("MIDI editor: a clip's take envelopes and take FX parameters get lanes
     f.pointer(ui::PointerEvent::Type::Up, {xAt(11), yAt(0.5)});
     CHECK(points()[1].pos == doctest::Approx(8));
     f.snapshot("midi-editor-clip-lanes.png");
-    // A right-click on a point removes it.
-    ui::PointerEvent right{ui::PointerEvent::Type::Down, {xAt(8), yAt(0.5)}, 3};
-    f.root->pointer(right);
-    right.type = ui::PointerEvent::Type::Up;
-    f.root->pointer(right);
+    // Alt+click on a point removes it (a right-click opens the lane's menu).
+    f.pointer(ui::PointerEvent::Type::Down, {xAt(8), yAt(0.5)}, 1, ui::kAlt);
+    f.pointer(ui::PointerEvent::Type::Up, {xAt(8), yAt(0.5)}, 1, ui::kAlt);
     f.frame();
     CHECK(points().size() == 1);
     // With an instrument in the take FX, the take's volume has a lane: before
@@ -4200,6 +4198,122 @@ TEST_CASE("MIDI editor: an audio clip's key button sets its one key point") {
     REQUIRE(context().size() == 1);
     CHECK(context()[0].tonic == "A");
     CHECK(f.editor->keyText() == "A minor");
+}
+
+TEST_CASE("MIDI editor: a clip-time lane selects points, moves them together, shapes them") {
+    // As the timeline's lanes (gui.md §4.3): a click selects, Ctrl+click
+    // adds, a drag moves the selection, the menu shapes it, Delete removes it.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string clip = audioClip(f);  // its take envelopes need no instrument
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 300;
+    s.scrollBeat = -0.1;
+    f.frame();
+    f.pickLane("Take volume");
+    REQUIRE(s.envLanes.size() == 1);
+    const model::Id env = s.envLanes[0].env;
+    f.exec("env.points.set",
+           R"({"env":")" + env.str() +
+               R"(","points":[{"seconds":0,"value":0},{"seconds":0.5,"value":-6},)"
+               R"({"seconds":1,"value":-6},{"seconds":1.5,"value":0}]})");
+    f.frame();
+    const views::EnvScale scale = s.envLanes[0].scale;
+    ui::Node* lane = f.root->find("midi.env." + env.str());
+    REQUIRE(lane);
+    const ui::Rect r = lane->bounds();
+    const float top = r.y + 14, bottom = r.bottom() - 4;
+    const auto yAt = [&](double value) {
+        return bottom - static_cast<float>(scale.toNorm(value)) * (bottom - top);
+    };
+    const auto at = [&](double seconds, double value) {
+        return ui::Point{f.at(seconds, 60).x, yAt(value)};
+    };
+    const auto points = [&] { return f.app->head().envelopes.find(env)->points; };
+    const auto steps = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+    auto click = [&](ui::Point p, unsigned mods = 0) {
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, mods);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, mods);
+        f.frame();
+    };
+    // A click selects a point; Ctrl+click adds another; neither edits.
+    const auto s0 = steps();
+    click(at(0.5, -6));
+    CHECK(s.envSel.size() == 1);
+    click(at(1.0, -6), ui::kCtrl);
+    CHECK(s.envSel.size() == 2);
+    CHECK(steps() == s0);
+    // Dragging one moves both by the same time (Shift: off the grid) and the
+    // same share of the lane: one step.
+    f.pointer(ui::PointerEvent::Type::Down, at(0.5, -6), 1, ui::kShift);
+    f.pointer(ui::PointerEvent::Type::Move, at(0.6, -6), 1, ui::kShift);
+    f.pointer(ui::PointerEvent::Type::Move, at(0.75, -6), 1, ui::kShift);
+    f.pointer(ui::PointerEvent::Type::Up, at(0.75, -6), 1, ui::kShift);
+    f.frame();
+    REQUIRE(points().size() == 4);
+    CHECK(points()[1].pos == doctest::Approx(0.75).epsilon(0.01));
+    CHECK(points()[2].pos == doctest::Approx(1.25).epsilon(0.01));
+    CHECK(points()[1].value == doctest::Approx(-6).epsilon(0.05));
+    CHECK(points()[0].pos == 0);
+    CHECK(points()[3].pos == doctest::Approx(1.5));
+    CHECK(steps() == s0 + 1);
+    CHECK(s.envSel.size() == 2);  // the selection follows its points
+    // The lane's menu: Point shape… > Square shapes the two selected only.
+    auto menu = [&](ui::Point p) {
+        ui::PointerEvent right{ui::PointerEvent::Type::Down, p, 3};
+        f.root->pointer(right);
+        right.type = ui::PointerEvent::Type::Up;
+        f.root->pointer(right);
+        f.root->frame(false);
+        ui::Node* m = f.root->find("midi.env.menu");
+        REQUIRE(m);
+        std::map<std::string, std::pair<bool, std::function<void()>>> rows;
+        for (const auto& item : ui::menuItems(*m))
+            if (!item.separator) rows[item.label] = {item.enabled, item.run};
+        f.root->closePopup();
+        return rows;
+    };
+    auto rows = menu(at(1.8, -12));
+    for (const char* row :
+         {"Insert point", "Select all points", "Delete points", "Point shape…", "Hide"}) {
+        INFO(row);
+        REQUIRE(rows.contains(row));
+        CHECK(rows.at(row).first);
+    }
+    rows.at("Point shape…").second();
+    ui::Node* shapes = f.root->find("midi.env.shape.menu");
+    REQUIRE(shapes);
+    std::function<void()> square;
+    for (const auto& m : ui::menuItems(*shapes))
+        if (m.label == "Square") square = m.run;
+    REQUIRE(square);
+    f.root->closePopup();
+    square();
+    f.frame();
+    CHECK(points()[0].shape == model::PointShape::Linear);
+    CHECK(points()[1].shape == model::PointShape::Square);
+    CHECK(points()[2].shape == model::PointShape::Square);
+    CHECK(points()[3].shape == model::PointShape::Linear);
+    f.snapshot("midi-editor-lane-selection.png");
+    // Delete removes the selected points, one step.
+    const auto s1 = steps();
+    f.root->key(SDLK_DELETE);
+    f.frame();
+    REQUIRE(points().size() == 2);
+    CHECK(points()[1].pos == doctest::Approx(1.5));
+    CHECK(steps() == s1 + 1);
+    CHECK(s.envSel.empty());
+    // Select all points, then a press on the waveform takes the selection away.
+    menu(at(1.8, -12)).at("Select all points").second();
+    CHECK(s.envSel.size() == 2);
+    const ui::Rect roll = f.root->find("midi.roll")->bounds();
+    click({roll.x + 80, roll.y + 40});
+    CHECK(s.envSel.empty());
+    // Without a selection, Delete points and Point shape… are disabled.
+    rows = menu(at(1.8, -12));
+    CHECK_FALSE(rows.at("Delete points").first);
+    CHECK_FALSE(rows.at("Point shape…").first);
 }
 
 TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {
