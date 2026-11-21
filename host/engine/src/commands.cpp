@@ -232,6 +232,18 @@ std::string describeSession(const model::Session& s) {
                     }
                 }
                 if (take) {
+                    // A following take: how, and the first key it reads (ADR-0098).
+                    if (take->follow != model::ClipFollow::None) {
+                        il += std::string(" · follows ") +
+                              (take->follow == model::ClipFollow::Chords ? "chords" : "key");
+                        for (const model::ContextPoint& p : take->context)
+                            if (p.type == model::ContextType::Key) {
+                                std::string scale = p.scale;
+                                std::replace(scale.begin(), scale.end(), '_', ' ');
+                                il += " " + p.tonic + " " + scale;
+                                break;
+                            }
+                    }
                     if (take->transients)
                         il += " · " + std::to_string(take->transients->positions.size()) + " hits";
                     if (!take->stretchMarkers.empty())
