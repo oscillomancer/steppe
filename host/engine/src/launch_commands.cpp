@@ -566,9 +566,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        schema::string().doc("kind key: the project's key there, which differs."))
                 .field("clip_chord", &CommittedMismatch::clipChord,
                        schema::string().doc("kind chord: the chord the clip was written over."))
-                .field("chord", &CommittedMismatch::chord,
-                       schema::string().doc(
-                           "kind chord: the project's chord there, which differs."))
+                .field(
+                    "chord", &CommittedMismatch::chord,
+                    schema::string().doc("kind chord: the project's chord there, which differs."))
                 .field("bar", &CommittedMismatch::bar,
                        schema::integer().doc("The first project bar where they differ."))
                 .build();

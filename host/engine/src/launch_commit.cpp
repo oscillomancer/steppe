@@ -459,11 +459,10 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                         ctx.warn(note->code, note->message, note->path);
                         if (!what.kind.empty()) {  // what differs: the keys, or the chords
                             if (!done.mismatches) done.mismatches.emplace();
-                            done.mismatches->push_back({clipId.str(), std::move(what.kind),
-                                                        std::move(what.clipKey),
-                                                        std::move(what.key),
-                                                        std::move(what.clipChord),
-                                                        std::move(what.chord), what.bar});
+                            done.mismatches->push_back(
+                                {clipId.str(), std::move(what.kind), std::move(what.clipKey),
+                                 std::move(what.key), std::move(what.clipChord),
+                                 std::move(what.chord), what.bar});
                         }
                         mismatchGiven = true;
                     }

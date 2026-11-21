@@ -110,9 +110,8 @@ Result<LeadSheet> parseLeadSheet(const time::TimeMap& map, std::string_view text
     const auto readBar = [&](int bar, const std::vector<std::string>& tokens,
                              std::size_t lineNo) -> std::optional<Error> {
         if (bar < 1)
-            return Error("context.syntax",
-                         "line " + std::to_string(lineNo) + ": bars start at 1", "/text",
-                         "the first project bar is 1");
+            return Error("context.syntax", "line " + std::to_string(lineNo) + ": bars start at 1",
+                         "/text", "the first project bar is 1");
         if (sheet.points.empty() && previous == 0) {
             sheet.firstBar = bar;
         } else if (bar != previous + 1) {
