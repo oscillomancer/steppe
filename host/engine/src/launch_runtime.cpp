@@ -6,6 +6,7 @@
 // boundary where the node's song position reaches the anchor (the target
 // plus the node's timeline shift), and acknowledges it for the log.
 #include <algorithm>
+#include <bit>
 #include <cmath>
 
 #include "plan.h"
@@ -94,6 +95,13 @@ bool Engine::launchClock(LaunchClock& c) const {
     c.epoch = t.epoch;
     c.loop = t.loop;
     c.playing = wantPlaying_.load(std::memory_order_acquire);
+    if (!c.playing && playStart_) {
+        // play() is starting a new epoch at the play position.
+        c.epoch = playStart_->first;
+        c.stream = 0;
+        c.pos = playStart_->second;
+        return true;
+    }
     if (!c.playing) {
         // Stopped: the stream holds still at the play position.
         c.stream = playedStream(c.epoch);
@@ -151,6 +159,9 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
                 // (ADR-0097, amended 2026-11-20).
                 floor = std::max(floor, at + n.launchLead);
             }
+    // On a playrate plan the song follows the rate timeline (S3).
+    if (clock.playing && plan->rateEnabled)
+        return placeRateLaunch(*plan, clock.epoch, floor, quantize);
     const time::TimeMap& tm = *latest_->timeMap;
     const double rate = config_.sampleRate;
     const std::int64_t songFloor = songAfter(clock.loop, clock.pos, floor - clock.stream);
@@ -184,16 +195,151 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
     return out;
 }
 
+Result<Engine::LaunchPlaced> Engine::placeRateLaunch(const detail::Plan& plan, std::uint64_t epoch,
+                                                     std::int64_t floor,
+                                                     model::LaunchQuantize quantize) const {
+    // The running executor's rate clock, as prepareRatePlan reads it: a
+    // copy of its timeline from there, with the controls that follow.
+    const auto words = readRateClock();
+    const detail::Plan* running = nullptr;
+    for (const auto& candidate : plans_)
+        if (candidate->generation == words[9]) running = candidate.get();
+    // Not a relocation: the rate the boundary is reached by is changing
+    // (review round 78 K1), or does not reach it within the search.
+    const auto later = [] {
+        return Error("launch.later", "the master playrate is changing", "",
+                     "launch again in a moment");
+    };
+    // A rate control changed and has not reached the executors yet: the
+    // trajectory to the boundary is not known (serviceLaunches retries).
+    if (words[8] != epoch || !running || !running->rateEnabled ||
+        running->requestedScalar != plan.requestedScalar ||
+        running->timelines[0]->points() != plan.timelines[0]->points())
+        return later();
+    std::array<std::uint64_t, 6> packed{};
+    std::copy_n(words.begin(), 6, packed.begin());
+    detail::PlayrateTimeline::Snapshot seed;
+    seed.clock = std::bit_cast<detail::PlayrateClock::State>(packed);
+    seed.device = std::bit_cast<std::int64_t>(words[6]);
+    seed.loopStart = std::bit_cast<double>(words[10]);
+    seed.loopEnd = std::bit_cast<double>(words[11]);
+    seed.looping = words[12] != 0;
+    const std::int64_t toDevice = seed.device - std::bit_cast<std::int64_t>(words[7]);
+    const std::size_t clockClass = options_.anticipative ? 1 : 0;
+    // A small ring: the search walks forward, reading only recent frames.
+    // (Its points are absolute already, and a live plan starts at 0.)
+    constexpr std::size_t kRing = std::size_t{1} << 16;
+    detail::PlayrateTimeline copy(kRing, seed.clock.target,
+                                  running->timelines[clockClass]->points());
+    copy.seed(seed);
+    for (const auto& edit : running->scalarHistory)
+        if (edit.device > seed.device) (void)copy.scalarEdits.push(edit);
+    copy.inheritControls(*running->timelines[clockClass]);
+    const std::int64_t first = floor + toDevice;
+    copy.ensure(first);
+    const double songFloor = copy.position(first);
+    const time::TimeMap& tm = *latest_->timeMap;
+    const double rate = config_.sampleRate;
+    const auto beatOf = [&](double sample) { return tm.beatAt(sample / rate); };
+    const auto sampleOf = [&](double beat) { return time::samplesAt(tm.secondsAt(beat), rate); };
+    LaunchPlaced out;
+    out.epoch = epoch;
+    if (quantize == model::LaunchQuantize::None) {
+        out.stream = floor;
+        out.anchorSample = static_cast<std::int64_t>(std::floor(songFloor));
+        out.anchorBeat = beatOf(double(out.anchorSample));
+        return out;
+    }
+    double beat = boundaryAt(tm, beatOf(songFloor), quantize);
+    std::int64_t anchor = sampleOf(beat);
+    double distance = double(anchor) - songFloor;
+    if (copy.looping() && songFloor < copy.loopEnd() && double(anchor) >= copy.loopEnd()) {
+        // The loop wraps first: the first boundary inside it after its start.
+        const auto start = static_cast<std::int64_t>(copy.loopStart());
+        beat = boundaryAt(tm, beatOf(double(start)), quantize);
+        anchor = sampleOf(beat);
+        if (double(anchor) >= copy.loopEnd()) {
+            anchor = start;
+            beat = beatOf(double(anchor));
+        }
+        distance = (copy.loopEnd() - songFloor) + double(anchor - start);
+    }
+    // The first device frame whose (unwrapped) song position reaches it.
+    const double reach = copy.phase(first) + distance;
+    constexpr std::int64_t kChunk = kRing / 4;
+    // At the slowest rate the song takes four frames a sample; a little more.
+    const std::int64_t limit =
+        first +
+        static_cast<std::int64_t>(std::ceil(std::max(distance, 0.0) / model::kMinPlayrate)) +
+        2 * kChunk;
+    std::int64_t lo = first;
+    for (;;) {
+        const std::int64_t hi = lo + kChunk;
+        copy.ensure(hi);
+        if (copy.phase(hi) >= reach) {
+            std::int64_t a = lo, b = hi;
+            while (a < b) {
+                const std::int64_t mid = a + (b - a) / 2;
+                if (copy.phase(mid) < reach)
+                    a = mid + 1;
+                else
+                    b = mid;
+            }
+            out.stream = floor + (a - first);
+            break;
+        }
+        lo = hi + 1;
+        if (lo > limit)  // a trajectory that does not advance
+            return Error("launch.later",
+                         "the master playrate does not reach the launch boundary yet", "",
+                         "launch again in a moment");
+    }
+    out.anchorSample = anchor;
+    out.anchorBeat = beat;
+    return out;
+}
+
+void Engine::voidRateLaunches(std::int64_t device) {
+    const auto words = readRateClock();
+    const std::int64_t toDevice =
+        std::bit_cast<std::int64_t>(words[6]) - std::bit_cast<std::int64_t>(words[7]);
+    const std::uint64_t epoch = epoch_.load(std::memory_order_acquire);
+    for (LaunchSlot& s : *launchSlots_) {
+        std::uint64_t st = s.state.load(std::memory_order_acquire);
+        if (status(st) != LaunchSlot::kPending && status(st) != LaunchSlot::kCommitted) continue;
+        if (s.epoch.load() != epoch || words[8] != epoch ||
+            s.target.load(std::memory_order_relaxed) + toDevice < device)
+            continue;
+        if (s.state.compare_exchange_strong(st, with(st, LaunchSlot::kVoided)))
+            launchesQueued_.fetch_sub(1);
+    }
+}
+
+bool Engine::rateActive() const {
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    return plan && plan->rateEnabled &&
+           (plan->requestedScalar != 1 || plan->syncRate || !plan->timelines[0]->points().empty());
+}
+
 Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> requests,
                                             model::LaunchQuantize quantize) {
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     if (!plan)
         return Error("launch.engine", "no project is loaded in the engine", "",
                      "start the engine with a project first");
-    if (plan->rateEnabled)  // staged (engine.md §1.4.2): no players compiled
-        return Error("launch.playrate", "clips cannot play while a master playrate is active", "",
-                     "set the master playrate to 1 and turn off its envelope, then launch");
     for (const LaunchRequest& r : requests) {
+        // Staged (S3 step 1): launched audio plays by tape only.
+        const model::Clip* clip = r.action == LaunchLogEntry::Action::Clip && latest_
+                                      ? latest_->clips.find(r.clip)
+                                      : nullptr;
+        if (plan->rateStretch && clip && clip->kind != model::ClipKind::Midi)
+            return Error("launch.playrate",
+                         r.clip.str() +
+                             " is an audio clip, which cannot play while the master playrate "
+                             "keeps the pitch",
+                         "",
+                         "turn off the master playrate's preserve pitch, or set it to 1 without "
+                         "an envelope, then launch");
         const auto& prepared = plan->preparedSources;
         if (r.action == LaunchLogEntry::Action::Clip && prepared &&
             std::find(prepared->clipsSkipped.begin(), prepared->clipsSkipped.end(), r.clip) !=
@@ -205,13 +351,26 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
         const detail::Node* n = nodeOf(*plan, r.track);
         if (!n || n->players.empty())
             return Error("launch.clip", r.track.str() + " has no clips to play", "",
-                         "the track is frozen, has no clips, or a master playrate is active");
+                         "the track is frozen or has no clips");
         if (r.action == LaunchLogEntry::Action::Clip && detail::playerOf(*n, r.clip) < 0)
             return Error(
                 "launch.clip",
                 r.clip.str() + " is not one of " + r.track.str() + "'s clips in the running plan",
                 "", "wait for the edit to reach the engine, then launch again");
     }
+    // Placed, published, then decided. If every executor's horizon passed
+    // it meanwhile (a placement on a playrate plan integrates the rate up to
+    // the boundary), it is placed again at once, the slots reused.
+    for (int attempt = 0;; ++attempt) {
+        bool missed = false;
+        auto placed = publishLaunch(requests, quantize, missed);
+        if (!placed || !missed || attempt == 2) return placed;
+    }
+}
+
+Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest> requests,
+                                                   model::LaunchQuantize quantize, bool& missed) {
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     auto placed = placeLaunch(requests, quantize);
     if (!placed) return placed;
     auto& slots = *launchSlots_;
@@ -263,6 +422,7 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
         slot->quantize = quantize;
         slot->track.store(r.track.n, std::memory_order_relaxed);
         slot->clip.store(r.clip.n, std::memory_order_relaxed);
+        slot->scene.store(r.scene ? r.scene->n : 0, std::memory_order_relaxed);
         slot->action.store(static_cast<std::uint8_t>(r.action), std::memory_order_relaxed);
         slot->done.store(0, std::memory_order_relaxed);
         slot->required.store(required, std::memory_order_relaxed);
@@ -279,14 +439,17 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
     // Decided once, for every target: committed if each executor running
     // one will read the slot before it passes its frame; otherwise missed,
     // and placed again by service().
+    missed = !published.empty();
     for (auto& [slot, st] : published) {
         const bool allow =
             launchHorizonsAllow(*plan, slot->request.track, placed->epoch, placed->stream);
         std::uint64_t expect = st;
-        if (allow)
+        if (allow) {
             (void)slot->state.compare_exchange_strong(expect, with(st, LaunchSlot::kCommitted));
-        else if (slot->state.compare_exchange_strong(expect, with(st, LaunchSlot::kMissed)))
+            missed = false;
+        } else if (slot->state.compare_exchange_strong(expect, with(st, LaunchSlot::kMissed))) {
             launchesQueued_.fetch_sub(1);
+        }
     }
     wakeRenderer();
     return placed;
@@ -389,6 +552,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                                                       slot.track.load(std::memory_order_relaxed))};
         const model::Id clip{model::Kind::Clip,
                              static_cast<std::uint32_t>(slot.clip.load(std::memory_order_relaxed))};
+        const std::uint64_t scene = slot.scene.load(std::memory_order_relaxed);
         const auto action =
             static_cast<LaunchLogEntry::Action>(slot.action.load(std::memory_order_relaxed));
         const detail::LaunchState::Kind kind =
@@ -405,7 +569,10 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 if (!when(target + n.timelineShift)) return;
                 if (feed) {
                     detail::applyFeedLaunch(*feed, kind, clip, anchorSample, anchorBeat);
-                    if (relocated) feed->launch.unanchored = true;
+                    if (relocated) {
+                        feed->launch.unanchored = true;
+                        feed->launchFresh = false;
+                    }
                     return;
                 }
                 detail::LaunchAction a;
@@ -416,11 +583,12 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 if (kind == detail::LaunchState::Kind::Clip && a.player < 0) return;
                 a.anchorSample = anchorSample;
                 a.anchorBeat = anchorBeat;
-                detail::applyLaunch(p, n, a);
+                detail::applyLaunch(p, n, a, target + n.timelineShift + p.rateOrigin);
                 if (relocated) detail::launchRelocated(n);
                 LaunchAck ack;
                 ack.track = track.n;
                 ack.clip = clip.n;
+                ack.scene = scene;
                 ack.epoch = slotEpoch;
                 ack.action = static_cast<std::uint8_t>(action);
                 ack.stream = target;
@@ -533,6 +701,8 @@ void Engine::serviceLaunches() {
             e.anchorSample = ack.anchorSample;
             e.anchorBeat = ack.anchorBeat;
             e.epoch = ack.epoch;
+            if (ack.scene != 0)
+                e.scene = model::Id{model::Kind::Scene, static_cast<std::uint32_t>(ack.scene)};
             launchLog_.push_back(e);
         }
     }
@@ -543,8 +713,39 @@ void Engine::serviceLaunches() {
                                                        : a.runningFrame < b.runningFrame;
                          });
     // Waiting for a track or clip the latest plan cannot play (frozen,
-    // removed, a master playrate): dropped, with a warning.
+    // removed, an audio clip under a pitch-keeping playrate): dropped, with
+    // a warning.
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    // A plan with other rate controls (S3): what was placed on the old
+    // trajectory and switches after its handover is placed again. A
+    // playrate that became active ends a running capture.
+    if (plan && publishedGen_ != launchCheckedGen_) {
+        LaunchRateControls controls;
+        controls.enabled = plan->rateEnabled;
+        if (plan->rateEnabled) {
+            controls.sync = plan->syncRate;
+            controls.scalar = plan->requestedScalar;
+            for (const auto& pt : plan->timelines[0]->points()) {
+                controls.points.push_back(pt.sample);
+                controls.points.push_back(pt.value);
+            }
+        }
+        if (controls != launchRateControls_) {
+            launchRateControls_ = std::move(controls);
+            const std::uint64_t epoch = epoch_.load(std::memory_order_acquire);
+            for (LaunchSlot& s : *launchSlots_) {
+                std::uint64_t st = s.state.load(std::memory_order_acquire);
+                if ((status(st) == LaunchSlot::kPending || status(st) == LaunchSlot::kCommitted) &&
+                    s.epoch.load() == epoch && s.target.load() >= plan->handAt &&
+                    s.state.compare_exchange_strong(st, with(st, LaunchSlot::kVoided)))
+                    launchesQueued_.fetch_sub(1);
+            }
+        }
+    }
+    if (capture_.on && !capture_.pending && rateActive()) {
+        (void)captureLaunches(false);
+        warnings_.push_back("launch: the capture ended: a master playrate became active");
+    }
     // A track whose last launch's clip the latest plan lacks is back on the
     // arrangement (carryLaunch does the same in the executors).
     if (added || publishedGen_ != launchCheckedGen_) {
@@ -579,8 +780,13 @@ void Engine::serviceLaunches() {
         warnings_.push_back("launch: " + r.track.str() +
                             "'s queued launch was dropped: the edit left nothing to play");
     }
+    placeLaunchesAgain();
+}
+
+void Engine::placeLaunchesAgain() {
     // Missed, or placed in an epoch that has ended: placed again, alone.
-    const std::uint64_t epoch = epoch_.load(std::memory_order_acquire);
+    const std::uint64_t epoch =
+        playStart_ ? playStart_->first : epoch_.load(std::memory_order_acquire);
     for (LaunchSlot& s : *launchSlots_) {
         std::uint64_t st = s.state.load(std::memory_order_acquire);
         // A committed launch of an ended epoch that nothing has switched yet
@@ -634,7 +840,7 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
             if (e.epoch == epoch && e.runningFrame + n.timelineShift > played) {
                 if (!tl.queued) {
                     LaunchPending q;
-                    q.request = {e.track, e.action, e.clip};
+                    q.request = {e.track, e.action, e.clip, e.scene};
                     q.placed = {e.epoch, e.runningFrame, e.anchorSample, e.anchorBeat};
                     tl.queued = q;
                 }
@@ -696,17 +902,28 @@ void Engine::captureRelocating() {
     }
 }
 
-void Engine::captureLaunches(bool on) {
-    if (on == capture_.on) return;
+Status Engine::captureLaunches(bool on) {
+    if (on == capture_.on) return {};
     if (on) {
+        if (rateActive())
+            return Error("launch.playrate", "a master playrate is active", "",
+                         "set the master playrate to 1 and turn off its envelope, then capture");
+        // Set to 1, a rate still gliding there is heard (the builder's song
+        // journey 2, D2): the capture's running time would not be the song's.
+        if (const double heard = effectivePlayrate(); heard != 1)
+            return Error(
+                "launch.playrate",
+                "the master playrate is still gliding to 1 (heard: " + std::to_string(heard) + ")",
+                "", "capture again once transport.playrate says effective_rate 1");
         capture_ = {};
         capture_.on = capture_.any = capture_.pending = true;
         placeCapture();
-        return;
+        return {};
     }
     capture_.endFrame = capture_.pending ? capture_.startFrame : captureHeard();
     capture_.pending = false;
     capture_.on = false;
+    return {};
 }
 
 std::optional<Engine::LaunchCapture> Engine::launchCapture() {

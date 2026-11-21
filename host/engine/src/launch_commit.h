@@ -20,7 +20,8 @@ struct CapturedLaunch {
     std::int64_t frame = 0;
     std::string track, action;  // clip | arrangement | stop
     std::optional<std::string> clip;
-    std::int64_t anchor = 0;  // song sample the clip's phase runs from
+    std::optional<std::string> scene;  // launched as part of this scene (launch.scene)
+    std::int64_t anchor = 0;           // song sample the clip's phase runs from
     double anchorBeat = 0;
 };
 struct CapturedLoop {
@@ -34,15 +35,23 @@ struct CapturedPerformance {
 };
 schema::Schema<CapturedPerformance> capturedPerformanceSchema();
 
+// A section written for a scene launched in the performance: every clip of the
+// scene started on one frame, held until one of its tracks was launched again.
+struct CommittedSection {
+    std::string scene, region;
+    double start = 0, end = 0;  // beats
+};
 struct CommitDone {
     std::vector<std::string> tracks, items;
+    std::vector<CommittedSection> sections;
     double from = 0, to = 0;  // beats
 };
 // Lays `perf` out linearly from where it began, by running time (L-f): on
 // each track that left the arrangement, its clip, stopped and held
 // stretches replace the arrangement there, each clip as copies of its
-// takes (MIDI copied unless `pooled`) at the phase it was heard. Runs in
-// the caller's transaction; errors point under /performance.
+// takes (MIDI copied unless `pooled`) at the phase it was heard, and a
+// section (region) for each scene launched whole. Runs in the caller's
+// transaction; errors point under /performance.
 Result<CommitDone> commitPerformance(cmd::Context& ctx, const CapturedPerformance& perf,
                                      bool pooled);
 

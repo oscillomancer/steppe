@@ -10,6 +10,7 @@
 
 #include "command_validation.h"
 #include "learn_binding.h"
+#include "param_ref.h"
 #include "supple/engine/app.h"
 #include "supple/engine/midi_control.h"
 #include "supple/engine/racks.h"
@@ -36,13 +37,6 @@ std::optional<std::uint32_t> numericId(std::string_view text) {
     const auto r = std::from_chars(text.data(), text.data() + text.size(), id);
     if (r.ec != std::errc{} || r.ptr != text.data() + text.size()) return std::nullopt;
     return id;
-}
-
-bool iequals(std::string_view a, std::string_view b) {
-    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-               return std::tolower(static_cast<unsigned char>(x)) ==
-                      std::tolower(static_cast<unsigned char>(y));
-           });
 }
 
 // The parameter a binding moves, and where it stands (normalized).
@@ -88,36 +82,30 @@ struct LearnList {
     json::Value learn = json::Value::array();
 };
 
-// A binding's parameter, as the effect names it: a semantic key, or a plain
-// parameter's id (given by id or by name).
+// A binding's parameter, stored canonical through the one resolver
+// (session-model "Plug-in parameter references"): the semantic key on a
+// semantic plug-in, whichever spelling was given, else the decimal id.
 Result<std::string> resolveParam(EngineApp& a, const model::FxInstance& fx,
                                  const std::string& param) {
     auto schema = a.fxSchema(fx);
     if (!schema) return std::move(schema).error().at("/fx");
-    if (schema->isObject()) {
-        const json::Value* ps = schema->find("params");
-        if (ps && ps->isObject() && ps->find(param)) return param;
-        return Error("fx.param_unknown", "no parameter " + param, "/param",
-                     "use a parameter key from fx.describe {full: true}");
-    }
     auto list = a.fxParams(fx);
     if (!list) return std::move(list).error().at("/fx");
-    const auto byId = numericId(param);
-    const host::ParamInfo* found = nullptr;
-    for (const host::ParamInfo& p : *list)
-        if ((byId && p.id == *byId) || (!byId && iequals(p.name, param))) {
-            if (found)
-                return Error("fx.param_ambiguous", "parameter name is ambiguous", "/param",
-                             "use the numeric id from fx.describe full");
-            found = &p;
-        }
-    if (!found)
-        return Error("fx.param_unknown", "unknown parameter " + param, "/param",
-                     "use a parameter name or id from fx.describe full");
-    if (found->flags & CLAP_PARAM_IS_READONLY)
-        return Error("fx.param_readonly", "parameter is read-only", "/param",
+    const auto info = a.findPlugin(fx.plugin.id);
+    const std::string plugin = info && !info->name.empty() ? info->name : fx.plugin.id;
+    auto ref = detail::resolveParam(*list, schema->isObject() ? &*schema : nullptr, param, plugin);
+    if (!ref) {
+        Error e = std::move(ref).error();
+        e.code = e.code == "param.ambiguous" ? "fx.param_ambiguous"
+                 : e.code == "param.id"      ? "fx.param_id"
+                                             : "fx.param_unknown";
+        e.path = "/param";
+        return e;
+    }
+    if (ref->info && (ref->info->flags & CLAP_PARAM_IS_READONLY))
+        return Error("fx.param_readonly", ref->name() + " is read-only", "/param",
                      "choose a writable parameter");
-    return std::to_string(found->id);
+    return ref->canonical;
 }
 
 json::Value learnJson(Id fx, const model::ParamLearn& l) {
@@ -416,7 +404,8 @@ void registerLearnCommands(cmd::Registry& registry) {
         args.field("fx", &LearnArgs::fx, fxId)
             .field("param", &LearnArgs::param,
                    schema::string().minLength(1).doc(
-                       "A semantic key, or a plain parameter's id or name (fx.describe)"));
+                       "A parameter's semantic key, id or name (fx.describe); a semantic "
+                       "plugin's is stored as its key"));
         learnBindingArgFields(args)
             .field("when_selected", &LearnArgs::whenSelected, schema::boolean())
             .field("when_focused", &LearnArgs::whenFocused, schema::boolean())

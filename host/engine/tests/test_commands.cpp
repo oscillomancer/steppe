@@ -4,7 +4,9 @@
 #include <supple/product.h>
 
 #include <unistd.h>
+#include <clocale>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <limits>
 
@@ -16,6 +18,7 @@
 #include <supple/model/schemas.h>
 
 #include "midi_ticks.h"
+#include "param_ref.h"
 #include "render_commands.h"
 
 using namespace supple;
@@ -3293,4 +3296,434 @@ TEST_CASE("MIDI sends: Notes source None does not prevent branch id remapping") 
         args["source"] = "none";
         CHECK(model::remapIds(args, command->argsSchema, remap) == args);
     }
+}
+
+TEST_CASE("module.set: a knob takes text in its own unit, as other parameters do") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Keys"})");
+    const auto rack = run(bus, "rack.add", R"({"track":"tr_1"})")["rack"].asString();
+    const auto macro =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.macro\"}")["module"]
+            .asString();
+    const auto lfo =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.lfo\"}")["module"]
+            .asString();
+    const auto knob = [&](const std::string& module, const char* key) {
+        const auto* m = app->head().modules.find(*model::Id::parse(module));
+        const json::Value* v = m->params.isObject() ? m->params.find(key) : nullptr;
+        return v ? v->asDouble() : -1.0;
+    };
+    const auto set = [&](const std::string& module, const char* params) {
+        auto args = json::Value::object();
+        args["module"] = module;
+        args["params"] = j(params);
+        return bus.execute({"module.set", args, kOrigin});
+    };
+    // A percent knob: "80 %" is 80, as the number 80 is (0 to 100).
+    REQUIRE(set(macro, R"({"macro_1": "80 %"})"));
+    CHECK(knob(macro, "macro_1") == 80.0);
+    REQUIRE(set(macro, R"({"macro_1": " 12.5%"})"));
+    CHECK(knob(macro, "macro_1") == 12.5);
+    REQUIRE(set(macro, R"({"macro_1": 40})"));
+    CHECK(knob(macro, "macro_1") == 40.0);
+    // Hertz, with kHz as well; the unit's case does not matter.
+    REQUIRE(set(lfo, R"({"rate": "2.5 hz"})"));
+    CHECK(knob(lfo, "rate") == 2.5);
+    REQUIRE(set(lfo, R"({"rate": "0.05 kHz"})"));
+    CHECK(knob(lfo, "rate") == 50.0);
+    // The text is read the same under a comma-decimal locale (a process setting the app
+    // does not own): "0.05 kHz" is 50, not 0. Skipped where the machine has none.
+    {
+        const std::string saved = std::setlocale(LC_NUMERIC, nullptr);
+        bool comma = false;
+        for (const char* name : {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "fr_FR.utf8", "de-DE",
+                                 "fr-FR", "German_Germany.1252", "French_France.1252"}) {
+            if (!std::setlocale(LC_NUMERIC, name)) continue;
+            char probe[16];
+            std::snprintf(probe, sizeof probe, "%.1f", 1.5);
+            comma = std::string(probe) == "1,5";
+            if (comma) break;
+        }
+        if (comma) {
+            REQUIRE(set(lfo, R"({"rate": "0.05 kHz"})"));
+            CHECK(knob(lfo, "rate") == 50.0);
+            REQUIRE(set(lfo, R"({"rate": " 0.25 hz"})"));
+            CHECK(knob(lfo, "rate") == 0.25);
+        } else {
+            MESSAGE("no comma-decimal locale on this machine: the locale check is skipped");
+        }
+        std::setlocale(LC_NUMERIC, saved.c_str());
+    }
+    // Text in another unit, or none, is refused, and the hint says what the knob takes.
+    for (const char* wrong :
+         {R"({"macro_1": "80 dB"})", R"({"macro_1": "loud"})", R"({"macro_1": ""})"}) {
+        const auto refused = set(macro, wrong);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "rack.param");
+        CHECK(refused.error().path == "/args/params/macro_1");
+        CHECK(refused.error().hint ==
+              "macro_1 runs 0 to 100 %: give the number in that unit, or text like \"50 %\"");
+    }
+    CHECK(knob(macro, "macro_1") == 40.0);  // nothing changed
+    // A knob with no unit takes no text.
+    const auto choice = set(lfo, R"({"voices": "4"})");
+    REQUIRE_FALSE(choice);
+    CHECK(choice.error().code == "rack.param");
+}
+
+TEST_CASE("module.set: a number outside the knob's range is refused, not clamped") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Keys"})");
+    const auto rack = run(bus, "rack.add", R"({"track":"tr_1"})")["rack"].asString();
+    const auto macro =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.macro\"}")["module"]
+            .asString();
+    const auto lfo =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.lfo\"}")["module"]
+            .asString();
+    const auto knob = [&](const std::string& module, const char* key) {
+        const auto* m = app->head().modules.find(*model::Id::parse(module));
+        const json::Value* v = m->params.isObject() ? m->params.find(key) : nullptr;
+        return v ? v->asDouble() : -1.0;
+    };
+    const auto set = [&](const std::string& module, const char* params) {
+        auto args = json::Value::object();
+        args["module"] = module;
+        args["params"] = j(params);
+        return bus.execute({"module.set", args, kOrigin});
+    };
+    REQUIRE(set(macro, R"({"macro_1": 40})"));
+    // Above, below, and as text: the code and the hint are the plug-in parameters'.
+    for (const char* wrong :
+         {R"({"macro_1": 500})", R"({"macro_1": -1})", R"({"macro_1": "101 %"})"}) {
+        const auto refused = set(macro, wrong);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "params.out_of_range");
+        CHECK(refused.error().path == "/args/params/macro_1");
+        CHECK(refused.error().hint == "use a value from 0 % to 100 %");
+    }
+    CHECK(knob(macro, "macro_1") == 40.0);  // nothing changed
+    // The unit is converted before the range is checked: 0.5 kHz is 500 Hz.
+    const auto fast = set(lfo, R"({"rate": "0.5 kHz"})");
+    REQUIRE_FALSE(fast);
+    CHECK(fast.error().code == "params.out_of_range");
+    CHECK(fast.error().message == "'rate' is 500 Hz, outside its range");
+    // The ends themselves are in range, and module.add refuses alike.
+    REQUIRE(set(macro, R"({"macro_1": 100})"));
+    CHECK(knob(macro, "macro_1") == 100.0);
+    REQUIRE(set(macro, R"({"macro_1": 0})"));
+    const auto added =
+        bus.execute({"module.add",
+                     j("{\"rack\":\"" + rack +
+                       "\",\"type\":\"com.suppleaudio.rack.macro\",\"params\":{\"macro_1\":150}}"),
+                     kOrigin});
+    REQUIRE_FALSE(added);
+    CHECK(added.error().code == "params.out_of_range");
+}
+
+TEST_CASE("fx.patch.merge on an instance never saved reports only what the patch changed") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Bus"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    REQUIRE_FALSE(app->head().fx.find(*model::Id::parse("fx_1"))->patch);  // never saved
+    const auto members = [](const json::Value& patch) {
+        const json::Value* params = patch.find("params");
+        return params && params->isObject() ? params->asObject().size() : std::size_t{0};
+    };
+    const auto first =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"gain":-6}}})");
+    CHECK(members(*first.find("changed")) == 1);
+    CHECK(first.find("changed")->find("params")->find("gain")->asDouble() == -6.0);
+    // The same again changes nothing; another member is the only one reported.
+    const auto again =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"gain":-6}}})");
+    CHECK(members(*again.find("changed")) == 0);
+    const auto other =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"latency":"short"}}})");
+    CHECK(members(*other.find("changed")) == 1);
+    // A member set to what it already is reports nothing, on a fresh instance too.
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    const auto defaulted =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_2","patch":{"params":{"gain":0}}})");
+    CHECK(members(*defaulted.find("changed")) == 0);
+    // fx.param.set answers the same way.
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    const auto set = run(bus, "fx.param.set", R"({"fx":"fx_3","values":{"gain":-3}})");
+    CHECK(members(*set.find("changed")) == 1);
+}
+
+// ---------------------------------------------------------------------------------------
+// Plug-in parameter references (session-model; review round 72 D1 to D4)
+
+namespace {
+Error failure(cmd::Dispatcher& bus, std::string name, std::string_view args) {
+    auto result = bus.execute({std::move(name), j(args), kOrigin});
+    REQUIRE_FALSE(result);
+    return result.error();
+}
+bool hasWarning(const std::vector<schema::Warning>& warnings, std::string_view code) {
+    return std::any_of(warnings.begin(), warnings.end(),
+                       [&](const auto& w) { return w.code == code; });
+}
+}  // namespace
+
+TEST_CASE("plug-in parameter references: one resolver for keys, ids and names") {
+    using engine::detail::Ambiguity;
+    using engine::detail::resolveParam;
+    const std::vector<host::ParamInfo> list = {{0, "Drive", "", 0, 1, 0, CLAP_PARAM_IS_AUTOMATABLE},
+                                               {1, "drive", "", 0, 1, 0, CLAP_PARAM_IS_AUTOMATABLE},
+                                               {2, "Mix", "", 0, 1, 0, CLAP_PARAM_IS_AUTOMATABLE},
+                                               {3, "Tone", "", 0, 1, 0, CLAP_PARAM_IS_AUTOMATABLE},
+                                               {4, "TONE", "", 0, 1, 0, CLAP_PARAM_IS_AUTOMATABLE}};
+    // Case does not matter for a name; among case variants an exact one wins.
+    CHECK(resolveParam(list, nullptr, "mix", "P")->canonical == "2");
+    CHECK(resolveParam(list, nullptr, "Drive", "P")->canonical == "0");
+    CHECK(resolveParam(list, nullptr, "drive", "P")->canonical == "1");
+    // No exact match among several: ambiguous, the ids in the hint.
+    auto ambiguous = resolveParam(list, nullptr, "tone", "P");
+    REQUIRE_FALSE(ambiguous);
+    CHECK(ambiguous.error().code == "param.ambiguous");
+    CHECK(ambiguous.error().hint.find("3 (Tone)") != std::string::npos);
+    CHECK(ambiguous.error().hint.find("4 (TONE)") != std::string::npos);
+    // A stored reference binds the first match, as before.
+    CHECK(resolveParam(list, nullptr, "tone", "P", Ambiguity::First)->canonical == "3");
+    // Ids: canonical, no leading zeros.
+    CHECK(resolveParam(list, nullptr, "4", "P")->canonical == "4");
+    auto zeros = resolveParam(list, nullptr, "04", "P");
+    REQUIRE_FALSE(zeros);
+    CHECK(zeros.error().code == "param.id");
+    CHECK(zeros.error().hint == "use the canonical parameter id 4");
+    auto unknown = resolveParam(list, nullptr, "nope", "Ferric");
+    REQUIRE_FALSE(unknown);
+    CHECK(unknown.error().code == "param.unknown");
+    CHECK(unknown.error().message == "Ferric has no parameter \"nope\"");
+    // On a semantic plug-in every spelling is stored as the key (review round
+    // 75); an id or a name still gives plain values (`semantic` null).
+    const auto schema = *json::parse(R"({"params":{"mix":{"id":2}}})");
+    auto byKey = resolveParam(list, &schema, "mix", "P");
+    REQUIRE(byKey);
+    CHECK(byKey->canonical == "mix");
+    CHECK(byKey->semantic);
+    CHECK_FALSE(byKey->respelled());
+    for (const char* other : {"2", "Mix"}) {
+        CAPTURE(other);
+        auto r = resolveParam(list, &schema, other, "P");
+        REQUIRE(r);
+        CHECK(r->canonical == "mix");
+        CHECK_FALSE(r->semantic);
+        CHECK(r->respelled());
+        CHECK(r->id == byKey->id);
+    }
+    // A parameter no key describes keeps its id.
+    CHECK(resolveParam(list, &schema, "Drive", "P")->canonical == "0");
+    // Round 79 J2: an entry without an id is not a key (the host refuses
+    // such a schema; this keeps one spelling if one got through).
+    const auto idless = *json::parse(R"({"params":{"mix":{"name":"Mix"}}})");
+    auto bare = resolveParam(list, &idless, "mix", "P");
+    REQUIRE(bare);
+    CHECK(bare->canonical == "2");
+    CHECK_FALSE(bare->semantic);
+    CHECK(resolveParam(list, &idless, "2", "P")->canonical == "2");
+}
+
+TEST_CASE("plug-in parameter references: a VST3's parameter is one parameter however named") {
+    // D1: an envelope by id, then by name, made two lanes; D2: a name in
+    // another case was refused by envelopes and taken by routes. Both are
+    // stored as the canonical id and answered with the display name.
+    Workdir dir;
+    AppOptions options;
+    options.workdir = dir.path;
+    options.pluginPath = {FIXTURE_VST3_PATH};
+    auto created = EngineApp::create(options, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    json::Value listed = run(bus, "plugin.list", R"({"filter":"Test VST3 Gain"})");
+    std::string plugin;
+    for (const auto& p : listed["plugins"].asArray())
+        if (p.find("name")->asString() == "Test VST3 Gain") plugin = p.find("id")->asString();
+    REQUIRE_FALSE(plugin.empty());
+    run(bus, "track.add", R"({"name":"Fx"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":")" + plugin + R"("})");
+    json::Value byId =
+        run(bus, "env.add", R"({"fx":"fx_1","param":"1","points":[{"beat":0,"value":0.5}]})");
+    CHECK(byId["param"].asString() == "1");
+    CHECK(byId["param_name"].asString() == "Gain");
+    for (const char* spelling : {"Gain", "gain", "GAIN"}) {
+        INFO(spelling);
+        const auto e = failure(bus, "env.add",
+                               std::string(R"({"fx":"fx_1","param":")") + spelling +
+                                   R"(","points":[{"beat":0,"value":0.9}]})");
+        CHECK(e.code == "env.exists");
+        CHECK(e.hint.find("en_1") != std::string::npos);
+    }
+    run(bus, "env.remove", R"({"env":"en_1"})");
+    // A name in another case: the envelope modulate adds and its route both
+    // store the id.
+    json::Value modulated =
+        run(bus, "modulate", R"({"target":{"fx":"fx_1","param":"gain"},"source":"lfo"})");
+    CHECK(modulated["param"].asString() == "1");
+    CHECK(modulated["param_name"].asString() == "Gain");
+    json::Value envelopes = run(bus, "env.list", R"({"object":"fx_1"})");
+    REQUIRE(envelopes["envelopes"].size() == 1);
+    CHECK(envelopes["envelopes"].at(0).find("param")->asString() == "1");
+    CHECK(envelopes["envelopes"].at(0).find("param_name")->asString() == "Gain");
+    json::Value routes = run(bus, "modulation.list", "{}");
+    REQUIRE(routes["modulations"].size() == 1);
+    CHECK(routes["modulations"].at(0).find("target")->find("param")->asString() == "1");
+    CHECK(routes["modulations"].at(0).find("param_name")->asString() == "Gain");
+    // The same source to the same parameter by its name: a duplicate.
+    const std::string mr = modulated["mod_out"].asString();
+    const auto duplicate =
+        failure(bus, "modulation.add",
+                R"({"source":{"module":")" + mr +
+                    R"(","input":"in_1"},"target":{"fx":"fx_1","param":"Gain"},"depth":0.1})");
+    CHECK(duplicate.code == "modulation.duplicate");
+}
+
+TEST_CASE("plug-in parameter references: an ambiguous name is refused and warned of at open") {
+    // D3: two parameters named "Gain". A command refuses the name and lists
+    // the ids; the id works. An older file that stored the name opens, binds
+    // the first, and says so; two envelopes on one parameter are warned of.
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Fx"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.twin-gain"})");
+    const auto env =
+        failure(bus, "env.add", R"({"fx":"fx_1","param":"Gain","points":[{"beat":0,"value":0}]})");
+    CHECK(env.code == "env.param");
+    CHECK(env.message.find("names 2 parameters") != std::string::npos);
+    CHECK(env.hint.find("0 (Gain)") != std::string::npos);
+    CHECK(env.hint.find("1 (Gain)") != std::string::npos);
+    const auto route =
+        failure(bus, "modulate", R"({"target":{"fx":"fx_1","param":"gain"},"source":"lfo"})");
+    CHECK(route.code == "modulation.target");
+    CHECK(route.hint.find("0 (Gain)") != std::string::npos);
+    // Round 75 G3: a name the plug-in lacks names the plug-in, as env.add does.
+    const auto lacking =
+        failure(bus, "modulate", R"({"target":{"fx":"fx_1","param":"nope"},"source":"lfo"})");
+    CHECK(lacking.message == "Test Twin Gain has no parameter \"nope\"");
+    CHECK(failure(bus, "fx.param.set", R"({"fx":"fx_1","values":{"Gain":-3}})").code ==
+          "fx.param_ambiguous");
+    json::Value byId =
+        run(bus, "env.add", R"({"fx":"fx_1","param":"0","points":[{"beat":0,"value":0}]})");
+    CHECK(byId["param"].asString() == "0");
+    // An older file: the envelope names "Gain", and a second one names "0".
+    auto doc = model::projectToJson(app->head());
+    doc["envelopes"]["en_1"]["target"]["param"] = json::Value("Gain");
+    json::Value second = doc["envelopes"]["en_1"];
+    second["target"]["param"] = json::Value("0");
+    doc["envelopes"]["en_2"] = second;
+    doc["project"]["next_ids"]["en"] = json::Value(3.0);
+    REQUIRE(writeFileAtomic(dir.path / "older.json", json::writeCanonical(doc)));
+    std::vector<schema::Warning> warnings;
+    REQUIRE(app->open(dir.path / "older.json", &warnings));
+    CHECK(hasWarning(warnings, "param.ambiguous"));
+    CHECK(hasWarning(warnings, "env.duplicate"));
+    // Round 75 G3: the hint is said once.
+    for (const auto& w : warnings)
+        if (w.code == "param.ambiguous") {
+            CAPTURE(w.message);
+            const auto said = w.message.find("name one by its id");
+            REQUIRE(said != std::string::npos);
+            CHECK(w.message.find("name one by its id", said + 1) == std::string::npos);
+            CHECK(w.message.find("Name one by its id") == std::string::npos);
+        }
+    // It still plays: the plan binds the first match.
+    run(bus, "render.mix", R"({"pattern":"older","end_beat":1})");
+}
+
+TEST_CASE("plug-in parameter references: an older spelling on a semantic plug-in is warned of") {
+    // Review round 75: an older file's envelope by id, and a route by name,
+    // on a semantic plug-in play, but no lookup by parameter finds them. The
+    // warning at open says what does not work and how to fix it.
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Fx"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    run(bus, "env.add", R"({"fx":"fx_1","param":"gain","points":[{"beat":0,"value":-6}]})");
+    json::Value made =
+        run(bus, "modulate", R"({"target":{"fx":"fx_1","param":"gain"},"source":"lfo"})");
+    const std::string route = made["modulation"].asString();
+    auto doc = model::projectToJson(app->head());
+    doc["envelopes"]["en_1"]["target"]["param"] = json::Value("0");
+    doc["modulations"][route]["target"]["param"] = json::Value("Gain");
+    REQUIRE(writeFileAtomic(dir.path / "older.json", json::writeCanonical(doc)));
+    std::vector<schema::Warning> warnings;
+    REQUIRE(app->open(dir.path / "older.json", &warnings));
+    int spelled = 0;
+    for (const auto& w : warnings) {
+        if (w.code != "param.spelling") continue;
+        ++spelled;
+        CAPTURE(w.message);
+        if (w.path == "/envelopes/en_1/target/param") {
+            CHECK(w.message.find("not recorded into it") != std::string::npos);
+            CHECK(w.message.find("lane lookup does not find it") != std::string::npos);
+            CHECK(w.message.find("env.remove") != std::string::npos);
+            CHECK(w.message.find("as gain") != std::string::npos);
+            // Round 79 J1: re-add under the same spelling, which converts.
+            CHECK(w.message.find("same points under the same spelling, \"0\"") !=
+                  std::string::npos);
+            CHECK(w.message.find("converting the points") != std::string::npos);
+        } else {
+            CHECK(w.path == "/modulations/" + route + "/target/param");
+            CHECK(w.message.find("modulation.remove") != std::string::npos);
+        }
+    }
+    CHECK(spelled == 2);
+    // A file stored canonically warns of none.
+    warnings.clear();
+    doc["envelopes"]["en_1"]["target"]["param"] = json::Value("gain");
+    doc["modulations"][route]["target"]["param"] = json::Value("gain");
+    REQUIRE(writeFileAtomic(dir.path / "canonical.json", json::writeCanonical(doc)));
+    REQUIRE(app->open(dir.path / "canonical.json", &warnings));
+    CHECK_FALSE(hasWarning(warnings, "param.spelling"));
+}
+
+TEST_CASE("plug-in parameter references: a parameter the plug-in does not automate") {
+    // D4: the refusal no longer tells the caller to automate what cannot be
+    // automated, and env.add refuses it too; fx.param.set still sets it.
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Fx"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.manual-gain"})");
+    const auto route =
+        failure(bus, "modulate", R"({"target":{"fx":"fx_1","param":"Gain"},"source":"lfo"})");
+    CHECK(route.code == "modulation.target");
+    CHECK(route.message.find("not automatable") != std::string::npos);
+    CHECK(route.hint.find("fx.param.set") != std::string::npos);
+    CHECK(route.hint.find("env.add") == std::string::npos);
+    const auto env =
+        failure(bus, "env.add", R"({"fx":"fx_1","param":"Gain","points":[{"beat":0,"value":0}]})");
+    CHECK(env.code == "env.param");
+    CHECK(env.message.find("not automatable") != std::string::npos);
+    CHECK(env.hint.find("fx.param.set") != std::string::npos);
+    run(bus, "fx.param.set", R"({"fx":"fx_1","values":{"Gain":0.5}})");
 }

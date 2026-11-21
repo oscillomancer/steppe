@@ -42,6 +42,7 @@ q = nil
 ---@field at? number Start in beats, on a bar line.
 ---@field bar? integer Start bar, 1-based [1].
 ---@field pooled? boolean (default: false)
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow.
 
 ---@class Steppe.arrangement_build_result
 ---@field segments table[]
@@ -225,6 +226,9 @@ q = nil
 ---@field item? string Item id, e.g. "it_1".
 ---@field pooled? boolean (default: false)
 ---@field name? string
+---@field context? string The key and chords the clip was written against, as a lead sheet in clip bars (bar 1 is the clip's start): "1: key D minor {Dm}:w". "" is none.
+---@field context_at? table A place in the project, by bar or in beats: the clip takes the key and chords holding there, and the changes up to its length after it.
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped when it is laid on the timeline (ADR-0098): none (default), key or chords. Needs a MIDI clip with a key at its start.
 
 ---@class Steppe.clip_add_result
 ---@field clip string
@@ -268,6 +272,9 @@ q = nil
 ---@field loop? table
 ---@field mode? "loop"|"once"
 ---@field quantize? any
+---@field context? string As clip.add's: the lead sheet in clip bars; "" clears the context.
+---@field context_at? table A place in the project, by bar or in beats: the clip takes the key and chords holding there, and the changes up to its length after it.
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped when it is laid on the timeline (ADR-0098): none (default), key or chords. Needs a MIDI clip with a key at its start.
 
 ---@class Steppe.clip_set_result
 ---@field warnings? table[]
@@ -568,6 +575,9 @@ q = nil
 ---@class Steppe.env_add_result
 ---@field env string
 ---@field points integer
+---@field param? string A plug-in parameter's canonical reference: its semantic key or decimal id.
+---@field param_name? string A plug-in parameter's display name.
+---@field converted? boolean True when a semantic plugin's parameter was named by id or name: the points were plain values, stored converted to the key's units (env.list shows those).
 ---@field warnings? table[]
 
 ---@class Steppe.env_list_args
@@ -707,7 +717,7 @@ q = nil
 
 ---@class Steppe.fx_learn_set_args
 ---@field fx string
----@field param string A semantic key, or a plain parameter's id or name (fx.describe)
+---@field param string A parameter's semantic key, id or name (fx.describe); a semantic plugin's is stored as its key
 ---@field midi table
 ---@field mode? "absolute"|"relative1"|"relative2"|"relative3"|"toggle"
 ---@field soft_takeover? boolean
@@ -940,6 +950,7 @@ q = nil
 ---@field audio_file? string
 ---@field midi_file? string
 ---@field clip? string Lay a copy of this clip's takes here.
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow.
 ---@field name? string
 
 ---@class Steppe.item_add_result
@@ -949,6 +960,7 @@ q = nil
 ---@field position number
 ---@field length number
 ---@field warnings? (string|table)[]
+---@field followed? table
 
 ---@class Steppe.item_apply_fx_args
 ---@field item string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
@@ -1140,6 +1152,7 @@ q = nil
 ---@class Steppe.launch_commit_result
 ---@field tracks string[]
 ---@field items string[]
+---@field sections table[]
 ---@field from number
 ---@field to number
 ---@field warnings? table[]
@@ -1216,6 +1229,7 @@ q = nil
 ---@class Steppe.midi_get_result
 ---@field text string
 ---@field context? table
+---@field follow? string
 ---@field warnings? table[]
 
 ---@class Steppe.midi_inputs_set_args
@@ -1253,6 +1267,8 @@ q = nil
 
 ---@class Steppe.modulate_result
 ---@field modulation string
+---@field param? string A plug-in target's canonical reference.
+---@field param_name? string A plug-in target's display name.
 ---@field rack? string
 ---@field module? string
 ---@field mod_out? string
@@ -1267,10 +1283,12 @@ q = nil
 ---@field target table
 ---@field depth number
 ---@field enabled? boolean
----@field lane? boolean Show the target's lane (default true).
+---@field lane? boolean Show the target's automation lane in the timeline while the route exists (default true). It never changes the sound.
 
 ---@class Steppe.modulation_add_result
 ---@field modulation string
+---@field param? string A plug-in target's canonical reference: its semantic key or decimal id.
+---@field param_name? string A plug-in target's display name.
 ---@field warnings? table[]
 
 ---@class Steppe.modulation_list_args
@@ -1294,7 +1312,7 @@ q = nil
 ---@field target? table
 ---@field depth? number
 ---@field enabled? boolean
----@field lane? boolean
+---@field lane? boolean Show or hide the target's automation lane for this route. It never changes the sound.
 
 ---@class Steppe.modulation_set_result
 ---@field warnings? table[]
@@ -2011,6 +2029,7 @@ q = nil
 ---@field bars integer
 ---@field name? string
 ---@field pooled? boolean (default: false)
+---@field follow? "none"|"key"|"chords" How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow.
 
 ---@class Steppe.scene_insert_result
 ---@field items table[]

@@ -102,6 +102,14 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
 }
 }  // namespace
 
+double Engine::effectivePlayrate() const {
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    if (plan && plan->rateEnabled && !plan->syncRate && plan->timelines[0]->points().empty() &&
+        !wantPlaying_.load(std::memory_order_acquire))
+        return plan->requestedScalar;
+    return effectivePlayrate_.load(std::memory_order_relaxed);
+}
+
 bool Engine::loadScalarRate(const model::Session& session, const std::filesystem::path& dir) {
     auto* p = latestPlan_.load(std::memory_order_acquire);
     // Never while an edit is deferred, nor for the reload that ends the
@@ -196,6 +204,16 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
         p->timelines[1]->scalarEdits.push(edit);
         p->scalarPublication->store(sequence, std::memory_order_release);
         p->requestedScalar = value;
+        // Launches placed on the old trajectory past the edit move with it
+        // (S3): service places them again.
+        voidRateLaunches(device);
+        launchRateControls_.scalar = value;
+        // Stopped (the transport asked to stop: review round 81 E4), nothing
+        // is heard, so there is nothing to glide from. A seek transport.stop
+        // prepared holds the old rate, and the glide queued on it would play
+        // out after the play start (the builder's song journey 2, D2): the
+        // play prepares its seek again, at the new rate. The plan stays.
+        if (!wantPlaying_.load(std::memory_order_acquire)) preparedSeekStale_ = true;
     }
     scalarPending_ = false;
     latest_ = std::make_shared<const model::Session>(session);

@@ -357,52 +357,22 @@ script::Transport RackClock::callTransport(std::int64_t position) SUPPLE_RT {
 
 // --- compile -----------------------------------------------------------------------------
 
-namespace {
-
-bool sameName(std::string_view a, std::string_view b) {
-    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-               return std::tolower(static_cast<unsigned char>(x)) ==
-                      std::tolower(static_cast<unsigned char>(y));
-           });
-}
-
-}  // namespace
-
 // The CLAP parameter a cable into the plug-in's `key` moves: a semantic key
 // (by `schema`, its semantic description), a parameter's id or its name. It
 // must be modulatable; a VST3 plug-in takes no modulation.
 Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
                                          const json::Value* schema, const std::string& key,
-                                         bool vst3, bool allowEnvelope) {
+                                         bool vst3, bool allowEnvelope, Ambiguity ambiguity,
+                                         std::string_view plugin) {
     if (vst3 && !allowEnvelope)
         return Error("rack.modulation", "VST3 plug-ins take no modulation", "",
                      "use a CLAP plug-in, or automate the parameter (env.add {fx})");
-    std::optional<std::uint32_t> id;
-    if (schema && schema->isObject())
-        if (const auto* ps = schema->find("params"); ps && ps->isObject())
-            if (const auto* d = ps->find(key); d && d->isObject())
-                if (const auto* v = d->find("id"); v && v->isNumber())
-                    id = static_cast<std::uint32_t>(v->asInt());
-    if (!id) {
-        if (key.size() > 1 && key.front() == '0' &&
-            key.find_first_not_of("0123456789") == std::string::npos) {
-            const auto first = key.find_first_not_of('0');
-            const auto canonical = first == std::string::npos ? "0" : key.substr(first);
-            return Error("rack.port", "numeric parameter ids cannot have leading zeros", "",
-                         "use the canonical parameter id " + canonical);
-        }
-        std::uint32_t number = 0;
-        const auto [end, ec] = std::from_chars(key.data(), key.data() + key.size(), number);
-        if (ec == std::errc{} && end == key.data() + key.size()) id = number;
-    }
-    const host::ParamInfo* found = nullptr;
-    for (const host::ParamInfo& info : list)
-        if (id ? info.id == *id
-               : key.find_first_not_of("0123456789") != std::string::npos &&
-                     sameName(info.name, key)) {
-            found = &info;
-            break;
-        }
+    // One resolver for every reference (session-model "Plug-in parameter
+    // references"): a semantic key, a canonical decimal id, or a name.
+    auto ref = resolveParam(list, schema, key, plugin, ambiguity);
+    if (!ref && ref.error().code != "param.unknown")
+        return recodeParamError(std::move(ref).error(), "rack.port");
+    const host::ParamInfo* found = ref ? ref->info : nullptr;
     // What a route takes, as fx.describe marks it: directly (PARAM_MOD), or
     // through an active envelope when `allowEnvelope` (ADR-0096 step M4):
     // automatable and continuous; a VST3's never directly.
@@ -445,7 +415,9 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
             routedCount += direct(info) ? 1 : 0;
             envelopedCount += byEnvelope(info) ? 1 : 0;
         }
-        const std::string message = "the plug-in has no parameter " + key;
+        const std::string message =
+            (plugin.empty() ? std::string("the plug-in") : std::string(plugin)) +
+            " has no parameter \"" + key + "\"";
         if (routedCount == 0 && envelopedCount == 0)
             return Error("rack.port", message, "",
                          allowEnvelope
@@ -477,7 +449,8 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
     if (vst3 || !(found->flags & CLAP_PARAM_IS_MODULATABLE)) {
         // Read-only and bypass parameters are the caller's to refuse.
         if (allowEnvelope && (found->flags & CLAP_PARAM_IS_AUTOMATABLE) && !stepped(*found))
-            return PluginModTarget{found->id, vst3 ? 1.0 : found->max - found->min, true};
+            return PluginModTarget{found->id, vst3 ? 1.0 : found->max - found->min, true,
+                                   ref->canonical};
         // A stepped or choice parameter is left out: a sum would move it
         // between steps at every grid point (a latency choice restarts).
         if (allowEnvelope && (found->flags & CLAP_PARAM_IS_AUTOMATABLE) && stepped(*found))
@@ -486,12 +459,19 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
                          "automate it with envelope points instead (env.add {fx, param, "
                          "points}); routes take continuous parameters, which fx.describe marks "
                          "modulatable or modulatable_by_envelope");
-        return Error("rack.modulation",
-                     found->name + (allowEnvelope ? " is neither modulatable nor automatable"
-                                                  : " is not modulatable"),
-                     "", "automate it instead (env.add {fx})");
+        // Not automatable: no envelope reaches it either (review round 72 D4).
+        if (allowEnvelope)
+            return Error("rack.modulation",
+                         found->name +
+                             " is not automatable, so neither a route nor an envelope "
+                             "can move it",
+                         "", "set its value with fx.param.set {fx, values}");
+        return Error("rack.modulation", found->name + " is not modulatable", "",
+                     (found->flags & CLAP_PARAM_IS_AUTOMATABLE)
+                         ? "automate it instead (env.add {fx, param, points})"
+                         : "set its value with fx.param.set {fx, values}");
     }
-    return PluginModTarget{found->id, found->max - found->min};
+    return PluginModTarget{found->id, found->max - found->min, false, ref->canonical};
 }
 
 RackLatencies rackLatencies(const Session& session, Id rackId,
@@ -756,7 +736,8 @@ Status compileRack(Plan& p, Node& n, const Session& s, Id rackId, InstancePool& 
             }
             auto target =
                 resolvePluginMod(st.instance->params(), schema->second ? &*schema->second : nullptr,
-                                 c.to.key, st.instance->info().format == "vst3");
+                                 c.to.key, st.instance->info().format == "vst3", false,
+                                 Ambiguity::First, st.instance->info().name);
             if (!target) {
                 p.warnings.push_back(e.id.str() + ": " + c.to.str() + ": " +
                                      target.error().message + "; the cable is not heard");
@@ -1028,6 +1009,13 @@ bool processRack(Plan& p, Node& n, std::int64_t pos, std::uint32_t frames,
     const bool playing = transport.playing;
     for (NotesFeed& feed : r.notes) {
         feed.block.clear();
+        // On a playrate plan a launch's release comes first: the clip's notes
+        // at the switch follow it (S3), and the stage holds none of the old.
+        if (p.rateEnabled && feed.releaseHeld) {
+            feed.notes->endSource(0);
+            feed.midiStage.voices.clear();
+            feed.releaseHeld = false;
+        }
         if (playing && p.rateEnabled) {
             rackTimelineEvents(p, n, feed, pos, frames);
             for (const auto& e : feed.midiStage.blockEvents) {

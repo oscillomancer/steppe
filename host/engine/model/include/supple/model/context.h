@@ -50,6 +50,15 @@ std::string keyWords(const ContextPoint& point);
 std::optional<harmony::Key> keyAt(const Session& s, double beat);
 std::optional<harmony::Chord> chordAt(const Session& s, double beat);
 
+// A clip's own context (ADR-0098): the point of the type that holds at clip beat
+// `beat` (the last at or before it), null before the first. Points are sorted by
+// beat then type, as the clip keeps them. keyAt and chordAt read what it says,
+// as the session's do: an unreadable point holds and answers nothing.
+const ContextPoint* keyPointAt(const Clip& clip, double beat);
+const ContextPoint* chordPointAt(const Clip& clip, double beat);
+std::optional<harmony::Key> keyAt(const Clip& clip, double beat);
+std::optional<harmony::Chord> chordAt(const Clip& clip, double beat);
+
 // The section at `beat`: of the regions with `section` true that cover it
 // (start <= beat < end, in beats through the time map), the one that starts
 // latest; ties go to the shorter, then the lower id. None for a gap.

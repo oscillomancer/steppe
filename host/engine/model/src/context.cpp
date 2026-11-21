@@ -76,6 +76,30 @@ std::optional<harmony::Chord> chordAt(const Session& s, double beat) {
     return p ? parseChordPoint(*p) : std::nullopt;
 }
 
+namespace {
+const ContextPoint* clipPointAt(const Clip& clip, ContextType type, double beat) {
+    const ContextPoint* held = nullptr;
+    for (const ContextPoint& p : clip.context)
+        if (p.type == type && p.beat <= beat && (!held || p.beat >= held->beat)) held = &p;
+    return held;
+}
+}  // namespace
+
+const ContextPoint* keyPointAt(const Clip& clip, double beat) {
+    return clipPointAt(clip, ContextType::Key, beat);
+}
+const ContextPoint* chordPointAt(const Clip& clip, double beat) {
+    return clipPointAt(clip, ContextType::Chord, beat);
+}
+std::optional<harmony::Key> keyAt(const Clip& clip, double beat) {
+    const ContextPoint* p = keyPointAt(clip, beat);
+    return p ? parseKey(*p) : std::nullopt;
+}
+std::optional<harmony::Chord> chordAt(const Clip& clip, double beat) {
+    const ContextPoint* p = chordPointAt(clip, beat);
+    return p ? parseChordPoint(*p) : std::nullopt;
+}
+
 std::optional<Id> sectionAt(const Session& s, double beat) {
     std::optional<Id> best;
     double bestStart = 0, bestEnd = 0;

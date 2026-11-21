@@ -1039,7 +1039,9 @@ class TcpPanel::EnvRow : public ui::Node {
         const model::Envelope* e = env_ ? session.envelopes.find(*env_) : nullptr;
         if (!e) return;
         const auto* g = session.groups.find(e->target.object);
-        title_->setText(g ? g->name + " · " + envTitle(*e) : envTitle(*e, session));
+        const auto scale = panel_.layout_.scaleOf(*e);
+        title_->setText(g ? g->name + " · " + envTitle(*e)
+                          : envTitle(*e, session, scale ? &*scale : nullptr));
         mode_->setText(modeName(e->mode));
         active_->setOn(e->active);
     }

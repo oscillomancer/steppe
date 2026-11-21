@@ -18,17 +18,21 @@ exec {"command": "modulate", "args": {"target": {"fx": "fx_4", "param": "gain"},
 |---|---|
 | `lfo` | an LFO (rate, shape, sync are its knobs) |
 | `random` | the same LFO set to Random Steps |
-| `macro` | a Macro's first knob; it sits at 0 until you move it, so it does nothing at first |
+| `macro` | a Macro's first knob; it sits at 0 until you move it, so it does nothing at first (its knobs run **0 to 100 %**) |
 | `follower` + `from: "tr_1"` | the level of another track, so a bass can duck from the drums |
 
-`target` is a plug-in parameter `{fx, param}` (key, name or CLAP id), a track's
-`{track, param: volume | pan | width}` or a send's `{route, param: volume}`.
+`target` is a plug-in parameter `{fx, param}` (key, id, or name in any case), a
+track's `{track, param: volume | pan | width}` or a send's `{route, param: volume}`.
+A name that two parameters share is refused with their ids; the route stores the
+key (any spelling, on a plug-in that has keys) or else the id, and answers give
+`param_name` beside it.
 
 It finds or makes the rack that does the work (the first rack on the target's
 track with a Mod Out, else one named Modulators on a new channel), adds the
 source module, cables it into a Mod Out input and routes that input to the
 target. The result names the `modulation` route (`mr_1`), the `rack`, the `module`,
-the `mod_out` and, for a macro, the `knob` to move. A follower that would close a loop through a rack is moved to
+the `mod_out` and, for a macro, the `knob` to move (`module.set {module, params:
+{macro_1: 80}}` or `{macro_1: "80 %"}`: a bare number is in the knob's unit, so `0.8` is 0.8 %, and a number above 100 is refused with `params.out_of_range`). A follower that would close a loop through a rack is moved to
 another rack; only a real cycle (a follower on a track the target feeds, itself
 included) is refused with `modulation.cycle`.
 
@@ -42,11 +46,22 @@ with `modulation.set {modulation, depth}`; turn a route off and on with
 `module.set {module, params}` (`module.describe {type}` lists them), for example
 an LFO's rate or a follower's threshold.
 
+`lane` (in `modulation.list`, `modulation.add` and `modulation.set`, default true) is a
+display flag: it asks the timeline to show the target's automation lane under its track, so
+you can see a modulated parameter beside its envelope. It never changes the sound, and
+nothing in a render, the telemetry or `inert` depends on it. A target has one lane however
+many routes reach it; the lane goes when the last route's `lane` is off and its own envelope
+is hidden. An agent can leave it alone; set `lane: false` to keep a route out of the way.
+
 Which parameters take it: `fx.describe` with full detail marks a parameter
 `modulatable` (taken directly) or `modulatable_by_envelope` (continuous and
 automatable but not modulatable by itself, as Drumlin's pads' tune is: `modulate`
 adds a one-point envelope first and the route rides on it, so keep that envelope
-on). A parameter that is neither is refused with `modulation.target`, and its
+on). Some plug-ins repeat on their output every value they are sent (a stepped one as
+the step it plays); while a parameter's lane sends it, what the plug-in reports for it
+is taken as that repeat and dropped, so a modulated parameter adds nothing to the undo
+history and writes no envelope points. Only the plug-in's own edits (its editor, with
+its gesture: a VST3 editor's beginEdit/endEdit count) are recorded. A parameter that is neither is refused with `modulation.target`, and its
 hint says what the plug-in does take.
 
 ## Reading it back
@@ -76,7 +91,8 @@ hint says what the plug-in does take.
 
 - Depth first, then rate: a modulation you cannot measure at a depth of 0.25 will not
   appear at 0.01.
-- A macro is for a person's hand or a later `module.set`; to hear movement, use an LFO.
+- A macro is for a person's hand or a later `module.set` (`"80 %"`, or 80); to hear movement,
+  use an LFO.
 - Delete a route with `modulation.remove`; removing its Mod Out or the plug-in it
   targets removes it too, with a `modulation.removed` warning.
 - Do not stack many routes on one target to fake an envelope: automate it (`env.add`).

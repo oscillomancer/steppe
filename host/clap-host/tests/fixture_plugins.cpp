@@ -153,6 +153,21 @@ const clap_plugin_descriptor_t* fixedGainDescriptor() {
     return &descriptor;
 }
 
+// Review round 72 D3, D4: the raw gain with both its parameters named
+// "Gain" (twin-gain: a name that matches two), and with its gain neither
+// modulatable nor automatable (manual-gain).
+const clap_plugin_descriptor_t* namingGainDescriptor(bool twin) {
+    static const auto descriptors = [] {
+        std::array<clap_plugin_descriptor_t, 2> value{*gainDescriptor(), *gainDescriptor()};
+        value[0].id = "com.suppleaudio.test.twin-gain";
+        value[0].name = "Test Twin Gain";
+        value[1].id = "com.suppleaudio.test.manual-gain";
+        value[1].name = "Test Manual Gain";
+        return value;
+    }();
+    return &descriptors[twin ? 0 : 1];
+}
+
 const clap_plugin_descriptor_t* checkedGainDescriptor(bool reject) {
     static const char* features[] = {CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_STEREO,
                                      nullptr};
@@ -256,6 +271,8 @@ struct Gain {
     int delayPos = 0;
     bool noSemantic = false;
     bool noModulation = false;  // fixed-gain: no parameter flagged modulatable
+    bool twinNames = false;     // twin-gain: both parameters named "Gain"
+    bool noAutomation = false;  // manual-gain: its gain not automatable
     bool enforceThread = false;
     bool rejectPatch = false;
     bool slowPatch = false;
@@ -308,8 +325,12 @@ bool CLAP_ABI gainParamInfo(const clap_plugin_t* pl, uint32_t index, clap_param_
     info->flags = params::clapFlags(p);
     if (G(pl)->noModulation)
         info->flags &= ~static_cast<clap_param_info_flags>(CLAP_PARAM_IS_MODULATABLE);
+    if (G(pl)->noAutomation && index == 0)
+        info->flags &= ~static_cast<clap_param_info_flags>(CLAP_PARAM_IS_MODULATABLE |
+                                                           CLAP_PARAM_IS_AUTOMATABLE);
     std::snprintf(info->name, sizeof(info->name), "%.*s", static_cast<int>(p.name.size()),
                   p.name.data());
+    if (G(pl)->twinNames) std::snprintf(info->name, sizeof(info->name), "Gain");
     const auto r = params::clapRange(p);
     info->min_value = r.min;
     info->max_value = r.max;
@@ -860,13 +881,29 @@ struct Edge {
     // (12). Mode 7 rescales its own size in response, as a plug-in may.
     double guiScale = 0;
     std::uint32_t guiScaleCalls = 0;
+    // Mode 37: the parameter values echoed one process call late (audio thread).
+    std::array<clap_event_param_value_t, 512> late{};
+    std::size_t lateCount = 0;
 };
 Edge* E(const clap_plugin_t* p) { return static_cast<Edge*>(p->plugin_data); }
 
-uint32_t CLAP_ABI edgeParamCount(const clap_plugin_t* pl) { return E(pl)->removed ? 1 : 2; }
+// Modes 36 and 37 (echoes) add parameters 20 and 21, automatable like 7.
+bool edgeEchoes(const clap_plugin_t* pl) {
+    return E(pl)->config[0] == 36 || E(pl)->config[0] == 37;
+}
+uint32_t CLAP_ABI edgeParamCount(const clap_plugin_t* pl) {
+    return edgeEchoes(pl) ? 4 : E(pl)->removed ? 1 : 2;
+}
 bool CLAP_ABI edgeParamInfo(const clap_plugin_t* pl, uint32_t index, clap_param_info_t* info) {
-    if (index > 1) return false;
+    if (index > (edgeEchoes(pl) ? 3u : 1u)) return false;
     std::memset(info, 0, sizeof(*info));
+    if (index >= 2) {
+        info->id = index == 2 ? 20 : 21;
+        info->flags = CLAP_PARAM_IS_AUTOMATABLE;
+        std::snprintf(info->name, sizeof(info->name), index == 2 ? "Extra A" : "Extra B");
+        info->max_value = 1e9;
+        return true;
+    }
     info->id = index == 0 && !E(pl)->removed ? 7 : 8;
     // Mode 53: a state-dependent macro parameter, absent in the default state.
     if (E(pl)->config[0] == 53 && index == 0) info->id = 105;
@@ -896,6 +933,10 @@ bool CLAP_ABI edgeParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
     }
     if (id == 10) {
         *out = E(pl)->mainCalls;
+        return true;
+    }
+    if ((id == 20 || id == 21) && edgeEchoes(pl)) {
+        *out = 0;
         return true;
     }
     if (id == 11 || id == 12) {
@@ -957,10 +998,35 @@ void edgeHostInput(const clap_plugin_t* pl, const clap_input_events_t* in) {
         }
     }
 }
+// Mode 36: each parameter value the host sends comes straight back as the
+// plug-in's output, as some plug-ins echo them (the gui-lead's second walk,
+// defect 1): the host must not take it for the plug-in's own edit. Mode 37
+// sends them back one call later (review round 81 E1: an echo a block late).
+void edgeEcho(const clap_plugin_t* pl, const clap_input_events_t* in,
+              const clap_output_events_t* out) {
+    if (!edgeEchoes(pl) || !out) return;
+    Edge& edge = *E(pl);
+    if (edge.config[0] == 37) {
+        for (std::size_t i = 0; i < edge.lateCount; ++i) out->try_push(out, &edge.late[i].header);
+        edge.lateCount = 0;
+    }
+    for (uint32_t i = 0; i < in->size(in); ++i) {
+        const auto* h = in->get(in, i);
+        if (h->space_id != CLAP_CORE_EVENT_SPACE_ID || h->type != CLAP_EVENT_PARAM_VALUE) continue;
+        clap_event_param_value_t echo = *reinterpret_cast<const clap_event_param_value_t*>(h);
+        echo.header.flags = CLAP_EVENT_IS_LIVE;
+        echo.header.time = 0;
+        if (edge.config[0] == 36)
+            out->try_push(out, &echo.header);
+        else if (edge.lateCount < edge.late.size())
+            edge.late[edge.lateCount++] = echo;
+    }
+}
 void CLAP_ABI edgeFlush(const clap_plugin_t* pl, const clap_input_events_t* in,
                         const clap_output_events_t* out) {
     const auto value = ++E(pl)->flushes;
     edgeHostInput(pl, in);
+    edgeEcho(pl, in, out);
     if (E(pl)->config[0] >= 30 && !E(pl)->processing) edgeEditorOutput(pl, out, true);
     if (E(pl)->config[0] != 9 && E(pl)->config[0] != 10) return;
     const int repeats = E(pl)->config[0] == 10 ? 600 : 1;
@@ -1261,6 +1327,7 @@ clap_process_status CLAP_ABI edgeProcess(const clap_plugin_t* pl, const clap_pro
     if (E(pl)->config[0] == 42 || E(pl)->config[0] == 44)
         E(pl)->host->request_callback(E(pl)->host);
     edgeHostInput(pl, p->in_events);
+    edgeEcho(pl, p->in_events, p->out_events);
     if (E(pl)->config[0] >= 30) edgeEditorOutput(pl, p->out_events, false);
     clap_event_param_value_t param{};
     param.header = {sizeof(param), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE,
@@ -1891,7 +1958,7 @@ clap_process_status CLAP_ABI noteGenProcess(const clap_plugin_t* p, const clap_p
     return CLAP_PROCESS_CONTINUE;
 }
 
-uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 21; }
+uint32_t CLAP_ABI factoryCount(const clap_plugin_factory_t*) { return 23; }
 const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t*, uint32_t i) {
     return i == 0    ? gainDescriptor()
            : i == 1  ? sineDescriptor()
@@ -1914,6 +1981,8 @@ const clap_plugin_descriptor_t* CLAP_ABI factoryDesc(const clap_plugin_factory_t
            : i == 18 ? noteEchoDescriptor()
            : i == 19 ? noteGenDescriptor()
            : i == 20 ? fixedGainDescriptor()
+           : i == 21 ? namingGainDescriptor(true)
+           : i == 22 ? namingGainDescriptor(false)
                      : nullptr;
 }
 const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const clap_host_t* host,
@@ -1925,6 +1994,14 @@ const clap_plugin_t* CLAP_ABI factoryCreate(const clap_plugin_factory_t*, const 
         G(plugin)->noModulation = true;
         return plugin;
     }
+    for (const bool twin : {true, false})
+        if (!std::strcmp(id, namingGainDescriptor(twin)->id)) {
+            const auto* plugin =
+                make<Gain>(host, namingGainDescriptor(twin), gainActivate, gainProcess, gainExt);
+            G(plugin)->noSemantic = true;
+            (twin ? G(plugin)->twinNames : G(plugin)->noAutomation) = true;
+            return plugin;
+        }
     if (!std::strcmp(id, rawGainDescriptor()->id)) {
         const auto* plugin =
             make<Gain>(host, rawGainDescriptor(), gainActivate, gainProcess, gainExt);

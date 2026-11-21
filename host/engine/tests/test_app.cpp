@@ -3661,14 +3661,18 @@ TEST_CASE("automation timebases preserve plugin output positions through branch 
     };
     call("track.add", "{}");
     call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})");
-    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
     const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
-    auto setup = app->beginTransaction(kTest, "Timed editor output");
-    REQUIRE(setup);
+    // The mode first: parameter 7 is automatable only in it (env.add checks).
+    auto mode = app->beginTransaction(kTest, "Editor output mode");
+    REQUIRE(mode);
     std::vector<std::uint8_t> state{35, 0, 0, 0};
     const auto hash = "sha256:" + sha256Hex(state);
     app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{state}));
     app->txn().modify<model::FxInstance>(fx, [&](auto& f) { f.state = hash; });
+    REQUIRE(app->commitTransaction(*mode));
+    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
+    auto setup = app->beginTransaction(kTest, "Timed editor output");
+    REQUIRE(setup);
     app->txn().modify<model::Envelope>(env, [](auto& e) {
         e.timebase = model::Timebase::Time;
         e.mode = model::EnvMode::Touch;
@@ -3717,14 +3721,18 @@ TEST_CASE("a touch over a parameter modulated through its envelope records the h
     };
     call("track.add", "{}");
     call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})");
-    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
     const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
-    auto setup = app->beginTransaction(kTest, "Editor output mode");
-    REQUIRE(setup);
+    // The mode first: parameter 7 is automatable only in it (env.add checks).
+    auto mode = app->beginTransaction(kTest, "Editor output mode");
+    REQUIRE(mode);
     std::vector<std::uint8_t> state{35, 0, 0, 0};
     const auto hash = "sha256:" + sha256Hex(state);
     app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{state}));
     app->txn().modify<model::FxInstance>(fx, [&](auto& f) { f.state = hash; });
+    REQUIRE(app->commitTransaction(*mode));
+    call("env.add", R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":0}]})");
+    auto setup = app->beginTransaction(kTest, "Touch mode");
+    REQUIRE(setup);
     app->txn().modify<model::Envelope>(env, [](auto& e) { e.mode = model::EnvMode::Touch; });
     REQUIRE(app->commitTransaction(*setup));
     DummyBackend backend({.mode = DummyBackend::Mode::Manual});
@@ -3900,6 +3908,118 @@ TEST_CASE("a touch over a moving plug-in lane records the hand's values, modulat
             CHECK(app->engine()->writeHolds().empty());
             app->stopEngine();
         }
+}
+
+// Review round 75: an envelope named by id on a semantic plug-in is stored by
+// its key, so every lookup by parameter finds it (session-model "Plug-in
+// parameter references"): a write pass from fx.param.set, the plug-in
+// window's gestures and the lane they hold.
+TEST_CASE("an envelope added by id on a semantic plug-in is stored by its key and recorded into") {
+    struct Control {
+        void (*edit)(const clap_plugin_t*, double, std::uint32_t);
+        std::uint32_t (*deliveries)(const clap_plugin_t*);
+        void (*latency)(const clap_plugin_t*, bool);
+        std::uint32_t (*creates)();
+        void (*patchRescan)(const clap_plugin_t*, std::uint32_t);
+        void (*patchEffect)(const clap_plugin_t*, std::uint32_t);
+        void (*hand)(const clap_plugin_t*, double, std::uint32_t);
+    };
+    for (const bool byGesture : {false, true}) {
+        CAPTURE(byGesture);
+        Root root;
+        auto app = makeApp(root.path);
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher bus(registry, *app);
+        auto call = [&](const char* command, std::string_view args) {
+            auto result = bus.execute({command, j(args), kTest});
+            REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+            return *result;
+        };
+        call("track.add", "{}");
+        call("fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+        // The gain's id is 0; its plain values are the plug-in's CLAP range.
+        const model::FxInstance& fxModel = *app->head().fx.find({model::Kind::Fx, 1});
+        const auto list = app->fxParams(fxModel);
+        REQUIRE(list);
+        const auto gain =
+            std::find_if(list->begin(), list->end(), [](const auto& p) { return p.id == 0; });
+        REQUIRE(gain != list->end());
+        const double plain = gain->min + 0.5 * (gain->max - gain->min);
+        json::Value add = j(R"({"fx":"fx_1","param":"0"})");
+        add["points"] = json::Value::array();
+        for (const double beat : {0.0, 16.0}) {
+            json::Value pt = json::Value::object();
+            pt["beat"] = beat;
+            pt["value"] = plain;
+            add["points"].asArray().push_back(std::move(pt));
+        }
+        auto added = bus.execute({"env.add", add, kTest});
+        REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+        CHECK(added->find("param")->asString() == "gain");
+        REQUIRE(added->find("converted"));
+        CHECK(added->find("converted")->asBool());
+        const model::Id fx{model::Kind::Fx, 1}, env{model::Kind::Envelope, 1};
+        const model::Envelope& stored = *app->head().envelopes.find(env);
+        CHECK(stored.target.param == "gain");
+        // The plain midpoint, converted to the key's dB.
+        auto described = app->fxSchema(fxModel);
+        REQUIRE(described);
+        REQUIRE(described->isObject());
+        auto spec = params::fromDescription("gain", *described->find("params")->find("gain"));
+        REQUIRE(spec);
+        CHECK(stored.points.at(0).value == doctest::Approx(params::fromClap((*spec)->spec, plain)));
+        // Named again by key or by name: the same parameter.
+        auto again = bus.execute({"env.add", j(R"({"fx":"fx_1","param":"Gain"})"), kTest});
+        REQUIRE_FALSE(again);
+        CHECK(again.error().code == "env.exists");
+        call("env.set", R"({"env":"en_1","mode":"latch"})");
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 64},
+                                 {.anticipative = false}));
+        REQUIRE(app->transport("play"));
+        backend.run(1);
+        app->tick();
+        const std::size_t before = app->head().envelopes.find(env)->points.size();
+        const std::vector<double> moves{-20, -15, -10};
+        for (const double db : moves) {
+            if (byGesture) {
+                auto* live = app->instanceOf(fx);
+                REQUIRE(live);
+                const auto* plugin = live->raw();
+                const auto* control = static_cast<const Control*>(
+                    plugin->get_extension(plugin, "supple.test.gain-control"));
+                REQUIRE(control);
+                // Begun on the first move, ended on the last.
+                control->hand(plugin, db, db == moves.front() ? 1u : db == moves.back() ? 2u : 0u);
+            } else {
+                json::Value set = j(R"({"fx":"fx_1"})");
+                set["values"] = json::Value::object();
+                set["values"]["gain"] = db;
+                REQUIRE(bus.execute({"fx.param.set", set, kTest}));
+            }
+            backend.run(20);
+            app->tick();
+        }
+        app->tick();
+        for (const auto& [topic, payload] : app->takeEvents())
+            if (topic == "engine.error") MESSAGE(json::writeCompact(payload));
+        const auto& points = app->head().envelopes.find(env)->points;
+        CHECK(points.size() > before);
+        for (const double db : moves) {
+            CAPTURE(db);
+            CHECK(std::any_of(points.begin(), points.end(), [&](const model::EnvPoint& p) {
+                return p.value == doctest::Approx(db).epsilon(1e-4);
+            }));
+        }
+        if (byGesture) {  // the latch pass holds the lane it records into
+            const auto& holds = app->engine()->writeHolds();
+            CHECK(std::find(holds.begin(), holds.end(), model::EnvTarget{fx, "gain"}) !=
+                  holds.end());
+        }
+        REQUIRE(app->transport("pause"));
+        app->stopEngine();
+    }
 }
 
 TEST_CASE("audio thread preference applies at next start and explicit options win") {
@@ -4763,4 +4883,429 @@ TEST_CASE("modulate: a follower listens through a send, and not to the track it 
     CHECK_FALSE(direct.find("module"));
     CHECK(app->view().modulations.find(*model::Id::parse(direct["modulation"].asString()))->depth ==
           50.0);
+}
+
+namespace {
+// An app with a track, a plug-in modulated through its envelope by a fast LFO
+// (ADR-0096 M4), the plug-in echoing each value it is sent (the gui-lead's
+// second walk, defect 1). `clap`: the edge fixture in its echo mode (36), its
+// parameter 7 (automatable, not modulatable); else Test VST3 Gain's Gain.
+struct EchoRig {
+    Root root;
+    std::unique_ptr<EngineApp> app;
+    std::unique_ptr<cmd::Registry> registry;
+    std::unique_ptr<cmd::Dispatcher> bus;
+    model::Id fx{model::Kind::Fx, 1}, env;
+    std::string modulation;
+    json::Value call(const char* command, const json::Value& args) {
+        auto result = bus->execute({command, args, kTest});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    }
+    // clap: the edge fixture in `echoMode` (36 echoes at once, 37 a block
+    // late), its `params` each on an envelope modulated by one LFO; else the
+    // VST3 `vst3` with its `vst3Param` modulated.
+    EchoRig(bool clap, const char* mode, const char* isolation, std::uint8_t echoMode = 36,
+            std::vector<const char*> params = {"7"}, const char* vst3 = "Test VST3 Gain",
+            const char* vst3Param = "Gain") {
+        AppOptions options;
+        options.workdir = root.path;
+        options.pluginPath = {kFixture, FIXTURE_VST3_PATH};
+        auto made = EngineApp::create(options, {.console9 = false});
+        REQUIRE(made);
+        app = std::move(*made);
+        registry = std::make_unique<cmd::Registry>();
+        registerEngineCommands(*registry);
+        bus = std::make_unique<cmd::Dispatcher>(*registry, *app);
+        call("track.add", j("{}"));
+        if (clap) {
+            call("fx.add", j(R"({"track":"tr_1","plugin":"com.suppleaudio.test.edge"})"));
+            auto echo = app->beginTransaction(kTest, "Echo mode");
+            REQUIRE(echo);
+            std::vector<std::uint8_t> state{echoMode, 0, 0, 0};
+            const auto hash = "sha256:" + sha256Hex(state);
+            app->txn().putBlob(hash, std::make_shared<const model::Blob>(model::Blob{state}));
+            app->txn().modify<model::FxInstance>(fx, [&](auto& f) { f.state = hash; });
+            REQUIRE(app->commitTransaction(*echo));
+            call("env.add", j(R"({"fx":"fx_1","param":"7","points":[{"beat":0,"value":500}]})"));
+            // The others as 7's (the commands read the fixture in its default
+            // state, where only 7 exists).
+            if (params.size() > 1) {
+                const model::Envelope seven = *app->head().envelopes.begin()->value;
+                auto more = app->beginTransaction(kTest, "More envelopes");
+                REQUIRE(more);
+                for (std::size_t k = 1; k < params.size(); ++k) {
+                    model::Envelope copy = seven;
+                    copy.target.param = params[k];
+                    app->txn().create(copy);
+                }
+                REQUIRE(app->commitTransaction(*more));
+            }
+            // The LFO (built on the pan: the commands read the fixture in its
+            // default state, where 7 is read-only), and a route from it into 7.
+            const json::Value made2 =
+                call("modulate", j(R"({"target":{"track":"tr_1","param":"pan"},"source":"lfo"})"));
+            const model::Modulation& pan = *app->head().modulations.find(
+                *model::Id::parse(made2.find("modulation")->asString()));
+            auto routing = app->beginTransaction(kTest, "Route into the envelope");
+            REQUIRE(routing);
+            for (const char* param : params) {
+                model::Modulation into;
+                into.source = pan.source;
+                into.target = {fx, param};
+                into.depth = 1e-7;
+                const auto id = app->txn().create(into).str();
+                if (modulation.empty()) modulation = id;
+            }
+            REQUIRE(app->commitTransaction(*routing));
+            json::Value fast = json::Value::object();
+            fast["module"] = made2.find("module")->asString();
+            fast["params"] = j(R"({"rate": 5})");
+            call("module.set", fast);
+        } else {
+            json::Value add = j(R"({"track":"tr_1"})");
+            add["plugin"] = vst3;
+            call("fx.add", add);
+            json::Value target = j(R"({"target":{"fx":"fx_1"},"source":"lfo"})");
+            target["target"]["param"] = vst3Param;
+            const json::Value made2 = call("modulate", target);
+            modulation = made2.find("modulation")->asString();
+            json::Value fast = json::Value::object();
+            fast["module"] = made2.find("module")->asString();
+            fast["params"] = j(R"({"rate": 5})");
+            call("module.set", fast);
+        }
+        for (const auto& e : app->head().envelopes)
+            if (e.value->target.object == fx) {
+                env = e.id;
+                json::Value set = json::Value::object();
+                set["env"] = env.str();
+                set["mode"] = mode;
+                call("env.set", set);
+            }
+        REQUIRE(env.n != 0);
+        if (isolation) {
+            json::Value iso = json::Value::object();
+            iso["fx"] = "fx_1";
+            iso["isolation"] = isolation;
+            call("fx.set", iso);
+        }
+    }
+};
+}  // namespace
+
+TEST_CASE("the values the host sends a plug-in are not its edits, though it echoes them") {
+    // The gui-lead's second walk, defect 1: a VST3 parameter modulated through
+    // its envelope (ADR-0096 M4) flooded the history with "Plug-in parameter
+    // edit" entries, playing or stopped, and a writing mode wrote points. Both
+    // fixtures echo each value they are sent; over seconds of modulated
+    // running, stopped and playing: no version, no point, the history as it
+    // was. In both executors, and bridged (the bridge carries the outputs).
+    struct Run {
+        bool anticipative;
+        const char* isolation;
+    };
+    for (const bool clap : {false, true})
+        for (const char* mode : {"read", "touch", "latch"})
+            for (const Run run :
+                 {Run{false, nullptr}, Run{true, nullptr}, Run{false, "shared_bridge"}}) {
+                CAPTURE(clap);
+                CAPTURE(std::string(mode));
+                CAPTURE(run.anticipative);
+                CAPTURE(run.isolation != nullptr);
+                EchoRig rig(clap, mode, run.isolation);
+                EngineApp& app = *rig.app;
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+                REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                        {.anticipative = run.anticipative}));
+                const auto seconds = [&](double s) {
+                    for (int i = 0; i < int(s * 48000 / 512); ++i) {
+                        if (run.anticipative) (void)app.engine()->awaitRendered(4096);
+                        backend.run(1);
+                        app.tick();
+                    }
+                };
+                seconds(0.5);
+                const auto version = app.head().version;
+                // The newest history entry (a flood adds "Plug-in parameter edit"s).
+                const auto newest = [&] { return app.versions().history(1).front()->id; };
+                const auto history = newest();
+                const auto points = app.head().envelopes.find(rig.env)->points.size();
+                REQUIRE(app.modulationOffsets().count(*model::Id::parse(rig.modulation)));
+                seconds(2);  // stopped: the LFO runs on
+                CHECK(app.head().version == version);
+                REQUIRE(app.transport("play"));
+                seconds(2);
+                CHECK(app.head().version == version);
+                CHECK(newest() == history);
+                CHECK(app.head().envelopes.find(rig.env)->points.size() == points);
+                REQUIRE(app.transport("stop"));
+                app.stopEngine();
+            }
+}
+
+TEST_CASE("a plug-in's own edit during modulation is still recorded, once") {
+    // The echo filter drops only values the host sent: the edge fixture's
+    // editor (its gesture, 5 then 10, in its echo mode) is the plug-in's own
+    // edit, recorded as one step with the hand's last value, while the LFO
+    // keeps sending and the fixture keeps echoing.
+    for (const char* mode : {"read", "touch"}) {
+        CAPTURE(std::string(mode));
+        EchoRig rig(true, mode, nullptr);
+        EngineApp& app = *rig.app;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                {.anticipative = false}));
+        const auto cycles = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                backend.run(1);
+                app.tick();
+            }
+        };
+        REQUIRE(app.transport("play"));
+        cycles(50);
+        const auto version = app.head().version;
+        auto* instance = app.instanceOf(rig.fx);
+        REQUIRE(instance);
+        REQUIRE(instance->openEditor(1234, 1));
+        cycles(50);
+        instance->closeEditor();
+        cycles(50);
+        CHECK(app.head().version == version + 1);
+        CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
+        REQUIRE(app.transport("stop"));
+        app.stopEngine();
+    }
+}
+
+TEST_CASE("echoes of several moving lanes, at once or a block late, are not edits") {
+    // Review round 81, E1: three LFO-modulated parameters send about 96
+    // values in an anticipative block of 1024 (and two in-callback at 2048
+    // send 128); an echo filter that kept the values it sent lost the first
+    // of them before process, and their echoes were edits again. The filter
+    // goes by the parameter its lane sent this block or the one before, so
+    // neither the count nor an echo one block late (mode 37) makes one.
+    struct Run {
+        std::uint8_t echoMode;
+        bool anticipative;
+        std::uint32_t block;
+    };
+    for (const Run run :
+         {Run{36, true, 512}, Run{36, false, 2048}, Run{37, true, 512}, Run{37, false, 2048}}) {
+        CAPTURE(int(run.echoMode));
+        CAPTURE(run.anticipative);
+        EchoRig rig(true, "touch", nullptr, run.echoMode, {"7", "20", "21"});
+        EngineApp& app = *rig.app;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = run.block},
+                                {.anticipative = run.anticipative}));
+        const auto seconds = [&](double s) {
+            for (int i = 0; i < int(s * 48000 / run.block); ++i) {
+                if (run.anticipative) (void)app.engine()->awaitRendered(4096);
+                backend.run(1);
+                app.tick();
+            }
+        };
+        seconds(0.5);
+        const auto version = app.head().version;
+        const auto newest = [&] { return app.versions().history(1).front()->id; };
+        const auto history = newest();
+        seconds(1);
+        CHECK(app.head().version == version);
+        REQUIRE(app.transport("play"));
+        seconds(1.5);
+        CHECK(app.head().version == version);
+        CHECK(newest() == history);
+        REQUIRE(app.transport("stop"));
+        app.stopEngine();
+    }
+}
+
+TEST_CASE("a stepped VST3 parameter on a ramp reports its steps, and they are not edits") {
+    // Review round 81, E2: a stepped plug-in reports the step it plays, not
+    // the value the host sent; matched by value, every such echo was an
+    // edit. Its lane sent the parameter, so the echo is the host's. In both
+    // executors.
+    for (const bool anticipative : {false, true}) {
+        CAPTURE(anticipative);
+        Root root;
+        AppOptions options;
+        options.workdir = root.path;
+        options.pluginPath = {FIXTURE_VST3_PATH};
+        auto made = EngineApp::create(options, {.console9 = false});
+        REQUIRE(made);
+        EngineApp& app = **made;
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher bus(registry, app);
+        const auto call = [&](const char* command, const char* args) {
+            auto result = bus.execute({command, j(args), kTest});
+            REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        };
+        call("track.add", "{}");
+        call("fx.add", R"({"track":"tr_1","plugin":"Test VST3 Stepped Echo"})");
+        call(
+            "env.add",
+            R"({"fx":"fx_1","param":"Steps","points":[{"beat":0,"value":0},{"beat":4,"value":1}]})");
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                {.anticipative = anticipative}));
+        const auto seconds = [&](double s) {
+            for (int i = 0; i < int(s * 48000 / 512); ++i) {
+                if (anticipative) (void)app.engine()->awaitRendered(4096);
+                backend.run(1);
+                app.tick();
+            }
+        };
+        seconds(0.2);
+        const auto version = app.head().version;
+        REQUIRE(app.transport("play"));
+        seconds(2.5);  // the ramp crosses every step
+        CHECK(app.head().version == version);
+        REQUIRE(app.transport("stop"));
+        app.stopEngine();
+    }
+}
+
+TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, its points once") {
+    // Review round 81b, E5: with no lane sending the parameter, the
+    // processor's report of the editor's edit was kept as a second,
+    // gestureless edit: playing in touch or latch, one edit made two steps
+    // and two points, and a drag wrote each point twice. A one-shot edit
+    // (performEdit alone) and a drag of two moves (beginEdit, performEdit
+    // twice, endEdit), in-callback and bridged. Within the drag the plug-in
+    // state is not captured as a step of its own (its plan swap dropped the
+    // drag's gesture): that waits for endEdit. The anticipative executor
+    // records a VST3 editor's edit as the plug-in's state (STATUS).
+    for (const char* mode : {"touch", "latch"})
+        for (const char* isolation : {static_cast<const char*>(nullptr), "shared_bridge"})
+            for (const bool drag : {false, true}) {
+                CAPTURE(std::string(mode));
+                CAPTURE(isolation != nullptr);
+                CAPTURE(drag);
+                Root root;
+                AppOptions options;
+                options.workdir = root.path;
+                options.pluginPath = {FIXTURE_VST3_PATH};
+                auto made = EngineApp::create(options, {.console9 = false});
+                REQUIRE(made);
+                EngineApp& app = **made;
+                cmd::Registry registry;
+                registerEngineCommands(registry);
+                cmd::Dispatcher bus(registry, app);
+                const auto call = [&](const char* command, json::Value args) {
+                    auto result = bus.execute({command, std::move(args), kTest});
+                    REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+                    return *result;
+                };
+                call("track.add", j("{}"));
+                call("fx.add", j(R"({"track":"tr_1","plugin":"Test VST3 Stepped Echo"})"));
+                const json::Value added =
+                    call("env.add",
+                         j(R"({"fx":"fx_1","param":"Level","points":[{"beat":0,"value":0.5}]})"));
+                const auto env = *model::Id::parse(added.find("env")->asString());
+                json::Value set = json::Value::object();
+                set["env"] = env.str();
+                set["mode"] = mode;
+                call("env.set", set);
+                if (isolation) {
+                    json::Value iso = j(R"({"fx":"fx_1"})");
+                    iso["isolation"] = isolation;
+                    call("fx.set", iso);
+                }
+                DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+                REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                        {.anticipative = false}));
+                const auto cycles = [&](int n) {
+                    for (int i = 0; i < n; ++i) {
+                        backend.run(1);
+                        app.tick();
+                    }
+                };
+                REQUIRE(app.transport("play"));
+                cycles(50);
+                const auto version = app.head().version;
+                const auto points = app.head().envelopes.find(env)->points.size();
+                auto* instance = app.instanceOf(*model::Id::parse("fx_1"));
+                REQUIRE(instance);
+                // Edit: below 0.1 grabs Level, from 0.9 lets go, else moves it.
+                if (drag) {
+                    REQUIRE(instance->setParam(2, 0.05));
+                    cycles(10);
+                    REQUIRE(instance->setParam(2, 0.3));
+                    cycles(10);
+                    REQUIRE(instance->setParam(2, 0.5));
+                    cycles(10);
+                    REQUIRE(instance->setParam(2, 0.95));
+                } else
+                    REQUIRE(instance->setParam(2, 0.7));
+                cycles(50);
+                CHECK(app.head().version == version + 1);
+                CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
+                // A write is a step: the value held just before, then each
+                // move once (one-shot: 0.7; the drag: 0.3, then 0.5).
+                const auto& now = app.head().envelopes.find(env)->points;
+                REQUIRE(now.size() == points + (drag ? 3 : 2));
+                CHECK(now[points].value == doctest::Approx(0.5));
+                if (drag) {
+                    CHECK(now[points + 1].value == doctest::Approx(0.3));
+                    CHECK(now[points + 2].value == doctest::Approx(0.5));
+                } else
+                    CHECK(now[points + 1].value == doctest::Approx(0.7));
+                REQUIRE(app.transport("stop"));
+                app.stopEngine();
+            }
+}
+
+TEST_CASE("a VST3 editor's edit during modulation is the plug-in's, recorded once") {
+    // Review round 81, E2: the editor's beginEdit, performEdit and endEdit
+    // reach the engine as the plug-in's gesture (as a CLAP plug-in's), so its
+    // edit of a parameter whose lane is sending is recorded, once, while the
+    // processor's echoes of the lane are not. The fixture's editor moves
+    // Level when the host sets Edit. In the anticipative executor the edit's
+    // "edited" flag captures the plug-in's state on the main thread while
+    // the rendered gesture waits to be heard, and the two race: that step's
+    // plan swap usually drops the gesture (one step, the state), but the
+    // gesture can land first and add the parameter edit (as before E2, with
+    // the echo; STATUS). Either outcome is accepted there.
+    struct Run {
+        bool anticipative;
+        const char* isolation;
+    };
+    for (const char* mode : {"read", "touch"})
+        for (const auto [anticipative, isolation] :
+             {Run{false, nullptr}, Run{true, nullptr}, Run{false, "shared_bridge"}}) {
+            CAPTURE(std::string(mode));
+            CAPTURE(anticipative);
+            CAPTURE(isolation != nullptr);
+            EchoRig rig(false, mode, isolation, 36, {}, "Test VST3 Stepped Echo", "Level");
+            EngineApp& app = *rig.app;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+            REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                    {.anticipative = anticipative}));
+            const auto cycles = [&](int n) {
+                for (int i = 0; i < n; ++i) {
+                    if (anticipative) (void)app.engine()->awaitRendered(4096);
+                    backend.run(1);
+                    app.tick();
+                }
+            };
+            REQUIRE(app.transport("play"));
+            cycles(50);
+            const auto version = app.head().version;
+            auto* instance = app.instanceOf(rig.fx);
+            REQUIRE(instance);
+            REQUIRE(instance->setParam(2, 0.7));  // the editor moves Level
+            cycles(100);
+            if (anticipative) {
+                const auto steps = app.head().version - version;
+                CHECK((steps == 1 || steps == 2));
+                CHECK(app.versions().history(steps).back()->txn.label == "Plug-in state");
+            } else {
+                CHECK(app.head().version == version + 1);
+                CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
+            }
+            REQUIRE(app.transport("stop"));
+            app.stopEngine();
+        }
 }

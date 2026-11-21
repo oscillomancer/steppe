@@ -222,9 +222,9 @@ void dumpStage(Dump& d, std::string_view a, const Stage& st) {
                                   pinned, chanDelay, pinBuf, auxOutPin, auxOut, auxOutPtr,
                                   auxWritten, blockEvents, voices, pendingVoices, noteSources,
                                   noteSourceIndex, sourceIds, nextNoteId, releases, voiceDropped,
-                                  modDeferred, outStorage, outEvents, pdcIgnore, parallel, group,
-                                  groupEnd, before, align, groupIn, groupOut, os, osFilters, osIn,
-                                  osOut, osKey, osPad] = st;
+                                  modDeferred, outStorage, outEvents, blocks, openGesture,
+                                  openGestures, pdcIgnore, parallel, group, groupEnd, before, align,
+                                  groupIn, groupOut, os, osFilters, osIn, osOut, osKey, osPad] = st;
     d.put(a, "fx", st.fx);
     d.put(a, "instance", st.instance != nullptr);
     d.put(a, "rackMidiBase", st.rackMidiBase);
@@ -333,7 +333,7 @@ void dumpTakeChain(Dump& d, std::string_view a, const TakeChain& tc) {
                                   releaseHeld, chain, gainL, gainR, fadeIn, fadeOut, fadeInShape,
                                   fadeOutShape, fadeInCurve, fadeOutCurve, volume, pan, mute, buf,
                                   active, clipChain, player, delay, delayAt, inputPlayer,
-                                  inputAnchor] = tc;
+                                  inputAnchor, clipReader] = tc;
     d.put(a, "item", tc.item);
     d.put(a, "take", tc.take);
     d.put(a, "span", std::array{tc.start, tc.end});
@@ -341,6 +341,7 @@ void dumpTakeChain(Dump& d, std::string_view a, const TakeChain& tc) {
     d.put(a, "clip", tc.clip);
     dumpEvents(d, a, tc.events);
     d.put(a, "noteTarget", tc.noteTarget);
+    d.put(a, "clipReader", tc.clipReader.state != nullptr);
     dumpStages(d, a, "chain", tc.chain);
     d.put(a, "gain", std::array{tc.gainL, tc.gainR});
     d.put(a, "fades", std::array{tc.fadeIn, tc.fadeOut});
@@ -403,7 +404,7 @@ void dumpRack(Dump& d, std::string_view a, const RackNode& r) {
                                       rateFresh, block, sortScratch, order, device, ports,
                                       sourceDevice, sourcePorts, fromChannel, toChannel, sourceAuto,
                                       liveGeneration, launch, players, clipEvents, follows,
-                                      releaseHeld] = f;
+                                      releaseHeld, launchFresh] = f;
         const auto fa = at(a, "notes", i);
         d.put(fa, "id", f.id);
         d.put(fa, "routes", f.routes);
@@ -474,17 +475,18 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   timelineShift, sum, preFx, preFader, post, postKey, events,
                                   nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
                                   takeChains, players, retiring, launch, launchLead, launchNext,
-                                  launchNextValid, launchFadeFrames, arrangementGain,
-                                  arrangementGains, launchBuf, clipVoices, clipWindow, postItems,
-                                  itemShift, items, mix, silentFrom, silentTo, dropItems,
-                                  noteTarget, volumeDb, pan, staticGain, panSettings, panCache,
-                                  type, mute, master, decodeInput, phaseInvert, mono, utility,
-                                  soloSilenced, postKeyed, stageSlot, decoder, encoder, fader,
-                                  keyEncoder, keyFader, monitorInputs, tapeAuto, midiIn, liveHeld,
-                                  live, autoVolume, autoPan, autoMute, autoWidth, autoPanLeft,
-                                  autoPanRight, autoPanBoost, holdWidth, holdPanLeft, holdPanRight,
-                                  holdPanBoost, holdVolume, holdPan, vcas, auxPostGain, meterSlot,
-                                  meterGeneration, meterPeak, meterSumSq] = n;
+                                  launchNextValid, launchFresh, launchFadeFrames, arrangementGain,
+                                  arrangementGains, launchBuf, launchReaders, clipVoices,
+                                  clipWindow, postItems, itemShift, items, mix, silentFrom,
+                                  silentTo, dropItems, noteTarget, volumeDb, pan, staticGain,
+                                  panSettings, panCache, type, mute, master, decodeInput,
+                                  phaseInvert, mono, utility, soloSilenced, postKeyed, stageSlot,
+                                  decoder, encoder, fader, keyEncoder, keyFader, monitorInputs,
+                                  tapeAuto, midiIn, liveHeld, live, autoVolume, autoPan, autoMute,
+                                  autoWidth, autoPanLeft, autoPanRight, autoPanBoost, holdWidth,
+                                  holdPanLeft, holdPanRight, holdPanBoost, holdVolume, holdPan,
+                                  vcas, auxPostGain, meterSlot, meterGeneration, meterPeak,
+                                  meterSumSq] = n;
     d.put(a, "id", n.id);
     d.put(a, "type", n.type);
     d.put(a, "master", n.master);
@@ -517,6 +519,8 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
     }
     // Its clip chains' lead (ADR-0097, amended 2026-11-20); launchNext is state.
     d.put(a, "launchLead", n.launchLead);
+    // Its readers on the playrate path (S3): whether the plan made them.
+    d.put(a, "launchReaders", n.launchReaders[0].state != nullptr);
     d.put(a, "clipSizing",
           std::array<std::uint64_t, 3>{static_cast<std::uint64_t>(n.launchFadeFrames), n.clipVoices,
                                        n.clipWindow});
@@ -733,24 +737,24 @@ std::string dumpPlan(const Plan& p) {
     [[maybe_unused]] const auto& [pool, buffers, sessionVersion, generation, nodes, mainMaster,
                                   outputs, edges, modEdges, modOffsets, modOffsetOf, nodeIndex,
                                   linearConsole, masterPlayrate, rateEnvelope, rateEnabled,
-                                  syncPlan, syncRate, timelines, previousTimelines, rateControl,
-                                  preparedRateBoundary, rateHandDevice, rateSeekSequence,
-                                  rateEpochSeekSequence, rateFromGeneration, rateFromUnity,
-                                  ratePrepared, rateOrigin, rateDeviceMargin, rateBackendLatency,
-                                  rateSourceAhead, rateSourceBehind, rateSwitchDevice,
-                                  rateSafeDevice, rateControlsChanged, scalarPublication,
-                                  scalarHistory, requestedScalar, rate, smoothFrames, mix,
-                                  startSeconds, outputLatency, block, timeMap, warnings,
-                                  clipPlayers, gestureHolds, projectDir, preparedSources, media,
-                                  instances, graph, anyLive, heldLive, rendererNodes, liveNodes,
-                                  rendererGraph, liveGraph, rendererInstances, liveInstances,
-                                  modules, rendererModules, liveModules, rendererMeterNodes,
-                                  liveMeterNodes, meterNodes, frontier, rateOutput, frontierRings,
-                                  recordTaps, recordRings, handAt, handEpoch, handContinuable,
-                                  split, deviceIn, deviceInChannels, deviceRecording, hardwareMidi,
-                                  midiInputsSettings, midiOutputsSettings, hardwareLead,
-                                  hardwareLeadBase, deviceMidi, deviceMidiOffset, processedInputs] =
-        p;
+                                  rateStretch, syncPlan, syncRate, timelines, previousTimelines,
+                                  rateControl, preparedRateBoundary, rateHandDevice,
+                                  rateSeekSequence, rateEpochSeekSequence, rateFromGeneration,
+                                  rateFromUnity, ratePrepared, rateOrigin, rateDeviceMargin,
+                                  rateBackendLatency, rateSourceAhead, rateSourceBehind,
+                                  rateSwitchDevice, rateSafeDevice, rateControlsChanged,
+                                  scalarPublication, scalarHistory, requestedScalar, rate,
+                                  smoothFrames, mix, startSeconds, outputLatency, block, timeMap,
+                                  warnings, clipPlayers, gestureHolds, projectDir, preparedSources,
+                                  media, instances, graph, anyLive, heldLive, rendererNodes,
+                                  liveNodes, rendererGraph, liveGraph, rendererInstances,
+                                  liveInstances, modules, rendererModules, liveModules,
+                                  rendererMeterNodes, liveMeterNodes, meterNodes, frontier,
+                                  rateOutput, frontierRings, recordTaps, recordRings, handAt,
+                                  handEpoch, handContinuable, split, deviceIn, deviceInChannels,
+                                  deviceRecording, hardwareMidi, midiInputsSettings,
+                                  midiOutputsSettings, hardwareLead, hardwareLeadBase, deviceMidi,
+                                  deviceMidiOffset, processedInputs] = p;
     Dump d;
     Names names;
     for (const Node& n : p.nodes) {
@@ -772,7 +776,7 @@ std::string dumpPlan(const Plan& p) {
     d.put(a, "playrate", p.masterPlayrate.rate);
     d.put(a, "preservePitch", p.masterPlayrate.preservePitch);
     dumpAutomation(d, "plan rateEnvelope", p.rateEnvelope);
-    d.put(a, "rateEnabled", p.rateEnabled);
+    d.put(a, "rateEnabled", std::array{p.rateEnabled, p.rateStretch});
     d.put(a, "sync", std::array{p.syncPlan, p.syncRate});
     d.put(a, "timelines", std::array{p.timelines[0] != nullptr, p.timelines[1] != nullptr});
     d.put(a, "rateMargins",

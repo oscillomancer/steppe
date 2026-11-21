@@ -608,8 +608,17 @@ Under the roll, the **Vel** lane has a stem for each note: drag near a
 note's start to set its velocity, and the other selected notes change by
 the same amount. Below it is a controller lane. Drag in it to draw values,
 one for each grid step; drag with the right button, or with Alt, to erase.
-The **CC** button in the header steps the lane through mod wheel, volume,
-pan, expression and sustain.
+The **Lanes** menu in the header picks the lanes: Velocity, and the
+controller (mod wheel, volume, pan, expression or sustain). Pick the shown
+one again to hide it.
+
+On a launcher clip, the Lanes menu also offers the clip's take envelopes
+(Take volume, pan and mute, once the take FX hold an instrument) and the
+parameters of each effect in its take FX (**parameters…**). Their lanes
+appear under the controller lane in clip beats, from the clip's start:
+click to add a point, drag one to move it, right-click one to remove it,
+and **hide** at the lane's left hides it. The envelope keeps playing while
+hidden.
 
 ### Moving around
 
@@ -1629,7 +1638,11 @@ button records audio. Click it so it lights, then play and launch clips and
 scenes. When you stop (or seek, or change the loop) the performance is
 written onto the timeline as items, in one undo step, and Capture stays lit
 for the next take; click it again to finish and turn it off. If every track
-stayed on the arrangement, nothing is written.
+stayed on the arrangement, nothing is written. Once the take is written with
+the transport stopped, every track goes back to the arrangement, so pressing
+play plays what you just recorded rather than the clips again. Capture also
+lights when an agent is capturing; clicking it then finishes that capture
+and writes it.
 
 If the performance can't be written (a locked item is in the way, say),
 Capture goes dark and the status line says why. The performance is kept: fix
@@ -1667,16 +1680,34 @@ Drag a clip to another empty cell to move it, with Ctrl to copy it; an
 occupied cell refuses it. Drag a clip onto a channel's lane to lay a copy
 on the timeline, or an item into an empty cell to make a clip from it.
 Right-click a clip for Rename, Colour, Mode (loop or once), Quantize,
-Duplicate, Lay on timeline at playhead and Delete; Delete on the keyboard
+Duplicate, Lay on timeline at playhead, Take FX… (the clip's own effects,
+which play whenever the clip does) and Delete; Delete on the keyboard
 removes the selected clips. Ctrl+C copies the selected clips; click an empty
 cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
 marks clips to move, and the next paste moves them. Copied clips stay in
 their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
-colour, length, gain, mode, launch quantize and mute.
+colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
+chords) says how the clip's notes are to be mapped onto the song's key when
+it is laid; it needs a key at the clip's start, and until following is built
+a laid clip is copied as it is. Clips launch under a master playrate, but
+while it keeps the pitch an audio clip can't be launched: the pane draws
+those clips (and the scenes holding one) dimmed, and a click says why in
+the status line.
 
 In the piano roll a clip starts at its own bar 1. It has no place in the
-song, so the roll shades and spells it by the key at the project's start
-and shows no chords. While the clip plays, the playhead shows where.
+song, so it keeps the key and chords it was written against, and the roll
+shows those: the key button names its key, its chords are in the strip over
+the roll (keys in a row under the chords), and the rows and note names
+follow its key. Drag a chord or key along the strip to move it (with Alt, a
+chord is copied). Right-click the strip
+to set its key (**Key…**), add a chord, remove one, take the song's key and
+chords at the playhead, or clear them; double-click a chord to change it.
+Without a key the key button is off. While the clip plays, the playhead
+shows where.
+
+Notes outside the key at their place are outlined in amber, and the roll's
+title counts them ("3 outside A minor"). That is how you see a clip laid into a song in another
+key: its notes are copied as they are, and the ones that clash stand out.
 
 ### Playing clips
 
@@ -1729,7 +1760,12 @@ committing again writes the same performance over itself.
 
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
-- launching while a master playrate is active (`launch.playrate`).
+- launching an audio clip while the master playrate keeps the pitch
+  (`launch.playrate`); MIDI clips, and audio clips without it, follow
+  the playrate;
+- capturing a performance while a master playrate is active, or while
+  the rate you hear is still gliding back to 1 after you set it there
+  (`transport.playrate.get` shows `effective_rate`).
 
 A rack's Notes module that plays a track's notes follows that track's
 launches: it plays the clip, falls silent when the track stops, and

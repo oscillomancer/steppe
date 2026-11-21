@@ -857,9 +857,6 @@ int frontendMain(int argc, char** argv) {
         // The menu bar's Item menu: the item entries the right-click menu
         // leaves out (gui.md).
         chrome.setMenuSource("Item", [&] { return shell.arrange()->gestures().itemBarMenu(); });
-        g.onError = [](const Error& e) {
-            std::fprintf(stderr, "edit refused: %s\n", e.toString().c_str());
-        };
         g.keysFor = [&](std::string_view action) { return appActions.keysFor(action); };
         g.onSeek = [&dispatcher, ui](double seconds) {
             json::Value args = json::Value::object();
@@ -906,6 +903,10 @@ int frontendMain(int argc, char** argv) {
          [&](bool on) {
              if (auto r = shell.capture().set(on); !r && appActions.onError)
                  appActions.onError("Capture: " + r.error().message);
+         },
+         [&](model::Id take) {
+             if (auto r = fxWindow.openTake(take); !r && appActions.onError)
+                 appActions.onError("Take FX: " + r.error().message);
          }});
     // A capture's commit at stop, or the next one's arming, refused.
     shell.capture().onError = [&appActions](const Error& e) {

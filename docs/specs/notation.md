@@ -470,6 +470,25 @@ std::string durationText(std::int64_t ticks, int ppq);
 }
 ```
 
+**Chord symbols in the compiled result (ADR-0098; the contract for step X1).**
+`Compiled` gains `std::vector<ChordSymbol> chords`, where `struct ChordSymbol
+{ std::int64_t tick; harmony::Chord chord; std::string voice; }`.
+- There is one entry per `{SYMBOL}:DUR` event as compiled, at its start tick,
+  including the bars that a copy line (`3-4 = 1-2`) repeats. A bar range
+  (`2-4: …`) is for grid voices only, which hold no chord symbols, so it
+  repeats none.
+- Entries are ordered by tick, then by voice declaration order (the order of
+  the voices' first `voice` lines). The implicit voice ("Implicit voice":
+  bars before any `voice` line) counts as declared first.
+- A tied continuation adds none. A symbol whose quality this build does not
+  know is a compile error (`notation.unknown_chord`), so no entry stands for
+  it.
+- The text format, `compile`'s notes and `decompile` are unchanged.
+- Tests:
+  - a two-voice text with ties and a slash chord, and a bad quality refused;
+  - a copy line, whose repeated bars give entries;
+  - two voices declared in one order with events written in the other.
+
 ### C.1 Errors
 
 All errors are `supple::Error` with `code` `notation.*`, `loc` (line,

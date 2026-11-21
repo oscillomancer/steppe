@@ -12,201 +12,17 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <tuple>
 
 #include "bridge_patience.h"
+#include "clip_player_support.h"
 #include "plan.h"
 #include "realtime_common.h"
 
 using namespace supple;
 using namespace supple::engine;
 namespace fs = std::filesystem;
-
-namespace supple::engine {
-// test_launch_access.cpp (EngineTestAccess): runs `hook` in launch() between
-// publishing a launch and deciding it.
-void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context);
-// The slots the executors still act on (Engine::launchesQueued_).
-std::uint32_t launchesQueuedForTests(const Engine& e);
-}  // namespace supple::engine
-
-namespace {
-
-const cmd::Origin kOrigin{cmd::Origin::Type::Test, "clip player", ""};
-json::Value j(std::string_view text) { return json::parse(text).value(); }
-model::Id id(const char* text) { return *model::Id::parse(text); }
-
-// A project at 120 BPM (a beat is 24000 samples) with channel tr_1 and
-// scenes sc_1 and sc_2, no Console 9.
-struct Project {
-    fs::path root = fs::temp_directory_path() /
-                    ("supple-player-" +
-                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    std::unique_ptr<EngineApp> app;
-    cmd::Registry registry;
-    std::unique_ptr<cmd::Dispatcher> bus;
-
-    Project() {
-        fs::remove_all(root);
-        fs::create_directories(root);
-        AppOptions options;
-        options.workdir = root;
-        options.pluginPath = {FIXTURE_CLAP_PATH};
-        auto made = EngineApp::create(options, {.console9 = false});
-        REQUIRE(made);
-        app = std::move(*made);
-        registerEngineCommands(registry);
-        bus = std::make_unique<cmd::Dispatcher>(registry, *app);
-        run("track.add", R"({"name": "Bass"})");
-        run("scene.add", R"({"name": "A"})");
-        run("scene.add", R"({"name": "B"})");
-    }
-    ~Project() { fs::remove_all(root); }
-
-    json::Value run(std::string name, std::string_view args) {
-        auto result = bus->execute({std::move(name), j(args), kOrigin});
-        REQUIRE_MESSAGE(result, (result ? std::string() : result.error().toString()));
-        return *result;
-    }
-    json::Value runArgs(std::string name, const json::Value& args) {
-        auto result = bus->execute({std::move(name), args, kOrigin});
-        REQUIRE_MESSAGE(result, (result ? std::string() : result.error().toString()));
-        return *result;
-    }
-    // A mono file whose frame k holds (k + 1) / 2^20: each frame says where
-    // in the source it is.
-    fs::path ramp(const char* name, std::size_t frames) {
-        audio::AudioData a;
-        a.sampleRate = 48000;
-        a.channels.assign(1, std::vector<float>(frames));
-        for (std::size_t k = 0; k < frames; ++k) a.channels[0][k] = float(k + 1) / float(1 << 20);
-        const auto path = root / name;
-        REQUIRE(audio::writeWav(path, a));
-        return path;
-    }
-    // tr_1 before its fader, from 0 for `seconds`, replaying `log`.
-    std::vector<float> render(double seconds, std::vector<LaunchLogEntry> log,
-                              std::uint32_t block = 512) {
-        InstancePool pool = makePool();
-        OfflineSettings settings;
-        settings.endSeconds = seconds;
-        settings.blockSize = block;
-        settings.projectDir = app->projectDir();
-        settings.track = id("tr_1");
-        settings.tap = model::Tap::PreFader;
-        settings.launches = std::move(log);
-        auto r = renderOffline(app->head(), pool, settings);
-        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
-        return r->audio.channels[0];
-    }
-};
-
-constexpr std::int64_t kBeat = 24000;
-constexpr std::int64_t kFade = 240;  // 5 ms at 48 kHz
-
-LaunchLogEntry launch(std::int64_t frame, const char* clip) {
-    LaunchLogEntry e;
-    e.runningFrame = frame;
-    e.track = id("tr_1");
-    e.action = LaunchLogEntry::Action::Clip;
-    e.clip = id(clip);
-    e.anchorSample = frame;
-    e.anchorBeat = double(frame) / double(kBeat);
-    return e;
-}
-LaunchLogEntry back(std::int64_t frame, LaunchLogEntry::Action action) {
-    LaunchLogEntry e = launch(frame, "cl_1");
-    e.action = action;
-    e.clip = {};
-    return e;
-}
-
-float rampAt(std::int64_t k) { return float(k + 1) / float(1 << 20); }
-
-// A live run from 0: launches made through Engine::launch at given cycles,
-// the master's output, its latency and the engine's own launch log.
-struct Step {
-    std::int64_t cycle;
-    std::vector<Engine::LaunchRequest> requests;
-    model::LaunchQuantize quantize = model::LaunchQuantize::Bar;
-    const model::Session* load = nullptr;  // instead: an edit reaches the engine
-};
-struct Live {
-    std::vector<float> left;
-    std::uint32_t latency = 0;
-    std::vector<LaunchLogEntry> log;
-};
-Live playLive(const model::Session& s, const fs::path& dir, const EngineOptions& options,
-              std::uint32_t block, std::int64_t frames, const std::vector<Step>& steps) {
-    InstancePool pool = makePool();
-    MediaCache media;
-    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
-    Engine engine(pool, media, options);
-    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
-    REQUIRE(engine.load(s, dir));
-    engine.play();
-    const auto run = [&](std::int64_t cycles) {
-        if (cycles <= 0) return;
-        if (options.anticipative)
-            runAheadOnState(engine, backend, cycles, block);
-        else
-            backend.run(cycles);
-    };
-    std::int64_t done = 0;
-    for (const Step& step : steps) {
-        run(step.cycle - done);
-        done = std::max(done, step.cycle);
-        engine.service();
-        if (step.load) {
-            REQUIRE(engine.load(*step.load, dir));
-            continue;
-        }
-        auto placed = engine.launch(step.requests, step.quantize);
-        REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
-    }
-    run(frames / block - done);
-    engine.service();
-    CHECK(engine.anticipationMisses() == 0);
-    CHECK(engine.bridgeLateCycles() == 0);  // a late live block is silent by design
-    engine.stop();
-    CHECK(engine.processErrors() == 0);
-    return {backend.capture().channels[0], engine.outputLatency(), engine.launchLog()};
-}
-
-Engine::LaunchRequest request(const char* track, const char* clip) {
-    Engine::LaunchRequest r;
-    r.track = id(track);
-    r.clip = id(clip);
-    return r;
-}
-Engine::LaunchRequest backTo(const char* track) {
-    Engine::LaunchRequest r;
-    r.track = id(track);
-    r.action = LaunchLogEntry::Action::Arrangement;
-    return r;
-}
-
-// A MIDI clip on tr_1 (the sine), an audio clip on tr_2, arrangement on
-// both; tr_2's latent gain shifts tr_1 (its node switches later in the
-// running frame than tr_2's).
-void twoTracks(Project& p) {
-    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
-    p.run("item.add",
-          R"({"track": "tr_1", "bar": 1, "notation": "voice bass; 1: G3:w | A3:w | B3:w"})");
-    p.run("clip.add",
-          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:e E3:e G3:q r:h"})");
-    p.run("track.add", R"({"name": "Loop"})");  // tr_2
-    auto args = j(R"({"track": "tr_2", "bar": 1})");
-    args["audio_file"] = p.ramp("item.wav", 240000).string();
-    p.runArgs("item.add", args);
-    args = j(R"({"track": "tr_2", "scene": "sc_1"})");
-    args["audio_file"] = p.ramp("clip.wav", 48000).string();
-    p.runArgs("clip.add", args);
-    p.run("clip.set", R"({"clip": "cl_2", "length": 0.75})");
-    p.run("fx.add", R"({"track": "tr_2", "plugin": "com.suppleaudio.test.gain"})");
-    p.run("fx.patch.merge", R"({"fx": "fx_2", "patch": {"params": {"latency": "short"}}})");
-}
-
-}  // namespace
+using namespace clip_player_test;
 
 TEST_CASE("an audio clip plays from its anchor, its phase the song position's") {
     Project p;
@@ -414,68 +230,6 @@ TEST_CASE("a channel delayed by compensation switches and plays its clip where i
     CHECK(plain[std::size_t(kBeat + kFade + 5)] != 0.0f);
 }
 
-TEST_CASE("live launches play as the offline replay of their log, in both executors" *
-          doctest::description("rt")) {
-    // A scene launch (both tracks, one target) on bar 2, then tr_1 back to
-    // the arrangement and tr_2 stopped on bar 3.
-    Project p;
-    twoTracks(p);
-    const model::Session s = p.app->head();
-    const std::int64_t frames = 48000 * 5 + 8192;
-    for (const std::uint32_t block : {128u, 512u})
-        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-            INFO("block " << block << ", anticipative " << options.anticipative);
-            Engine::LaunchRequest stop = backTo("tr_2");
-            stop.action = LaunchLogEntry::Action::Stop;
-            const std::vector<Step> steps{{20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}},
-                                          {(96000 + 4000) / block, {backTo("tr_1"), stop}}};
-            const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
-            REQUIRE(live.log.size() == 4);
-            CHECK(live.log[0].anchorSample == 96000);  // bar 2
-            CHECK(live.log[0].runningFrame == 96000);
-            CHECK(live.log[1].anchorSample == 96000);   // one target for the scene
-            CHECK(live.log[2].anchorSample == 192000);  // bar 3
-            InstancePool pool = makePool();
-            OfflineSettings settings;
-            settings.endSeconds = 5.0;
-            settings.projectDir = p.app->projectDir();
-            settings.launches = live.log;
-            auto offline = renderOffline(s, pool, settings);
-            REQUIRE(offline);
-            CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 5) == 0.0);
-            // The launches changed the output: equality says something.
-            settings.launches.clear();
-            auto plain = renderOffline(s, pool, settings);
-            REQUIRE(plain);
-            CHECK(maxDiff(live.left, live.latency, plain->audio.channels[0], 48000 * 5) > 0.0);
-        }
-}
-
-TEST_CASE("live launches through the bridge play as the offline replay" *
-          doctest::description("rt")) {
-    host::setBridgeExecutable(BRIDGE_PATH);
-    Project p;
-    twoTracks(p);
-    p.run("fx.set", R"({"fx": "fx_1", "isolation": "shared_bridge"})");
-    const model::Session s = p.app->head();
-    const std::int64_t frames = 48000 * 3 + 8192;
-    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-        INFO("anticipative " << options.anticipative);
-        const std::vector<Step> steps{{10, {request("tr_1", "cl_1")}}};
-        const Live live =
-            playLive(s, p.app->projectDir(), test::patient(options), 128, frames, steps);
-        REQUIRE(live.log.size() == 1);
-        InstancePool pool = makePool();
-        OfflineSettings settings;
-        settings.endSeconds = 3.0;
-        settings.projectDir = p.app->projectDir();
-        settings.launches = live.log;
-        auto offline = renderOffline(s, pool, settings);
-        REQUIRE(offline);
-        CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 3) == 0.0);
-    }
-}
-
 TEST_CASE("a launch waits for its boundary, and one waiting at a relocation is placed again") {
     Project p;
     twoTracks(p);
@@ -621,6 +375,53 @@ TEST_CASE("removing the playing clip, or freezing its track, crossfades to the a
             CHECK(ratio(z - 1) == doctest::Approx(1.0 / 240).epsilon(0.05));
             for (std::int64_t t = z; t < z + 24000; ++t) REQUIRE(out(t) == 0.0);
         }
+}
+
+TEST_CASE(
+    "right after a pause, the position, a stopped launch's anchor and a capture's start "
+    "are where it paused" *
+    doctest::description("rt")) {
+    // Review round 70 P3: in the anticipative executor, until the renderer
+    // relocated for the pause's epoch, transport() gave that epoch's
+    // predecessor's start (0 here), so a launch or a capture armed in the
+    // same main-thread turn as the pause was anchored there.
+    Project p;
+    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = p.ramp("ramp.wav", 48000).string();
+    p.runArgs("clip.add", args);
+    p.run("clip.set", R"({"clip": "cl_1", "length": 0.25})");
+    const model::Session s = p.app->head();
+    constexpr std::uint32_t kBlock = 128;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.play();
+        for (int done = 0; done < 104; done += 8) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, 8, kBlock);
+            else
+                backend.run(8);
+            engine.service();
+        }
+        const std::int64_t heard = engine.transport().sample;
+        REQUIRE(heard > 0);
+        engine.pause();  // and at once, in the same turn:
+        CHECK(engine.transport().sample == heard);
+        REQUIRE(engine.captureLaunches(true));
+        const Engine::LaunchRequest r = request("tr_1", "cl_1");
+        auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+        REQUIRE(placed);
+        CHECK(placed->anchorSample == heard);
+        const auto capture = engine.launchCapture();
+        REQUIRE(capture);
+        CHECK(capture->startSample == heard);
+        engine.stop();
+    }
 }
 
 TEST_CASE("a launch while stopped applies at the play start" * doctest::description("rt")) {
@@ -784,15 +585,29 @@ TEST_CASE("a render without a launch log plays the arrangement, with no clip war
         [](const std::string& w) { return w.find("launch.tempo") != std::string::npos; }));
 }
 
-TEST_CASE("launches are refused while a master playrate is active") {
+TEST_CASE("launching a clip that follows the context warns launch.unfollowed, once per launch") {
+    // ADR-0098: a launched clip plays as written until X4, so live and the timeline differ for
+    // a clip whose follow is not none; the answer says so.
     Project p;
     twoTracks(p);
     DummyBackend backend({.mode = DummyBackend::Mode::Manual});
     REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
-    p.run("transport.playrate.set", R"({"rate": 0.5})");
-    auto r = p.bus->execute({"launch.clip", j(R"({"clip": "cl_1"})"), kOrigin});
-    REQUIRE_FALSE(r);
-    CHECK(r.error().code == "launch.playrate");
+    const auto unfollowed = [](const json::Value& done) {
+        int n = 0;
+        if (const json::Value* w = done.find("warnings"))
+            for (const json::Value& e : w->asArray())
+                n += e.find("code")->asString() == "launch.unfollowed";
+        return n;
+    };
+    CHECK(unfollowed(p.run("launch.clip", R"({"clip": "cl_1"})")) == 0);  // follow none
+    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w", "follow": "key"})");
+    json::Value one = p.run("launch.clip", R"({"clip": "cl_1"})");
+    REQUIRE(unfollowed(one) == 1);
+    CHECK(one["warnings"].at(0).find("message")->asString().find("cl_1") != std::string::npos);
+    json::Value scene = p.run("launch.scene", R"({"scene": "sc_1"})");
+    CHECK(unfollowed(scene) == 1);  // one for the scene, not one per clip
+    const std::string said = scene["warnings"].at(0).find("message")->asString();
+    CHECK(said.find("the clip cl_1 follows") != std::string::npos);  // one clip: singular
     p.app->stopEngine();
 }
 
@@ -844,111 +659,6 @@ TEST_CASE("a MIDI clip plays through the track's MIDI send") {
 
 // --- A rack's Notes module follows its source track (ADR-0097, 2026-11-20) -----
 
-// tr_1 plays the sine: four bars of whole notes, and a clip of two eighth
-// notes a bar. tr_2's rack turns tr_1's notes into its gate: a Notes module
-// sourcing tr_1 (with a device, which makes the rack live, so the anticipative
-// engine runs it in the callback while tr_1 stays with the renderer).
-void rackFollows(Project& p, bool device) {
-    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
-    p.run("item.add",
-          R"({"track": "tr_1", "bar": 1, "notation": "voice bass; 1: G3:w | A3:w | B3:w | C4:w"})");
-    p.run(
-        "clip.add",
-        R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:e r:e C3:e r:e r:h"})");
-    p.run("track.add", R"({"name": "Gates"})");  // tr_2
-    p.run("rack.add", R"({"track": "tr_2"})");   // rk_1, its Out mo_1
-    p.run("module.add",
-          device ? R"({"rack": "rk_1", "type": "notes", "source": "tr_1", "device": "controller"})"
-                 : R"({"rack": "rk_1", "type": "notes", "source": "tr_1"})");  // mo_2
-    p.run("cable.add", R"({"from": "mo_2.gate", "to": "mo_1.l"})");
-}
-
-// tr_2 (the rack's gate) before its fader, offline, replaying `log`.
-std::vector<float> gates(Project& p, double seconds, std::vector<LaunchLogEntry> log) {
-    InstancePool pool = makePool();
-    OfflineSettings settings;
-    settings.endSeconds = seconds;
-    settings.projectDir = p.app->projectDir();
-    settings.track = id("tr_2");
-    settings.tap = model::Tap::PreFader;
-    settings.launches = std::move(log);
-    auto r = renderOffline(p.app->head(), pool, settings);
-    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
-    return r->audio.channels[0];
-}
-
-TEST_CASE("a rack's Notes module follows its source track's launches, offline") {
-    Project p;
-    rackFollows(p, false);
-    const std::int64_t bar = 4 * kBeat;
-    const std::vector<LaunchLogEntry> log{launch(bar, "cl_1"),
-                                          back(2 * bar, LaunchLogEntry::Action::Stop),
-                                          back(3 * bar, LaunchLogEntry::Action::Arrangement)};
-    const auto g = gates(p, 8.0, log);
-    const auto at = [&](double seconds) { return g[std::size_t(seconds * 48000)]; };
-    CHECK(at(1.0) == 1.0f);   // the arrangement's G3
-    CHECK(at(2.1) == 1.0f);   // the clip's first eighth note
-    CHECK(at(2.35) == 0.0f);  // its rest: the arrangement's A3 passes unplayed
-    CHECK(at(2.6) == 1.0f);   // its second eighth
-    CHECK(at(3.5) == 0.0f);
-    CHECK(at(4.5) == 0.0f);  // stopped: B3 passes unplayed
-    CHECK(at(6.5) == 1.0f);  // the arrangement again, from C4 at the switch
-    // Without the launches the rack plays the arrangement throughout.
-    const auto plain = gates(p, 8.0, {});
-    CHECK(plain[std::size_t(2.35 * 48000)] == 1.0f);
-    CHECK(plain[std::size_t(4.5 * 48000)] == 1.0f);
-}
-
-TEST_CASE(
-    "a rack's Notes module follows launches live as offline, in both executors, also "
-    "with the rack and its source track on different executors" *
-    doctest::description("rt")) {
-    for (const bool device : {false, true}) {
-        Project p;
-        rackFollows(p, device);
-        const model::Session s = p.app->head();
-        {
-            // With the device the rack is live and tr_1 is not: in the
-            // anticipative engine their launches switch on two executors.
-            InstancePool pool = makePool();
-            auto plan = detail::compile(s, pool, 0, 128);
-            REQUIRE_MESSAGE(plan, (plan ? std::string() : plan.error().toString()));
-            for (const detail::Node& n : plan->nodes) {
-                if (n.rack) CHECK(n.live == device);
-                if (n.id == id("tr_1")) CHECK_FALSE(n.live);
-            }
-        }
-        const std::int64_t frames = 48000 * 7 + 8192;
-        for (const std::uint32_t block : {128u, 512u})
-            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-                INFO("device " << device << ", block " << block << ", anticipative "
-                               << options.anticipative);
-                Engine::LaunchRequest stop = backTo("tr_1");
-                stop.action = LaunchLogEntry::Action::Stop;
-                const std::vector<Step> steps{{20, {request("tr_1", "cl_1")}},
-                                              {(96000 + 4000) / block, {stop}},
-                                              {(192000 + 4000) / block, {backTo("tr_1")}}};
-                const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
-                REQUIRE(live.log.size() == 3);
-                CHECK(live.log[0].anchorSample == 96000);
-                CHECK(live.log[1].anchorSample == 192000);
-                CHECK(live.log[2].anchorSample == 288000);
-                InstancePool pool = makePool();
-                OfflineSettings settings;
-                settings.endSeconds = 7.0;
-                settings.projectDir = p.app->projectDir();
-                settings.launches = live.log;
-                auto offline = renderOffline(s, pool, settings);
-                REQUIRE(offline);
-                CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 7) ==
-                      0.0);
-                // The rack's switches changed the mix: equality says something.
-                const auto heard = gates(p, 7.0, live.log), plain = gates(p, 7.0, {});
-                CHECK(heard != plain);
-            }
-    }
-}
-
 TEST_CASE("an applied launch frees its slot once every executor is done with it" *
           doctest::description("rt")) {
     // Each executor class marks an applied slot done, even one that runs
@@ -985,80 +695,6 @@ TEST_CASE("an applied launch frees its slot once every executor is done with it"
     }
 }
 
-TEST_CASE("a launch missed before it is decided lands on neither the track nor its rack" *
-          doctest::description("rt")) {
-    // The main thread stalls between publishing a launch and deciding it,
-    // while the executors play past its bar. The executor that reaches a
-    // frame of it undecided marks it missed: nothing switches there. Placed
-    // again, it switches the track and the rack together on the next bar.
-    for (const bool device : {false, true}) {
-        Project p;
-        rackFollows(p, device);
-        const model::Session s = p.app->head();
-        constexpr std::uint32_t kBlock = 128;
-        const std::int64_t frames = 48000 * 7 + 8192;
-        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-            INFO("device " << device << ", anticipative " << options.anticipative);
-            InstancePool pool = makePool();
-            MediaCache media;
-            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
-            Engine engine(pool, media, options);
-            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
-            REQUIRE(engine.load(s, p.app->projectDir()));
-            engine.play();
-            struct Stall {
-                Engine* engine;
-                DummyBackend* backend;
-                bool anticipative;
-                std::int64_t cycles;
-            } stall{&engine, &backend, options.anticipative, (96000 + 8192) / kBlock - 20};
-            const auto run = [](Stall& st, std::int64_t cycles) {
-                if (st.anticipative)
-                    runAheadOnState(*st.engine, *st.backend, cycles, kBlock);
-                else
-                    st.backend->run(cycles);
-            };
-            run(stall, 20);
-            launchCommitHookForTests(
-                engine,
-                [](void* context) {
-                    auto& st = *static_cast<Stall*>(context);
-                    if (st.anticipative)
-                        runAheadOnState(*st.engine, *st.backend, st.cycles, kBlock);
-                    else
-                        st.backend->run(st.cycles);
-                },
-                &stall);
-            const Engine::LaunchRequest r = request("tr_1", "cl_1");
-            auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
-            launchCommitHookForTests(engine, nullptr, nullptr);
-            REQUIRE(placed);
-            CHECK(placed->anchorSample == 96000);
-            engine.service();  // missed: placed again, on bar 3
-            const auto pending = engine.launchesPending();
-            REQUIRE(pending.size() == 1);
-            CHECK(pending[0].placed.anchorSample == 192000);
-            run(stall, frames / kBlock - 20 - stall.cycles);
-            engine.service();
-            engine.stop();
-            CHECK(engine.processErrors() == 0);
-            CHECK(engine.anticipationMisses() == 0);
-            const auto log = engine.launchLog();
-            REQUIRE(log.size() == 1);  // applied once, on bar 3
-            CHECK(log[0].anchorSample == 192000);
-            OfflineSettings settings;
-            settings.endSeconds = 7.0;
-            settings.projectDir = p.app->projectDir();
-            settings.launches = log;
-            InstancePool offlinePool = makePool();
-            auto offline = renderOffline(s, offlinePool, settings);
-            REQUIRE(offline);
-            CHECK(maxDiff(backend.capture().channels[0], engine.outputLatency(),
-                          offline->audio.channels[0], 48000 * 7) == 0.0);
-        }
-    }
-}
-
 TEST_CASE(
     "a launch and a capture armed while stopped begin where the song starts after a "
     "count-in" *
@@ -1083,7 +719,7 @@ TEST_CASE(
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
         REQUIRE(engine.load(s, p.app->projectDir()));
         engine.setMetronome(false, 0.0);  // the count clicks regardless
-        engine.captureLaunches(true);
+        REQUIRE(engine.captureLaunches(true));
         const std::vector<Engine::LaunchRequest> scene{request("tr_1", "cl_1"),
                                                        request("tr_2", "cl_2")};
         auto placed = engine.launch(scene, model::LaunchQuantize::Bar);
@@ -1134,31 +770,6 @@ TEST_CASE(
 }
 
 // --- A clip's take chain (ADR-0097, amended 2026-11-20) -----------------------
-
-namespace {
-
-std::string takeOf(Project& p, const char* clip) {
-    return p.app->head().clips.find(id(clip))->activeTake->str();
-}
-
-// tr_1's audio clip cl_1 (the ramp, 0.25 s) whose take has the gain fixture
-// at -6 dB with 64 samples of latency.
-void latentClip(Project& p) {
-    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
-    args["audio_file"] = p.ramp("ramp.wav", 48000).string();
-    p.runArgs("clip.add", args);
-    p.run("clip.set", R"({"clip": "cl_1", "length": 0.25})");  // 12000 frames
-    auto fx = j(R"({"plugin": "com.suppleaudio.test.gain"})");
-    fx["take"] = takeOf(p, "cl_1");
-    const std::string fxId = p.runArgs("fx.add", fx)["fx"].asString();
-    auto patch = j(R"({"patch": {"params": {"latency": "short", "gain": -6}}})");
-    patch["fx"] = fxId;
-    p.runArgs("fx.patch.merge", patch);
-}
-// The ramp's frame k through that chain.
-double chained(std::int64_t k) { return double(rampAt(k)) * std::pow(10.0, -6.0 / 20.0); }
-
-}  // namespace
 
 TEST_CASE("a clip with a take chain launched while stopped plays from the play start" *
           doctest::description("rt")) {
@@ -1338,84 +949,6 @@ TEST_CASE("a MIDI clip's take envelope is in beats from the clip's start, wherev
     CHECK(peak(x, a + 2 * kBeat, a + 2 * kBeat + kBeat / 4) < 0.1 * peak(x, a, a + kBeat / 4));
 }
 
-TEST_CASE("a clip chain through the bridge plays as the offline replay" *
-          doctest::description("rt")) {
-    host::setBridgeExecutable(BRIDGE_PATH);
-    Project p;
-    latentClip(p);
-    p.run("fx.set", R"({"fx": "fx_1", "isolation": "shared_bridge"})");
-    const model::Session s = p.app->head();
-    const std::int64_t frames = 48000 * 3 + 8192;
-    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-        INFO("anticipative " << options.anticipative);
-        const std::vector<Step> steps{{10, {request("tr_1", "cl_1")}}};
-        const Live live =
-            playLive(s, p.app->projectDir(), test::patient(options), 128, frames, steps);
-        REQUIRE(live.log.size() == 1);
-        InstancePool pool = makePool();
-        OfflineSettings settings;
-        settings.endSeconds = 3.0;
-        settings.projectDir = p.app->projectDir();
-        settings.launches = live.log;
-        auto offline = renderOffline(s, pool, settings);
-        REQUIRE(offline);
-        CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 3) == 0.0);
-        // The clip plays from bar 2, through its chain: a ramp at -6 dB.
-        CHECK(double(live.left[live.latency + 96000 + 5000]) ==
-              doctest::Approx(chained(5000)).epsilon(1e-5));
-    }
-}
-
-TEST_CASE("live launches of clips with take chains play as the offline replay" *
-          doctest::description("rt")) {
-    // An audio clip through a latent chain on tr_1, a MIDI clip through an
-    // instrument and a latent gain on tr_2; launched, relaunched, swapped,
-    // back to the arrangement and stopped.
-    Project p;
-    latentClip(p);
-    p.run("track.add", R"({"name": "Keys"})");  // tr_2
-    p.run("clip.add",
-          R"({"track": "tr_2", "scene": "sc_1", "notation": "voice bass; 1: C3:q E3:q G3:h"})");
-    auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
-    fx["take"] = takeOf(p, "cl_2");
-    p.runArgs("fx.add", fx);
-    auto gain = j(R"({"plugin": "com.suppleaudio.test.gain"})");
-    gain["take"] = takeOf(p, "cl_2");
-    const std::string fxId = p.runArgs("fx.add", gain)["fx"].asString();
-    auto patch = j(R"({"patch": {"params": {"latency": "short"}}})");
-    patch["fx"] = fxId;
-    p.runArgs("fx.patch.merge", patch);
-    auto args = j(R"({"track": "tr_1", "bar": 1})");
-    args["audio_file"] = p.ramp("item.wav", 240000).string();
-    p.runArgs("item.add", args);
-    const model::Session s = p.app->head();
-    const std::int64_t frames = 48000 * 5 + 8192;
-    for (const std::uint32_t block : {128u, 512u})
-        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-            INFO("block " << block << ", anticipative " << options.anticipative);
-            Engine::LaunchRequest stop = backTo("tr_2");
-            stop.action = LaunchLogEntry::Action::Stop;
-            const std::vector<Step> steps{
-                {20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}},
-                {(96000 + 4000) / block, {request("tr_1", "cl_1")}, model::LaunchQuantize::Beat},
-                {(144000 + 4000) / block, {backTo("tr_1"), stop}}};
-            const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
-            REQUIRE(live.log.size() == 5);
-            InstancePool pool = makePool();
-            OfflineSettings settings;
-            settings.endSeconds = 5.0;
-            settings.projectDir = p.app->projectDir();
-            settings.launches = live.log;
-            auto offline = renderOffline(s, pool, settings);
-            REQUIRE(offline);
-            CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 5) == 0.0);
-            settings.launches.clear();
-            auto plain = renderOffline(s, pool, settings);
-            REQUIRE(plain);
-            CHECK(maxDiff(live.left, live.latency, plain->audio.channels[0], 48000 * 5) > 0.0);
-        }
-}
-
 TEST_CASE("a clip through its take's chain keeps its phase when the song wraps before its anchor" *
           doctest::description("rt")) {
     // Review round 66's suggestion: a transport loop over bars 1-2 and the
@@ -1576,6 +1109,47 @@ std::vector<std::string> itemsOn(const model::Session& s, const char* track) {
 
 }  // namespace
 
+TEST_CASE("the launch log and a performance say which launches were a scene's" *
+          doctest::description("rt")) {
+    // A commit writes a section per scene launched whole; it must not guess
+    // one from clips that started together (a launch.clip of a scene's only
+    // clip would look the same). Each logged launch names its scene, or none.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        AppLive live(p, options, 128, 48000 * 5 + 16384);
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2, both tracks
+        live.until(96000 + 4000);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 3, tr_1 alone
+        live.until(192000 + 4000);
+        const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
+        REQUIRE(log.size() == 3);
+        CHECK(log[0].scene == id("sc_1"));
+        CHECK(log[1].scene == id("sc_1"));
+        CHECK_FALSE(log[2].scene);
+        CHECK(log[2].clip == id("cl_1"));
+        p.run("launch.capture", R"({"on": false})");
+        p.run("launch.commit", "{}");
+        json::Value history = p.run("log.list", R"({"limit": 1})");
+        const json::Value& last = history["entries"].at(history["entries"].size() - 1);
+        REQUIRE(last.find("command")->asString() == "launch.commit");
+        const json::Value* launches = last.find("args")->find("performance")->find("launches");
+        REQUIRE(launches);
+        REQUIRE(launches->size() == 3);
+        for (std::size_t k : {0u, 1u}) {
+            const json::Value* scene = launches->at(k).find("scene");
+            REQUIRE(scene);
+            CHECK(scene->asString() == "sc_1");
+        }
+        CHECK_FALSE(launches->at(2).find("scene"));
+        live.stop();
+    }
+}
+
 TEST_CASE("a captured performance commits as items that play as it was heard" *
           doctest::description("rt")) {
     // The scene on bar 2 (both tracks, from the arrangement), tr_1 back to
@@ -1711,7 +1285,7 @@ TEST_CASE("a capture keeps what plays as it begins and ends at a relocation" *
                                                        request("tr_2", "cl_2")};
         REQUIRE(engine.launch(scene, model::LaunchQuantize::Bar));  // bar 2
         until(110000);
-        engine.captureLaunches(true);
+        REQUIRE(engine.captureLaunches(true));
         auto capture = engine.launchCapture();
         REQUIRE(capture);
         CHECK(capture->on);
@@ -1747,7 +1321,7 @@ TEST_CASE("a capture keeps what plays as it begins and ends at a relocation" *
         engine.pause();
         stopped = true;
         until(220000);
-        engine.captureLaunches(true);
+        REQUIRE(engine.captureLaunches(true));
         engine.seek(3.0);
         engine.awaitTransport();  // as transport.seek does: the executor has placed it
         until(230000);
@@ -1878,4 +1452,226 @@ TEST_CASE("launch.commit: history, undo, pooling and refusals") {
     REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
     CHECK(fails("launch.commit", j("{}")).code == "launch.capture");
     p.app->stopEngine();
+}
+
+TEST_CASE("launch.commit writes a section for each scene launched whole, in the same undo step") {
+    Project p;
+    twoTracks(p);  // tr_1 cl_1 and tr_2 cl_2 in sc_1 "A"
+    // sc_2 "B" has a clip on tr_1 only; a third scene "C" has both again.
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "notation": "voice b; 1: E3:w"})");
+    p.run("scene.add", R"({"name": "C", "color": "#ff8800"})");  // sc_3
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "notation": "voice b; 1: G3:w"})");
+    p.run("clip.add", R"({"track": "tr_2", "scene": "sc_3", "notation": "voice b; 1: G2:w"})");
+    // The clips: cl_1 (tr_1, A), cl_2 (tr_2, A), cl_3 (tr_1, B), cl_4 (tr_1, C), cl_5 (tr_2, C).
+    // A launch of a clip; `scene` is the id launch.scene logs with it ("" for a clip launched
+    // on its own).
+    const auto launch = [](std::int64_t frame, const char* track, const char* clip, double beat,
+                           const char* scene = "") {
+        return std::string(R"({"frame": )") + std::to_string(frame) + R"(, "track": ")" + track +
+               R"(", "action": "clip", "clip": ")" + clip + R"(", )" +
+               (*scene ? std::string(R"("scene": ")") + scene + R"(", )" : std::string()) +
+               R"("anchor": )" + std::to_string(frame) + R"(, "anchor_beat": )" +
+               std::to_string(beat) + "}";
+    };
+    const auto commit = [&](const std::string& launches, std::int64_t frames) {
+        json::Value args = json::Value::object();
+        args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": )" +
+                                std::to_string(frames) + R"(, "launches": [)" + launches + "]}");
+        return p.runArgs("launch.commit", args);
+    };
+    const auto regions = [&] {
+        std::vector<std::tuple<std::string, double, double>> out;
+        for (const auto& e : p.app->head().regions)
+            out.push_back({e.value->name, e.value->start, e.value->end});
+        std::sort(out.begin(), out.end(),
+                  [](const auto& a, const auto& b) { return std::get<1>(a) < std::get<1>(b); });
+        return out;
+    };
+    const std::size_t before = p.app->head().regions.size();
+    const std::size_t itemsBefore = p.app->head().items.size();
+
+    SUBCASE(
+        "two scenes in turn: a section each, named after the scene, meeting where one gave way") {
+        // A on bar 1 (frame 0), C on bar 2 (96000): beats 0 and 4; the capture ends at bar 4.
+        const std::string log = launch(0, "tr_1", "cl_1", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_2", 0, "sc_1") + "," +
+                                launch(96000, "tr_1", "cl_4", 4, "sc_3") + "," +
+                                launch(96000, "tr_2", "cl_5", 4, "sc_3");
+        json::Value done = commit(log, 288000);
+        REQUIRE(done["sections"].size() == 2);
+        const auto r = regions();
+        REQUIRE(r.size() == before + 2);
+        CHECK(std::get<0>(r[before]) == "A");
+        CHECK(std::get<1>(r[before]) == 0.0);
+        CHECK(std::get<2>(r[before]) == 4.0);
+        CHECK(std::get<0>(r[before + 1]) == "C");
+        CHECK(std::get<1>(r[before + 1]) == 4.0);
+        CHECK(std::get<2>(r[before + 1]) == doctest::Approx(12));  // the capture's end
+        CHECK(done["sections"].at(0).find("scene")->asString() == "sc_1");
+        CHECK(done["sections"].at(1).find("scene")->asString() == "sc_3");
+        const model::Session s = p.app->head();
+        const model::Region& second =
+            *s.regions.find(id(done["sections"].at(1).find("region")->asString().c_str()));
+        CHECK(second.section);
+        CHECK(second.color == "#ff8800");
+        // context.at names the section over the committed performance.
+        auto at = p.run("context.at", R"({"bar": 2})");
+        CHECK(at["section"]["name"].asString() == "C");
+        // One undo step takes the sections and the items away together.
+        p.run("history.undo", "{}");
+        CHECK(p.app->head().regions.size() == before);
+        CHECK(p.app->head().items.size() == itemsBefore);
+        p.run("history.redo", "{}");
+        CHECK(p.app->head().regions.size() == before + 2);
+    }
+    SUBCASE("under a transport loop the sections land where the items do, past the wrap") {
+        // The loop runs bars 1-2 (frames 0-192000); A is launched whole at running frame 0,
+        // C at running frame 288000, which the song heard as frame 96000 (beat 4, bar 2). The
+        // items lie on the timeline by running time, C from bar 4 (beat 12), A before it, and
+        // so must the sections: not at the folded song position.
+        const auto at = [](std::int64_t frame, std::int64_t anchor, const char* track,
+                           const char* clip, const char* scene, double beat) {
+            return std::string(R"({"frame": )") + std::to_string(frame) + R"(, "track": ")" +
+                   track + R"(", "action": "clip", "clip": ")" + clip + R"(", "scene": ")" + scene +
+                   R"(", "anchor": )" + std::to_string(anchor) + R"(, "anchor_beat": )" +
+                   std::to_string(beat) + "}";
+        };
+        const std::string log = at(0, 0, "tr_1", "cl_1", "sc_1", 0) + "," +
+                                at(0, 0, "tr_2", "cl_2", "sc_1", 0) + "," +
+                                at(288000, 96000, "tr_1", "cl_4", "sc_3", 4) + "," +
+                                at(288000, 96000, "tr_2", "cl_5", "sc_3", 4);
+        json::Value args = json::Value::object();
+        args["performance"] = j(
+            R"({"sample_rate": 48000, "start": 0, "frames": 384000, "loop": {"start": 0, "end": 192000},
+                "launches": [)" +
+            log + "]}");
+        json::Value done = p.runArgs("launch.commit", args);
+        REQUIRE(done["sections"].size() == 2);
+        const auto r = regions();
+        REQUIRE(r.size() == before + 2);
+        CHECK(std::get<0>(r[before]) == "A");
+        CHECK(std::get<1>(r[before]) == doctest::Approx(0));
+        CHECK(std::get<2>(r[before]) == doctest::Approx(12));
+        CHECK(std::get<0>(r[before + 1]) == "C");
+        CHECK(std::get<1>(r[before + 1]) == doctest::Approx(12));
+        CHECK(std::get<2>(r[before + 1]) == doctest::Approx(16));  // the capture's end
+        // The section names what plays under it: C's items start where its section does.
+        CHECK(p.run("context.at", R"({"bar": 3})")["section"]["name"].asString() == "A");
+        CHECK(p.run("context.at", R"({"bar": 4})")["section"]["name"].asString() == "C");
+    }
+    SUBCASE("committing again writes the same performance over itself: the sections stay") {
+        const std::string log =
+            launch(0, "tr_1", "cl_1", 0, "sc_1") + "," + launch(0, "tr_2", "cl_2", 0, "sc_1");
+        json::Value first = commit(log, 192000);
+        const std::size_t items = p.app->head().items.size();
+        json::Value again = commit(log, 192000);
+        CHECK(p.app->head().regions.size() == before + 1);
+        CHECK(p.app->head().items.size() == items);
+        CHECK(again["sections"].at(0).find("region")->asString() ==
+              first["sections"].at(0).find("region")->asString());
+    }
+    SUBCASE("a clip launched alone, or only some of a scene's clips, writes none") {
+        // A holds cl_1 and cl_2: launching cl_1 alone is not launching the scene.
+        json::Value done = commit(launch(0, "tr_1", "cl_1", 0), 192000);
+        CHECK(done["sections"].size() == 0);
+        CHECK(p.app->head().regions.size() == before);
+        CHECK(done["items"].size() > 0);
+    }
+    SUBCASE("every clip of a scene launched one by one on one frame writes none") {
+        // The same clips at the same frame as launch.scene would start them, but launched on
+        // their own: no scene was launched, so no section.
+        const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0);
+        json::Value done = commit(log, 192000);
+        CHECK(done["sections"].size() == 0);
+        CHECK(p.app->head().regions.size() == before);
+        CHECK(done["items"].size() > 0);
+    }
+    SUBCASE("a scene launch one of whose tracks is taken over on the same frame writes none") {
+        // launch.scene A, then tr_2 launched alone on A's frame with C's clip: A is not whole.
+        const std::string log = launch(0, "tr_1", "cl_1", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_2", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_5", 0);
+        json::Value done = commit(log, 192000);
+        CHECK(done["sections"].size() == 0);
+        CHECK(p.app->head().regions.size() == before);
+    }
+    SUBCASE("a scene's section ends when one of its tracks is launched again") {
+        // A at bar 1; tr_2 leaves for the arrangement at bar 3 (frame 192000): A ends there.
+        const std::string log = launch(0, "tr_1", "cl_1", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_2", 0, "sc_1") +
+                                R"(,{"frame": 192000, "track": "tr_2", "action": "arrangement",
+                                    "anchor": 192000, "anchor_beat": 8})";
+        json::Value done = commit(log, 288000);
+        REQUIRE(done["sections"].size() == 1);
+        CHECK(done["sections"].at(0).find("end")->asDouble() == doctest::Approx(8));
+    }
+    SUBCASE(
+        "a scene launched twice writes a section each time; the last of one frame's launches "
+        "holds") {
+        // B (one clip on tr_1) at bar 1, then A over it at the same frame: A holds there.
+        const std::string log = launch(0, "tr_1", "cl_3", 0, "sc_2") + "," +
+                                launch(0, "tr_1", "cl_1", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_2", 0, "sc_1") + "," +
+                                launch(96000, "tr_1", "cl_1", 4, "sc_1") + "," +
+                                launch(96000, "tr_2", "cl_2", 4, "sc_1");
+        json::Value done = commit(log, 192000);
+        REQUIRE(done["sections"].size() == 2);
+        CHECK(done["sections"].at(0).find("scene")->asString() == "sc_1");
+        CHECK(done["sections"].at(1).find("scene")->asString() == "sc_1");
+        CHECK(done["sections"].at(0).find("end")->asDouble() == doctest::Approx(4));
+        CHECK(done["sections"].at(1).find("start")->asDouble() == doctest::Approx(4));
+    }
+}
+
+TEST_CASE("launch.commit names the items after their clips") {
+    Project p;
+    twoTracks(p);
+    p.run("clip.set", R"({"clip": "cl_1", "name": "Riff"})");
+    json::Value args = json::Value::object();
+    args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": 192000,
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]})");
+    json::Value done = p.runArgs("launch.commit", args);
+    REQUIRE(done["items"].size() > 0);
+    const model::Session s = p.app->head();
+    for (const auto& item : done["items"].asArray()) {
+        const model::Item& it = *s.items.find(id(item.asString().c_str()));
+        CHECK(s.takes.find(*it.activeTake)->name == "Riff");
+    }
+}
+
+TEST_CASE("launch.commit copies a launched clip and warns when its key is not the project's") {
+    Project p;
+    twoTracks(p);
+    p.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w"})");
+    json::Value args = json::Value::object();
+    args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": 192000,
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]})");
+    json::Value done = p.runArgs("launch.commit", args);
+    REQUIRE(done["items"].size() > 0);
+    const json::Value* warnings = done.find("warnings");
+    REQUIRE(warnings);
+    bool mismatch = false;
+    for (const auto& w : warnings->asArray())
+        mismatch |= w.find("code")->asString() == "context.mismatch";
+    CHECK(mismatch);
+    // A clip laid one item per period (its length twice its content) says it once per stretch,
+    // not once per period.
+    p.run("clip.set", R"({"clip": "cl_1", "length": 8})");
+    json::Value periods = j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 768000,
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]}})");
+    json::Value laid = p.runArgs("launch.commit", periods);
+    CHECK(laid["items"].size() > 1);
+    int mismatches = 0;
+    for (const auto& w : laid.find("warnings")->asArray())
+        mismatches += w.find("code")->asString() == "context.mismatch";
+    CHECK(mismatches == 1);
+    p.run("clip.set", R"({"clip": "cl_1", "length": 4})");
+    // The notes are as they were played: nothing was mapped.
+    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key C minor ~:w"})");
+    json::Value again = p.runArgs("launch.commit", args);
+    CHECK_FALSE(again.find("warnings"));
 }

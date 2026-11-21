@@ -3251,6 +3251,33 @@ TEST_CASE("the FX window shows a take's chain (take FX): add, reorder, no input 
     CHECK(f.fx->chain().empty());
 }
 
+TEST_CASE("the FX window shows a launcher clip's take chain") {
+    Fixture f;
+    if (!f.ok || !f.stockPlugins()) {
+        MESSAGE("skipped: no GUI or stock plugins");
+        return;
+    }
+    const auto track = f.addTrack("Keys");
+    auto scene = f.run("scene.add", f.args({{"name", "Chorus"}}));
+    REQUIRE(scene);
+    auto clip = f.run("clip.add", f.args({{"track", track.str()},
+                                          {"scene", (*scene)["id"].asString()},
+                                          {"notation", "1: C4:q E4:q G4:q E4:q"}}));
+    REQUIRE(clip);
+    const model::Clip* c = f.app->head().clips.find(*model::Id::parse((*clip)["clip"].asString()));
+    REQUIRE(c);
+    REQUIRE(c->activeTake);
+    const model::Id take = *c->activeTake;
+    REQUIRE(f.run("fx.add", f.args({{"take", take.str()}, {"plugin", f.pluginId("Teasel")}})));
+    // A clip's take has no item: the window opens on the clip's track.
+    REQUIRE(f.fx->openTake(take));
+    f.frame();
+    REQUIRE(f.fx->take() == take);
+    CHECK(f.uiRoot().find("fx.title")->valueText().rfind("Take FX: Keys", 0) == 0);
+    CHECK(f.fx->chain().size() == 1);
+    CHECK(f.fx->inputChain().empty());
+}
+
 TEST_CASE("FX latency badge follows an effect edit and undo without reopening") {
     Fixture f;
     REQUIRE(f.ok);

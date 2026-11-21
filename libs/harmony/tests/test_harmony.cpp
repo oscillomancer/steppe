@@ -5,11 +5,37 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <new>
 #include <random>
 #include <set>
 #include <sstream>
 
 using namespace supple::harmony;
+
+// Counts the global allocations, to show `follow` makes none. Not under a sanitizer, which
+// brings its own allocator.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define HARMONY_NO_ALLOCATION_COUNT 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+    __has_feature(realtime_sanitizer)
+#define HARMONY_NO_ALLOCATION_COUNT 1
+#endif
+#endif
+#ifndef HARMONY_NO_ALLOCATION_COUNT
+namespace {
+std::atomic<long> gAllocations{0};
+}
+void* operator new(std::size_t size) {
+    gAllocations.fetch_add(1, std::memory_order_relaxed);
+    if (void* p = std::malloc(size ? size : 1)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+#endif
 
 namespace {
 
@@ -417,3 +443,211 @@ TEST_CASE("snapping a pitch to a set of classes") {
             }
         }
 }
+
+// --- following (specs/harmony.md §5) ----------------------------------------------------------
+
+namespace {
+
+Place keyOnly(std::string_view tonic, Scale scale) {
+    return Place{key(tonic, scale), std::nullopt};
+}
+Place keyChord(std::string_view tonic, Scale scale, std::string_view chord) {
+    return Place{key(tonic, scale), *parseChord(chord)};
+}
+Place chordOnly(std::string_view chord) { return Place{std::nullopt, *parseChord(chord)}; }
+Followed keyFollow(int pitch, const Place& from, const Place& to) {
+    return follow(pitch, from, to, FollowMode::Key);
+}
+Followed chordFollow(int pitch, const Place& from, const Place& to) {
+    return follow(pitch, from, to, FollowMode::Chords);
+}
+// C4 = 60: a note named like "E4".
+int note(std::string_view name) {
+    const char letter = name[0];
+    int semitone = pitchClassSemitone(PitchClass{letter, 0});
+    std::size_t i = 1;
+    if (name[i] == '#')
+        semitone += 1, ++i;
+    else if (name[i] == 'b')
+        semitone -= 1, ++i;
+    return 12 * (std::atoi(std::string(name.substr(i)).c_str()) + 1) + semitone;
+}
+
+}  // namespace
+
+TEST_CASE("follow in key mode: the same scale transposes by the nearest interval") {
+    const Place c = keyOnly("C", Scale::Major), d = keyOnly("D", Scale::Major);
+    for (int p = 0; p <= 125; ++p) {
+        const Followed f = keyFollow(p, c, d);
+        CHECK(f.pitch == p + 2);
+        CHECK(f.by == FollowedBy::Transpose);
+        CHECK_FALSE(f.folded);
+    }
+    for (int p : {126, 127}) {
+        const Followed f = keyFollow(p, c, d);
+        CHECK(f.pitch == p + 2 - 12);  // 116, 117
+        CHECK(f.folded);
+    }
+    CHECK(keyFollow(60, c, keyOnly("F#", Scale::Major)).pitch == 54);  // the tritone goes down
+    CHECK(tonicInterval(PitchClass{'C', 0}, PitchClass{'F', 1}) == -6);
+    CHECK(tonicInterval(PitchClass{'C', 0}, PitchClass{'G', 0}) == -5);
+    CHECK(tonicInterval(PitchClass{'G', 0}, PitchClass{'C', 0}) == 5);
+}
+
+TEST_CASE("follow in key mode: scales of the same size map by degree") {
+    const Place cMajor = keyOnly("C", Scale::Major), dMinor = keyOnly("D", Scale::Minor);
+    CHECK(keyFollow(note("E4"), cMajor, dMinor).pitch == note("F4"));
+    CHECK(keyFollow(note("E4"), cMajor, dMinor).by == FollowedBy::Degree);
+    CHECK(keyFollow(note("F#4"), cMajor, dMinor).pitch == note("G#4"));
+    const Place aMinor = keyOnly("A", Scale::Minor);
+    CHECK(keyFollow(note("A4"), aMinor, cMajor).pitch == note("C5"));
+    CHECK(keyFollow(note("C5"), aMinor, cMajor).pitch == note("E5"));
+    CHECK(keyFollow(note("G4"), aMinor, cMajor).pitch == note("B4"));
+    const Place cMinor = keyOnly("C", Scale::Minor), eb = keyOnly("Eb", Scale::Major);
+    CHECK(keyFollow(note("C4"), cMinor, eb).pitch == note("Eb4"));
+    CHECK(keyFollow(note("Eb4"), cMinor, eb).pitch == note("G4"));
+    CHECK(keyFollow(note("G4"), cMinor, eb).pitch == note("Bb4"));
+    // Harmonic minor's G and G# both land on B in C major: the rule keeps degrees.
+    const Place aHarmonic = keyOnly("A", Scale::HarmonicMinor);
+    CHECK(keyFollow(note("G4"), aHarmonic, cMajor).pitch == note("B4"));
+    CHECK(keyFollow(note("G#4"), aHarmonic, cMajor).pitch == note("B4"));
+    // Pentatonic to pentatonic.
+    CHECK(keyFollow(note("F#4"), keyOnly("C", Scale::MajorPentatonic),
+                    keyOnly("A", Scale::MinorPentatonic))
+              .pitch == note("E4"));
+    // Low pitches, where the scale pitch below lies under 0 (pitch 0 in B major).
+    const Followed low = keyFollow(0, keyOnly("B", Scale::Major), keyOnly("C", Scale::Minor));
+    CHECK(low.pitch >= 0);
+    CHECK(low.pitch <= 127);
+}
+
+TEST_CASE("follow in key mode: scales of different sizes transpose, and a missing key copies") {
+    const Followed shape =
+        keyFollow(note("E4"), keyOnly("C", Scale::Major), keyOnly("C", Scale::MinorPentatonic));
+    CHECK(shape.pitch == note("E4"));
+    CHECK(shape.by == FollowedBy::Transpose);
+    CHECK(shape.scaleShape);
+    CHECK_FALSE(keyFollow(60, keyOnly("C", Scale::Major), keyOnly("D", Scale::Major)).scaleShape);
+    const Place none;
+    for (const auto& [from, to] :
+         {std::pair{keyOnly("C", Scale::Major), none}, std::pair{none, keyOnly("D", Scale::Major)},
+          std::pair{none, none}}) {
+        const Followed f = keyFollow(61, from, to);
+        CHECK(f.pitch == 61);
+        CHECK(f.by == FollowedBy::Copy);
+    }
+}
+
+TEST_CASE("follow in chords mode: tones map by function") {
+    const Place cmaj7 = chordOnly("Cmaj7"), dm7 = chordOnly("Dm7");
+    // Cmaj7 -> Dm7, tone by tone, in each octave: the root, third, fifth and seventh go to
+    // their counterparts (D, F, A, C), each in the octave nearest.
+    for (int octave = 1; octave <= 7; ++octave) {
+        const int c = 12 * (octave + 1);
+        CHECK(chordFollow(c, cmaj7, dm7).pitch == c + 2);        // C -> D
+        CHECK(chordFollow(c + 4, cmaj7, dm7).pitch == c + 5);    // E -> F
+        CHECK(chordFollow(c + 7, cmaj7, dm7).pitch == c + 9);    // G -> A
+        CHECK(chordFollow(c + 11, cmaj7, dm7).pitch == c + 12);  // B -> C
+    }
+    CHECK(chordFollow(60, cmaj7, dm7).by == FollowedBy::Chords);
+    // At the top, with keys: G9 (127) goes to A9 (129) by the nearest rule and folds to A8.
+    const Place from = keyChord("C", Scale::Major, "Cmaj7"),
+                to = keyChord("D", Scale::Major, "Dm7");
+    const Followed top = chordFollow(127, from, to);
+    CHECK(top.pitch == 117);
+    CHECK(top.folded);
+    // C11 -> Dm7 maps C, G, Bb, D, F to D, A, C, D, F.
+    const Place c11 = chordOnly("C11");
+    const auto cls = [](int p) { return ((p % 12) + 12) % 12; };
+    CHECK(cls(chordFollow(note("C4"), c11, dm7).pitch) == 2);
+    CHECK(cls(chordFollow(note("G4"), c11, dm7).pitch) == 9);
+    CHECK(cls(chordFollow(note("Bb4"), c11, dm7).pitch) == 0);
+    CHECK(cls(chordFollow(note("D5"), c11, dm7).pitch) == 2);
+    CHECK(cls(chordFollow(note("F5"), c11, dm7).pitch) == 5);
+    // C5 -> Dm maps G to A.
+    CHECK(cls(chordFollow(note("G4"), chordOnly("C5"), chordOnly("Dm")).pitch) == 9);
+    // C13 -> D maps C, E, Bb, D, A to D, F#, A, D, A.
+    const Place c13 = chordOnly("C13"), dMajor = chordOnly("D");
+    CHECK(cls(chordFollow(note("C4"), c13, dMajor).pitch) == 2);
+    CHECK(cls(chordFollow(note("E4"), c13, dMajor).pitch) == 6);
+    CHECK(cls(chordFollow(note("Bb4"), c13, dMajor).pitch) == 9);
+    CHECK(cls(chordFollow(note("D5"), c13, dMajor).pitch) == 2);
+    CHECK(cls(chordFollow(note("A5"), c13, dMajor).pitch) == 9);
+    // C11 -> D5: the eleventh F goes to D (no third, so the root).
+    CHECK(cls(chordFollow(note("F5"), c11, chordOnly("D5")).pitch) == 2);
+    // Cmaj7 -> C5 keeps both of two notes that land together: C4 E4 G4 B4 -> C4 C4 G4 G4.
+    const Place c5 = chordOnly("C5");
+    CHECK(chordFollow(note("C4"), cmaj7, c5).pitch == note("C4"));
+    CHECK(chordFollow(note("E4"), cmaj7, c5).pitch == note("C4"));
+    CHECK(chordFollow(note("G4"), cmaj7, c5).pitch == note("G4"));
+    CHECK(chordFollow(note("B4"), cmaj7, c5).pitch == note("G4"));
+}
+
+TEST_CASE("follow in chords mode: slash basses, other notes, the octave, and the key fallback") {
+    const auto cls = [](int p) { return ((p % 12) + 12) % 12; };
+    // A slash bass that is not a tone maps to the target's bass: C/D -> G/A maps D to A.
+    CHECK(cls(chordFollow(note("D3"), chordOnly("C/D"), chordOnly("G/A")).pitch) == 9);
+    // One that is a tone maps as the tone: C/E -> G/D maps E to B.
+    CHECK(cls(chordFollow(note("E3"), chordOnly("C/E"), chordOnly("G/D")).pitch) == 11);
+    // C over Dm in C major, to Em in D major, gives D (the seventh to the seventh).
+    CHECK(cls(chordFollow(note("C4"), keyChord("C", Scale::Major, "Dm"),
+                          keyChord("D", Scale::Major, "Em"))
+                  .pitch) == 2);
+    // A over G7 in C major, to A7 in D minor, gives Bb.
+    CHECK(cls(chordFollow(note("A4"), keyChord("C", Scale::Major, "G7"),
+                          keyChord("D", Scale::Minor, "A7"))
+                  .pitch) == 10);
+    // The octave tie: keys C major to F# major, the chord C held: C4 goes down to C3.
+    CHECK(
+        chordFollow(note("C4"), keyChord("C", Scale::Major, "C"), keyChord("F#", Scale::Major, "C"))
+            .pitch == note("C3"));
+    // A chord missing on either side falls back to key mode for the note.
+    const Followed missing =
+        chordFollow(note("E4"), keyOnly("C", Scale::Major), keyChord("D", Scale::Minor, "Dm"));
+    CHECK(missing.pitch == note("F4"));
+    CHECK(missing.by == FollowedBy::Degree);
+    const Followed neither = chordFollow(61, Place{}, Place{});
+    CHECK(neither.pitch == 61);
+    CHECK(neither.by == FollowedBy::Copy);
+}
+
+TEST_CASE("follow never fails: any pitch, any pair of places, lands in range") {
+    const std::vector<Place> places = {
+        Place{},
+        keyOnly("C", Scale::Major),
+        keyOnly("F#", Scale::HarmonicMinor),
+        keyChord("Eb", Scale::Minor, "Cm7"),
+        keyChord("B", Scale::Blues, "F#7#9"),
+        chordOnly("G11"),
+        keyChord("A", Scale::Chromatic, "Asus2/E"),
+    };
+    for (const Place& from : places)
+        for (const Place& to : places)
+            for (int p = 0; p <= 127; ++p)
+                for (const FollowMode mode : {FollowMode::Key, FollowMode::Chords}) {
+                    const Followed f = follow(p, from, to, mode);
+                    CHECK(f.pitch >= 0);
+                    CHECK(f.pitch <= 127);
+                }
+}
+
+#ifndef HARMONY_NO_ALLOCATION_COUNT
+TEST_CASE("follow allocates nothing, the first call included") {
+    // harmony.md section 5: X4 builds its tables from follow, so it must not touch the heap.
+    // The places are built first; only the calls are counted.
+    const Place cmaj7 = keyChord("C", Scale::Major, "Cmaj7");
+    const Place dm7 = keyChord("D", Scale::Minor, "Dm7");
+    const Place c11 = keyChord("Eb", Scale::Major, "C11/Bb");
+    const Place none;
+    const long before = gAllocations.load();
+    int sum = 0;
+    for (int pitch = 0; pitch <= 127; ++pitch)
+        for (const FollowMode mode : {FollowMode::Key, FollowMode::Chords})
+            for (const Place* from : {&cmaj7, &c11, &none})
+                for (const Place* to : {&dm7, &cmaj7, &none})
+                    sum += follow(pitch, *from, *to, mode).pitch;
+    const long made = gAllocations.load() - before;
+    CHECK(made == 0);
+    CHECK(sum > 0);
+}
+#endif

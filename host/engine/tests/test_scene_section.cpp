@@ -343,6 +343,47 @@ TEST_CASE("scene.capture makes a scene from the items of a section, one clip per
     CHECK(l.head().clips.empty());
 }
 
+TEST_CASE("scene.capture gives each clip the context under its item (ADR-0098)") {
+    Song l;
+    l.run("key.set", R"({"at": 0, "tonic": "D", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Dm"})");
+    l.run("chord.set", R"({"at": 2, "symbol": "A7"})");
+    l.run("region.add", R"({"start": 0, "end": 4, "name": "Hook"})");
+    l.run("item.add", R"({"track": "tr_2", "position": 0, "notation": "voice pad; 1: C3:h r:h"})");
+    auto r = l.run("scene.capture", R"({"region": "rg_1"})");
+    const model::Clip& bass =
+        *l.head().clips.find(id(at(r["clips"], 0)["clip"].asString().c_str()));
+    const model::Clip& pad = *l.head().clips.find(id(at(r["clips"], 1)["clip"].asString().c_str()));
+    // Each clip remembers what its item sat under, from the item's start, in clip beats.
+    for (const model::Clip* c : {&bass, &pad}) {
+        REQUIRE(c->context.size() == 3);
+        CHECK(c->context[0].type == model::ContextType::Key);
+        CHECK(c->context[0].tonic == "D");
+        CHECK(c->context[1].symbol == "Dm");
+        CHECK(c->context[2].symbol == "A7");
+        CHECK(c->context[2].beat == 2.0);
+        CHECK(c->follow == model::ClipFollow::None);
+    }
+    // An audio item gives its clip the key alone.
+    auto args = j(R"({"track": "tr_2", "position": 8})");
+    args["audio_file"] = l.wav("pad.wav", 2.0).string();
+    l.runArgs("item.add", args);
+    l.run("region.add", R"({"start": 8, "end": 12, "name": "Wash"})");
+    auto audio = l.run("scene.capture", R"({"region": "rg_2"})");
+    const model::Clip& wash =
+        *l.head().clips.find(id(at(audio["clips"], 0)["clip"].asString().c_str()));
+    CHECK(wash.kind == model::ClipKind::Audio);
+    REQUIRE(wash.context.size() == 1);
+    CHECK(wash.context[0].type == model::ContextType::Key);
+    // With no context track there is nothing to take.
+    Song bare;
+    bare.run("region.add", R"({"start": 0, "end": 4, "name": "Hook"})");
+    auto none = bare.run("scene.capture", R"({"region": "rg_1"})");
+    CHECK(bare.head()
+              .clips.find(id(at(none["clips"], 0)["clip"].asString().c_str()))
+              ->context.empty());
+}
+
 TEST_CASE("scene.capture: a shorter item is a once clip, a looped item a looped clip") {
     Song l;
     l.run("region.add", R"({"start": 0, "end": 8, "name": "Verse 2"})");
@@ -741,4 +782,75 @@ TEST_CASE("scene.insert lays a clip take's FX envelope in timeline beats, pass a
             CHECK(e.value->points.front().pos == 0.0);
             CHECK(e.value->points.back().pos == 3.0);
         }
+}
+
+// --- names ---------------------------------------------------------------------------
+
+// An item's name is its active take's: the model has no name on an item.
+std::string itemName(const Song& l, model::Id item) {
+    const model::Item* it = l.head().items.find(item);
+    REQUIRE(it);
+    REQUIRE(it->activeTake);
+    return l.head().takes.find(*it->activeTake)->name;
+}
+
+TEST_CASE("a clip's name becomes the name of the items made from it") {
+    Song l;
+    l.verseClips();
+    l.run("clip.set", R"({"clip": "cl_1", "name": "Bass line"})");  // cl_2 has none
+    SUBCASE("scene.insert") {
+        auto r = l.run("scene.insert", R"({"scene": "sc_1", "bar": 3, "bars": 2})");
+        CHECK(itemName(l, id(at(r["items"], 0)["item"].asString().c_str())) == "Bass line");
+        CHECK(itemName(l, id(at(r["items"], 1)["item"].asString().c_str())).empty());
+        CHECK(l.describe().find(" \"Bass line\" bar 3") != std::string::npos);
+    }
+    SUBCASE("arrangement.build") {
+        auto r =
+            l.run("arrangement.build", R"({"sequence": [{"scene": "sc_1", "bars": 2}], "bar": 3})");
+        auto items = at(at(r["segments"], 0)["items"], 0);
+        CHECK(itemName(l, id(items["item"].asString().c_str())) == "Bass line");
+    }
+    SUBCASE("item.add {clip}") {
+        auto r = l.run("item.add", R"({"track": "tr_1", "bar": 3, "clip": "cl_1"})");
+        CHECK(itemName(l, id(r["item"].asString().c_str())) == "Bass line");
+    }
+    SUBCASE("a clip without a name leaves the copied take's own") {
+        l.run("take.set", R"({"take": "tk_3", "name": "pad take"})");  // cl_2's take
+        auto r = l.run("item.add", R"({"track": "tr_2", "bar": 3, "clip": "cl_2"})");
+        CHECK(itemName(l, id(r["item"].asString().c_str())) == "pad take");
+    }
+}
+
+TEST_CASE("an item's name becomes the name of the clip made from it") {
+    Song l;
+    l.run("item.set", R"({"item": "it_1", "name": "Bass riff"})");
+    SUBCASE("clip.add {item} takes the item's name, unless one is given") {
+        auto r = l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
+        CHECK(l.head().clips.find(id(r["clip"].asString().c_str()))->name == "Bass riff");
+        auto named = l.run(
+            "clip.add", R"({"track": "tr_1", "scene": "sc_2", "item": "it_1", "name": "Intro"})");
+        CHECK(l.head().clips.find(id(named["clip"].asString().c_str()))->name == "Intro");
+    }
+    SUBCASE("scene.capture") {
+        l.run("region.add", R"({"start": 0, "end": 4, "name": "Verse"})");
+        auto r = l.run("scene.capture", R"({"region": "rg_1"})");
+        CHECK(l.head().clips.find(id(at(r["clips"], 0)["clip"].asString().c_str()))->name ==
+              "Bass riff");
+    }
+}
+
+TEST_CASE("a name makes the whole trip: clip, item, clip, item") {
+    Song l;
+    l.verseClips();
+    l.run("clip.set", R"({"clip": "cl_1", "name": "Hook"})");
+    auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 3, "bars": 1})");
+    const std::string item = at(laid["items"], 0)["item"].asString();
+    CHECK(itemName(l, id(item.c_str())) == "Hook");
+    l.run("item.set", std::string(R"({"item": ")") + item + R"(", "name": "Hook 2"})");
+    auto back = l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_2", "item": ")") +
+                                      item + R"("})");
+    CHECK(l.head().clips.find(id(back["clip"].asString().c_str()))->name == "Hook 2");
+    // One undo step takes the name with the item.
+    l.run("history.undo", "{}");
+    CHECK(l.head().clips.find(id(back["clip"].asString().c_str())) == nullptr);
 }

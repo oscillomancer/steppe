@@ -183,7 +183,9 @@ compiler and the commands follow it together.
   in the item's first pass, refuse with `midi.context_varies` (and a hint)
   when a loop pass or a pooled sharer would see a different key or chord, and
   apply in order within one `midi.edit`. A clip reads the key that holds at
-  the project's start and no chords.
+  the project's start and no chords. *(2026-11-20: for clips this is
+  superseded by ADR-0098, which gives a clip its own context; it holds until
+  step X1 lands.)*
 
 ### The lead sheet (proposed here; built in C2, see "C2: as built" below)
 

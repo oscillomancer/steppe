@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include "supple/model/context.h"
 #include "supple/model/source_mapping.h"
@@ -73,6 +74,92 @@ std::string beatText(const model::Session& s, double beat) {
 }
 
 }  // namespace
+
+std::vector<double> clipSoundingBeats(const model::Clip& clip, const model::Take& take, int ppq,
+                                      std::int64_t tick) {
+    std::vector<double> beats;
+    if (ppq <= 0 || !(clip.length > 0)) return beats;
+    const model::SourceBeatMapping mapping{take.startOffset,
+                                           take.playrate > 0 ? take.playrate : 1.0, 0};
+    const double on = mapping.itemBeat(static_cast<double>(tick) / ppq);
+    const bool looping = clip.loop.on && clip.loop.length > 0;
+    const double from = looping ? clip.loop.start : 0.0;
+    const double window = looping ? clip.loop.length : clip.length;
+    const int passes = looping ? static_cast<int>(std::ceil(clip.length / window - 1e-9)) : 1;
+    if (on < from || on >= from + window) return beats;
+    for (int pass = 0; pass < passes; ++pass) {
+        const double at = pass * window + on - from;
+        if (at < clip.length) beats.push_back(at);
+    }
+    return beats;
+}
+
+Result<NoteContext> clipNoteContext(const model::Clip& clip, const model::Take& take, int ppq,
+                                    std::int64_t tick, bool needKey, bool needChord,
+                                    const std::string& path) {
+    std::vector<double> beats = clipSoundingBeats(clip, take, ppq, tick);
+    if (beats.empty()) {  // never played: where its content sits, kept inside the clip
+        const double on = ppq > 0 ? (static_cast<double>(tick) / ppq - take.startOffset) /
+                                        (take.playrate > 0 ? take.playrate : 1.0)
+                                  : 0.0;
+        beats.push_back(std::clamp(on, 0.0, std::max(0.0, clip.length - 1.0 / 960.0)));
+    }
+    const auto beatWords = [](double beat) {
+        char text[48];
+        std::snprintf(text, sizeof text, "beat %.4g of the clip", beat);
+        return std::string(text);
+    };
+    NoteContext out;
+    bool first = true;
+    for (const double beat : beats) {
+        std::optional<harmony::Key> key;
+        std::optional<harmony::Chord> chord;
+        if (needKey) {
+            const model::ContextPoint* point = model::keyPointAt(clip, beat);
+            key = point ? model::parseKey(*point) : std::nullopt;
+            if (!key)
+                return Error("midi.no_key",
+                             point ? "the clip's key at " + beatWords(beat) + " is '" +
+                                         model::keyWords(*point) + "', which this build cannot read"
+                                   : "the clip holds no key at " + beatWords(beat),
+                             path,
+                             "give the clip a context (clip.set {context} or {context_at}) or "
+                             "pass key");
+        }
+        if (needChord) {
+            const model::ContextPoint* point = model::chordPointAt(clip, beat);
+            chord = point ? model::parseChordPoint(*point) : std::nullopt;
+            if (!chord)
+                return Error("midi.no_chord",
+                             point && !point->symbol.empty()
+                                 ? "the clip's chord at " + beatWords(beat) + " is '" +
+                                       point->symbol + "', which this build cannot read"
+                                 : "the clip holds no chord at " + beatWords(beat),
+                             path,
+                             "give the clip a context with chords (clip.set {context} or "
+                             "{context_at}) or pass chord");
+        }
+        if (first) {
+            out.key = key;
+            out.chord = chord;
+            first = false;
+            continue;
+        }
+        if (needKey && key != out.key)
+            return Error("midi.context_varies",
+                         "this note sounds in different keys of the clip (a loop pass puts it "
+                         "at " +
+                             beatWords(beats.front()) + " and " + beatWords(beat) + ")",
+                         path, "pass key to say which one, or loop the clip over one key");
+        if (needChord && chord != out.chord)
+            return Error("midi.context_varies",
+                         "this note sounds over different chords of the clip (a loop pass puts "
+                         "it at " +
+                             beatWords(beats.front()) + " and " + beatWords(beat) + ")",
+                         path, "pass chord to say which one, or loop the clip over one chord");
+    }
+    return out;
+}
 
 Result<NoteContext> noteContext(const model::Session& s, model::Id source, std::int64_t tick,
                                 double fallbackBeat, bool needKey, bool needChord,

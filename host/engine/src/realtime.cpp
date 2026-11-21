@@ -928,6 +928,7 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
             seekSample_.store(time::samplesAt(*recoverySeek, config_.sampleRate),
                               std::memory_order_relaxed);
             seekSeq_.fetch_add(1, std::memory_order_relaxed);
+            seekEpoch_.store(epoch_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
         });
     wakeRenderer();
     notifyMain();
@@ -950,21 +951,34 @@ void Engine::writeTransport(F&& change) {
     notifyMain();
 }
 
-void Engine::play() {
+bool Engine::seekToPlayStart() {
     const auto* prepared = latestPlan_.load(std::memory_order_acquire);
     const bool preparedSeek =
-        prepared && prepared->rateSeekSequence != 0 &&
+        !preparedSeekStale_ && prepared && prepared->rateSeekSequence != 0 &&
         prepared->preparedRateBoundary.epoch == epoch_.load(std::memory_order_acquire) &&
         prepared->rateSeekSequence == seekSeq_.load(std::memory_order_acquire);
-    if (!wantPlaying_.load(std::memory_order_acquire) &&
-        rateScheduling_.load(std::memory_order_acquire) && !preparedSeek) {
-        auto ready = prepareSeek(transport().seconds);
-        if (!ready) {
-            warnings_.push_back(ready.error().toString());
-            notifyMain();
-            return;
-        }
+    if (wantPlaying_.load(std::memory_order_acquire) ||
+        !rateScheduling_.load(std::memory_order_acquire) || preparedSeek)
+        return true;
+    auto ready = prepareSeek(transport().seconds);
+    if (!ready) {
+        warnings_.push_back(ready.error().toString());
+        notifyMain();
+        return false;
     }
+    // The seek begins a new epoch at the play position: the launches placed
+    // while stopped, for the play start, are placed there again before the
+    // transport runs (else service would place them once it runs, on the
+    // next boundary).
+    playStart_.emplace(seekEpoch_.load(std::memory_order_acquire),
+                       seekSample_.load(std::memory_order_acquire));
+    placeLaunchesAgain();
+    playStart_.reset();
+    return true;
+}
+
+void Engine::play() {
+    if (!seekToPlayStart()) return;
     placeCapture();  // a capture armed while stopped begins at the play position
     wantPlaying_.store(true, std::memory_order_release);
     wakeRenderer();
@@ -989,11 +1003,13 @@ Status Engine::prepareSeek(double seconds) {
         const auto status = load(*latest_, dir);
         rateSeekTarget_.reset();
         if (!status) return status;
+        preparedSeekStale_ = false;
     }
     writeTransport([&] {
         seekSample_.store(time::samplesAt(std::max(0., seconds), config_.sampleRate),
                           std::memory_order_relaxed);
         seekSeq_.fetch_add(1, std::memory_order_relaxed);
+        seekEpoch_.store(epoch_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
         if (rateLoopTarget_) {
             loopStart_.store(rateLoopTarget_->start, std::memory_order_relaxed);
             loopEnd_.store(rateLoopTarget_->end, std::memory_order_relaxed);
@@ -1054,6 +1070,20 @@ std::int64_t Engine::playedPosition(std::uint64_t epoch, std::int64_t epochStart
     return rtPosEpoch_.load(std::memory_order_acquire) == epoch ? rtPos_.load() : epochStart;
 }
 
+std::int64_t Engine::anticipativePosition(std::uint64_t epoch) const {
+    // Until the renderer has relocated for `epoch` (review round 70 P3: a
+    // pause and a launch or capture in one main-thread turn), the position
+    // relocate() will take: a seek's sample when a seek opened an epoch it
+    // has not relocated for, else where the epoch it last relocated for was
+    // heard (a pause or a loop change resumes there). Not that epoch's start.
+    const auto done = epochDone_.load(std::memory_order_acquire);
+    if (done < epoch) {
+        if (seekEpoch_.load(std::memory_order_acquire) > done) return seekSample_.load();
+        return playedPosition(done, epochStart_.load());
+    }
+    return playedPosition(epoch, epochStart_.load());
+}
+
 std::int64_t Engine::playedStream(std::uint64_t epoch) const {
     const auto stream = rtStream_.load();  // consumption/renderer-arm handshake
     return rtPosEpoch_.load(std::memory_order_acquire) == epoch ? stream : 0;
@@ -1070,8 +1100,7 @@ TransportState Engine::transport() const {
         t.sample = static_cast<std::int64_t>(std::llround(sample));
         t.seconds = sample / config_.sampleRate;
     } else {
-        t.sample =
-            options_.anticipative ? playedPosition(epoch, epochStart_.load()) : reportedPos_.load();
+        t.sample = options_.anticipative ? anticipativePosition(epoch) : reportedPos_.load();
         const auto* prepared = latestPlan_.load(std::memory_order_acquire);
         if (prepared && prepared->rateSeekSequence != 0 &&
             prepared->preparedRateBoundary.epoch == epoch)
@@ -2150,20 +2179,7 @@ void Engine::setMetronome(bool on, double gainDb) {
 }
 
 void Engine::playCountIn(std::int64_t frames, std::int64_t beatFrames, int beatsPerBar) {
-    const auto* prepared = latestPlan_.load(std::memory_order_acquire);
-    const bool preparedSeek =
-        prepared && prepared->rateSeekSequence != 0 &&
-        prepared->preparedRateBoundary.epoch == epoch_.load(std::memory_order_acquire) &&
-        prepared->rateSeekSequence == seekSeq_.load(std::memory_order_acquire);
-    if (!wantPlaying_.load(std::memory_order_acquire) &&
-        rateScheduling_.load(std::memory_order_acquire) && !preparedSeek) {
-        const auto ready = prepareSeek(transport().seconds);
-        if (!ready) {
-            warnings_.push_back(ready.error().toString());
-            notifyMain();
-            return;
-        }
-    }
+    if (!seekToPlayStart()) return;  // as play(), with its re-place (review round 81 E3)
     countFrames_.store(std::max<std::int64_t>(0, frames), std::memory_order_relaxed);
     countBeat_.store(std::max<std::int64_t>(1, beatFrames), std::memory_order_relaxed);
     countBar_.store(std::max(1, beatsPerBar), std::memory_order_relaxed);

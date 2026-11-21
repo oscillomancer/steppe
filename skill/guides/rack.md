@@ -28,7 +28,9 @@ probe again.
    audio, gates per beat and duty, the notes a pitch visits, a CV's range
    and rate. Nothing changes. This is how you hear a patch: probe the
    module feeding the Out and the note sources behind it before rendering.
-4. Adjust: `module.set {module, params}`, `cable.set {cable, amount}`,
+4. Adjust: `module.set {module, params}` (a knob is a number in its unit, or text like
+   `"80 %"` or `"1.2 kHz"`; a number outside the knob's range is refused with its
+   range in the hint, not clamped), `cable.set {cable, amount}`,
    `module.set {module, preset}` (a module's factory preset). Probe again.
 5. Render or listen as for any track. Ask the human to listen when it
    matters.
@@ -68,8 +70,10 @@ patch's drive, envelopes and feedback.
   time with everything else and does nothing while the song is stopped.
   Cable a `clock` only to change the rate or interlock two sources (a
   Euclid's gate clocking a melody, as the bells do). Motion runs free of
-  the song unless told: an `lfo` locks to it with `sync` on, `dust` with
-  a `grid`; `drift` and `chaos` never do.
+  the song unless told: an `lfo` locks to it with `sync` on (while
+  stopped it runs on at the tempo from the stop position, so a synced gate
+  still moves when you play the rack from a keyboard), `dust` with a
+  `grid`; `drift` and `chaos` never do.
 - **Probing from the middle.** `from_beat` starts a fresh render at that
   beat. Form, Transport and anything clocked by the song know where they
   are, but whatever builds up as it runs does not: Phrase's and Changes'
