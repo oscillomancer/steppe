@@ -242,7 +242,13 @@ instructions are in `docs/guides/installing.md`.
   `placeAt`. Not built: the commands (placement, `take.set`, `take.bake`,
   `midi.get {sounding}` and the rest of the contract's table, X4d) and the
   engine's use of it (X4c): a take's `follow` is stored and nothing plays by it
-  yet.
+  yet. The GUI shows it (X4e, the model's part): a following take's roll draws
+  its notes where they sound with the written pitches outlined, and a Written
+  cell; the strip shows the song's and the take's chords; the item carries
+  "→D" and a thumbnail at the sounding pitches; the inspector says what the
+  take was written in. Not yet: Follow and Bake in the inspector and the Item
+  menu, editing the take's context in the roll, degree steps on a following
+  take, and the placement and context-edit status lines (X4d's commands).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
