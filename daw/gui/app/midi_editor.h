@@ -79,7 +79,7 @@ struct CcPoint {
 struct RollState {
     std::uint64_t gestureVersion = 0;
     std::string item;         // "it_3", or a launcher clip "cl_2"; empty: closed
-    bool clip = false;        // the owner is a clip: it sits at beat 0, no chords
+    bool clip = false;        // the owner is a clip: it sits at beat 0, in its own context
     double itemPosition = 0;  // project beats
     double itemLength = 4;    // beats
     std::vector<RollNote> notes;
@@ -213,6 +213,7 @@ class MidiEditor {
     void transpose(int semitones);
     void transposeDegrees(int degrees);  // midi.edit transpose_degrees on the selection
     ui::Toggle* keyButton() const { return keyButton_; }
+    const std::string& keyText() const { return keyText_; }  // the key button's words
     // The chord field (views/chord_field.h) for the chord point at the project
     // beat `beat`, opened at the window point `at` (the strip's double-click).
     void editChord(double beat, ui::Point at);

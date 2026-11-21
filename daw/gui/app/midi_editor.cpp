@@ -1893,16 +1893,23 @@ Status MidiEditor::reload() {
         state_.barLines.push_back(at);
     }
     // The context in the same window (ADR-0095): what holds at its start and
-    // the changes in it. A clip has no place in time: it reads the key at the
-    // project's start, as midi.edit does, and no chords.
+    // the changes in it. A clip has no place in time: it reads its own
+    // context (ADR-0098), in clip beats, as midi.edit does, so the shading,
+    // the spelling and a degree drag's preview agree with what the engine
+    // commits. Without one no key holds.
     state_.keys.clear();
     state_.chords.clear();
     if (state_.clip) {
-        std::optional<harmony::Key> key;
-        if (const auto id = model::keyPointAt(app_.head(), 0.0))
-            if (const model::ContextPoint* p = app_.head().context.find(*id))
-                key = model::parseKey(*p);
-        state_.keys.push_back({0.0, key});
+        const model::Clip& clip = *owner->clip;
+        state_.keys.push_back({0.0, model::keyAt(clip, 0.0)});
+        for (const model::ContextPoint& p : clip.context) {
+            if (p.type == model::ContextType::Key) {
+                if (p.beat > 0) state_.keys.push_back({p.beat, model::parseKey(p)});
+                continue;
+            }
+            const bool known = p.symbol.empty() || model::parseChordPoint(p).has_value();
+            state_.chords.push_back({p.beat, p.symbol + (known ? "" : "?"), known});
+        }
     } else {
         const model::Session& head = app_.head();
         const double lo = state_.itemPosition - 64;
@@ -2174,14 +2181,25 @@ void MidiEditor::transposeDegrees(int degrees) {
 void MidiEditor::refreshKeyButton() {
     if (!keyButton_) return;
     const model::Session& head = app_.head();
-    const auto id = model::keyPointAt(head, state_.itemPosition);
-    const model::ContextPoint* point = id ? head.context.find(*id) : nullptr;
+    // An item's key at its start; a clip's own at its start (ADR-0098).
+    const model::ContextPoint* point = nullptr;
+    const auto owner = state_.clip ? midiOwner(head, state_.item) : std::nullopt;
+    if (owner && owner->clip) {
+        point = model::keyPointAt(*owner->clip, 0.0);
+    } else if (const auto id = model::keyPointAt(head, state_.itemPosition)) {
+        point = head.context.find(*id);
+    }
     const bool known = point && model::parseKey(*point);
     std::string text = point ? model::keyWords(*point) : "No key";
     keyButton_->enabled = known;
     if (!known && state_.degrees) {  // nothing to count degrees in
         state_.degrees = false;
         keyButton_->setOn(false);
+        // midi.edit refuses degrees on a clip without a key (midi.no_key).
+        if (state_.clip && actions_.onError)
+            actions_.onError(
+                "MIDI: degree mode is off: the clip has no key; give it a "
+                "context with a key at its start");
     }
     if (text == keyText_) return;
     keyText_ = text;

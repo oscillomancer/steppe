@@ -3661,35 +3661,113 @@ TEST_CASE("MIDI editor: a clip's take envelopes and take FX parameters get lanes
     CHECK(f.lanesMenu().size() == 6);
 }
 
-TEST_CASE("MIDI editor: a launcher clip opens at beat 0, keyed by the project's start, no chords") {
+TEST_CASE("MIDI editor: a clip in another key than the project's: degrees preview what commits") {
+    // Review round 73, F4: the preview read the project's key while the
+    // engine commits by the clip's own. Here the project is in C major and
+    // the clip in Eb major: D4 dragged one row up, to Eb4, is one degree in
+    // Eb major, and none in C major (Eb4 is as near D4 as E4 there).
     Fixture f;
     if (!f.ok) return;
-    // Eb major from the start, A major later; chords over the start. A clip
-    // has no place in time: the roll reads only the key at the start.
+    f.exec("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add",
+               R"({"track":")" + track +
+                   R"(","scene":"sc_1","name":"Riff",)"
+                   R"("notation":"voice v; 1: C4:q D4:q r:h","context":"1: key Eb major ~:w"})")
+            .find("clip")
+            ->asString();
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.scrollBeat = -0.25;
+    s.topPitch = 72;
+    f.frame();
+    CHECK(f.editor->keyText() == "Eb major");
+    CHECK(harmony::spell(63, s.keyAt(1.0)) == "Eb4");
+    ui::Toggle* key = f.editor->keyButton();
+    REQUIRE(key->enabled);
+    const ui::Rect box = key->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {box.x + box.w / 2, box.y + box.h / 2});
+    f.pointer(ui::PointerEvent::Type::Up, {box.x + box.w / 2, box.y + box.h / 2});
+    REQUIRE(s.degrees);
+    auto pitch = [&](int i) {
+        const json::Value notes = f.exec("midi.notes", R"({"item":")" + clip + R"("})")["notes"];
+        return static_cast<int>(notes.at(static_cast<std::size_t>(i)).find("pitch")->asInt());
+    };
+    // A drag from D4 one row up: the preview counts in Eb major (Eb4, one
+    // degree), and the commit lands where the preview showed.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(1.5, 62));
+    f.pointer(ui::PointerEvent::Type::Move, f.at(1.5, 63));
+    CHECK(s.dDegrees == 1);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(1.5, 63));
+    CHECK(pitch(1) == 63);
+    // The arrow goes by the same key: Eb4 up one degree is F4.
+    f.root->key(SDLK_UP, 0);
+    f.frame();
+    CHECK(pitch(1) == 65);
+    // The clip's context cleared: degree mode goes off, and the status line
+    // says why (midi.edit would refuse with midi.no_key).
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    f.exec("clip.set", R"({"clip":")" + clip + R"(","context":""})");
+    f.frame();
+    CHECK_FALSE(s.degrees);
+    CHECK_FALSE(key->enabled);
+    CHECK(f.editor->keyText() == "No key");
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].find("the clip has no key") != std::string::npos);
+}
+
+TEST_CASE("MIDI editor: a launcher clip opens at beat 0 in its own key and chords") {
+    Fixture f;
+    if (!f.ok) return;
+    // The project is in Eb major, then A major, with chords. A clip has no
+    // place in time: it reads only its own context (ADR-0098), never the
+    // project's.
     f.exec("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
     f.exec("key.set", R"({"at":2,"tonic":"A","scale":"major"})");
     f.exec("chord.set", R"({"at":0,"symbol":"Ebmaj7"})");
     f.exec("scene.add", R"({"name":"Verse"})");
     const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    // Without a context: no key, no chords, no degrees.
+    const json::Value bare = f.exec(
+        "clip.add", R"({"track":")" + track +
+                        R"(","scene":"sc_1","name":"Bare","notation":"voice v; 1: D4:q r:q r:h"})");
+    REQUIRE(f.editor->open(bare.find("clip")->asString()));
+    f.frame();
+    auto& s = f.editor->state();
+    CHECK(s.clip);
+    CHECK_FALSE(s.keyAt(0.0));
+    CHECK(s.chords.empty());
+    CHECK_FALSE(f.editor->keyButton()->enabled);
+    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(16));  // no chord row
+    // With one: G minor, a chord change at its second bar; the project's keys
+    // and chords play no part.
+    f.exec("scene.add", R"({"name":"Chorus"})");
     const json::Value made = f.exec(
         "clip.add",
         R"({"track":")" + track +
-            R"(","scene":"sc_1","name":"Riff","notation":"voice v; 1: D4:q F4:q r:h | 2: G4:w"})");
+            R"(","scene":"sc_2","name":"Riff","notation":"voice v; 1: D4:q F4:q r:h | 2: G4:w",)"
+            R"("context":"1: key G minor {Gm}:w\n2: {Cm}:w"})");
     const std::string clip = made.find("clip")->asString();
     REQUIRE(f.editor->open(clip));
     f.frame();
-    auto& s = f.editor->state();
     CHECK(s.clip);
     CHECK(s.itemPosition == 0);
     CHECK(s.itemLength == doctest::Approx(8));  // two 4/4 bars
     CHECK(s.notes.size() == 3);
     REQUIRE(s.keys.size() == 1);
     REQUIRE(s.keyAt(5.0));
-    CHECK(harmony::spell(63, s.keyAt(5.0)) == "Eb4");  // Eb major's spelling, not A major's
-    CHECK(s.keyAt(5.0)->scale == harmony::Scale::Major);
-    CHECK(s.chords.empty());
-    CHECK(f.root->find("midi.bars")->bounds().h == doctest::Approx(16));  // no chord row
-    CHECK(f.editor->keyButton()->enabled);  // degrees count in Eb major
+    CHECK(harmony::spell(70, s.keyAt(5.0)) == "Bb4");  // G minor's spelling
+    CHECK(s.keyAt(5.0)->scale == harmony::Scale::Minor);
+    REQUIRE(s.chords.size() == 2);
+    CHECK(s.chords[0].text == "Gm");
+    CHECK(s.chords[1].beat == doctest::Approx(4));
+    CHECK(s.chords[1].text == "Cm");
+    CHECK(f.root->find("midi.bars")->bounds().h > 16);  // the chord row
+    CHECK(f.editor->keyButton()->enabled);
+    CHECK(f.editor->keyText() == "G minor");
     // Edits go to the clip's own take.
     REQUIRE(
         f.editor->edit(json::parse(R"([{"op":"add","pitch":72,"start":4,"length":1}])").value()));
