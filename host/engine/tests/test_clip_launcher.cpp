@@ -1484,12 +1484,17 @@ TEST_CASE("laying a clip copies its notes and warns when its key is not the proj
               .find("pitch")
               ->asInt() == 33);  // copied: A1
     CHECK(laid.find("followed")->find("mode")->asString() == "none");
+    // The followed block says the same for a program: the two keys and the bar.
+    const json::Value* mismatch = laid.find("followed")->find("mismatch");
+    REQUIRE(mismatch);
+    CHECK(json::writeCompact(*mismatch) == R"({"clip_key":"D minor","key":"C minor","bar":5})");
     // The clip's own follow is the default: a clip that follows the key is mapped, with no
     // mismatch warning (the notes were moved), and follow: none overrides it.
     l.run("clip.set", R"({"clip": "cl_1", "follow": "key"})");
     const auto followed = l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_1"})");
     CHECK(warningCodes(followed).find("context.mismatch") == std::string::npos);
     CHECK(followed.find("followed")->find("mode")->asString() == "key");
+    CHECK(followed.find("followed")->find("mismatch") == nullptr);
     CHECK(
         l.run("midi.notes", R"({"item": ")" + followed.find("item")->asString() + R"("})")["notes"]
             .at(0)

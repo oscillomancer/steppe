@@ -31,6 +31,14 @@ schema::Schema<FollowedInfo> followedSchema() {
                       .field("interval", &FollowRegion::interval,
                              schema::integer().doc("Semitones, for transpose."))
                       .build();
+    auto mismatch =
+        schema::object<KeyMismatch>("followed_mismatch")
+            .field("clip_key", &KeyMismatch::clipKey, schema::string().doc("The clip's key."))
+            .field("key", &KeyMismatch::key,
+                   schema::string().doc("The project's key there, which differs."))
+            .field("bar", &KeyMismatch::bar,
+                   schema::integer().doc("The first project bar where they differ."))
+            .build();
     return schema::object<FollowedInfo>("followed")
         .field("mode", &FollowedInfo::mode,
                schema::enumeration<std::string>(
@@ -43,6 +51,9 @@ schema::Schema<FollowedInfo> followedSchema() {
                                                  {"audio", "audio"},
                                                  {"no_key", "no_key"},
                                                  {"no_notes", "no_notes"}}))
+        .field("mismatch", &FollowedInfo::mismatch,
+               mismatch.doc("Set with the context.mismatch warning: the notes were copied as "
+                            "they are under a key that is not the clip's."))
         .build();
 }
 
@@ -109,8 +120,11 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
         info = FollowedInfo{};
         info.mode = "none";
         if (copiedBecause) info.copied = copiedBecause;
-        if (auto note = mismatchNote(s, clipId, clip, itemStart, itemBeats, 0.0, path))
+        KeyMismatch what;
+        if (auto note = mismatchNote(s, clipId, clip, itemStart, itemBeats, 0.0, path, &what)) {
+            info.mismatch = what;
             notes.push_back(std::move(*note));
+        }
         return info;
     };
     if (wanted == model::ClipFollow::None) return placeAsIs(nullptr);

@@ -4,6 +4,7 @@
 // What a clip knows of the harmony it was written against (ADR-0098, session-model
 // "Clip context"): its lead sheet text in clip bars, the project's context taken under
 // a span, the chord points a notation's symbols make, and the precedence between them.
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +16,12 @@
 namespace supple::engine::detail {
 
 // A warning a command gives: its code, message and path.
+// What a `context.mismatch` note says, for the answer's `followed.mismatch`.
+struct KeyMismatch {
+    std::string clipKey, key;  // the clip's key and the project's, in words
+    std::int64_t bar = 0;      // the first project bar where they differ
+};
+
 struct ClipNote {
     std::string code, message, path;
 };
@@ -78,10 +85,11 @@ std::vector<model::ContextPoint> composeContext(
 // period, `phase` beats into it at the start) and the project's key both hold and differ in
 // tonic pitch class or scale. It names the clip, both keys and the first project bar where
 // they differ. A clip with no note off channel 10 (drums, or empty) gives none, and neither
-// does an enharmonic spelling.
+// does an enharmonic spelling. With a note, `what` (when given) gets the keys and the bar.
 std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
                                      const model::Clip& clip, double start, double length,
-                                     double phase = 0, const std::string& path = "/clip");
+                                     double phase = 0, const std::string& path = "/clip",
+                                     KeyMismatch* what = nullptr);
 
 // The key a clip's points say at beat 0 (a readable one), for describe and the checks.
 std::optional<std::string> clipKeyWords(const model::Clip& clip);

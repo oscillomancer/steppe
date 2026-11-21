@@ -252,7 +252,7 @@ std::vector<model::ContextPoint> composeContext(
 
 std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
                                      const model::Clip& clip, double start, double length,
-                                     double phase, const std::string& path) {
+                                     double phase, const std::string& path, KeyMismatch* what) {
     if (clip.kind != model::ClipKind::Midi || !(clip.length > 0) || !(length > 0)) return {};
     if (model::keyPointAt(clip, 0) == nullptr && clip.context.empty()) return {};
     // Notes off channel 10 (stored 9): a drum clip, or an empty one, has no pitch to move.
@@ -296,6 +296,9 @@ std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
             continue;
         const std::string name =
             clip.name.empty() ? clipId.str() : clipId.str() + " \"" + clip.name + "\"";
+        if (what)
+            *what = {model::keyWords(*cp), model::keyWords(*pp),
+                     s.timeMap->barBeat(std::max(0.0, b)).bar};
         return ClipNote{"context.mismatch",
                         name + " was written in " + model::keyWords(*cp) + " and sits under " +
                             model::keyWords(*pp) + " from " + barWords(s, b) +

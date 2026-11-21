@@ -2302,7 +2302,11 @@ bars.
   `harmony::follow`; the answer counts the notes with `folded`.
 - **The answer** gains per laid item `followed: {mode, regions?: [{from_bar,
   to_bar, from_key?, to_key?, by, interval?}], folded?, unrolled?,
-  copied?}`.
+  copied?, mismatch?: {clip_key, key, bar}}`.
+  - `mismatch` is set exactly when the item gives `context.mismatch`: the
+    clip's key, the project's and the first project bar where they differ,
+    as the warning words them, so a caller need not read the message (a
+    scene's warning points at `/scene`, not at the item).
   - A region is a maximal run of project bars over which the clip's key, the
     place's key and the way notes were mapped stay the same. Regions are read
     from the bars where notes start; a bar where none does (a rest, a held

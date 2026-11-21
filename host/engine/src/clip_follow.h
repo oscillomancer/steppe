@@ -31,7 +31,8 @@ struct FollowedInfo {
     std::optional<std::vector<FollowRegion>> regions;
     std::optional<std::int64_t> folded;  // notes that were folded into range
     std::optional<bool> unrolled;
-    std::optional<std::string> copied;  // why a clip that could not follow was copied
+    std::optional<std::string> copied;    // why a clip that could not follow was copied
+    std::optional<KeyMismatch> mismatch;  // with context.mismatch: the keys and the bar
 };
 
 schema::Schema<FollowedInfo> followedSchema();
