@@ -175,7 +175,9 @@ struct Lfo : Module {
     double anchor = 0.0;  // the beat a synced reset started from
     // Stopped: the song position run on at tempo from where it stopped, so
     // a synced cycle keeps moving (a gate opens while auditioning). It starts
-    // again from the stop position when that moves (a seek) or play stops.
+    // again from the stop position when play stops, or when that position
+    // moves by more than 10 ms (a seek): not on a host's stopped position
+    // that jitters by a few samples (review round 78 K2).
     double freeBeats = 0.0;
     double stoppedAt = 0.0;
     bool runningOn = false;
@@ -215,7 +217,7 @@ struct Lfo : Module {
         const bool driven = drive.connected();
         if (t.playing) {
             runningOn = false;
-        } else if (!runningOn || t.beats != stoppedAt) {
+        } else if (!runningOn || abs(t.beats - stoppedAt) > 0.01 * t.tempo / 60.0) {
             runningOn = true;
             stoppedAt = t.beats;
             freeBeats = t.beats;
