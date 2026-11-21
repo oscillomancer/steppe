@@ -1268,7 +1268,7 @@ q = nil
 ---@field target table
 ---@field depth number
 ---@field enabled? boolean
----@field lane? boolean Show the target's lane (default true).
+---@field lane? boolean Show the target's automation lane in the timeline while the route exists (default true). It never changes the sound.
 
 ---@class Steppe.modulation_add_result
 ---@field modulation string
@@ -1295,7 +1295,7 @@ q = nil
 ---@field target? table
 ---@field depth? number
 ---@field enabled? boolean
----@field lane? boolean
+---@field lane? boolean Show or hide the target's automation lane for this route. It never changes the sound.
 
 ---@class Steppe.modulation_set_result
 ---@field warnings? table[]

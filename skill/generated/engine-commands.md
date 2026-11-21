@@ -12184,7 +12184,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `target.param` | string |  |  |  | A plug-in parameter's key, name or decimal CLAP id (fx.describe marks the modulatable ones); volume, pan or width for a track; volume for a route. |
 | `depth` | number |  |  |  |  |
 | `enabled` | boolean |  |  |  |  |
-| `lane` | boolean |  |  |  | Show the target's lane (default true). |
+| `lane` | boolean |  |  |  | Show the target's automation lane in the timeline while the route exists (default true). It never changes the sound. |
 
 ### Result
 
@@ -12322,7 +12322,8 @@ Kind: `query`. Exposure: `mcp-exec`.
             "type": "boolean"
           },
           "lane": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "The route asks for its target's lane to be shown (a display flag; the sound is the same either way)"
           },
           "range": {
             "type": "string"
@@ -12487,7 +12488,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `target.param` | string |  |  |  | A plug-in parameter's key, name or decimal CLAP id (fx.describe marks the modulatable ones); volume, pan or width for a track; volume for a route. |
 | `depth` | number |  |  |  |  |
 | `enabled` | boolean |  |  |  |  |
-| `lane` | boolean |  |  |  |  |
+| `lane` | boolean |  |  |  | Show or hide the target's automation lane for this route. It never changes the sound. |
 
 ### Result
 

@@ -466,7 +466,9 @@ void registerModulationCommands(cmd::Registry& registry) {
                      .field("depth", &ModAddArgs::depth, schema::number())
                      .field("enabled", &ModAddArgs::enabled, schema::boolean())
                      .field("lane", &ModAddArgs::lane,
-                            schema::boolean().doc("Show the target's lane (default true)."))
+                            schema::boolean().doc("Show the target's automation lane in the "
+                                                  "timeline while the route exists (default "
+                                                  "true). It never changes the sound."))
                      .build();
         c.result = schema::object<ModAdded>("modulation_added")
                        .field("modulation", &ModAdded::modulation, schema::string())
@@ -518,7 +520,9 @@ void registerModulationCommands(cmd::Registry& registry) {
                      .field("target", &ModSetArgs::target, targetSchema())
                      .field("depth", &ModSetArgs::depth, schema::number())
                      .field("enabled", &ModSetArgs::enabled, schema::boolean())
-                     .field("lane", &ModSetArgs::lane, schema::boolean())
+                     .field("lane", &ModSetArgs::lane,
+                            schema::boolean().doc("Show or hide the target's automation lane "
+                                                  "for this route. It never changes the sound."))
                      .build();
         c.result = emptySchema();
         c.examples = {{"Deepen", j(R"({"modulation": "mr_1", "depth": 0.5})"), j("{}"),
@@ -598,7 +602,9 @@ void registerModulationCommands(cmd::Registry& registry) {
                 .field("target", &ModEntry::target, targetSchema())
                 .field("depth", &ModEntry::depth, schema::number())
                 .field("enabled", &ModEntry::enabled, schema::boolean())
-                .field("lane", &ModEntry::lane, schema::boolean())
+                .field("lane", &ModEntry::lane,
+                       schema::boolean().doc("The route asks for its target's lane to be shown "
+                                             "(a display flag; the sound is the same either way)"))
                 .field("range", &ModEntry::range, schema::string())
                 .field("fed_by", &ModEntry::fedBy,
                        schema::arrayOf(schema::object<FedBy>("modulation_fed_by")

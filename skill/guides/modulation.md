@@ -43,6 +43,13 @@ with `modulation.set {modulation, depth}`; turn a route off and on with
 `module.set {module, params}` (`module.describe {type}` lists them), for example
 an LFO's rate or a follower's threshold.
 
+`lane` (in `modulation.list`, `modulation.add` and `modulation.set`, default true) is a
+display flag: it asks the timeline to show the target's automation lane under its track, so
+you can see a modulated parameter beside its envelope. It never changes the sound, and
+nothing in a render, the telemetry or `inert` depends on it. A target has one lane however
+many routes reach it; the lane goes when the last route's `lane` is off and its own envelope
+is hidden. An agent can leave it alone; set `lane: false` to keep a route out of the way.
+
 Which parameters take it: `fx.describe` with full detail marks a parameter
 `modulatable` (taken directly) or `modulatable_by_envelope` (continuous and
 automatable but not modulatable by itself, as Drumlin's pads' tune is: `modulate`
