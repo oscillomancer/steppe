@@ -238,12 +238,28 @@ std::vector<model::ContextPoint> composeContext(
         return p.type == model::ContextType::Chord;
     });
     if (!symbols.points.empty()) {
-        if (statedChords)
-            notes.push_back({"clip.chords_ignored",
-                             "the notation's chord symbols are ignored: the stated context holds "
-                             "chords, which win",
-                             "/context"});
-        else
+        if (statedChords) {
+            // Symbols that say what the stated chords already say (the usual way to write a
+            // keys clip: symbols for the notes, context_at for the harmony) are not news.
+            std::vector<const model::ContextPoint*> heldChords;
+            for (const auto& p : out)
+                if (p.type == model::ContextType::Chord) heldChords.push_back(&p);
+            const auto agree = [&](const model::ContextPoint& sym) {
+                const model::ContextPoint* held = nullptr;
+                for (const auto* c : heldChords)
+                    if (c->beat <= sym.beat + 1e-9) held = c;
+                if (!held) return false;
+                const auto a = model::parseChordPoint(sym);
+                const auto b = model::parseChordPoint(*held);
+                return a && b ? *a == *b : sym.symbol == held->symbol;
+            };
+            if (!std::all_of(symbols.points.begin(), symbols.points.end(), agree))
+                notes.push_back(
+                    {"clip.chords_ignored",
+                     "the notation's chord symbols are ignored: the stated context holds "
+                     "chords, which win, and they differ from the symbols'",
+                     "/context"});
+        } else
             for (auto& p : symbols.points) out.push_back(std::move(p));
     }
     sortPoints(out);

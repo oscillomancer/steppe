@@ -54,7 +54,8 @@ keeps the harmony at a place. Say it when you make the clip:
   there, for the clip's length. `clip.add {item}` and `scene.capture` take the context
   under the item the same way, and `context: ""` takes none.
 - The `{Dm}` chord symbols in a clip's notation (`clip.add {notation}`, `midi.write`)
-  are recorded as its chords, unless you stated chords (`clip.chords_ignored`).
+  are recorded as its chords, unless you stated chords, which win (`clip.chords_ignored` warns
+  only when the symbols differ from the stated chords: symbols and `context_at` that agree are fine).
   An audio clip's context is a key at the start of bar 1 and holds (`~`) only.
 - `clip.set {context, context_at, follow}` changes it (`context: ""` clears it).
   `follow` (`none`, `key`, `chords`) says how the clip's notes are to be mapped

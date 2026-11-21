@@ -163,7 +163,8 @@ summarized below under "The mapping".
   - **Precedence:**
     - a stated `context` with chords, and a `context_at` (or item) span
       that holds a chord, win over the symbols, which are ignored with
-      `clip.chords_ignored`;
+      `clip.chords_ignored` (21 Nov 2026: warned only when a symbol is not the
+      chord the stated points hold at its beat);
     - a stated `context` with only a key, and a `context_at` or item span
       with no chord, take the symbols' chords;
     - `midi.write` replaces the chord points only when the symbols differ,

@@ -2199,8 +2199,9 @@ bars.
     voice wins, with `clip.chord_conflict`.
   - Equal neighbours collapse, and a rest does not end a chord.
   - With a stated `context` holding chords, or a `context_at` (or an item)
-    whose span holds a chord, the symbols are ignored with
-    `clip.chords_ignored`. A stated `context` holding only a key, and a
+    whose span holds a chord, the symbols are ignored; `clip.chords_ignored`
+    warns only when some symbol is not the chord the stated points hold at its
+    beat (symbols that say the same are not news). A stated `context` holding only a key, and a
     `context_at` or item span with no chord, take the symbols' chords. So
     `context_at` and its resolved `context` text give the same points.
 - **`clip.set {context?, context_at?, follow?}`:** `context: ""` clears the

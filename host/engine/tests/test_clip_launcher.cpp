@@ -1356,6 +1356,22 @@ TEST_CASE("clip.add records the chord symbols of its notation, by precedence") {
                               R"x("voice a; 1: {Dm}:w; voice b; 1: {Gm}:w"})x");
     CHECK(pointsOf(clipOf(l, "cl_6")) == "chord@0 Dm");
     CHECK(warningCodes(conflict).find("clip.chord_conflict") != std::string::npos);
+    // Symbols that say what the stated chords say are not news: no warning when every symbol
+    // is the chord holding at its beat (a stated chord may hold across several symbols).
+    l.run("scene.add", R"({"name": "Same"})");
+    const auto agreeing =
+        l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_7", "notation": )") +
+                              R"x("voice bass; 1: {Dm}:w; 2: {Dm}:h {Dm}:h", )x" +
+                              R"x("context": "1: key D minor {Dm}:w\n2: ~:w"})x");
+    CHECK(pointsOf(clipOf(l, "cl_7")) == "key@0 D minor, chord@0 Dm");
+    CHECK(warningCodes(agreeing).find("clip.chords_ignored") == std::string::npos);
+    // One symbol that differs from the chord holding at its beat brings the warning back.
+    l.run("scene.add", R"({"name": "Differ"})");
+    const auto differing =
+        l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_8", "notation": )") +
+                              R"x("voice bass; 1: {Dm}:w; 2: {Dm}:h {Gm}:h", )x" +
+                              R"x("context": "1: key D minor {Dm}:w\n2: ~:w"})x");
+    CHECK(warningCodes(differing).find("clip.chords_ignored") != std::string::npos);
 }
 
 TEST_CASE("clip.set: context, follow, and the edits that keep the invariants in the same step") {

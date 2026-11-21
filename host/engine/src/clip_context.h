@@ -66,8 +66,9 @@ SymbolChords chordsFromSymbols(const model::Session& s,
 
 // A stated context (text, or taken from a place) and the symbols of a notation, by
 // precedence: a stated context holding chords wins, and the symbols are ignored
-// (`clip.chords_ignored`); otherwise the stated points and the symbols' chords. Nothing
-// stated: the symbols' chords alone. Sorted by beat then type.
+// (`clip.chords_ignored`, only when some symbol is not the chord the stated points hold at its
+// beat: symbols that say the same are not news); otherwise the stated points and the symbols'
+// chords. Nothing stated: the symbols' chords alone. Sorted by beat then type.
 std::vector<model::ContextPoint> composeContext(
     std::optional<std::vector<model::ContextPoint>> stated, SymbolChords symbols,
     std::vector<ClipNote>& notes);
