@@ -37,7 +37,7 @@ bool holdsMembers(const Take& t) {
 }
 
 bool validPeriod(const std::optional<double>& period) {
-    return !period || (std::isfinite(*period) && *period > 0);
+    return !period || (std::isfinite(*period) && *period >= kMinContextPeriod);
 }
 
 // `beat` in [0, period), a beat within the slack below the period reading as 0.
@@ -116,14 +116,17 @@ std::vector<ClipContextNote> fitTakeContext(Take& take, TakeHome home) {
         take.follow = ClipFollow::None;
         return notes;
     }
+    if (take.contextPeriod && std::isfinite(*take.contextPeriod))
+        take.contextPeriod = std::round(*take.contextPeriod * 960.0) / 960.0;
     if (!validPeriod(take.contextPeriod)) {
         notes.push_back({"take.context_dropped",
-                         "dropped context_period: it must be finite and above 0, so the context "
-                         "does not repeat"});
+                         "dropped context_period: it must be finite and at least 1/960 of a "
+                         "beat, so the context does not repeat"});
         take.contextPeriod.reset();
     }
-    if (!std::isfinite(take.contextPhase)) {
-        notes.push_back({"take.context_dropped", "context_phase is not finite: read as 0"});
+    if (!std::isfinite(take.contextPhase) || std::abs(take.contextPhase) > kMaxContextPhase) {
+        notes.push_back({"take.context_dropped",
+                         "context_phase is not finite or beyond a billion beats: read as 0"});
         take.contextPhase = 0;
     }
     const auto drop = [&](const ContextPoint& p, const std::string& why) {
@@ -188,9 +191,14 @@ void checkTakeContext(const Session& s, std::vector<Error>& errors) {
             continue;
         }
         if (!validPeriod(t.contextPeriod))
-            fail(path + "/context_period", "the context period must be finite and above 0");
-        if (!std::isfinite(t.contextPhase))
-            fail(path + "/context_phase", "the context phase must be finite");
+            fail(path + "/context_period",
+                 "the context period must be finite and at least 1/960 of a beat");
+        else if (t.contextPeriod &&
+                 std::abs(*t.contextPeriod * 960.0 - std::round(*t.contextPeriod * 960.0)) > 1e-6)
+            fail(path + "/context_period", "the context period lies on the 1/960 grid");
+        if (!std::isfinite(t.contextPhase) || std::abs(t.contextPhase) > kMaxContextPhase)
+            fail(path + "/context_phase",
+                 "the context phase must be finite and within a billion beats");
         std::size_t keys = 0, chords = 0;
         for (std::size_t i = 0; i < t.context.size(); ++i) {
             const ContextPoint& p = t.context[i];
@@ -216,15 +224,16 @@ void checkTakeContext(const Session& s, std::vector<Error>& errors) {
     }
 }
 
-void takeContextFromClip(Take& take, const Clip& clip, double clipBeatAtStart, ClipFollow follow) {
-    if (clip.context.empty() || !takeIsMidi(take)) return;
+std::vector<ClipContextNote> takeContextFromClip(Take& take, const Clip& clip,
+                                                 double clipBeatAtStart, ClipFollow follow) {
+    if (clip.context.empty() || !takeIsMidi(take)) return {};
     const double rate = take.playrate > 0 ? take.playrate : 1.0;
     take.context = clip.context;
     for (ContextPoint& p : take.context) p.beat *= rate;
     take.contextPeriod = clip.length * rate;
     take.contextPhase = clipBeatAtStart * rate - take.startOffset;
     take.follow = follow;
-    fitTakeContext(take, TakeHome::Item);
+    return fitTakeContext(take, TakeHome::Item);
 }
 
 // --- a note's place -----------------------------------------------------------------------
@@ -405,6 +414,41 @@ LeadPitches leadPitches(const std::vector<SoundingNote>& heard,
             }
         }
     }
+    // A fragment that sounds other than the pitch the note keeps changes pitch if the note is
+    // written as kept.
+    for (std::size_t k = 0; k < heard.size() && k < sounded.size(); ++k) {
+        const SoundingNote& h = heard[k];
+        if (h.note >= noteCount || !out.keep[h.note]) continue;
+        if (h.songBeat < itemStartBeat - kEdge && sounded[k] != *out.keep[h.note])
+            out.fragmentsAlike = false;
+    }
+    return out;
+}
+
+std::vector<midi::Note> soundingNoteList(const Session& s, Id itemId, int ppq,
+                                         const std::vector<std::int64_t>* sounded) {
+    std::vector<midi::Note> out;
+    const Item* item = s.items.find(itemId);
+    if (!item || !item->activeTake) return out;
+    const Take* take = s.takes.find(*item->activeTake);
+    if (!take || !takeIsMidi(*take)) return out;
+    const MidiSource* src = s.midi.find(*take->source);
+    if (!src) return out;
+    const double itemStart = itemSpan(s, *item).startBeat;
+    const auto heard = soundingNotes(s, itemId, -1e18, 1e18);
+    const auto tick = [&](double beat) { return static_cast<std::int64_t>(std::llround(beat * ppq)); };
+    for (std::size_t k = 0; k < heard.size(); ++k) {
+        const SoundingNote& h = heard[k];
+        midi::Note note = src->sequence.notes[h.note];
+        if (note.channel != 9) {
+            const std::int64_t pitch =
+                sounded && k < sounded->size() ? (*sounded)[k] : h.sounds.pitch;
+            note.pitch = static_cast<std::uint8_t>(pitch);
+        }
+        note.start = tick(std::max(h.songBeat, itemStart) - itemStart);
+        note.length = std::max<std::int64_t>(0, tick(h.endBeat - itemStart) - note.start);
+        out.push_back(note);
+    }
     return out;
 }
 
@@ -436,8 +480,19 @@ std::vector<ContextPoint> contextOver(const Take& take, double u0, double u1, bo
     const double at0 = repeats ? wrapped(u0, period) : u0;
     if (const ContextPoint* k = contextKeyPointAt(take.context, at0)) add(*k, 0.0);
     if (const ContextPoint* c = contextChordPointAt(take.context, at0)) add(*c, 0.0);
+    // Beyond what a double steps by one in (or a file's span of more than a million repeats) the
+    // walk stops with what it has: it never runs on without end.
+    if (std::abs(u0) > 1e12 || std::abs(u1) > 1e12) {
+        if (truncated) *truncated = true;
+        return out;
+    }
     const double firstRepeat = repeats ? std::floor(u0 / period) : 0.0;
+    long repeatsWalked = 0;
     for (double n = firstRepeat;; n += 1.0) {
+        if (++repeatsWalked > kMaxContextRepeats) {
+            if (truncated) *truncated = true;
+            break;
+        }
         const double base = repeats ? n * period : 0.0;
         if (base >= u1) break;
         bool full = false;

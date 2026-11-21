@@ -25,6 +25,13 @@ namespace supple::model {
 // at a point's beat computed through a sum), a millionth of a beat, as the engine's tables.
 inline constexpr double kPlaceSlack = 1e-6;
 
+// The bounds a take's context keeps to, so no reader can be sent round a loop that does not end
+// (round 85): a context_period is on the 1/960 grid and at least one grid step, a context_phase
+// within a billion beats, and contextOver walks at most kMaxContextRepeats repeats.
+inline constexpr double kMinContextPeriod = 1.0 / 960.0;
+inline constexpr double kMaxContextPhase = 1e9;
+inline constexpr long kMaxContextRepeats = 1 << 20;
+
 // --- reading a take's context -----------------------------------------------------------
 
 // The point of the type that holds at context beat `contextBeat`: the last at or before it,
@@ -77,7 +84,10 @@ void checkTakeContext(const Session& s, std::vector<Error>& errors);
 // `(c0 + d) * r` modulo the period: its clip beat, as the launcher reads it. A clip with no
 // context leaves the take as it is. The take is made fit afterwards (`fitTakeContext`), so
 // follow other than none needs a key the take reads.
-void takeContextFromClip(Take& take, const Clip& clip, double clipBeatAtStart, ClipFollow follow);
+// Returns the fit's notes (a point the take's grid rounded onto the period, say), for the caller to
+// give as warnings.
+std::vector<ClipContextNote> takeContextFromClip(Take& take, const Clip& clip,
+                                                 double clipBeatAtStart, ClipFollow follow);
 
 // --- a note's place -----------------------------------------------------------------------
 
@@ -161,10 +171,21 @@ std::vector<SoundingNote> soundingNotes(const Session& s, Id item, double fromBe
 struct LeadPitches {
     std::vector<std::optional<std::int64_t>> keep;
     bool alike = true;
+    // Whether every fragment held into the item's start sounds as the note keeps: a bake counts
+    // them (a render after must equal the render before), the one-pass view of `midi.get` does not.
+    bool fragmentsAlike = true;
 };
 LeadPitches leadPitches(const std::vector<SoundingNote>& heard,
                         const std::vector<std::int64_t>& sounded, double itemStartBeat,
                         std::size_t noteCount);
+
+// The item's heard notes as a plain note list in item time at `ppq` (what an export and a bake's
+// unroll write): each occurrence of `soundingNotes`, a copy of its source note with the pitch it
+// sounds as (channel 10 as written; `sounded`, when given, is the pitch of each occurrence in
+// `soundingNotes` order instead), starting where it is heard (the item's start for a chased note)
+// and ending where it stops sounding. Empty for an item whose active take is not MIDI.
+std::vector<midi::Note> soundingNoteList(const Session& s, Id item, int ppq,
+                                         const std::vector<std::int64_t>* sounded = nullptr);
 
 // What a note written as `key` on `channel` sounds as at a place: the per-note step of the
 // helper above, for the engine's live tables for launched clips and for tests. Channel 10
