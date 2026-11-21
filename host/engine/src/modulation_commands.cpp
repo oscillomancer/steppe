@@ -180,7 +180,7 @@ Result<PluginParam> modulatableParam(EngineApp& app, const model::FxInstance& fx
                              "fx.describe marks the parameters a route can take (modulatable)");
             return PluginParam{p, target->envelope, target->canonical};
         }
-    return Error("modulation.target", "the plug-in has no parameter " + key, "",
+    return Error("modulation.target", pluginName(app, fx) + " has no parameter \"" + key + "\"", "",
                  "fx.describe lists its parameters");
 }
 

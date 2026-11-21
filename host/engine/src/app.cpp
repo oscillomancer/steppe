@@ -1263,8 +1263,8 @@ void EngineApp::warnStoredParamRefs(const model::Session& s,
                                               detail::Ambiguity::First);
             warnings.push_back({"param.ambiguous",
                                 t.object.str() + " " + t.param + ": " + strict.error().message +
-                                    "; the first, " + first->canonical +
-                                    ", plays. Name one by its id: " + strict.error().hint,
+                                    "; the first, " + first->canonical + ", plays; " +
+                                    strict.error().hint,
                                 path});
             return Resolved{first->id, first->name()};
         }

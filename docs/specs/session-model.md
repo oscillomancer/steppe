@@ -302,8 +302,11 @@ rendered).
 #### Plug-in parameter references
 
 Envelopes (`{fx, param}`), modulation routes (`target.param`), `fx.param.set`
-keys and cables into a plugin module (`fx_N.<key>`) name a plug-in parameter
-the same way, through one resolver (`detail::resolveParam`):
+keys, cables into a plugin module (`fx_N.<key>`) and MIDI learn
+(`fx.learn.set`, `fx.learn.remove`) name a plug-in parameter the same way,
+through one resolver (`detail::resolveParam`). Learn keeps its own error
+codes (`fx.param_unknown`, `fx.param_ambiguous`, `fx.param_id`,
+`fx.param_readonly`) with the resolver's messages and hints.
 
 - **What it accepts**, in this order:
   - a semantic key of the plug-in's schema, exactly;

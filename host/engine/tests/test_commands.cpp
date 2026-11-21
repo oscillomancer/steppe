@@ -3612,6 +3612,10 @@ TEST_CASE("plug-in parameter references: an ambiguous name is refused and warned
         failure(bus, "modulate", R"({"target":{"fx":"fx_1","param":"gain"},"source":"lfo"})");
     CHECK(route.code == "modulation.target");
     CHECK(route.hint.find("0 (Gain)") != std::string::npos);
+    // Round 75 G3: a name the plug-in lacks names the plug-in, as env.add does.
+    const auto lacking =
+        failure(bus, "modulate", R"({"target":{"fx":"fx_1","param":"nope"},"source":"lfo"})");
+    CHECK(lacking.message == "Test Twin Gain has no parameter \"nope\"");
     CHECK(failure(bus, "fx.param.set", R"({"fx":"fx_1","values":{"Gain":-3}})").code ==
           "fx.param_ambiguous");
     json::Value byId =
@@ -3629,6 +3633,15 @@ TEST_CASE("plug-in parameter references: an ambiguous name is refused and warned
     REQUIRE(app->open(dir.path / "older.json", &warnings));
     CHECK(hasWarning(warnings, "param.ambiguous"));
     CHECK(hasWarning(warnings, "env.duplicate"));
+    // Round 75 G3: the hint is said once.
+    for (const auto& w : warnings)
+        if (w.code == "param.ambiguous") {
+            CAPTURE(w.message);
+            const auto said = w.message.find("name one by its id");
+            REQUIRE(said != std::string::npos);
+            CHECK(w.message.find("name one by its id", said + 1) == std::string::npos);
+            CHECK(w.message.find("Name one by its id") == std::string::npos);
+        }
     // It still plays: the plan binds the first match.
     run(bus, "render.mix", R"({"pattern":"older","end_beat":1})");
 }

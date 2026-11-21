@@ -7340,7 +7340,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `fx` | string |  |  |  |  |
-| `param` | string |  |  |  | A semantic key, or a plain parameter's id or name (fx.describe) |
+| `param` | string |  |  |  | A parameter's semantic key, id or name (fx.describe); a semantic plugin's is stored as its key |
 | `midi` | object |  |  |  |  |
 | `midi.kind` | string |  |  |  | One of: cc, note, pitch_bend, program. |
 | `midi.channel` | integer |  | 1.0..16.0 |  |  |

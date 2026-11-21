@@ -415,7 +415,9 @@ Result<PluginModTarget> resolvePluginMod(std::span<const host::ParamInfo> list,
             routedCount += direct(info) ? 1 : 0;
             envelopedCount += byEnvelope(info) ? 1 : 0;
         }
-        const std::string message = "the plug-in has no parameter " + key;
+        const std::string message =
+            (plugin.empty() ? std::string("the plug-in") : std::string(plugin)) +
+            " has no parameter \"" + key + "\"";
         if (routedCount == 0 && envelopedCount == 0)
             return Error("rack.port", message, "",
                          allowEnvelope
