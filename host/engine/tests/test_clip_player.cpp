@@ -863,6 +863,30 @@ TEST_CASE("launches are refused while a master playrate is active") {
     p.app->stopEngine();
 }
 
+TEST_CASE("launching a clip that follows the context warns launch.unfollowed, once per launch") {
+    // ADR-0098: a launched clip plays as written until X4, so live and the timeline differ for
+    // a clip whose follow is not none; the answer says so.
+    Project p;
+    twoTracks(p);
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
+    const auto unfollowed = [](const json::Value& done) {
+        int n = 0;
+        if (const json::Value* w = done.find("warnings"))
+            for (const json::Value& e : w->asArray())
+                n += e.find("code")->asString() == "launch.unfollowed";
+        return n;
+    };
+    CHECK(unfollowed(p.run("launch.clip", R"({"clip": "cl_1"})")) == 0);  // follow none
+    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w", "follow": "key"})");
+    json::Value one = p.run("launch.clip", R"({"clip": "cl_1"})");
+    REQUIRE(unfollowed(one) == 1);
+    CHECK(one["warnings"].at(0).find("message")->asString().find("cl_1") != std::string::npos);
+    json::Value scene = p.run("launch.scene", R"({"scene": "sc_1"})");
+    CHECK(unfollowed(scene) == 1);  // one for the scene, not one per clip
+    p.app->stopEngine();
+}
+
 TEST_CASE("a looped replay is refused under a master playrate") {
     // The replay wraps as the live executors do only on the unity path,
     // which is the only one that plays launches yet.

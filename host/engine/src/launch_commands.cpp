@@ -241,10 +241,12 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Play a clip on its track from the next quantize boundary.";
-        c.description = std::string(kWhen) +
-                        " Launching while stopped starts the transport. The track leaves the "
-                        "arrangement (or the clip it played) there: its sounding notes end and "
-                        "audio crossfades over 5 ms.";
+        c.description =
+            std::string(kWhen) +
+            " Launching while stopped starts the transport. The track leaves the "
+            "arrangement (or the clip it played) there: its sounding notes end and "
+            "audio crossfades over 5 ms. A clip whose follow is not none warns launch.unfollowed: "
+            "a launched clip plays as written until ADR-0098's X4.";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<ClipArg>("launch_clip_args")
                      .field("clip", &ClipArg::clip, idArg("cl", "Clip"))
@@ -265,8 +267,16 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (!id) return std::move(id).error();
             const model::Clip& clip = *s.clips.find(*id);
             SUPPLE_TRY(refuseFrozen(s, clip.track, "/clip"));
-            return launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
-                             quantizeOf(s, &clip), "/clip");
+            auto done = launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
+                                  quantizeOf(s, &clip), "/clip");
+            if (done && clip.follow != model::ClipFollow::None)
+                ctx.warn("launch.unfollowed",
+                         id->str() + " follows the " +
+                             (clip.follow == model::ClipFollow::Key ? "key" : "chords") +
+                             " when it is laid on the timeline, but a launched clip plays as "
+                             "it was written until ADR-0098's X4",
+                         "/clip");
+            return done;
         };
         addChecked(registry, std::move(c));
     }();
@@ -281,7 +291,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             " All the scene's tracks switch at the same boundary, the project's launch_quantize. "
             "Tracks with no clip in the scene keep playing what they play. A frozen track is "
             "skipped with a track.frozen warning, a clip past the memory budget with a "
-            "launch.memory warning.";
+            "launch.memory warning, and clips whose follow is not none with one "
+            "launch.unfollowed warning (launched clips play as written until ADR-0098's X4).";
         c.tags = {"clip launcher", "transport", "scene"};
         c.args = schema::object<SceneArg>("launch_scene_args")
                      .field("scene", &SceneArg::scene, idArg("sc", "Scene"))
@@ -322,7 +333,18 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (requests.empty())
                 return Error("launch.scene", a.scene + " has no clip that can play", "/scene",
                              "add clips to the scene with clip.add, or unfreeze their tracks");
-            return launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
+            auto done = launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
+            std::string following;
+            for (const auto& r : requests)
+                if (s.clips.find(r.clip)->follow != model::ClipFollow::None)
+                    following += (following.empty() ? "" : ", ") + r.clip.str();
+            if (done && !following.empty())
+                ctx.warn("launch.unfollowed",
+                         "the clips " + following +
+                             " follow the context when they are laid on the timeline, but "
+                             "launched clips play as they were written until ADR-0098's X4",
+                         "/scene");
+            return done;
         };
         addChecked(registry, std::move(c));
     }();
