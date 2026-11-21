@@ -931,11 +931,17 @@ TEST_CASE("launching a clip that follows the context warns launch.unfollowed, on
     p.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w", "follow": "key"})");
     json::Value one = p.run("launch.clip", R"({"clip": "cl_1"})");
     REQUIRE(unfollowed(one) == 1);
-    CHECK(one["warnings"].at(0).find("message")->asString().find("cl_1") != std::string::npos);
+    const std::string told = one["warnings"].at(0).find("message")->asString();
+    CHECK(told.find("cl_1") != std::string::npos);
+    // It says what to do instead, not the name of an internal work item.
+    CHECK(told.find("scene.insert") != std::string::npos);
+    CHECK(told.find("X4") == std::string::npos);
     json::Value scene = p.run("launch.scene", R"({"scene": "sc_1"})");
     CHECK(unfollowed(scene) == 1);  // one for the scene, not one per clip
     const std::string said = scene["warnings"].at(0).find("message")->asString();
     CHECK(said.find("the clip cl_1 follows") != std::string::npos);  // one clip: singular
+    CHECK(said.find("arrangement.build") != std::string::npos);
+    CHECK(said.find("X4") == std::string::npos);
     p.app->stopEngine();
 }
 

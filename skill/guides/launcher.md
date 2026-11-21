@@ -106,7 +106,9 @@ clip's or match them: `midi.get` on the laid item says what it now holds.
   the key (`by: transpose` for that bar).
 - `pooled: true` with a mapping that moves a note is refused (`clip.follow_pooled`).
 - A launched clip is **not** followed yet: it plays as written, and `launch.clip` /
-  `launch.scene` warn `launch.unfollowed` for a clip whose `follow` is not `none`.
+  `launch.scene` warn `launch.unfollowed` for a clip whose `follow` is not `none`. To hear a
+  scene followed, lay it with `scene.insert` or `arrangement.build` (a clip: `item.add {clip}`);
+  `launch.commit` copies what was heard, so a performance of followed clips is laid as played.
 
 ## Launching
 

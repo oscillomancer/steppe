@@ -1011,8 +1011,8 @@ void registerClipCommands(cmd::Registry& registry) {
             "follow (none, key or chords) "
             "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying "
             "the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the "
-            "key or chords under it (their follow argument), and a launched clip plays as "
-            "written until ADR-0098's X4 (launch.unfollowed).";
+            "key or chords under it (their follow argument); a launched clip is not followed, it "
+            "plays as written (launch.unfollowed says so and what to do instead).";
         c.tags = {"clip launcher", "clip"};
         c.args = clipAddArgsSchema();
         c.result =
