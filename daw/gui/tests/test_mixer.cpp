@@ -3464,10 +3464,19 @@ TEST_CASE("mixer: a modulated plug-in's slot and its strip's fx carry the modula
     CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory (modulated)");
     CHECK(f.node("mixer.fx." + plain)->valueText() == "Hickory");
     f.snapshot("mixer-modulated-slot.png");
-    // A disabled route still names the parameter as modulated (its lane stays).
+    CHECK(f.strip(keys).fx->markColor() == "signal-cv");
+    // Every route off: still marked (its lane stays), the mark dimmed.
     f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
     f.refresh();
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory (modulation off)");
+    CHECK(f.strip(keys).fx->mark() == views::kModMark);
+    CHECK(f.strip(keys).fx->markColor() == "ink-faint");
+    f.snapshot("mixer-modulation-off.png");
+    // On again: normal.
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})");
+    f.refresh();
     CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory (modulated)");
+    CHECK(f.strip(keys).fx->markColor() == "signal-cv");
     // Without its route, no mark.
     f.exec("modulation.remove", R"({"modulation":")" + route + R"("})");
     f.refresh();

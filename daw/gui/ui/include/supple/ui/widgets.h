@@ -55,6 +55,7 @@ class Button : public Node {
     // Not part of valueText().
     void setMark(std::string mark, std::string token = {});
     const std::string& mark() const { return mark_; }
+    const std::string& markColor() const { return markColor_; }
 
   protected:
     bool pressed() const { return pressed_; }

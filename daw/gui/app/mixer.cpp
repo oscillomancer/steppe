@@ -176,9 +176,12 @@ class FxSlot : public DragButton {
     // A parameter of it is modulated (ADR-0096): views::kModMark at its right
     // in `signal-cv`, the name centred in the room left of it.
     bool modulated = false;
+    bool modulationOn = true;  // false: every route is off, the mark dimmed
     std::string valueText() const override {
         const std::string name =
-            Button::valueText() + (modulated ? std::string(" (modulated)") : std::string());
+            Button::valueText() + (!modulated     ? std::string()
+                                   : modulationOn ? std::string(" (modulated)")
+                                                  : std::string(" (modulation off)"));
         return state == State::Disabled   ? name + " (disabled)"
                : state == State::Failed   ? name + " (failed)"
                : state == State::Bypassed ? name + " (bypassed)"
@@ -222,7 +225,8 @@ class FxSlot : public DragButton {
             const std::string mark(views::kModMark);
             const float w = c.textWidth(mark, ui::Font::UiBold, size);
             c.text({b.right() - 5 - w, b.y, w + 1, b.h}, mark, ui::Font::UiBold, size,
-                   t.color(enabled ? "signal-cv" : "ink-faint"), ui::kLeft | ui::kMiddle);
+                   t.color(enabled && modulationOn ? "signal-cv" : "ink-faint"),
+                   ui::kLeft | ui::kMiddle);
             room = {b.x + 2, b.y, b.w - w - 9, b.h};  // the name centred left of the mark
         }
         c.text(room, name, ui::Font::UiBold, size,
@@ -1087,13 +1091,14 @@ std::string Mixer::structure() const {
             const model::FxInstance* f = s.fx.find(fx);
             out += fx.str() + ",";
             if (f)
-                out += std::to_string(f->bypass) + std::to_string(f->offline) +
-                       (attention_.markOf(fx, *f) == FxAttention::Mark::Disabled ? "D"
-                        : attention_.markOf(fx, *f) == FxAttention::Mark::Failed ? "F"
-                                                                                 : "") +
-                       ":" + std::to_string(f->label.size()) + ":" + f->label + ":" +
-                       std::to_string(f->plugin.name.size()) + ":" + f->plugin.name +
-                       (views::fxModulated(s, fx) ? "~" : "");
+                out +=
+                    std::to_string(f->bypass) + std::to_string(f->offline) +
+                    (attention_.markOf(fx, *f) == FxAttention::Mark::Disabled ? "D"
+                     : attention_.markOf(fx, *f) == FxAttention::Mark::Failed ? "F"
+                                                                              : "") +
+                    ":" + std::to_string(f->label.size()) + ":" + f->label + ":" +
+                    std::to_string(f->plugin.name.size()) + ":" + f->plugin.name +
+                    (views::fxModulated(s, fx) ? (views::fxModulationOn(s, fx) ? "~" : "~0") : "");
         }
         for (model::Id rack : racks::racksFeeding(s, id))
             out += rack.str() + "," + model::rackLabel(s, rack) + ",";
@@ -1289,6 +1294,7 @@ void Mixer::rebuild(bool keepLists) {
             slot->remove = [this, fx] { removeFx(fx); };
             slot->enabled = !t.freeze;
             slot->modulated = views::fxModulated(s, fx);
+            slot->modulationOn = views::fxModulationOn(s, fx);
             switch (attention_.markOf(fx, *f)) {
                 case FxAttention::Mark::Disabled:
                     slot->state = FxSlot::State::Disabled;
@@ -2200,7 +2206,7 @@ void Mixer::update() {
         st.addFx->enabled = !t->freeze;
         st.fx->setEmphasis(!t->chain.empty() || !t->inputChain.empty());
         st.fx->setMark(views::chainModulated(s, *id) ? std::string(views::kModMark) : std::string(),
-                       "signal-cv");
+                       views::chainModulationOn(s, *id) ? "signal-cv" : "ink-faint");
         if (st.arm) st.arm->enabled = !t->freeze;
         if (st.monitor) st.monitor->enabled = !t->freeze;
         st.polarity->setOn(t->phaseInvert);

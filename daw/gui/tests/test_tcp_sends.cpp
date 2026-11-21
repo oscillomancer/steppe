@@ -1007,6 +1007,15 @@ TEST_CASE("modulation helpers: routes on a target, a modulated effect and chain"
     const model::Id second = modulate(f.a, "volume");
     modulate(f.a, "pan");
     CHECK(views::routesOn(f.app->head(), vol) == std::vector<model::Id>{first, second});
+    // On while one route is: off only when every route onto it is.
+    CHECK(views::routeOn(f.app->head(), vol));
+    f.exec("modulation.set",
+           json::parse(R"({"modulation":")" + first.str() + R"(","enabled":false})").value());
+    CHECK(views::routeOn(f.app->head(), vol));
+    f.exec("modulation.set",
+           json::parse(R"({"modulation":")" + second.str() + R"(","enabled":false})").value());
+    CHECK_FALSE(views::routeOn(f.app->head(), vol));
+    CHECK_FALSE(views::routeOn(f.app->head(), {f.b, "volume"}));
     // A strip's own controls are no plug-in: its chain is not marked.
     CHECK_FALSE(views::chainModulated(f.app->head(), f.a));
     CHECK_FALSE(views::fxModulated(f.app->head(), f.a));

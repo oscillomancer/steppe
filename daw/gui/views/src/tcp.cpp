@@ -424,7 +424,7 @@ void TcpPanel::Row::refresh(const model::Session& session) {
                                                                  : ui::MonitorButton::Mode::Auto);
     fx_->setEmphasis(!tr->chain.empty() || !tr->inputChain.empty());
     fx_->setMark(chainModulated(session, *track_) ? std::string(kModMark) : std::string(),
-                 "signal-cv");
+                 chainModulationOn(session, *track_) ? "signal-cv" : "ink-faint");
     fx_->setTextColor(
         panel_.cb_.fxNeedsAttention && panel_.cb_.fxNeedsAttention(*track_) ? "meter-hot" : "");
     fader_->setValue(tr->volumeDb);
@@ -1058,6 +1058,7 @@ class TcpPanel::EnvRow : public ui::Node {
         const auto scale = panel_.layout_.scaleOf(shown);
         const LaneTitle title = laneTitle(shown, session, scale ? &*scale : nullptr);
         const bool mod = !routesOn(session, *target_).empty(), envelope = e != nullptr;
+        mod_->setTextColor(routeOn(session, *target_) ? "signal-cv" : "ink-faint");
         const bool changed = title.headerText() != title_parts_.headerText() ||
                              mod != mod_->visible || envelope != mode_->visible;
         title_parts_ = title;

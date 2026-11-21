@@ -155,6 +155,28 @@ bool chainModulated(const model::Session& session, model::Id track) {
     return false;
 }
 
+bool routeOn(const model::Session& session, const model::EnvTarget& target) {
+    for (const auto& m : session.modulations)
+        if (m.value->target == target && m.value->enabled) return true;
+    return false;
+}
+
+bool fxModulationOn(const model::Session& session, model::Id fx) {
+    if (fx.kind != model::Kind::Fx) return false;
+    for (const auto& m : session.modulations)
+        if (m.value->target.object == fx && m.value->enabled) return true;
+    return false;
+}
+
+bool chainModulationOn(const model::Session& session, model::Id track) {
+    const model::Track* t = session.tracks.find(track);
+    if (!t) return false;
+    for (const auto* chain : {&t->chain, &t->inputChain})
+        for (model::Id fx : *chain)
+            if (fxModulationOn(session, fx)) return true;
+    return false;
+}
+
 std::string envTitle(const model::Envelope& env) {
     const std::string& p = env.target.param;
     if (p == "volume") return "Volume";

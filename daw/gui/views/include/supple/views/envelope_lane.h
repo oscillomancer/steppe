@@ -82,6 +82,11 @@ std::vector<model::Id> routesOn(const model::Session& session, const model::EnvT
 bool fxModulated(const model::Session& session, model::Id fx);
 // Whether some plug-in in the track's chain or input chain is modulated.
 bool chainModulated(const model::Session& session, model::Id track);
+// The same with an enabled route: where every route is off, the mark (and a
+// lane's "mod") is drawn dimmed, in `ink-faint` (gui.md §2).
+bool routeOn(const model::Session& session, const model::EnvTarget& target);
+bool fxModulationOn(const model::Session& session, model::Id fx);
+bool chainModulationOn(const model::Session& session, model::Id track);
 
 // Modulation (ADR-0096). Whether a route's source input carries 0..1 (every
 // cable into it from a unipolar, gate or phase output); the app supplies it

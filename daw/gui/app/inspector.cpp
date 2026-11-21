@@ -416,7 +416,8 @@ class ModLine : public ui::Button {
                ui::kLeft | ui::kMiddle);
         if (!mark().empty())
             c.text({b.x + 6 + wordsW + 6, b.y, markW, b.h}, mark(), ui::Font::Ui, size,
-                   t.color("signal-cv"), ui::kLeft | ui::kMiddle);
+                   t.color(markColor().empty() ? "signal-cv" : markColor().c_str()),
+                   ui::kLeft | ui::kMiddle);
     }
 };
 
@@ -876,25 +877,29 @@ void Inspector::readModulation(model::Id id) {
     modLines_->clear();
     AppActions* a = &actions_;
     ui::Root* r = &root_;
+    // A source mark dims where its route is off (all of them, on "N routes").
+    auto on = [&](model::Id route) { return s.modulations.find(route)->enabled; };
     auto line = [&](const std::string& nodeId, const std::string& text, const std::string& mark,
-                    std::function<void()> click) {
+                    bool lit, std::function<void()> click) {
         auto& b = modLines_->emplace<ModLine>(nodeId, text, std::move(click));
-        b.setMark(mark, "signal-cv");
+        b.setMark(mark, lit ? "signal-cv" : "ink-faint");
         b.layout.width = ui::SizeRule::fraction();
         b.layout.height = ui::SizeRule::fixed(22);
         return &b;
     };
     if (shown.size() <= 4) {
         for (const auto& [route, what, source] : shown)
-            line("inspector.track.modulation." + route.str(), what, source,
+            line("inspector.track.modulation." + route.str(), what, source, on(route),
                  [a, route] { showModSource(*a, route); });
     } else {
         // Past four: one line, its menu listing them all.
         std::vector<ui::MenuItem> items;
         for (const auto& [route, what, source] : shown)
             items.push_back({what + " " + source, "", [a, route] { showModSource(*a, route); }});
+        const bool any = std::any_of(shown.begin(), shown.end(),
+                                     [&](const auto& entry) { return on(std::get<0>(entry)); });
         line("inspector.track.modulation.all", std::to_string(shown.size()) + " routes",
-             std::string(views::kModMark), [r, items] {
+             std::string(views::kModMark), any, [r, items] {
                  const ui::Node* at = r->find("inspector.track.modulation.all");
                  if (!at) return;
                  r->openPopup(

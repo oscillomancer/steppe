@@ -857,7 +857,17 @@ TEST_CASE("TCP: a chain with a modulated plug-in marks its fx as the mixer does"
                 R"({"target":{"fx":")" + fx + R"(","param":")" + param + R"("},"source":"lfo"})"));
     f.sync();
     CHECK(fxButton()->mark() == views::kModMark);
+    CHECK(fxButton()->markColor() == "signal-cv");
     CHECK(fxButton()->valueText() == "fx");
+    // Every route off: dimmed; one on again: normal.
+    const std::string route = f.app->head().modulations.begin()->id.str();
+    REQUIRE(run("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})"));
+    f.sync();
+    CHECK(fxButton()->mark() == views::kModMark);
+    CHECK(fxButton()->markColor() == "ink-faint");
+    REQUIRE(run("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})"));
+    f.sync();
+    CHECK(fxButton()->markColor() == "signal-cv");
     CHECK(views::fxModulated(f.app->head(), *model::Id::parse(fx)));
     CHECK(views::chainModulated(f.app->head(), track));
 }
@@ -916,6 +926,23 @@ TEST_CASE(
     REQUIRE(control(modOnly, "title"));
     CHECK(control(withEnv, "mod")->visible);
     CHECK(control(modOnly, "mod")->visible);
+    auto modColor = [&](const model::EnvTarget& t) {
+        return static_cast<ui::Button*>(control(t, "mod"))->textColor();
+    };
+    CHECK(modColor(modOnly) == "signal-cv");
+    // Its route off: "mod" dimmed, still there; on again: normal.
+    std::string modOnlyRoute;
+    for (const auto& m : f.app->head().modulations)
+        if (m.value->target == modOnly) modOnlyRoute = m.id.str();
+    REQUIRE(run("modulation.set", R"({"modulation":")" + modOnlyRoute + R"(","enabled":false})"));
+    f.sync();
+    REQUIRE(control(modOnly, "mod"));
+    CHECK(control(modOnly, "mod")->visible);
+    CHECK(modColor(modOnly) == "ink-faint");
+    CHECK(modColor(withEnv) == "signal-cv");
+    REQUIRE(run("modulation.set", R"({"modulation":")" + modOnlyRoute + R"(","enabled":true})"));
+    f.sync();
+    CHECK(modColor(modOnly) == "signal-cv");
     CHECK_FALSE(control(modOnly, "mode")->visible);
     CHECK_FALSE(control(modOnly, "active")->visible);
     CHECK(control(modOnly, "hide")->visible);

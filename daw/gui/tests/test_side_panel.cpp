@@ -401,9 +401,19 @@ TEST_CASE("inspector: a track's Modulation row leads to each source, 'N routes' 
     REQUIRE(line);
     CHECK(line->valueText() == "Volume");
     CHECK(line->mark() == std::string(views::kModMark) + " LFO");
+    CHECK(line->markColor() == "signal-cv");
     // One click: its source.
     f.root->click(line->id());
     CHECK(shown == std::vector<std::string>{route});
+    // Its route off: "(off)", the mark dimmed.
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
+    f.pass();
+    line = dynamic_cast<ui::Button*>(f.node("inspector.track.modulation." + route));
+    REQUIRE(line);
+    CHECK(line->mark() == std::string(views::kModMark) + " LFO (off)");
+    CHECK(line->markColor() == "ink-faint");
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})");
+    f.pass();
     // Five routes: one line, "5 routes", whose menu lists them.
     for (int i = 2; i <= 5; ++i)
         f.exec("modulation.add", R"({"source":{"module":")" + modOut + R"(","input":"in_)" +

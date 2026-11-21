@@ -305,7 +305,10 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   the mixer strip alike when a plug-in in the track's chain or input chain
   is (`views::chainModulated`, drawn by `ui::Button::setMark`). It is
   static: what moves is the controls' bars and the lane's curve. A strip's
-  own fader and pan carry their bars, not the mark.
+  own fader and pan carry their bars, not the mark. Where every route onto
+  its target is off (the plug-in's, the chain's), the mark is drawn dimmed
+  in `ink-faint` (`views::fxModulationOn`, `chainModulationOn`; the slot's
+  accessible text ends "(modulation off)"); one route on draws it normal.
 - **The source.** A route's source is the module cabled into its Mod Out
   input (the first cable by id), named as the rack window titles it, else
   "Mod N" (`gui::modSourceName`). The app action `ui.modulation.source
@@ -1050,7 +1053,8 @@ the parameter first and then what owns it, "Filter 1 Cutoff · Marram",
 lane's own caption keeps `envTitle`'s order). When the words do not fit,
 the owner is elided first, then the parameter. Its cells sit in fixed
 columns, the same in every lane: **mod** in `signal-cv` (shown while a
-route, enabled or not, reaches the target: one click asks the app for the
+route, enabled or not, reaches the target, dimmed in `ink-faint` while
+every one of them is off, `views::routeOn`: one click asks the app for the
 source, §2), the automation mode (read → touch → latch → write → trim),
 **on** (whether the envelope is heard) and **hide**. A lane without an
 envelope (a modulated parameter) has its title, **mod** and **hide**, the
@@ -2720,7 +2724,7 @@ tracks), each one `track.set` per track, several in one transaction:
 | Colour (`inspector.track.color`) | The eight track colours as swatches and an empty square for none; the colour all of them have is ringed | A click; or, with the row focused (Tab), Left and Right (Home, End) to move a focus ring that starts on the tracks' colour, and Enter or Space to pick | `color` |
 | Volume (`inspector.track.volume_db`) | "-6.0 dB", or empty and "mixed" | A number, with or without "dB" | `volume_db` |
 | Pan (`inspector.track.pan`) | "-30 %" (negative is left), or empty and "mixed" | A number, with or without "%" | `pan` |
-| Modulation (`inspector.track.modulation`), one track only, and only while a route moves something of it (its controls, its effects' parameters, its sends'; `gui::modRoutesOfTrack`) | A line per route, boxed as a field: the parameter as its lane names it and, after it in `signal-cv`, "~ LFO" (its source, `gui::modSourceName`; "(off)" after a disabled one). Past four routes, one line, "5 routes" | A click on a line shows its source in the rack window (§2, `ui.modulation.source`); on "N routes", a menu of them, each doing the same | — |
+| Modulation (`inspector.track.modulation`), one track only, and only while a route moves something of it (its controls, its effects' parameters, its sends'; `gui::modRoutesOfTrack`) | A line per route, boxed as a field: the parameter as its lane names it and, after it in `signal-cv`, "~ LFO" (its source, `gui::modSourceName`; "(off)" after a disabled one, whose mark is dimmed in `ink-faint`, as "N routes"'s is when all are off). Past four routes, one line, "5 routes" | A click on a line shows its source in the rack window (§2, `ui.modulation.source`); on "N routes", a menu of them, each doing the same | — |
 | Notes (`inspector.track.notes`), one track only | The track's notes, five lines in view, under its label and as wide as the panel, with a rule around it | Any text over several lines (a `TextArea` without line numbers: Enter is a new line, long lines scroll, they do not wrap). Ctrl+Enter or leaving the field applies it; Escape puts back the track's | `notes` |
 
 Inputs, outputs, sends and record settings stay where they are (the track
