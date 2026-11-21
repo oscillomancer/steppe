@@ -276,6 +276,9 @@ class MidiEditor {
     // reason in the status line) when a looped clip's point would fall
     // outside the first pass the strip shows.
     std::optional<double> clipBeatAt(double rollBeat);
+    // An audio clip's key button: its menu (Key…, Remove key, Take from the
+    // project at the playhead).
+    void openAudioKeyMenu();
     Status setClipContext(const std::vector<model::ContextPoint>& points);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.

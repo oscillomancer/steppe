@@ -3997,7 +3997,7 @@ TEST_CASE("MIDI editor: an audio clip opens as its take's waveform in seconds, i
         CHECK(f.root->find(id)->visible);
     }
     CHECK(f.editor->keyText() == "No key");
-    CHECK_FALSE(f.editor->keyButton()->enabled);
+    CHECK(f.editor->keyButton()->enabled);  // it sets the clip's key
     f.golden("audio-clip-pane-dark.png");
     // A press on the waveform edits nothing; the note actions do nothing.
     const auto version = f.app->head().version;
@@ -4122,6 +4122,76 @@ TEST_CASE("MIDI editor: an audio clip's Lanes menu and clip-time lanes are in se
     settleWave(f);
     f.golden("audio-clip-lanes-dark.png");
     f.editor->setPeaks(nullptr);
+}
+
+TEST_CASE("MIDI editor: an audio clip's key button sets its one key point") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"A","scale":"minor"})");
+    const std::string clip = audioClip(f);
+    const model::Id id = *model::Id::parse(clip);
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    auto& s = f.editor->state();
+    const auto context = [&] { return f.app->head().clips.find(id)->context; };
+    // The button opens the clip's key menu; it never turns degrees on.
+    auto menu = [&] {
+        REQUIRE(f.root->click("midi.key"));
+        f.root->frame(false);
+        ui::Node* m = f.root->find("midi.key.menu");
+        REQUIRE(m);
+        std::map<std::string, std::function<void()>> rows;
+        for (const auto& item : ui::menuItems(*m))
+            if (!item.separator) rows[item.label] = item.run;
+        f.root->closePopup();
+        CHECK_FALSE(s.degrees);
+        CHECK_FALSE(f.editor->keyButton()->on());
+        return rows;
+    };
+    auto type = [&](const char* typed) {
+        f.root->frame(false);
+        f.root->text(typed);
+        f.root->key(SDLK_RETURN);
+        f.frame();
+    };
+    auto rows = menu();
+    CHECK(rows.size() == 2);
+    REQUIRE(rows.contains("Key…"));
+    REQUIRE(rows.contains("Take from the project at bar 1"));
+    // Key…: the field starts from the project's key; D minor becomes the
+    // clip's key at 0, written as bar 1 of holds.
+    rows.at("Key…")();
+    REQUIRE(f.root->find("midi-key-field"));
+    CHECK(f.root->find("midi-key-field")->valueText() == "A minor");
+    type("D minor");
+    CHECK_FALSE(f.root->popupOpen());
+    REQUIRE(context().size() == 1);
+    CHECK(context()[0].type == model::ContextType::Key);
+    CHECK(context()[0].beat == 0);
+    CHECK(context()[0].tonic == "D");
+    CHECK(f.editor->keyText() == "D minor");
+    // What the button sent, which the engine read back to the point above.
+    CHECK(gui::clipLeadSheet(context(), *f.app->head().timeMap, 0.0) == "1: key D minor ~:w\n");
+    // A bad key is refused into the status line, the field kept.
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    menu().at("Key…")();
+    type("H major");  // the field's text is selected: it is replaced
+    CHECK(f.root->popupOpen());
+    REQUIRE(said.size() == 1);
+    f.root->closePopup();
+    // Remove key D minor: none; Take from the project: A minor again.
+    rows = menu();
+    REQUIRE(rows.contains("Remove key D minor"));
+    rows.at("Remove key D minor")();
+    f.frame();
+    CHECK(context().empty());
+    CHECK(f.editor->keyText() == "No key");
+    menu().at("Take from the project at bar 1")();
+    f.frame();
+    REQUIRE(context().size() == 1);
+    CHECK(context()[0].tonic == "A");
+    CHECK(f.editor->keyText() == "A minor");
 }
 
 TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {

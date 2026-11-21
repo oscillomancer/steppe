@@ -1619,8 +1619,15 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     midiOnly_.push_back(
         &header.emplace<ui::Button>("midi.quantize", "Quantize", [this] { quantize(); }));
     // The key at the item's start; lit, pitch drags and arrows go by degrees.
-    keyButton_ = &header.emplace<ui::Toggle>("midi.key", "No key", "accent",
-                                             [this](bool on) { state_.degrees = on; });
+    // An audio clip's is its one key point, set from the button's menu.
+    keyButton_ = &header.emplace<ui::Toggle>("midi.key", "No key", "accent", [this](bool on) {
+        if (state_.audio) {
+            keyButton_->setOn(false);
+            openAudioKeyMenu();
+            return;
+        }
+        state_.degrees = on;
+    });
     keyButton_->layout.width = ui::SizeRule::content();
     keyButton_->textSize = "small";  // as the header's buttons
     keyButton_->offInk = "ink";
@@ -2664,6 +2671,43 @@ void MidiEditor::openContextMenu(double rollBeat, std::optional<double> rollChor
         ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
 }
 
+void MidiEditor::openAudioKeyMenu() {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip || !keyButton_) return;
+    // An audio clip holds at most one point, a key at 0 (ADR-0098): set it,
+    // remove it, or take the project's at the playhead.
+    const ui::Rect b = keyButton_->bounds();
+    const ui::Point at{b.x, b.bottom()};
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, std::function<void()> run) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.run = std::move(run);
+        items.push_back(std::move(m));
+    };
+    add("Key\u2026", [this, at] { editClipKey(0.0, at); });
+    if (const model::ContextPoint* key = model::keyPointAt(*owner->clip, 0.0)) {
+        const model::ContextPoint gone = *key;
+        add("Remove key " + model::keyWords(gone), [this, gone] {
+            if (const auto o = midiOwner(app_.head(), state_.item); o && o->clip)
+                (void)setClipContext(withContextPoint(o->clip->context, gone, true));
+        });
+    }
+    const auto t = app_.transport("get");
+    const double from = t ? t->beat : 0.0;
+    const time::TimeMap& tm = *app_.head().timeMap;
+    add("Take from the project at bar " + std::to_string(tm.barBeat(std::max(0.0, from)).bar),
+        [this, from] {
+            json::Value args = json::Value::object(), place = json::Value::object();
+            args["clip"] = state_.item;
+            place["at"] = std::max(0.0, from);
+            args["context_at"] = std::move(place);
+            (void)command("clip.set", std::move(args), {}, "Context");
+        });
+    root_.openPopup(ui::makeMenu("midi.key.menu", std::move(items), [this] { root_.closePopup(); }),
+                    ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
 std::optional<double> MidiEditor::clipBeatAt(double rollBeat) {
     const auto owner = midiOwner(app_.head(), state_.item);
     if (!owner || !owner->clip) return std::nullopt;
@@ -2702,7 +2746,10 @@ Status MidiEditor::setClipContext(const std::vector<model::ContextPoint>& points
     if (!owner || !owner->clip) return Error("gui.midi", "no clip is open", "/clip");
     json::Value args = json::Value::object();
     args["clip"] = state_.item;
-    args["context"] = clipLeadSheet(points, *app_.head().timeMap, owner->clip->length);
+    // An audio clip's length is in seconds: its text is bar 1 only, a key
+    // and holds (ADR-0098).
+    args["context"] =
+        clipLeadSheet(points, *app_.head().timeMap, state_.audio ? 0.0 : owner->clip->length);
     return command("clip.set", std::move(args), {}, "Context");
 }
 
@@ -2773,8 +2820,10 @@ void MidiEditor::refreshKeyButton() {
     }
     const bool known = point && model::parseKey(*point);
     std::string text = point ? model::keyWords(*point) : "No key";
-    keyButton_->enabled = known && !state_.audio;  // an audio clip has no degrees
-    if (!known && state_.degrees) {                // nothing to count degrees in
+    // An audio clip's button sets its key (it has no degrees), with or
+    // without one.
+    keyButton_->enabled = known || state_.audio;
+    if (!known && state_.degrees) {  // nothing to count degrees in
         state_.degrees = false;
         keyButton_->setOn(false);
         // midi.edit refuses degrees on a clip without a key (midi.no_key).
