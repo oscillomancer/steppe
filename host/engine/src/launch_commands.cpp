@@ -478,9 +478,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "or a loop change ends a capture that has run; one that has not run begins again "
             "at the new position. launch.commit writes the capture onto the timeline. from and "
             "to: its span on the timeline in beats, laid out by running time. Refused while a "
-            "master playrate is active, where running time is not song time, and while the rate "
-            "heard is still gliding to 1 after one was set (effective_rate in "
-            "transport.playrate.get); one that becomes active ends a running capture.";
+            "master playrate is active, where running time is not song time; one that becomes "
+            "active ends a running capture.";
         c.tags = {"clip launcher", "transport", "recording"};
         c.args = schema::object<CaptureArg>("launch_capture_args")
                      .field("on", &CaptureArg::on, schema::boolean())
@@ -491,9 +490,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("to", &CaptureDone::to, schema::number())
                        .build();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
-                    {"launch.playrate", "a master playrate is active, or still gliding to 1",
-                     "set the master playrate to 1 and turn off its envelope, then capture once "
-                     "effective_rate is 1"}};
+                    {"launch.playrate", "a master playrate is active",
+                     "set the master playrate to 1 and turn off its envelope, then capture"}};
         c.examples = {{"While stopped", j(R"({"on": true})"),
                        j(R"({"on": true, "from": 0, "to": 0})"), "song_with_clip_running"}};
         c.run = [](const CaptureArg& a, Context& ctx) -> Result<CaptureDone> {

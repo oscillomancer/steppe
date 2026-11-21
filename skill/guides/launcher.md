@@ -127,7 +127,7 @@ A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
 master playrate does not stop launches, but while it keeps the pitch an audio clip's
 launch is refused (`launch.playrate`), and `launch.capture` is refused under any active
-playrate, and while the rate heard (`effective_rate`) is still gliding back to 1. A clip's FX and envelopes play through its own chain; a rack's Notes module
+playrate. A clip's FX and envelopes play through its own chain; a rack's Notes module
 and the track's MIDI sends follow launches.
 
 Two things to expect when polling. A launch given just as the transport started (the

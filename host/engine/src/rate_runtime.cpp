@@ -102,14 +102,6 @@ bool scalarOnly(const model::Session& a, const model::Session& b) {
 }
 }  // namespace
 
-double Engine::effectivePlayrate() const {
-    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
-    if (plan && plan->rateEnabled && !plan->syncRate && plan->timelines[0]->points().empty() &&
-        !wantPlaying_.load(std::memory_order_acquire) && !reportedPlaying_.load())
-        return plan->requestedScalar;
-    return effectivePlayrate_.load(std::memory_order_relaxed);
-}
-
 bool Engine::loadScalarRate(const model::Session& session, const std::filesystem::path& dir) {
     auto* p = latestPlan_.load(std::memory_order_acquire);
     // Never while an edit is deferred, nor for the reload that ends the
@@ -121,11 +113,6 @@ bool Engine::loadScalarRate(const model::Session& session, const std::filesystem
         notificationReload_ || rateDeferred_ || rateDeferredFrom_ || dir != p->projectDir ||
         !scalarOnly(*latest_, session))
         return false;
-    // Stopped, nothing is heard, so there is nothing to glide from: the
-    // edit compiles, and the play starts at the new rate (a glide queued
-    // here would play out after the play start: the builder's song journey
-    // 2, D2).
-    if (!wantPlaying_.load(std::memory_order_acquire) && !reportedPlaying_.load()) return false;
     const auto saved = session.project->playrate.rate;
     // An unchanged session can be an explicit maintenance reload. Only value
     // edits (or retrying a coalesced value) qualify for the control shortcut.

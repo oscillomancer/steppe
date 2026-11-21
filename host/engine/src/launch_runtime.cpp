@@ -95,13 +95,6 @@ bool Engine::launchClock(LaunchClock& c) const {
     c.epoch = t.epoch;
     c.loop = t.loop;
     c.playing = wantPlaying_.load(std::memory_order_acquire);
-    if (!c.playing && playStart_) {
-        // play() is starting a new epoch at the play position.
-        c.epoch = playStart_->first;
-        c.stream = 0;
-        c.pos = playStart_->second;
-        return true;
-    }
     if (!c.playing) {
         // Stopped: the stream holds still at the play position.
         c.stream = playedStream(c.epoch);
@@ -780,13 +773,8 @@ void Engine::serviceLaunches() {
         warnings_.push_back("launch: " + r.track.str() +
                             "'s queued launch was dropped: the edit left nothing to play");
     }
-    placeLaunchesAgain();
-}
-
-void Engine::placeLaunchesAgain() {
     // Missed, or placed in an epoch that has ended: placed again, alone.
-    const std::uint64_t epoch =
-        playStart_ ? playStart_->first : epoch_.load(std::memory_order_acquire);
+    const std::uint64_t epoch = epoch_.load(std::memory_order_acquire);
     for (LaunchSlot& s : *launchSlots_) {
         std::uint64_t st = s.state.load(std::memory_order_acquire);
         // A committed launch of an ended epoch that nothing has switched yet
@@ -908,13 +896,6 @@ Status Engine::captureLaunches(bool on) {
         if (rateActive())
             return Error("launch.playrate", "a master playrate is active", "",
                          "set the master playrate to 1 and turn off its envelope, then capture");
-        // Set to 1, a rate still gliding there is heard (the builder's song
-        // journey 2, D2): the capture's running time would not be the song's.
-        if (const double heard = effectivePlayrate(); heard != 1)
-            return Error(
-                "launch.playrate",
-                "the master playrate is still gliding to 1 (heard: " + std::to_string(heard) + ")",
-                "", "capture again once transport.playrate says effective_rate 1");
         capture_ = {};
         capture_.on = capture_.any = capture_.pending = true;
         placeCapture();

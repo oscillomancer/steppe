@@ -488,11 +488,6 @@ the same.*
   sample; it applies there too, live as in the replay, and the chain
   warms up through its first frames (its lead), as when a swap raises the
   lead (ADR-0097, amended 2026-11-20; review round 69).
-  Under a master playrate the play start is a seek to the play position,
-  which begins a new transport epoch: `play()` places the launches made
-  while stopped again in that epoch, at its first sample, before the
-  transport runs, so they still start at the play start and not on the
-  next boundary (the builder's song journey 2, D1).
 - **Quantize** is project-wide (`launch_quantize`) with a per-clip
   override. `none` means the floor: about the render-ahead (200 ms) for a
   rendered track, one device block for a live one. That is accepted for
@@ -3547,17 +3542,11 @@ are independent clients of the command API and the cached state accessor below.
   scalar; `envelope` is present only for an active master rate envelope with
   effective points (including automation items). `effective_rate` reports
   consumed output, accounting for graph and backend output latency, rather than the
-  requested or render-lookahead value. Without an engine it is 1.0. While
-  the transport is stopped nothing is heard, and a steady scalar reads as
-  the rate playing starts at; an envelope or a sync chase reads as last
-  heard (the builder's song journey 2, F8).
+  requested or render-lookahead value. Without an engine it is 1.0.
 - `transport.playrate.set {rate?: number, preserve_pitch?: bool}` is an edit
   returning the same result. Rate is finite 0.25..4.0, and omitted fields retain
   their values. Empty arguments or unchanged settings make no version unless
-  the call writes an automation point. While playing, a scalar edit glides
-  (the knob ramp and its low-pass); while stopped it compiles instead, so
-  playing starts at the new rate with no glide (D2: a glide queued while
-  stopped played out after the play start). GUI drags use `Origin.gesture` for the
+  the call writes an automation point. GUI drags use `Origin.gesture` for the
   same live model updates and coalesced undo as strip faders. The range of a
   future knob is display state, never a model constraint.
 - `transport.playrate.apply-to-tempo {}` is an edit returning `{}`. It
