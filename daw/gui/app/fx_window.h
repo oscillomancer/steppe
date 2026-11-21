@@ -61,8 +61,8 @@ class FxWindow {
     ~FxWindow();
 
     Status open(model::Id track);
-    // A take's own chain (take FX, gap log #22): the item plays through it
-    // before its track's input.
+    // A take's own chain (take FX, gap log #22): an item's take plays through
+    // it before its track's input, a launcher clip's when the clip plays.
     Status openTake(model::Id take);
     std::optional<model::Id> take() const { return take_; }
     // The `ui.fx.chain` action: a track id in `prompt`, else the selected track.

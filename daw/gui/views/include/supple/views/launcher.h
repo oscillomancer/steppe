@@ -63,6 +63,8 @@ struct LauncherCallbacks {
     // The header's Capture toggle pressed: arm (true) or end and commit
     // (false) the capture of launches (launch.capture, launch.commit).
     std::function<void(bool on)> capture;
+    // The clip menu's Take FX…: open the chain of the clip's active take.
+    std::function<void(model::Id take)> takeFx;
 };
 
 // The pane's geometry, shared by its body and its header cell: one column

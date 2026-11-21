@@ -50,7 +50,7 @@ struct LauncherFixture {
     views::ArrangeView* view = nullptr;
     std::vector<std::string> commands;
     std::vector<Error> errors;
-    std::vector<model::Id> opened, selected;
+    std::vector<model::Id> opened, selected, takeFx;
 
     LauncherFixture() {
         dir = std::filesystem::temp_directory_path() /
@@ -87,7 +87,8 @@ struct LauncherFixture {
              [this](model::Id clip) { opened.push_back(clip); },
              [this](const std::vector<model::Id>& clips) { selected = clips; },
              {},
-             {}});
+             {},
+             [this](model::Id take) { takeFx.push_back(take); }});
         sync();
     }
     ~LauncherFixture() {
@@ -487,9 +488,19 @@ TEST_CASE("launcher: the header's buttons, scene ▶, rename, move, + and the sc
     for (const auto& item : ui::menuItems(*menu)) rows.push_back(item.label);
     CHECK(rows == std::vector<std::string>{"Rename…", "Colour…", "", "Mode: Loop", "Mode: Once",
                                            "Quantize…", "", "Duplicate",
-                                           "Lay on timeline at playhead", "Delete"});
+                                           "Lay on timeline at playhead", "Take FX…", "Delete"});
     const auto once = ui::menuItems(*menu)[4].run;
+    const auto takeFx = ui::menuItems(*menu)[9].run;
     f.root->closePopups();
+    // Take FX… hands the app the clip's active take (it opens that chain).
+    takeFx();
+    {
+        const auto fill = views::clipIn(f.app->head(), *model::Id::parse("tr_1"),
+                                        views::launcherColumns(f.app->head()).scenes[2]);
+        REQUIRE(fill);
+        REQUIRE(f.takeFx.size() == 1);
+        CHECK(f.takeFx.front() == f.app->head().clips.find(*fill)->activeTake);
+    }
     once();
     f.sync();
     const auto clip = views::clipIn(f.app->head(), *model::Id::parse("tr_1"),

@@ -754,6 +754,11 @@ void LauncherPane::openClipMenu(model::Id clip, ui::Point at) {
                          args["position"] = now.timeMap->beatAt(view_.playhead());
                          (void)view_.runLauncher("item.add", std::move(args));
                      }});
+    // The active take's chain, in the FX window, as an item's take menu has.
+    if (c->activeTake && view_.launcherCallbacks().takeFx)
+        items.push_back({"Take FX\u2026", "", [this, take = *c->activeTake] {
+                             view_.launcherCallbacks().takeFx(take);
+                         }});
     items.push_back({"Delete", "", [this] {
                          const std::vector<model::Id> clips = view_.selectedClips();
                          view_.selectClips({});

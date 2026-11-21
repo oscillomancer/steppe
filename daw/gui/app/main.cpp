@@ -903,6 +903,10 @@ int frontendMain(int argc, char** argv) {
          [&](bool on) {
              if (auto r = shell.capture().set(on); !r && appActions.onError)
                  appActions.onError("Capture: " + r.error().message);
+         },
+         [&](model::Id take) {
+             if (auto r = fxWindow.openTake(take); !r && appActions.onError)
+                 appActions.onError("Take FX: " + r.error().message);
          }});
     // A capture's commit at stop, or the next one's arming, refused.
     shell.capture().onError = [&appActions](const Error& e) {
