@@ -642,6 +642,53 @@ TEST_CASE("removing the playing clip, or freezing its track, crossfades to the a
         }
 }
 
+TEST_CASE(
+    "right after a pause, the position, a stopped launch's anchor and a capture's start "
+    "are where it paused" *
+    doctest::description("rt")) {
+    // Review round 70 P3: in the anticipative executor, until the renderer
+    // relocated for the pause's epoch, transport() gave that epoch's
+    // predecessor's start (0 here), so a launch or a capture armed in the
+    // same main-thread turn as the pause was anchored there.
+    Project p;
+    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = p.ramp("ramp.wav", 48000).string();
+    p.runArgs("clip.add", args);
+    p.run("clip.set", R"({"clip": "cl_1", "length": 0.25})");
+    const model::Session s = p.app->head();
+    constexpr std::uint32_t kBlock = 128;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.play();
+        for (int done = 0; done < 104; done += 8) {
+            if (options.anticipative)
+                runAheadOnState(engine, backend, 8, kBlock);
+            else
+                backend.run(8);
+            engine.service();
+        }
+        const std::int64_t heard = engine.transport().sample;
+        REQUIRE(heard > 0);
+        engine.pause();  // and at once, in the same turn:
+        CHECK(engine.transport().sample == heard);
+        engine.captureLaunches(true);
+        const Engine::LaunchRequest r = request("tr_1", "cl_1");
+        auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+        REQUIRE(placed);
+        CHECK(placed->anchorSample == heard);
+        const auto capture = engine.launchCapture();
+        REQUIRE(capture);
+        CHECK(capture->startSample == heard);
+        engine.stop();
+    }
+}
+
 TEST_CASE("a launch while stopped applies at the play start" * doctest::description("rt")) {
     Project p;
     twoTracks(p);

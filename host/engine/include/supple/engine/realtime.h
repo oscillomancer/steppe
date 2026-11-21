@@ -1023,6 +1023,9 @@ class Engine {
     void scheduleBackground();  // main thread, start(): renderer and pool policy
     std::uint64_t relocate(std::uint64_t previous);  // returns the epoch it relocated for
     std::int64_t playedPosition(std::uint64_t epoch, std::int64_t epochStart) const;
+    // The anticipative executors' position in `epoch`, also before the
+    // renderer has relocated for it: then what relocate() will take.
+    std::int64_t anticipativePosition(std::uint64_t epoch) const;
     // Frames the callback has played in `epoch` (0 before its first).
     // The epoch with its seek target and loop, read under xportSeq_: the
     // audio thread gives up after `tries` (a write in progress) and keeps
@@ -1119,6 +1122,7 @@ class Engine {
     std::atomic<bool> wantPlaying_{false};
     std::atomic<std::int64_t> seekSample_{0};
     std::atomic<std::uint64_t> seekSeq_{0};
+    std::atomic<std::uint64_t> seekEpoch_{0};  // main thread: the epoch the last seek opened
     std::atomic<bool> shutdownRequested_{false};
     std::uint64_t seekSeen_ = 0;
     // seekSeen_/xportSeen_ are plain, and for that reason the in-callback

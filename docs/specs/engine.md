@@ -668,7 +668,11 @@ the same.*
   plan block for a node it renders. The target is the first quantize
   boundary at or after the floor's song position. A loop end before it
   places it at the first boundary inside the loop. Stopped, the target is
-  the play position, applied at the play start. The queue has
+  the play position, applied at the play start. Right after a pause or a
+  seek, before the anticipative renderer has relocated, the play position
+  `transport()` reports (and so a launch's anchor and a capture's start)
+  is where it will relocate: the seek's sample, else where it paused
+  (review round 70). The queue has
   `kLaunchSlots` fixed slots, one per track; a newer request replaces the
   track's pending one, and a full queue refuses with `launch.queue`.
   Each slot's state word carries a generation, so a slot the main thread
