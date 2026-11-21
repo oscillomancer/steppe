@@ -3513,6 +3513,10 @@ TEST_CASE("plug-in parameter references: an older spelling on a semantic plug-in
             CHECK(w.message.find("lane lookup does not find it") != std::string::npos);
             CHECK(w.message.find("env.remove") != std::string::npos);
             CHECK(w.message.find("as gain") != std::string::npos);
+            // Round 79 J1: re-add under the same spelling, which converts.
+            CHECK(w.message.find("same points under the same spelling, \"0\"") !=
+                  std::string::npos);
+            CHECK(w.message.find("converting the points") != std::string::npos);
         } else {
             CHECK(w.path == "/modulations/" + route + "/target/param");
             CHECK(w.message.find("modulation.remove") != std::string::npos);
