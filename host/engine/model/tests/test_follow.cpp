@@ -813,7 +813,8 @@ TEST_CASE("invariance: split keeps every note's place and what it sounds as") {
                 const Rig r = rig(spec);
                 const auto before = heard(r.s, r.item);
                 REQUIRE_FALSE(before.empty());
-                for (const double at : {5.0, 6.5, 8.0}) {  // inside a pass and on a boundary
+                for (const double at :
+                     {5.0, 6.5, 8.0, 10.5}) {  // inside a pass, on a boundary, past the first pass
                     Id right;
                     const Session s = splitAt(r.s, r.item, r.take, at, &right, wrap);
                     auto both = heard(s, r.item);
@@ -911,6 +912,28 @@ TEST_CASE("invariance: trims from either side keep every surviving note's place"
             const Session left = t.commit().value();
             CHECK(subset(heard(left, r.item), before));
             CHECK_FALSE(heard(left, r.item).empty());
+            // The same trim as two separate calls, the item first and then the take (or the
+            // other way round): no phase is touched, so each order ends in the same place.
+            const Session twoCalls =
+                edit<Take>(edit<Item>(r.s, r.item,
+                                      [](Item& i) {
+                                          i.position += 2;
+                                          i.length -= 2;
+                                      })
+                               .value(),
+                           r.take, [&](Take& tk) { tk.startOffset += 2 * rate; })
+                    .value();
+            CHECK(heard(twoCalls, r.item) == heard(left, r.item));
+            const Session otherOrder =
+                edit<Item>(
+                    edit<Take>(r.s, r.take, [&](Take& tk) { tk.startOffset += 2 * rate; }).value(),
+                    r.item,
+                    [](Item& i) {
+                        i.position += 2;
+                        i.length -= 2;
+                    })
+                    .value();
+            CHECK(heard(otherOrder, r.item) == heard(left, r.item));
             // The left edge moves out (a negative trim): the same.
             EditTxn u(r.s, r.s.version + 1);
             u.modify<Item>(r.item, [](Item& i) {
