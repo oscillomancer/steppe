@@ -393,4 +393,9 @@ there. Not in X1 or X2.
   - `launch.unfollowed` is given by `launch.clip` and `launch.scene` (once per
     launch) until X4.
   - `follow` with an `item.add` source other than `clip` is `item.follow`.
+- *(2026-11-21, X2 review round 76, H3.)* The note held into the item's start
+  (the X2 note above) is mapped to the place it sounds from, the item's start,
+  but from the clip beat it was written at, not from clip beat 0; and a
+  held-in fragment does not count in "every pass maps alike", so one fragment
+  cannot unroll an item whose whole passes agree.
 

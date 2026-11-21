@@ -2322,7 +2322,11 @@ bars.
     item, naming the first bar.
   - An unrolled item drops the notes it never played (they are heard nowhere);
     its controllers and sysex repeat with the passes.
-  - A note held into the item's start is mapped at the item's start; a
-    pitched note's `folded` counts once per note written.
+  - A note held into the item's start is mapped to the key (or chord) at the
+    item's start, from the clip beat it was written at (in the clip's
+    previous pass), and does not decide whether every pass maps alike: a looped
+    item stays looped when every whole pass maps alike, and the fragment plays
+    the note's own pitch. A pitched note's `folded` counts once per note
+    written.
   - `launch.clip` and `launch.scene` warn `launch.unfollowed` for a clip whose
     `follow` is not `none`, once per launch.

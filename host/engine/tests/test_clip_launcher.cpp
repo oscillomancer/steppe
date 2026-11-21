@@ -1821,3 +1821,40 @@ TEST_CASE("notes that follow to one pitch are one note, and stay so under an edi
     json::Value after = l.run("midi.notes", R"({"item": ")" + item + R"("})");
     CHECK(after["notes"].size() == before["notes"].size());
 }
+
+TEST_CASE("a note held into the item's start is mapped from where it was written") {
+    // The clip's second bar is in C major; its first, in D minor. The take starts at beat 6,
+    // inside the second bar's whole note, so that note sounds from the item's start as a
+    // fragment. It was written in C major, so under C major it does not move (mapped from
+    // the clip's beat 0, D minor, its E would become D).
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "follow": "key",
+                          "notation": "voice lead; 1: r:w; 2: E3:w",
+                          "context": "1: key D minor ~:w\n2: key C major ~:w"})");
+    const model::Id take = l.head().clips.find(id("cl_1"))->takes[0];
+    l.runArgs("take.set",
+              json::parse(R"({"take": ")" + take.str() + R"(", "start_offset": 6})").value());
+    auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    CHECK(pitchesOf(l, laid.find("item")->asString()) ==
+          "52@-2");  // the note began two beats before the item
+}
+
+TEST_CASE("a held-in fragment does not unroll an item whose whole passes map alike") {
+    // As above, looped over four bars from bar 5, with the project in C major at bar 5 and in
+    // D major from bar 6: the fragment at the item's start is in C major, every whole pass is
+    // in D major (+2). The item stays looped over the mapped source.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    l.run("key.set", R"({"at": 20, "tonic": "D", "scale": "major"})");  // bar 6
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "follow": "key",
+                          "notation": "voice lead; 1: r:w; 2: E3:w",
+                          "context": "1: key C major ~:w"})");
+    const model::Id take = l.head().clips.find(id("cl_1"))->takes[0];
+    l.runArgs("take.set",
+              json::parse(R"({"take": ")" + take.str() + R"(", "start_offset": 6})").value());
+    auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const json::Value& row = laid["items"].at(0);
+    CHECK(row.find("followed")->find("unrolled") == nullptr);
+    CHECK(l.head().items.find(id(row.find("item")->asString().c_str()))->loop);
+}

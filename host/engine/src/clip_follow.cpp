@@ -80,7 +80,9 @@ const char* byName(harmony::FollowedBy by) {
 // One heard pass of a note: where it sounds (item beats) and what it maps to.
 struct Occurrence {
     int pass = 0;
-    double on = 0, off = 0;
+    double on = 0, off = 0;  // item beats; `on` is 0 for a note held into the item's start
+    double writtenOn = 0;    // where the note began, before that clamp (negative when held in)
+    bool heldIn = false;
     harmony::Followed followed;
     std::optional<harmony::Key> fromKey, toKey;
     int bar = 1;
@@ -149,7 +151,9 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
             double on = beatOf(n.start, k);
             const double off = std::min(itemBeats, beatOf(n.start + n.length, k));
             if (on >= itemBeats) continue;
-            if (on < 0) {
+            const double written = on;
+            const bool heldIn = on < 0;
+            if (heldIn) {
                 if (off <= 0) continue;
                 on = 0;  // held into the item's start
             }
@@ -157,13 +161,18 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
             o.pass = k;
             o.on = on;
             o.off = off;
+            o.writtenOn = written;
+            o.heldIn = heldIn;
             out.push_back(o);
         }
         return out;
     };
     const auto mapOccurrence = [&](const midi::Note& n, Occurrence& o) {
         const double place = itemStart + o.on;
-        const double inClip = clip.length > 0 ? std::fmod(o.on, clip.length) : 0.0;
+        // The clip beat the note was written at: for a note held into the item's start,
+        // where it began (in the clip's previous pass), not where it sounds from.
+        double inClip = clip.length > 0 ? std::fmod(o.writtenOn, clip.length) : 0.0;
+        if (inClip < 0) inClip += clip.length;
         harmony::Place from{model::keyAt(clip, inClip), model::chordAt(clip, inClip)};
         harmony::Place to{model::keyAt(s, place), model::chordAt(s, place)};
         o.fromKey = from.key;
@@ -172,6 +181,13 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
         o.followed = harmony::follow(n.pitch, from, to, mode);
     };
 
+    // The occurrence whose pitch the note keeps in a looped item: the first whole pass, else
+    // the held-in fragment when that is all there is.
+    const auto lead = [](const std::vector<Occurrence>& h) -> const Occurrence& {
+        for (const Occurrence& o : h)
+            if (!o.heldIn) return o;
+        return h.front();
+    };
     // Map every heard pass of every pitched note.
     std::vector<std::vector<Occurrence>> heard(seq.notes.size());
     bool moved = false, alike = true;
@@ -182,10 +198,12 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
         const midi::Note& n = seq.notes[i];
         if (n.channel == 9) continue;
         heard[i] = occurrencesOf(n);
-        for (Occurrence& o : heard[i]) {
-            mapOccurrence(n, o);
+        for (Occurrence& o : heard[i]) mapOccurrence(n, o);
+        for (const Occurrence& o : heard[i]) {
             moved |= o.followed.pitch != n.pitch;
-            alike &= o.followed.pitch == heard[i].front().followed.pitch;
+            // A fragment held into the item's start does not decide whether every pass maps
+            // alike (it plays the note's own pitch); a note heard only so is its own case.
+            alike &= o.heldIn || o.followed.pitch == lead(heard[i]).followed.pitch;
             if (o.followed.by == harmony::FollowedBy::Copy) {
                 if (!firstNoKeyBar) firstNoKeyBar = o.bar;
                 ++copiedNoKey;
@@ -276,12 +294,12 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
                 for (std::size_t i = 0; i < m.sequence.notes.size() && i < heard.size(); ++i)
                     if (!heard[i].empty())
                         m.sequence.notes[i].pitch =
-                            static_cast<std::uint8_t>(heard[i].front().followed.pitch);
+                            static_cast<std::uint8_t>(lead(heard[i]).followed.pitch);
                 m.sequence.canonicalize();
             });
         }
         for (const auto& h : heard)
-            if (!h.empty() && h.front().followed.folded) ++folded;
+            if (!h.empty() && lead(h).followed.folded) ++folded;
     } else {
         // A pass maps differently from another: the item is laid out pass by pass, each
         // note at its place, with the loop off.
