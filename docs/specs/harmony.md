@@ -234,7 +234,9 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
    octaves, until it is in 0..127, with `folded`. The live player (X4) folds
    alike, so a laid clip and a launched one give the same notes.
 
-Deterministic. It allocates nothing and has no model or engine dependency.
+Deterministic. It allocates nothing (not even a first-use table: it reads the
+constant quality table `chordQualities()` is built from) and has no model or
+engine dependency.
 X4 builds the engine's pitch tables from it.
 
 **Tests (X2; this is the only test list, and ADR-0098 points here):**

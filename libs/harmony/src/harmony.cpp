@@ -137,38 +137,45 @@ bool keySupported(const Key& key) {
 
 // --- chords -------------------------------------------------------------------------------------
 
+namespace {
+
+// The one table of qualities: the map `chordQualities()` builds from it, and `follow` reads it
+// directly, so a chord's tones need no allocation (not even the map's first-use build).
+struct QualityRow {
+    std::string_view name;
+    int count;
+    std::array<int, 6> intervals;
+};
+constexpr std::array<QualityRow, 31> kQualityRows = {{
+    {"", 3, {0, 4, 7, 0, 0, 0}},       {"maj", 3, {0, 4, 7, 0, 0, 0}},
+    {"m", 3, {0, 3, 7, 0, 0, 0}},      {"min", 3, {0, 3, 7, 0, 0, 0}},
+    {"dim", 3, {0, 3, 6, 0, 0, 0}},    {"aug", 3, {0, 4, 8, 0, 0, 0}},
+    {"+", 3, {0, 4, 8, 0, 0, 0}},      {"sus2", 3, {0, 2, 7, 0, 0, 0}},
+    {"sus4", 3, {0, 5, 7, 0, 0, 0}},   {"sus", 3, {0, 5, 7, 0, 0, 0}},
+    {"6", 4, {0, 4, 7, 9, 0, 0}},      {"m6", 4, {0, 3, 7, 9, 0, 0}},
+    {"7", 4, {0, 4, 7, 10, 0, 0}},     {"maj7", 4, {0, 4, 7, 11, 0, 0}},
+    {"M7", 4, {0, 4, 7, 11, 0, 0}},    {"m7", 4, {0, 3, 7, 10, 0, 0}},
+    {"min7", 4, {0, 3, 7, 10, 0, 0}},  {"mMaj7", 4, {0, 3, 7, 11, 0, 0}},
+    {"dim7", 4, {0, 3, 6, 9, 0, 0}},   {"m7b5", 4, {0, 3, 6, 10, 0, 0}},
+    {"ø", 4, {0, 3, 6, 10, 0, 0}},     {"7sus4", 4, {0, 5, 7, 10, 0, 0}},
+    {"add9", 4, {0, 4, 7, 14, 0, 0}},  {"9", 5, {0, 4, 7, 10, 14, 0}},
+    {"maj9", 5, {0, 4, 7, 11, 14, 0}}, {"m9", 5, {0, 3, 7, 10, 14, 0}},
+    {"7b9", 5, {0, 4, 7, 10, 13, 0}},  {"7#9", 5, {0, 4, 7, 10, 15, 0}},
+    {"11", 5, {0, 7, 10, 14, 17, 0}},  {"13", 5, {0, 4, 10, 14, 21, 0}},
+    {"5", 2, {0, 7, 0, 0, 0, 0}},
+}};
+
+}  // namespace
+
 const std::map<std::string, std::vector<int>>& chordQualities() {
-    static const std::map<std::string, std::vector<int>> qualities = {{"", {0, 4, 7}},
-                                                                      {"maj", {0, 4, 7}},
-                                                                      {"m", {0, 3, 7}},
-                                                                      {"min", {0, 3, 7}},
-                                                                      {"dim", {0, 3, 6}},
-                                                                      {"aug", {0, 4, 8}},
-                                                                      {"+", {0, 4, 8}},
-                                                                      {"sus2", {0, 2, 7}},
-                                                                      {"sus4", {0, 5, 7}},
-                                                                      {"sus", {0, 5, 7}},
-                                                                      {"6", {0, 4, 7, 9}},
-                                                                      {"m6", {0, 3, 7, 9}},
-                                                                      {"7", {0, 4, 7, 10}},
-                                                                      {"maj7", {0, 4, 7, 11}},
-                                                                      {"M7", {0, 4, 7, 11}},
-                                                                      {"m7", {0, 3, 7, 10}},
-                                                                      {"min7", {0, 3, 7, 10}},
-                                                                      {"mMaj7", {0, 3, 7, 11}},
-                                                                      {"dim7", {0, 3, 6, 9}},
-                                                                      {"m7b5", {0, 3, 6, 10}},
-                                                                      {"ø", {0, 3, 6, 10}},
-                                                                      {"7sus4", {0, 5, 7, 10}},
-                                                                      {"add9", {0, 4, 7, 14}},
-                                                                      {"9", {0, 4, 7, 10, 14}},
-                                                                      {"maj9", {0, 4, 7, 11, 14}},
-                                                                      {"m9", {0, 3, 7, 10, 14}},
-                                                                      {"7b9", {0, 4, 7, 10, 13}},
-                                                                      {"7#9", {0, 4, 7, 10, 15}},
-                                                                      {"11", {0, 7, 10, 14, 17}},
-                                                                      {"13", {0, 4, 10, 14, 21}},
-                                                                      {"5", {0, 7}}};
+    static const std::map<std::string, std::vector<int>> qualities = [] {
+        std::map<std::string, std::vector<int>> table;
+        for (const QualityRow& row : kQualityRows)
+            table.emplace(
+                std::string(row.name),
+                std::vector<int>(row.intervals.begin(), row.intervals.begin() + row.count));
+        return table;
+    }();
     return qualities;
 }
 
@@ -483,25 +490,36 @@ struct Tone {
     int slot = 0;
     int pitchClass = 0;
 };
-std::vector<Tone> tonesOf(const Chord& chord) {
-    std::vector<Tone> out;
-    const auto& table = chordQualities();
-    const auto it = table.find(chord.quality);
-    if (it == table.end()) return out;
-    for (const int interval : it->second) {
-        const int slot = slotOf(interval);
-        if (slot < 0) continue;
-        out.push_back({slot, floorMod(pcOf(chord.root) + interval, 12)});
+// A chord's tones, in the table's order (no quality has more than six).
+struct Tones {
+    std::array<Tone, 6> tone{};
+    int count = 0;
+    const Tone* begin() const { return tone.data(); }
+    const Tone* end() const { return tone.data() + count; }
+    bool empty() const { return count == 0; }
+};
+Tones tonesOf(const Chord& chord) {
+    Tones out;
+    for (const QualityRow& row : kQualityRows) {
+        if (row.name != chord.quality) continue;
+        for (int i = 0; i < row.count; ++i) {
+            const int interval = row.intervals[static_cast<std::size_t>(i)];
+            const int slot = slotOf(interval);
+            if (slot < 0) continue;
+            out.tone[static_cast<std::size_t>(out.count++)] = {
+                slot, floorMod(pcOf(chord.root) + interval, 12)};
+        }
+        break;
     }
     return out;
 }
-const Tone* toneInSlot(const std::vector<Tone>& tones, int slot) {
+const Tone* toneInSlot(const Tones& tones, int slot) {
     for (const Tone& t : tones)
         if (t.slot == slot) return &t;
     return nullptr;
 }
 // The highest tone below `slot`, the root at least.
-const Tone* toneBelow(const std::vector<Tone>& tones, int slot) {
+const Tone* toneBelow(const Tones& tones, int slot) {
     const Tone* best = nullptr;
     for (const Tone& t : tones)
         if (t.slot < slot && (!best || t.slot > best->slot)) best = &t;
@@ -540,7 +558,7 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode) 
         byKey();
         return out;
     }
-    const std::vector<Tone> fromTones = tonesOf(*from.chord), toTones = tonesOf(*to.chord);
+    const Tones fromTones = tonesOf(*from.chord), toTones = tonesOf(*to.chord);
     if (fromTones.empty() || toTones.empty()) {  // a quality the table does not hold
         byKey();
         return out;

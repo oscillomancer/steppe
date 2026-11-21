@@ -5,12 +5,37 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
+#include <new>
 #include <random>
 #include <set>
 #include <sstream>
 
 using namespace supple::harmony;
+
+// Counts the global allocations, to show `follow` makes none. Not under a sanitizer, which
+// brings its own allocator.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define HARMONY_NO_ALLOCATION_COUNT 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+    __has_feature(realtime_sanitizer)
+#define HARMONY_NO_ALLOCATION_COUNT 1
+#endif
+#endif
+#ifndef HARMONY_NO_ALLOCATION_COUNT
+namespace {
+std::atomic<long> gAllocations{0};
+}
+void* operator new(std::size_t size) {
+    gAllocations.fetch_add(1, std::memory_order_relaxed);
+    if (void* p = std::malloc(size ? size : 1)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+#endif
 
 namespace {
 
@@ -605,3 +630,24 @@ TEST_CASE("follow never fails: any pitch, any pair of places, lands in range") {
                     CHECK(f.pitch <= 127);
                 }
 }
+
+#ifndef HARMONY_NO_ALLOCATION_COUNT
+TEST_CASE("follow allocates nothing, the first call included") {
+    // harmony.md section 5: X4 builds its tables from follow, so it must not touch the heap.
+    // The places are built first; only the calls are counted.
+    const Place cmaj7 = keyChord("C", Scale::Major, "Cmaj7");
+    const Place dm7 = keyChord("D", Scale::Minor, "Dm7");
+    const Place c11 = keyChord("Eb", Scale::Major, "C11/Bb");
+    const Place none;
+    const long before = gAllocations.load();
+    int sum = 0;
+    for (int pitch = 0; pitch <= 127; ++pitch)
+        for (const FollowMode mode : {FollowMode::Key, FollowMode::Chords})
+            for (const Place* from : {&cmaj7, &c11, &none})
+                for (const Place* to : {&dm7, &cmaj7, &none})
+                    sum += follow(pitch, *from, *to, mode).pitch;
+    const long made = gAllocations.load() - before;
+    CHECK(made == 0);
+    CHECK(sum > 0);
+}
+#endif

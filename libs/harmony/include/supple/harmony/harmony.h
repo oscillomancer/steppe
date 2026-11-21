@@ -139,7 +139,8 @@ int tonicInterval(PitchClass a, PitchClass b);
 
 // A MIDI pitch (0..127) written against `from`, mapped to `to` (docs/specs/harmony.md §5).
 // It never fails: what cannot be mapped is copied (`Copy`), and a result outside 0..127
-// is folded by octaves. Deterministic, allocation-free apart from the quality lookup.
+// is folded by octaves. Deterministic and allocation-free: it reads constant tables and
+// holds nothing on the heap, so a caller needs no setup before it (X4 builds tables from it).
 Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
 
 // --- context ------------------------------------------------------------------------------------
