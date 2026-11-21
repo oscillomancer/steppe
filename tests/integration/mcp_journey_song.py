@@ -352,9 +352,11 @@ def perform(j):
     j.exec("launch.capture", {"on": True}, "Start capturing launches.")
     assert j.exec("launch.state", {}, "Capturing?")["capturing"]
     beats = []
+    clips_launched = 0
     for scene in ("sc_1", "sc_2", "sc_3", "sc_4"):
         launched = j.launch_when_ready("launch.scene", {"scene": scene}, f"Launch {scene}.")
         beats.append(launched["beat"])
+        clips_launched += len(launched["tracks"])
         # Into the second bar of the scene, so the next launch lands on a later bar line.
         deadline = time.monotonic() + TIMEOUT
         while j.beat() < launched["beat"] + 4.5:
@@ -373,7 +375,8 @@ def perform(j):
     j.exec("transport.stop", {}, "Stop.")
     committed = j.exec("launch.commit", {}, "Lay the performance on the timeline.")
     assert committed["tracks"] == ["tr_1", "tr_2", "tr_3"], committed
-    assert len(committed["items"]) >= 11, committed  # 3 + 2 + 3 + 3 clips played, a period each
+    # One item for each clip launched (3 + 2 + 3 + 3), however late each launch landed.
+    assert len(committed["items"]) == clips_launched == 11, (clips_launched, committed)
     assert (committed["from"], committed["to"]) == (end["from"], end["to"]), committed
     # Each scene launched whole is a section named after it, from its launch to the next
     # one's (the last to the capture's end), as scene.insert makes one.

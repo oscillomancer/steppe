@@ -98,7 +98,7 @@ SONG_CHORDS = """1: key C minor {Cm7}:w
 
 # Only a hang ends a poll: every condition polled for here takes a few seconds on any machine
 # that plays in real time, so the limit is far above what a slow runner needs, and below
-# ctest's own test timeout (1500 s).
+# the journeys' ctest TIMEOUT (1800 s; the preset default is 600 s).
 TIMEOUT = 600.0
 
 
@@ -333,8 +333,9 @@ def live(j, ids):
     launched = j.exec("launch.scene", {"scene": "sc_3"}, "Launch the Break scene.")
     assert launched["started"] and launched["beat"] == 0.0, launched
     assert [t["track"] for t in launched["tracks"]] == ["tr_1", "tr_2"], launched
+    # The bass is a once clip, a second long at this tempo: a slow poll may find it ended.
     state = j.wait("Break plays on both tracks",
-                   lambda s: s["tr_1"]["plays"] == "clip" and s["tr_2"]["plays"] == "clip")
+                   lambda s: s["tr_1"]["plays"] == "clip" and s["tr_2"]["plays"] in ("clip", "held"))
     assert state["tr_1"]["clip"] == ids[("sc_3", "tr_1")]["clip"], state
     assert state["tr_3"]["plays"] == "arrangement", "tracks outside the scene are untouched"
     # Both clips started on the same beat, so they are at the same place.

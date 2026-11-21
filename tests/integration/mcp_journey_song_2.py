@@ -511,9 +511,11 @@ def perform(j):
     before = j.described()
     j.exec("launch.capture", {"on": True}, "Capture.")
     beats = []
+    clips_launched = 0
     for scene in ("sc_1", "sc_2", "sc_3"):
         launched = j.launch_when_ready("launch.scene", {"scene": scene}, f"Launch {scene}.")
         beats.append(launched["beat"])
+        clips_launched += len(launched["tracks"])
         poll(f"the transport passes {launched['beat'] + 4.5}",
              lambda: j.beat() >= launched["beat"] + 4.5)
     # A launch lands on the next bar line after its call, so a slow call lands later: the
@@ -527,7 +529,8 @@ def perform(j):
     assert [(s["scene"], s["start"]) for s in committed["sections"]] == [
         ("sc_1", beats[0]), ("sc_2", beats[1]), ("sc_3", beats[2])], committed
     assert committed["sections"][2]["end"] == end["to"], committed
-    assert len(committed["items"]) >= 12, committed  # four clips in each of three scenes
+    # One item for each clip launched (four in each of three scenes), however late.
+    assert len(committed["items"]) == clips_launched == 12, (clips_launched, committed)
     for beat, name in zip(beats, ("Verse", "Hook", "Bridge")):
         bar = int(beat // 4) + 1
         found = j.exec("context.at", {"bar": bar}, f"The section over bar {bar}.")
