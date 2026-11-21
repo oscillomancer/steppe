@@ -1638,7 +1638,15 @@ clip is edited, its context included:
   chord points fill the strip's chord row, the last cell ending with the
   clip, and its key points a key row under it (a tick and the key's name at
   each, as on the context track's ruler). A degree drag previews in the clip's key at the note's clip beat, as
-  `midi.edit` commits it. Without a key the key button is disabled ("No
+  `midi.edit` commits it. The roll's axis is the take's content and the
+  context runs in clip beats, so a looped clip's is read through its loop
+  window as the engine reads it (`gui::ClipContextAxis`, the engine's
+  `clipSoundingBeats`): a note in the window reads the clip beat of its first
+  pass (content beat − loop start), one outside it, which never sounds, its
+  content beat kept inside the clip. The strip shows the first pass, from the
+  loop's start; points in later passes are edited by command, and a point
+  dropped or set outside the loop is refused in the status line. Without a
+  key the key button is disabled ("No
   key"); when degree mode was on it goes off and the status line says why
   (`midi.edit` would refuse with `midi.no_key`).
 - A double-click on the chord row edits the clip's chord there (the chord
@@ -1669,7 +1677,10 @@ clip is edited, its context included:
 Tests: test_midi_editor "a clip in another key than the project's: degrees
 preview what commits" (review round 73, F4), "a clip's key and chords are
 edited in its roll", "a clip's chords and keys drag to another beat in its
-strip", "a clip opens with all its notes in view under its taller strip", "a
+strip", "a looped clip's key is read through its loop: degrees preview what
+commits" and "a looped clip's chords and keys drag inside its loop" (review
+round 77, L1), "clip context axis: the roll reads each note's key where
+midi.edit does", "a clip opens with all its notes in view under its taller strip", "a
 clip laid in another key shows its notes outside the key", "a launcher clip opens at beat 0 in its own key and chords", and
 "clip context edit: the printed lead sheet …".
 
