@@ -22,7 +22,8 @@ none to snap to, a clip take's FX take no modulation), and it plays only the pat
 works. A clip keeps the key and chords it was written against (ADR-0098): the drums and
 the bass are written with `context_at` where their scene sits in the song, the keys with
 chord symbols, and the Break's bass snaps within D minor though the project starts in
-C minor. Nothing here
+C minor. The Verse is written once, in C minor: laid under D minor it warns, and laid
+with `follow: key` its bass lands in D minor beside its unmoved drums. Nothing here
 decides by a wall clock: the live stage polls the transport and the modulation
 telemetry, and the timeout only turns a hang into a failure.
 
@@ -530,7 +531,7 @@ def other_direction(j, built):
     for route in ("mr_1", "mr_2", "mr_3"):
         assert route in after, route
     # A scene laid under another key says so: the Verse was written in C minor, and from the
-    # Break on the song is in D minor. Its notes are copied as they are.
+    # Break on the song is in D minor. Its notes are copied as they are (follow: none).
     mismatched = j.exec("scene.insert", {"scene": "sc_2", "bars": 4, "bar": 40},
                         "The Verse, written in C minor, laid under D minor.")
     warnings = [w for w in mismatched.get("warnings", []) if w["code"] == "context.mismatch"]
@@ -538,6 +539,29 @@ def other_direction(j, built):
     assert len(warnings) == 1 and "cl_4" in warnings[0]["message"], mismatched.get("warnings")
     assert all("C minor" in w["message"] and "D minor" in w["message"] and "bar 40" in w["message"]
                for w in warnings), warnings
+    j.undo()
+    # The Verse is written once, in C minor, and asked to follow the key it is laid under:
+    # the bass lands in D minor (C minor's root C2 is D2, its Fm is Gm, Ab is Bb, G is A),
+    # the drums are not moved, and the keys clip, which names no key, is copied and says so.
+    followed = j.exec("scene.insert", {"scene": "sc_2", "bars": 4, "bar": 40, "follow": "key"},
+                      "The same Verse, asked to follow the key: it lands in D minor.")
+    assert not [w for w in followed.get("warnings", []) if w["code"] == "context.mismatch"], \
+        followed.get("warnings")
+    rows = {row["clip"]: row for row in followed["items"]}
+    bass_row = rows["cl_4"]["followed"]
+    assert bass_row["mode"] == "key" and "unrolled" not in bass_row, bass_row
+    assert bass_row["regions"] == [{"from_bar": 40, "to_bar": 43, "from_key": "C minor",
+                                    "to_key": "D minor", "by": "transpose", "interval": 2}], bass_row
+    assert rows["cl_3"]["followed"]["copied"] == "drums", rows["cl_3"]
+    assert rows["cl_5"]["followed"]["copied"] == "no_key", rows["cl_5"]
+    laid_bass = j.exec("midi.notes", {"item": rows["cl_4"]["item"]}, "The bass as laid.")
+    assert {n["pitch"] for n in laid_bass["notes"]} == {38, 43, 34, 33}, laid_bass["notes"]
+    clip_bass = j.exec("midi.notes", {"item": "cl_4"}, "The bass clip, unchanged.")
+    assert {n["pitch"] for n in clip_bass["notes"]} == {36, 41, 32, 31}, clip_bass["notes"]
+    clip_drums = j.exec("midi.notes", {"item": "cl_3"}, "The drums clip.")
+    laid_drums = j.exec("midi.notes", {"item": rows["cl_3"]["item"]}, "The drums as laid.")
+    assert [(n["start"], n["pitch"]) for n in laid_drums["notes"]] == \
+        [(n["start"], n["pitch"]) for n in clip_drums["notes"]], "the drums are not moved"
     j.undo()
 
 
