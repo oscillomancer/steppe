@@ -3865,6 +3865,54 @@ TEST_CASE("clip context edit: the printed lead sheet covers the clip's bars in t
     CHECK(gui::withContextPoint(points, chord, true).size() == 2);
 }
 
+TEST_CASE("MIDI editor: a clip laid in another key shows its notes outside the key") {
+    // ADR-0098 X3: items keep no link to their clip, so the item's roll shows
+    // the mismatch by what it can see: notes outside the key at their beat.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"A","scale":"minor"})");
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add", R"({"track":")" + track +
+                               R"(","scene":"sc_1","name":"Riff",)"
+                               R"("notation":"voice k; 1: D4:q F#4:q A4:q C#5:q",)"
+                               R"("context":"1: key D major ~:w"})")
+            .find("clip")
+            ->asString();
+    // In its own key, the clip has none outside it.
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    auto& s = f.editor->state();
+    for (const gui::RollNote& n : s.notes) CHECK_FALSE(s.outsideKey(n));
+    CHECK(f.root->find("midi.title")->valueText().find("outside") == std::string::npos);
+    // Laid in A minor (the engine warns context.mismatch): F#4 and C#5 are
+    // outside A minor, outlined, and the title counts them.
+    const json::Value laid = f.exec(
+        "item.add", R"({"track":")" + track + R"(","position":16,"clip":")" + clip + R"("})");
+    bool warned = false;
+    if (const json::Value* w = laid.find("warnings"))
+        for (const json::Value& e : w->asArray())
+            warned |= e.find("code") && e.find("code")->asString() == "context.mismatch";
+    CHECK(warned);
+    REQUIRE(f.editor->open(laid.find("item")->asString()));
+    f.frame();
+    std::vector<int> outside;
+    for (const gui::RollNote& n : s.notes)
+        if (s.outsideKey(n)) outside.push_back(n.pitch);
+    CHECK(outside == std::vector<int>{66, 73});
+    CHECK(f.root->find("midi.title")->valueText().find("· 2 outside the key") != std::string::npos);
+    // Drums (channel 10) are never counted.
+    const std::string drums =
+        f.exec("item.add", R"({"track":")" + track +
+                               R"(","position":24,"notation":"voice d ch 10; 1: C#2:q D#2:q r:h"})")
+            .find("item")
+            ->asString();
+    REQUIRE(f.editor->open(drums));
+    f.frame();
+    CHECK(f.root->find("midi.title")->valueText().find("outside") == std::string::npos);
+}
+
 TEST_CASE("MIDI editor: a launcher clip opens at beat 0 in its own key and chords") {
     Fixture f;
     if (!f.ok) return;

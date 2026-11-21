@@ -106,6 +106,15 @@ std::optional<harmony::Key> RollState::keyAt(double projectBeat) const {
     return key;
 }
 
+bool RollState::outsideKey(const RollNote& note) const {
+    if (note.channel == 10) return false;  // General MIDI drums
+    const auto key = keyAt(itemPosition + note.start);
+    if (!key) return false;
+    const int pc = ((note.pitch % 12) + 12) % 12;
+    const std::vector<int> classes = harmony::keyPitchClasses(*key);
+    return std::find(classes.begin(), classes.end(), pc) == classes.end();
+}
+
 double RollState::snapBeat(double itemBeat) const {
     if (!snap || grid <= 0) return itemBeat;
     const double project = itemPosition + itemBeat;
@@ -256,7 +265,10 @@ class Roll : public ui::Node {
                 continue;
             const bool sel = s_.selected.contains(i);
             c.fillRound(r, 2, velocityColor(t, s_, n.velocity, sel));
-            c.strokeRound(r, 2, sel ? t.color("ink") : t.color("ground").withAlpha(0.7f));
+            c.strokeRound(r, 2,
+                          sel                ? t.color("ink")
+                          : s_.outsideKey(n) ? t.color("meter-hot")
+                                             : t.color("ground").withAlpha(0.7f));
             if (r.w > 34 && s_.rowHeight >= 11)
                 c.text({r.x + 3, r.y, r.w - 4, r.h},
                        harmony::spell(n.pitch, s_.keyAt(s_.itemPosition + n.start)), ui::Font::Ui,
@@ -1971,6 +1983,9 @@ Status MidiEditor::reload() {
                            (label.empty() ? state_.item : label);
                 }
         titleBase_ = "MIDI · " + name + " · " + std::to_string(state_.notes.size()) + " notes";
+        const auto outside = std::count_if(state_.notes.begin(), state_.notes.end(),
+                                           [&](const RollNote& n) { return state_.outsideKey(n); });
+        if (outside > 0) titleBase_ += " · " + std::to_string(outside) + " outside the key";
         refreshTitle();
     }
     if (roll_) roll_->invalidate();

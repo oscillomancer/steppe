@@ -136,6 +136,12 @@ struct RollState {
     };
     std::vector<ChordMark> chords;
     std::optional<harmony::Key> keyAt(double projectBeat) const;
+    // A note off channel 10 whose pitch is not in the key holding at its
+    // start (none holding: false). The roll outlines it, and the title
+    // counts them: a clip laid in another key than the place's (ADR-0098
+    // context.mismatch) shows on the item's roll, and a clip's notes outside
+    // its own key show on its.
+    bool outsideKey(const RollNote& note) const;
     // The key button (gui.md §4.7): a pitch drag and the arrow keys move the
     // selected notes by scale degrees of the key at each note's beat
     // (harmony::transposeDegrees, as midi.edit's transpose_degrees does).
