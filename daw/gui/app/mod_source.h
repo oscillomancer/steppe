@@ -42,6 +42,10 @@ struct ModSourceView {
 };
 std::optional<ModSourceView> modSourceView(const model::Session& s, model::Id route);
 
+// The routes that move something of `track`: its own controls, its effects'
+// parameters (chain and input chain) and its sends', in id order.
+std::vector<model::Id> modRoutesOfTrack(const model::Session& s, model::Id track);
+
 // Runs ui.modulation.source for `route`; its error goes to actions.onError.
 void showModSource(AppActions& actions, model::Id route);
 

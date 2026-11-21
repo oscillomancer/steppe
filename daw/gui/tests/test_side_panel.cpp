@@ -30,11 +30,13 @@
 #include "supple/ui/forms.h"
 #include "supple/ui/gl.h"
 #include "supple/ui/list.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
 
 using namespace supple;
 
@@ -370,6 +372,65 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     f.side->show("inspector");
     f.pass();
     CHECK(f.text("inspector.title") == "buss_1");
+}
+
+TEST_CASE("inspector: a track's Modulation row leads to each source, 'N routes' past four") {
+    // gui.md §4.14: shown only while something of the track is modulated.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string bass = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    std::vector<std::string> shown;
+    f.actions->addUiFor("ui.modulation.source", "Modulation: show source", "modulation",
+                        [&](const json::Value& v) -> Status {
+                            shown.push_back(v.asString());
+                            return {};
+                        });
+    f.side->show("inspector");
+    f.ui.selectedTracks = {bass};
+    f.ui.tracksFocused = true;
+    f.pass();
+    REQUIRE(f.inView("inspector.track"));
+    CHECK_FALSE(f.inView("inspector.row.track.modulation"));  // nothing modulated: no row
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + bass + R"(","param":"volume"},"source":"lfo"})");
+    const std::string route = made["modulation"].asString();
+    const std::string modOut = made["mod_out"].asString();
+    f.pass();
+    REQUIRE(f.inView("inspector.row.track.modulation"));
+    auto* line = dynamic_cast<ui::Button*>(f.node("inspector.track.modulation." + route));
+    REQUIRE(line);
+    CHECK(line->valueText() == "Volume");
+    CHECK(line->mark() == std::string(views::kModMark) + " LFO");
+    // One click: its source.
+    f.root->click(line->id());
+    CHECK(shown == std::vector<std::string>{route});
+    // Five routes: one line, "5 routes", whose menu lists them.
+    for (int i = 2; i <= 5; ++i)
+        f.exec("modulation.add", R"({"source":{"module":")" + modOut + R"(","input":"in_)" +
+                                     std::to_string(i) + R"("},"target":{"track":")" + bass +
+                                     R"(","param":")" + (i % 2 ? "volume" : "pan") +
+                                     R"("},"depth":2})");
+    f.pass();
+    CHECK_FALSE(f.root->find("inspector.track.modulation." + route));
+    auto* all = dynamic_cast<ui::Button*>(f.node("inspector.track.modulation.all"));
+    REQUIRE(all);
+    CHECK(all->valueText() == "5 routes");
+    f.root->click(all->id());
+    f.pass();
+    ui::Node* menu = f.root->find("inspector.modulation.menu");
+    REQUIRE(menu);
+    const auto items = ui::menuItems(*menu);
+    REQUIRE(items.size() == 5);
+    CHECK(items[0].label == "Volume " + std::string(views::kModMark) + " LFO");
+    CHECK(items[1].label == "Pan " + std::string(views::kModMark) + " Mod 2");
+    items[1].run();
+    CHECK(shown.size() == 2);
+    f.root->closePopups();
+    // Two tracks selected: no row (it is one track's).
+    const std::string keys = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    f.ui.selectedTracks = {bass, keys};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.row.track.modulation"));
 }
 
 TEST_CASE("inspector: positions read and write as bar.beat.thousandths, in the bar's meter") {

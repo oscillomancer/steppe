@@ -60,6 +60,21 @@ std::optional<ModSourceView> modSourceView(const model::Session& s, model::Id ro
     return view;
 }
 
+std::vector<model::Id> modRoutesOfTrack(const model::Session& s, model::Id track) {
+    std::vector<model::Id> out;
+    for (const auto& m : s.modulations) {
+        const model::Id object = m.value->target.object;
+        const model::Route* send =
+            object.kind == model::Kind::Route ? s.routes.find(object) : nullptr;
+        if (object == track ||
+            (object.kind == model::Kind::Fx && model::trackOfFx(s, object) == track) ||
+            (send && send->from.track == track))
+            out.push_back(m.id);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 void showModSource(AppActions& actions, model::Id route) {
     const actions::Action* action = actions.registry().find("ui.modulation.source");
     if (!action) return;
