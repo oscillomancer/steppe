@@ -2090,9 +2090,24 @@ Status MidiEditor::reload() {
                            (label.empty() ? state_.item : label);
                 }
         titleBase_ = "MIDI · " + name + " · " + std::to_string(state_.notes.size()) + " notes";
-        const auto outside = std::count_if(state_.notes.begin(), state_.notes.end(),
-                                           [&](const RollNote& n) { return state_.outsideKey(n); });
-        if (outside > 0) titleBase_ += " · " + std::to_string(outside) + " outside the key";
+        // Named when one key holds over every such note: "3 outside A minor".
+        std::size_t outside = 0;
+        std::optional<harmony::Key> which;
+        bool one = true;
+        for (const RollNote& n : state_.notes) {
+            if (!state_.outsideKey(n)) continue;
+            const auto key = state_.keyAt(state_.itemPosition + n.start);
+            one = one && (!which || which == key);
+            which = key;
+            ++outside;
+        }
+        if (outside > 0) {
+            std::string scale(harmony::scaleName(which->scale));
+            std::replace(scale.begin(), scale.end(), '_', ' ');
+            titleBase_ += " · " + std::to_string(outside) + " outside " +
+                          (one ? harmony::printPitchClass(which->tonic) + " " + scale
+                               : std::string("the key"));
+        }
         refreshTitle();
     }
     if (roll_) roll_->invalidate();

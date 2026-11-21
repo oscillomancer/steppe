@@ -3976,7 +3976,7 @@ TEST_CASE("MIDI editor: a clip laid in another key shows its notes outside the k
     for (const gui::RollNote& n : s.notes)
         if (s.outsideKey(n)) outside.push_back(n.pitch);
     CHECK(outside == std::vector<int>{66, 73});
-    CHECK(f.root->find("midi.title")->valueText().find("· 2 outside the key") != std::string::npos);
+    CHECK(f.root->find("midi.title")->valueText().find("· 2 outside A minor") != std::string::npos);
     // Drums (channel 10) are never counted.
     const std::string drums =
         f.exec("item.add", R"({"track":")" + track +
