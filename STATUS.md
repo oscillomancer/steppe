@@ -831,7 +831,13 @@ instructions are in `docs/guides/installing.md`.
   the playhead, and an editable row for each modulatable parameter of a
   plain CLAP plug-in. With M4 a parameter reached through its envelope
   (`modulatable_by_envelope`, any VST3 one) takes Modulate too, and an
-  inert route draws idle, with the reason in the parameter menu. The FX window's live value on a modulated slider is
+  inert route draws idle, with the reason in the parameter menu. A
+  modulated plug-in shows "~" on its mixer slot and on its chain's "fx"
+  (track panel and mixer). A lane's header names the parameter first and
+  has a "mod" cell (a modulation-only lane gets title, mod and hide). The
+  inspector lists one track's routes (past four, "N routes"), and the
+  controls' menus have Show modulation source; each opens the rack window
+  with the source picked. The FX window's live value on a modulated slider is
   untested with a running plug-in (the mixer's, which shares its code, is
   tested with the engine running). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next

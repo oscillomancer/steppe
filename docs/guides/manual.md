@@ -1158,6 +1158,19 @@ change how deep the modulation goes. A plug-in without its own parameter
 descriptions lists its parameters in the FX window; those it lets you
 modulate have a slider there.
 
+A violet "~" says that something is modulated. It appears at the right of
+a plug-in in the mixer when one of its parameters is, and after "fx" on
+the track (in the track list and the mixer) when any plug-in in its chain
+is. Selecting the track shows a **Modulation** row in the inspector: each
+modulated parameter with its source ("Marram · Filter 1 Cutoff ~ LFO"), or
+"5 routes" when there are more than four. Click a line to open the rack
+window with that source picked. A modulated parameter's lane has a
+**mod** button that does the same (with a short list when several sources
+move it), and its title names the parameter first ("Filter 1 Cutoff ·
+Marram"). On a fader, pan or FX parameter, the right-click menu's **Show
+modulation source** takes you there too; clicking the violet bar only
+changes the depth.
+
 ## Timing audio with hits and stretch markers
 
 Items have two menus. Right-click an item for the everyday edits: cut, copy,
