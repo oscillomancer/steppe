@@ -2726,12 +2726,15 @@ same heights, scroll and colours.
 - **A clip** is a small item: a name bar in its colour (the track's when it
   has none) and its content drawn by the shared item-body functions
   (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
-  muted clip is dimmed, as a muted item is. While the master playrate is
-  not 1 or its envelope is active the engine refuses every launch
-  (`launch.playrate`), so every clip and the scenes' ▶ draw dimmed the same
-  way (`views::launchesRefused`, the plan's condition read from the
-  session); a click still asks, and the refusal's message reaches the status
-  line.
+  muted clip is dimmed, as a muted item is. Clips launch under a master
+  playrate; the engine refuses only an audio clip while the playrate keeps
+  the pitch at other than a steady 1 (`launch.playrate`), and the pane dims
+  exactly those, and the scenes' ▶ whose launch would start one, the same
+  way (`views::launchRefused`, `views::sceneLaunchRefused`). The engine does
+  not report which clips it would refuse, so that function mirrors its one
+  check (launch_runtime.cpp, `Engine::launch`) from the session; a MIDI-clock
+  chase, which stretches too, is not seen. A click still asks, and the
+  refusal's message reaches the status line.
   - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
     name bar's ink while idle).
   - **Playing:** the ▶, an outline, and a progress line along the bottom
@@ -2832,9 +2835,11 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   undo step and arming; refused twice, a third click drops it. After a
   commit at stop the tracks are back on the arrangement, or queued to it.
   An agent's capture lights the cell, and a click on it ends and commits it.
-- With a master playrate on: the pane and the scenes' ▶ dimmed (golden
-  `launcher-refused-dark.png`), a ▶ click refused with `launch.playrate`
-  through the launcher's error hook, undimmed again at rate 1.
+- A master playrate: at a rate that moves the pitch nothing dims; keeping
+  the pitch, the audio clip and its scene's ▶ dim and nothing else (golden
+  `launcher-refused-dark.png`), its ▶ click is refused with
+  `launch.playrate` through the launcher's error hook while a MIDI clip's
+  launches, and nothing dims again at rate 1.
 - The clip menu's Take FX… handing the app the active take, and the FX
   window opening a clip's take chain.
 - A scene dragged onto the lanes (its ghost, the command, the section and

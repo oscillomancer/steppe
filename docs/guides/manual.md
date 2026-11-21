@@ -1689,9 +1689,10 @@ their own project: after you open another one, there is nothing to paste. The in
 colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
 chords) says how the clip's notes are to be mapped onto the song's key when
 it is laid; it needs a key at the clip's start, and until following is built
-a laid clip is copied as it is. While the master
-playrate is not 1 (or its envelope is on), clips can't be launched: the
-pane draws them dimmed, and a click says why in the status line.
+a laid clip is copied as it is. Clips launch under a master playrate, but
+while it keeps the pitch an audio clip can't be launched: the pane draws
+those clips (and the scenes holding one) dimmed, and a click says why in
+the status line.
 
 In the piano roll a clip starts at its own bar 1. It has no place in the
 song, so it keeps the key and chords it was written against, and the roll

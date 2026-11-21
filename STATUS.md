@@ -292,7 +292,10 @@ instructions are in `docs/guides/installing.md`.
   its longest clip's whole bars, with a drop marker while dragged), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
   status line. The clip menu's Take FX… opens a clip's take chain, and with
-  a master playrate on the pane draws dimmed. Limits:
+  under a pitch-keeping master playrate the pane dims the audio clips (and
+  their scenes' ▶) the engine refuses to launch, by a mirror of the
+  engine's check until the engine reports it (a MIDI-clock chase is not
+  seen). Limits:
   - there is no dialog for `arrangement.build`;
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
