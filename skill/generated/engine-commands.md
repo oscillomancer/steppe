@@ -13366,7 +13366,7 @@ Result:
 
 Set a module's knobs, label, place or bypass.
 
-params merge into its knobs (values in the knob's units; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. Notes source/device accept null to clear them (source returns to the home track; device to none). source: none disables the track feed while keeping routes and device. source_sends: false stops it hearing MIDI sends into its source track (its own sends and device still play). bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
+params merge into its knobs (a number in the knob's unit, or text in it, "80 %" or "1.2 kHz"; a percent knob such as a Macro's runs 0 to 100; a choice by key; a default value is dropped from the file). A knob edit is heard at once, without a recompile. Notes source/device accept null to clear them (source returns to the home track; device to none). source: none disables the track feed while keeping routes and device. source_sends: false stops it hearing MIDI sends into its source track (its own sends and device still play). bypass passes each input to the output of its kind. label names it (an Out module's label is what channels' input menus list). preset: a factory preset by name (module.describe lists them): every knob to it, then params on top.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 

@@ -2,12 +2,15 @@
 // Copyright (c) 2026 Supple Audio
 // Modular racks' commands (ADR-0062, rack.md §7): racks, modules and cables.
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
 #include <random>
 #include <set>
 
@@ -228,6 +231,46 @@ std::string_view kindName(sd::ParamModel::Kind k) {
                              : "number";
 }
 
+// A knob given as text, "80 %" or "1.2 kHz": a number and the knob's own unit
+// (kHz for Hz and s for ms as well), in that unit. A bare number in a knob's
+// value is the same number in its unit already. Nothing else is accepted (a
+// knob with no unit takes no text).
+std::optional<double> knobFromText(const sd::ParamModel& p, const std::string& text) {
+    const std::string unit(unitName(p.unit));
+    if (unit.empty()) return std::nullopt;
+    std::size_t i = 0;
+    while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;
+    const char* first = text.c_str() + i;
+    char* end = nullptr;
+    const double v = std::strtod(first, &end);
+    if (end == first || !std::isfinite(v)) return std::nullopt;
+    std::string suffix(end);
+    const auto b = suffix.find_first_not_of(" \t"), e = suffix.find_last_not_of(" \t");
+    suffix = b == std::string::npos ? std::string() : suffix.substr(b, e - b + 1);
+    const auto same = [&](std::string_view a, std::string_view b) {
+        return a.size() == b.size() &&
+               std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+                   return std::tolower(static_cast<unsigned char>(x)) ==
+                          std::tolower(static_cast<unsigned char>(y));
+               });
+    };
+    if (suffix.empty() || same(suffix, unit)) return v;
+    if (p.unit == sd::ParamModel::Unit::Hertz && same(suffix, "kHz")) return v * 1000.0;
+    if (p.unit == sd::ParamModel::Unit::Milliseconds && same(suffix, "s")) return v * 1000.0;
+    return std::nullopt;
+}
+
+// A knob's value as a number: given as one, or as text in its unit.
+bool numberKnob(const sd::ParamModel& p, const json::Value& v) {
+    if (v.isNumber()) return std::isfinite(v.asDouble());
+    return v.isString() && knobFromText(p, v.asString()).has_value();
+}
+json::Value numberFromText(const sd::ParamModel& p, const json::Value& v) {
+    if (v.isString())
+        if (const auto n = knobFromText(p, v.asString())) return json::Value(*n);
+    return v;
+}
+
 // The params a command gives, checked against the type, merged over `base`
 // and written canonically: only values that differ from the defaults.
 Result<json::Value> mergeParams(const rack::ModuleType& t, const json::Value& base,
@@ -262,14 +305,22 @@ Result<json::Value> mergeParams(const rack::ModuleType& t, const json::Value& ba
                    !m.value.isNumber()) {
             return Error("rack.param", m.key + " is a switch", at, "give true or false");
         } else if (p.kind != sd::ParamModel::Kind::Choice &&
-                   p.kind != sd::ParamModel::Kind::Toggle &&
-                   (!m.value.isNumber() || !std::isfinite(m.value.asDouble()))) {
+                   p.kind != sd::ParamModel::Kind::Toggle && !numberKnob(p, m.value)) {
+            const std::string unit(unitName(p.unit));
+            const auto num = [](double v) {
+                char text[32];
+                std::snprintf(text, sizeof text, "%.3g", v);
+                return std::string(text);
+            };
             return Error("rack.param", m.key + " is a number", at,
-                         m.key + " runs " + json::writeCompact(json::Value(p.min)) + " to " +
-                             json::writeCompact(json::Value(p.max)) + " " +
-                             std::string(unitName(p.unit)));
+                         m.key + " runs " + num(p.min) + " to " + num(p.max) +
+                             (unit.empty() ? "" : " " + unit) + ": give the number in that unit" +
+                             (unit.empty() ? std::string()
+                                           : ", or text like \"" + num((p.min + p.max) / 2) + " " +
+                                                 unit + "\""));
         }
-        values[m.key] = detail::moduleParamValue(p, &m.value);
+        const json::Value knobValue = numberFromText(p, m.value);
+        values[m.key] = detail::moduleParamValue(p, &knobValue);
     }
     for (const auto& p : t.params())
         if (!p.output && values[p.key] != p.def)
@@ -1352,7 +1403,8 @@ void registerRackCommands(cmd::Registry& registry) {
         Command<ModuleSet, json::Value> c;
         common(c, "module.set", Kind::Edit, "Set a module's knobs, label, place or bypass.");
         c.description =
-            "params merge into its knobs (values in the knob's units; a choice by key; a "
+            "params merge into its knobs (a number in the knob's unit, or text in it, \"80 %\" "
+            "or \"1.2 kHz\"; a percent knob such as a Macro's runs 0 to 100; a choice by key; a "
             "default value is dropped from the file). A knob edit is heard at once, without a "
             "recompile. Notes source/device accept null to clear them (source returns to the home "
             "track; device to none). source: none disables the track feed while keeping routes and "

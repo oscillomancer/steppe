@@ -3294,3 +3294,59 @@ TEST_CASE("MIDI sends: Notes source None does not prevent branch id remapping") 
         CHECK(model::remapIds(args, command->argsSchema, remap) == args);
     }
 }
+
+TEST_CASE("module.set: a knob takes text in its own unit, as other parameters do") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Keys"})");
+    const auto rack = run(bus, "rack.add", R"({"track":"tr_1"})")["rack"].asString();
+    const auto macro =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.macro\"}")["module"]
+            .asString();
+    const auto lfo =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.lfo\"}")["module"]
+            .asString();
+    const auto knob = [&](const std::string& module, const char* key) {
+        const auto* m = app->head().modules.find(*model::Id::parse(module));
+        const json::Value* v = m->params.isObject() ? m->params.find(key) : nullptr;
+        return v ? v->asDouble() : -1.0;
+    };
+    const auto set = [&](const std::string& module, const char* params) {
+        auto args = json::Value::object();
+        args["module"] = module;
+        args["params"] = j(params);
+        return bus.execute({"module.set", args, kOrigin});
+    };
+    // A percent knob: "80 %" is 80, as the number 80 is (0 to 100).
+    REQUIRE(set(macro, R"({"macro_1": "80 %"})"));
+    CHECK(knob(macro, "macro_1") == 80.0);
+    REQUIRE(set(macro, R"({"macro_1": " 12.5%"})"));
+    CHECK(knob(macro, "macro_1") == 12.5);
+    REQUIRE(set(macro, R"({"macro_1": 40})"));
+    CHECK(knob(macro, "macro_1") == 40.0);
+    // Hertz, with kHz as well; the unit's case does not matter.
+    REQUIRE(set(lfo, R"({"rate": "2.5 hz"})"));
+    CHECK(knob(lfo, "rate") == 2.5);
+    REQUIRE(set(lfo, R"({"rate": "0.05 kHz"})"));
+    CHECK(knob(lfo, "rate") == 50.0);
+    // Text in another unit, or none, is refused, and the hint says what the knob takes.
+    for (const char* wrong :
+         {R"({"macro_1": "80 dB"})", R"({"macro_1": "loud"})", R"({"macro_1": ""})"}) {
+        const auto refused = set(macro, wrong);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "rack.param");
+        CHECK(refused.error().path == "/args/params/macro_1");
+        CHECK(refused.error().hint ==
+              "macro_1 runs 0 to 100 %: give the number in that unit, or text like \"50 %\"");
+    }
+    CHECK(knob(macro, "macro_1") == 40.0);  // nothing changed
+    // A knob with no unit takes no text.
+    const auto choice = set(lfo, R"({"voices": "4"})");
+    REQUIRE_FALSE(choice);
+    CHECK(choice.error().code == "rack.param");
+}

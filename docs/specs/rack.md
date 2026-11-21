@@ -784,6 +784,14 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 Errors carry `code`, `message`, `path` and a `hint` naming what exists
 (`"mo_2 has inputs pitch, fm, sync"`).
 
+A knob's value in `params` (`module.add`, `module.set`, `rack.patch`) is a
+number in the knob's unit (a percent knob such as a Macro's runs 0 to 100:
+`macro_1: 80` is 80 %, `0.8` is 0.8 %), or text in that unit as other
+parameters take it, `"80 %"` or `"1.2 kHz"` (kHz for a Hz knob, s for a ms
+one; the unit's case is free). Text in another unit, or any text for a knob
+with no unit, is `rack.param`, and its hint names the knob's range, its unit
+and an example. A choice is by its key, a switch is true or false.
+
 A module's knob is automated with `env.add {module, param, points}`
 (values in the knob's unit, a choice by its key); a plugin module's knobs
 are its plug-in's (`env.add {fx}`). `preset` on `module.add` and
