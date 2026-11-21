@@ -717,9 +717,9 @@ instructions are in `docs/guides/installing.md`.
   restores one validation probe per FX, and open skips it when warnings are
   not requested.
   Plug-in parameter references (session-model): envelopes, modulation
-  routes, `fx.param.set` and cables into plugin modules name a parameter
-  through one resolver: a semantic key, a canonical decimal id, or a display
-  name in any letter case. An ambiguous name is refused with the ids, new
+  routes, `fx.param.set`, cables into plugin modules and MIDI learn name a
+  parameter through one resolver: a semantic key, a canonical decimal id,
+  or a display name in any letter case. An ambiguous name is refused with the ids, new
   references are stored canonical (one spelling per parameter: the semantic
   key on a plug-in that has keys, whatever the caller wrote, else the
   decimal id; `env.add` converts plain points to the key's units and

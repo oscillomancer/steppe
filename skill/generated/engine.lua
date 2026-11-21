@@ -710,7 +710,7 @@ q = nil
 
 ---@class Steppe.fx_learn_set_args
 ---@field fx string
----@field param string A semantic key, or a plain parameter's id or name (fx.describe)
+---@field param string A parameter's semantic key, id or name (fx.describe); a semantic plugin's is stored as its key
 ---@field midi table
 ---@field mode? "absolute"|"relative1"|"relative2"|"relative3"|"toggle"
 ---@field soft_takeover? boolean
