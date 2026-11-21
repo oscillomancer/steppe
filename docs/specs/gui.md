@@ -306,6 +306,19 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   is (`views::chainModulated`, drawn by `ui::Button::setMark`). It is
   static: what moves is the controls' bars and the lane's curve. A strip's
   own fader and pan carry their bars, not the mark.
+- **The source.** A route's source is the module cabled into its Mod Out
+  input (the first cable by id), named as the rack window titles it, else
+  "Mod N" (`gui::modSourceName`). The app action `ui.modulation.source
+  {modulation}` opens the rack window on the Mod Out's rack with the Mod Out
+  and every module cabled into that input selected and in view
+  (`RackWindow::showModulationSource`). One click reaches it from a lane's
+  **mod** (§4.3): one route at once, several a menu of them ("LFO
+  (Modulators)", "(off)" after a disabled one). A control's bar never opens
+  it, since a press there is the depth drag. Instead the control's
+  right-click menu (the strips' menu in the track panel and the mixer, the
+  FX window's parameter menu) has **Show modulation source** for one route
+  and one row per route for several ("Show modulation source: LFO
+  (Modulators)"; `gui::modSourceItems`).
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved

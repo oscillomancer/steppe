@@ -43,6 +43,10 @@ class RackWindow {
     ~RackWindow();
     // Opens on `rack` (else the last one shown, else the first).
     void open(std::optional<model::Id> rack = std::nullopt);
+    // A modulation route's source (gui.md §2): opens on the rack of its Mod
+    // Out with the Mod Out and the modules cabled into the route's input
+    // selected and in view. An error when the route is gone.
+    Status showModulationSource(model::Id route);
     void close() { panel_.close(); }
     bool isOpen() const { return space_ != nullptr; }
     void sync();  // reload when the session changed while open

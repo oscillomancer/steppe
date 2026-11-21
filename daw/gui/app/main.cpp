@@ -54,6 +54,7 @@
 #include "meter_feed.h"
 #include "midi_editor.h"
 #include "mixer.h"
+#include "mod_source.h"
 #include "mouse_dialog.h"
 #include "plugin_windows.h"
 #include "preferences.h"
@@ -547,6 +548,10 @@ int frontendMain(int argc, char** argv) {
             [&](const std::string& incident) {
                 SDL_RaiseWindow((*window)->sdl());
                 helpActions.crashReports().open(incident);
+            },
+            [&](const model::EnvTarget& target) {
+                const auto catalog = gui::racks::catalog(**app);
+                return gui::modSourceItems(appActions, (*app)->head(), catalog.get(), target);
             }},
         gui::Favourites::defaultFile(product::kSlug));
     // A plugin dragged out of the browser lands on the strip or the track
@@ -593,6 +598,17 @@ int frontendMain(int argc, char** argv) {
     appActions.addUiFor("ui.fx.chain", "FX: chain…", "track", [&](const json::Value& v) -> Status {
         return fxWindow.openFor(uiState, v);
     });
+    // A modulation route's source in the rack window (gui.md §2): a lane's
+    // "mod", the inspector's lines and the parameter menus run it.
+    appActions.addUiFor(
+        "ui.modulation.source", "Modulation: show source", "modulation",
+        [&](const json::Value& v) -> Status {
+            const auto route = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;
+            if (!route || route->kind != model::Kind::Modulation)
+                return Error("modulation.source", "name a modulation route", "/modulation",
+                             "Pass {\"modulation\": \"mr_N\"}; modulation.list names them.");
+            return racks.showModulationSource(*route);
+        });
     appActions.addUi("ui.fx.move_up", "FX: move the selected plugin up the chain",
                      [&] { fxWindow.moveSelected(-1); });
     appActions.addUi("ui.fx.move_down", "FX: move the selected plugin down the chain",

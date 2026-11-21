@@ -3123,6 +3123,69 @@ TEST_CASE("mixer: Modulate… on a fader opens the sources, and one makes the ro
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: a modulated fader's menu shows its source; a plain click on its bar opens none") {
+    // gui.md §2: "Show modulation source" in the control's right-click menu,
+    // the routes listed when there are several; the bar itself stays a depth
+    // drag.
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    std::vector<std::string> shown;
+    f.actions->addUiFor("ui.modulation.source", "Modulation: show source", "modulation",
+                        [&](const json::Value& v) -> Status {
+                            shown.push_back(v.asString());
+                            return {};
+                        });
+    const std::string route =
+        f.exec("modulate", R"({"target":{"track":")" + a +
+                               R"(","param":"volume"},"source":"lfo"})")["modulation"]
+            .asString();
+    f.refresh();
+    ui::Fader* fader = f.strip(a).fader;
+    REQUIRE(fader->modulation());
+    auto menuAt = [&](ui::Point p) -> ui::Node* {
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
+        return f.root->find("strip.param.menu");
+    };
+    ui::Node* menu = menuAt(f.centre(fader));
+    REQUIRE(menu);
+    std::vector<std::string> sources;
+    std::function<void()> run;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Show modulation source")) {
+            sources.push_back(item.label);
+            run = item.run;
+        }
+    CHECK(sources == std::vector<std::string>{"Show modulation source"});
+    REQUIRE(run);
+    f.root->closePopups();
+    run();
+    CHECK(shown == std::vector<std::string>{route});
+    // A plain click on the depth bar opens nothing.
+    const ui::Rect zone = fader->depthZone();
+    const ui::Point onBar{zone.x + zone.w / 2, zone.y + zone.h / 2};
+    f.pointer(ui::PointerEvent::Type::Down, onBar, 1);
+    f.pointer(ui::PointerEvent::Type::Up, onBar, 1);
+    CHECK(shown.size() == 1);
+    // Two routes: one row each, by source.
+    const std::string modOut =
+        f.app->head().modulations.find(*model::Id::parse(route))->source.module.str();
+    f.exec("modulation.add", R"({"source":{"module":")" + modOut +
+                                 R"(","input":"in_4"},"target":{"track":")" + a +
+                                 R"(","param":"volume"},"depth":2})");
+    f.refresh();
+    menu = menuAt(f.centre(f.strip(a).fader));
+    REQUIRE(menu);
+    sources.clear();
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Show modulation source")) sources.push_back(item.label);
+    REQUIRE(sources.size() == 2);
+    CHECK(sources[0].starts_with("Show modulation source: LFO ("));
+    CHECK(sources[1].starts_with("Show modulation source: Mod 4 ("));
+    f.root->closePopups();
+}
+
 TEST_CASE("mixer: a modulated fader and pan bar show their routes; a bar drag sets the depth") {
     Fixture f;
     if (!f.ok) return;

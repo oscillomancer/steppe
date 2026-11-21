@@ -13,7 +13,9 @@
 //   (and full width, or full left and right in dual pan).
 // - Modulate: Volume… beside each lane (ADR-0096, M-k), opening the sources
 //   `modulate` makes; greyed where the parameter takes no modulation (a
-//   switch, a dual pan's bars, a VCA, a frozen track).
+//   switch, a dual pan's bars, a VCA, a frozen track);
+// - Show modulation source when a route reaches the control (one row per
+//   route when there are several; gui::modSourceItems).
 // A channel's or buss's pan then adds its mode, its law and gain
 // compensation; a master's pan is a balance and has none of those.
 #pragma once
