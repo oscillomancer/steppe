@@ -74,8 +74,7 @@ struct RollEnvLane {
     model::Envelope envelope;  // as the session had it at the last reload
     views::EnvScale scale;
     double fallback = 0;  // the value without points
-    std::string title;    // "Volume (take)", "Teasel · Drive (take)"
-    std::string name;     // the lane header's: "Volume", "Drive"
+    std::string title;    // "Volume (take)", "Teasel · Drive (take)": the lane's one name
 };
 
 // What the roll, keyboard and velocity lane share.

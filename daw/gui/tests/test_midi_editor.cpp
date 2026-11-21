@@ -3682,8 +3682,8 @@ TEST_CASE("MIDI editor: a clip's take envelopes and take FX parameters get lanes
     ui::Node* volumeLane = f.root->find("midi.env." + volumeEnv.str());
     REQUIRE(volumeLane);
     const ui::Rect vr = volumeLane->bounds();
-    f.pointer(ui::PointerEvent::Type::Down, {vr.x + 10, vr.y + 26});
-    f.pointer(ui::PointerEvent::Type::Up, {vr.x + 10, vr.y + 26});
+    f.pointer(ui::PointerEvent::Type::Down, {vr.x + 10, vr.y + 10});
+    f.pointer(ui::PointerEvent::Type::Up, {vr.x + 10, vr.y + 10});
     REQUIRE(s.envLanes.size() == 1);
     CHECK(s.envLanes[0].env == env);
     CHECK_FALSE(f.root->find("midi.env." + volumeEnv.str()));

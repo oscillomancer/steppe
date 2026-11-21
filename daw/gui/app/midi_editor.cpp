@@ -1244,9 +1244,11 @@ class EnvLane : public ui::Node {
         return {b.x + kKeysWidth, b.y + kTitle, std::max(0.0f, b.w - kKeysWidth),
                 std::max(1.0f, b.h - kTitle - 4)};
     }
+    // The header column holds only "hide": the lane's title row names it in
+    // full ("Volume (take)"), which the narrow column could only cut short.
     ui::Rect hideRect() const {
         const ui::Rect b = bounds();
-        return {b.x + 4, b.y + 20, kKeysWidth - 8, 14};
+        return {b.x + 4, b.y + 4, kKeysWidth - 8, 14};
     }
     const RollEnvLane* lane() const {
         for (const RollEnvLane& l : s_.envLanes)
@@ -1260,8 +1262,6 @@ class EnvLane : public ui::Node {
         c.fillRect({b.x, b.y, b.w, 1}, t.color("rule"));
         const RollEnvLane* l = lane();
         if (!l) return;
-        c.text({b.x + 4, b.y + 4, kKeysWidth - 6, 14}, l->name, ui::Font::Ui, t.type("caption"),
-               t.color("ink"));
         c.text(hideRect(), "hide", ui::Font::Ui, t.type("caption"), t.color("ink-faint"));
         const ui::Rect a = area();
         c.text({a.x + 4, b.y + 1, std::max(0.0f, a.w - 8), kTitle}, l->title, ui::Font::Ui,
@@ -2147,14 +2147,8 @@ void MidiEditor::collectEnvLanes(const MidiOwner& owner) {
             lane.envelope = env;
             lane.scale = *scale;
             lane.fallback = views::targetValue(head, env.target, *scale);
-            if (env.target.object == takeId) {
-                lane.name = views::envTitle(env);
-                lane.title = lane.name + " (take)";
-            } else {
-                lane.title = views::envTitle(env, head, &*scale);
-                lane.name = scale->param && !scale->param->name.empty() ? scale->param->name
-                                                                        : env.target.param;
-            }
+            lane.title = env.target.object == takeId ? views::envTitle(env) + " (take)"
+                                                     : views::envTitle(env, head, &*scale);
             lanes.push_back({{order, e.id.n}, std::move(lane)});
         }
         std::sort(lanes.begin(), lanes.end(),
