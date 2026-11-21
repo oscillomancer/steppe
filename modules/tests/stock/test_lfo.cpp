@@ -88,10 +88,11 @@ TEST_CASE("lfo: a phase input drives it") {
     CHECK(h.output("trigger")[2005] == 1.0);
 }
 
-TEST_CASE("lfo: synced, it holds the play position's phase while the song is stopped") {
-    // The builder's D2: a synced LFO is a function of the song position, so
-    // with the transport stopped it sits at the play position's phase, and
-    // playing from there goes on from it.
+TEST_CASE("lfo: synced, locked to the song while playing, running on at tempo while stopped") {
+    // Round 74 F2: a rack auditioned from a keyboard with the transport
+    // stopped must hear a synced gate move, so a synced LFO runs on at the
+    // tempo from the stop position's phase, and locks to the song position
+    // again when play starts.
     ModuleHarness h(supple::rack::test::stock("lfo"));
     h.set("sync", 1);
     h.set("division", 6);  // 1/4: a cycle a beat
@@ -100,15 +101,30 @@ TEST_CASE("lfo: synced, it holds the play position's phase while the song is sto
     t.tempo = 120;  // 24000 frames a beat
     t.beats = 2.25;
     h.transport(t);
-    h.run(24000);
-    const auto& still = h.output("phase");
-    for (std::size_t k = 0; k < 24000; k += 1000) CHECK(still[k] == doctest::Approx(0.25));
-    const double held = h.output("out")[23999];
-    CHECK(h.output("out")[0] == doctest::Approx(held));
-    t.playing = true;
-    h.transport(t);
     h.run(12000);
-    const auto& moving = h.output("phase");  // the whole run: playing from 24000
-    CHECK(moving[24000] == doctest::Approx(0.25));
-    CHECK(moving[24000 + 6000] == doctest::Approx(0.5).epsilon(1e-3));
+    {
+        const auto& ph = h.output("phase");
+        CHECK(ph[0] == doctest::Approx(0.25));
+        CHECK(ph[6000] == doctest::Approx(0.5).epsilon(1e-3));
+        CHECK(ph[11999] == doctest::Approx(0.75).epsilon(1e-3));
+    }
+    // A seek while stopped: on from the new stop position's phase.
+    t.beats = 3.5;
+    h.transport(t);
+    h.run(6000);
+    {
+        const auto& ph = h.output("phase");
+        CHECK(ph[12000] == doctest::Approx(0.5));
+        CHECK(ph[15000] == doctest::Approx(0.625).epsilon(1e-3));
+    }
+    // Playing from 2.25: the song position's phase, wherever it ran to.
+    t.playing = true;
+    t.beats = 2.25;
+    h.transport(t);
+    h.run(6000);
+    {
+        const auto& ph = h.output("phase");
+        CHECK(ph[18000] == doctest::Approx(0.25));
+        CHECK(ph[21000] == doctest::Approx(0.375).epsilon(1e-3));
+    }
 }
