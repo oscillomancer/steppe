@@ -210,13 +210,18 @@ instructions are in `docs/guides/installing.md`.
   sheet as `context.text`) and `follow` and spells by the clip's own key;
   `session.describe` names a clip's key and follow. The `midi.edit` scale ops
   on a clip read the clip's own context at the clip beat each note sounds,
-  never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert`,
-  `arrangement.build` and `launch.commit` copy a clip's notes as they are and
-  warn `context.mismatch` when its key is not the project's under the item.
-  Not built: following (X2: the `follow` argument on placement and
-  `harmony::follow`), launching a followed clip (X4), the roll's view of a
-  clip's context (X3), `write_context` (X5). A clip with `follow` set is
-  copied as `none` until X2.
+  never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert` and
+  `arrangement.build` take `follow` (`none`, `key`, `chords`; default the
+  clip's own) and map a MIDI clip's notes by `harmony::follow` from the key or
+  chords it was written against to those under the item; the answer's
+  `followed` says how, by bar, and a looped item whose passes map differently
+  is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
+  that cannot follow is copied with its reason, and `launch.commit` copies
+  what was heard and warns `context.mismatch` when a clip's key is not the
+  project's under it. Not built: a launched clip following live (X4:
+  `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
+  clip plays as written), the roll's view of a clip's context (X3),
+  `write_context` (X5).
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

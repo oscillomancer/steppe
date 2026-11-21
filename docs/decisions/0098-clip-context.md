@@ -379,4 +379,18 @@ there. Not in X1 or X2.
   laid as one item per period gave the mismatch warning once per period, each
   naming a later bar. It is given once for each launched stretch of the clip,
   naming the first bar: one launch, one warning.
+- *(2026-11-21, X2 built.)* `harmony::follow` and following at placement are
+  built as the contracts say. What the contracts left to the builder:
+  - `followed` is on every laid item (`{mode: "none"}` when nothing was
+    mapped); `harmony::tonicInterval` is public, for the `interval` a
+    transpose region reports.
+  - A key or a chord the clip holds that this build cannot read is absent,
+    so a note there follows by what remains (or is copied).
+  - An unrolled item drops the notes it never played; the contract's "copied"
+    applies to the looped item that stays looped.
+  - A note held into the item's start (a note that began in an earlier pass) is
+    mapped at the item's start, as it sounds from there.
+  - `launch.unfollowed` is given by `launch.clip` and `launch.scene` (once per
+    launch) until X4.
+  - `follow` with an `item.add` source other than `clip` is `item.follow`.
 

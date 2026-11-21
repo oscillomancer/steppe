@@ -2037,12 +2037,12 @@ Scenes (2):
 
 ### Clip context (schema 2.20, ADR-0098; the contract for steps X1 and X2)
 
-*Step X1 is built: the fields and schema 2.20, the commands, `midi.get`,
-`midi.write` and the scale ops on a clip, `session.describe`, and the
-`context.mismatch` warning. Following itself (step X2, `follow` on
-`item.add {clip}`, `scene.insert` and `arrangement.build`) and launching a
-followed clip (X4) are not built: until then placement copies every clip as
-`none`, whatever its `follow`.*
+*Steps X1 and X2 are built: the fields and schema 2.20, the commands,
+`midi.get`, `midi.write` and the scale ops on a clip, `session.describe`, the
+`context.mismatch` warning, and following at placement (`follow` on
+`item.add {clip}`, `scene.insert` and `arrangement.build`, with `harmony::follow`).
+A launched clip following live (X4) is not built: until then it plays as it was
+written, and `launch.unfollowed` says so.*
 
 Writers emit `supple.project/2.20`. A clip gains two members; earlier files
 load unchanged and nothing migrates. A 2.19 build drops both members with its
@@ -2182,11 +2182,9 @@ bars.
 
 **Laying a clip (X1: the warning; X2: following).**
 - **Where.** `item.add {clip}`, `scene.insert` and `arrangement.build` take
-  `follow?: none | key | chords` (X2), defaulting to each clip's `follow`.
-  `launch.commit` copies, as heard (ADR-0098).
-- **Until X2** those three copy every clip as `none`, whatever its `follow`,
-  and give the mismatch warning below. The `follow` argument and the
-  mapping arrive with X2.
+  `follow?: none | key | chords`, defaulting to each clip's `follow`.
+  `launch.commit` copies, as heard (ADR-0098). `follow` with an `item.add`
+  source other than `clip` is `item.follow`.
 - **Following never refuses and never fails.**
   - A `follow` other than `none` applies to each clip that can follow: a
     MIDI clip with a readable key at 0 and a note off channel 10 (stored
@@ -2211,11 +2209,11 @@ bars.
   project bar where they differ. A clip whose notes are all on channel 10
   gives none. `launch.commit` gives it once for each launched stretch of a
   clip, not for each period the stretch is laid as.
-- **`key` (X2).** Each note goes through `harmony::follow` (`harmony.md` §5)
+- **`key`.** Each note goes through `harmony::follow` (`harmony.md` §5)
   from the clip's key at its clip beat to the key at its place. Where no
   readable key holds at the place, the note is copied, with one
   `context.no_key` warning per item.
-- **`chords` (X2).** From the clip's chord at the note's clip beat to the
+- **`chords`.** From the clip's chord at the note's clip beat to the
   chord at its place. A note with either chord missing or unreadable
   follows by key.
 - **The item.**
@@ -2246,3 +2244,16 @@ bars.
   on, as `scene.insert` re-reads the clip.
 - **Launching, until X4.** A launched clip plays unfollowed. Launching one
   whose `follow` is not `none` warns `launch.unfollowed` once per launch.
+- **What was built (X2).**
+  - `followed` is on every laid item, `{mode: "none"}` when nothing was
+    mapped. A clip placed as `none` or copied for a reason gives the
+    `context.mismatch` warning as before.
+  - `context.no_key` (the notes of a followed clip copied for want of a key
+    under them) and `context.scale_shape` (step 5 applied) are given once per
+    item, naming the first bar.
+  - An unrolled item drops the notes it never played (they are heard nowhere);
+    its controllers and sysex repeat with the passes.
+  - A note held into the item's start is mapped at the item's start; a
+    pitched note's `folded` counts once per note written.
+  - `launch.clip` and `launch.scene` warn `launch.unfollowed` for a clip whose
+    `follow` is not `none`, once per launch.
