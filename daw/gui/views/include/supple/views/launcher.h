@@ -124,15 +124,36 @@ bool sceneLaunchRefused(const model::Session& session, model::Id scene);
 
 // What a command that laid clips on the timeline did with their keys, in a
 // few words for the status line (gui.md §4.15), read from the answer's
-// `followed` blocks: "Bass followed to D minor, +2", "Keys copied: its key C
-// minor differs from D minor at bar 21", "Drums copied: drums don't follow";
-// for scene.insert the scene and its bar, then each clip, or counts when
-// they would not fit; for launch.commit "Committed: " and each launched clip
-// copied under another key (`mismatches`). `command` and `args` are what ran
-// (item.add {clip}, scene.insert or launch.commit); nothing when no clip was
-// mapped or copied in another key.
+// `followed` blocks. The notes are laid as written and sound as the place
+// says (ADR-0098, following is playback): "Riff follows: sounds in E minor,
+// by degree", "Stabs follows the chords: sounds in E minor", "Keys is laid as
+// written: its key C minor differs from D minor at bar 21", "Beat is laid as
+// written: drums don't follow"; for scene.insert the scene and its bar, then
+// each clip, or counts when they would not fit; for launch.commit
+// "Committed: " and each launched clip laid as written under another key
+// (`mismatches`). `command` and `args` are what ran (item.add {clip},
+// scene.insert or launch.commit); nothing when no clip sounds moved or was
+// laid as written in another key.
 std::optional<std::string> followNotice(const model::Session& session, const std::string& command,
                                         const json::Value& args, const json::Value& answer);
+
+// What a context edit made in the GUI (key.set, key.remove, chord.set,
+// chord.remove) did to the items that follow, for the status line (gui.md
+// §4.15): the items whose notes now sound otherwise, found by comparing
+// model::soundingNotes before and after. "Riff follows the new chord at bar
+// 6", "Bass and Keys follow the new key at bar 9: G major", "3 items follow
+// the new chord at bar 6"; where a following note found no key to read,
+// "Riff sounds as written from bar 17: no key there". Nothing when no
+// following item sounds otherwise.
+std::optional<std::string> contextFollowNotice(const model::Session& before,
+                                               const model::Session& after,
+                                               const std::string& command);
+
+// What take.bake did, for the status line: "Riff baked: 6 notes written as
+// they sound", or, when the answer says `unrolled`, "Riff baked: its 4
+// passes written out, each as it sounds". `notes` and `passes` are the
+// item's heard notes and passes before the bake.
+std::string bakeNotice(const std::string& name, std::size_t notes, int passes, bool unrolled);
 
 // The mark before a following clip's key (gui.md §4.15): the one place it
 // is spelled. An arrow: "~" is the modulation mark.

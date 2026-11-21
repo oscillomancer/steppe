@@ -4986,6 +4986,36 @@ TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or
     CHECK(errors[0] == "MIDI: nothing written sounds as G#4 here: draw it in Written");
 }
 
+TEST_CASE("a context edit says which following items it moved; a bake says what it wrote") {
+    // gui.md §4.15 (ADR-0098 amended): the status line after a key or chord
+    // edit made in the GUI, and after a bake.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"}])", "key");
+    const std::string name = views::Lanes::itemLabel(
+        f.app->head(), *f.app->head().items.find(*model::Id::parse(f.item)));
+    auto after = [&](const std::string& command, const std::string& args) {
+        const model::Session before = f.app->head();
+        f.exec(command, args);
+        return views::contextFollowNotice(before, f.app->head(), command);
+    };
+    // The item lies over beats 4 to 8: a key from beat 8 moves nothing.
+    CHECK_FALSE(after("key.set", R"({"at":8,"tonic":"G","scale":"major"})"));
+    // From beat 6 (bar 2, beat 3) its last two notes sound in G major.
+    CHECK(after("key.set", R"({"at":6,"tonic":"G","scale":"major"})") ==
+          name + " follows the new key at bar 2: G major");
+    // A key follow reads no chords.
+    CHECK_FALSE(after("chord.set", R"({"at":5,"symbol":"Am"})"));
+    // The song's first key gone: its first two notes have no key to read.
+    CHECK(after("key.remove", R"({"at":0})") ==
+          name + " sounds as written from bar 2: no key there");
+    CHECK(views::bakeNotice("Riff", 6, 1, false) == "Riff baked: 6 notes written as they sound");
+    CHECK(views::bakeNotice("Riff", 1, 1, false) == "Riff baked: 1 note written as it sounds");
+    CHECK(views::bakeNotice("Riff", 6, 4, true) ==
+          "Riff baked: its 4 passes written out, each as it sounds");
+}
+
 TEST_CASE("a take that does not follow opens its roll as written, with no Written cell") {
     Fixture f;
     if (!f.ok) return;

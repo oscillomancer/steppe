@@ -78,6 +78,7 @@
 #include "supple/rpc/model_loop.h"
 #include "supple/rpc/protocol.h"
 #include "supple/ui/root.h"
+#include "supple/views/launcher.h"
 #include "sync_dialog.h"
 #include "timecode_dialog.h"
 #include "ui_persistence.h"
@@ -938,9 +939,20 @@ int frontendMain(int argc, char** argv) {
     // What a commit copied under another key (gui.md §4.15), as a lay says it.
     shell.capture().onNotice = [&shell](const std::string& notice) { shell.setStatus(notice); };
     shell.arrange()->setRulerCallbacks(
-        {[&dispatcher](const std::string& command, json::Value args) {
-             return dispatcher.execute(
-                 {command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+        {[&](const std::string& command, json::Value args) {
+             // A key or chord edit: what it moved of the items that follow
+             // the song, in the status line (gui.md §4.15).
+             const bool context = command == "key.set" || command == "key.remove" ||
+                                  command == "chord.set" || command == "chord.remove";
+             std::optional<model::Session> before;
+             if (context) before = (*app)->head();
+             auto r =
+                 dispatcher.execute({command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+             if (r && before)
+                 if (const auto notice =
+                         views::contextFollowNotice(*before, (*app)->head(), command))
+                     shell.setStatus(*notice);
+             return r;
          },
          // A refusal (a tempo, a section captured as a scene) in the status line.
          [&appActions](const Error& e) {

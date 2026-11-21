@@ -764,7 +764,8 @@ TEST_CASE("launcher: a Capture commit says which clips it copied under another k
     capture.service();
     CHECK(refused.empty());
     REQUIRE(notices.size() == 1);
-    CHECK(notices[0] == "Committed: Root copied: its key D minor differs from C minor at bar 1");
+    CHECK(notices[0] ==
+          "Committed: Root is laid as written: its key D minor differs from C minor at bar 1");
     // Kit A, with no key, commits with nothing to say.
     const double kit = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
     const model::Id drums = *model::Id::parse("tr_1");
@@ -1200,7 +1201,7 @@ TEST_CASE("launcher: laying clips on the timeline says in the status line what t
     f.drag(from, {beatX(16) + 1, lane.y + lane.h / 2});
     REQUIRE(f.commands == std::vector<std::string>{"item.add"});
     REQUIRE(f.notices.size() == 1);
-    CHECK(f.notices[0] == "Root followed to C minor, −2");
+    CHECK(f.notices[0] == "Root follows: sounds in C minor, −2");
     // The clip menu's Lay on timeline at playhead: Pad at bar 9 is copied
     // under F minor, and says so.
     auto layAtPlayhead = [&](std::size_t row, std::size_t column, double beat) {
@@ -1218,7 +1219,7 @@ TEST_CASE("launcher: laying clips on the timeline says in the status line what t
     };
     layAtPlayhead(f.row("tr_3"), 1, 32);
     REQUIRE(f.notices.size() == 2);
-    CHECK(f.notices[1] == "Pad copied: its key D minor differs from F minor at bar 9");
+    CHECK(f.notices[1] == "Pad is laid as written: its key D minor differs from F minor at bar 9");
     // A clip with nothing to say (Kit B: no key, follows nothing) says nothing.
     layAtPlayhead(f.row("tr_1"), 1, 64);
     CHECK(f.notices.size() == 2);
@@ -1234,7 +1235,7 @@ TEST_CASE("launcher: laying clips on the timeline says in the status line what t
     f.sync();
     REQUIRE(f.notices.size() == 3);
     CHECK(f.notices[2] ==
-          "Verse at bar 21: Root followed to F minor, +3; Pad copied: its key D "
+          "Verse at bar 21: Root sounds in F minor, +3; Pad is laid as written: its key D "
           "minor differs from F minor at bar 21");
     CHECK(f.errors.empty());
 }
@@ -1255,14 +1256,14 @@ TEST_CASE("launcher: followNotice words key changes, chords, folding, and sums u
                 R"({"mode":"key","regions":[)"
                 R"({"from_bar":5,"to_bar":6,"from_key":"D minor","to_key":"C minor","by":"transpose","interval":-2},)"
                 R"({"from_bar":7,"to_bar":8,"from_key":"D minor","to_key":"F minor","by":"degree"}],"folded":2})")) ==
-        "Root followed to C minor, −2, then F minor by degree from bar 7 (2 folded into range)");
+        "Root follows: sounds in C minor, then F minor from bar 7 (2 folded into range)");
     // Chords; a run already in the key (copy) is not a change.
     CHECK(views::followNotice(s, "item.add", root,
                               item(R"({"mode":"chords","regions":[{"from_bar":1,"to_bar":1,)"
                                    R"("from_key":"C minor","to_key":"C minor","by":"copy"},)"
                                    R"({"from_bar":2,"to_bar":2,"from_key":"C minor",)"
                                    R"("to_key":"C minor","by":"chords"}]})")) ==
-          "Root followed to C minor by chord");
+          "Root follows the chords: sounds in C minor");
     CHECK_FALSE(
         views::followNotice(s, "item.add", root,
                             item(R"({"mode":"key","regions":[{"from_bar":1,"to_bar":1,)"
@@ -1278,9 +1279,9 @@ TEST_CASE("launcher: followNotice words key changes, chords, folding, and sums u
         item(R"({"mode":"key","regions":[{"from_bar":23,"to_bar":23,"from_key":"C major",)"
              R"("to_key":"C major","by":"degree"}]})")));
     CHECK(views::followNotice(s, "item.add", root, item(R"({"mode":"none","copied":"drums"})")) ==
-          "Root copied: drums don't follow");
+          "Root is laid as written: drums don't follow");
     CHECK(views::followNotice(s, "item.add", root, item(R"({"mode":"none","copied":"audio"})")) ==
-          "Root copied: audio doesn't follow");
+          "Root is laid as written: audio doesn't follow");
     CHECK_FALSE(views::followNotice(s, "item.add", root, item(R"({"mode":"none"})")));
     // A scene whose phrases would not fit the line: counts and names.
     const std::string moved =
@@ -1293,7 +1294,7 @@ TEST_CASE("launcher: followNotice words key changes, chords, folding, and sums u
                      off + R"(},{"clip":"cl_2","followed":{"mode":"none"}}]})");
     CHECK(views::followNotice(s, "scene.insert", *json::parse(R"({"scene":"sc_2","bar":3})"),
                               answer) ==
-          "Verse at bar 3: 2 followed the key (Kit A, Kit B); 1 copied as written (Root)");
+          "Verse at bar 3: 2 follow (Kit A, Kit B); 1 laid as written (Root)");
     // Other commands, and refusals' empty answers, say nothing.
     CHECK_FALSE(views::followNotice(s, "clip.duplicate", root, item(moved)));
 }

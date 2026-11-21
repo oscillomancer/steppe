@@ -2835,9 +2835,9 @@ same heights, scroll and colours.
   it off. A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
   item in the way) shows its message in the status line. A commit that
-  copied clips under another key (the answer's `mismatches`, with the
-  `context.mismatch` warning) says so there as laying does: "Committed:
-  Root copied: its key D minor differs from C minor at bar 1"
+  laid clips as written under another key (the answer's `mismatches`, with
+  the `context.mismatch` warning) says so there as laying does: "Committed:
+  Root is laid as written: its key D minor differs from C minor at bar 1"
   (`views::followNotice` with `launch.commit`, through
   `CaptureControl::onNotice`).
 - **After a commit made while stopped** (at stop, or the cell turned off
@@ -2970,24 +2970,40 @@ same heights, scroll and colours.
   at end) says in the status line, without a dialog, what its clips' keys
   did, read from the answer's `followed` blocks (`views::followNotice`,
   routed from `ArrangeView::runLauncher` through
-  `LauncherCallbacks::onNotice`):
-  - a clip that followed: "Bass followed to D minor, +2" (each run of bars
-    the notes moved over: its key and the interval, or "by degree", "by
-    chord"; a second run "then F minor, +3 from bar 7", more counted;
-    notes folded into range counted);
-  - a clip copied under another key (`followed.mismatch`, with the
-    `context.mismatch` warning): "Keys copied: its key C minor differs from
-    D minor at bar 21";
-  - a clip that could not follow (`copied`): "Drums copied: drums don't
-    follow", "… audio doesn't follow", "… it has no key to follow from",
-    "… it has no notes to move";
-  - a scene: "Verse at bar 21: " and each such clip's phrase, joined by
-    "; ", or, past 110 characters, how many followed and how many were
-    copied, with up to three names each.
+  `LauncherCallbacks::onNotice`). The notes are laid as written and sound
+  as the place says (ADR-0098 amended, "following is playback"):
+  - a clip that follows: "Riff follows: sounds in E minor, by degree"
+    (one run of bars whose notes sound moved: its key and the interval
+    "+2", or "by degree"); "Riff follows: sounds in E minor, then G major
+    from bar 9" for several runs (more counted); "Stabs follows the chords:
+    sounds in E minor"; notes folded into range counted;
+  - a clip laid as written under another key (`followed.mismatch`, with
+    the `context.mismatch` warning): "Keys is laid as written: its key C
+    minor differs from D minor at bar 21";
+  - a clip that could not follow (`copied`): "Beat is laid as written:
+    drums don't follow", "… audio doesn't follow", "… it has no key to
+    follow from", "… it has no notes to follow";
+  - a scene: "Verse at bar 21: " and each such clip's phrase ("Root sounds
+    in F minor, +3"), joined by "; ", or, past 110 characters, how many
+    follow and how many were laid as written, with up to three names each.
 
   A clip with nothing to say (no key change, its key the song's, or
   already in the key: a run moved by 0 or by degree into its own key) says
   nothing, so the last note stays.
+- **What a context edit moved.** A key or chord edit made in the GUI (the
+  ruler's `key.set`, `key.remove`, `chord.set`, `chord.remove`) says in the
+  status line which items that follow the song now sound otherwise, found
+  by comparing `model::soundingNotes` before and after
+  (`views::contextFollowNotice`): "Riff follows the new chord at bar 6",
+  "Bass and Keys follow the new key at bar 9: G major", "3 items follow the
+  new chord at bar 6"; where a following note now finds no key to read
+  (`context.no_key`), "Riff sounds as written from bar 17: no key there".
+  An edit that moves nothing says nothing, and an agent's edit only redraws.
+- **What a bake wrote** (`take.bake`, from the inspector or the Item menu):
+  "Riff baked: 6 notes written as they sound", or, when the answer says
+  `unrolled`, "Riff baked: its 4 passes written out, each as it sounds"
+  (`views::bakeNotice`); several items, "3 items baked: their notes written
+  as they sound".
 - **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
   Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
   empty cell to its right; none left is an error in the status line), Lay on
