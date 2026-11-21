@@ -23,17 +23,57 @@ loop, quantize, gain and content).
 - `clip.move`, `clip.duplicate` (the copy's MIDI is its own unless `pooled`),
   `clip.remove`.
 
+Names go with the material: the items `scene.insert`, `arrangement.build`, `item.add {clip}`
+and `launch.commit` make from a clip are named as it is, and the clips `clip.add {item}` and
+`scene.capture` make from an item are named as it is (an item's name is its active take's,
+`item.set {name}`); `session.describe` shows a named item as `it_3 "Bass line" bar 5–bar 9`.
+
 Content commands take a clip as they take an item: `midi.get`, `midi.write`,
 `midi.edit`, `midi.notes`, take FX and the take's own envelopes. **A clip keeps
 its length under `midi.write`**: notation longer than it is kept but never plays,
 and the warning `midi.beyond_length` says so; set `clip.set {length}` first. A
-clip has no place in time, so `midi.get` spells pitches by the key at the
-project's start and gives no `context`.
+clip has no place in time, so its `midi.get` spells pitches by the clip's own
+key (see "A clip knows its key and chords" below) and its `context` is the clip's.
 
 Timeline commands refuse a clip with `item.kind` (`item.set`, `item.remove` …) and say
-which command to use instead. `env.add` on an effect in a clip take's chain is
-refused with `clip.unsupported`: a clip take's FX and envelopes do not play yet, so
-automate the clip take's volume, pan or mute, or the track's FX.
+which command to use instead. A clip take has its own FX chain (`fx.add {take}`) and
+envelopes on it (`env.add {fx}`): they play with the clip, and an envelope's points are in
+**clip time** (beats on a MIDI clip, seconds on an audio one), so a clip launched at two
+places, or on its second pass, hears the same values. `modulate` does not reach a clip
+take's FX yet (`modulation.target`): modulate the track's FX instead.
+
+## A clip knows its key and chords
+
+A clip has no place in time, so it keeps the harmony it was **written against** (its
+`context`, with beats counted from the clip's start), as the project's context track
+keeps the harmony at a place. Say it when you make the clip:
+
+- `clip.add {..., context: "1: key D minor {Dm}:w\n2: {A7}:h {Dm}:h"}`: a lead sheet in
+  **clip bars** (bar 1 is the clip's start; `guides/harmony.md` has the text form).
+- `clip.add {..., context_at: {bar: 5}}` (or `{at: <beat>}`): read it from the project
+  there, for the clip's length. `clip.add {item}` and `scene.capture` take the context
+  under the item the same way, and `context: ""` takes none.
+- The `{Dm}` chord symbols in a clip's notation (`clip.add {notation}`, `midi.write`)
+  are recorded as its chords, unless you stated chords (`clip.chords_ignored`).
+  An audio clip's context is a key at the start of bar 1 and holds (`~`) only.
+- `clip.set {context, context_at, follow}` changes it (`context: ""` clears it).
+  `follow` (`none`, `key`, `chords`) says how the clip's notes are to be mapped
+  when it is laid under another key; it needs a MIDI clip with a key at its start
+  (`clip.no_key`, `clip.follow_audio`). **Nothing follows yet:** placement copies
+  every clip as it is, whatever its `follow`.
+- `midi.get` on a clip answers `context` (its runs by clip bar and beat, and `text`, the
+  lead sheet) and `follow`, and spells pitch names by the clip's own key.
+  `session.describe` shows `cl_3 "Break bass" in D minor …`.
+- `midi.edit`'s `snap_to_scale`, `transpose_degrees` and `fit_to_chord` on a clip read
+  **the clip's** key and chord, never the project's: a bass line written in D minor
+  snaps within D minor whatever key the song is in at the bar it is laid at. A clip
+  with no context says `midi.no_key` / `midi.no_chord` (give it one, or pass `key` /
+  `chord`).
+- Laying a clip (`item.add {clip}`, `scene.insert`, `arrangement.build`, `launch.commit`)
+  gives a `context.mismatch` warning when the clip's key is not the project's under the
+  item: the notes were copied as they are.
+- Shortening a clip drops the context points past its end (`clip.context_dropped`); a
+  context change that leaves no key at the start resets `follow` (`clip.follow_reset`).
 
 ## Launching
 
@@ -62,8 +102,8 @@ make bars short.
 A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.scene` skips it with a warning. `launch.stop` on a track with no clips is
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
-master playrate refuses launches (`launch.playrate`). A clip's FX and envelopes do
-not play yet; a rack's Notes module and the track's MIDI sends do follow launches.
+master playrate refuses launches (`launch.playrate`). A clip's take FX and
+their envelopes play, and so do a rack's Notes module and the track's MIDI sends.
 
 Two things to expect when polling. A launch given just as the transport started (the
 first launch while stopped, or right after a seek) can be refused with `launch.later`
@@ -86,9 +126,13 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   arrangement, its clips and its stopped or held stretches replace what the timeline
   had there; tracks that stayed on the arrangement are untouched. Each clip becomes
   copies of its takes at the phase heard, MIDI copied (shared with `pooled: true`),
-  and the 5 ms switches are item fades. It answers `{tracks, items, from, to}`.
-  Nothing captured is `launch.capture`. Committing again writes the same performance
-  over itself.
+  and the 5 ms switches are item fades. A scene launched whole (`launch.scene`, every
+  clip that could play started on one boundary) also writes a **section** named after
+  the scene, from that boundary until one of its tracks is launched again or the capture
+  ends, so `context.at` names it as it does a built song's; clips launched one by one
+  write none. It answers `{tracks, items, sections, from, to}`. Nothing captured is
+  `launch.capture`. Committing again writes the same performance over itself (a section
+  already there stays).
 - A committed performance renders as what was launched: unlike a clip playing live,
   its items are on the timeline. To check, render the span, or lay the same scenes
   with `arrangement.build` and compare away from the switches.

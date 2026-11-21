@@ -280,9 +280,16 @@ inline std::function<midi::Meter(int)> meterContext(const model::Session& s, dou
     };
 }
 
-inline Result<std::pair<model::MidiSource, double>> compileNotation(const model::Session& s,
-                                                                    const std::string& text,
-                                                                    double atBeat) {
+// What compiling notation gives: the source, its length in beats, and the chord symbols
+// the text voiced (ADR-0098), for the commands that record them as a clip's context.
+struct NotationCompiled {
+    model::MidiSource source;
+    double beats = 0;
+    std::vector<notation::ChordSymbol> chords;
+};
+
+inline Result<NotationCompiled> compileNotationFull(const model::Session& s,
+                                                    const std::string& text, double atBeat) {
     notation::CompileContext cc;
     cc.ppq = s.project->ppq;
     cc.meterAt = meterContext(s, atBeat);
@@ -292,10 +299,19 @@ inline Result<std::pair<model::MidiSource, double>> compileNotation(const model:
         if (e.path.empty() || e.path.front() != '/') e.path = "/notation";
         return e;
     }
-    model::MidiSource src;
-    src.sequence = std::move(compiled->sequence);
-    const double beats = static_cast<double>(src.sequence.length) / src.sequence.ppq;
-    return std::pair{std::move(src), beats};
+    NotationCompiled out;
+    out.source.sequence = std::move(compiled->sequence);
+    out.beats = static_cast<double>(out.source.sequence.length) / out.source.sequence.ppq;
+    out.chords = std::move(compiled->chords);
+    return out;
+}
+
+inline Result<std::pair<model::MidiSource, double>> compileNotation(const model::Session& s,
+                                                                    const std::string& text,
+                                                                    double atBeat) {
+    auto full = compileNotationFull(s, text, atBeat);
+    if (!full) return std::move(full).error();
+    return std::pair{std::move(full->source), full->beats};
 }
 
 // A model entry the session itself refers to (an item's takes, a take's chain):

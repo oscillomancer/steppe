@@ -484,6 +484,11 @@ A scene is a section you can play before it has a place in the song.
     stop, seek or loop change ends a capture that has run.
     `launch.commit` records the performance it laid out in history
     (`performance`), so a merge replays it without an engine.
+  - *(2026-11-20, I3.)* A scene launched whole also gets a section, a
+    region named after the scene as `scene.insert` makes one, in the same
+    undo step, so a committed performance and a built song are the same
+    shape and `context.at` names the section over either (engine.md
+    §1.4.2).
 - **`scene.insert {scene, at, bars}`** lays the scene's clips on the
   timeline as items for that length and names a region after the scene.
 - **`scene.capture {region, name?}`** makes a scene from the items inside a

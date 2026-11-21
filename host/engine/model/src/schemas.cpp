@@ -1251,6 +1251,50 @@ const Schema<Scene>& schemaOf<Scene>() {
 }
 
 template <>
+const Schema<ContextPoint>& schemaOf<ContextPoint>();
+
+namespace {
+
+// A clip's `follow` (schema 2.20). A name this build does not know reads as
+// none with a clip.follow_reset warning, so a file from a later build opens
+// (the open never fails for the clip context, ADR-0098).
+Schema<ClipFollow> clipFollowSchema() {
+    const auto names = std::array<std::pair<ClipFollow, std::string_view>, 3>{
+        {{ClipFollow::None, "none"}, {ClipFollow::Key, "key"}, {ClipFollow::Chords, "chords"}}};
+    json::Value spec = json::Value::object();
+    spec["type"] = "string";
+    spec["enum"] = json::Array{"none", "key", "chords"};
+    return {"clip follow",
+            [names](const json::Value& v, ClipFollow& out, schema::DecodeCtx& ctx,
+                    const std::string& path) {
+                if (!v.isString()) {
+                    ctx.error("schema.type", "expected a string", path);
+                    return false;
+                }
+                for (const auto& [value, name] : names)
+                    if (name == v.asString()) {
+                        out = value;
+                        return true;
+                    }
+                out = ClipFollow::None;
+                if (ctx.warnings)
+                    ctx.warnings->push_back(
+                        {"clip.follow_reset",
+                         "follow \"" + v.asString() + "\" is not none, key or chords: read as none",
+                         path});
+                return true;
+            },
+            [names](ClipFollow v) {
+                for (const auto& [value, name] : names)
+                    if (value == v) return json::Value(std::string(name));
+                return json::Value("none");
+            },
+            spec};
+}
+
+}  // namespace
+
+template <>
 const Schema<Clip>& schemaOf<Clip>() {
     static const Schema<Clip> s = [] {
         const Clip d;
@@ -1286,6 +1330,10 @@ const Schema<Clip>& schemaOf<Clip>() {
         dflt(b, d.mute);
         b.field("gain_db", &Clip::gainDb, num().range(kSilenceDb, 24));
         dflt(b, d.gainDb);
+        b.field("context", &Clip::context, schema::arrayOf(schemaOf<ContextPoint>()));
+        dflt(b, d.context);
+        b.field("follow", &Clip::follow, clipFollowSchema());
+        dflt(b, d.follow);
         return b.build();
     }();
     return s;
@@ -1606,10 +1654,10 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 19 && warnings)  // 2.14: branches; 2.15: autosaved_through;
+    } else if (version->minor > 20 && warnings)  // 2.14: branches; 2.15: autosaved_through;
                                                  // 2.16: modulation; 2.17: context;
                                                  // 2.18: scenes, clips; 2.19: clip take FX
-                                                 // envelopes in clip time
+                                                 // envelopes in clip time; 2.20: clip context
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never
@@ -1932,6 +1980,25 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
     derive(s.clips, Kind::Clip);
     for (const auto& [id, why] : dropStrayClips(s))
         warn("project.clip_dropped", "dropped clip " + id.str() + ": " + why, "/clips/" + id.str());
+    // Clip context (2.20, ADR-0098): points against the rules are dropped and a
+    // follow without a readable key reads as none, each with a warning. The open
+    // never fails for either.
+    {
+        IdMap<Clip>::Builder fitted(s.clips);
+        bool changed = false;
+        for (const auto& e : s.clips) {
+            Clip c = *e.value;
+            const auto notes = fitClipContext(c);
+            if (c == *e.value) continue;
+            changed = true;
+            for (const auto& n : notes)
+                warn(n.code, "clip " + e.id.str() + ": " + n.message,
+                     "/clips/" + e.id.str() +
+                         (n.code == "clip.follow_reset" ? "/follow" : "/context"));
+            fitted.put(e.id, 0, std::make_shared<const Clip>(std::move(c)));
+        }
+        if (changed) s.clips = fitted.build();
+    }
     if (warnings)
         for (const auto& [envelope, given] : derivedItems) {
             auto expected = json::Value::array();

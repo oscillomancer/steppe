@@ -484,14 +484,28 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "(its items are split, trimmed or removed); each clip becomes copies of its takes "
             "at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch "
             "crossfades become item fades. Tracks that followed the arrangement are untouched, "
-            "and so is the arrangement a loop repeated. A running capture ends first; the "
+            "and so is the arrangement a loop repeated. A scene launched whole (launch.scene: "
+            "every clip that could play started on one boundary) also writes a section named "
+            "after it, from that boundary until one of its tracks is launched again or the "
+            "capture ends, as scene.insert does; clips launched singly write none. A launched "
+            "clip is not followed (until ADR-0098's X4): its items copy what was heard, and "
+            "context.mismatch warns for each whose clip's key is not the project's under it. "
+            "A running "
+            "capture ends first; the "
             "capture stays, so committing again writes it again over itself. performance is "
             "what history records: leave it out and launch.commit fills it from the capture.";
         c.tags = {"clip launcher", "recording", "item"};
         c.args = commitArgsSchema();
+        auto section = schema::object<CommittedSection>("committed_section")
+                           .field("scene", &CommittedSection::scene, schema::string())
+                           .field("region", &CommittedSection::region, schema::string())
+                           .field("start", &CommittedSection::start, schema::number())
+                           .field("end", &CommittedSection::end, schema::number())
+                           .build();
         c.result = schema::object<CommitDone>("launch_commit")
                        .field("tracks", &CommitDone::tracks, schema::arrayOf(schema::string()))
                        .field("items", &CommitDone::items, schema::arrayOf(schema::string()))
+                       .field("sections", &CommitDone::sections, schema::arrayOf(section))
                        .field("from", &CommitDone::from, schema::number())
                        .field("to", &CommitDone::to, schema::number())
                        .build();
@@ -503,12 +517,13 @@ void registerLaunchCommands(cmd::Registry& registry) {
                     {"item.locked", "a locked item is in the way", "unlock it with item.set first"},
                     {"clip.unsupported", "a clip's loop window has no item equivalent",
                      "set its loop to the whole content, or off"}};
-        c.examples = {{"A captured bar of cl_1",
-                       j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,
+        c.examples = {
+            {"A captured bar of cl_1",
+             j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,
                             "launches": [{"frame": 0, "track": "tr_1", "action": "clip",
                                           "clip": "cl_1", "anchor": 0, "anchor_beat": 0}]}})"),
-                       j(R"({"tracks": ["tr_1"], "items": ["<any>"], "from": 0, "to": 4})"),
-                       "song_with_clip"}};
+             j(R"({"tracks": ["tr_1"], "items": ["<any>"], "sections": [{"scene": "sc_1", "region": "<any>", "start": 0, "end": 4}], "from": 0, "to": 4})"),
+             "song_with_clip"}};
         c.resolve = [](CommitArgs& a, Context& ctx) -> Status {
             if (a.performance) return {};
             EngineApp& app = engine::app(ctx);

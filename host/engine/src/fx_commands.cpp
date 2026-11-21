@@ -510,7 +510,14 @@ void registerFxCommands(cmd::Registry& registry) {
             return e;
         }
         MergeResult r;
-        auto before = fx.patch ? *fx.patch : json::Value::object();
+        // What the instance holds before: its saved patch, or for one never
+        // saved the defaults its schema gives (an empty patch merged), so a
+        // first merge reports the members it changed, not every default.
+        json::Value before = json::Value::object();
+        if (fx.patch)
+            before = *fx.patch;
+        else if (auto defaults = app.mergedPatch(fx, json::Value::object(), false))
+            before = std::move(*defaults);
         auto changed = json::createMergePatch(before, *merged);
         r.changed = changed ? std::move(*changed) : json::Value::object();
         model::FxInstance next = fx;
@@ -549,7 +556,10 @@ void registerFxCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Merge a partial patch into a plugin instance; returns the effective change.";
         c.description =
-            "Semantic plugins only. Values in physical units: {\"params\": {\"gain\": \"-6 dB\"}}.";
+            "Semantic plugins only. Values in physical units: {\"params\": {\"gain\": \"-6 dB\"}}. "
+            "changed holds only the members the merge changed: against the saved patch, or for an "
+            "instance never saved against the plug-in's defaults (a value set to what it already "
+            "is changes nothing).";
         c.tags = {"fx", "patch"};
         c.args = schema::object<FxPatchArgs>("fx_patch_args")
                      .field("fx", &FxPatchArgs::fx, idArg("fx", "Plugin instance"))

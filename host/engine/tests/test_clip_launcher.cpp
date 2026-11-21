@@ -584,49 +584,98 @@ TEST_CASE("midi.write warns when the notation runs past the clip's or item's len
         "voice bass; 1: C2:w; 2: D2:w"})")) == "midi.beyond_length ");
 }
 
-TEST_CASE("midi.edit's scale ops on a clip read the key at the project's start, no chord") {
+TEST_CASE("midi.edit's scale ops on a clip read the clip's own context, never the project's") {
     Launcher l;
-    // The note at the clip's beat 4, where A major would hold if the clip sat at bar 1.
-    l.run("clip.add",
-          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: r:w; 2: C#2:w"})");
-    l.run("clip.set", R"({"clip": "cl_1", "length": 32})");
+    // The project is in C minor from the start; the clip was written in D minor (defect D1:
+    // its A1 used to be read in C minor and snapped to Ab1).
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Cm"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w"})");
+    // Without a context of its own the clip has no key, whatever the project holds.
     const Error noKey =
-        l.fails("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale", "mode": "up"}]})");
+        l.fails("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale"}]})");
     CHECK(noKey.code == "midi.no_key");
-    CHECK(noKey.hint.find("key.set at 0") != std::string::npos);
-    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
-    l.run("key.set", R"({"at": 4, "tonic": "A", "scale": "major"})");  // C# is in A major
-    l.run("chord.set", R"({"at": 0, "symbol": "F"})");
-    // Read at the project's start (C major), not at the clip's own beat 0..4.
-    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale", "mode": "up"}]})");
-    CHECK(l.run("midi.notes", R"({"item": "cl_1"})")["notes"].at(0).find("pitch")->asInt() ==
-          38);  // D2
-    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "transpose_degrees", "notes": [0],
-                           "degrees": 1}]})");
-    CHECK(l.run("midi.notes", R"({"item": "cl_1"})")["notes"].at(0).find("pitch")->asInt() ==
-          40);  // E2
+    CHECK(noKey.hint.find("clip.set {context}") != std::string::npos);
     const Error noChord =
         l.fails("midi.edit", R"({"item": "cl_1", "ops": [{"op": "fit_to_chord"}]})");
     CHECK(noChord.code == "midi.no_chord");
+    CHECK(noChord.hint.find("clip.set {context}") != std::string::npos);
+    const auto pitch = [&] {
+        return l.run("midi.notes", R"({"item": "cl_1"})")["notes"].at(0).find("pitch")->asInt();
+    };
+    // With its own key, the A stays: it is in D minor.
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor {Dm}:w"})");
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale", "mode": "up"}]})");
+    CHECK(pitch() == 33);  // A1, not Ab1
+    // transpose_degrees moves it by D minor's degrees: A up one is Bb.
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "transpose_degrees", "notes": [0],
+                           "degrees": 1}]})");
+    CHECK(pitch() == 34);  // Bb1
+    // fit_to_chord reads the clip's chord (Dm): Bb is nearest A (down one) or D (up four).
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "fit_to_chord"}]})");
+    CHECK(pitch() == 33);
+    // key and chord still replace the reading.
     l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "fit_to_chord", "chord": "G"}]})");
-    CHECK(l.run("midi.notes", R"({"item": "cl_1"})")["notes"].at(0).find("pitch")->asInt() ==
-          38);  // D2, nearest G tone (a tie goes down)
+    CHECK(pitch() == 31);  // G1, the nearest G tone below
+    // A clip with a key and no chord: fit_to_chord is midi.no_chord.
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w"})");
+    CHECK(l.fails("midi.edit", R"({"item": "cl_1", "ops": [{"op": "fit_to_chord"}]})").code ==
+          "midi.no_chord");
 }
 
-TEST_CASE("midi.get on a clip spells by the key at the project's start, with no context") {
+TEST_CASE("midi.edit on a clip reads the context at the clip beat each pass sounds at") {
+    Launcher l;
+    // Two bars (8 beats), looped over its first bar: the note at beat 0 sounds at 0 and at 4.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w"})");
+    l.run("clip.set",
+          R"({"clip": "cl_1", "length": 8, "loop": {"on": true, "start": 0, "length": 4}})");
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w\n2: ~:w"})");
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale"}]})");  // one key
+    // A key change at the second pass: the same note is in two keys.
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w\n2: key F major ~:w"})");
+    const Error varies =
+        l.fails("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale"}]})");
+    CHECK(varies.code == "midi.context_varies");
+    CHECK(varies.message.find("keys of the clip") != std::string::npos);
+    // key says which one.
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale", "key": "D minor"}]})");
+    // Without the loop the note sounds once, at beat 0.
+    l.run("clip.set", R"({"clip": "cl_1", "loop": {"on": false}})");
+    l.run("midi.edit", R"({"item": "cl_1", "ops": [{"op": "snap_to_scale"}]})");
+    // Chords vary alike.
+    l.run("clip.set", R"({"clip": "cl_1", "loop": {"on": true}, "context":
+                          "1: key D minor {Dm}:w\n2: {Gm}:w"})");
+    CHECK(l.fails("midi.edit", R"({"item": "cl_1", "ops": [{"op": "fit_to_chord"}]})").code ==
+          "midi.context_varies");
+}
+
+TEST_CASE("midi.get on a clip spells by the clip's own key, and lists its context") {
     Launcher l;
     l.run("clip.add",
-          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A#2:h D#3:h"})");
+          R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: F#2:h C#3:h"})");
+    // The project's key is not read: F major would spell F# as Gb.
     l.run("key.set", R"({"at": 0, "tonic": "F", "scale": "major"})");
-    l.run("key.set", R"({"at": 16, "tonic": "E", "scale": "major"})");  // later: not read
+    auto none = l.run("midi.get", R"({"item": "cl_1"})");
+    CHECK(none.find("text")->asString().find("F#2") != std::string::npos);  // the default table
+    CHECK_FALSE(none.find("context"));                 // a clip with no context has none to list
+    CHECK(none.find("follow")->asString() == "none");  // a clip's, always present
+    // The clip's own key decides: B major has sharps, F minor flats.
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key F minor ~:w"})");
+    auto flats = l.run("midi.get", R"({"item": "cl_1"})");
+    CHECK(flats.find("text")->asString().find("Gb2") != std::string::npos);
+    CHECK(flats.find("text")->asString().find("Db3") != std::string::npos);
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key B major ~:w"})");
+    CHECK(l.run("midi.get", R"({"item": "cl_1"})").find("text")->asString().find("F#2") !=
+          std::string::npos);
+    // The timeline item beside it still lists the project's key and chord, in its own shape.
     l.run("chord.set", R"({"at": 0, "symbol": "F"})");
-    auto got = l.run("midi.get", R"({"item": "cl_1"})");
-    const std::string text = got["text"].asString();
-    CHECK(text.find("Bb2") != std::string::npos);  // F major: flats
-    CHECK(text.find("Eb3") != std::string::npos);
-    CHECK_FALSE(got.find("context"));  // a clip has no place in time (C-e)
-    // The timeline item beside it still lists its key and chord.
-    CHECK(l.run("midi.get", R"({"item": "it_1"})").find("context"));
+    const auto item = l.run("midi.get", R"({"item": "it_1"})");
+    const json::Value* context = item.find("context");
+    REQUIRE(context);
+    CHECK(context->find("keys")->at(0).find("project_bar"));
+    CHECK_FALSE(context->find("keys")->at(0).find("beat"));
+    CHECK_FALSE(context->find("text"));
+    CHECK_FALSE(item.find("follow"));
 }
 
 TEST_CASE("take.list, take.add, take.activate and take.remove take a clip") {
@@ -954,4 +1003,429 @@ TEST_CASE("clip audio is prepared after the arrangement, in launch order, as far
     l.run("scene.move", R"({"scene": "sc_2", "to": 0})");
     CHECK(residentSamples(l.head(), l.app->projectDir(), 48000).clipsSkipped ==
           std::vector<model::Id>{id("cl_3")});
+}
+
+// --- clip context (ADR-0098, step X1) ------------------------------------------------
+
+namespace {
+
+const model::Clip& clipOf(const Launcher& l, const char* clip) {
+    const model::Clip* c = l.head().clips.find(id(clip));
+    REQUIRE(c);
+    return *c;
+}
+
+// The clip's points as text, beat first: "key@0 D minor, chord@0 Dm".
+std::string pointsOf(const model::Clip& c) {
+    std::string out;
+    for (const auto& p : c.context) {
+        char at[32];
+        std::snprintf(at, sizeof at, "%g", p.beat);
+        out += std::string(out.empty() ? "" : ", ") +
+               (p.type == model::ContextType::Key
+                    ? "key@" + std::string(at) + " " + p.tonic + " " + p.scale
+                    : "chord@" + std::string(at) + " " + p.symbol);
+    }
+    return out;
+}
+
+// What the last undo step recorded of its command: the arguments history keeps.
+json::Value lastRecorded(const Launcher& l) {
+    const auto* v = l.app->versions().history(1).front();
+    return v->txn.invocations.back().args;
+}
+
+// A project whose context track reads C minor / Cm, then from beat 16 D minor / Dm and
+// A7 at 20.
+void seedContext(Launcher& l) {
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("key.set", R"({"at": 16, "tonic": "D", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Cm"})");
+    l.run("chord.set", R"({"at": 16, "symbol": "Dm"})");
+    l.run("chord.set", R"({"at": 20, "symbol": "A7"})");
+}
+
+const char* kTwoBars = R"("notation": "voice bass; 1: D2:w; 2: A1:w")";
+
+}  // namespace
+
+TEST_CASE("clip.add {context} keeps the key and chords as a lead sheet in clip bars") {
+    Launcher l;
+    l.run("clip.add",
+          std::string(R"({"track": "tr_1", "scene": "sc_1", )") + kTwoBars +
+              R"(, "context": "1: key D minor {Dm}:w\n2: {A7}:h {Dm}:h", "follow": "key"})");
+    const model::Clip& c = clipOf(l, "cl_1");
+    CHECK(pointsOf(c) == "key@0 D minor, chord@0 Dm, chord@4 A7, chord@6 Dm");
+    CHECK(c.follow == model::ClipFollow::Key);
+    // midi.get answers it in the item's shape: runs by clip bar and beat, the text and follow.
+    const auto got = l.run("midi.get", R"({"item": "cl_1"})");
+    const json::Value* context = got.find("context");
+    REQUIRE(context);
+    CHECK(context->find("text")->asString() == "1: key D minor {Dm}:w\n2: {A7}:h {Dm}:h\n");
+    CHECK(context->find("keys")->at(0).find("what")->asString() == "D minor");
+    CHECK(context->find("keys")->at(0).find("beat")->asDouble() == 0.0);
+    CHECK_FALSE(context->find("keys")->at(0).find("project_bar"));
+    const auto& chords = *context->find("chords");
+    REQUIRE(chords.size() == 3);
+    CHECK(chords.at(1).find("what")->asString() == "A7");
+    CHECK(chords.at(1).find("item_bar")->asInt() == 2);
+    CHECK(chords.at(1).find("beat")->asDouble() == 4.0);
+    CHECK(got.find("follow")->asString() == "key");
+    // The names follow the clip's own key: the D minor line reads in flats' absence.
+    CHECK(got.find("text")->asString().find("D2") != std::string::npos);
+    // session.describe names the key and the follow.
+    const std::string text = l.run("session.describe", "{}")["text"].asString();
+    CHECK(text.find("cl_1 in D minor ") != std::string::npos);
+    CHECK(text.find("· follows the key") != std::string::npos);
+    // The text reads back as the same points, and the file keeps them.
+    const std::string printed = context->find("text")->asString();
+    l.run("clip.set", R"({"clip": "cl_1", "context": ""})");
+    CHECK(clipOf(l, "cl_1").context.empty());
+    auto args = j(R"({"clip": "cl_1"})");
+    args["context"] = printed;
+    l.runArgs("clip.set", args);
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Dm, chord@4 A7, chord@6 Dm");
+    auto reopened = model::parseProject(model::serializeProject(l.head()));
+    REQUIRE(reopened);
+    CHECK(reopened->clips.find(id("cl_1"))->context == clipOf(l, "cl_1").context);
+}
+
+TEST_CASE("clip.add context errors name the clip bar and change nothing") {
+    Launcher l;
+    const auto before = l.head().version;
+    const auto refuses = [&](std::string extra, const char* code, const char* in = "") {
+        const Error e = l.fails("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") +
+                                                kTwoBars + ", " + extra + "}");
+        CHECK_MESSAGE(e.code == code, e.toString());
+        CHECK_MESSAGE(e.message.find(in) != std::string::npos, e.toString());
+        CHECK(l.head().version == before);
+        return e;
+    };
+    auto both = refuses(R"("context": "1: {Dm}:w", "context_at": {"bar": 1})", "clip.context_args");
+    CHECK(both.path == "/args/context_at");
+    const auto syntax = refuses(R"("context": "{Dm}:w")", "clip.context_syntax");
+    CHECK(syntax.path == "/args/context");
+    CHECK(refuses(R"("context": "1: {Dm}:h")", "context.bar_length", "bar 1").path ==
+          "/args/context");
+    // The clip is two bars (8 beats): a point in bar 3 is past its end, though bars may run on.
+    CHECK(
+        refuses(R"("context": "1: ~:w\n2: ~:w\n3: {Dm}:w")", "clip.context_range", "bar 3").path ==
+        "/args/context");
+    // follow needs a MIDI clip with a key at its start.
+    CHECK(refuses(R"("follow": "key")", "clip.no_key").path == "/args/follow");
+    CHECK(refuses(R"("follow": "chords", "context": "1: {Dm}:w")", "clip.no_key").code ==
+          "clip.no_key");
+    // context_at takes a bar or beats, one of them.
+    CHECK(refuses(R"("context_at": {})", "clip.context_args").path == "/args/context_at");
+    CHECK(refuses(R"("context_at": {"bar": 1, "at": 4})", "clip.context_args").code ==
+          "clip.context_args");
+    // Bars may run past the clip's end; only a point may not.
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") + kTwoBars +
+                          R"(, "context": "1: key D minor {Dm}:w\n2: ~:w\n3: ~:w"})");
+}
+
+TEST_CASE("clip.add on an audio clip: a key at the start only, and no follow") {
+    Launcher l;
+    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = l.wav("pad.wav", 2.0).string();
+    const auto add = [&](const char* extra) {
+        auto a = args;
+        const auto extras = j(extra);
+        for (const auto& m : extras.asObject()) a[m.key] = m.value;
+        return l.bus->execute({"clip.add", a, kOrigin});
+    };
+    const auto refused = [&](const char* extra, const char* code) {
+        const auto r = add(extra);
+        REQUIRE_FALSE(r);
+        CHECK_MESSAGE(r.error().code == code, r.error().toString());
+        CHECK_FALSE(r.error().hint.empty());
+    };
+    refused(R"({"context": "1: key D minor {Dm}:w"})", "clip.context_audio");
+    refused(R"({"context": "1: key D minor r:w"})",
+            "clip.context_audio");  // a rest is a chord point
+    refused(R"({"context": "1: ~:h key D minor ~:h"})", "clip.context_audio");  // not at the start
+    refused(R"({"follow": "key"})", "clip.follow_audio");
+    refused(R"({"context": "1: key D minor ~:w", "follow": "key"})", "clip.follow_audio");
+    const auto ok = add(R"({"context": "1: key D minor ~:w"})");
+    REQUIRE_MESSAGE(ok, (ok ? "" : ok.error().toString()));
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor");
+    // describe names an audio clip's key too.
+    CHECK(l.run("session.describe", "{}")["text"].asString().find("cl_1 in D minor ") !=
+          std::string::npos);
+    // Setting follow on it later is refused the same way.
+    const Error e = l.fails("clip.set", R"({"clip": "cl_1", "follow": "key"})");
+    CHECK(e.code == "clip.follow_audio");
+}
+
+TEST_CASE("clip.add {context_at} reads the project's context for the clip's length") {
+    Launcher l;
+    seedContext(l);
+    // Bar 5 is beat 16: D minor and Dm at the start, the A7 change at beat 4 of the clip.
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") + kTwoBars +
+                          R"(, "context_at": {"bar": 5}})");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Dm, chord@4 A7");
+    // History records the context the user saw, not the place it was read from.
+    const json::Value recorded = lastRecorded(l);
+    CHECK_FALSE(recorded.find("context_at"));
+    REQUIRE(recorded.find("context"));
+    CHECK(recorded.find("context")->asString() == "1: key D minor {Dm}:w\n2: {A7}:w\n");
+    // The same place in beats; the key holding mid-clip is carried to its start.
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_2", )") + kTwoBars +
+                          R"(, "context_at": {"at": 18}})");
+    CHECK(pointsOf(clipOf(l, "cl_2")) == "key@0 D minor, chord@0 Dm, chord@2 A7");
+    // Before any key, no key: the clip has none and the answer warns.
+    Launcher bare;
+    const auto none = bare.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") +
+                                               kTwoBars + R"(, "context_at": {"bar": 1}})");
+    CHECK(warningCodes(none).find("context.no_key") != std::string::npos);
+    CHECK(clipOf(bare, "cl_1").context.empty());
+}
+
+TEST_CASE("clip.add {item} takes the context under the item; a stated one wins") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Cm"})");
+    l.run("chord.set", R"({"at": 2, "symbol": "Fm"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm, chord@2 Fm");
+    const json::Value recorded = lastRecorded(l);
+    REQUIRE(recorded.find("context"));  // replayed as the points it took
+    CHECK(recorded.find("context")->asString() == "1: key C minor {Cm}:h {Fm}:h\n");
+    // A stated context, even none, is the clip's.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "item": "it_1", "context": ""})");
+    CHECK(clipOf(l, "cl_2").context.empty());
+    CHECK(lastRecorded(l).find("context")->asString().empty());
+    // No key under the item: nothing is taken, and no warning (the project may have no context).
+    Launcher bare;
+    const auto r = bare.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
+    CHECK(clipOf(bare, "cl_1").context.empty());
+    CHECK(warningCodes(r).empty());
+}
+
+TEST_CASE("clip.add records the chord symbols of its notation, by precedence") {
+    Launcher l;
+    const std::string base = R"({"track": "tr_1", "scene": "sc_1", "notation": )";
+    const std::string text = R"("voice bass; 1: {Dm}:w; 2: {A7}:h {Dm}:h")";
+    // No stated context: the symbols' chords, at their clip beats; no key.
+    const auto plain = l.run("clip.add", base + text + "}");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "chord@0 Dm, chord@4 A7, chord@6 Dm");
+    CHECK(warningCodes(plain).empty());
+    // A stated key only takes the symbols' chords too.
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_2", "notation": )") + text +
+                          R"(, "context": "1: key D minor ~:w"})");
+    CHECK(pointsOf(clipOf(l, "cl_2")) == "key@0 D minor, chord@0 Dm, chord@4 A7, chord@6 Dm");
+    // A stated context holding chords wins; the symbols are ignored, with a warning.
+    l.run("scene.add", R"({"name": "Bridge"})");
+    const auto ignored =
+        l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_3", "notation": )") + text +
+                              R"(, "context": "1: key D minor {Gm}:w"})");
+    CHECK(pointsOf(clipOf(l, "cl_3")) == "key@0 D minor, chord@0 Gm");
+    CHECK(warningCodes(ignored).find("clip.chords_ignored") != std::string::npos);
+    // context_at gives the place's points as a stated context would: a place with chords
+    // wins over the symbols, a place with a key only takes them.
+    seedContext(l);
+    l.run("scene.add", R"({"name": "Outro"})");
+    const auto atChords =
+        l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_4", "notation": )") + text +
+                              R"(, "context_at": {"bar": 5}})");
+    CHECK(pointsOf(clipOf(l, "cl_4")) == "key@0 D minor, chord@0 Dm, chord@4 A7");
+    CHECK(warningCodes(atChords).find("clip.chords_ignored") != std::string::npos);
+    Launcher keyOnly;
+    keyOnly.run("key.set", R"({"at": 0, "tonic": "D", "scale": "minor"})");
+    const auto atKey =
+        keyOnly.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", "notation": )") +
+                                    text + R"(, "context_at": {"bar": 1}})");
+    CHECK(pointsOf(clipOf(keyOnly, "cl_1")) == "key@0 D minor, chord@0 Dm, chord@4 A7, chord@6 Dm");
+    CHECK(warningCodes(atKey).find("clip.chords_ignored") == std::string::npos);
+    // ... and the history of the last replays to the same points: key only, symbols taken.
+    CHECK(lastRecorded(keyOnly).find("context")->asString() == "1: key D minor ~:w\n2: ~:w\n");
+    // Equal neighbours collapse, a tie adds none, and of two voices the earlier wins.
+    l.run("scene.add", R"({"name": "Coda"})");
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_5", "notation": )") +
+                          R"x("voice bass; 1: {Dm}:h {Dm}:h; 2: {Gm}:h~ {Gm}:h"})x");
+    CHECK(pointsOf(clipOf(l, "cl_5")) == "chord@0 Dm, chord@4 Gm");
+    l.run("scene.add", R"({"name": "Fin"})");
+    const auto conflict =
+        l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_6", "notation": )") +
+                              R"x("voice a; 1: {Dm}:w; voice b; 1: {Gm}:w"})x");
+    CHECK(pointsOf(clipOf(l, "cl_6")) == "chord@0 Dm");
+    CHECK(warningCodes(conflict).find("clip.chord_conflict") != std::string::npos);
+}
+
+TEST_CASE("clip.set: context, follow, and the edits that keep the invariants in the same step") {
+    Launcher l;
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") + kTwoBars +
+                          R"(, "context": "1: key D minor {Dm}:w\n2: {A7}:w"})");
+    l.run("clip.set", R"({"clip": "cl_1", "follow": "chords"})");
+    CHECK(clipOf(l, "cl_1").follow == model::ClipFollow::Chords);
+    // Shortening drops the points at or past the new length, and says so.
+    const auto shorter = l.run("clip.set", R"({"clip": "cl_1", "length": 4})");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Dm");
+    CHECK(warningCodes(shorter).find("clip.context_dropped") != std::string::npos);
+    CHECK(shorter.find("warnings")->at(0).find("message")->asString().find("A7") !=
+          std::string::npos);
+    l.run("history.undo", "{}");  // the points and the length come back together
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Dm, chord@4 A7");
+    CHECK(clipOf(l, "cl_1").length == 8.0);
+    // Clearing the context resets a follow that needs its key, in the same step.
+    const auto cleared = l.run("clip.set", R"({"clip": "cl_1", "context": ""})");
+    CHECK(clipOf(l, "cl_1").context.empty());
+    CHECK(clipOf(l, "cl_1").follow == model::ClipFollow::None);
+    CHECK(warningCodes(cleared).find("clip.follow_reset") != std::string::npos);
+    l.run("history.undo", "{}");
+    CHECK(clipOf(l, "cl_1").follow == model::ClipFollow::Chords);
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Dm, chord@4 A7");
+    // A text with no key does the same.
+    const auto keyless = l.run("clip.set", R"({"clip": "cl_1", "context": "1: {Dm}:w\n2: ~:w"})");
+    CHECK(warningCodes(keyless).find("clip.follow_reset") != std::string::npos);
+    CHECK(clipOf(l, "cl_1").follow == model::ClipFollow::None);
+    // follow asked for without a key is refused, not reset.
+    CHECK(l.fails("clip.set", R"({"clip": "cl_1", "follow": "key"})").code == "clip.no_key");
+    CHECK(
+        l.fails("clip.set", R"({"clip": "cl_1", "context": "", "context_at": {"bar": 1}})").code ==
+        "clip.context_args");
+    // context_at on a set is recorded as the context it read.
+    seedContext(l);
+    l.run("clip.set", R"({"clip": "cl_1", "context_at": {"bar": 5}, "follow": "key"})");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Dm, chord@4 A7");
+    CHECK(clipOf(l, "cl_1").follow == model::ClipFollow::Key);
+    CHECK_FALSE(lastRecorded(l).find("context_at"));
+    CHECK(lastRecorded(l).find("context")->asString() == "1: key D minor {Dm}:w\n2: {A7}:w\n");
+    // A point past a shorter clip is refused as range, not dropped.
+    CHECK(l.fails("clip.set", R"({"clip": "cl_1", "length": 4, "context": "2: {C}:w"})").code ==
+          "clip.context_range");
+}
+
+TEST_CASE("clip.set context.limit: a clip holds at most 4096 chord points") {
+    Launcher l;
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1"})");
+    l.run("clip.set", R"({"clip": "cl_1", "length": 9000})");
+    std::string text;
+    for (int bar = 1; bar <= 2049; ++bar) text += std::to_string(bar) + ": {C}:h {G}:h\n";
+    auto args = j(R"({"clip": "cl_1"})");
+    args["context"] = text;  // 4098 chord points
+    const auto result = l.bus->execute({"clip.set", args, kOrigin});
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "context.limit");
+    CHECK_FALSE(result.error().hint.empty());
+}
+
+TEST_CASE("clip.duplicate and clip.move keep the context and follow") {
+    Launcher l;
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") + kTwoBars +
+                          R"(, "context": "1: key D minor {Dm}:w\n2: {A7}:w", "follow": "key"})");
+    l.run("clip.duplicate", R"({"clip": "cl_1", "scene": "sc_2"})");
+    CHECK(clipOf(l, "cl_2").context == clipOf(l, "cl_1").context);
+    CHECK(clipOf(l, "cl_2").follow == model::ClipFollow::Key);
+    l.run("scene.add", R"({"name": "Bridge"})");
+    l.run("clip.move", R"({"clip": "cl_2", "scene": "sc_3"})");
+    CHECK(pointsOf(clipOf(l, "cl_2")) == "key@0 D minor, chord@0 Dm, chord@4 A7");
+    CHECK(clipOf(l, "cl_2").follow == model::ClipFollow::Key);
+    // An item made from the clip is plain notes: it keeps no link.
+    l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_1"})");
+    // (An item has no context member to hold one: nothing to check but that it plays.)
+    CHECK(l.head().items.size() == 2);
+}
+
+TEST_CASE("midi.write on a clip records its chord symbols, replacing the chords when they differ") {
+    Launcher l;
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") + kTwoBars +
+                          R"(, "context": "1: key D minor {Dm}:w\n2: {A7}:w"})");
+    const auto write = [&](const char* notation) {
+        auto args = j(R"({"item": "cl_1"})");
+        args["notation"] = notation;
+        return l.runArgs("midi.write", args);
+    };
+    // Symbols that differ replace the chords, keep the key, and say so.
+    const auto replaced = write("voice bass; 1: {Gm}:w; 2: {Dm}:w");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Gm, chord@4 Dm");
+    CHECK(warningCodes(replaced).find("clip.chords_set") != std::string::npos);
+    // The same symbols again: nothing replaced, nothing said.
+    const auto same = write("voice bass; 1: {Gm}:w; 2: {Dm}:w");
+    CHECK(warningCodes(same).empty());
+    // A text without symbols leaves the context alone.
+    write("voice bass; 1: D2:w; 2: A1:w");
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Gm, chord@4 Dm");
+    // A clip with no chords takes them too, and says so.
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w"})");
+    CHECK(warningCodes(write("voice bass; 1: {Am}:w; 2: {Dm}:w")).find("clip.chords_set") !=
+          std::string::npos);
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Am, chord@4 Dm");
+    // Symbols at or past the clip's length are not recorded, and the answer says so.
+    l.run("clip.set", R"({"clip": "cl_1", "length": 4})");
+    const auto beyond = write("voice bass; 1: {Em}:w; 2: {Dm}:w");
+    CHECK(warningCodes(beyond).find("clip.chords_beyond_length") != std::string::npos);
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 D minor, chord@0 Em");
+}
+
+TEST_CASE("laying a clip copies its notes and warns when its key is not the project's") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "name": "Break bass"})");
+    // item.add {clip}: the notes are copied as they are, with a warning that names the clip,
+    // both keys and the first project bar where they differ.
+    const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
+    const auto codes = warningCodes(laid);
+    CHECK(codes.find("context.mismatch") != std::string::npos);
+    const std::string message = laid.find("warnings")->at(0).find("message")->asString();
+    CHECK(message.find("cl_1 \"Break bass\"") != std::string::npos);
+    CHECK(message.find("D minor") != std::string::npos);
+    CHECK(message.find("C minor") != std::string::npos);
+    CHECK(message.find("bar 5") != std::string::npos);
+    CHECK(l.run("midi.notes", R"({"item": ")" + laid.find("item")->asString() + R"("})")["notes"]
+              .at(0)
+              .find("pitch")
+              ->asInt() == 33);  // copied: A1, whatever follow says until X2
+    // follow does not change that until X2: every clip is copied as none, with the warning.
+    l.run("clip.set", R"({"clip": "cl_1", "follow": "key"})");
+    CHECK(warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_1"})"))
+              .find("context.mismatch") != std::string::npos);
+    // The same key, an enharmonic spelling of it, a clip with no key and a clip of drums or
+    // nothing give none.
+    l.run("clip.set", R"({"clip": "cl_1", "follow": "none", "context": "1: key C minor ~:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 13, "clip": "cl_1"})")).empty());
+    l.run("clip.set", R"({"clip": "cl_1", "context": ""})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 17, "clip": "cl_1"})")).empty());
+    l.run("key.set", R"({"at": 0, "tonic": "C#", "scale": "major"})");
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key Db major ~:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 21, "clip": "cl_1"})")).empty());
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "notation": "voice kick ch 10; 1: C2:w",
+                          "context": "1: key D minor ~:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 25, "clip": "cl_2"})")).empty());
+    l.run("scene.add", R"({"name": "Empty"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "context": "1: key D minor ~:w"})");
+    CHECK(
+        warningCodes(l.run("item.add", R"({"track": "tr_1", "bar": 29, "clip": "cl_3"})")).empty());
+}
+
+TEST_CASE("the mismatch warning finds a key change inside the span, and comes from scene.insert") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "D", "scale": "minor"})");
+    l.run("key.set", R"({"at": 40, "tonic": "C", "scale": "minor"})");  // bar 11
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w"})");
+    l.run("clip.set", R"({"clip": "cl_1", "length": 16})");
+    // Laid at bar 9 for four bars, the clip's D minor agrees with the project's for two bars
+    // and parts from it at bar 11.
+    const auto inserted = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 4})");
+    REQUIRE(warningCodes(inserted).find("context.mismatch") != std::string::npos);
+    CHECK(inserted.find("warnings")->at(0).find("message")->asString().find("from bar 11") !=
+          std::string::npos);
+    CHECK(inserted.find("warnings")->size() == 1);  // once per item
+    // arrangement.build gives it as well.
+    l.run("history.undo", "{}");
+    const auto built =
+        l.run("arrangement.build", R"({"sequence": [{"scene": "sc_1", "bars": 4}], "bar": 9})");
+    CHECK(warningCodes(built).find("context.mismatch") != std::string::npos);
+    l.run("history.undo", "{}");
+    // A clip that changes key itself at its bar 3 agrees with the project throughout.
+    l.run("clip.set",
+          R"({"clip": "cl_1", "context": "1: key D minor ~:w\n2: ~:w\n3: key C minor ~:w"})");
+    const auto agrees = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 4})");
+    CHECK(warningCodes(agrees).empty());
 }

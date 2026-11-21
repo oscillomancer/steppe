@@ -2,9 +2,11 @@
 // Copyright (c) 2026 Supple Audio
 // Item commands: item.add/remove/move/set/duplicate/paste/split, midi.write and midi.get.
 #include <cstdio>
+#include "clip_context.h"
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "supple/model/context.h"
+#include "supple/model/launcher.h"
 
 namespace supple::engine {
 
@@ -53,16 +55,23 @@ struct MidiGetArgs {
 
 // The key and the chords heard over a MIDI item's span, each from the bar of the item
 // where it starts (item bars are the notation's; project bars are the arrange view's).
+// A run of the key or the chords. On an item: the bar of the item and of the project where
+// it starts. On a clip, which has no place in time: the clip's bar and its beat from the
+// clip's start (ADR-0098).
 struct ContextRun {
-    std::int64_t itemBar = 1, projectBar = 1;
+    std::int64_t itemBar = 1;
+    std::optional<std::int64_t> projectBar;
+    std::optional<double> beat;
     std::string what;
 };
 struct MidiContext {
     std::vector<ContextRun> keys, chords;
+    std::optional<std::string> text;  // a clip's lead sheet in clip bars
 };
 struct MidiGetResult {
     std::string text;
     std::optional<MidiContext> context;
+    std::optional<std::string> follow;  // a clip's: none, key or chords
 };
 
 // The 1-based bar of the item that holds `itemBeat` (beats from the item's start).
@@ -82,7 +91,7 @@ std::optional<MidiContext> midiContext(const model::Session& s, const model::Ite
     const auto meterAt = meterContext(s, start);
     auto run = [&](double from, bool holding, std::string what) {
         const double at = holding ? start : from;
-        return ContextRun{itemBarOf(meterAt, at - start), s.timeMap->barBeat(at).bar,
+        return ContextRun{itemBarOf(meterAt, at - start), s.timeMap->barBeat(at).bar, std::nullopt,
                           std::move(what)};
     };
     MidiContext out;
@@ -109,6 +118,29 @@ std::optional<MidiContext> midiContext(const model::Session& s, const model::Ite
     collect(model::ContextType::Key, out.keys);
     collect(model::ContextType::Chord, out.chords);
     if (out.keys.empty() && out.chords.empty()) return std::nullopt;
+    return out;
+}
+
+// A clip's context as midi.get answers it (ADR-0098): the runs by clip bar and beat, and
+// the lead sheet text. Nothing for a clip with no context.
+std::optional<MidiContext> midiContext(const model::Session& s, const model::Clip& clip) {
+    if (clip.context.empty()) return std::nullopt;
+    const auto meterAt = meterContext(s, 0);
+    MidiContext out;
+    for (const model::ContextPoint& p : clip.context) {
+        ContextRun run;
+        run.itemBar = itemBarOf(meterAt, p.beat);
+        run.beat = std::round(p.beat * 960.0) / 960.0;
+        if (p.type == model::ContextType::Key) {
+            run.what = model::keyWords(p);
+            out.keys.push_back(std::move(run));
+        } else {
+            run.what =
+                p.symbol.empty() ? "(no chord)" : p.symbol + (model::parseChordPoint(p) ? "" : "?");
+            out.chords.push_back(std::move(run));
+        }
+    }
+    out.text = detail::clipContextText(s, clip);
     return out;
 }
 
@@ -330,9 +362,8 @@ schema::Schema<model::FadeShape> fadeShapeSchema() {
 // item.add {clip}: a new item from a copy of the clip's takes, converted
 // at the tempo where it lands (ADR-0097 "Converting between an item and a
 // clip").
-Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, model::EditTxn& t,
+Result<ItemAddResult> addItemFromClip(Context& ctx, const model::Session& s, model::EditTxn& t,
                                       Id track, double pos, const std::string& text) {
-    (void)app;
     auto id = existing<model::Clip>(s, text, "/clip");
     if (!id) return std::move(id).error();
     const model::Clip& clip = *s.clips.find(*id);
@@ -353,7 +384,11 @@ Result<ItemAddResult> addItemFromClip(EngineApp& app, const model::Session& s, m
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)
         if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+    nameItemFromClip(t, clip, item);
     const double length = model::itemLengthBeats(s, item);
+    // The notes are copied as they are: say when the clip's key is not the project's here.
+    if (auto note = detail::mismatchNote(s, *id, clip, pos, length, 0.0, "/clip"))
+        ctx.warn(note->code, note->message, note->path);
     const Id it = t.create(std::move(item));
     ItemAddResult r;
     r.item = it.str();
@@ -465,7 +500,10 @@ void registerItemCommands(cmd::Registry& registry) {
             "project's tempo (the file's tempo and meter are not applied; a warning says when they "
             "differ), and the item is as long as the file unless length is given. clip: a copy of "
             "that clip's takes, as long as the clip, its loop and take envelopes converted at "
-            "the tempo where the item lands (ADR-0097). A master holds "
+            "the tempo where the item lands (ADR-0097); the item is named as the clip is (its "
+            "active take's name) when the clip has a name; the notes are copied as they are, and "
+            "context.mismatch warns when the clip's key is not the project's under the item "
+            "(ADR-0098). A master holds "
             "audio items only (prints, played after its fader); busses hold none.";
         c.tags = {"item", "midi"};
         c.args =
@@ -533,7 +571,7 @@ void registerItemCommands(cmd::Registry& registry) {
             take.name = a.name.value_or("");
             double length = a.length.value_or(4.0);
             ItemAddResult r;
-            if (a.clip) return addItemFromClip(app, s, t, *track, pos, *a.clip);
+            if (a.clip) return addItemFromClip(ctx, s, t, *track, pos, *a.clip);
             if (a.notation) {
                 auto compiled = compileNotation(s, *a.notation, pos);
                 if (!compiled) return std::move(compiled).error();
@@ -682,14 +720,54 @@ void registerItemCommands(cmd::Registry& registry) {
             if (!take || !take->source || take->source->kind != model::Kind::Midi)
                 return Error("midi.not_midi", a.item + " has no MIDI take", "/item",
                              "use item.add or clip.add with notation");
-            auto compiled = compileNotation(s, a.notation, ownerStartBeat(s, *id));
+            auto compiled = compileNotationFull(s, a.notation, ownerStartBeat(s, *id));
             if (!compiled) return std::move(compiled).error();
             const model::MidiSource* old = s.midi.find(*take->source);
-            compiled->first.pooled = old && old->pooled;
+            compiled->source.pooled = old && old->pooled;
             model::EditTxn& txn = app.txn();
-            txn.put<model::MidiSource>(*take->source, std::move(compiled->first));
+            const auto symbols = std::move(compiled->chords);
+            const int ppq = compiled->source.sequence.ppq;
+            txn.put<model::MidiSource>(*take->source, std::move(compiled->source));
             if (!old || !old->pooled)
                 txn.modify<model::Take>(*active, [](model::Take& tk) { tk.startOffset = 0; });
+            // A clip records the chord symbols the text holds as its chords (ADR-0098): they
+            // replace the chords it had when they differ, and a text without symbols leaves
+            // its context alone.
+            if (const model::Clip* held = s.clips.find(*id); held && !symbols.empty()) {
+                const double offset = old && old->pooled ? take->startOffset : 0.0;
+                const double rate = take->playrate > 0 ? take->playrate : 1.0;
+                auto made = detail::chordsFromSymbols(s, symbols, ppq, offset, rate, held->length);
+                for (const auto& n : made.notes) ctx.warn(n.code, n.message, n.path);
+                std::vector<model::ContextPoint> chords;
+                for (const auto& p : held->context)
+                    if (p.type == model::ContextType::Chord) chords.push_back(p);
+                const auto grid = [](double beat) { return std::llround(beat * 960.0); };
+                bool same = chords.size() == made.points.size();
+                for (std::size_t k = 0; same && k < chords.size(); ++k)
+                    same = grid(chords[k].beat) == grid(made.points[k].beat) &&
+                           chords[k].symbol == made.points[k].symbol;
+                if (!same && !made.points.empty()) {
+                    model::Clip next = *held;
+                    next.context.erase(std::remove_if(next.context.begin(), next.context.end(),
+                                                      [](const model::ContextPoint& p) {
+                                                          return p.type ==
+                                                                 model::ContextType::Chord;
+                                                      }),
+                                       next.context.end());
+                    for (auto& p : made.points) next.context.push_back(std::move(p));
+                    model::fitClipContext(next);
+                    txn.modify<model::Clip>(*id, [&](model::Clip& c2) { c2 = next; });
+                    ctx.warn("clip.chords_set",
+                             "the clip's chords are now the notation's " +
+                                 std::to_string(made.points.size()) + " chord symbol" +
+                                 (made.points.size() == 1 ? "" : "s") +
+                                 (chords.empty()
+                                      ? ""
+                                      : " (replacing its " + std::to_string(chords.size()) + ")") +
+                                 "; its keys are kept",
+                             "/notation");
+                }
+            }
             // The owner keeps its length, so notation that runs past it is stored and
             // never plays: say so rather than let the caller think it did.
             const model::Clip* clip = s.clips.find(*id);
@@ -722,8 +800,10 @@ void registerItemCommands(cmd::Registry& registry) {
             "the bar of the item (item_bar, the notation's) and of the project (project_bar) "
             "where it starts; the first of each is the one already holding at the item's "
             "start. Omitted when the project has no key or chords there. A clip has no place "
-            "in time: its pitch names follow the key at the project's start, and it has no "
-            "context.";
+            "in time: its pitch names follow its own key at its start, and its context is the "
+            "key and chords it was written against: runs by clip bar (item_bar, no "
+            "project_bar) and beat from its start, and text, its lead sheet in clip bars "
+            "(clip.set {context} takes it back). follow (none, key, chords) is a clip's.";
         c.tags = {"midi"};
         c.args = schema::object<MidiGetArgs>("midi_get_args")
                      .field("item", &MidiGetArgs::item, ownerIdArg())
@@ -731,6 +811,7 @@ void registerItemCommands(cmd::Registry& registry) {
         auto runSchema = schema::object<ContextRun>("context_run")
                              .field("item_bar", &ContextRun::itemBar, schema::integer())
                              .field("project_bar", &ContextRun::projectBar, schema::integer())
+                             .field("beat", &ContextRun::beat, schema::number())
                              .field("what", &ContextRun::what, schema::string())
                              .build();
         c.result = schema::object<MidiGetResult>("midi_get")
@@ -739,7 +820,9 @@ void registerItemCommands(cmd::Registry& registry) {
                               schema::object<MidiContext>("midi_context")
                                   .field("keys", &MidiContext::keys, schema::arrayOf(runSchema))
                                   .field("chords", &MidiContext::chords, schema::arrayOf(runSchema))
+                                  .field("text", &MidiContext::text, schema::string())
                                   .build())
+                       .field("follow", &MidiGetResult::follow, schema::string())
                        .build();
         c.examples = {{"Read the bass line", j(R"({"item": "it_1"})"), j(R"({"text": "<any>"})"),
                        "song_with_item"}};
@@ -756,12 +839,20 @@ void registerItemCommands(cmd::Registry& registry) {
             notation::DecompileOptions options;
             const double start = ownerStartBeat(s, *id);
             options.meterAt = meterContext(s, start);
-            options.key = model::keyAt(s, start);
+            const model::Clip* clip = s.clips.find(*id);
+            // A clip's names follow its own key at its start, never the project's.
+            options.key = clip ? model::keyAt(*clip, 0) : model::keyAt(s, start);
             auto text = notation::decompile(s.midi.find(*take->source)->sequence, options);
             if (!text) return std::move(text).error();
-            const model::Item* item = s.items.find(*id);  // null for a clip
-            return MidiGetResult{std::move(*text),
-                                 item ? midiContext(s, *item) : std::optional<MidiContext>{}};
+            if (clip) {
+                const auto follow = clip->follow == model::ClipFollow::Key      ? "key"
+                                    : clip->follow == model::ClipFollow::Chords ? "chords"
+                                                                                : "none";
+                return MidiGetResult{std::move(*text), midiContext(s, *clip), follow};
+            }
+            const model::Item* item = s.items.find(*id);
+            return MidiGetResult{std::move(*text), item ? midiContext(s, *item) : std::nullopt,
+                                 std::nullopt};
         };
         addChecked(registry, std::move(c));
     }();

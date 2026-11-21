@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <tuple>
 
 #include "bridge_patience.h"
 #include "plan.h"
@@ -1878,4 +1879,151 @@ TEST_CASE("launch.commit: history, undo, pooling and refusals") {
     REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
     CHECK(fails("launch.commit", j("{}")).code == "launch.capture");
     p.app->stopEngine();
+}
+
+TEST_CASE("launch.commit writes a section for each scene launched whole, in the same undo step") {
+    Project p;
+    twoTracks(p);  // tr_1 cl_1 and tr_2 cl_2 in sc_1 "A"
+    // sc_2 "B" has a clip on tr_1 only; a third scene "C" has both again.
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "notation": "voice b; 1: E3:w"})");
+    p.run("scene.add", R"({"name": "C", "color": "#ff8800"})");  // sc_3
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "notation": "voice b; 1: G3:w"})");
+    p.run("clip.add", R"({"track": "tr_2", "scene": "sc_3", "notation": "voice b; 1: G2:w"})");
+    // The clips: cl_1 (tr_1, A), cl_2 (tr_2, A), cl_3 (tr_1, B), cl_4 (tr_1, C), cl_5 (tr_2, C).
+    const auto launch = [](std::int64_t frame, const char* track, const char* clip, double beat) {
+        return std::string(R"({"frame": )") + std::to_string(frame) + R"(, "track": ")" + track +
+               R"(", "action": "clip", "clip": ")" + clip + R"(", "anchor": )" +
+               std::to_string(frame) + R"(, "anchor_beat": )" + std::to_string(beat) + "}";
+    };
+    const auto commit = [&](const std::string& launches, std::int64_t frames) {
+        json::Value args = json::Value::object();
+        args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": )" +
+                                std::to_string(frames) + R"(, "launches": [)" + launches + "]}");
+        return p.runArgs("launch.commit", args);
+    };
+    const auto regions = [&] {
+        std::vector<std::tuple<std::string, double, double>> out;
+        for (const auto& e : p.app->head().regions)
+            out.push_back({e.value->name, e.value->start, e.value->end});
+        std::sort(out.begin(), out.end(),
+                  [](const auto& a, const auto& b) { return std::get<1>(a) < std::get<1>(b); });
+        return out;
+    };
+    const std::size_t before = p.app->head().regions.size();
+    const std::size_t itemsBefore = p.app->head().items.size();
+
+    SUBCASE(
+        "two scenes in turn: a section each, named after the scene, meeting where one gave way") {
+        // A on bar 1 (frame 0), C on bar 2 (96000): beats 0 and 4; the capture ends at bar 4.
+        const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0) +
+                                "," + launch(96000, "tr_1", "cl_4", 4) + "," +
+                                launch(96000, "tr_2", "cl_5", 4);
+        json::Value done = commit(log, 288000);
+        REQUIRE(done["sections"].size() == 2);
+        const auto r = regions();
+        REQUIRE(r.size() == before + 2);
+        CHECK(std::get<0>(r[before]) == "A");
+        CHECK(std::get<1>(r[before]) == 0.0);
+        CHECK(std::get<2>(r[before]) == 4.0);
+        CHECK(std::get<0>(r[before + 1]) == "C");
+        CHECK(std::get<1>(r[before + 1]) == 4.0);
+        CHECK(std::get<2>(r[before + 1]) == doctest::Approx(12));  // the capture's end
+        CHECK(done["sections"].at(0).find("scene")->asString() == "sc_1");
+        CHECK(done["sections"].at(1).find("scene")->asString() == "sc_3");
+        const model::Session s = p.app->head();
+        const model::Region& second =
+            *s.regions.find(id(done["sections"].at(1).find("region")->asString().c_str()));
+        CHECK(second.section);
+        CHECK(second.color == "#ff8800");
+        // context.at names the section over the committed performance.
+        auto at = p.run("context.at", R"({"bar": 2})");
+        CHECK(at["section"]["name"].asString() == "C");
+        // One undo step takes the sections and the items away together.
+        p.run("history.undo", "{}");
+        CHECK(p.app->head().regions.size() == before);
+        CHECK(p.app->head().items.size() == itemsBefore);
+        p.run("history.redo", "{}");
+        CHECK(p.app->head().regions.size() == before + 2);
+    }
+    SUBCASE("committing again writes the same performance over itself: the sections stay") {
+        const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0);
+        json::Value first = commit(log, 192000);
+        const std::size_t items = p.app->head().items.size();
+        json::Value again = commit(log, 192000);
+        CHECK(p.app->head().regions.size() == before + 1);
+        CHECK(p.app->head().items.size() == items);
+        CHECK(again["sections"].at(0).find("region")->asString() ==
+              first["sections"].at(0).find("region")->asString());
+    }
+    SUBCASE("a clip launched alone, or only some of a scene's clips, writes none") {
+        // A holds cl_1 and cl_2: launching cl_1 alone is not launching the scene.
+        json::Value done = commit(launch(0, "tr_1", "cl_1", 0), 192000);
+        CHECK(done["sections"].size() == 0);
+        CHECK(p.app->head().regions.size() == before);
+        CHECK(done["items"].size() > 0);
+    }
+    SUBCASE("a scene's section ends when one of its tracks is launched again") {
+        // A at bar 1; tr_2 leaves for the arrangement at bar 3 (frame 192000): A ends there.
+        const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0) +
+                                R"(,{"frame": 192000, "track": "tr_2", "action": "arrangement",
+                                    "anchor": 192000, "anchor_beat": 8})";
+        json::Value done = commit(log, 288000);
+        REQUIRE(done["sections"].size() == 1);
+        CHECK(done["sections"].at(0).find("end")->asDouble() == doctest::Approx(8));
+    }
+    SUBCASE(
+        "a scene launched twice writes a section each time; the last of one frame's launches "
+        "holds") {
+        // B (one clip on tr_1) at bar 1, then A over it at the same frame: A holds there.
+        const std::string log = launch(0, "tr_1", "cl_3", 0) + "," + launch(0, "tr_1", "cl_1", 0) +
+                                "," + launch(0, "tr_2", "cl_2", 0) + "," +
+                                launch(96000, "tr_1", "cl_1", 4) + "," +
+                                launch(96000, "tr_2", "cl_2", 4);
+        json::Value done = commit(log, 192000);
+        REQUIRE(done["sections"].size() == 2);
+        CHECK(done["sections"].at(0).find("scene")->asString() == "sc_1");
+        CHECK(done["sections"].at(1).find("scene")->asString() == "sc_1");
+        CHECK(done["sections"].at(0).find("end")->asDouble() == doctest::Approx(4));
+        CHECK(done["sections"].at(1).find("start")->asDouble() == doctest::Approx(4));
+    }
+}
+
+TEST_CASE("launch.commit names the items after their clips") {
+    Project p;
+    twoTracks(p);
+    p.run("clip.set", R"({"clip": "cl_1", "name": "Riff"})");
+    json::Value args = json::Value::object();
+    args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": 192000,
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]})");
+    json::Value done = p.runArgs("launch.commit", args);
+    REQUIRE(done["items"].size() > 0);
+    const model::Session s = p.app->head();
+    for (const auto& item : done["items"].asArray()) {
+        const model::Item& it = *s.items.find(id(item.asString().c_str()));
+        CHECK(s.takes.find(*it.activeTake)->name == "Riff");
+    }
+}
+
+TEST_CASE("launch.commit copies a launched clip and warns when its key is not the project's") {
+    Project p;
+    twoTracks(p);
+    p.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w"})");
+    json::Value args = json::Value::object();
+    args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": 192000,
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]})");
+    json::Value done = p.runArgs("launch.commit", args);
+    REQUIRE(done["items"].size() > 0);
+    const json::Value* warnings = done.find("warnings");
+    REQUIRE(warnings);
+    bool mismatch = false;
+    for (const auto& w : warnings->asArray())
+        mismatch |= w.find("code")->asString() == "context.mismatch";
+    CHECK(mismatch);
+    // The notes are as they were played: nothing was mapped.
+    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key C minor ~:w"})");
+    json::Value again = p.runArgs("launch.commit", args);
+    CHECK_FALSE(again.find("warnings"));
 }

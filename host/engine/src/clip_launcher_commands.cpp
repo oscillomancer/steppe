@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "clip_context.h"
 #include "command_helpers.h"
 #include "supple/model/env_shape.h"
 #include "supple/model/launcher.h"
@@ -412,7 +413,15 @@ Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id 
     clip.mute = it.mute;
     clip.gainDb = it.gainDb;
     clip.color = it.color;
+    // An item's name is its active take's.
+    if (it.activeTake)
+        if (const model::Take* active = s.takes.find(*it.activeTake)) clip.name = active->name;
     return clip;
+}
+
+void nameItemFromClip(model::EditTxn& t, const model::Clip& clip, const model::Item& item) {
+    if (clip.name.empty() || !item.activeTake) return;
+    t.modify<model::Take>(*item.activeTake, [&](model::Take& k) { k.name = clip.name; });
 }
 
 Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const model::Clip& clip,
@@ -482,6 +491,7 @@ Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const m
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)
         if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
+    nameItemFromClip(t, clip, item);
     return t.create(std::move(item));
 }
 
@@ -595,10 +605,18 @@ struct SceneList {
     std::vector<SceneEntry> scenes;
 };
 
+// A place in the project to read the context from (clip.add, clip.set): a bar, or beats.
+struct ContextAtArg {
+    std::optional<std::int64_t> bar;
+    std::optional<double> at;
+};
 struct ClipAddArgs {
     std::string track, scene;
     std::optional<std::string> notation, audioFile, midiFile, item, name;
     bool pooled = false;
+    std::optional<std::string> context;
+    std::optional<ContextAtArg> contextAt;
+    std::optional<model::ClipFollow> follow;
 };
 struct ClipAddResult {
     std::string clip;
@@ -620,6 +638,9 @@ struct ClipSetArgs {
     std::optional<LoopArg> loop;
     std::optional<model::ClipMode> mode;
     std::optional<json::Value> quantize;  // null: the project's
+    std::optional<std::string> context;
+    std::optional<ContextAtArg> contextAt;
+    std::optional<model::ClipFollow> follow;
 };
 struct ClipRef {
     std::string clip;
@@ -637,6 +658,150 @@ struct ClipDuplicateArgs {
 schema::Schema<model::ClipMode> clipModeSchema() {
     return schema::enumeration<model::ClipMode>(
         {{model::ClipMode::Loop, "loop"}, {model::ClipMode::Once, "once"}});
+}
+
+schema::Schema<model::ClipFollow> clipFollowArgSchema() {
+    return schema::enumeration<model::ClipFollow>({{model::ClipFollow::None, "none"},
+                                                   {model::ClipFollow::Key, "key"},
+                                                   {model::ClipFollow::Chords, "chords"}})
+        .doc(
+            "How the clip's notes are mapped when it is laid on the timeline (ADR-0098): "
+            "none (default), key or chords. Needs a MIDI clip with a key at its start.");
+}
+
+schema::Schema<ContextAtArg> contextAtSchema() {
+    return schema::object<ContextAtArg>("context_at")
+        .field("bar", &ContextAtArg::bar, schema::integer().range(1, 1000000))
+        .field("at", &ContextAtArg::at, schema::number().min(0))
+        .build()
+        .doc(
+            "A place in the project, by bar or in beats: the clip takes the key and chords "
+            "holding there, and the changes up to its length after it.");
+}
+
+schema::Schema<ClipAddArgs> clipAddArgsSchema() {
+    return schema::object<ClipAddArgs>("clip_add_args")
+        .field("track", &ClipAddArgs::track, idArg("tr", "Track"))
+        .field("scene", &ClipAddArgs::scene, idArg("sc", "Scene"))
+        .field("notation", &ClipAddArgs::notation, schema::string())
+        .field("audio_file", &ClipAddArgs::audioFile, schema::string())
+        .field("midi_file", &ClipAddArgs::midiFile, schema::string())
+        .field("item", &ClipAddArgs::item, idArg("it", "Item"))
+        .field("pooled", &ClipAddArgs::pooled, schema::boolean())
+        .defaultValue(false)
+        .field("name", &ClipAddArgs::name, schema::string())
+        .field("context", &ClipAddArgs::context,
+               schema::string().doc("The key and chords the clip was written against, as a lead "
+                                    "sheet in clip bars (bar 1 is the clip's start): "
+                                    "\"1: key D minor {Dm}:w\". \"\" is none."))
+        .field("context_at", &ClipAddArgs::contextAt, contextAtSchema())
+        .field("follow", &ClipAddArgs::follow, clipFollowArgSchema())
+        .build();
+}
+
+schema::Schema<ClipSetArgs> clipSetArgsSchema() {
+    auto loop = schema::object<LoopArg>("clip_loop_arg")
+                    .field("on", &LoopArg::on, schema::boolean())
+                    .field("start", &LoopArg::start, schema::number().min(0))
+                    .field("length", &LoopArg::length, schema::number())
+                    .build();
+    return schema::object<ClipSetArgs>("clip_set_args")
+        .field("clip", &ClipSetArgs::clip, idArg("cl", "Clip"))
+        .field("name", &ClipSetArgs::name, schema::string())
+        .field("color", &ClipSetArgs::color, schema::string())
+        .field("mute", &ClipSetArgs::mute, schema::boolean())
+        .field("gain_db", &ClipSetArgs::gainDb, schema::number().range(model::kSilenceDb, 24))
+        .field("length", &ClipSetArgs::length, schema::number())
+        .field("loop", &ClipSetArgs::loop, loop)
+        .field("mode", &ClipSetArgs::mode, clipModeSchema())
+        .field("quantize", &ClipSetArgs::quantize,
+               clearable("clearable_launch_quantize", model::launchQuantizeSchema()))
+        .field("context", &ClipSetArgs::context,
+               schema::string().doc("As clip.add's: the lead sheet in clip bars; \"\" clears the "
+                                    "context."))
+        .field("context_at", &ClipSetArgs::contextAt, contextAtSchema())
+        .field("follow", &ClipSetArgs::follow, clipFollowArgSchema())
+        .build();
+}
+
+// The beat a context_at names: a bar of the project, or beats; exactly one.
+Result<double> contextPlace(const model::Session& s, const ContextAtArg& at,
+                            const std::string& path) {
+    if (at.bar.has_value() == at.at.has_value())
+        return Error("clip.context_args", "context_at takes bar or at, one of them", path,
+                     "e.g. {\"bar\": 9}, or {\"at\": 32} in beats");
+    return at.bar ? s.timeMap->beatOfBar(static_cast<int>(*at.bar)) : *at.at;
+}
+
+// The context a command states for a clip of `kind` and `length`: its `context` text, the
+// project's context under `at`, or (clip.add {item}) under the item. `text` is what
+// history records for the resolved arguments. Nothing stated: nullopt.
+struct Stated {
+    std::optional<std::vector<model::ContextPoint>> points;
+    std::string text;
+};
+Result<Stated> statedContext(Context& ctx, const model::Session& s, model::ClipKind kind,
+                             double length, const std::optional<std::string>& text,
+                             const std::optional<ContextAtArg>& at,
+                             std::optional<std::pair<double, double>> underItem) {
+    if (text && at)
+        return Error("clip.context_args", "give context or context_at, not both", "/context_at",
+                     "context is the lead sheet text; context_at reads the project's context");
+    Stated out;
+    const bool audio = kind == model::ClipKind::Audio;
+    if (text) {
+        auto points = detail::clipContextFromText(s, *text, kind, length, "/context");
+        if (!points) return std::move(points).error();
+        out.points = std::move(*points);
+    } else if (at || underItem) {
+        double from = 0, span = length;
+        if (at) {
+            auto place = contextPlace(s, *at, "/context_at");
+            if (!place) return std::move(place).error();
+            from = *place;
+        } else {
+            from = underItem->first;
+            span = underItem->second;
+        }
+        auto taken = detail::contextUnder(s, from, span, audio);
+        if (at && !taken.key)
+            ctx.warn("context.no_key",
+                     "no key holds at " + std::string("bar ") +
+                         std::to_string(s.timeMap->barBeat(from).bar) +
+                         ": the clip has no key and cannot follow",
+                     "/context_at");
+        out.points = std::move(taken.points);
+    } else {
+        return out;
+    }
+    model::Clip shape;  // the text history records is of the points as the clip keeps them
+    shape.kind = kind;
+    shape.length = length;
+    shape.context = *out.points;
+    model::fitClipContext(shape);
+    out.text = detail::clipContextText(s, shape);
+    return out;
+}
+
+void warnNotes(Context& ctx, const std::vector<detail::ClipNote>& notes) {
+    for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
+}
+void warnFit(Context& ctx, const std::vector<model::ClipContextNote>& notes) {
+    for (const auto& n : notes)
+        ctx.warn(n.code, n.message, n.code == "clip.follow_reset" ? "/follow" : "/context");
+}
+
+// `follow` as given for a clip with this context: the refusals of clip.add and clip.set.
+Status checkFollow(const model::Clip& clip, model::ClipFollow follow) {
+    if (follow == model::ClipFollow::None) return {};
+    if (clip.kind == model::ClipKind::Audio)
+        return Error("clip.follow_audio", "an audio clip cannot follow the context", "/follow",
+                     "follow applies to MIDI clips; leave it out for audio");
+    if (!model::keyAt(clip, 0))
+        return Error("clip.no_key", "follow needs a key at the clip's start", "/follow",
+                     "give the clip a context with a key at its start: clip.set {context: \"1: key "
+                     "D minor ~:w\"} or {context_at}");
+    return {};
 }
 
 auto sceneIdArg() { return idArg("sc", "Scene"); }
@@ -835,19 +1000,17 @@ void registerClipCommands(cmd::Registry& registry) {
             "MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes "
             "rounded up to whole bars; an audio clip in seconds of take time, as long as the "
             "file. From an item, the length, loop and take envelopes convert at the tempo where "
-            "the item sits (ADR-0097). Clips live on channels, one per (track, scene).";
+            "the item sits (ADR-0097); the clip is named as the item is (its active take's name) "
+            "unless name is given. Clips live on channels, one per (track, scene). A clip keeps "
+            "the key and chords it was written against (context): as a lead sheet in clip bars "
+            "(\"1: key D minor {Dm}:w\"), read from the project at a place (context_at), under "
+            "the item it copies, or from the {SYMBOL} chords of its notation (a stated context "
+            "holding chords wins over them, clip.chords_ignored). follow (none, key or chords) "
+            "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); until "
+            "placement follows it, only the mismatch warning on laying a clip uses the context "
+            "(ADR-0098).";
         c.tags = {"clip launcher", "clip"};
-        c.args = schema::object<ClipAddArgs>("clip_add_args")
-                     .field("track", &ClipAddArgs::track, idArg("tr", "Track"))
-                     .field("scene", &ClipAddArgs::scene, sceneIdArg())
-                     .field("notation", &ClipAddArgs::notation, schema::string())
-                     .field("audio_file", &ClipAddArgs::audioFile, schema::string())
-                     .field("midi_file", &ClipAddArgs::midiFile, schema::string())
-                     .field("item", &ClipAddArgs::item, idArg("it", "Item"))
-                     .field("pooled", &ClipAddArgs::pooled, schema::boolean())
-                     .defaultValue(false)
-                     .field("name", &ClipAddArgs::name, schema::string())
-                     .build();
+        c.args = clipAddArgsSchema();
         c.result =
             schema::object<ClipAddResult>("clip_add")
                 .field("clip", &ClipAddResult::clip, schema::string())
@@ -866,10 +1029,25 @@ void registerClipCommands(cmd::Registry& registry) {
                     {"clip.mixed", "the item holds MIDI and audio takes", "copy one kind"},
                     {"clip.unsupported", "a warped take", "reset its warp first"},
                     {"clip.memory", "the clips' audio would not fit", "use shorter audio"},
-                    {"clip.limit", "the project has 16384 clips", "remove clips first"}};
+                    {"clip.limit", "the project has 16384 clips", "remove clips first"},
+                    {"clip.context_args", "context and context_at together",
+                     "give one: the text, or a place to read"},
+                    {"clip.context_syntax", "the context text does not read",
+                     "write a lead sheet in clip bars: 1: key D minor {Dm}:w"},
+                    {"clip.context_range", "a context point at or past the clip's end",
+                     "move it earlier or lengthen the clip"},
+                    {"clip.context_audio", "a chord, or a key after the start, on an audio clip",
+                     "an audio clip's context is a key at the start of bar 1"},
+                    {"clip.no_key", "follow without a key at the clip's start",
+                     "give the clip a context with a key at its start"},
+                    {"clip.follow_audio", "follow on an audio clip", "follow is for MIDI clips"}};
         c.examples = {
             {"A chorus bass line",
              j(R"({"track": "tr_1", "scene": "sc_2", "notation": "voice bass; 1: C2:h G2:h"})"),
+             j(R"({"clip": "cl_2", "takes": ["tk_3"], "source": "mi_3", "kind": "midi", "length": 4.0})"),
+             "song_with_clip"},
+            {"A bass line written in D minor, following the key when laid",
+             j(R"({"track": "tr_1", "scene": "sc_2", "notation": "voice bass; 1: D2:h A1:h", "context": "1: key D minor {Dm}:w", "follow": "key"})"),
              j(R"({"clip": "cl_2", "takes": ["tk_3"], "source": "mi_3", "kind": "midi", "length": 4.0})"),
              "song_with_clip"}};
         c.run = [](const ClipAddArgs& a, Context& ctx) -> Result<ClipAddResult> {
@@ -899,6 +1077,8 @@ void registerClipCommands(cmd::Registry& registry) {
             clip.scene = *scene;
             clip.name = a.name.value_or("");
             ClipAddResult r;
+            std::vector<notation::ChordSymbol> symbolsOf;        // the notation's {SYMBOL} chords
+            std::optional<std::pair<double, double>> underItem;  // where an item's context is
             auto single = [&](model::Take take) {
                 const Id tk = t.create(std::move(take));
                 clip.takes = {tk};
@@ -911,8 +1091,10 @@ void registerClipCommands(cmd::Registry& registry) {
                 if (!made) return std::move(made).error();
                 made->track = clip.track;
                 made->scene = clip.scene;
-                made->name = clip.name;
+                if (a.name) made->name = *a.name;  // else the item's
                 clip = std::move(*made);
+                const model::Item& it = *s.items.find(*item);
+                underItem = {model::itemSpan(s, it).startBeat, model::itemLengthBeats(s, it)};
             } else if (a.audioFile) {
                 auto imported = importAudioFile(app, t, s, *a.audioFile);
                 if (!imported) return std::move(imported).error().at("/audio_file");
@@ -926,10 +1108,11 @@ void registerClipCommands(cmd::Registry& registry) {
                 model::MidiSource source;
                 double beats = 0;
                 if (a.notation) {
-                    auto compiled = compileNotation(s, *a.notation, 0);
+                    auto compiled = compileNotationFull(s, *a.notation, 0);
                     if (!compiled) return std::move(compiled).error();
-                    source = std::move(compiled->first);
-                    beats = compiled->second;
+                    source = std::move(compiled->source);
+                    beats = compiled->beats;
+                    symbolsOf = std::move(compiled->chords);
                 } else if (a.midiFile) {
                     auto file = readMidiFile(app, s, *a.midiFile, 0);
                     if (!file) return std::move(file).error().at("/midi_file");
@@ -947,6 +1130,28 @@ void registerClipCommands(cmd::Registry& registry) {
                 model::Take take;
                 take.source = t.create(std::move(source));
                 single(std::move(take));
+            }
+            // The context the clip was written against (ADR-0098).
+            auto stated =
+                statedContext(ctx, s, clip.kind, clip.length, a.context, a.contextAt, underItem);
+            if (!stated) return std::move(stated).error();
+            std::vector<detail::ClipNote> notes;
+            detail::SymbolChords symbols;
+            if (!symbolsOf.empty())
+                symbols =
+                    detail::chordsFromSymbols(s, symbolsOf, s.project->ppq, 0.0, 1.0, clip.length);
+            clip.context =
+                detail::composeContext(std::move(stated->points), std::move(symbols), notes);
+            SUPPLE_TRY(checkFollow(clip, a.follow.value_or(model::ClipFollow::None)));
+            clip.follow = a.follow.value_or(model::ClipFollow::None);
+            warnNotes(ctx, notes);
+            warnFit(ctx, model::fitClipContext(clip));
+            // History replays the context the user saw, not the place it was read from.
+            if (a.contextAt || (a.item && !a.context)) {
+                ClipAddArgs resolved = a;
+                resolved.contextAt.reset();
+                resolved.context = stated->text;
+                ctx.setResolvedArgs(clipAddArgsSchema().encode(resolved));
             }
             const Id id = t.create(clip);
             if (clip.kind == model::ClipKind::Audio)
@@ -974,29 +1179,27 @@ void registerClipCommands(cmd::Registry& registry) {
             "audio. loop: {on, start?, length?}, the window that repeats inside the clip from "
             "the take's start. mode loop repeats every length; once plays it once. quantize "
             "(bar, beat, 1/2 … 1/32, none) overrides the project's launch_quantize; null "
-            "returns to it.";
+            "returns to it. context (a lead sheet in clip bars; \"\" clears it) or context_at "
+            "(read from the project at a bar or beat) sets the key and chords the clip was "
+            "written against, and follow (none, key, chords) how it is mapped when laid; "
+            "shortening a clip drops the points past its end (clip.context_dropped), and a "
+            "context left with no key at the start resets follow to none (clip.follow_reset).";
         c.tags = {"clip launcher", "clip"};
-        auto loop = schema::object<LoopArg>("clip_loop_arg")
-                        .field("on", &LoopArg::on, schema::boolean())
-                        .field("start", &LoopArg::start, schema::number().min(0))
-                        .field("length", &LoopArg::length, schema::number())
-                        .build();
-        c.args = schema::object<ClipSetArgs>("clip_set_args")
-                     .field("clip", &ClipSetArgs::clip, clipIdArg())
-                     .field("name", &ClipSetArgs::name, schema::string())
-                     .field("color", &ClipSetArgs::color, schema::string())
-                     .field("mute", &ClipSetArgs::mute, schema::boolean())
-                     .field("gain_db", &ClipSetArgs::gainDb,
-                            schema::number().range(model::kSilenceDb, 24))
-                     .field("length", &ClipSetArgs::length, schema::number())
-                     .field("loop", &ClipSetArgs::loop, loop)
-                     .field("mode", &ClipSetArgs::mode, clipModeSchema())
-                     .field("quantize", &ClipSetArgs::quantize,
-                            clearable("clearable_launch_quantize", model::launchQuantizeSchema()))
-                     .build();
+        c.args = clipSetArgsSchema();
         c.result = emptySchema();
         c.errors = {{"clip.length", "a length or loop length not above 0",
-                     "give a positive length in the clip's unit"}};
+                     "give a positive length in the clip's unit"},
+                    {"clip.context_args", "context and context_at together",
+                     "give one: the text, or a place to read"},
+                    {"clip.context_syntax", "the context text does not read",
+                     "write a lead sheet in clip bars: 1: key D minor {Dm}:w"},
+                    {"clip.context_range", "a context point at or past the clip's end",
+                     "move it earlier or lengthen the clip"},
+                    {"clip.context_audio", "a chord, or a key after the start, on an audio clip",
+                     "an audio clip's context is a key at the start of bar 1"},
+                    {"clip.no_key", "follow without a key at the clip's start",
+                     "give the clip a context with a key at its start"},
+                    {"clip.follow_audio", "follow on an audio clip", "follow is for MIDI clips"}};
         c.examples = {{"Play once, on the beat",
                        j(R"({"clip": "cl_1", "mode": "once", "quantize": "beat"})"), j("{}"),
                        "song_with_clip"}};
@@ -1021,6 +1224,22 @@ void registerClipCommands(cmd::Registry& registry) {
             if (a.mute) clip.mute = *a.mute;
             if (a.gainDb) clip.gainDb = *a.gainDb;
             if (a.mode) clip.mode = *a.mode;
+            // The clip's context and follow (ADR-0098): stated against the clip as it will be.
+            auto stated =
+                statedContext(ctx, s, clip.kind, clip.length, a.context, a.contextAt, std::nullopt);
+            if (!stated) return std::move(stated).error();
+            if (stated->points) clip.context = std::move(*stated->points);
+            if (a.follow) {
+                SUPPLE_TRY(checkFollow(clip, *a.follow));
+                clip.follow = *a.follow;
+            }
+            warnFit(ctx, model::fitClipContext(clip));
+            if (a.contextAt) {
+                ClipSetArgs resolved = a;
+                resolved.contextAt.reset();
+                resolved.context = stated->text;
+                ctx.setResolvedArgs(clipSetArgsSchema().encode(resolved));
+            }
             if (a.quantize) {
                 if (a.quantize->isNull())
                     clip.quantize.reset();
@@ -1179,8 +1398,9 @@ std::string describeScenes(const model::Session& s) {
             any = true;
             const model::Clip& clip = *s.clips.find(*cl);
             const model::Track& track = *s.tracks.find(tr);
+            const auto key = detail::clipKeyWords(clip);
             std::string line = "    " + tr.str() + (track.name.empty() ? "" : " " + track.name) +
-                               ": " + clipLabel(s, *cl) + " ";
+                               ": " + clipLabel(s, *cl) + (key ? " in " + *key : "") + " ";
             if (clip.kind == model::ClipKind::Midi) {
                 line += number(clip.length) + " beats";
             } else {
@@ -1212,6 +1432,9 @@ std::string describeScenes(const model::Session& s) {
                 line += " · quantize " + std::string(model::launchQuantizeName(*clip.quantize));
             if (clip.gainDb != 0.0) line += " · " + number(clip.gainDb) + " dB";
             if (clip.mute) line += " · muted";
+            if (clip.follow != model::ClipFollow::None)
+                line += clip.follow == model::ClipFollow::Key ? " · follows the key"
+                                                              : " · follows the chords";
             lines += line + "\n";
         }
         out += any ? "\n" + lines : " (no clips)\n";

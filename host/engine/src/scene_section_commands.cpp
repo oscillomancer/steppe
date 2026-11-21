@@ -8,6 +8,7 @@
 #include <cmath>
 #include <set>
 
+#include "clip_context.h"
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "supple/model/freeze.h"
@@ -121,9 +122,10 @@ std::string barLabel(const model::Session& s, double beat) {
 // scene.insert for one scene: its clips as items over `bars` bars from
 // `firstBar`, and a section over them. `base` is the path of the scene
 // argument's owner.
-Result<Segment> insertScene(model::EditTxn& t, const model::Session& s, model::Id scene,
-                            int firstBar, std::int64_t bars, const std::optional<std::string>& name,
-                            bool pooled, const std::string& base) {
+Result<Segment> insertScene(Context& ctx, model::EditTxn& t, const model::Session& s,
+                            model::Id scene, int firstBar, std::int64_t bars,
+                            const std::optional<std::string>& name, bool pooled,
+                            const std::string& base) {
     if (bars < 1 || bars > kMaxBars)
         return Error("scene.bars", "bars must be from 1 to " + std::to_string(kMaxBars),
                      base + "/bars", "give the number of whole bars the scene lasts");
@@ -166,6 +168,13 @@ Result<Segment> insertScene(model::EditTxn& t, const model::Session& s, model::I
     for (const auto& [clipId, clip] : clips) {
         auto item = layClipOnTimeline(t, s, *clip, start, end, pooled, base + "/scene");
         if (!item) return std::move(item).error();
+        // Notes are copied as they are (follow arrives with X2): say when the clip's key is
+        // not the project's under it.
+        if (const model::Item* laid = t.preview().items.find(*item))
+            if (auto note = detail::mismatchNote(s, clipId, *clip, start,
+                                                 model::itemLengthBeats(t.preview(), *laid), 0.0,
+                                                 base + "/scene"))
+                ctx.warn(note->code, note->message, note->path);
         seg.items.push_back({clipId.str(), item->str(), clip->track.str()});
     }
     model::Region region;
@@ -194,7 +203,10 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "the span, as one looping item when it repeats within it, which needs its period to be "
             "its content: loop off with its length (as clip.add makes it), or loop on over the "
             "whole content with a length of whole repeats (scene.insert.period otherwise). Takes "
-            "are copied, MIDI with them unless pooled. An item already in "
+            "are copied, MIDI with them unless pooled; an item takes its clip's name (its active "
+            "take's) when the clip has one. Notes are copied as they are, and context.mismatch "
+            "warns "
+            "once for each item whose clip's key is not the project's under it. An item already in "
             "the span on a track that receives a clip is refused (scene.insert.occupied), and "
             "an empty scene (scene.empty). A section named after the scene (name overrides) "
             "is added over the span. One undo step.";
@@ -239,7 +251,7 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             auto bar = startBar(s, a.at, a.bar, "");
             if (!bar) return std::move(bar).error();
             model::EditTxn& t = app.txn();
-            auto seg = insertScene(t, s, *scene, *bar, a.bars, a.name, a.pooled, "");
+            auto seg = insertScene(ctx, t, s, *scene, *bar, a.bars, a.name, a.pooled, "");
             if (!seg) return std::move(seg).error();
             SceneInsertResult r;
             r.items = std::move(seg->items);
@@ -263,7 +275,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "clip begins at its own start); a region holding no item is scene.capture.empty. "
             "Items on a master are skipped with a warning. Each item becomes a clip as clip.add "
             "{item} makes it (MIDI copied unless pooled; a warped take is clip.unsupported): "
-            "loop mode when it fills the region, once when it is shorter. The scene is added "
+            "loop mode when it fills the region, once when it is shorter, named as the item is "
+            "(its active take's name). The scene is added "
             "after the last, named after the region unless name is given, with its colour. The "
             "region and the items are unchanged. One undo step.";
         c.tags = {"clip launcher", "scene", "arrangement"};
@@ -389,6 +402,13 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                 made->mode =
                     length < (re - rs) - kEps ? model::ClipMode::Once : model::ClipMode::Loop;
                 audio |= made->kind == model::ClipKind::Audio;
+                // The clip remembers the key and chords the item sat under (ADR-0098); an
+                // audio clip takes the key only.
+                made->context =
+                    detail::contextUnder(s, model::itemSpan(s, *s.items.find(pick.item)).startBeat,
+                                         length, made->kind == model::ClipKind::Audio)
+                        .points;
+                model::fitClipContext(*made);
                 const Id clip = t.create(std::move(*made));
                 r.clips.push_back({clip.str(), pick.item.str(), pick.track.str()});
             }
@@ -415,7 +435,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "from bar or at (default bar 1), with a section for each. A scene may appear more "
             "than once. Every entry's refusal (scene.empty, scene.insert.period, "
             "scene.insert.occupied) names its index in path, and changes nothing; an empty "
-            "sequence or one of more than 256 entries is scene.sequence. One undo step.";
+            "sequence or one of more than 256 entries is scene.sequence. Each item warns "
+            "context.mismatch as scene.insert's does. One undo step.";
         c.tags = {"clip launcher", "scene", "arrangement"};
         auto entry = schema::object<SequenceEntry>("sequence_entry")
                          .field("scene", &SequenceEntry::scene, idArg("sc", "Scene"))
@@ -482,8 +503,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
                     return Error("scene.bars",
                                  "the sequence runs past bar " + std::to_string(kMaxBars),
                                  at + "/bars", "give fewer bars");
-                auto seg = insertScene(t, s, scenes[i], static_cast<int>(where), a.sequence[i].bars,
-                                       std::nullopt, a.pooled, at);
+                auto seg = insertScene(ctx, t, s, scenes[i], static_cast<int>(where),
+                                       a.sequence[i].bars, std::nullopt, a.pooled, at);
                 if (!seg) return std::move(seg).error();
                 r.segments.push_back(std::move(*seg));
                 bars += a.sequence[i].bars;

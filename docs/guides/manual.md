@@ -1692,7 +1692,8 @@ pane draws them dimmed, and a click says why in the status line.
 
 In the piano roll a clip starts at its own bar 1. It has no place in the
 song, so the roll shades and spells it by the key at the project's start
-and shows no chords. While the clip plays, the playhead shows where.
+and shows no chords. (A clip also keeps the key and chords it was written against;
+agents set them with `clip.set`, and the roll does not show them yet.) While the clip plays, the playhead shows where.
 
 ### Playing clips
 

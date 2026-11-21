@@ -200,8 +200,8 @@ Result<std::int64_t> noteEnd(const midi::Note& note, const std::string& path) {
 }
 
 Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, std::size_t original,
-               midi::Sequence& seq, const Frame& f, const model::Session& session,
-               const Id& source) {
+               midi::Sequence& seq, const Frame& f, const model::Session& session, const Id& source,
+               const Id& owner) {
     const std::string here = "/ops/" + std::to_string(at);
     constexpr std::int64_t tickLimit = std::int64_t{1} << 56;
     auto validBeat = [&](double beat, bool absolute) {
@@ -455,18 +455,20 @@ Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, st
                 // The note as the earlier ops of this edit left it.
                 const bool needKey = !fit && !key, needChord = fit && !chord;
                 detail::NoteContext context;
-                if (f.clip && needChord)  // a clip has no place in time: no chord holds
-                    return Error("midi.no_chord", "a clip has no chords: it has no place in time",
-                                 here + "/notes",
-                                 R"(give the chord, e.g. {"op":"fit_to_chord","chord":"Am7"})");
-                if (f.clip && needKey) {  // the key at the project's start
-                    context.key = model::keyAt(session, 0);
-                    if (!context.key)
-                        return Error("midi.no_key",
-                                     "a clip reads the key at the project's start, and none "
-                                     "holds there (or this build cannot read it)",
-                                     here + "/notes",
-                                     R"(key.set at 0, or give the key, e.g. "key": "C major")");
+                if (f.clip && (needKey || needChord)) {
+                    // A clip reads its own context at the clip beat the note sounds at,
+                    // never the project's (ADR-0098; supersedes ADR-0095 amendment C-e).
+                    const model::Clip* held = session.clips.find(owner);
+                    const model::Take* take =
+                        held && held->activeTake ? session.takes.find(*held->activeTake) : nullptr;
+                    if (!held || !take)
+                        return Error("midi.no_key", "the clip is missing from the model",
+                                     here + "/notes", "reload the project");
+                    auto read =
+                        detail::clipNoteContext(*held, *take, static_cast<int>(f.ppq), n.start,
+                                                needKey, needChord, here + "/notes");
+                    if (!read) return std::move(read).error();
+                    context = *read;
                 } else if (needKey || needChord) {
                     auto read = detail::noteContext(session, source, n.start,
                                                     f.itemPosition + f.beatOf(n.start), needKey,
@@ -733,7 +735,9 @@ void registerMidiCommands(cmd::Registry& registry) {
             "goes down; a slash bass counts). key is \"Eb major\", chord is \"Cm7\"; given, they "
             "replace the context. A note that is looped or shared by another item in a "
             "different key or chord is refused with midi.context_varies; none holding is "
-            "midi.no_key or midi.no_chord. Returns the new indices of the notes the ops added "
+            "midi.no_key or midi.no_chord. On a clip they read the clip's own context (the key "
+            "and chords it was written against, clip.set {context}) at the clip beat each note "
+            "sounds, never the project's. Returns the new indices of the notes the ops added "
             "or changed (to keep a selection).";
         c.tags = {"midi"};
         auto point = schema::object<CcPoint>("cc_point")
@@ -805,7 +809,8 @@ void registerMidiCommands(cmd::Registry& registry) {
             for (const midi::Note& n : seq.notes) notes.push_back({n, true, false});
             const std::size_t original = notes.size();
             for (std::size_t i = 0; i < a.ops.size(); ++i)
-                SUPPLE_TRY(applyOp(a.ops[i], i, notes, original, seq, t->frame, s, t->source));
+                SUPPLE_TRY(
+                    applyOp(a.ops[i], i, notes, original, seq, t->frame, s, t->source, t->item));
             seq.notes.clear();
             std::vector<midi::Note> touched;
             for (const Working& w : notes)

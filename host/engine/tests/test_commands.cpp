@@ -3294,3 +3294,150 @@ TEST_CASE("MIDI sends: Notes source None does not prevent branch id remapping") 
         CHECK(model::remapIds(args, command->argsSchema, remap) == args);
     }
 }
+
+TEST_CASE("module.set: a knob takes text in its own unit, as other parameters do") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Keys"})");
+    const auto rack = run(bus, "rack.add", R"({"track":"tr_1"})")["rack"].asString();
+    const auto macro =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.macro\"}")["module"]
+            .asString();
+    const auto lfo =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.lfo\"}")["module"]
+            .asString();
+    const auto knob = [&](const std::string& module, const char* key) {
+        const auto* m = app->head().modules.find(*model::Id::parse(module));
+        const json::Value* v = m->params.isObject() ? m->params.find(key) : nullptr;
+        return v ? v->asDouble() : -1.0;
+    };
+    const auto set = [&](const std::string& module, const char* params) {
+        auto args = json::Value::object();
+        args["module"] = module;
+        args["params"] = j(params);
+        return bus.execute({"module.set", args, kOrigin});
+    };
+    // A percent knob: "80 %" is 80, as the number 80 is (0 to 100).
+    REQUIRE(set(macro, R"({"macro_1": "80 %"})"));
+    CHECK(knob(macro, "macro_1") == 80.0);
+    REQUIRE(set(macro, R"({"macro_1": " 12.5%"})"));
+    CHECK(knob(macro, "macro_1") == 12.5);
+    REQUIRE(set(macro, R"({"macro_1": 40})"));
+    CHECK(knob(macro, "macro_1") == 40.0);
+    // Hertz, with kHz as well; the unit's case does not matter.
+    REQUIRE(set(lfo, R"({"rate": "2.5 hz"})"));
+    CHECK(knob(lfo, "rate") == 2.5);
+    REQUIRE(set(lfo, R"({"rate": "0.05 kHz"})"));
+    CHECK(knob(lfo, "rate") == 50.0);
+    // Text in another unit, or none, is refused, and the hint says what the knob takes.
+    for (const char* wrong :
+         {R"({"macro_1": "80 dB"})", R"({"macro_1": "loud"})", R"({"macro_1": ""})"}) {
+        const auto refused = set(macro, wrong);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "rack.param");
+        CHECK(refused.error().path == "/args/params/macro_1");
+        CHECK(refused.error().hint ==
+              "macro_1 runs 0 to 100 %: give the number in that unit, or text like \"50 %\"");
+    }
+    CHECK(knob(macro, "macro_1") == 40.0);  // nothing changed
+    // A knob with no unit takes no text.
+    const auto choice = set(lfo, R"({"voices": "4"})");
+    REQUIRE_FALSE(choice);
+    CHECK(choice.error().code == "rack.param");
+}
+
+TEST_CASE("module.set: a number outside the knob's range is refused, not clamped") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Keys"})");
+    const auto rack = run(bus, "rack.add", R"({"track":"tr_1"})")["rack"].asString();
+    const auto macro =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.macro\"}")["module"]
+            .asString();
+    const auto lfo =
+        run(bus, "module.add",
+            "{\"rack\":\"" + rack + "\",\"type\":\"com.suppleaudio.rack.lfo\"}")["module"]
+            .asString();
+    const auto knob = [&](const std::string& module, const char* key) {
+        const auto* m = app->head().modules.find(*model::Id::parse(module));
+        const json::Value* v = m->params.isObject() ? m->params.find(key) : nullptr;
+        return v ? v->asDouble() : -1.0;
+    };
+    const auto set = [&](const std::string& module, const char* params) {
+        auto args = json::Value::object();
+        args["module"] = module;
+        args["params"] = j(params);
+        return bus.execute({"module.set", args, kOrigin});
+    };
+    REQUIRE(set(macro, R"({"macro_1": 40})"));
+    // Above, below, and as text: the code and the hint are the plug-in parameters'.
+    for (const char* wrong :
+         {R"({"macro_1": 500})", R"({"macro_1": -1})", R"({"macro_1": "101 %"})"}) {
+        const auto refused = set(macro, wrong);
+        REQUIRE_FALSE(refused);
+        CHECK(refused.error().code == "params.out_of_range");
+        CHECK(refused.error().path == "/args/params/macro_1");
+        CHECK(refused.error().hint == "use a value from 0 % to 100 %");
+    }
+    CHECK(knob(macro, "macro_1") == 40.0);  // nothing changed
+    // The unit is converted before the range is checked: 0.5 kHz is 500 Hz.
+    const auto fast = set(lfo, R"({"rate": "0.5 kHz"})");
+    REQUIRE_FALSE(fast);
+    CHECK(fast.error().code == "params.out_of_range");
+    CHECK(fast.error().message == "'rate' is 500 Hz, outside its range");
+    // The ends themselves are in range, and module.add refuses alike.
+    REQUIRE(set(macro, R"({"macro_1": 100})"));
+    CHECK(knob(macro, "macro_1") == 100.0);
+    REQUIRE(set(macro, R"({"macro_1": 0})"));
+    const auto added =
+        bus.execute({"module.add",
+                     j("{\"rack\":\"" + rack +
+                       "\",\"type\":\"com.suppleaudio.rack.macro\",\"params\":{\"macro_1\":150}}"),
+                     kOrigin});
+    REQUIRE_FALSE(added);
+    CHECK(added.error().code == "params.out_of_range");
+}
+
+TEST_CASE("fx.patch.merge on an instance never saved reports only what the patch changed") {
+    Workdir dir;
+    auto app = makeApp(dir.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, *app);
+    run(bus, "track.add", R"({"name":"Bus"})");
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    REQUIRE_FALSE(app->head().fx.find(*model::Id::parse("fx_1"))->patch);  // never saved
+    const auto members = [](const json::Value& patch) {
+        const json::Value* params = patch.find("params");
+        return params && params->isObject() ? params->asObject().size() : std::size_t{0};
+    };
+    const auto first =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"gain":-6}}})");
+    CHECK(members(*first.find("changed")) == 1);
+    CHECK(first.find("changed")->find("params")->find("gain")->asDouble() == -6.0);
+    // The same again changes nothing; another member is the only one reported.
+    const auto again =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"gain":-6}}})");
+    CHECK(members(*again.find("changed")) == 0);
+    const auto other =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_1","patch":{"params":{"latency":"short"}}})");
+    CHECK(members(*other.find("changed")) == 1);
+    // A member set to what it already is reports nothing, on a fresh instance too.
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    const auto defaulted =
+        run(bus, "fx.patch.merge", R"({"fx":"fx_2","patch":{"params":{"gain":0}}})");
+    CHECK(members(*defaulted.find("changed")) == 0);
+    // fx.param.set answers the same way.
+    run(bus, "fx.add", R"({"track":"tr_1","plugin":"com.suppleaudio.test.gain"})");
+    const auto set = run(bus, "fx.param.set", R"({"fx":"fx_3","values":{"gain":-3}})");
+    CHECK(members(*set.find("changed")) == 1);
+}

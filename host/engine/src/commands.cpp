@@ -212,8 +212,10 @@ std::string describeSession(const model::Session& s) {
                 const model::Item& it = *e.value;
                 std::string il(static_cast<std::size_t>(2 * depth + 2), ' ');
                 const double start = model::itemSpan(s, it).startBeat;
-                il += e.id.str() + " " + barOf(start) + "–" +
-                      barOf(start + model::itemLengthBeats(s, it));
+                const model::Take* named = it.activeTake ? s.takes.find(*it.activeTake) : nullptr;
+                il += e.id.str() +
+                      (named && !named->name.empty() ? " \"" + named->name + "\"" : "") + " " +
+                      barOf(start) + "–" + barOf(start + model::itemLengthBeats(s, it));
                 if (model::itemTimebase(s, it) != model::Timebase::Beats)
                     il += model::itemTimebase(s, it) == model::Timebase::Time ? " [time]"
                                                                               : " [beats position]";

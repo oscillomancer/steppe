@@ -7,6 +7,8 @@
 #include <map>
 #include <set>
 
+#include "supple/json/write.h"
+#include "supple/model/context.h"
 #include "supple/model/take_owner.h"
 
 namespace supple::model {
@@ -89,6 +91,37 @@ void checkLauncher(const Session& s, std::vector<Error>& errors) {
                      t.str() + " holds " + std::string(clipKindName(*kind)) + "; the clip is " +
                          std::string(clipKindName(c.kind)));
         }
+        // Clip context (ADR-0098): the points a clip keeps, sorted and unique, and a
+        // follow that needs a MIDI clip with a readable key at 0.
+        {
+            const std::string where = at("clips", e.id, "context");
+            std::size_t keys = 0, chords = 0;
+            for (std::size_t i = 0; i < c.context.size(); ++i) {
+                const ContextPoint& p = c.context[i];
+                const std::string pt = where + "/" + std::to_string(i);
+                (p.type == ContextType::Key ? keys : chords)++;
+                if (!std::isfinite(p.beat) || p.beat < 0)
+                    fail(pt + "/beat", "a clip's context point lies at beat 0 or later");
+                else if (c.kind == ClipKind::Midi && std::isfinite(c.length) && p.beat >= c.length)
+                    fail(pt + "/beat", "the point lies at or past the clip's length");
+                if (i > 0) {
+                    const ContextPoint& q = c.context[i - 1];
+                    if (p.beat < q.beat || (p.beat == q.beat && p.type < q.type))
+                        fail(pt, "the points are not sorted by beat, then type (key first)");
+                    else if (p.beat == q.beat && p.type == q.type)
+                        fail(pt, "two points of one type at one beat");
+                }
+            }
+            if (keys > kMaxContextPoints || chords > kMaxContextPoints)
+                fail(where, "more than " + std::to_string(kMaxContextPoints) +
+                                " context points of one type");
+            if (c.kind == ClipKind::Audio &&
+                (chords > 0 || keys > 1 || (keys == 1 && c.context.front().beat != 0)))
+                fail(where, "an audio clip holds at most one key, at 0");
+            if (c.follow != ClipFollow::None && !clipCanFollow(c))
+                fail(at("clips", e.id, "follow"),
+                     "follow needs a MIDI clip with a readable key at beat 0");
+        }
         if (c.activeTake &&
             std::find(c.takes.begin(), c.takes.end(), *c.activeTake) == c.takes.end())
             fail(at("clips", e.id, "active_take"),
@@ -157,6 +190,60 @@ std::vector<std::pair<Id, std::string>> dropStrayClips(Session& s) {
     s.envelopes = eb.build();
     s.autoItems = ab.build();
     return dropped;
+}
+
+bool clipCanFollow(const Clip& clip) {
+    return clip.kind == ClipKind::Midi && keyAt(clip, 0).has_value();
+}
+
+std::vector<ClipContextNote> fitClipContext(Clip& clip) {
+    std::vector<ClipContextNote> notes;
+    const auto words = [](const ContextPoint& p) {
+        return p.type == ContextType::Key ? "key " + keyWords(p)
+                                          : "chord " + (p.symbol.empty() ? "none" : p.symbol);
+    };
+    const auto drop = [&](const ContextPoint& p, const std::string& why) {
+        notes.push_back({"clip.context_dropped", "dropped " + words(p) + " at beat " +
+                                                     json::formatDouble(p.beat) + ": " + why});
+    };
+    std::vector<ContextPoint> points = clip.context;
+    for (ContextPoint& p : points)
+        if (std::isfinite(p.beat)) p.beat = std::round(p.beat * 960.0) / 960.0;
+    std::stable_sort(points.begin(), points.end(),
+                     [](const ContextPoint& a, const ContextPoint& b) {
+                         if (a.beat != b.beat) return a.beat < b.beat;
+                         return a.type < b.type;
+                     });
+    std::vector<ContextPoint> kept;
+    std::size_t keys = 0, chords = 0;
+    for (const ContextPoint& p : points) {
+        if (!std::isfinite(p.beat) || p.beat < 0) {
+            drop(p, "before the clip's start");
+        } else if (clip.kind == ClipKind::Midi && std::isfinite(clip.length) &&
+                   p.beat >= clip.length) {
+            drop(p, "at or past the clip's length");
+        } else if (clip.kind == ClipKind::Audio &&
+                   (p.type != ContextType::Key || p.beat != 0 || keys > 0)) {
+            drop(p, "an audio clip holds one key, at 0");
+        } else if (!kept.empty() && kept.back().beat == p.beat && kept.back().type == p.type) {
+            drop(p, "another point of its type is at that beat");
+        } else if ((p.type == ContextType::Key ? keys : chords) >= kMaxContextPoints) {
+            drop(p, "a clip holds at most " + std::to_string(kMaxContextPoints) + " of a type");
+        } else {
+            (p.type == ContextType::Key ? keys : chords)++;
+            kept.push_back(p);
+        }
+    }
+    clip.context = std::move(kept);
+    if (clip.follow != ClipFollow::None && !clipCanFollow(clip)) {
+        clip.follow = ClipFollow::None;
+        notes.push_back(
+            {"clip.follow_reset",
+             std::string("follow is reset to none: ") +
+                 (clip.kind == ClipKind::Audio ? "an audio clip cannot follow"
+                                               : "no readable key holds at the clip's start")});
+    }
+    return notes;
 }
 
 std::optional<Id> clipAt(const Session& s, Id track, Id scene) {
