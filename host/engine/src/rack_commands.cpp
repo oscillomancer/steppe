@@ -1267,7 +1267,7 @@ void registerRackCommands(cmd::Registry& registry) {
             "the knob's units (a choice by its key, a switch as a bool). Notes: source (the "
             "track whose MIDI it plays; default the rack's channel) and device (a live MIDI "
             "input it always plays; \"\" any). plugin (instead of type): a plug-in id "
-            "(fx.scan) for a plugin module, which shows the plug-in's name and opens its "
+            "(plugin.list) for a plugin module, which shows the plug-in's name and opens its "
             "editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate "
             "and velocity. preset: a factory preset (module.describe), params on top. Returns "
             "its size and keys.";
@@ -1327,7 +1327,7 @@ void registerRackCommands(cmd::Registry& registry) {
                              a.plugin ? "give a type or a plugin, not both"
                                       : "a module needs a type, or a plug-in to host",
                              a.plugin || !a.type ? "/type" : "/plugin",
-                             "give type (module.list) for a module, or plugin (an fx.scan id) "
+                             "give type (module.list) for a module, or plugin (a plugin.list id) "
                              "for a plug-in");
             if (a.plugin) {
                 m.type = std::string(model::kPluginModule);
@@ -1383,7 +1383,7 @@ void registerRackCommands(cmd::Registry& registry) {
                 auto info = e.findPlugin(*a.plugin);
                 if (!info)
                     return Error("fx.unknown_plugin", "no plug-in " + *a.plugin, "/plugin",
-                                 "give a plug-in id from fx.scan");
+                                 "give a plug-in id from plugin.list");
                 fx.plugin.name = info->name;
                 fx.plugin.vendor = info->vendor;
                 fx.plugin.version = info->version;

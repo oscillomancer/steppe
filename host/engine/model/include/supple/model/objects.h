@@ -297,6 +297,25 @@ struct TakeMarker {
     std::string name, color;
 };
 
+// A point of the project's context track (ADR-0095): a key or a chord that holds
+// from `beat` until the next point of its type. The strings are data: a later
+// build may write a scale or a chord quality this one lacks, so the model keeps
+// them and only the commands (and the harmony library) judge them.
+enum class ContextType : std::uint8_t { Key, Chord };
+inline constexpr std::size_t kMaxContextPoints = 4096;  // per type
+struct ContextPoint {
+    double beat = 0.0;  // beats from project start
+    ContextType type = ContextType::Key;
+    std::string tonic, scale;  // Key: a spelled pitch class and a scale name
+    std::string symbol;        // Chord: "" is "no chord from here"
+    bool operator==(const ContextPoint&) const = default;
+};
+
+// What a MIDI take's or clip's notes sound as (ADR-0098): as written, by the key, or by the
+// chords. A clip's `follow` is how it plays when launched and the default when it is laid; a
+// take's `follow` is how its own notes sound (schema 2.21, "Take context and follow").
+enum class ClipFollow : std::uint8_t { None, Key, Chords };
+
 struct Take {
     std::string name;
     std::optional<Id> source;  // md_* or mi_*; empty = an empty take
@@ -313,6 +332,15 @@ struct Take {
     std::vector<Id> warpPeers;
     std::vector<TakeMarker> takeMarkers;
     std::vector<Id> chain;
+    // A MIDI take's key and chords and how its notes follow them (schema 2.21, ADR-0098
+    // "Amendment: following is playback"). `context` is in context beats, which run with the
+    // source: a note's context beat is `contextPhase` plus its unwrapped source beat, modulo
+    // `contextPeriod` when there is one. Only an item's MIDI take holds any of the four; a
+    // clip's takes and audio takes hold none (model/follow.h has the rules and the readers).
+    std::vector<ContextPoint> context;
+    std::optional<double> contextPeriod;
+    double contextPhase = 0.0;
+    ClipFollow follow = ClipFollow::None;
 };
 
 struct MediaSource {
@@ -558,20 +586,6 @@ struct Modulation {
 };
 inline constexpr std::size_t kMaxModulations = 4096;
 
-// A point of the project's context track (ADR-0095): a key or a chord that holds
-// from `beat` until the next point of its type. The strings are data: a later
-// build may write a scale or a chord quality this one lacks, so the model keeps
-// them and only the commands (and the harmony library) judge them.
-enum class ContextType : std::uint8_t { Key, Chord };
-inline constexpr std::size_t kMaxContextPoints = 4096;  // per type
-struct ContextPoint {
-    double beat = 0.0;  // beats from project start
-    ContextType type = ContextType::Key;
-    std::string tonic, scale;  // Key: a spelled pitch class and a scale name
-    std::string symbol;        // Chord: "" is "no chord from here"
-    bool operator==(const ContextPoint&) const = default;
-};
-
 // The clip launcher (ADR-0097, session-model "Scenes and clips"). A scene is
 // a column; a clip is a channel's material for one scene, holding ordinary
 // takes. A clip is not an Item: timeline code never sees one.
@@ -591,9 +605,6 @@ enum class ClipMode : std::uint8_t { Loop, Once };
 // Fixed when the clip is made: a take whose source does not match is
 // refused, so the unit never changes under a clip.
 enum class ClipKind : std::uint8_t { Midi, Audio };
-// How a clip's notes are mapped when it is laid on the timeline (ADR-0098,
-// session-model "Clip context"): not at all, by the key, or by the chords.
-enum class ClipFollow : std::uint8_t { None, Key, Chords };
 struct Clip {
     Id track = kMaster;  // a channel
     Id scene{Kind::Scene, 0};

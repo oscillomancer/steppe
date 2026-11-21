@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <limits>
+#include <set>
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
@@ -1931,6 +1932,14 @@ TEST_CASE("take FX and take envelopes over the bus: add, reorder, copy with the 
                        kOrigin})
               .error()
               .code == "env.position");
+    // A take's pitch is a constant (take.set); its envelope is not offered, as the engine does
+    // not play one (engine.md, ItemPlayer).
+    const auto pitchEnvelope = bus.execute(
+        {"env.add", j(R"({"take":"tk_1","param":"pitch","points":[{"beat":0,"value":0}]})"),
+         kOrigin});
+    REQUIRE_FALSE(pitchEnvelope);
+    CHECK(pitchEnvelope.error().code == "env.param");
+    CHECK(pitchEnvelope.error().hint == "volume, pan, mute");
     run(bus, "env.add",
         R"({"take":"tk_1","param":"volume","points":[{"beat":0,"value":0},{"beat":4,"value":-12}]})");
     run(bus, "env.add", R"({"fx":"fx_2","param":"gain","points":[{"beat":0,"value":0}]})");
@@ -3726,4 +3735,43 @@ TEST_CASE("plug-in parameter references: a parameter the plug-in does not automa
     CHECK(env.message.find("not automatable") != std::string::npos);
     CHECK(env.hint.find("fx.param.set") != std::string::npos);
     run(bus, "fx.param.set", R"({"fx":"fx_1","values":{"Gain":0.5}})");
+}
+
+TEST_CASE("an error's hint names only commands that exist") {
+    // A hint tells the caller how to fix the call; one that names a command that is not
+    // registered (session.query, fx.scan once did) sends the caller nowhere.
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    std::set<std::string> commands, spaces, codes;
+    for (const cmd::CommandInfo* info : registry.all()) {
+        commands.insert(info->name);
+        spaces.insert(info->name.substr(0, info->name.find('.')));
+        for (const auto& e : info->errors) codes.insert(e.code);
+    }
+    const auto isName = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    };
+    for (const cmd::CommandInfo* info : registry.all())
+        for (const auto& e : info->errors) {
+            const std::string& hint = e.hint;
+            for (std::size_t i = 0; i < hint.size();) {
+                if (!isName(hint[i]) || (i > 0 && (isName(hint[i - 1]) || hint[i - 1] == '.'))) {
+                    ++i;
+                    continue;
+                }
+                std::size_t j = i;  // a dotted word: name(.name)+
+                while (j < hint.size() &&
+                       (isName(hint[j]) ||
+                        (hint[j] == '.' && j + 1 < hint.size() && isName(hint[j + 1]))))
+                    ++j;
+                const std::string word = hint.substr(i, j - i);
+                i = j;
+                if (word.find('.') == std::string::npos) continue;
+                if (!spaces.count(word.substr(0, word.find('.'))))
+                    continue;  // not a command's family
+                if (commands.count(word) || codes.count(word)) continue;
+                FAIL_CHECK(info->name << ": the hint of " << e.code << " names " << word
+                                      << ", which is not a command");
+            }
+        }
 }

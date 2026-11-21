@@ -39,7 +39,10 @@ are named by the key at the item's start (`Bb` in F major, `A#` in D major).
 ## The lead sheet: a whole progression in one call
 
 `context.get` also returns `text`: the points as a lead sheet, one line per
-project bar. `context.write {text}` writes one back.
+project bar. `context.write {text}` writes one back. It reads bars as notation does: a
+newline, a `;` or a ` | ` token (surrounded by spaces) ends a bar, and the number after `|`
+may be left out (`1: key C major {C}:w | {F}:w` is bars 1 and 2); what it prints is always
+one line per bar. The same goes for a clip's `context`.
 
 ```
 1: key Eb major {Ebmaj7}:w
@@ -104,7 +107,10 @@ Regions are sections unless told otherwise. `region.add {"section": false}` or
 `region.set {"id": "rg_1", "section": false}` marks a region that is only a
 span to loop or label. `context.at` names the section at a beat: the region
 that starts latest and covers it. `scene.insert` and `arrangement.build` add a
-section for every scene they lay out, named after it (`guides/launcher.md`).
+section for every scene they lay out, named after it (`guides/launcher.md`). With
+`write_context: true` they also write the scenes' clips' key and chords onto the context
+track under each section that has none, so a song built from scenes gets its lead sheet
+without writing it twice.
 
 ## Rules of thumb
 

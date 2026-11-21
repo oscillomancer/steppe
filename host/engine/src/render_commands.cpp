@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "render_commands.h"
+#include "rack_runtime.h"
 #include "supple/model/numeric.h"
 
 #include <algorithm>
@@ -682,6 +683,56 @@ Status insideRoot(const fs::path& root, const fs::path& path) {
 
 // dryRun: nothing is written or rendered, so large inputs (the cover) are
 // only checked.
+// A channel that can produce no audio, found by what feeds it: it has a rack, none of its
+// racks has an Out module with an audio signal cabled into it (a rack's audio leaves only
+// through an Out; Mod Out carries control, Notes Out plays an instrument elsewhere, and the
+// Out that `rack.add` makes stays silent until something is patched to it), and nothing else
+// is on it or into it: no items, FX, print, children, input, or send into it. `modulate`'s
+// Modulators channel is the usual one. A source this build does not know, or a port it cannot
+// find, counts as audio. An empty channel with no rack is not this: it is silent only because
+// nothing was put on it yet.
+bool controlOnlyChannel(EngineApp& app, const model::Session& s, model::Id id) {
+    const model::Track* track = s.tracks.find(id);
+    if (!track || track->type != model::StripType::Channel) return false;
+    if (!track->chain.empty() || !track->inputChain.empty() || !track->children.empty() ||
+        track->freeze || track->record.midiInput)
+        return false;
+    for (const auto& item : s.items)
+        if (item.value->track == id) return false;
+    const rack::Catalog& catalog = *app.instances().racks().catalog();
+    const auto audioCable = [&](const model::Cable& cable) {
+        const model::RackModule* from = s.modules.find(cable.from.object);
+        const auto* entry = from ? catalog.find(from->type) : nullptr;
+        if (!entry) return true;
+        for (const auto& port : entry->type->ports())
+            if (port.output && port.key == cable.from.key)
+                return port.signal == rack::sd::PortModel::Signal::Audio;
+        return true;
+    };
+    const auto carriesAudio = [&](model::Id out) {
+        for (const auto& cable : s.cables)
+            if (cable.value->to.object == out && audioCable(*cable.value)) return true;
+        return false;
+    };
+    // What routes into it (its record input is such a route too): a rack's Out is audio only
+    // when something audible is patched to it; any other source (a send from a track, a
+    // hardware input) is audio.
+    for (const auto& route : s.routes) {
+        if (route.value->to.track != id) continue;
+        if (!route.value->from.module || carriesAudio(*route.value->from.module)) return false;
+    }
+    bool racks = false;
+    for (const auto& rack : s.racks) {
+        if (rack.value->track != id) continue;
+        racks = true;
+        for (const auto& module : s.modules)
+            if (module.value->rack == rack.id && module.value->type == model::kOutModule &&
+                carriesAudio(module.id))
+                return false;
+    }
+    return racks;
+}
+
 Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, bool dryRun = false) {
     auto source = sessionFor(app, a.sel.branch, a.sel.version);
     if (!source) return std::move(source).error();
@@ -997,6 +1048,7 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
         }
     } else if (operation == rs::Source::Stems) {
         std::vector<model::Id> ids;
+        std::vector<json::Value> controlOnly;  // default selection only: channels with no audio
         if (e.stems->tracks)
             for (const auto& text : *e.stems->tracks) {
                 auto id = trackId(s, text, a.sel.tracks ? "/tracks" : "/stems/tracks");
@@ -1005,13 +1057,27 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
             }
         else
             for (const auto& entry : s.tracks)
-                if (entry.value->parent == model::kMaster) ids.push_back(entry.id);
-        if (ids.empty())
+                if (entry.value->parent == model::kMaster) {
+                    if (controlOnlyChannel(app, s, entry.id)) {
+                        json::Value skip = json::Value::object();
+                        skip["track"] = entry.id.str();
+                        skip["reason"] = "no_audio";
+                        skip["detail"] =
+                            "its racks have no Out module, so only control signals leave them, "
+                            "and nothing else feeds it; name it in tracks to render it anyway";
+                        controlOnly.push_back(std::move(skip));
+                    } else {
+                        ids.push_back(entry.id);
+                    }
+                }
+        if (ids.empty() && controlOnly.empty())
             return Error(
                 "render.empty", "no stem tracks", "/tracks",
                 "add a channel or select existing track ids with tracks before rendering stems");
         int n = 0;
         for (auto id : ids) SUPPLE_TRY(add(id, {}, ++n, 0));
+        // After the tasks, so a skipped track does not move the file counter.
+        for (auto& skip : controlOnly) out.skipped.push_back(std::move(skip));
         if (*e.normalize->scope == rs::Scope::Master &&
             e.normalize->mode != rs::NormalizeMode::None && !out.tasks.empty()) {
             RenderTask master = out.tasks.front();
@@ -1092,8 +1158,13 @@ json::Value dryRunList(const RenderPlan& p) {
     }
     for (const auto& skipped : p.skipped.asArray()) {
         json::Value entry = json::Value::object();
-        entry["path"] = *skipped.find("path");
-        entry["exists"] = true;
+        if (const json::Value* path = skipped.find("path")) {
+            entry["path"] = *path;
+            entry["exists"] = true;
+        } else {  // a channel that can produce no audio: no file to name
+            entry["track"] = *skipped.find("track");
+            entry["reason"] = *skipped.find("reason");
+        }
         entry["skip"] = true;
         list.push_back(std::move(entry));
     }
@@ -2140,7 +2211,11 @@ void registerRenderCommands(cmd::Registry& registry) {
             "named by pattern (subfolders allowed). job: true runs the render as a job (job.get "
             "for progress, job.cancel to stop). Each file lists its outputs (with delivery "
             "checks when a loudness target or a ceiling is set), branch, version, start_beat, "
-            "seconds, a render id (analyze.render, analyze.compare) and an analysis summary.";
+            "seconds, a render id (analyze.render, analyze.compare) and an analysis summary. "
+            "skipped lists files left out: skip_silent, if_exists skip, and (stems without "
+            "tracks) a channel that can produce no audio, reason no_audio: it has a rack whose "
+            "Out modules have no audio patched to them (as modulate's Modulators channel) and "
+            "nothing else feeds it; naming it in tracks renders it.";
         if (which == "render.mix")
             c.description +=
                 " The mix answers with its file's entry at the top level (path, secondary_path, "

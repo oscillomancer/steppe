@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/model/session.h"
 #include "supple/model/audio_warp.h"
+#include "supple/model/follow.h"
 #include "supple/model/groups.h"
 #include "supple/model/launcher.h"
 #include "supple/model/numeric.h"
@@ -1099,7 +1100,8 @@ Status checkInvariants(const Session& s) {
     c.modulations();
     c.context();
     c.envelopes();
-    checkLauncher(s, c.errors);  // scenes and clips (ADR-0097)
+    checkLauncher(s, c.errors);     // scenes and clips (ADR-0097)
+    checkTakeContext(s, c.errors);  // a take's context and follow (ADR-0098)
     if (c.errors.empty()) return validateFrozenState(s);
     if (c.errors.size() == 1) return c.errors.front();
     Error e("model.invariant", std::to_string(c.errors.size()) + " invariant violations");

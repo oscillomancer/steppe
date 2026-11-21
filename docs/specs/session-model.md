@@ -453,7 +453,9 @@ busses only; `track.strip_type` on masters),
 `{track: "tr_0", param: playrate}` (one global master-rate envelope only),
 `{route: id, param: volume|pan|mute}`, `{fx: id, param: <key, id or name>}`
 (stored canonical; "Plug-in parameter references"),
-`{take: id, param: volume|pan|pitch|mute}`, `{tempo: true}` (the tempo map is
+`{take: id, param: volume|pan|pitch|mute}` (`pitch` in semitones is valid in
+a file and checked on load, but `env.add` refuses it, `env.param`, and the engine
+does not play it: engine.md, ItemPlayer), `{tempo: true}` (the tempo map is
 edited through `tempo.*`, not envelopes); `mode`
 (`trim|read|touch|latch|latch_preview|write`); `active`, `armed`,
 `visible`; `points`: array of `[pos, value, shape, tension]` in the
@@ -603,12 +605,16 @@ deduplicated, reference-counted across versions.
 ## 2. In-memory representation
 
 - Every object type is an immutable C++ value struct; collections are
-  `ImmutableMap<Id, std::shared_ptr<const T>>` (a sorted vector for ≤ 256
-  entries, a persistent HAMT beyond — behind one interface so it can start
-  as a sorted vector and upgrade without touching callers; ADR-0008 allows
-  `immer` if needed). Large arrays (MIDI events, envelope points) are chunked
-  (`ChunkedArray<T>`, 4096 elements per chunk) so editing one note copies one
-  chunk.
+  `IdMap<T>` (`supple/model/idmap.h`): a sorted vector of `{id, rev,
+  std::shared_ptr<const T>}`. Copying a map is a pointer copy; an edit copies
+  the entry vector once per transaction and shares every untouched object.
+  *(21 Nov 2026: the text before this said a persistent HAMT beyond 256
+  entries and a `ChunkedArray<T>` of 4096-element chunks for MIDI events and
+  envelope points. Neither was built. Both are plain `std::vector`s inside
+  their object, ``midi::Sequence::notes` and `Envelope::points`, so editing one
+  note or point copies that object's whole array. The interface leaves room for a
+  persistent trie (ADR-0008 allows `immer`); nothing needs one at the limits
+  the model enforces, and one is to be added only for a measured cost.)*
 - `Session` holds the root pointers; edits produce a new `Session` sharing
   everything untouched. Readers on any thread hold a `std::shared_ptr<const
   Session>`; nothing is ever mutated in place.
@@ -645,7 +651,8 @@ never a user error — user errors are caught by command validation first.
   order as in §1, then ID). Large arrays diff as summaries (`notes: 3 added,
   1 changed`) with an optional detailed form. Used by `session.changed`
   events, branch reviews and the undo history display.
-- `describe(session, scope, detail)` → compact text for LLMs, e.g.
+- `describe(session)` → compact text for LLMs (no scope or detail argument: it
+  prints the whole session), e.g.
 
 ```
 Project "Demo" · 48 kHz · 120 BPM 4/4 · 16 bars (0:32.0)
@@ -658,7 +665,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.19`)
+## 5. Project file (`supple.project/2.21`)
 
 ### 5.1 Shape
 
@@ -677,9 +684,12 @@ route is dropped, with a `project.hw_output_route` warning.
 Schema 2.16 adds modulation routes (ADR-0096); 2.17 adds the context
 track's points (ADR-0095); 2.18 adds scenes, clips and
 `launch_quantize` (ADR-0097, "Scenes and clips"); 2.19 puts the envelopes
-on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2).
+on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2); 2.20
+adds a clip's `context` and `follow` (ADR-0098); 2.21 adds a MIDI take's
+`context`, `context_period`, `context_phase` and `follow` ("Take context and
+follow").
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.19,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.21,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
@@ -1089,8 +1099,13 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `project.template.save` (a), `project.template.load {name}` (a, a new
   unsaved project), `project.template.list` (q), `project.template.delete`
   (a).
-- **session**: `session.describe {scope, detail}` (q), `session.query
-  {kind, filter, fields}` (q), `session.get {id, fields}` (q).
+- **session**: `session.describe` (q, no arguments): the compact text of §4 and
+  the ids to use with other commands. *(21 Nov 2026: this list also named
+  `session.query {kind, filter, fields}` and `session.get {id, fields}`. They
+  were never built; the per-kind queries (`scene.list`, `take.list`, `route.list`,
+  `env.list`, `region.list`, `marker.list`, `rack.list`, `modulation.list`, … and
+  each family's `get`) answer what they were for, and error hints name
+  `session.describe`. The sandbox has its own `session.get`.)*
 - **tempo/meter**: `tempo.set {points}`, `tempo.add`, `tempo.remove`,
   `timesig.set {bar, meter: "3/4"}`, `timesig.remove`,
   `time.convert {from, to, value}` (q).
@@ -1634,7 +1649,13 @@ field: the key and chords over the item's span, with item bars and project bars
 both named.
 
 **Lead sheet.** `context.get`'s `text` and `context.write {text}` use one line per
-project bar: `N: ` then items. `{SYMBOL}:DUR` is a chord point at the cursor,
+project bar: `N: ` then items. The reader takes notation's bar separators too
+(*21 Nov 2026*): a `;` outside braces ends a bar like a newline, so `1: … ; 2: …` is two
+lines; a `|` written as a token of its own ends the bar and goes on with the next one on the
+same line, and a number after it is accepted when it names that bar (`1: … | 2: …` reads
+as `1: … | …`), any other is `context.bar_order`; a `#` comment still ends the whole line,
+the `;` after it included; a trailing `|` is an empty bar (`context.bar_length`). Printing
+is unchanged: one line per bar. The same reader reads a clip's context. `{SYMBOL}:DUR` is a chord point at the cursor,
 `r:DUR` a chord point with an empty symbol, `~:DUR` a hold (no point) and
 `key TONIC SCALE` a key point at the cursor that takes no time; `DUR` is the
 notation's duration (`notation::parseDuration`, at 960 ppq) and a bar's durations
@@ -1854,6 +1875,13 @@ keeps playing its print.
   `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
+- Stacking: an enabled route added (`modulation.add`, and `modulate`, which adds
+  through it) onto a target that another enabled route already reaches from the
+  same kind of source (the type of the module cabled into its Mod Out input; an
+  LFO and a Random source are both an LFO) is allowed, with the warning
+  `modulation.stacked` at `/target` naming the new route and the routes already
+  there: their offsets add. A route whose input nothing feeds has no kind and
+  does not warn.
 - `modulation.list` reports each route's signal range (`bipolar` −1..1 or
   `unipolar` 0..1, from the Mod Out input) and `inert` with its reason when
   the plan cannot apply it (`source`, `target`, `envelope` when the envelope
@@ -2036,7 +2064,7 @@ commands move material between the launcher and the timeline. They change
 the model only (no launch), each is one undo step, and a refusal changes
 nothing.
 
-- `scene.insert {scene, at | bar, bars, name?, pooled?}` (edit): lays the
+- `scene.insert {scene, at | bar, bars, name?, pooled?, follow?, write_context?}` (edit): lays the
   scene's clips on the timeline as items and adds a section over them.
   - The span starts at `bar` (1-based) or at `at` (beats), which must be on a
     bar line (`scene.at`), and lasts `bars` whole bars (≥ 1; `scene.bars`)
@@ -2064,7 +2092,12 @@ nothing.
   - It adds one region over the span: `section` true, named after the scene
     (`name` overrides), with the scene's colour. Existing regions are never
     edited.
-  - Result: `{items: [{clip, item, track}], region, start, end}` (beats).
+  - `write_context: true` (ADR-0098 X5, "Writing the context from scenes" below)
+    writes the scene's own harmony onto the context track under the span, in the
+    same undo step, before the clips are laid, so a clip that follows finds the
+    context it was written against.
+  - Result: `{items: [{clip, item, track, followed?}], region, start, end,
+    context?}` (beats); `context` is present when `write_context` was true.
 - `scene.capture {region, name?, pooled?}` (edit): makes a scene from the items
   of a section.
   - For each channel, the items overlapping the region must be one item
@@ -2083,7 +2116,8 @@ nothing.
   - Errors beside the above: `scene.limit`, `clip.limit`, `clip.memory`
     (audio), as `scene.add` and `clip.add`.
   - Result: `{scene, clips: [{clip, source_item, track}]}`.
-- `arrangement.build {sequence: [{scene, bars}…], at | bar?, pooled?}` (edit):
+- `arrangement.build {sequence: [{scene, bars}…], at | bar?, pooled?, follow?,
+  write_context?}` (edit):
   `scene.insert` for each entry in turn, each starting where the last ended,
   from `bar` or `at` (default bar 1), and a region for each. Every entry is
   checked before anything changes. An empty sequence, one of more than 256
@@ -2092,9 +2126,42 @@ nothing.
   with the entry's index in `path` (`/sequence/2/scene`). A scene may appear
   more than once.
   - Result: `{segments: [{scene, region, start, end, items: [{clip, item,
-    track}]}]}`.
+    track, followed?}], context?}]}`.
 - Every one of these errors carries `code`, `message`, `path` and a `hint`
   that says how to fix the call.
+
+**Writing the context from scenes (ADR-0098 X5).** `write_context: true` on
+`scene.insert` and `arrangement.build` writes, for each section, the harmony the
+scene's clips were written against onto the context track, so a song built from
+scenes has a lead sheet without writing it twice.
+
+- *Where:* a section's span `[start, end)`. If the context track already holds
+  a key or chord point at a beat in the span, nothing is written for that section
+  and the points are left alone (`reason: "present"`). Points before the span do
+  not count: a key that holds into the span is held, not "under" it.
+- *What:* each clip's `context` points (a MIDI clip's keys and chords, an audio
+  clip's key at its start), shifted to the span: a `loop` clip repeats at its
+  length for the span (a point is written for every pass), a `once` clip's points
+  are laid once from the start; points at or past the span's end are dropped. Clips
+  with no context say nothing.
+- *Agreement:* two clips whose points of one type fall at the same timeline beat
+  and differ (another key, another chord) disagree. Then nothing is written for
+  that section: `reason: "disagree"`, `clips` the two clips (the first
+  disagreement, by beat) and `bar` its project bar. Clips that merely have
+  points the others lack agree: the union is written.
+- *Redundancy:* a point equal to what holds at its beat, from the context track
+  before the span or from points this call wrote for an earlier section, is not
+  written (a Verse that repeats writes its key once). If nothing remains,
+  `written` is false with `reason: "holds"`.
+- Nothing to write because no clip has a context: `reason: "no_context"`.
+- It is part of the command's one undo step. The points are created before
+  the clips are laid, so `follow` reads them: a clip written in the key it is laid
+  under maps by a transpose of 0. `context.limit` refuses when a type would
+  exceed 4096 points.
+- Result `context` (only when `write_context` is true): `{written, keys, chords,
+  reason?, clips?, bar?, message?}`, `keys` and `chords` the points written. A
+  section that was not written for a reason other than `no_context` and `holds`
+  (`present`, `disagree`) also gives the warning `context.not_written`.
 
 **What `session.describe` prints.** After the tracks, one line per scene in
 order with its clips under it. Each clip line has its track, length in its
@@ -2200,8 +2267,9 @@ bars.
     voice wins, with `clip.chord_conflict`.
   - Equal neighbours collapse, and a rest does not end a chord.
   - With a stated `context` holding chords, or a `context_at` (or an item)
-    whose span holds a chord, the symbols are ignored with
-    `clip.chords_ignored`. A stated `context` holding only a key, and a
+    whose span holds a chord, the symbols are ignored; `clip.chords_ignored`
+    warns only when some symbol is not the chord the stated points hold at its
+    beat (symbols that say the same are not news). A stated `context` holding only a key, and a
     `context_at` or item span with no chord, take the symbols' chords. So
     `context_at` and its resolved `context` text give the same points.
 - **`clip.set {context?, context_at?, follow?}`:** `context: ""` clears the
@@ -2293,7 +2361,12 @@ whose start rule is the only rule.)*
   when the clip has a key and, at some beat b of the item's span, the clip's
   key at b's clip beat and the project's key at b both hold and differ in
   tonic pitch class or scale. It names the clip, both keys and the first
-  project bar where they differ. A clip whose notes are all on channel 10
+  project bar where they differ. In the same key (or with no key to compare)
+  it is also given when, at some beat b, the clip's chord at b's clip beat
+  and the project's chord at b both hold and differ (root, quality or bass):
+  it names the clip, both chords and the first project bar; the first bar
+  that differs, key or chord, is the one named, and an item gets one warning
+  in all. A clip with no chords, or a clip whose notes are all on channel 10
   gives none. `launch.commit` gives it once for each launched stretch of a
   clip, not for each period the stretch is laid as.
 - **`key`.** Each note goes through `harmony::follow` (`harmony.md` §5)
@@ -2350,13 +2423,15 @@ whose start rule is the only rule.)*
     item stays looped when every whole pass maps alike, and the fragment plays
     the note's own pitch. A pitched note's `folded` counts once per note
     written.
-  - `launch.clip` and `launch.scene` warn `launch.unfollowed` for a clip whose
-    `follow` is not `none`, once per launch.
+  - `launch.clip` and `launch.scene` warned `launch.unfollowed` for a clip whose
+    `follow` is not `none`, once per launch, until X4a made a launched clip
+    follow live.
 
 ### Take context and follow (schema 2.21, ADR-0098 amended; the contract for X4b and X4d)
 
-*Not built. Steps X4b (model) and X4d (commands) build it; X4c (engine) is in
-`engine.md` "Following at playback". Revised after review round 82 with the
+*X4b (the model: the four members, schema 2.21, `model/follow.h`) is built;
+X4d (the commands) is not. X4c (engine) is in `engine.md` "Following at
+playback". Revised after review round 82 with the
 co-director's decisions (A1 to A5, B1 to B9), and after round 82b (C1, C2,
 D1 to D4).*
 

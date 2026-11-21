@@ -4470,6 +4470,62 @@ TEST_CASE("modulation commands: a modulated track analyzes and renders as a stem
     run("render.stems", R"({"end_beat": 4, "tracks": ["tr_1"]})");
 }
 
+TEST_CASE("render.stems leaves out a channel that can produce no audio, and says why") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_item");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto fileCount = [](const json::Value& r) { return r.find("files")->asArray().size(); };
+    const auto skippedReasons = [](const json::Value& r) {
+        std::string out;
+        if (const json::Value* skipped = r.find("skipped"))
+            for (const auto& e : skipped->asArray())
+                out += e.find("track")->asString() + ":" + e.find("reason")->asString() + " ";
+        return out;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+    const auto made =
+        run("modulate", R"({"target": {"fx": "fx_1", "param": "gain"}, "source": "lfo"})");
+    const std::string channel = made.find("channel")->asString();
+    // By default the Modulators channel (a rack with only a Mod Out, nothing feeding it) is
+    // left out, named with its reason, and the song's own track is rendered.
+    const auto stems = run("render.stems", R"({"end_beat": 4, "pattern": "stem-{counter}"})");
+    CHECK(skippedReasons(stems) == channel + ":no_audio ");
+    CHECK(stems.find("skipped")->at(0).find("detail") != nullptr);
+    CHECK(fileCount(stems) >= 1);
+    // The skipped channel does not move the counter: the first file is stem-1.
+    CHECK(stems.find("files")->at(0).find("path")->asString().find("stem-1.") != std::string::npos);
+    // Named in tracks, it is rendered, whatever it holds.
+    const auto named = run("render.stems", R"({"end_beat": 4, "tracks": [")" + channel + R"("]})");
+    CHECK(fileCount(named) == 1);
+    CHECK(skippedReasons(named).empty());
+    // The dry run lists the skip without a path.
+    const auto dry = run("render.dry-run", R"({"operation": "stems", "end_beat": 4})");
+    bool listed = false;
+    for (const auto& e : dry.find("files")->asArray())
+        listed |= e.find("skip") && e.find("track") && e.find("track")->asString() == channel &&
+                  e.find("reason")->asString() == "no_audio";
+    CHECK(listed);
+    // The Out that rack.add made stays silent: a control signal patched to it is still no
+    // audio, so the channel is still left out; an audio signal patched to it makes it heard.
+    const auto rack = made.find("rack")->asString();
+    const auto drum = run("module.add", R"({"rack": ")" + rack + R"(", "type": "drum"})");
+    const std::string id = drum.find("module")->asString();
+    run("cable.add", R"({"from": ")" + id + R"(.env", "to": "mo_1.l"})");
+    CHECK(skippedReasons(run("render.stems", R"({"end_beat": 4, "if_exists": "overwrite"})")) ==
+          channel + ":no_audio ");
+    run("cable.add", R"({"from": ")" + id + R"(.out", "to": "mo_1.l"})");
+    CHECK(skippedReasons(run("render.stems", R"({"end_beat": 4, "if_exists": "overwrite"})"))
+              .empty());
+}
+
 TEST_CASE(
     "modulation commands: a parameter that is not modulatable takes a route through its "
     "envelope") {
@@ -4777,6 +4833,57 @@ TEST_CASE("modulate: the whole gesture in one undo step, reusing the rack it mad
     run("history.undo", "{}");
     CHECK(app->view().modulations.size() == 1);
     CHECK(app->view().modules.size() == modules);
+}
+
+TEST_CASE("modulate: a second route of the same kind onto one target is allowed and warns") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto stacked = [](const json::Value& result) {
+        std::string out;
+        if (const json::Value* w = result.find("warnings"))
+            for (const auto& e : w->asArray())
+                if (e.find("code")->asString() == "modulation.stacked")
+                    out += e.find("message")->asString();
+        return out;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+    const std::string target = R"("target": {"fx": "fx_1", "param": "gain"})";
+    // The first route, and one of another kind (a macro), are fine.
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "lfo"})")).empty());
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "macro"})")).empty());
+    // A second LFO onto the same parameter, spelled another way, is allowed and names mr_1.
+    const auto second =
+        run("modulate", R"({"target": {"fx": "fx_1", "param": "Gain"}, "source": "random"})");
+    const std::string message = stacked(second);
+    CHECK(message.find("mr_3") != std::string::npos);  // the new route
+    CHECK(message.find("mr_1") != std::string::npos);  // the existing lfo route
+    CHECK(message.find("mr_2") == std::string::npos);  // the macro is another kind
+    CHECK(message.find("offsets add") != std::string::npos);
+    CHECK(app->view().modulations.size() == 3);
+    // modulation.add says the same, for a Mod Out input fed by an LFO of its own.
+    const auto lfo = run("module.add", R"({"rack": "rk_1", "type": "lfo"})");
+    const std::string out = lfo.find("module")->asString();
+    run("cable.add", R"({"from": ")" + out + R"(.out", "to": "mo_2.in_9"})");
+    const auto added = run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_9"},
+        "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.1})");
+    CHECK(stacked(added).find("mr_1, mr_3") != std::string::npos);
+    // A disabled route adds nothing, so it is not named, and a disabled new one warns of nothing.
+    for (const char* id : {"mr_1", "mr_3", "mr_4"})
+        run("modulation.set", std::string(R"({"modulation": ")") + id + R"(", "enabled": false})");
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "lfo"})")).empty());
+    // Other targets are not stacked onto.
+    CHECK(stacked(run("modulate", R"({"target": {"track": "tr_1", "param": "volume"},
+        "source": "lfo"})"))
+              .empty());
 }
 
 TEST_CASE("modulate: a shared rack that would close a loop is passed over for another") {

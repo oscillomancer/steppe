@@ -169,7 +169,8 @@ summarized below under "The mapping".
   - **Precedence:**
     - a stated `context` with chords, and a `context_at` (or item) span
       that holds a chord, win over the symbols, which are ignored with
-      `clip.chords_ignored`;
+      `clip.chords_ignored` (21 Nov 2026: warned only when a symbol is not the
+      chord the stated points hold at its beat);
     - a stated `context` with only a key, and a `context_at` or item span
       with no chord, take the symbols' chords;
     - `midi.write` replaces the chord points only when the symbols differ,
@@ -247,7 +248,9 @@ clip (above), and placement copies what cannot follow, saying why.
   and the project's key both hold and differ in tonic pitch class or scale.
   It names the clip, both keys and the first project bar. A drum-only clip
   gives none, and neither does an enharmonic spelling (Eb major under D#
-  major).
+  major). (21 Nov 2026: the same warning is also given when the key agrees
+  but the clip's chord at some beat differs from the project's there; it
+  names both chords and the first bar, and an item still gets one.)
 - **`key`.** Each note is mapped by `harmony::follow` from the clip's key at
   its clip beat to the key at its place. Where no readable key holds at the
   place, the note is copied, with one `context.no_key` warning per item.
@@ -313,6 +316,12 @@ In short:
 `arrangement.build {write_context: true}`: where the context track is empty
 under a section, the scene's clips' context (when they agree) is written
 there. Not in X1 or X2.
+
+*21 Nov 2026, X5 built:* `scene.insert` takes the flag too. Where the track
+already has points under the section they are left alone, where the clips
+disagree (one type, one beat, two values) nothing is written, and the answer
+says which; points equal to what holds are not written again. The contract is
+session-model "Writing the context from scenes".
 
 ### Steps
 
