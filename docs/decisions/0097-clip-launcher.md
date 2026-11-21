@@ -760,6 +760,13 @@ revision records step 1 as built.
     it before it was decided) is placed again at once by `launch()`, up to
     three times, instead of at the next service. A placement on a playrate
     plan integrates the rate up to the boundary, which takes milliseconds.
+    Three, because a miss means the placement took longer than the time
+    from the floor to the executors' horizon, which happens when the main
+    thread is starved (a debug build under load): one more try almost
+    always lands, and the bound keeps `launch()` from spinning on the main
+    thread while the starvation lasts. After the third, the missed slots
+    stay missed and the next service places them again, as it did before
+    the retry; `launch()` answers with the third placement.
 - **Audio clips** play through a tape converter (`PlayerReader`: per
   channel one for what plays and one for what fades out, and one per clip
   chain).

@@ -70,8 +70,10 @@ patch's drive, envelopes and feedback.
   time with everything else and does nothing while the song is stopped.
   Cable a `clock` only to change the rate or interlock two sources (a
   Euclid's gate clocking a melody, as the bells do). Motion runs free of
-  the song unless told: an `lfo` locks to it with `sync` on, `dust` with
-  a `grid`; `drift` and `chaos` never do.
+  the song unless told: an `lfo` locks to it with `sync` on (while
+  stopped it runs on at the tempo from the stop position, so a synced gate
+  still moves when you play the rack from a keyboard), `dust` with a
+  `grid`; `drift` and `chaos` never do.
 - **Probing from the middle.** `from_beat` starts a fresh render at that
   beat. Form, Transport and anything clocked by the song know where they
   are, but whatever builds up as it runs does not: Phrase's and Changes'

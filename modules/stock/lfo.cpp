@@ -107,8 +107,9 @@ struct Lfo : Module {
     Param sync = toggle("Sync", false)
                      .in("Time")
                      .help(
-                         "Lock the cycle to the song's tempo and position, one cycle a division; "
-                         "stopped, it holds the phase of the play position.");
+                         "One cycle a division. Playing, the cycle is locked to the song's "
+                         "position; stopped, it runs on at the tempo from the stop position's "
+                         "phase, and locks again when play starts.");
     Param division =
         choice("Division",
                {"16/1", "8/1", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32",
@@ -172,6 +173,14 @@ struct Lfo : Module {
     Array<Voice, 16> state;
     bool resetHigh = false;
     double anchor = 0.0;  // the beat a synced reset started from
+    // Stopped: the song position run on at tempo from where it stopped, so
+    // a synced cycle keeps moving (a gate opens while auditioning). It starts
+    // again from the stop position when play stops, or when that position
+    // moves by more than 10 ms (a seek): not on a host's stopped position
+    // that jitters by a few samples (review round 78 K2).
+    double freeBeats = 0.0;
+    double stoppedAt = 0.0;
+    bool runningOn = false;
     int pulseFrames = 48;
     int salt = 0;
 
@@ -206,10 +215,21 @@ struct Lfo : Module {
         const double beatStep = t.tempo / 60.0 / sampleRate();
         const bool unipolar = polarity.index() == 1;
         const bool driven = drive.connected();
+        if (t.playing) {
+            runningOn = false;
+        } else if (!runningOn || abs(t.beats - stoppedAt) > 0.01 * t.tempo / 60.0) {
+            runningOn = true;
+            stoppedAt = t.beats;
+            freeBeats = t.beats;
+        }
         for (int i = 0; i < frames; ++i) {
-            // The song position; stopped, the play position, so a synced
-            // cycle holds the phase it will start from (as glitch holds).
-            const double beats = t.playing ? t.beats + (t.offset + i) * beatStep : t.beats;
+            // The song position; stopped, run on at tempo from the stop
+            // position.
+            double beats = freeBeats;
+            if (t.playing)
+                beats = t.beats + (t.offset + i) * beatStep;
+            else
+                freeBeats += beatStep;
             const double r = reset[0][i];
             bool restart = false;
             if (!resetHigh && r >= 0.5) {

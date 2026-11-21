@@ -10826,7 +10826,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
-- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
 
 ### Examples
 
@@ -10987,7 +10987,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
-- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
 - `track.frozen`: the clip's track is frozen Hint: track.unfreeze first
 - `launch.memory`: the clip's audio did not fit the budget Hint: use shorter audio or fewer files in clips
 
@@ -11224,7 +11224,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
-- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
 - `launch.scene`: the scene has no clip that can play Hint: add clips to the scene, or unfreeze their tracks
 
 ### Examples
@@ -11436,7 +11436,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
-- `launch.later`: the transport is relocating Hint: launch again in a moment
+- `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
 - `launch.track`: the track has no clips in the running plan Hint: mute the track to silence it
 
 ### Examples

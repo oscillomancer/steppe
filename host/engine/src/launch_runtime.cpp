@@ -197,8 +197,11 @@ Result<Engine::LaunchPlaced> Engine::placeRateLaunch(const detail::Plan& plan, s
     const detail::Plan* running = nullptr;
     for (const auto& candidate : plans_)
         if (candidate->generation == words[9]) running = candidate.get();
+    // Not a relocation: the rate the boundary is reached by is changing
+    // (review round 78 K1), or does not reach it within the search.
     const auto later = [] {
-        return Error("launch.later", "the transport is relocating", "", "launch again in a moment");
+        return Error("launch.later", "the master playrate is changing", "",
+                     "launch again in a moment");
     };
     // A rate control changed and has not reached the executors yet: the
     // trajectory to the boundary is not known (serviceLaunches retries).
@@ -279,7 +282,10 @@ Result<Engine::LaunchPlaced> Engine::placeRateLaunch(const detail::Plan& plan, s
             break;
         }
         lo = hi + 1;
-        if (lo > limit) return later();  // (a trajectory that does not advance)
+        if (lo > limit)  // a trajectory that does not advance
+            return Error("launch.later",
+                         "the master playrate does not reach the launch boundary yet", "",
+                         "launch again in a moment");
     }
     out.anchorSample = anchor;
     out.anchorBeat = beat;

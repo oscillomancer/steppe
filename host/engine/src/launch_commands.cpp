@@ -230,7 +230,8 @@ std::vector<cmd::ErrorSpec> commonErrors() {
         {"launch.clip", "the running plan has no player for the clip",
          "wait for the edit to reach the engine, then launch again"},
         {"launch.queue", "too many launches are waiting", "wait for them to play"},
-        {"launch.later", "the transport is relocating", "launch again in a moment"}};
+        {"launch.later", "the transport is relocating, or the master playrate is changing",
+         "launch again in a moment"}};
 }
 
 }  // namespace
