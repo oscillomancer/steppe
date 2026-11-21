@@ -310,10 +310,9 @@ instructions are in `docs/guides/installing.md`.
   (`item.add {clip}`, `scene.insert`, `arrangement.build`, `launch.commit`) takes the
   clip's name, a clip made from an item (`clip.add {item}`, `scene.capture`) the
   item's (an item's name is its active take's), and `session.describe` shows a
-  named item. Known limit: the capture logs clips, not the command
-  that launched them, so a scene is recognised by every clip of it starting
-  together; a clip launched alone is taken for a scene launch only when it
-  is the scene's only clip.
+  named item. The capture logs the scene on each clip `launch.scene` starts, so
+  a scene is recognised by that, not by clips that happen to start together;
+  a section lies where its items do, also past a transport loop's wrap.
   History records the performance, so merges replay it. A stop, seek or
   loop change ends a capture; the arrangement a loop repeated is not
   copied; under a tempo change a MIDI piece laid where the loop repeated

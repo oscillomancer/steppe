@@ -2035,10 +2035,15 @@ TEST_CASE("launch.commit writes a section for each scene launched whole, in the 
     p.run("clip.add", R"({"track": "tr_1", "scene": "sc_3", "notation": "voice b; 1: G3:w"})");
     p.run("clip.add", R"({"track": "tr_2", "scene": "sc_3", "notation": "voice b; 1: G2:w"})");
     // The clips: cl_1 (tr_1, A), cl_2 (tr_2, A), cl_3 (tr_1, B), cl_4 (tr_1, C), cl_5 (tr_2, C).
-    const auto launch = [](std::int64_t frame, const char* track, const char* clip, double beat) {
+    // A launch of a clip; `scene` is the id launch.scene logs with it ("" for a clip launched
+    // on its own).
+    const auto launch = [](std::int64_t frame, const char* track, const char* clip, double beat,
+                           const char* scene = "") {
         return std::string(R"({"frame": )") + std::to_string(frame) + R"(, "track": ")" + track +
-               R"(", "action": "clip", "clip": ")" + clip + R"(", "anchor": )" +
-               std::to_string(frame) + R"(, "anchor_beat": )" + std::to_string(beat) + "}";
+               R"(", "action": "clip", "clip": ")" + clip + R"(", )" +
+               (*scene ? std::string(R"("scene": ")") + scene + R"(", )" : std::string()) +
+               R"("anchor": )" + std::to_string(frame) + R"(, "anchor_beat": )" +
+               std::to_string(beat) + "}";
     };
     const auto commit = [&](const std::string& launches, std::int64_t frames) {
         json::Value args = json::Value::object();
@@ -2060,9 +2065,10 @@ TEST_CASE("launch.commit writes a section for each scene launched whole, in the 
     SUBCASE(
         "two scenes in turn: a section each, named after the scene, meeting where one gave way") {
         // A on bar 1 (frame 0), C on bar 2 (96000): beats 0 and 4; the capture ends at bar 4.
-        const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0) +
-                                "," + launch(96000, "tr_1", "cl_4", 4) + "," +
-                                launch(96000, "tr_2", "cl_5", 4);
+        const std::string log = launch(0, "tr_1", "cl_1", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_2", 0, "sc_1") + "," +
+                                launch(96000, "tr_1", "cl_4", 4, "sc_3") + "," +
+                                launch(96000, "tr_2", "cl_5", 4, "sc_3");
         json::Value done = commit(log, 288000);
         REQUIRE(done["sections"].size() == 2);
         const auto r = regions();
@@ -2096,14 +2102,16 @@ TEST_CASE("launch.commit writes a section for each scene launched whole, in the 
         // items lie on the timeline by running time, C from bar 4 (beat 12), A before it, and
         // so must the sections: not at the folded song position.
         const auto at = [](std::int64_t frame, std::int64_t anchor, const char* track,
-                           const char* clip, double beat) {
+                           const char* clip, const char* scene, double beat) {
             return std::string(R"({"frame": )") + std::to_string(frame) + R"(, "track": ")" +
-                   track + R"(", "action": "clip", "clip": ")" + clip + R"(", "anchor": )" +
-                   std::to_string(anchor) + R"(, "anchor_beat": )" + std::to_string(beat) + "}";
+                   track + R"(", "action": "clip", "clip": ")" + clip + R"(", "scene": ")" + scene +
+                   R"(", "anchor": )" + std::to_string(anchor) + R"(, "anchor_beat": )" +
+                   std::to_string(beat) + "}";
         };
-        const std::string log = at(0, 0, "tr_1", "cl_1", 0) + "," + at(0, 0, "tr_2", "cl_2", 0) +
-                                "," + at(288000, 96000, "tr_1", "cl_4", 4) + "," +
-                                at(288000, 96000, "tr_2", "cl_5", 4);
+        const std::string log = at(0, 0, "tr_1", "cl_1", "sc_1", 0) + "," +
+                                at(0, 0, "tr_2", "cl_2", "sc_1", 0) + "," +
+                                at(288000, 96000, "tr_1", "cl_4", "sc_3", 4) + "," +
+                                at(288000, 96000, "tr_2", "cl_5", "sc_3", 4);
         json::Value args = json::Value::object();
         args["performance"] = j(
             R"({"sample_rate": 48000, "start": 0, "frames": 384000, "loop": {"start": 0, "end": 192000},
@@ -2124,7 +2132,8 @@ TEST_CASE("launch.commit writes a section for each scene launched whole, in the 
         CHECK(p.run("context.at", R"({"bar": 4})")["section"]["name"].asString() == "C");
     }
     SUBCASE("committing again writes the same performance over itself: the sections stay") {
-        const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0);
+        const std::string log =
+            launch(0, "tr_1", "cl_1", 0, "sc_1") + "," + launch(0, "tr_2", "cl_2", 0, "sc_1");
         json::Value first = commit(log, 192000);
         const std::size_t items = p.app->head().items.size();
         json::Value again = commit(log, 192000);
@@ -2140,9 +2149,28 @@ TEST_CASE("launch.commit writes a section for each scene launched whole, in the 
         CHECK(p.app->head().regions.size() == before);
         CHECK(done["items"].size() > 0);
     }
+    SUBCASE("every clip of a scene launched one by one on one frame writes none") {
+        // The same clips at the same frame as launch.scene would start them, but launched on
+        // their own: no scene was launched, so no section.
+        const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0);
+        json::Value done = commit(log, 192000);
+        CHECK(done["sections"].size() == 0);
+        CHECK(p.app->head().regions.size() == before);
+        CHECK(done["items"].size() > 0);
+    }
+    SUBCASE("a scene launch one of whose tracks is taken over on the same frame writes none") {
+        // launch.scene A, then tr_2 launched alone on A's frame with C's clip: A is not whole.
+        const std::string log = launch(0, "tr_1", "cl_1", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_2", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_5", 0);
+        json::Value done = commit(log, 192000);
+        CHECK(done["sections"].size() == 0);
+        CHECK(p.app->head().regions.size() == before);
+    }
     SUBCASE("a scene's section ends when one of its tracks is launched again") {
         // A at bar 1; tr_2 leaves for the arrangement at bar 3 (frame 192000): A ends there.
-        const std::string log = launch(0, "tr_1", "cl_1", 0) + "," + launch(0, "tr_2", "cl_2", 0) +
+        const std::string log = launch(0, "tr_1", "cl_1", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_2", 0, "sc_1") +
                                 R"(,{"frame": 192000, "track": "tr_2", "action": "arrangement",
                                     "anchor": 192000, "anchor_beat": 8})";
         json::Value done = commit(log, 288000);
@@ -2153,10 +2181,11 @@ TEST_CASE("launch.commit writes a section for each scene launched whole, in the 
         "a scene launched twice writes a section each time; the last of one frame's launches "
         "holds") {
         // B (one clip on tr_1) at bar 1, then A over it at the same frame: A holds there.
-        const std::string log = launch(0, "tr_1", "cl_3", 0) + "," + launch(0, "tr_1", "cl_1", 0) +
-                                "," + launch(0, "tr_2", "cl_2", 0) + "," +
-                                launch(96000, "tr_1", "cl_1", 4) + "," +
-                                launch(96000, "tr_2", "cl_2", 4);
+        const std::string log = launch(0, "tr_1", "cl_3", 0, "sc_2") + "," +
+                                launch(0, "tr_1", "cl_1", 0, "sc_1") + "," +
+                                launch(0, "tr_2", "cl_2", 0, "sc_1") + "," +
+                                launch(96000, "tr_1", "cl_1", 4, "sc_1") + "," +
+                                launch(96000, "tr_2", "cl_2", 4, "sc_1");
         json::Value done = commit(log, 192000);
         REQUIRE(done["sections"].size() == 2);
         CHECK(done["sections"].at(0).find("scene")->asString() == "sc_1");

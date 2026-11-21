@@ -552,15 +552,16 @@ the same.*
   The arrangement a loop repeated is not copied. What it writes plays as
   the capture was heard: exactly away from the switches, and to rounding
   through the fades.
-  A scene launched whole also writes a section. The commit reads the
-  launches that hold at each running frame (of several at one frame on a
-  track, the last), and a scene is launched whole when they start every one
-  of its clips that sits on a track not frozen: the log records clips, not
-  the command that launched them, so a clip launched alone is a scene
-  launch only when it is the scene's only clip. The section is a region
-  (`section` true) named after the scene, in its colour, from the song
-  position of that frame (the launch's own beat where it is exact) to the
-  first later launch on any of the scene's tracks, else the capture's end.
+  A scene launched whole also writes a section. `launch.scene` logs each
+  clip it starts with the scene's id, all on one running frame; the commit
+  writes a section for a scene whose launches at a frame all still hold (a
+  track's last at that frame: one taken over by a later launch of the track
+  on the same frame spoils it). Clips launched one by one write none, however
+  they line up. The section is a region (`section` true) named after the
+  scene, in its colour, from where the items of that frame land (the
+  launch's own beat before the loop's first wrap, the timeline's position of
+  the running frame after it, as the items do) to the first later launch on
+  any of the scene's tracks, else the capture's end.
   A section already there with the same name and span is kept (committing
   again writes the same performance over itself).
 - **Memory (L-e).** The prepared-source budget counts sample values
