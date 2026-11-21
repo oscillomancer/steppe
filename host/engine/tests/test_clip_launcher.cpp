@@ -1266,7 +1266,14 @@ TEST_CASE(
     // The span from beat 14 holds both: C minor and Cm are taken, the later build's two named.
     const auto spanned = l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_1", )") +
                                                kTwoBars + R"(, "context_at": {"at": 14}})");
-    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm");
+    // The chord the later build wrote at beat 6 is "no chord" in the clip, as it reads in the
+    // project: Cm does not carry on over it (H4); the key, which has no such point, says that
+    // the earlier one does.
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm, chord@6 ");
+    CHECK_FALSE(model::chordAt(clipOf(l, "cl_1"), 7).has_value());
+    CHECK(model::chordAt(clipOf(l, "cl_1"), 5).has_value());
+    CHECK(dropped(spanned).find("no chord from there") != std::string::npos);
+    CHECK(dropped(spanned).find("earlier key carries on") != std::string::npos);
     CHECK(dropped(spanned).find("zz_future_scale") != std::string::npos);
     CHECK(dropped(spanned).find("Cm11") != std::string::npos);
     const std::string text = lastRecorded(l).find("context")->asString();
@@ -1276,7 +1283,7 @@ TEST_CASE(
     // answer names the key and the later chord, and no context.no_key is added to it.
     const auto held = l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_2", )") +
                                             kTwoBars + R"(, "context_at": {"bar": 5}})");
-    CHECK(pointsOf(clipOf(l, "cl_2")) == "chord@0 Cm");
+    CHECK(pointsOf(clipOf(l, "cl_2")) == "chord@0 Cm, chord@4 ");
     CHECK(dropped(held).find("zz_future_scale") != std::string::npos);
     CHECK(warningCodes(held).find("context.no_key") == std::string::npos);
     // The same under an item, and by scene.capture: named, not taken.
@@ -1297,7 +1304,8 @@ TEST_CASE(
     REQUIRE_MESSAGE(merged, (merged ? "" : merged.error().toString()));
     const auto first = model::clipAt(l.head(), id("tr_1"), id("sc_1"));
     REQUIRE(first);
-    CHECK(pointsOf(*l.head().clips.find(*first)) == "key@0 C minor, chord@0 Cm");  // as it saw
+    CHECK(pointsOf(*l.head().clips.find(*first)) ==
+          "key@0 C minor, chord@0 Cm, chord@6 ");  // as it saw
 }
 
 TEST_CASE("clip.add records the chord symbols of its notation, by precedence") {

@@ -398,4 +398,9 @@ there. Not in X1 or X2.
   but from the clip beat it was written at, not from clip beat 0; and a
   held-in fragment does not count in "every pass maps alike", so one fragment
   cannot unroll an item whose whole passes agree.
+- *(2026-11-21, X2 review round 76, H4.)* Leaving an unreadable point out of a
+  clip (the F5 note above) must not extend the point before it: an unreadable
+  chord inside the clip is written as a "no chord from here" point, as the
+  project reads it, and an unreadable key (there is no "no key" point) is named
+  in the warning as leaving the earlier key in force over that stretch.
 

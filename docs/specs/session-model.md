@@ -2180,7 +2180,10 @@ bars.
     `context_at`, an item and `scene.capture` do not take it, the answer warns
     `clip.context_dropped` naming it and its bar, and nothing unreadable is ever
     written into a resolved text, so a replay of the step is never refused for
-    it.
+    it. Where the dropped point lay inside the clip, the clip does not let the
+    point before it carry on: a dropped chord becomes a "no chord from here" point
+    (the project reads none there either), and a dropped key, which has no such
+    point, is named in the warning as leaving the earlier key in force.
   - `follow` is accepted under the invariant (`clip.no_key`, hint: give the
     clip a context with a key at its start).
 - **Chord symbols in a `notation` source** are recorded as chord points
