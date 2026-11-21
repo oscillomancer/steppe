@@ -4342,6 +4342,111 @@ TEST_CASE("MIDI editor: a clip-time lane selects points, moves them together, sh
     CHECK_FALSE(rows.at("Point shape…").first);
 }
 
+TEST_CASE("MIDI editor: a clip-time lane takes a marquee, and copies, cuts and pastes points") {
+    // As the timeline's lanes (gui.md §4.3): a right-drag or a Ctrl-drag from
+    // empty space selects the points inside; the editor's keys and the lane's
+    // menu copy, cut and paste them.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string clip = audioClip(f);
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 300;
+    s.scrollBeat = -0.1;
+    f.frame();
+    f.pickLane("Take volume");
+    f.pickLane("Take pan");
+    REQUIRE(s.envLanes.size() == 2);
+    const model::Id volume = s.envLanes[0].env, pan = s.envLanes[1].env;
+    f.exec("env.points.set",
+           R"({"env":")" + volume.str() +
+               R"(","points":[{"seconds":0,"value":0},{"seconds":0.5,"value":-6},)"
+               R"({"seconds":1,"value":-6},{"seconds":1.5,"value":0}]})");
+    f.frame();
+    const ui::Rect r = f.root->find("midi.env." + volume.str())->bounds();
+    const float top = r.y + 15, bottom = r.bottom() - 5;
+    const auto x = [&](double seconds) { return f.at(seconds, 60).x; };
+    const auto points = [&](model::Id env) { return f.app->head().envelopes.find(env)->points; };
+    const auto steps = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+    const auto s0 = steps();
+    auto rightButton = [&](ui::PointerEvent::Type type, ui::Point p) {
+        ui::PointerEvent e{type, p, 3};
+        f.root->pointer(e);
+        f.frame();
+    };
+    // A right-drag over 0.4-1.1 s takes the two points there, drawn while held.
+    rightButton(ui::PointerEvent::Type::Down, {x(0.4), top});
+    rightButton(ui::PointerEvent::Type::Move, {x(0.8), bottom});
+    rightButton(ui::PointerEvent::Type::Move, {x(1.1), bottom});
+    f.snapshot("midi-editor-lane-marquee.png");
+    rightButton(ui::PointerEvent::Type::Up, {x(1.1), bottom});
+    CHECK_FALSE(f.root->find("midi.env.menu"));  // a drag, not a click
+    CHECK(s.envSel.size() == 2);
+    CHECK(s.envSelLane == volume);
+    // A Ctrl-drag from empty space adds the one at 1.5 s, and adds no point.
+    f.pointer(ui::PointerEvent::Type::Down, {x(1.3), top}, 1, ui::kCtrl);
+    f.pointer(ui::PointerEvent::Type::Move, {x(1.7), bottom}, 1, ui::kCtrl);
+    f.pointer(ui::PointerEvent::Type::Up, {x(1.7), bottom}, 1, ui::kCtrl);
+    f.frame();
+    CHECK(s.envSel.size() == 3);
+    CHECK(points(volume).size() == 4);
+    CHECK(steps() == s0);
+    // Ctrl+X takes them out, one step; Ctrl+V puts them back where they were.
+    f.root->key(SDLK_X, ui::kCtrl);
+    f.frame();
+    REQUIRE(points(volume).size() == 1);
+    CHECK(steps() == s0 + 1);
+    f.root->key(SDLK_V, ui::kCtrl);
+    f.frame();
+    REQUIRE(points(volume).size() == 4);
+    CHECK(points(volume)[1].pos == doctest::Approx(0.5));
+    CHECK(points(volume)[2].value == doctest::Approx(-6));
+    CHECK(points(volume)[3].pos == doctest::Approx(1.5));
+    CHECK(s.envSel.size() == 3);  // the pasted points are the selection
+    CHECK(steps() == s0 + 2);
+    // The pan lane's menu (a right-click without a drag): Paste points at the
+    // pointer, 0.2 s, keeping their offsets.
+    const ui::Rect pr = f.root->find("midi.env." + pan.str())->bounds();
+    ui::PointerEvent right{ui::PointerEvent::Type::Down, {x(0.2), pr.y + 30}, 3};
+    f.root->pointer(right);
+    right.type = ui::PointerEvent::Type::Up;
+    f.root->pointer(right);
+    f.root->frame(false);
+    ui::Node* menu = f.root->find("midi.env.menu");
+    REQUIRE(menu);
+    std::map<std::string, std::pair<bool, std::function<void()>>> rows;
+    for (const auto& item : ui::menuItems(*menu))
+        if (!item.separator) rows[item.label] = {item.enabled, item.run};
+    f.root->closePopup();
+    for (const char* row : {"Copy points", "Cut points", "Paste points"}) {
+        INFO(row);
+        REQUIRE(rows.contains(row));
+    }
+    CHECK(rows.at("Paste points").first);
+    rows.at("Paste points").second();
+    f.frame();
+    std::vector<double> at;
+    for (const model::EnvPoint& p : points(pan)) at.push_back(p.pos);
+    REQUIRE(at.size() >= 3);
+    CHECK(std::count_if(at.begin(), at.end(), [](double v) { return std::abs(v - 0.2) < 1e-6; }) ==
+          1);
+    CHECK(std::count_if(at.begin(), at.end(), [](double v) { return std::abs(v - 0.7) < 1e-6; }) ==
+          1);
+    CHECK(std::count_if(at.begin(), at.end(), [](double v) { return std::abs(v - 1.2) < 1e-6; }) ==
+          1);
+    CHECK(s.envSelLane == pan);
+    // A press on the waveform gives the keys back to the notes: no lane paste.
+    const ui::Rect roll = f.root->find("midi.roll")->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {roll.x + 80, roll.y + 40});
+    f.pointer(ui::PointerEvent::Type::Up, {roll.x + 80, roll.y + 40});
+    f.frame();
+    CHECK_FALSE(s.envLastLane);
+    const auto s1 = steps();
+    f.root->key(SDLK_V, ui::kCtrl);
+    f.frame();
+    CHECK(steps() == s1);
+}
+
 TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {
     Fixture f;
     if (!f.ok) return;

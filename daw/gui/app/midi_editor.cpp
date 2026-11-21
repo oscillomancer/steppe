@@ -354,9 +354,12 @@ class Roll : public ui::Node {
     bool onPointer(const ui::PointerEvent& e) override {
         // An audio clip's waveform is not edited: the wheel zooms and
         // scrolls it, as the roll.
-        if (e.type == ui::PointerEvent::Type::Down && !s_.envSel.empty()) {
-            s_.envSel.clear();  // a press on the roll takes the lanes' selection away
-            editor_.repaintLanes();
+        if (e.type == ui::PointerEvent::Type::Down) {
+            s_.envLastLane.reset();  // the editor's keys are the notes' again
+            if (!s_.envSel.empty()) {
+                s_.envSel.clear();  // a press on the roll takes the lanes' selection away
+                editor_.repaintLanes();
+            }
         }
         if (s_.audio && e.type != ui::PointerEvent::Type::Wheel) return false;
         const bool handled = handle(e);
@@ -1328,6 +1331,12 @@ class EnvLane : public ui::Node {
                 c.text({x + 6, y - 14, 120, 12}, l->scale.text(pt.value), ui::Font::Ui,
                        t.type("caption"), t.color("ink"));
         }
+        // A marquee being drawn.
+        if (marking_ && marked_) {
+            const ui::Rect m = markRect();
+            c.fillRect(m, t.color("focus").withAlpha(0.15f));
+            c.strokeRect(m, t.color("focus"), 1);
+        }
         // Before the clip's start and past its end: not played (as the roll).
         if (const float start = g.xOf(0); start > a.x)
             c.fillRect({a.x, a.y, std::min(start, a.right()) - a.x, a.h},
@@ -1341,7 +1350,7 @@ class EnvLane : public ui::Node {
         using T = ui::PointerEvent::Type;
         const RollEnvLane* l = lane();
         if (e.type == T::Cancel) {
-            dragging_ = false;
+            dragging_ = marking_ = false;
             invalidate();
             return true;
         }
@@ -1371,10 +1380,54 @@ class EnvLane : public ui::Node {
             return true;
         }
         if (e.type == T::Down && e.pos.x < a.x) return true;  // the header
-        if (e.type == T::Down) s_.selected.clear();           // a lane's press leaves the notes
-        // A right-click opens the lane's menu (as the timeline's).
-        if (e.type == T::Down && e.button == 3) {
-            editor_.openEnvLaneMenu(env_, e.pos, beatAt(e.pos.x), valueAt(e.pos.y));
+        if (e.type == T::Down) {
+            s_.selected.clear();  // a lane's press leaves the notes
+            s_.envLastLane = env_;
+        }
+        // A marquee, as on the timeline's lanes: a right-drag (Shift or Ctrl
+        // adds to the selection), or a Ctrl-drag from empty space (adds). A
+        // right-click without a drag opens the lane's menu.
+        if (e.type == T::Down &&
+            (e.button == 3 || (e.button == 1 && (e.mods & ui::kCtrl) && !hit(e.pos)))) {
+            marking_ = true;
+            marked_ = false;
+            markButton_ = e.button;
+            markAdd_ = e.button == 1 || (e.mods & (ui::kShift | ui::kCtrl));
+            markFrom_ = markTo_ = e.pos;
+            if (ui::Root* r = root()) {
+                r->capture(this);
+                if (roll_) r->focus(roll_);
+            }
+            return true;
+        }
+        if (e.type == T::Move && marking_) {
+            markTo_ = e.pos;
+            marked_ = marked_ || std::abs(markTo_.x - markFrom_.x) > 3 ||
+                      std::abs(markTo_.y - markFrom_.y) > 3;
+            invalidate();
+            return true;
+        }
+        if (e.type == T::Up && marking_) {
+            if (ui::Root* r = root()) r->capture(nullptr);
+            marking_ = false;
+            if (marked_) {
+                // The lane's points inside it become the selection, or join it.
+                const ui::Rect m = markRect();
+                if (!markAdd_ || s_.envSelLane != env_) s_.envSel.clear();
+                s_.envSelLane = env_;
+                for (const model::EnvPoint& pt : l->envelope.points) {
+                    const float x = g.xOf(pt.pos);
+                    const float y =
+                        a.bottom() -
+                        static_cast<float>(std::clamp(l->scale.toNorm(pt.value), 0.0, 1.0)) * a.h;
+                    if (m.contains({x, y}) && !s_.envSelected(env_, pt))
+                        s_.envSel.push_back({pt.pos, pt.value});
+                }
+                editor_.repaintLanes();
+            } else if (markButton_ == 3) {
+                editor_.openEnvLaneMenu(env_, e.pos, beatAt(markFrom_.x), valueAt(markFrom_.y));
+            }
+            invalidate();
             return true;
         }
         // Alt+click deletes the point under it.
@@ -1496,6 +1549,18 @@ class EnvLane : public ui::Node {
     MidiEditor& editor_;
     ui::Node*& roll_;
     model::Id env_;
+    // The marquee: from where it was pressed to the pointer, inside the lane.
+    ui::Rect markRect() const {
+        const ui::Rect a = area();
+        const float x0 = std::clamp(std::min(markFrom_.x, markTo_.x), a.x, a.right());
+        const float x1 = std::clamp(std::max(markFrom_.x, markTo_.x), a.x, a.right());
+        const float y0 = std::clamp(std::min(markFrom_.y, markTo_.y), a.y, a.bottom());
+        const float y1 = std::clamp(std::max(markFrom_.y, markTo_.y), a.y, a.bottom());
+        return {x0, y0, x1 - x0, y1 - y0};
+    }
+    bool marking_ = false, marked_ = false, markAdd_ = false;
+    int markButton_ = 0;
+    ui::Point markFrom_{}, markTo_{};
     bool dragging_ = false, moved_ = false;
     std::size_t index_ = 0;         // the point in hand, in original_
     std::set<std::size_t> moving_;  // the selected points it moves, in original_
@@ -2844,7 +2909,22 @@ void MidiEditor::openEnvLaneMenu(model::Id env, ui::Point at, double pos, double
             refreshEnvLanes();
         },
         !points.empty());
-    add("Delete points", [this] { deleteEnvSelection(); }, picked, "Delete");
+    add(
+        "Copy points", [this] { copyEnvSelection(); }, picked,
+        actions_.keysFor("ui.midi.notes.copy"));
+    add(
+        "Cut points",
+        [this] {
+            copyEnvSelection();
+            deleteEnvSelection();
+        },
+        picked, actions_.keysFor("ui.midi.notes.cut"));
+    add(
+        "Paste points", [this, env, pos] { (void)pasteEnvPoints(env, pos); }, canPasteEnv(),
+        actions_.keysFor("ui.midi.notes.paste"));
+    add(
+        "Delete points", [this] { deleteEnvSelection(); }, picked,
+        actions_.keysFor("ui.midi.notes.delete"));
     add(
         "Point shape\u2026",
         [this, at] {
@@ -2887,6 +2967,36 @@ void MidiEditor::openEnvLaneMenu(model::Id env, ui::Point at, double pos, double
 void MidiEditor::repaintLanes() {
     if (envColumn_)
         for (const auto& lane : envColumn_->children()) lane->invalidate();
+}
+
+void MidiEditor::copyEnvSelection() {
+    for (const RollEnvLane& l : state_.envLanes) {
+        if (l.env != state_.envSelLane) continue;
+        std::vector<model::EnvPoint> picked;
+        for (const model::EnvPoint& p : l.envelope.points)
+            if (state_.envSelected(l.env, p)) picked.push_back(p);
+        if (picked.empty()) return;
+        envClip_ = views::copyPoints(l.envelope.points, picked, l.scale,
+                                     views::envUnit(l.envelope, l.scale));
+        envClipAt_ = picked.front().pos;
+        return;
+    }
+}
+
+bool MidiEditor::pasteEnvPoints(model::Id env, std::optional<double> pos) {
+    if (envClip_.empty()) return false;
+    for (const RollEnvLane& l : state_.envLanes) {
+        if (l.env != env) continue;
+        const views::EnvEdit edit =
+            views::pastePoints(l.envelope.points, envClip_, pos.value_or(envClipAt_), l.scale,
+                               views::envUnit(l.envelope, l.scale));
+        state_.envSelLane = env;
+        state_.envSel.clear();
+        for (const model::EnvPoint& p : edit.selected) state_.envSel.push_back({p.pos, p.value});
+        (void)setEnvPoints(env, edit.points);
+        return true;
+    }
+    return false;
 }
 
 void MidiEditor::deleteEnvSelection() {
@@ -3102,7 +3212,12 @@ void MidiEditor::duplicate() {
 }
 
 void MidiEditor::copySelected() {
-    if (!isOpen() || state_.selected.empty()) return;
+    if (!isOpen()) return;
+    if (!state_.envSel.empty()) {  // a clip-time lane's points were picked last
+        copyEnvSelection();
+        return;
+    }
+    if (state_.selected.empty()) return;
     double first = 1e18;
     for (std::size_t i : state_.selected) first = std::min(first, state_.notes[i].start);
     clipboard_.clear();
@@ -3119,7 +3234,11 @@ void MidiEditor::cutSelected() {
 }
 
 void MidiEditor::paste(std::optional<double> itemBeat) {
-    if (!isOpen() || clipboard_.empty()) return;
+    if (!isOpen()) return;
+    // After a press on a clip-time lane its copied points paste there, at the
+    // clip time they were copied from.
+    if (!itemBeat && state_.envLastLane && pasteEnvPoints(*state_.envLastLane)) return;
+    if (clipboard_.empty()) return;
     const double at = itemBeat.value_or(
         state_.clip ? std::max(0.0, state_.playheadBeat)
                     : std::max(0.0, actions_.context().playheadBeats - state_.itemPosition));

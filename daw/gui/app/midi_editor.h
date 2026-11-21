@@ -24,6 +24,7 @@
 #include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
+#include "supple/views/envelope_edit.h"
 #include "supple/views/envelope_lane.h"
 
 namespace supple::ui {
@@ -109,6 +110,9 @@ struct RollState {
     // points an edit removed simply leave it.
     model::Id envSelLane;
     std::vector<std::pair<double, double>> envSel;
+    // The lane pressed last (none after a press on the roll): the editor's
+    // copy and paste keys take its points.
+    std::optional<model::Id> envLastLane;
     bool envSelected(model::Id env, const model::EnvPoint& p) const {
         if (env != envSelLane) return false;
         for (const auto& [pos, value] : envSel)
@@ -299,6 +303,14 @@ class MidiEditor {
     void openEnvLaneMenu(model::Id env, ui::Point at, double pos, double value);
     // The selected points of state_.envSelLane removed, or given `shape`.
     void deleteEnvSelection();
+    // The selected points of state_.envSelLane copied (positions and values,
+    // as the timeline copies them); pasted into lane `env` at `pos` (its own
+    // clip time: beats, or an audio clip's seconds), replacing the points over
+    // the pasted span, or at the place they were copied from. False when
+    // there is nothing to paste or no such lane.
+    void copyEnvSelection();
+    bool pasteEnvPoints(model::Id env, std::optional<double> pos = {});
+    bool canPasteEnv() const { return !envClip_.empty(); }
     void repaintLanes();  // the clip-time lanes, after their selection changed
     void shapeEnvSelection(model::PointShape shape);
     Status setClipContext(const std::vector<model::ContextPoint>& points);
@@ -347,6 +359,8 @@ class MidiEditor {
     UiState& ui_;
     RollState state_;
     std::string lastItem_;             // the item opened last (ui.midi.toggle reopens it)
+    views::EnvClip envClip_;           // the clip-time lanes' copied points
+    double envClipAt_ = 0;             // where the first of them was
     std::vector<RollNote> clipboard_;  // starts from the earliest copied note
     float height_ = kDefaultHeight;
     const views::MouseMap* mouse_ = nullptr;
