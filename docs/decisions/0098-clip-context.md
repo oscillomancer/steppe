@@ -7,6 +7,10 @@ after the design review (round 71, F1 to F19), with the co-director's
 decisions on F1, F2, F5, F7 and F8: chord tones map by function, following
 never refuses, and a laid note reads the clip's context at its place in the
 clip's period.
+**Amended 2026-11-21** (below, "Amendment: following is playback"): what
+sounds is mapped at playback, for timeline items as for launched clips;
+notes are stored as written. It supersedes "Following (X2)" where that bakes
+mapped pitches into notes, and X4's row of the steps.
 It extends ADR-0095 (the context track) and ADR-0097 (the clip launcher).
 It is built in steps X1 to X5 (below); X1 and X2 are specified here and in
 the contracts precisely enough to build without asking.
@@ -14,7 +18,9 @@ the contracts precisely enough to build without asking.
 Contracts: `specs/session-model.md` "Clip context (schema 2.20, ADR-0098)"
 and the clip rows of "Scenes and clips", `specs/harmony.md` §5 "Following",
 `specs/notation.md` "Chord symbols in the compiled result". Each is marked
-as the contract for X1 or X2.
+as the contract for X1 or X2. The amendment's contracts: `specs/session-model.md`
+"Take context and follow (schema 2.21)" (X4b, X4d), `specs/engine.md` "Following
+at playback" (X4a, X4c).
 
 ## Context
 
@@ -203,6 +209,11 @@ summarized below under "The mapping".
 
 ### Following (X2)
 
+*(Amended 2026-11-21: where this section bakes mapped pitches into the laid
+notes, unrolls, refuses `pooled`, or plays a launched clip unfollowed, it is
+superseded by "Amendment: following is playback". The mapping, channel 10, the
+copies' reasons and the mismatch warning stand.)*
+
 **Following itself never refuses and never fails.** X4 must give the same
 notes live, and a refusal has no live meaning. So the conditions live on the
 clip (above), and placement copies what cannot follow, saying why.
@@ -309,6 +320,86 @@ there. Not in X1 or X2.
 | X3 | gui-lead | A clip's roll shows and edits its context (chord strip, scale shading); the clip inspector has Follow; a mismatch shows on a laid item's roll. |
 | X4 | lead (engine) | A launched clip follows live through pitch tables built at compile from `harmony::follow`, per key region and chord region. A note is looked up by the song position of its *start* (its clip beat by the launch's phase), and keeps that pitch until its note-off, so a note held across a change cannot stick. A note out of range folds as on the timeline, and a clip that cannot follow plays unfollowed, as placement copies it. Context edits then publish the tables while a clip with `follow` ≠ `none` exists, which amends engine.md "Context edits". `launch.commit` lays what was heard, followed, and `launch.unfollowed` goes. |
 | X5 | later | `write_context`; modulation sources that read the context (idea I7); scenes carrying macro state (I5). |
+
+*(Amended 2026-11-21: X4's row is replaced by X4a to X4e in "Amendment:
+following is playback".)*
+
+## Amendment: following is playback (2026-11-21)
+
+Decided by the co-director on 2026-11-21 (design question B of the X4 review),
+with the picks for recording, edits and glue below.
+
+**Why.** Baking at placement left laid items stale. When the context track
+changed nothing said so, and the only repair was to remove the item and lay
+it again, which loses hand edits. Unrolling, the pooled refusal and the
+held-in rule existed only because the mapping was written into notes. X4
+already maps a launched clip at playback, from its written notes and its
+context. That becomes the one mechanism, for timeline items and launched
+clips alike.
+
+**The rule.**
+- Notes are stored as written.
+- A MIDI take, like a clip, carries a context and a `follow`.
+- What sounds is computed at compile: a timeline item's notes are mapped into
+  the plan's events; a launched clip is mapped through live tables.
+- A context edit recompiles while anything follows, so what follows moves
+  with it and nothing is stale.
+- `follow: none` plays the notes as written.
+- Writing the sounding pitches into the notes is an explicit command,
+  `take.bake`.
+- One function, `model::soundingKey`, says what a note sounds as. Compile,
+  `take.bake`, `midi.get {sounding}`, `item.export` and placement's answer all
+  call it, so render, export and bake agree by construction. It lives in the
+  model library (GPL), over model types, on top of `harmony::follow`
+  (MIT, unchanged): the harmony library does not see the model.
+
+**What goes.**
+- Unrolling at placement, and placement's `unrolled` answer field.
+  Unrolling moves to `take.bake`, which needs it when a looped item's passes
+  sound differently.
+- `clip.follow_pooled`: a pooled source may follow, since the mapping belongs
+  to each take that reads it.
+- The held-in rule (X2 note and review round 76, H3), replaced by the start
+  rule: a note keeps the pitch of the place where it starts.
+- `launch.unfollowed`.
+- Difference 3 of "Where this differs from the outline".
+
+**Placement and the launcher.**
+- Placement (`item.add {clip}`, `scene.insert`, `arrangement.build`) copies
+  notes as written. Each laid MIDI take gets the clip's context, in source
+  beats, and `follow`: the argument, else the clip's own. Its answer keeps
+  `followed: {mode, regions?, folded?, copied?}`, computed by `soundingKey`.
+- `launch.commit` lays notes as written, each take with its clip's context and
+  the `follow` the plan used for that clip (after the budget). The committed
+  timeline renders as the performance was heard, by construction. Old baked
+  items load unchanged: they have no take `follow`, so they play as stored.
+
+**Recording.** A pass never writes into a following take: new material is
+its own take, with `follow: none` and no context. `midi_overdub` and
+`midi_replace` over an active following take are refused at
+`transport.record` (`record.follow`), before a note is played, with a hint to
+bake or turn follow off.
+
+**Edits.** Edits act on written notes. `midi.get` answers written notes by
+default, sounding ones on request, and always says how many differ. The
+pitch-reading `midi.edit` ops say they acted on written notes.
+
+**Glue.** Takes concatenate their contexts when their follow modes match;
+different modes are refused, with a hint to bake first. No glue command exists
+today: the rule binds whichever lands.
+
+**Steps (replacing X4's row).**
+
+| Step | Who | What |
+|---|---|---|
+| X4a | lead (engine) | Launched clips follow live (built, with D1 and D2 first). Context edits compile while a clip follows. `launch.state` `followed`. `launch.unfollowed` goes. |
+| X4b | builder (model) | `Take.context` and `Take.follow`, schema 2.21, the invariants and their edits, load, the round trip; `model::soundingKey` with its tests. |
+| X4c | lead (engine) | Timeline mapping at compile; the `followed` note origin; the plan-wide pool of live tables with a per-clip budget; context edits compile while a take follows. Tests: a render equals `take.bake` then a render as written; live equals offline across a context edit. |
+| X4d | builder (commands) | Placement copies; `launch.commit` as written with the outcome; `take.set {context, follow}`; `take.bake`; `midi.get {sounding}`; the `midi.edit` answers; the record refusal; split, duplicate and paste; `clip.add {item}` and `scene.capture` from a following take; guides and generated files. |
+| X4e | gui-lead | The roll's sounding ghosts; the take inspector's Follow and context strip. |
+
+No item-side code (X4b to X4e) until the reviewer has read this amendment and
+its contracts.
 
 ## Where this differs from the outline, and why
 

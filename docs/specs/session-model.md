@@ -2257,6 +2257,13 @@ bars.
   at the project's start (ADR-0095 amendment C-e).
 
 **Laying a clip (X1: the warning; X2: following).**
+
+*(Amended 2026-11-21, ADR-0098 "Amendment: following is playback": placement
+no longer maps notes, unrolls or refuses `pooled`; it copies notes as written
+and gives the laid take the clip's context and `follow`, and `launch.unfollowed`
+goes. "Take context and follow (schema 2.21)" below is the contract; the rest
+of this section (which clips can follow, a note's place, channel 10, the
+mismatch warning, `harmony::follow`, the regions) stands, read as what sounds.)*
 - **Where.** `item.add {clip}`, `scene.insert` and `arrangement.build` take
   `follow?: none | key | chords`, defaulting to each clip's `follow`.
   `launch.commit` copies, as heard (ADR-0098). `follow` with an `item.add`
@@ -2339,3 +2346,158 @@ bars.
     written.
   - `launch.clip` and `launch.scene` warn `launch.unfollowed` for a clip whose
     `follow` is not `none`, once per launch.
+
+### Take context and follow (schema 2.21, ADR-0098 amended; the contract for X4b and X4d)
+
+*Not built. Steps X4b (model) and X4d (commands) build it; X4c (engine) is in
+`engine.md` "Following at playback".*
+
+Writers emit `supple.project/2.21`. A take gains two members; earlier files load
+unchanged and nothing migrates. An item an X2 build laid (its notes baked) has
+neither, so it plays as stored. A 2.20 build drops both members with its
+unknown-field warnings, and the take then sounds as written there.
+
+| Take field | Meaning |
+|---|---|
+| `context` | Key and chord points, the clip `context` shapes, with `beat` in **source beats** (the MIDI source's own beat axis, which its notes are on), rounded to 1/960, sorted by beat and then type (key first). Written only when not empty. |
+| `follow` | `none` (default, not written), `key` or `chords`: what the take's notes sound as (below). |
+
+Source beats move with the notes, so a slip (`start_offset`), the take's
+`playrate` and the item's loop move the context with them. Only a take whose
+source is MIDI holds either; a pooled source may be read by takes with
+different contexts and follow modes.
+
+**Invariants (checked at commit).**
+- **Points.** Each lies in `[0, source length)`. At most one point of a type
+  at a beat, and at most 4096 of a type. Before the first key point no key
+  holds; before the first chord point no chord holds.
+- **Audio.** An audio take, or an empty one, holds neither.
+- **`follow` other than `none`** needs a readable key at the take's **start
+  beat**: the source beat where it starts to play, `start_offset`, or 0 when
+  that is negative. This is a clip's "key at 0", read where the take begins.
+- **Unreadable points** are kept as data and read as no key or no chord, as
+  on a clip.
+
+**Edits that would break an invariant** keep it in the same step; the answer
+says what changed, and undo restores it.
+- An edit that leaves no readable key at the start beat (a slip, a context
+  edit, a source swap or edit) resets `follow` to `none`, with
+  `take.follow_reset` naming the take.
+- A point at or past the source's end after a source edit is removed, with
+  `take.context_dropped`.
+
+**Load.** A point against the rules is dropped with `take.context_dropped`;
+a `follow` that is unknown, on a non-MIDI take, or without a readable key at
+the start beat reads as `none` with `take.follow_reset`. The open never fails
+for any of this.
+
+**What sounds: `model::soundingKey` (X4b).** The one implementation, used by
+the engine's compile (timeline items, and the live tables of launched
+clips), `take.bake`, `midi.get {sounding}`, `item.export` and placement's
+`followed` answer. It lives in the model library, on top of
+`harmony::follow` (`harmony.md` §5), which is unchanged and does not see the
+model.
+
+```cpp
+// supple/model/follow.h
+// What a note written as MIDI `key` on `channel` (0..15) sounds as, starting at
+// `takeBeat` of `context` followed by `follow`, at song beat `songBeat` of the
+// project's context `project`. It never fails: what does not follow, or cannot,
+// comes back as written (`by == Copy`), and a mapped pitch is folded into range.
+harmony::Followed soundingKey(std::span<const ContextPoint> context, ClipFollow follow,
+                              const ContextView& project, double takeBeat, double songBeat,
+                              int channel, int key);
+```
+
+- **Takes and clips alike.** For a take, `takeBeat` is the note's source
+  beat and `context` the take's; for a launched clip, the clip beat (as X4
+  built it) and the clip's.
+- **A note's place** (`songBeat`) is the song beat of its start: its source
+  beat put on the song by the item's position, start offset, take playrate
+  and loop. It keeps that pitch to its note-off. A note cut by the item's
+  start or by a loop boundary keeps the place of its own start, also where
+  that start falls before the item's start or in the previous pass.
+- **Never mapped:** channel 10 (stored 9); controllers, bend and pressure.
+- **`key`** maps from the take's key at `takeBeat` to the project's key at
+  `songBeat`; **`chords`** from chord to chord, a note with either chord
+  missing or unreadable following by key. Where no readable key holds at
+  either side the note sounds as written.
+- **Order with the take's `pitch`:** follow first, then the take's pitch
+  shift, as it shifts written notes today.
+- Which takes follow: `follow` other than `none`, a MIDI source, and a note
+  off channel 10. Any other note sounds as written.
+
+**Commands (X4d).**
+- **Placement** (`item.add {clip}`, `scene.insert`, `arrangement.build`)
+  copies notes as written. Each laid MIDI take gets the clip's context in
+  source beats (clip beat `c` of a take with start offset `o` is source beat
+  `o + c`, points outside the source dropped) and `follow`: the argument,
+  else the clip's own. `pooled: true` is allowed with any `follow`. Nothing
+  is unrolled, and `unrolled` leaves the answer. `followed: {mode, regions?,
+  folded?, copied?}` stays, computed by `soundingKey`, and says what sounds
+  now. `clip.follow_pooled` is no longer given.
+- **`launch.commit`** lays notes as written, each take with its clip's
+  context and `follow` set to the outcome the plan used for that clip
+  (`none`, `key` or `chords`, after the budget: `engine.md`). `pooled` is
+  allowed.
+- **`take.set {take, context?, follow?}`.** `context` is lead-sheet text in
+  take bars, bar 1 at the start beat, in the project's meters (as
+  `clip.set` reads a clip's), stored in source beats; `""` clears it.
+  `follow` is `none | key | chords`. The invariants apply: `take.no_key`
+  (hint: give the take a context with a key at its start), `take.follow_audio`
+  on a take that is not MIDI, and the lead sheet's errors as
+  `take.context_syntax` and `take.context_range` (a point outside the
+  source), naming the take bar. Turning `follow` off returns the notes as
+  written.
+- **`take.bake {take}`** (new; X2's laying code moves under `soundingKey`)
+  writes the sounding pitches into the take's notes and sets its `follow` to
+  `none`; its context stays, for display.
+  - A pooled source is first made the take's own copy.
+  - When every pass of a looped item sounds alike, the loop stays.
+    Otherwise the item is unrolled (loop off, its passes written out, each
+    at its place), its other takes repeated alike, as X2 laid items; the
+    answer says `unrolled: true`.
+  - The answer is the `followed` block of what was baked.
+  - On a take whose `follow` is `none`: `take.not_following`.
+- **`midi.get`** answers written notes by default. `sounding: true`
+  answers what sounds. Every answer for a following take carries
+  `sounding_differs: n`, the number of notes that sound otherwise (0 when
+  none do). On a clip, `sounding` is refused (`midi.sounding_clip`): what a
+  clip sounds as depends on where it is launched; `launch.state` says how it
+  follows.
+- **`midi.edit`** ops act on written notes. Ops that read pitch
+  (`snap_to_scale`, `fit_to_chord`, pitch filters, `transpose_degrees`) answer
+  `acts_on: "written"` when the take follows and any note sounds otherwise;
+  their key or chord is the take's context, as a clip's ops read the clip's.
+- **Recording.** A pass never writes into a following take: new material is
+  its own take, with `follow: none` and no context. A track recording in
+  `midi_overdub` or `midi_replace` whose item under the record start has an
+  active take with `follow` other than `none` is refused at
+  `transport.record` (`record.follow`, naming the track and take; hint: bake
+  it with `take.bake` or turn follow off with `take.set {follow: "none"}`),
+  before a note is played.
+- **Glue** (no glue command exists today; the rule binds whichever lands):
+  contexts concatenate in item time when both sides have the same `follow`;
+  different modes are refused (`item.follow_glue`, hint: bake first).
+- **Split, duplicate, paste** (`item.split`, `item.duplicate`, `item.paste`):
+  each take's context and `follow` go with it. Source beats do not change,
+  so a split needs no conversion. A split half whose start beat has no
+  readable key resets `follow`, with `take.follow_reset`.
+- **`clip.add {item}` and `scene.capture`** from an active following take:
+  the clip takes the take's context converted to clip beats (source beat `s`
+  is clip beat `s - o`, points outside the clip dropped) and its `follow`.
+  From a take whose `follow` is `none`, the context under the item, as
+  today.
+- **`item.export`** (MIDI files) writes what sounds.
+- **History.** Placement records nothing resolved: notes are copied as
+  written, and the take's context comes from the clip as it is on the branch
+  the step replays on. `take.set {context}` records its text.
+- **`session.describe`** writes a following take's key at its start beat and
+  its `follow`, after the take's name.
+
+**Tests (X4b, X4d).** A save and reopen round trip with both fields and each
+load rule; the invariant resets with undo; `soundingKey` against
+`harmony::follow` over the `harmony.md` §5 list, plus channel 10, a note
+before the item's start and one across a loop boundary; each command above,
+its errors and its history replay on another branch; a 2.20 file opens
+unchanged.

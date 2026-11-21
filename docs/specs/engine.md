@@ -1095,6 +1095,9 @@ handles changed, so an edit that changes nothing they handle falls through
 them to a compile. A context edit that comes with any other change compiles
 as that change does. When something in the plan reads the context (a note
 source, a rack module), an edit compiles only if the plan reads it.
+*(Amended 2026-11-21, ADR-0098 "Amendment: following is playback": while a take
+or a clip in the session follows, the plan reads the context, and a context-only
+edit compiles; see "Following at playback".)*
 
 What the tests pin, and what they do not (the reader of `loadContextOnly`'s guards
 should know which is which). `a context-only edit compiles nothing and the same
@@ -1145,6 +1148,51 @@ before the patches are applied and by one after; every executor reads it
 before processing a block and stamps that block's plug-in outputs with it,
 and the app drops outputs stamped with any value other than the current
 one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
+
+### Following at playback (ADR-0098 amended; the contract for X4a and X4c)
+
+*X4a is built apart from `launch.state`'s `followed` and the context-edit
+compile (the live tables, the budget, the note identity rules below for clip
+notes); X4c is not built.* What a note sounds as is `model::soundingKey`
+(`session-model.md`, "Take context and follow"); the engine only places its
+results.
+
+- **Timeline items: at compile.** Item notes are compiled into each stage's
+  timed events at plan time, as now. A following take's note-ons are mapped
+  there through `soundingKey`, with the 128-key table memoised per pair of
+  places (the take's key and chord at the note's source beat, the project's at
+  its place), and each note-off takes its note-on's mapped key. Nothing is
+  added to the audio path, and there is no budget.
+- **Launched clips: the live tables.** X4's tables move into one pool per plan,
+  deduplicated by pair of places across all clip players. The budget stays per
+  clip: its own pairs, counted before deduplication, at most `kFollowPairs`
+  (1024); past it a `chords` clip follows its key, and past that it plays as
+  written, with `launch.follow_budget` at compile. A clip's outcome so depends
+  only on the clip and the project, never on what else is launched.
+- **`launch.state`** (X4a): each listed track gains `followed: "none" | "key" |
+  "chords"`, the outcome the plan uses for the clip it plays or has queued,
+  omitted when it plays the arrangement or nothing. `launch.unfollowed` goes.
+- **Note identity.** A note origin gains `followed` (today the rule keys on
+  `kClipOrigin`). For a followed note:
+  - a plan swap carries a held voice by its address without the key;
+  - `prepareNoteIds` pairs its note-off by source id, port and channel, taking
+    the held voice's key.
+  So a context edit while a note sounds lets it play on to its note-off at the
+  pitch it started with, and no note sticks.
+- **Context edits.** A context-only edit takes the compile path whenever a take
+  or a clip in the session has `follow` other than `none`; otherwise the
+  shortcut above stays. The compile time on the song journey is measured in the
+  X4 hand-back.
+- **Everything downstream reads compiled events:** offline renders, freeze,
+  stems, rack Notes feeds, MIDI sends and plug-in MIDI inputs take the sounding
+  pitches with no change of their own.
+- **Invariants.** Real-time output stays bit-identical to the offline render in
+  both executors and bridged. Tests (X4c): a render of a following item equals
+  `take.bake` and then a render as written; live equals offline across a
+  context edit, in both executors; a note held across a context edit ends at
+  its note-off, at its start's pitch; a looped item whose passes sound
+  differently; a pooled source read by a following and a written take; a clip
+  over its budget beside one within it, each with its own outcome.
 
 ## 2. Real-time execution
 
