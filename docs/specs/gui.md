@@ -1021,7 +1021,14 @@ sequence on this track** (item.explode-takes, recording order; this ends
 the takes, Show all takes keeps them); **Delete take "name"** for the
 heard take (take.remove); and **Keep only the
 selected take**: every selected item with several takes keeps only its heard
-take (take.remove of the others, one undo step). The right-click menu's
+take (take.remove of the others, one undo step). For an item whose heard
+take is MIDI it adds how that take sounds against the song (ADR-0098
+amended), each checked as it is: **Play as written**, **Follow the song's
+key** and **Follow the song's chords** (`take.set {follow}` as the
+inspector's Follow sends it; greyed with the reason when the take cannot
+follow), and **Bake into notes** (`ui.take.bake`, a key-bindable action:
+`take.bake` on each selected item whose heard take follows, one undo step,
+and the status line says what it wrote). The right-click menu's
 renders act on every selected item with material that is not locked, audio
 and MIDI alike, one item.apply-fx each in one undo step (through the take and
 track FX; on the clicked item the take under the pointer is heard first):
@@ -2740,6 +2747,7 @@ inspector adds no command:
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
+| Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |
 | Written in (`inspector.written_in`) | One item whose heard MIDI take has a context (ADR-0098 amended): the take's own key where its content starts, "D major" ("no key" when that point is unreadable) | Read only | |
 
 When the heard take plays audio, its speed and pitch follow

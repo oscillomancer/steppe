@@ -28,6 +28,7 @@
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
+#include "supple/model/context.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/gl.h"
@@ -374,6 +375,65 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     f.side->show("inspector");
     f.pass();
     CHECK(f.text("inspector.title") == "buss_1");
+}
+
+TEST_CASE("inspector: a MIDI take's Follow and Bake") {
+    // gui.md §4.14 (ADR-0098 amended, X4e): take.set {follow}, and take.bake.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string keys = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    const std::string item =
+        f.exec("item.add", R"({"track":")" + keys +
+                               R"(","bar":1,"notation":"voice v; 1: C4:q E4:q G4:q C5:q"})")["item"]
+            .asString();
+    const auto itemId = *model::Id::parse(item);
+    auto take = [&]() -> const model::Take& {
+        return *f.app->head().takes.find(*f.app->head().items.find(itemId)->activeTake);
+    };
+    std::vector<std::string> notices, errors;
+    f.actions->onNotice = [&](const std::string& n) { notices.push_back(n); };
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    f.side->show("inspector");
+    f.ui.selectedItems = {item};
+    f.ui.tracksFocused = false;
+    f.pass();
+    REQUIRE(f.inView("inspector.row.follow"));
+    auto* follow = dynamic_cast<ui::Dropdown*>(f.node("inspector.follow"));
+    REQUIRE(follow);
+    // No key in the song and none of its own: Key and Chords say why.
+    REQUIRE(follow->choices().size() == 3);
+    CHECK(follow->choices()[1].label == "Key (no key in the song here)");
+    CHECK_FALSE(follow->choices()[1].enabled);
+    CHECK_FALSE(f.node("inspector.bake")->enabled);
+    // With a key in the song, Key gives the take the song's context under the
+    // item in the same take.set: nothing sounds otherwise yet.
+    f.exec("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+    f.pass();
+    CHECK(follow->choices()[1].label == "Key");
+    follow->choose("key");
+    f.pass();
+    CHECK(errors.empty());
+    CHECK(take().follow == model::ClipFollow::Key);
+    REQUIRE(take().context.size() == 1);
+    CHECK(model::keyWords(take().context[0]) == "C major");
+    CHECK(f.text("inspector.written_in") == "C major");
+    CHECK(f.node("inspector.bake")->enabled);
+    // The song moves to E minor: the notes sound there; Bake writes them.
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    f.pass();
+    REQUIRE(f.root->click("inspector.bake"));
+    f.pass();
+    CHECK(errors.empty());
+    CHECK(take().follow == model::ClipFollow::None);
+    std::vector<int> pitches;
+    const json::Value notes = f.exec("midi.notes", R"({"item":")" + item + R"("})")["notes"];
+    for (const json::Value& n : notes.asArray())
+        pitches.push_back(static_cast<int>(n.find("pitch")->asInt()));
+    CHECK(pitches == std::vector<int>{64, 67, 71, 76});
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0].ends_with(" baked: 4 notes written as they sound"));
+    CHECK(follow->valueText().find("None") != std::string::npos);
+    CHECK_FALSE(f.node("inspector.bake")->enabled);
 }
 
 TEST_CASE("inspector: one item's Timebase, and Written in while its take has a context") {
