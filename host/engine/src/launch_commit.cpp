@@ -380,7 +380,8 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 bool pitched = false;
                 if (take.source && take.source->kind == model::Kind::Midi)
                     if (const model::MidiSource* source = s.midi.find(*take.source))
-                        for (const midi::Note& n : source->sequence.notes) pitched |= n.channel != 9;
+                        for (const midi::Note& n : source->sequence.notes)
+                            pitched |= n.channel != 9;
                 const auto built = detail::buildClipFollow(clip, pitched, detail::projectFollow(s));
                 outcome = built.outcome == detail::FollowOutcome::Chords ? model::ClipFollow::Chords
                           : built.outcome == detail::FollowOutcome::Key  ? model::ClipFollow::Key

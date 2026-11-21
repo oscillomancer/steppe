@@ -279,9 +279,11 @@ def scenes(j):
 # --- reading a laid item against the lead sheet ----------------------------------------
 
 def laid_notes(j, item, base_beat):
-    """An item's notes as (project beat, pitch class, pitch), pitch-sorted within a start."""
-    return [(base_beat + n["start"], n["pitch"] % 12, n["pitch"])
-            for n in j.exec("midi.notes", {"item": item}, "An item's notes.")["notes"]]
+    """An item's sounding notes as (project beat, pitch class, pitch)."""
+    # What sounds: the notes are laid as written and mapped as they play (ADR-0098).
+    return [(base_beat + n["start"], n["sounds"] % 12, n["sounds"])
+            for n in j.exec("midi.notes", {"item": item, "sounding": True},
+                            "An item's notes, as they sound.")["notes"]]
 
 
 def bar_matches(notes, first_bar, bars):
@@ -535,12 +537,17 @@ def perform(j):
         bar = int(beat // 4) + 1
         found = j.exec("context.at", {"bar": bar}, f"The section over bar {bar}.")
         assert found["section"]["name"] == name, found
-    # A launched clip is not followed: the commit lays what was heard and says where it sits
-    # under another key than it was written in (the Hook was written in C major, the Bridge's
-    # bass and keys in F# minor; the lead sheet says A minor for these bars).
+    # The commit lays notes as written with each clip's context and the follow the plan used
+    # (ADR-0098, following is playback): the clips that follow the chords or the key keep
+    # following where they are laid, so nothing sits under a key it was not written in; the
+    # drums and the Bridge lead (follow none, written in A minor, which the lead sheet says
+    # for those bars) were not mapped when heard and are not now.
     mismatched = sorted(re.match(r"(cl_\d+)", w["message"]).group(1)
-                        for w in committed["warnings"] if w["code"] == "context.mismatch")
-    assert mismatched == ["cl_10", "cl_11", "cl_6", "cl_7", "cl_8"], committed["warnings"]
+                        for w in committed.get("warnings", []) if w["code"] == "context.mismatch")
+    assert mismatched == [], committed.get("warnings")
+    follows = [j.exec("midi.get", {"item": i}, "A committed item.").get("follow")
+               for i in committed["items"]]
+    assert sorted(f for f in follows if f) == ["chords"] * 6 + ["key"] * 2, follows
     hook_bass = [i for i in committed["items"]
                  if j.exec("midi.get", {"item": i}, "A committed item.")["text"].count("C2:e") > 0]
     assert hook_bass, "the Hook's bass was committed as written (C2 first)"

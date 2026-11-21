@@ -151,7 +151,7 @@ struct TakeSetArgs {
     std::optional<model::ChannelMode> channelMode;
     std::optional<std::string> name, pitchMode;
     std::optional<bool> preservePitch;
-    std::optional<std::string> context;      // lead-sheet text in the take's bars; "" clears
+    std::optional<std::string> context;       // lead-sheet text in the take's bars; "" clears
     std::optional<model::ClipFollow> follow;  // none | key | chords
 };
 
@@ -499,15 +499,15 @@ void registerTakeCommands(cmd::Registry& registry) {
                            "at its item's position, bar 1 at context beat 0, in context beats (the "
                            "take's playrate does not scale them); \"\" clears it. A point at or "
                            "past the context's period is take.context_range."))
-                .field("follow", &TakeSetArgs::follow,
-                       schema::enumeration<model::ClipFollow>(
-                           {{model::ClipFollow::None, "none"},
-                            {model::ClipFollow::Key, "key"},
-                            {model::ClipFollow::Chords, "chords"}})
-                           .doc("How the take's notes sound against the project's context (ADR-0098, "
-                                "following is playback): none plays them as written, key or chords "
-                                "maps them as they play. Needs a MIDI take with a readable key in "
-                                "its context. The notes stay as written; take.bake writes them."))
+                .field(
+                    "follow", &TakeSetArgs::follow,
+                    schema::enumeration<model::ClipFollow>({{model::ClipFollow::None, "none"},
+                                                            {model::ClipFollow::Key, "key"},
+                                                            {model::ClipFollow::Chords, "chords"}})
+                        .doc("How the take's notes sound against the project's context (ADR-0098, "
+                             "following is playback): none plays them as written, key or chords "
+                             "maps them as they play. Needs a MIDI take with a readable key in "
+                             "its context. The notes stay as written; take.bake writes them."))
                 .build();
         c.result = emptySchema();
         c.examples = {
@@ -518,6 +518,9 @@ void registerTakeCommands(cmd::Registry& registry) {
             {"Half speed, pitch kept", j(R"({"take":"tk_1","playrate":0.5})"), j("{}"),
              "song_with_item"},
             {"An octave up, same tempo", j(R"({"take":"tk_1","pitch":12})"), j("{}"),
+             "song_with_item"},
+            {"Follow the project's key, the take written in A minor",
+             j(R"({"take":"tk_1","context":"1: key A minor ~:w","follow":"key"})"), j("{}"),
              "song_with_item"}};
         c.errors = {
             {"take.no_key", "follow needs a key in the take's context",
@@ -546,7 +549,8 @@ void registerTakeCommands(cmd::Registry& registry) {
                 const model::Session& view = app(ctx).view();
                 const auto owner = model::takeOwner(view, *id);
                 if (owner && owner->kind == model::Kind::Clip)
-                    return Error("take.in_clip", a.take + " belongs to a clip, which holds no context",
+                    return Error("take.in_clip",
+                                 a.take + " belongs to a clip, which holds no context",
                                  a.context ? "/context" : "/follow",
                                  "a clip's context and follow are the clip's: clip.set {context, "
                                  "follow}");
@@ -625,6 +629,8 @@ void registerTakeCommands(cmd::Registry& registry) {
             "active take: what sounds is the active take's). One undo step. pitches is recorded by "
             "history, not given.";
         c.tags = {"take", "midi"};
+        c.examples = {{"Write what sounds into the notes", j(R"({"take":"tk_1"})"),
+                       j(R"({"followed":"<any>","unrolled":false})"), "song_following"}};
         c.args = takeBakeArgsSchema();
         c.result = schema::object<TakeBakeResult>("take_bake_result")
                        .field("followed", &TakeBakeResult::followed, detail::followedSchema())
@@ -644,21 +650,21 @@ void registerTakeCommands(cmd::Registry& registry) {
             SUPPLE_TRY(checkUnlockedTake(s, *id, "/take"));
             const model::Take* tk = s.takes.find(*id);
             const auto owner = model::takeOwner(s, *id);
-            if (tk->follow == model::ClipFollow::None || !owner ||
-                owner->kind != model::Kind::Item)
-                return Error("take.not_following", a.take + " does not follow: it sounds as written",
-                             "/take",
+            if (tk->follow == model::ClipFollow::None || !owner || owner->kind != model::Kind::Item)
+                return Error("take.not_following",
+                             a.take + " does not follow: it sounds as written", "/take",
                              "set follow first (take.set {follow: \"key\"}), or there is nothing "
                              "to bake");
             const model::Item& item = *s.items.find(*owner);
-            if (item.activeTake != id)
+            if (item.activeTake != *id)
                 return Error("take.not_active",
                              a.take + " is not the active take of " + owner->str() +
                                  ": what sounds is the active take's",
                              "/take", "take.activate it first, then bake");
             const model::MidiSource* source = s.midi.find(*tk->source);
-            if (!source) return Error("take.source", "the take's MIDI source is missing", "/take",
-                                      "undo to a version that has it");
+            if (!source)
+                return Error("take.source", "the take's MIDI source is missing", "/take",
+                             "undo to a version that has it");
             const midi::Sequence& seq = source->sequence;
             const double itemStart = model::itemSpan(s, item).startBeat;
             const double itemBeats = model::itemLengthBeats(s, item);
@@ -721,20 +727,22 @@ void registerTakeCommands(cmd::Registry& registry) {
                     if (note.channel != 9) note.pitch = static_cast<std::uint8_t>(sounded[k]);
                     const double on = std::max(h.songBeat, itemStart) - itemStart;
                     note.start = tick(on);
-                    note.length = std::max<std::int64_t>(0, tick(h.endBeat - itemStart) - note.start);
+                    note.length =
+                        std::max<std::int64_t>(0, tick(h.endBeat - itemStart) - note.start);
                     out.notes.push_back(note);
                 }
                 out.canonicalize();
-                txn.modify<model::MidiSource>(sourceId,
-                                              [&](model::MidiSource& m) { m.sequence = std::move(out); });
+                txn.modify<model::MidiSource>(
+                    sourceId, [&](model::MidiSource& m) { m.sequence = std::move(out); });
                 // The other takes are laid out alike, by plain repetition, so every take keeps
                 // the item's length and loop state.
                 for (const Id other : item.takes) {
                     if (other == *id) continue;
                     const model::Take* ot = s.takes.find(other);
-                    const model::MidiSource* os = ot && ot->source && ot->source->kind == model::Kind::Midi
-                                                      ? s.midi.find(*ot->source)
-                                                      : nullptr;
+                    const model::MidiSource* os =
+                        ot && ot->source && ot->source->kind == model::Kind::Midi
+                            ? s.midi.find(*ot->source)
+                            : nullptr;
                     if (!os) continue;
                     midi::Sequence plain;
                     plain.ppq = os->sequence.ppq;
@@ -769,7 +777,8 @@ void registerTakeCommands(cmd::Registry& registry) {
                 txn.modify<model::Item>(*owner, [](model::Item& it) { it.loop = false; });
                 result.unrolled = true;
             }
-            txn.modify<model::Take>(*id, [](model::Take& k) { k.follow = model::ClipFollow::None; });
+            txn.modify<model::Take>(*id,
+                                    [](model::Take& k) { k.follow = model::ClipFollow::None; });
             // History records the pitches it wrote.
             if (!a.pitches) {
                 TakeBakeArgs resolved = a;

@@ -233,9 +233,8 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
     for (const model::Id takeId : item.takes) {
         const model::Take* take = now.takes.find(takeId);
         if (!take || !model::takeIsMidi(*take)) continue;
-        t.modify<model::Take>(takeId, [&](model::Take& k) {
-            model::takeContextFromClip(k, clip, 0.0, outcome);
-        });
+        t.modify<model::Take>(
+            takeId, [&](model::Take& k) { model::takeContextFromClip(k, clip, 0.0, outcome); });
     }
 
     // Placed as it is: the mismatch warning says when the clip's key is not the project's.

@@ -5442,6 +5442,11 @@ struct Gain : Effect {
         run("region.add", R"({"start":0,"end":8,"name":"Verse"})");
         return;
     }
+    if (fixture == "song_following") {  // it_1's take follows its C major by key; the project is Eb
+        run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+        run("take.set", R"({"take":"tk_1","context":"1: key C major ~:w","follow":"key"})");
+        return;
+    }
     run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
     run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
     if (fixture == "song_with_learn")  // + fx_2 gain on CC 21, channel 1

@@ -83,7 +83,7 @@ struct MidiContext {
 struct MidiGetResult {
     std::string text;
     std::optional<MidiContext> context;
-    std::optional<std::string> follow;  // a clip's or a following take's: none, key or chords
+    std::optional<std::string> follow;       // a clip's or a following take's: none, key or chords
     std::optional<std::string> takeContext;  // a take's lead sheet, in the take's bars
     std::optional<std::int64_t> soundingDiffers;  // heard notes whose key differs from written
     std::optional<bool> differsByPass;  // sounding on a looped item: only its first pass answered
@@ -851,47 +851,52 @@ void registerItemCommands(cmd::Registry& registry) {
             "project_bar) and beat from its start, and text, its lead sheet in clip bars "
             "(clip.set {context} takes it back). follow (none, key, chords) is a clip's.";
         c.tags = {"midi"};
-        c.args = schema::object<MidiGetArgs>("midi_get_args")
-                     .field("item", &MidiGetArgs::item, ownerIdArg())
-                     .field("sounding", &MidiGetArgs::sounding,
-                            schema::boolean().doc("Answer what sounds (a following take's notes "
-                                                  "as they play), in item time, not what is "
-                                                  "written. A clip is refused: midi.sounding_clip."))
-                     .defaultValue(false)
-                     .field("from", &MidiGetArgs::from,
-                            schema::number().doc("With sounding: the first song beat; the heard "
-                                                 "notes of from..to answer, passes as they fall."))
-                     .field("to", &MidiGetArgs::to,
-                            schema::number().doc("With sounding: the end song beat."))
-                     .build();
+        c.args =
+            schema::object<MidiGetArgs>("midi_get_args")
+                .field("item", &MidiGetArgs::item, ownerIdArg())
+                .field("sounding", &MidiGetArgs::sounding,
+                       schema::boolean().doc("Answer what sounds (a following take's notes "
+                                             "as they play), in item time, not what is "
+                                             "written. A clip is refused: midi.sounding_clip."))
+                .defaultValue(false)
+                .field("from", &MidiGetArgs::from,
+                       schema::number().doc("With sounding: the first song beat; the heard "
+                                            "notes of from..to answer, passes as they fall."))
+                .field("to", &MidiGetArgs::to,
+                       schema::number().doc("With sounding: the end song beat."))
+                .build();
         auto runSchema = schema::object<ContextRun>("context_run")
                              .field("item_bar", &ContextRun::itemBar, schema::integer())
                              .field("project_bar", &ContextRun::projectBar, schema::integer())
                              .field("beat", &ContextRun::beat, schema::number())
                              .field("what", &ContextRun::what, schema::string())
                              .build();
-        c.result = schema::object<MidiGetResult>("midi_get")
-                       .field("text", &MidiGetResult::text, schema::string())
-                       .field("context", &MidiGetResult::context,
-                              schema::object<MidiContext>("midi_context")
-                                  .field("keys", &MidiContext::keys, schema::arrayOf(runSchema))
-                                  .field("chords", &MidiContext::chords, schema::arrayOf(runSchema))
-                                  .field("text", &MidiContext::text, schema::string())
-                                  .build())
-                       .field("follow", &MidiGetResult::follow, schema::string())
-                       .field("take_context", &MidiGetResult::takeContext, schema::string())
-                       .field("sounding_differs", &MidiGetResult::soundingDiffers,
-                              schema::integer())
-                       .field("differs_by_pass", &MidiGetResult::differsByPass,
-                              schema::boolean())
-                       .build();
+        c.result =
+            schema::object<MidiGetResult>("midi_get")
+                .field("text", &MidiGetResult::text, schema::string())
+                .field("context", &MidiGetResult::context,
+                       schema::object<MidiContext>("midi_context")
+                           .field("keys", &MidiContext::keys, schema::arrayOf(runSchema))
+                           .field("chords", &MidiContext::chords, schema::arrayOf(runSchema))
+                           .field("text", &MidiContext::text, schema::string())
+                           .build())
+                .field("follow", &MidiGetResult::follow, schema::string())
+                .field("take_context", &MidiGetResult::takeContext, schema::string())
+                .field("sounding_differs", &MidiGetResult::soundingDiffers, schema::integer())
+                .field("differs_by_pass", &MidiGetResult::differsByPass, schema::boolean())
+                .build();
         c.errors = {{"midi.sounding_clip",
                      "a clip has no place in time, so what it sounds as is not defined",
                      "ask launch.state how it follows, or lay it on the timeline first"},
                     {"midi.range_args", "from and to go with sounding",
                      "give sounding: true, or leave from and to out"}};
-        c.examples = {{"Read the bass line", j(R"({"item": "it_1"})"), j(R"({"text": "<any>"})"),
-                       "song_with_item"}};
+        c.examples = {
+            {"Read the bass line", j(R"({"item": "it_1"})"), j(R"({"text": "<any>"})"),
+             "song_with_item"},
+            {"Read what a following take sounds as", j(R"({"item": "it_1", "sounding": true})"),
+             j(R"({"text": "<any>", "context": "<any>", "follow": "key",
+                             "take_context": "1: key C major ~:w\n", "sounding_differs": 2})"),
+             "song_following"}};
         c.run = [](const MidiGetArgs& a, Context& ctx) -> Result<MidiGetResult> {
             const model::Session s = app(ctx).view();
             auto id = existingOwner(s, a.item, "/item");
@@ -911,8 +916,9 @@ void registerItemCommands(cmd::Registry& registry) {
                              "give sounding: true, or leave from and to out");
             if (a.sounding && clip)
                 return Error("midi.sounding_clip",
-                             a.item + " is a clip: what it sounds as depends on where it is "
-                                      "launched",
+                             a.item +
+                                 " is a clip: what it sounds as depends on where it is "
+                                 "launched",
                              "/sounding",
                              "launch.state says how a launched clip follows; lay it on the "
                              "timeline (item.add {clip}) to read what sounds");
@@ -931,7 +937,8 @@ void registerItemCommands(cmd::Registry& registry) {
                 }
                 const double itemStart = model::itemSpan(s, *s.items.find(*id)).startBeat;
                 extra.follow = take->follow == model::ClipFollow::Chords ? "chords" : "key";
-                extra.takeContext = detail::takeContextText(detail::takeBarMap(s, itemStart), *take);
+                extra.takeContext =
+                    detail::takeContextText(detail::takeBarMap(s, itemStart), *take);
                 extra.soundingDiffers = differs;
                 if (a.sounding) {
                     const midi::Sequence& written = *shown;
@@ -939,8 +946,8 @@ void registerItemCommands(cmd::Registry& registry) {
                     heardSeq.length = written.length;
                     if (a.from || a.to) {
                         // The heard notes of the range, each at its place in item time.
-                        const auto range = model::soundingNotes(
-                            s, *id, a.from.value_or(-1e18), a.to.value_or(1e18));
+                        const auto range = model::soundingNotes(s, *id, a.from.value_or(-1e18),
+                                                                a.to.value_or(1e18));
                         for (const auto& h : range) {
                             midi::Note note = written.notes[h.note];
                             if (note.channel != 9)
@@ -948,8 +955,8 @@ void registerItemCommands(cmd::Registry& registry) {
                             const double on = std::max(h.songBeat, itemStart) - itemStart;
                             note.start = std::llround(on * written.ppq);
                             note.length = std::max<std::int64_t>(
-                                0, std::llround((h.endBeat - itemStart) * written.ppq) -
-                                       note.start);
+                                0,
+                                std::llround((h.endBeat - itemStart) * written.ppq) - note.start);
                             heardSeq.notes.push_back(note);
                         }
                         heardSeq.length = std::max<std::int64_t>(
@@ -957,8 +964,8 @@ void registerItemCommands(cmd::Registry& registry) {
                             std::llround(model::itemLengthBeats(s, *s.items.find(*id)) *
                                          written.ppq));
                     } else {
-                        const model::LeadPitches lead = model::leadPitches(
-                            heard, sounded, itemStart, written.notes.size());
+                        const model::LeadPitches lead =
+                            model::leadPitches(heard, sounded, itemStart, written.notes.size());
                         heardSeq.notes = written.notes;
                         for (std::size_t i = 0; i < heardSeq.notes.size(); ++i)
                             if (lead.keep[i] && heardSeq.notes[i].channel != 9)
@@ -974,8 +981,8 @@ void registerItemCommands(cmd::Registry& registry) {
                 // A take that does not follow sounds as written: the notes, and the range
                 // asked for is only a filter on them (the heard notes of the item).
                 if (a.from || a.to) {
-                    const auto range = model::soundingNotes(s, *id, a.from.value_or(-1e18),
-                                                            a.to.value_or(1e18));
+                    const auto range =
+                        model::soundingNotes(s, *id, a.from.value_or(-1e18), a.to.value_or(1e18));
                     const midi::Sequence& written = *shown;
                     const double itemStart = model::itemSpan(s, *s.items.find(*id)).startBeat;
                     heardSeq.ppq = written.ppq;

@@ -1150,7 +1150,8 @@ TEST_CASE("placeAt: both sides' keys and chords, a place before the item, and no
 
 // --- a take laid from a clip ---------------------------------------------------------------------
 
-TEST_CASE("takeContextFromClip: the clip's context in the take's beats, read as the launcher reads it") {
+TEST_CASE(
+    "takeContextFromClip: the clip's context in the take's beats, read as the launcher reads it") {
     Clip clip;
     clip.length = 8;
     clip.context = {keyPt(0, "C", "major"), keyPt(4, "Eb", "major"), chordPt(2, "F")};
@@ -1172,8 +1173,8 @@ TEST_CASE("takeContextFromClip: the clip's context in the take's beats, read as 
     takeContextFromClip(fast, clip, 3, ClipFollow::Chords);
     CHECK(fast.contextPeriod == std::optional<double>(16.0));
     CHECK(fast.contextPhase == 3 * 2 - 1.5);
-    CHECK(fast.context[1].beat == 4);   // the chord at clip beat 2
-    CHECK(fast.context[2].beat == 8);   // Eb at clip beat 4
+    CHECK(fast.context[1].beat == 4);  // the chord at clip beat 2
+    CHECK(fast.context[2].beat == 8);  // Eb at clip beat 4
     CHECK(fast.follow == ClipFollow::Chords);
     // A clip with no context leaves the take as it was; an audio or empty take holds none.
     Take plain;
@@ -1194,7 +1195,9 @@ TEST_CASE("takeContextFromClip: the clip's context in the take's beats, read as 
     CHECK(reset.follow == ClipFollow::None);
 }
 
-TEST_CASE("takeContextFromClip: a note heard d beats after the item's start reads clip beat (c0 + d) * r") {
+TEST_CASE(
+    "takeContextFromClip: a note heard d beats after the item's start reads clip beat (c0 + d) * "
+    "r") {
     for (const double rate : {1.0, 2.0, 0.5}) {
         for (const double offset : {0.0, 1.0}) {
             for (const double c0 : {0.0, 2.0}) {

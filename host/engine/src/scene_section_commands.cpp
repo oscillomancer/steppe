@@ -359,8 +359,8 @@ Result<Segment> insertScene(Context& ctx, model::EditTxn& t, const model::Sessio
         // context under the item says when asked to; otherwise as written, and context.mismatch
         // says when the clip's key is not the project's.
         std::vector<detail::ClipNote> notes;
-        auto followed = detail::followPlacedItem(s, t, clipId, *clip, *item, follow,
-                                                 base + "/scene", notes);
+        auto followed =
+            detail::followPlacedItem(s, t, clipId, *clip, *item, follow, base + "/scene", notes);
         if (!followed) return std::move(followed).error();
         for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
         seg.items.push_back({clipId.str(), item->str(), clip->track.str(), std::move(*followed)});
@@ -395,7 +395,8 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "take's) when the clip has one. follow (none, key or chords; default: each clip's own) "
             "is set on each laid MIDI take with the clip's context, so its notes sound as the key "
             "or chords under the item say, mapped from those they were written against "
-            "(ADR-0098, \"following is playback\"): the notes stay as written, a context edit moves "
+            "(ADR-0098, \"following is playback\"): the notes stay as written, a context edit "
+            "moves "
             "them, and take.bake writes the sounding pitches. Each item's followed says how they "
             "sound, by bar, and copied why a clip that cannot follow was left as it is; pooled "
             "may follow too. With none the notes sound as written, and context.mismatch warns "

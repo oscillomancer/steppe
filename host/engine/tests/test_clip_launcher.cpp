@@ -1624,7 +1624,6 @@ TEST_CASE("the mismatch warning finds a key change inside the span, and comes fr
 
 // --- following at placement (ADR-0098 X2) ------------------------------------------------------
 
-
 TEST_CASE("laying a clip as written warns when its chords are not the project's, key or no key") {
     Launcher l;
     // The project: D minor over Dm | Gm | A7 | Dm.
@@ -1782,7 +1781,8 @@ TEST_CASE("a looped item stays looped and as written, whatever the passes sound 
     CHECK(laid.find("followed")->find("unrolled") == nullptr);
     CHECK(pitchesOf(l, item) == "33@0");
     CHECK(soundsOf(l, item) == "31@0 31@4 31@8 31@12");
-    const model::Take& take = *l.head().takes.find(*l.head().items.find(id(item.c_str()))->activeTake);
+    const model::Take& take =
+        *l.head().takes.find(*l.head().items.find(id(item.c_str()))->activeTake);
     CHECK(take.follow == model::ClipFollow::Key);
     CHECK(take.contextPeriod == std::optional<double>(4.0));  // the clip's length
     l.run("history.undo", "{}");
@@ -1991,4 +1991,280 @@ TEST_CASE("followed.regions run across a bar where no note starts") {
     auto split = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
     CHECK(regionsOf(*split.find("followed")) ==
           "5-5 transpose D minor>E minor 2, 7-7 transpose D minor>F minor 3");
+}
+
+// --- X4d: a take's own context and follow (ADR-0098, following is playback) ------------------
+
+TEST_CASE("take.set gives a take a context and a follow: the notes stay as written") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    // Follow needs a key in the take's own context.
+    CHECK(l.fails("take.set", R"({"take": "tk_1", "follow": "key"})").code == "take.no_key");
+    CHECK(l.fails("take.set", R"({"take": "tk_1", "context": "1: key Q major ~:w"})").code ==
+          "take.context_syntax");
+    auto set = l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w",
+                                      "follow": "key"})");
+    CHECK(pitchesOf(l, "it_1") == "36@0 40@1 43@2 48@3");
+    CHECK(soundsOf(l, "it_1") == "39@0 43@1 46@2 51@3");
+    const model::Take& take = *l.head().takes.find(id("tk_1"));
+    CHECK(take.follow == model::ClipFollow::Key);
+    CHECK_FALSE(take.contextPeriod);
+    CHECK(take.contextPhase == 0.0);
+    // midi.get answers written notes by default, says it follows, and counts what differs.
+    auto written = l.run("midi.get", R"({"item": "it_1"})");
+    CHECK(written["follow"].asString() == "key");
+    CHECK(written["sounding_differs"].asInt() == 4);
+    CHECK(written["take_context"].asString() == "1: key C major ~:w\n");
+    CHECK(written["text"].asString().find("C2:q E2:q G2:q C3:q") != std::string::npos);
+    auto sounding = l.run("midi.get", R"({"item": "it_1", "sounding": true})");
+    CHECK(sounding["text"].asString().find("Eb2:q G2:q Bb2:q Eb3:q") != std::string::npos);
+    // from and to answer the heard notes of that range.
+    auto range = l.run("midi.get", R"({"item": "it_1", "sounding": true, "from": 1, "to": 3})");
+    CHECK(range["text"].asString().find("G2:q Bb2:q") != std::string::npos);
+    CHECK(l.fails("midi.get", R"({"item": "it_1", "from": 1})").code == "midi.range_args");
+    // Turning follow off returns the notes as written; the context stays.
+    l.run("take.set", R"({"take": "tk_1", "follow": "none"})");
+    CHECK(soundsOf(l, "it_1") == "36@0 40@1 43@2 48@3");
+    CHECK_FALSE(l.head().takes.find(id("tk_1"))->context.empty());
+    // Clearing the context of a following take sets its follow back, and says so.
+    l.run("take.set", R"({"take": "tk_1", "follow": "key"})");
+    auto cleared = l.run("take.set", R"({"take": "tk_1", "context": ""})");
+    CHECK(warningCodes(cleared) == "take.follow_reset ");
+    CHECK(l.head().takes.find(id("tk_1"))->follow == model::ClipFollow::None);
+    // A clip's take holds none of the four.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    const model::Id clipTake = l.head().clips.find(id("cl_1"))->takes[0];
+    CHECK(l.fails("take.set",
+                  R"({"take": ")" + clipTake.str() + R"(", "context": "1: key C major ~:w"})")
+              .code == "take.in_clip");
+    // session.describe names a following take's first key.
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    CHECK(l.run("session.describe", "{}")["text"].asString().find("follows key C major") !=
+          std::string::npos);
+}
+
+TEST_CASE(
+    "take.set context is read in bars of the meter at the item, and refuses past the period") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const std::string item = laid["items"].at(0).find("item")->asString();
+    const model::Id take = *l.head().items.find(id(item.c_str()))->activeTake;
+    REQUIRE(l.head().takes.find(take)->contextPeriod == std::optional<double>(4.0));
+    // The period is four beats: a point in bar 2 is out of range, naming the bar.
+    auto err =
+        l.fails("take.set", R"({"take": ")" + take.str() +
+                                R"(", "context": "1: key D minor ~:w\n2: key F minor ~:w"})");
+    CHECK(err.code == "take.context_range");
+    CHECK(err.message.find("bar 2") != std::string::npos);
+    l.run("take.set", R"({"take": ")" + take.str() + R"(", "context": "1: key D minor {Dm}:w"})");
+    CHECK(l.run("midi.get", R"({"item": ")" + item + R"("})")["take_context"].asString() ==
+          "1: key D minor {Dm}:w\n");
+}
+
+TEST_CASE("take.bake writes what sounds, and one undo takes it back") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    CHECK(l.fails("take.bake", R"({"take": "tk_1"})").code == "take.not_following");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    const std::string before = soundsOf(l, "it_1");
+    auto baked = l.run("take.bake", R"({"take": "tk_1"})");
+    CHECK(baked["unrolled"].asBool() == false);
+    CHECK(baked["followed"]["mode"].asString() == "key");
+    CHECK(pitchesOf(l, "it_1") == "39@0 43@1 46@2 51@3");
+    const model::Take& take = *l.head().takes.find(id("tk_1"));
+    CHECK(take.follow == model::ClipFollow::None);
+    CHECK_FALSE(take.context.empty());  // for display
+    CHECK(soundsOf(l, "it_1") == before);
+    CHECK(l.fails("take.bake", R"({"take": "tk_1"})").code == "take.not_following");
+    l.run("history.undo", "{}");
+    CHECK(pitchesOf(l, "it_1") == "36@0 40@1 43@2 48@3");
+    CHECK(l.head().takes.find(id("tk_1"))->follow == model::ClipFollow::Key);
+    CHECK(soundsOf(l, "it_1") == before);
+    // A take that is not the item's active take is refused: what sounds is the active take's.
+    auto added = l.run("take.add", R"({"item": "it_1", "from": "tk_1"})");
+    const std::string second = added["id"].asString();
+    CHECK(l.head().takes.find(id(second.c_str()))->follow == model::ClipFollow::Key);  // copied
+    CHECK(l.fails("take.bake", R"({"take": ")" + second + R"("})").code == "take.not_active");
+    // A clip's copy of the take holds none of the four.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
+    const model::Clip& clip = *l.head().clips.find(id("cl_1"));
+    CHECK(clip.follow == model::ClipFollow::Key);
+    CHECK_FALSE(clip.context.empty());
+    for (const model::Id t : clip.takes) {
+        CHECK(l.head().takes.find(t)->context.empty());
+        CHECK(l.head().takes.find(t)->follow == model::ClipFollow::None);
+    }
+    auto clipAdded =
+        l.run("take.add", R"({"item": "cl_1", "from": ")" + clip.takes[0].str() + R"("})");
+    CHECK(l.head().takes.find(id(clipAdded["id"].asString().c_str()))->follow ==
+          model::ClipFollow::None);
+    CHECK(l.fails("midi.get", R"({"item": "cl_1", "sounding": true})").code ==
+          "midi.sounding_clip");
+}
+
+TEST_CASE("take.bake unrolls a looped item whose passes sound differently") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("key.set", R"({"at": 24, "tonic": "F", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const std::string item = laid["items"].at(0).find("item")->asString();
+    const model::Id take = *l.head().items.find(id(item.c_str()))->activeTake;
+    const std::string before = soundsOf(l, item);
+    CHECK(before == "31@0 31@4 36@8 36@12");
+    auto baked = l.run("take.bake", R"({"take": ")" + take.str() + R"("})");
+    CHECK(baked["unrolled"].asBool());
+    CHECK_FALSE(l.head().items.find(id(item.c_str()))->loop);
+    CHECK(pitchesOf(l, item) == "31@0 31@4 36@8 36@12");
+    CHECK(soundsOf(l, item) == before);
+    CHECK(l.head().takes.find(take)->follow == model::ClipFollow::None);
+    // One undo step puts the looped item and its written note back.
+    l.run("history.undo", "{}");
+    CHECK(l.head().items.find(id(item.c_str()))->loop);
+    CHECK(pitchesOf(l, item) == "33@0");
+    CHECK(soundsOf(l, item) == before);
+    // The same key all through: the loop stays, and the note is written as it sounds.
+    l.run("key.remove", R"({"at": 24})");
+    auto steady = l.run("take.bake", R"({"take": ")" + take.str() + R"("})");
+    CHECK_FALSE(steady["unrolled"].asBool());
+    CHECK(l.head().items.find(id(item.c_str()))->loop);
+    CHECK(pitchesOf(l, item) == "31@0");
+}
+
+TEST_CASE("take.bake makes a pooled source the take's own copy") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w",
+                          "context": "1: key C major ~:w", "follow": "key"})");
+    auto one = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 1, "pooled": true})");
+    auto two = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 1, "pooled": true})");
+    const std::string a = one["items"].at(0).find("item")->asString();
+    const std::string b = two["items"].at(0).find("item")->asString();
+    CHECK(l.head().takes.find(*l.head().items.find(id(a.c_str()))->activeTake)->source ==
+          l.head().takes.find(*l.head().items.find(id(b.c_str()))->activeTake)->source);
+    CHECK(soundsOf(l, a) == "39@0");
+    l.run("take.bake",
+          R"({"take": ")" + l.head().items.find(id(a.c_str()))->activeTake->str() + R"("})");
+    CHECK(pitchesOf(l, a) == "39@0");  // written now
+    CHECK(pitchesOf(l, b) == "36@0");  // the other item's notes are untouched
+    CHECK(soundsOf(l, b) == "39@0");   // and still follow
+}
+
+TEST_CASE("midi.edit acts on written notes, reading a following take's own context") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    // C#2 is outside C major (the take's own key), and outside Eb major too; snap reads C major.
+    l.run("midi.edit", R"({"item": "it_1", "ops": [{"op": "add", "pitch": 37, "start": 3.5,
+                                                    "length": 0.25}]})");
+    auto snapped = l.run("midi.edit", R"({"item": "it_1", "ops": [{"op": "snap_to_scale",
+                                                                  "mode": "down"}]})");
+    CHECK(snapped["acts_on"].asString() == "written");
+    CHECK(pitchesOf(l, "it_1") == "36@0 40@1 43@2 48@3 36@3.5");
+    // Written notes only: an edit that reads no pitch does not say it.
+    auto moved = l.run("midi.edit", R"({"item": "it_1", "ops": [{"op": "velocity", "notes": [0],
+                                                                "velocity": 90}]})");
+    CHECK(moved.find("acts_on") == nullptr);
+}
+
+TEST_CASE("midi.write on a following take keeps its context and says how it follows") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    auto written = l.run("midi.write", R"({"item": "it_1", "notation": "voice bass; 1: C2:w"})");
+    CHECK(written["follows"].asString() == "key");
+    CHECK(soundsOf(l, "it_1") == "39@0");
+    CHECK(pitchesOf(l, "it_1") == "36@0");
+}
+
+TEST_CASE("clip.add {item} and scene.capture take a following take's context and follow") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major {C}:w", "follow": "chords"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
+    const model::Clip& clip = *l.head().clips.find(id("cl_1"));
+    CHECK(clip.follow == model::ClipFollow::Chords);
+    REQUIRE_FALSE(clip.context.empty());
+    CHECK(clip.context.front().beat == 0.0);
+    // The take-to-clip conversion clears the four members on the clip's copy.
+    CHECK(l.head().takes.find(clip.takes[0])->context.empty());
+    // An item whose take does not follow gives the clip the project's context under it.
+    Launcher p;
+    p.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
+    CHECK(p.head().clips.find(id("cl_1"))->follow == model::ClipFollow::None);
+    CHECK(p.head().clips.find(id("cl_1"))->context.front().tonic == "Eb");
+}
+
+TEST_CASE("a context edit names the following items that lost their key") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    CHECK(soundsOf(l, "it_1") == "39@0 43@1 46@2 51@3");
+    auto removed = l.run("key.remove", R"({"at": 0})");
+    CHECK(warningCodes(removed) == "context.no_key ");
+    CHECK(soundsOf(l, "it_1") == "36@0 40@1 43@2 48@3");  // as written
+    CHECK(warningCodes(l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})")).empty());
+}
+
+TEST_CASE("item.split, trims and duplicate carry a take's context with each note's place") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    const std::string before = soundsOf(l, "it_1");
+    auto split = l.run("item.split", R"({"item": "it_1", "at": 2})");
+    (void)split;
+    // Split keeps every note's song beat and pitch, and each part its take's context.
+    std::string all;
+    for (const auto& e : l.head().items) {
+        const auto s = soundsOf(l, e.id.str());
+        all += (all.empty() ? "" : " | ") + s;
+        const model::Take& tk = *l.head().takes.find(*e.value->activeTake);
+        CHECK(tk.follow == model::ClipFollow::Key);
+        CHECK(tk.context.size() == 1);
+    }
+    CHECK(all.find("39@0 43@1") != std::string::npos);
+    auto dup = l.run("item.duplicate", R"({"item": "it_1", "to": 16})");
+    (void)dup;
+    CHECK(l.head().items.size() == 3);
+}
+
+TEST_CASE("take.bake replays on another branch with the pitches the user heard") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    l.run("branch.create", R"({"name": "agent/test/bake"})");
+    l.run("take.bake", R"({"take": "tk_1"})");
+    CHECK(pitchesOf(l, "it_1") == "39@0 43@1 46@2 51@3");
+    // Main's key moves meanwhile; the merge replays the bake, writing what the user heard on
+    // the branch (Eb), not what the key says there now (F).
+    l.run("branch.switch", R"({"name": "main"})");
+    l.run("key.set", R"({"at": 0, "tonic": "F", "scale": "major"})");
+    CHECK(soundsOf(l, "it_1") == "41@0 45@1 48@2 53@3");
+    l.run("branch.merge", R"({"from": "agent/test/bake"})");
+    CHECK(pitchesOf(l, "it_1") == "39@0 43@1 46@2 51@3");
+    CHECK(l.head().takes.find(id("tk_1"))->follow == model::ClipFollow::None);
+}
+
+TEST_CASE("midi.notes {sounding} adds each note's sounding pitch beside the written one") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    auto notes = l.run("midi.notes", R"({"item": "it_1", "sounding": true})");
+    std::string written, sounds;
+    for (const auto& n : notes["notes"].asArray()) {
+        written += std::to_string(n.find("pitch")->asInt()) + " ";
+        sounds += std::to_string(n.find("sounds")->asInt()) + " ";
+    }
+    CHECK(written == "36 40 43 48 ");
+    CHECK(sounds == "39 43 46 51 ");
+    CHECK(notes.find("differs_by_pass") == nullptr);
+    CHECK(l.run("midi.notes", R"({"item": "it_1"})")["notes"].at(0).find("sounds") == nullptr);
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
+    CHECK(l.fails("midi.notes", R"({"item": "cl_1", "sounding": true})").code ==
+          "midi.sounding_clip");
 }

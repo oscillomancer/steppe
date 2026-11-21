@@ -15,8 +15,8 @@
 #include <tuple>
 
 #include "supple/engine/app.h"
-#include "supple/json/write.h"
 #include "supple/harmony/harmony.h"
+#include "supple/json/write.h"
 #include "supple/model/follow.h"
 #include "supple/model/schemas.h"
 #include "supple/model/source_mapping.h"
@@ -33,6 +33,10 @@ json::Value j(std::string_view s) { return json::parse(s).value(); }
 
 struct ItemArgs {
     std::string item;
+};
+struct NotesArgs {
+    std::string item;
+    bool sounding = false;  // also each note's sounding pitch (a following take's)
 };
 
 enum class OpKind : std::uint8_t {
@@ -165,7 +169,7 @@ json::Value noteJson(const midi::Note& n, const Frame& f) {
     return v;
 }
 
-Result<json::Value> describe(const model::Session& s, const Target& t) {
+Result<json::Value> describe(const model::Session& s, const Target& t, bool sounding = false) {
     const midi::Sequence& seq = t.midi->sequence;
     json::Value out = json::Value::object();
     out["item"] = t.item.str();
@@ -179,6 +183,21 @@ Result<json::Value> describe(const model::Session& s, const Target& t) {
     if (t.midi->pooled) out["pooled"] = true;
     json::Value notes = json::Value::array();
     for (const midi::Note& n : seq.notes) notes.push_back(noteJson(n, t.frame));
+    if (sounding) {
+        // Each note's pitch as it sounds (its first whole pass; as written when the take does
+        // not follow or the note is never heard): `sounds`, beside the written `pitch`.
+        const model::Item* item = s.items.find(t.item);
+        const auto heard = item ? model::soundingNotes(s, t.item, -1e18, 1e18)
+                                : std::vector<model::SoundingNote>{};
+        std::vector<std::int64_t> sounded;
+        for (const auto& h : heard) sounded.push_back(h.channel == 9 ? h.written : h.sounds.pitch);
+        const model::LeadPitches lead = model::leadPitches(
+            heard, sounded, item ? model::itemSpan(s, *item).startBeat : 0.0, seq.notes.size());
+        for (std::size_t i = 0; i < seq.notes.size() && i < lead.keep.size(); ++i)
+            notes.asArray()[i]["sounds"] = lead.keep[i] ? *lead.keep[i]
+                                                         : static_cast<std::int64_t>(seq.notes[i].pitch);
+        if (!lead.alike) out["differs_by_pass"] = true;
+    }
     out["notes"] = std::move(notes);
     json::Value ccs = json::Value::array();
     for (const midi::Control& c : seq.controls) {
@@ -483,8 +502,8 @@ Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, st
                 } else if ((needKey || needChord) && followingTake(session, owner)) {
                     // A following take reads its own context at the note's context beat
                     // (ADR-0098, following is playback).
-                    auto read = detail::takeNoteContext(session, owner, n.start, needKey,
-                                                        needChord, here + "/notes");
+                    auto read = detail::takeNoteContext(session, owner, n.start, needKey, needChord,
+                                                        here + "/notes");
                     if (!read) return std::move(read).error();
                     context = *read;
                 } else if (needKey || needChord) {
@@ -631,16 +650,15 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
     const model::ClipFollow mode = s.takes.find(parts.front().second)->follow;
     if (following != 0) {
         if (following != parts.size())
-            return followRefusal("some of the takes follow the project's context and some do not, "
-                                 "so merging would change how some notes sound");
+            return followRefusal(
+                "some of the takes follow the project's context and some do not, "
+                "so merging would change how some notes sound");
         for (const auto& [id, take] : parts)
             if (s.takes.find(take)->follow != mode)
-                return followRefusal(id.str() + " follows by " +
-                                     (s.takes.find(take)->follow == model::ClipFollow::Chords
-                                          ? "chords"
-                                          : "key") +
-                                     " and the others by " +
-                                     (mode == model::ClipFollow::Chords ? "chords" : "key"));
+                return followRefusal(
+                    id.str() + " follows by " +
+                    (s.takes.find(take)->follow == model::ClipFollow::Chords ? "chords" : "key") +
+                    " and the others by " + (mode == model::ClipFollow::Chords ? "chords" : "key"));
     }
     // The result's context, in the result's source beats. A note of the first source that is
     // chased at its start keeps its true start, before the result's start: `leadIn` beats.
@@ -668,7 +686,8 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
             const double rate = tk.playrate > 0 ? tk.playrate : 1.0;
             const bool lead = !lone && part.first == base;
             const double u0 = tk.contextPhase + tk.startOffset - (lead ? leadIn * rate : 0.0);
-            const double u1 = tk.contextPhase + tk.startOffset + model::itemLengthBeats(s, it) * rate;
+            const double u1 =
+                tk.contextPhase + tk.startOffset + model::itemLengthBeats(s, it) * rate;
             // Result source beat of the re-based beat 0: the lead-in for the first source (it
             // starts there), else the lead-in plus the source's distance from the result start.
             const double origin = lead ? 0.0 : (lone ? 0.0 : leadIn + (itemStart - start));
@@ -679,16 +698,15 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
                 const auto key = [](const model::ContextPoint& p) {
                     return std::tie(p.beat, p.type, p.tonic, p.scale, p.symbol);
                 };
-                const bool same = seen && std::equal(points.begin(), points.end(), first.begin(),
-                                                     first.end(),
-                                                     [&](const auto& a, const auto& b) {
-                                                         return key(a) == key(b);
-                                                     });
+                const bool same =
+                    seen &&
+                    std::equal(points.begin(), points.end(), first.begin(), first.end(),
+                               [&](const auto& a, const auto& b) { return key(a) == key(b); });
                 if (seen && !same)
-                    return followRefusal(
-                        part.second.str() + " has a different context from the item's other takes "
-                                            "over its span, so layering them would change how "
-                                            "some notes sound");
+                    return followRefusal(part.second.str() +
+                                         " has a different context from the item's other takes "
+                                         "over its span, so layering them would change how "
+                                         "some notes sound");
                 if (!seen) first = points;
                 seen = true;
                 continue;
@@ -727,8 +745,8 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
             for (const auto& h : baseHeard) {
                 midi::Note note = written.notes[h.note];
                 note.start = std::llround((h.songBeat - start + leadIn) * merged.ppq);
-                note.length = std::max<std::int64_t>(
-                    0, std::llround((h.endBeat - h.songBeat) * merged.ppq));
+                note.length =
+                    std::max<std::int64_t>(0, std::llround((h.endBeat - h.songBeat) * merged.ppq));
                 merged.notes.push_back(note);
             }
             continue;
@@ -868,7 +886,7 @@ void detail::heardMidi(const model::Session& s, const model::Item& it, const mod
 
 void registerMidiCommands(cmd::Registry& registry) {
     {
-        Command<ItemArgs, json::Value> c;
+        Command<NotesArgs, json::Value> c;
         c.name = "midi.notes";
         c.kind = Kind::Query;
         c.exposure = cmd::Exposure::McpExec;
@@ -879,19 +897,34 @@ void registerMidiCommands(cmd::Registry& registry) {
             "is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them "
             "too. For writing whole phrases, midi.write with notation is usually better.";
         c.tags = {"midi"};
-        c.args = schema::object<ItemArgs>("midi_notes_args")
-                     .field("item", &ItemArgs::item, ownerIdArg())
+        c.args = schema::object<NotesArgs>("midi_notes_args")
+                     .field("item", &NotesArgs::item, ownerIdArg())
+                     .field("sounding", &NotesArgs::sounding,
+                            schema::boolean().doc("Add each note's sounding pitch as `sounds` "
+                                                  "(a following take's notes as they play; the "
+                                                  "first pass of a looped item, and "
+                                                  "differs_by_pass when later passes differ). "
+                                                  "`pitch` stays the written one. A clip is "
+                                                  "refused: midi.sounding_clip."))
+                     .defaultValue(false)
                      .build();
         c.result = schema::any();
         c.examples = {
             {"Notes of a MIDI item", j(R"({"item": "it_1"})"),
              j(R"({"item": "it_1", "ppq": 960, "length": "<any>", "position": "<any>", "notes": "<any>", "cc": "<any>"})"),
              "song_with_item"}};
-        c.run = [](const ItemArgs& a, Context& ctx) -> Result<json::Value> {
+        c.run = [](const NotesArgs& a, Context& ctx) -> Result<json::Value> {
             const model::Session s = ctx.service<EngineApp>().view();
             auto t = midiTarget(s, a.item);
             if (!t) return std::move(t).error();
-            return describe(s, *t);
+            if (a.sounding && s.clips.find(t->item))
+                return Error("midi.sounding_clip",
+                             a.item + " is a clip: what it sounds as depends on where it is "
+                                      "launched",
+                             "/sounding",
+                             "launch.state says how a launched clip follows; lay it on the "
+                             "timeline (item.add {clip}) to read what sounds");
+            return describe(s, *t, a.sounding);
         };
         addChecked(registry, std::move(c));
     }
@@ -924,7 +957,8 @@ void registerMidiCommands(cmd::Registry& registry) {
             "sounds, never the project's. On an item whose take follows (take.set {follow}) they "
             "read the take's own context at each note's context beat, and act on the notes as "
             "written: the answer says acts_on: \"written\" when some heard note sounds "
-            "otherwise (take.bake writes what sounds). Returns the new indices of the notes the ops added "
+            "otherwise (take.bake writes what sounds). Returns the new indices of the notes the "
+            "ops added "
             "or changed (to keep a selection).";
         c.tags = {"midi"};
         auto point = schema::object<CcPoint>("cc_point")

@@ -409,7 +409,8 @@ Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id 
     // that take's context over the span copied, re-based and in clip beats, and its follow; the
     // key and the chord in force at the span's start are carried in at 0, so the clip has a key.
     for (const Id tk : clip.takes)
-        t.modify<model::Take>(tk, [](model::Take& k) { model::fitTakeContext(k, model::TakeHome::Clip); });
+        t.modify<model::Take>(
+            tk, [](model::Take& k) { model::fitTakeContext(k, model::TakeHome::Clip); });
     if (clip.kind == model::ClipKind::Midi && it.activeTake)
         if (const model::Take* active = s.takes.find(*it.activeTake);
             active && active->follow != model::ClipFollow::None) {

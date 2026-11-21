@@ -573,8 +573,11 @@ def other_direction(j, built):
                                     "to_key": "D minor", "by": "transpose", "interval": 2}], bass_row
     assert rows["cl_3"]["followed"]["copied"] == "drums", rows["cl_3"]
     assert rows["cl_5"]["followed"]["copied"] == "no_key", rows["cl_5"]
-    laid_bass = j.exec("midi.notes", {"item": rows["cl_4"]["item"]}, "The bass as laid.")
-    assert {n["pitch"] for n in laid_bass["notes"]} == {38, 43, 34, 33}, laid_bass["notes"]
+    # Notes are laid as written (ADR-0098, following is playback); they sound as D minor says.
+    laid_bass = j.exec("midi.notes", {"item": rows["cl_4"]["item"], "sounding": True},
+                       "The bass as laid: written, and as it sounds.")
+    assert {n["pitch"] for n in laid_bass["notes"]} == {36, 41, 32, 31}, laid_bass["notes"]
+    assert {n["sounds"] for n in laid_bass["notes"]} == {38, 43, 34, 33}, laid_bass["notes"]
     clip_bass = j.exec("midi.notes", {"item": "cl_4"}, "The bass clip, unchanged.")
     assert {n["pitch"] for n in clip_bass["notes"]} == {36, 41, 32, 31}, clip_bass["notes"]
     clip_drums = j.exec("midi.notes", {"item": "cl_3"}, "The drums clip.")

@@ -227,7 +227,7 @@ instructions are in `docs/guides/installing.md`.
   `launch.unfollowed`. The roll shows
   and edits a clip's context, and the clip inspector sets Follow (X3).
 - **Take context and follow** (ADR-0098 amended, "following is playback"; step
-  X4b, the model only; session-model "Take context and follow", schema 2.21): a
+  X4b the model, X4d the commands; session-model "Take context and follow", schema 2.21): a
   MIDI take of an item carries `context`, `context_period`, `context_phase` and
   `follow`, loaded and saved with every older file unchanged (the open drops a
   point against the rules with `take.context_dropped` and resets a follow
@@ -235,10 +235,21 @@ instructions are in `docs/guides/installing.md`.
   takes hold none of the four). `model/follow.h` has a note's place (its context
   beat is the take's phase plus its unwrapped source beat, so the context
   travels with the notes), `soundingNotes`, `soundingKey`, `contextOver` and
-  `placeAt`. Not built: the commands (placement, `take.set`, `take.bake`,
-  `midi.get {sounding}` and the rest of the contract's table, X4d) and the
-  engine's use of it (X4c): a take's `follow` is stored and nothing plays by it
-  yet.
+  `placeAt`. The commands (X4d) keep to the contract's table: `take.set
+  {context, follow}` (the lead sheet in bars of the meter at the item, errors
+  `take.no_key`, `take.follow_audio`, `take.in_clip`, `take.context_syntax`,
+  `take.context_range`), `take.bake` (writes what sounds, unrolls a looped item
+  whose passes differ, `take.not_following`, `take.not_active`, records the pitches
+  it wrote), `midi.get {sounding, from, to}` with `sounding_differs` and
+  `differs_by_pass` (`midi.sounding_clip` on a clip), `midi.edit` reading a following
+  take's own context (`acts_on: "written"`), `midi.write` keeping context and follow
+  (`follows`), `item.consolidate` (MIDI; what sounds is preserved and checked,
+  `item.follow_merge`), `take.extract` from a clip, `clip.add {item}` and
+  `scene.capture` (a following take's context becomes the clip's), `take.add`,
+  a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
+  `context.no_key` warning on every context edit, and `session.describe`. Not
+  built: the engine's use of it (X4c): a take's `follow` is stored and nothing
+  plays by it yet, and `item.glue` is not registered.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

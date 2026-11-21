@@ -98,7 +98,8 @@ std::string takeContextText(const time::TimeMap& map, const model::Take& take) {
     int last = 1;
     if (take.contextPeriod)
         last = map.barBeat(std::max(0.0, *take.contextPeriod - 1.0 / 960.0)).bar;
-    for (const model::ContextPoint& p : take.context) last = std::max(last, map.barBeat(p.beat).bar);
+    for (const model::ContextPoint& p : take.context)
+        last = std::max(last, map.barBeat(p.beat).bar);
     return printLeadSheetPoints(take.context, map, 1, last);
 }
 
