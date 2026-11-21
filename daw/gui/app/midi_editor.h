@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -21,6 +22,7 @@
 #include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
+#include "supple/views/envelope_lane.h"
 
 namespace supple::ui {
 class Button;
@@ -36,6 +38,7 @@ class MouseMap;
 namespace supple::gui {
 
 class MidiEventList;
+class PluginScales;
 
 // The MIDI take an editor opens (ADR-0097 "The take owner"): an item's active
 // take, or a launcher clip's. A clip has no place in time: its beats count
@@ -53,6 +56,18 @@ struct RollNote {
     int pitch = 60;
     double start = 0, length = 1;  // beats from the item's start
     int velocity = 96, channel = 1;
+};
+
+// A clip-time lane (gui.md §4.7): one of a MIDI clip take's envelopes
+// (volume, pan, mute) or one on its take FX, in clip beats from the clip's
+// start, shown while the envelope is visible.
+struct RollEnvLane {
+    model::Id env;
+    model::Envelope envelope;  // as the session had it at the last reload
+    views::EnvScale scale;
+    double fallback = 0;  // the value without points
+    std::string title;    // "Volume (take)", "Teasel · Drive (take)"
+    std::string name;     // the lane header's: "Volume", "Drive"
 };
 
 // What the roll, keyboard and velocity lane share.
@@ -77,6 +92,10 @@ struct RollState {
     // shows or hides it and the velocity lane.
     int ccNumber = 1;
     bool ccShown = true, velocityShown = true;
+    // A MIDI clip's take envelopes and take FX envelopes, in lane order
+    // (volume, pan, mute, then the take FX in chain order); none for an item,
+    // whose take lanes are on the timeline.
+    std::vector<RollEnvLane> envLanes;
     std::vector<CcPoint> cc;
     std::vector<CcPoint> ccDraft;  // a drag in progress (drawn, not yet committed)
     bool ccErasing = false;
@@ -211,6 +230,15 @@ class MidiEditor {
     // The grid's right-click menu at a window point (`itemBeat` under it):
     // Delete, Copy, Cut, Paste (there), Duplicate.
     void openNoteMenu(ui::Point at, double itemBeat);
+    // A clip-time lane's edits (gui.md §4.7): its points replaced
+    // (env.points.set, clip beats), and an envelope on the clip's take or
+    // its take FX shown (made with one point at the parameter's value when it
+    // has none) or hidden. Refusals go to the actions' error hook.
+    Status setEnvPoints(model::Id env, const std::vector<model::EnvPoint>& points,
+                        std::optional<std::uint64_t> expectedVersion = {});
+    Status showEnvelope(const model::EnvTarget& target, bool shown);
+    // The Lanes menu's parameter list for one take effect, at a window point.
+    void openFxParamsMenu(model::Id fx, ui::Point at);
 
   private:
     // sync's work apart from the edge scroll. `pass`: the pass's time; none
@@ -250,7 +278,13 @@ class MidiEditor {
     ui::Node* ccLane_ = nullptr;
     ui::Button* lanesButton_ = nullptr;
     void openLanesMenu();
-    void applyLanes();  // the lanes' visibility from the state
+    void applyLanes();       // the lanes' visibility from the state
+    void refreshEnvLanes();  // the clip-time lanes' nodes from state_.envLanes
+    Status command(std::string_view name, json::Value args,
+                   std::optional<std::uint64_t> expectedVersion = {});
+    std::unique_ptr<PluginScales> scales_;
+    ui::Node* envColumn_ = nullptr;    // the clip-time lanes, under the CC lane
+    std::vector<model::Id> envNodes_;  // the envelopes envColumn_ has lanes for
     ui::Toggle* keyButton_ = nullptr;
     std::string keyText_ = "No key";  // the key button's words (its width follows them)
     void refreshKeyButton();

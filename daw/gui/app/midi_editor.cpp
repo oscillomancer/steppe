@@ -4,6 +4,7 @@
 #include "midi_event_list.h"
 #include "panel_grip.h"
 #include "panel_height.h"
+#include "plugin_scales.h"
 #include "supple/harmony/harmony.h"
 #include "supple/ui/shortcut.h"
 
@@ -35,6 +36,24 @@ constexpr float kGripHeight = 6;  // the top border that resizes the panel
 // sustain.
 constexpr std::pair<int, const char*> kCcs[] = {
     {1, "mod"}, {7, "volume"}, {10, "pan"}, {11, "expression"}, {64, "sustain"}};
+
+const char* shapeName(model::PointShape shape) {
+    switch (shape) {
+        case model::PointShape::Linear:
+            return "linear";
+        case model::PointShape::Square:
+            return "square";
+        case model::PointShape::Slow:
+            return "slow";
+        case model::PointShape::FastStart:
+            return "fast_start";
+        case model::PointShape::FastEnd:
+            return "fast_end";
+        case model::PointShape::Bezier:
+            return "bezier";
+    }
+    return "linear";
+}
 
 bool blackKey(int pitch) {
     const int pc = ((pitch % 12) + 12) % 12;
@@ -956,6 +975,199 @@ class CcLane : public ui::Node {
     double pressBeat_ = 0;
 };
 
+// ----------------------------------------------------------------- clip-time lanes
+
+// One of a MIDI clip take's envelopes, or one on its take FX (gui.md §4.7):
+// the curve in clip beats on the roll's axis, dimmed past the clip's end,
+// where it holds its last value (dashed). A click adds a point and drags it;
+// a point drags in beat (snapped to the grid) and value; a right- or
+// Alt-click removes one; each is one env.points.set on release. The header
+// at the left names the lane and hides it. Clip time takes no writing mode
+// and no automation items, so there is no read/write cell.
+class EnvLane : public ui::Node {
+  public:
+    static constexpr float kHeight = 56, kTitle = 14;
+    EnvLane(RollState& s, MidiEditor& editor, ui::Node*& roll, model::Id env)
+        : Node("midi.env." + env.str()), s_(s), editor_(editor), roll_(roll), env_(env) {
+        interactive = true;
+        layout.height = ui::SizeRule::fixed(kHeight);
+    }
+    ui::Rect area() const {
+        const ui::Rect b = bounds();
+        return {b.x + kKeysWidth, b.y + kTitle, std::max(0.0f, b.w - kKeysWidth),
+                std::max(1.0f, b.h - kTitle - 4)};
+    }
+    ui::Rect hideRect() const {
+        const ui::Rect b = bounds();
+        return {b.x + 4, b.y + 20, kKeysWidth - 8, 14};
+    }
+    const RollEnvLane* lane() const {
+        for (const RollEnvLane& l : s_.envLanes)
+            if (l.env == env_) return &l;
+        return nullptr;
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        c.fillRect(b, t.color("panel"));
+        c.fillRect({b.x, b.y, b.w, 1}, t.color("rule"));
+        const RollEnvLane* l = lane();
+        if (!l) return;
+        c.text({b.x + 4, b.y + 4, kKeysWidth - 6, 14}, l->name, ui::Font::Ui, t.type("caption"),
+               t.color("ink"));
+        c.text(hideRect(), "hide", ui::Font::Ui, t.type("caption"), t.color("ink-faint"));
+        const ui::Rect a = area();
+        c.text({a.x + 4, b.y + 1, std::max(0.0f, a.w - 8), kTitle}, l->title, ui::Font::Ui,
+               t.type("caption"), t.color("ink-quiet"));
+        const Geometry g{s_, roll_ ? roll_->bounds() : a};
+        model::Envelope env = l->envelope;
+        if (dragging_) env.points = draft_;
+        auto yOf = [&](double value) {
+            return a.bottom() -
+                   static_cast<float>(std::clamp(l->scale.toNorm(value), 0.0, 1.0)) * a.h;
+        };
+        c.save();
+        c.clip(a);
+        c.fillRect({a.x, yOf(l->scale.reference()), a.w, 1}, t.color("rule").withAlpha(0.5f));
+        const ui::Color ink = t.color("accent").withAlpha(env.active ? 1.0f : 0.4f);
+        const float end = g.xOf(s_.itemLength);
+        // The curve to the clip's end, then its value there held, dashed.
+        float px = a.x;
+        float py = yOf(views::envValueAt(env, std::max(0.0, g.beatOf(px)), l->fallback));
+        for (float x = a.x + 2; x <= std::min(a.right(), end) + 2; x += 2) {
+            const float cx = std::min(x, end);
+            const float y = yOf(views::envValueAt(env, std::max(0.0, g.beatOf(cx)), l->fallback));
+            c.line({px, py}, {cx, y}, ink, 1.5f);
+            px = cx;
+            py = y;
+            if (cx >= end) break;
+        }
+        if (end < a.right()) {
+            const float y = yOf(views::envValueAt(env, s_.itemLength, l->fallback));
+            for (float x = std::max(end, a.x); x < a.right(); x += 7)
+                c.line({x, y}, {std::min(x + 4, a.right()), y}, ink.withAlpha(0.45f), 1.2f);
+        }
+        for (std::size_t i = 0; i < env.points.size(); ++i) {
+            const model::EnvPoint& pt = env.points[i];
+            const float x = g.xOf(pt.pos), y = yOf(pt.value);
+            const bool held = dragging_ && i == index_;
+            c.fillRect({x - 3, y - 3, 6, 6}, held ? t.color("focus") : ink);
+            if (held)
+                c.text({x + 6, y - 14, 120, 12}, l->scale.text(pt.value), ui::Font::Ui,
+                       t.type("caption"), t.color("ink"));
+        }
+        // Before the clip's start and past its end: not played (as the roll).
+        if (const float start = g.xOf(0); start > a.x)
+            c.fillRect({a.x, a.y, std::min(start, a.right()) - a.x, a.h},
+                       t.color("ground").withAlpha(0.6f));
+        if (end < a.right())
+            c.fillRect({std::max(end, a.x), a.y, a.right() - std::max(end, a.x), a.h},
+                       t.color("ground").withAlpha(0.6f));
+        c.restore();
+    }
+    bool onPointer(const ui::PointerEvent& e) override {
+        using T = ui::PointerEvent::Type;
+        const RollEnvLane* l = lane();
+        if (e.type == T::Cancel) {
+            dragging_ = false;
+            invalidate();
+            return true;
+        }
+        if (!l) return false;
+        const ui::Rect a = area();
+        const Geometry g{s_, roll_ ? roll_->bounds() : a};
+        auto valueAt = [&](float y) {
+            return l->scale.fromNorm(
+                static_cast<double>(std::clamp((a.bottom() - y) / a.h, 0.0f, 1.0f)));
+        };
+        auto beatAt = [&](float x) {
+            return std::clamp(s_.snapBeat(g.beatOf(x)), 0.0, s_.itemLength);
+        };
+        auto hit = [&](ui::Point p) -> std::optional<std::size_t> {
+            const auto& pts = l->envelope.points;
+            for (std::size_t i = 0; i < pts.size(); ++i) {
+                const float x = g.xOf(pts[i].pos);
+                const float y =
+                    a.bottom() -
+                    static_cast<float>(std::clamp(l->scale.toNorm(pts[i].value), 0.0, 1.0)) * a.h;
+                if (std::abs(p.x - x) <= 5 && std::abs(p.y - y) <= 5) return i;
+            }
+            return std::nullopt;
+        };
+        if (e.type == T::Down && e.button == 1 && hideRect().contains(e.pos)) {
+            (void)editor_.showEnvelope(l->envelope.target, false);
+            return true;
+        }
+        if (e.type == T::Down && e.pos.x < a.x) return true;  // the header
+        if (e.type == T::Down && (e.button == 3 || (e.button == 1 && (e.mods & ui::kAlt)))) {
+            if (const auto i = hit(e.pos)) {
+                const std::uint64_t version = editor_.beginGesture();
+                std::vector<model::EnvPoint> pts = l->envelope.points;
+                pts.erase(pts.begin() + static_cast<std::ptrdiff_t>(*i));
+                (void)editor_.setEnvPoints(env_, pts, version);
+            }
+            return true;
+        }
+        if (e.type == T::Down && e.button == 1) {
+            version_ = editor_.beginGesture();
+            l = lane();  // the gesture starts from the session as it is
+            if (!l) return true;
+            draft_ = l->envelope.points;
+            if (const auto i = hit(e.pos)) {
+                index_ = *i;
+                grab_ = {e.pos.x - g.xOf(draft_[*i].pos), 0};
+            } else {
+                model::EnvPoint pt;
+                pt.pos = beatAt(e.pos.x);
+                pt.value = valueAt(e.pos.y);
+                const auto at = std::upper_bound(
+                    draft_.begin(), draft_.end(), pt.pos,
+                    [](double beat, const model::EnvPoint& p) { return beat < p.pos; });
+                index_ = static_cast<std::size_t>(at - draft_.begin());
+                draft_.insert(at, pt);
+                grab_ = {};
+            }
+            dragging_ = true;
+            moved_ = !hit(e.pos).has_value();  // a new point is an edit already
+            if (ui::Root* r = root()) r->capture(this);
+            invalidate();
+            return true;
+        }
+        if (e.type == T::Move && dragging_) {
+            model::EnvPoint pt = draft_[index_];
+            draft_.erase(draft_.begin() + static_cast<std::ptrdiff_t>(index_));
+            pt.pos = beatAt(e.pos.x - grab_.x);
+            pt.value = valueAt(e.pos.y);
+            // It stays between its neighbours' beats, so the order holds.
+            if (index_ > 0) pt.pos = std::max(pt.pos, draft_[index_ - 1].pos);
+            if (index_ < draft_.size()) pt.pos = std::min(pt.pos, draft_[index_].pos);
+            draft_.insert(draft_.begin() + static_cast<std::ptrdiff_t>(index_), pt);
+            moved_ = true;
+            invalidate();
+            return true;
+        }
+        if (e.type == T::Up && dragging_) {
+            if (ui::Root* r = root()) r->capture(nullptr);
+            dragging_ = false;
+            if (moved_) (void)editor_.setEnvPoints(env_, draft_, version_);
+            invalidate();
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    RollState& s_;
+    MidiEditor& editor_;
+    ui::Node*& roll_;
+    model::Id env_;
+    bool dragging_ = false, moved_ = false;
+    std::size_t index_ = 0;
+    ui::Point grab_{};
+    std::uint64_t version_ = 0;
+    std::vector<model::EnvPoint> draft_;
+};
+
 // ----------------------------------------------------------------- playhead (overlay)
 
 class RollPlayhead : public ui::Node {
@@ -1029,7 +1241,12 @@ std::optional<MidiOwner> midiOwner(const model::Session& s, const std::string& t
 
 MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dispatcher,
                        engine::EngineApp& app, UiState& ui)
-    : root_(root), actions_(actions), dispatcher_(dispatcher), app_(app), ui_(ui) {
+    : root_(root),
+      actions_(actions),
+      dispatcher_(dispatcher),
+      app_(app),
+      ui_(ui),
+      scales_(std::make_unique<PluginScales>(dispatcher, &app)) {
     // The notes take the colour their item has in the arrangement.
     state_.color = [this](const ui::Theme& theme) {
         const model::Session& s = app_.head();
@@ -1191,12 +1408,18 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     auto& vel = left.emplace<VelocityLane>(state_, *this, roll_);
     velocity_ = &vel;
     ccLane_ = &left.emplace<CcLane>(state_, *this, roll_);
+    // A MIDI clip's take envelopes and take FX envelopes (gui.md §4.7).
+    envColumn_ = &left.emplace<ui::Node>("midi.envlanes");
+    envColumn_->layout.dir = ui::Layout::Dir::Column;
+    envColumn_->layout.height = ui::SizeRule::content();
     auto repaint = [this] {
         if (roll_) roll_->invalidate();
         if (bars_) bars_->invalidate();
         if (keys_) keys_->invalidate();
         if (velocity_) velocity_->invalidate();
         if (ccLane_) ccLane_->invalidate();
+        if (envColumn_)
+            for (const auto& lane : envColumn_->children()) lane->invalidate();
     };
     roll.repaintAll = repaint;
     vel.repaintAll = repaint;
@@ -1285,6 +1508,8 @@ void MidiEditor::close() {
     state_.velocityNote.reset();
     state_.ccDraft.clear();
     state_.ccErasing = false;
+    state_.envLanes.clear();
+    refreshEnvLanes();
     if (eventList_) eventList_->sync();
     if (panel_ && panel_->visible) {
         root_.releaseWithin(panel_);
@@ -1385,10 +1610,180 @@ void MidiEditor::openLanesMenu() {
                 applyLanes();
             });
     }
+    // A MIDI clip's take envelopes and its take FX's parameters, in clip time.
+    const auto owner = isOpen() ? midiOwner(app_.head(), state_.item) : std::nullopt;
     const ui::Rect b = lanesButton_ ? lanesButton_->bounds() : ui::Rect{};
+    if (owner && owner->clip && owner->clip->activeTake) {
+        const model::Session& head = app_.head();
+        const model::Id take = *owner->clip->activeTake;
+        auto shown = [&](const model::EnvTarget& target) {
+            for (const auto& e : head.envelopes)
+                if (e.value->target == target) return e.value->visible;
+            return false;
+        };
+        // A MIDI take's envelope shapes what an instrument in its take FX
+        // plays (env.take_midi otherwise).
+        bool instrument = false;
+        for (model::Id fx : owner->take->chain)
+            if (const model::FxInstance* f = head.fx.find(fx))
+                if (auto info = app_.findPlugin(f->plugin.id)) instrument |= info->instrument;
+        ui::MenuItem rule;
+        rule.separator = true;
+        items.push_back(rule);
+        for (const auto& [param, label] :
+             {std::pair{"volume", "Take volume"}, {"pan", "Take pan"}, {"mute", "Take mute"}}) {
+            const model::EnvTarget target{take, param};
+            const bool on = shown(target);
+            add(label, on, [this, target, on] { (void)showEnvelope(target, !on); });
+            items.back().enabled = instrument;
+        }
+        if (!instrument) {
+            ui::MenuItem why;
+            why.label = "Take envelopes need an instrument in Take FX";
+            why.enabled = false;
+            items.push_back(why);
+        }
+        for (model::Id fx : owner->take->chain) {
+            const model::FxInstance* f = head.fx.find(fx);
+            if (!f) continue;
+            const std::string effect = f->label.empty() ? f->plugin.name : f->label;
+            items.push_back(rule);
+            // Its envelopes, then the whole parameter list.
+            for (const auto& e : head.envelopes) {
+                if (e.value->target.object != fx) continue;
+                const auto scale = (*scales_)(*e.value);
+                const std::string name = scale && scale->param && !scale->param->name.empty()
+                                             ? scale->param->name
+                                             : e.value->target.param;
+                const model::EnvTarget target = e.value->target;
+                const bool on = e.value->visible;
+                add(effect + " \u00b7 " + name, on,
+                    [this, target, on] { (void)showEnvelope(target, !on); });
+            }
+            const ui::Point at{b.x, b.bottom()};
+            add(effect + ": parameters\u2026", false, [this, fx, at] { openFxParamsMenu(fx, at); });
+        }
+    }
     root_.openPopup(
         ui::makeMenu("midi.lanes.menu", std::move(items), [this] { root_.closePopup(); }),
         ui::Rect{b.x, b.bottom(), 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::openFxParamsMenu(model::Id fx, ui::Point at) {
+    json::Value args = json::Value::object();
+    args["fx"] = fx.str();
+    args["full"] = true;
+    auto described = dispatcher_.execute({"fx.describe", std::move(args), kOrigin});
+    if (!described) {
+        if (actions_.onError) actions_.onError("Lanes: " + described.error().message);
+        return;
+    }
+    const model::Session& head = app_.head();
+    std::vector<ui::MenuItem> items;
+    if (const json::Value* ps = described->find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject()) {
+            auto d = params::fromDescription(m.key, m.value);
+            if (!d || ((*d)->spec.flags & (params::kReadonly | params::kHidden))) continue;
+            const model::EnvTarget target{fx, m.key};
+            bool on = false;
+            for (const auto& e : head.envelopes)
+                if (e.value->target == target) on = e.value->visible;
+            ui::MenuItem item;
+            item.label = (*d)->name.empty() ? m.key : (*d)->name;
+            item.checked = on;
+            item.run = [this, target, on] { (void)showEnvelope(target, !on); };
+            items.push_back(std::move(item));
+        }
+    if (items.empty()) {
+        ui::MenuItem none;
+        none.label = "No described parameters";
+        none.enabled = false;
+        items.push_back(std::move(none));
+    }
+    root_.openPopup(
+        ui::makeMenu("midi.lanes.params", std::move(items), [this] { root_.closePopup(); }),
+        ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::refreshEnvLanes() {
+    if (!envColumn_) return;
+    std::vector<model::Id> wanted;
+    for (const RollEnvLane& l : state_.envLanes) wanted.push_back(l.env);
+    if (wanted == envNodes_) {
+        for (const auto& lane : envColumn_->children()) lane->invalidate();
+        return;
+    }
+    root_.releaseWithin(envColumn_);
+    envColumn_->clear();
+    for (model::Id env : wanted) envColumn_->emplace<EnvLane>(state_, *this, roll_, env);
+    envNodes_ = std::move(wanted);
+    root_.relayout();
+    root_.damageAll();
+}
+
+Status MidiEditor::command(std::string_view name, json::Value args,
+                           std::optional<std::uint64_t> expectedVersion) {
+    if (expectedVersion && (*expectedVersion != app_.head().version ||
+                            gestureGeneration_ != app_.projectGeneration())) {
+        follow({});
+        return Error("gui.midi.stale", "the clip changed during the gesture", "/env",
+                     "start the gesture again against the current clip");
+    }
+    auto r = dispatcher_.execute({std::string(name), std::move(args), kOrigin});
+    if (!r) {
+        if (actions_.onError) actions_.onError("Lanes: " + r.error().message);
+        return std::move(r).error();
+    }
+    return reload();
+}
+
+Status MidiEditor::setEnvPoints(model::Id env, const std::vector<model::EnvPoint>& points,
+                                std::optional<std::uint64_t> expectedVersion) {
+    json::Value args = json::Value::object(), list = json::Value::array();
+    args["env"] = env.str();
+    for (const model::EnvPoint& pt : points) {
+        json::Value p = json::Value::object();
+        p["beat"] = pt.pos;
+        p["value"] = pt.value;
+        p["shape"] = shapeName(pt.shape);
+        if (pt.tension != 0) p["tension"] = pt.tension;
+        list.push_back(std::move(p));
+    }
+    args["points"] = std::move(list);
+    return command("env.points.set", std::move(args), expectedVersion);
+}
+
+Status MidiEditor::showEnvelope(const model::EnvTarget& target, bool shown) {
+    const model::Session& head = app_.head();
+    for (const auto& e : head.envelopes) {
+        if (e.value->target != target) continue;
+        if (e.value->visible == shown) return {};
+        json::Value args = json::Value::object();
+        args["env"] = e.id.str();
+        args["visible"] = shown;
+        return command("env.set", std::move(args));
+    }
+    if (!shown) return {};
+    // None yet: one point at the clip's start, at the parameter's value now.
+    model::Envelope probe;
+    probe.target = target;
+    const auto scale =
+        target.object.kind == model::Kind::Fx ? (*scales_)(probe) : views::envScale(probe);
+    if (!scale) {
+        Error error("gui.lanes", "the parameter has no lane", "/param",
+                    "pick a parameter the plug-in describes");
+        if (actions_.onError) actions_.onError("Lanes: " + error.message);
+        return error;
+    }
+    json::Value args = json::Value::object(), points = json::Value::array(),
+                point = json::Value::object();
+    args[target.object.kind == model::Kind::Fx ? "fx" : "take"] = target.object.str();
+    args["param"] = target.param;
+    point["beat"] = 0.0;
+    point["value"] = views::targetValue(head, target, *scale);
+    points.push_back(std::move(point));
+    args["points"] = std::move(points);
+    return command("env.add", std::move(args));
 }
 
 std::string_view MidiEditor::wheelBehaviour(unsigned mods) const {
@@ -1445,6 +1840,48 @@ Status MidiEditor::reload() {
         state_.cc.push_back(
             {c.find("beat")->asDouble(), static_cast<int>(c.find("value")->asInt())});
     }
+    // A clip's take lanes, in clip beats; an item's are on the timeline.
+    state_.envLanes.clear();
+    if (owner->clip && owner->clip->activeTake) {
+        const model::Session& head = app_.head();
+        const model::Id takeId = *owner->clip->activeTake;
+        std::vector<std::pair<std::pair<int, std::uint32_t>, RollEnvLane>> lanes;
+        for (const auto& e : head.envelopes) {
+            const model::Envelope& env = *e.value;
+            if (!env.visible) continue;
+            int order = 0;
+            std::optional<views::EnvScale> scale;
+            if (env.target.object == takeId) {
+                scale = views::envScale(env);
+                order = views::envOrder(env);
+            } else if (env.target.object.kind == model::Kind::Fx) {
+                const auto at =
+                    std::find(take->chain.begin(), take->chain.end(), env.target.object);
+                if (at == take->chain.end()) continue;
+                scale = (*scales_)(env);
+                order = 100 + static_cast<int>(at - take->chain.begin());
+            }
+            if (!scale) continue;
+            RollEnvLane lane;
+            lane.env = e.id;
+            lane.envelope = env;
+            lane.scale = *scale;
+            lane.fallback = views::targetValue(head, env.target, *scale);
+            if (env.target.object == takeId) {
+                lane.name = views::envTitle(env);
+                lane.title = lane.name + " (take)";
+            } else {
+                lane.title = views::envTitle(env, head, &*scale);
+                lane.name = scale->param && !scale->param->name.empty() ? scale->param->name
+                                                                        : env.target.param;
+            }
+            lanes.push_back({{order, e.id.n}, std::move(lane)});
+        }
+        std::sort(lanes.begin(), lanes.end(),
+                  [](const auto& x, const auto& y) { return x.first < y.first; });
+        for (auto& l : lanes) state_.envLanes.push_back(std::move(l.second));
+    }
+    refreshEnvLanes();
     // Bars in a generous window around the item.
     state_.barLines.clear();
     const auto& map = *app_.head().timeMap;

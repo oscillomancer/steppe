@@ -11,6 +11,7 @@
 #include <array>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <set>
 
 #include "app_actions.h"
@@ -24,6 +25,7 @@
 #include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
+#include "supple/params/params.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
@@ -3482,6 +3484,181 @@ TEST_CASE("routing matrix: hardware MIDI replaces audio and rack inputs") {
         CHECK_FALSE(f.app->head().tracks.find(id)->record.input);
         CHECK_FALSE(f.app->head().tracks.find(id)->record.midiInput);
     }
+}
+
+TEST_CASE("MIDI editor: a clip's take envelopes and take FX parameters get lanes in clip beats") {
+    Fixture f({SUPPLE_CLAP_DIR});  // the stock plug-ins only
+    if (!f.ok) return;
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add", R"({"track":")" + track +
+                               R"(","scene":"sc_1","name":"Riff",)"
+                               R"("notation":"voice v; 1: D4:q F4:q r:h | 2: G4:w"})")
+            .find("clip")
+            ->asString();
+    const model::Id take = *f.app->head().clips.find(*model::Id::parse(clip))->activeTake;
+    // A stock effect with a continuous parameter on the clip's take, and a
+    // stock instrument for the take envelopes later (partial builds lack them).
+    std::string fxId, key, name, instrument;
+    const json::Value listed = f.exec("plugin.list", "{}");
+    for (const json::Value& p : listed.find("plugins")->asArray()) {
+        const bool isInstrument = p.find("instrument") && p.find("instrument")->asBool();
+        if (isInstrument) {
+            if (instrument.empty()) instrument = p.find("id")->asString();
+            continue;
+        }
+        if (!fxId.empty()) continue;
+        auto added =
+            f.dispatcher->execute({"fx.add",
+                                   json::parse(R"({"take":")" + take.str() + R"(","plugin":")" +
+                                               p.find("id")->asString() + R"("})")
+                                       .value(),
+                                   kTest});
+        if (!added) continue;
+        const std::string id = (*added)["fx"].asString();
+        const json::Value d = f.exec("fx.describe", R"({"fx":")" + id + R"(","full":true})");
+        bool found = false;
+        if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+            for (const auto& m : ps->asObject()) {
+                auto desc = params::fromDescription(m.key, m.value);
+                if (!desc || (*desc)->spec.type != params::Type::Float ||
+                    ((*desc)->spec.flags & (params::kReadonly | params::kHidden)))
+                    continue;
+                fxId = id;
+                key = m.key;
+                name = (*desc)->name.empty() ? m.key : (*desc)->name;
+                found = true;
+                break;
+            }
+        if (!found) f.exec("fx.remove", R"({"fx":")" + id + R"("})");
+    }
+    if (fxId.empty() || instrument.empty()) {
+        MESSAGE("skipped: no stock effect with a continuous parameter or no instrument");
+        return;
+    }
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    auto& s = f.editor->state();
+    CHECK(s.envLanes.empty());
+    const model::FxInstance& fx = *f.app->head().fx.find(*model::Id::parse(fxId));
+    const std::string effect = fx.label.empty() ? fx.plugin.name : fx.label;
+    // Without an instrument in the take FX the take envelopes are offered
+    // disabled, and the menu says why; the effect's parameters are listed.
+    {
+        REQUIRE(f.root->click("midi.lanes"));
+        f.root->frame(false);
+        ui::Node* menu = f.root->find("midi.lanes.menu");
+        REQUIRE(menu);
+        std::map<std::string, bool> enabled;
+        for (const auto& m : ui::menuItems(*menu))
+            if (!m.separator) enabled[m.label] = m.enabled;
+        f.root->closePopup();
+        CHECK(enabled.at("Take volume") == false);
+        CHECK(enabled.at("Take envelopes need an instrument in Take FX") == false);
+        CHECK(enabled.at(effect + ": parameters…"));
+    }
+    // The parameter list makes its envelope: one point at the clip's start
+    // at the parameter's value now, and a lane in clip beats.
+    f.pickLane(effect + ": parameters…");
+    ui::Node* params = f.root->find("midi.lanes.params");
+    REQUIRE(params);
+    std::function<void()> pick;
+    for (const auto& m : ui::menuItems(*params))
+        if (m.label == name) pick = m.run;
+    REQUIRE(pick);
+    f.root->closePopup();
+    pick();
+    f.frame();
+    REQUIRE(s.envLanes.size() == 1);
+    const model::Id env = s.envLanes[0].env;
+    CHECK(s.envLanes[0].title == effect + " · " + name + " (take)");
+    const auto points = [&] { return f.app->head().envelopes.find(env)->points; };
+    REQUIRE(points().size() == 1);
+    CHECK(points()[0].pos == 0);
+    ui::Node* lane = f.root->find("midi.env." + env.str());
+    REQUIRE(lane);
+    CHECK(lane->visible);
+    CHECK(lane->bounds().h > 40);
+    // A click in the lane's upper quarter at beat 4 adds a point there, three
+    // quarters up the parameter's curve; one undo step.
+    const views::EnvScale scale = s.envLanes[0].scale;
+    const auto steps = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+    const auto s0 = steps();
+    const ui::Rect r = lane->bounds();
+    const float top = r.y + 14, bottom = r.bottom() - 4;
+    const auto yAt = [&](double norm) {
+        return bottom - static_cast<float>(norm) * (bottom - top);
+    };
+    const auto xAt = [&](double beat) { return f.at(beat, 60).x; };
+    f.pointer(ui::PointerEvent::Type::Down, {xAt(4), yAt(0.75)});
+    f.pointer(ui::PointerEvent::Type::Up, {xAt(4), yAt(0.75)});
+    REQUIRE(points().size() == 2);
+    CHECK(points()[1].pos == doctest::Approx(4));
+    CHECK(scale.toNorm(points()[1].value) == doctest::Approx(0.75).epsilon(0.05));
+    CHECK(steps() == s0 + 1);
+    // Dragged to beat 6 (snapped to the grid), then past the clip's end: it
+    // stops at the end, beat 8.
+    f.pointer(ui::PointerEvent::Type::Down, {xAt(4), yAt(0.75)});
+    f.pointer(ui::PointerEvent::Type::Move, {xAt(6.02), yAt(0.5)});
+    f.pointer(ui::PointerEvent::Type::Up, {xAt(6.02), yAt(0.5)});
+    REQUIRE(points().size() == 2);
+    CHECK(points()[1].pos == doctest::Approx(6));
+    CHECK(scale.toNorm(points()[1].value) == doctest::Approx(0.5).epsilon(0.05));
+    f.pointer(ui::PointerEvent::Type::Down, {xAt(6), yAt(0.5)});
+    f.pointer(ui::PointerEvent::Type::Move, {xAt(11), yAt(0.5)});
+    f.pointer(ui::PointerEvent::Type::Up, {xAt(11), yAt(0.5)});
+    CHECK(points()[1].pos == doctest::Approx(8));
+    f.snapshot("midi-editor-clip-lanes.png");
+    // A right-click on a point removes it.
+    ui::PointerEvent right{ui::PointerEvent::Type::Down, {xAt(8), yAt(0.5)}, 3};
+    f.root->pointer(right);
+    right.type = ui::PointerEvent::Type::Up;
+    f.root->pointer(right);
+    f.frame();
+    CHECK(points().size() == 1);
+    // With an instrument in the take FX, the take's volume has a lane: before
+    // the effect's, at 0 dB.
+    f.exec("fx.add",
+           R"({"take":")" + take.str() + R"(","plugin":")" + instrument + R"(","index":0})");
+    f.frame();
+    const model::FxInstance& synthFx =
+        *f.app->head().fx.find(f.app->head().takes.find(take)->chain.front());
+    const std::string synth = synthFx.label.empty() ? synthFx.plugin.name : synthFx.label;
+    f.pickLane("Take volume");
+    REQUIRE(s.envLanes.size() == 2);
+    CHECK(s.envLanes[0].title == "Volume (take)");
+    CHECK(s.envLanes[1].env == env);
+    const model::Id volumeEnv = s.envLanes[0].env;
+    const model::Envelope& volume = *f.app->head().envelopes.find(volumeEnv);
+    CHECK(volume.target == model::EnvTarget{take, "volume"});
+    REQUIRE(volume.points.size() == 1);
+    CHECK(volume.points[0].value == doctest::Approx(0));
+    CHECK(f.lanesMenu() ==
+          std::vector<std::string>{
+              "[x] Velocity", "[x] CC 1 mod", "CC 7 volume", "CC 10 pan", "CC 11 expression",
+              "CC 64 sustain", "[x] Take volume", "Take pan", "Take mute",
+              // The instrument (first in the chain), then the effect.
+              synth + ": parameters…", "[x] " + effect + " · " + name, effect + ": parameters…"});
+    // "hide" in a lane's header hides it; the envelope stays and still plays.
+    ui::Node* volumeLane = f.root->find("midi.env." + volumeEnv.str());
+    REQUIRE(volumeLane);
+    const ui::Rect vr = volumeLane->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {vr.x + 10, vr.y + 26});
+    f.pointer(ui::PointerEvent::Type::Up, {vr.x + 10, vr.y + 26});
+    REQUIRE(s.envLanes.size() == 1);
+    CHECK(s.envLanes[0].env == env);
+    CHECK_FALSE(f.root->find("midi.env." + volumeEnv.str()));
+    const model::Envelope* hidden = f.app->head().envelopes.find(volumeEnv);
+    REQUIRE(hidden);
+    CHECK_FALSE(hidden->visible);
+    CHECK(hidden->active);
+    // An item's take lanes are on the timeline, not in its roll.
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    CHECK(s.envLanes.empty());
+    CHECK_FALSE(f.root->find("midi.env." + env.str()));
+    CHECK(f.lanesMenu().size() == 6);
 }
 
 TEST_CASE("MIDI editor: a launcher clip opens at beat 0, keyed by the project's start, no chords") {
