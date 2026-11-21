@@ -1146,8 +1146,10 @@ void registerClipCommands(cmd::Registry& registry) {
             clip.follow = a.follow.value_or(model::ClipFollow::None);
             warnNotes(ctx, notes);
             warnFit(ctx, model::fitClipContext(clip));
-            // History replays the context the user saw, not the place it was read from.
-            if (a.contextAt || (a.item && !a.context)) {
+            // History replays the context the user saw, not the place it was read from:
+            // only context_at, which states a place for the context alone, records the text.
+            // An item is taken by reference and re-read on replay, notes and context together.
+            if (a.contextAt) {
                 ClipAddArgs resolved = a;
                 resolved.contextAt.reset();
                 resolved.context = stated->text;

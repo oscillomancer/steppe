@@ -348,3 +348,15 @@ there. Not in X1 or X2.
 - **Items stay plain notes.** Nothing that plays today changes, since
   `follow` defaults to `none`.
 - **D1 is fixed by X1.** It needs no separate fix.
+
+## Notes
+
+- *(2026-11-21, X1 review round 73, F2.)* The history rule is one rule: a
+  command that takes project material by reference (an item, a region)
+  re-reads all of it on replay, the notes and the context together, and only
+  `context_at`, which states a place for the context alone, records the
+  resolved `context` text. So `clip.add {item}` records no resolved text, as
+  `scene.capture` never did; the History bullet above, which listed the
+  context taken under an item with `context_at`, is superseded by this for the
+  item case. A replay of either on another branch gives the clip the context
+  that branch holds under the item.

@@ -1188,9 +1188,11 @@ TEST_CASE("clip.add {item} takes the context under the item; a stated one wins")
     l.run("chord.set", R"({"at": 2, "symbol": "Fm"})");
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
     CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm, chord@2 Fm");
+    // An item is taken by reference, so history keeps the reference and replay reads the
+    // context again with the notes; only context_at records the text it resolved to.
     const json::Value recorded = lastRecorded(l);
-    REQUIRE(recorded.find("context"));  // replayed as the points it took
-    CHECK(recorded.find("context")->asString() == "1: key C minor {Cm}:h {Fm}:h\n");
+    CHECK_FALSE(recorded.find("context"));
+    CHECK(recorded.find("item")->asString() == "it_1");
     // A stated context, even none, is the clip's.
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "item": "it_1", "context": ""})");
     CHECK(clipOf(l, "cl_2").context.empty());
@@ -1200,6 +1202,35 @@ TEST_CASE("clip.add {item} takes the context under the item; a stated one wins")
     const auto r = bare.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");
     CHECK(clipOf(bare, "cl_1").context.empty());
     CHECK(warningCodes(r).empty());
+}
+
+TEST_CASE(
+    "a replay re-reads what an item is taken by; context_at replays the text it resolved to") {
+    // ADR-0098, the history rule: a command that takes project material by reference
+    // re-reads all of it on replay; context_at, which states a place for the context alone,
+    // records the resolved text.
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("chord.set", R"({"at": 0, "symbol": "Cm"})");
+    l.run("branch.create", R"({"name": "agent/test/ctx"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})");  // cl_1 (item)
+    l.run("clip.add", std::string(R"({"track": "tr_1", "scene": "sc_2", )") + kTwoBars +
+                          R"(, "context_at": {"bar": 1}})");  // cl_2 (context_at)
+    CHECK(pointsOf(clipOf(l, "cl_1")) == "key@0 C minor, chord@0 Cm");
+    CHECK(pointsOf(clipOf(l, "cl_2")) == "key@0 C minor, chord@0 Cm");
+    // Main moves: the key under bar 1 changes. The merge replays both steps there.
+    l.run("branch.switch", R"({"name": "main"})");
+    l.run("key.set", R"({"at": 0, "tonic": "E", "scale": "minor"})");
+    l.run("branch.merge", R"({"from": "agent/test/ctx"})");
+    const model::Session& s = l.head();
+    const auto fromItem = model::clipAt(s, id("tr_1"), id("sc_1"));
+    REQUIRE(fromItem);
+    // The item case reads the context under the item on this branch: E minor, as its notes.
+    CHECK(pointsOf(*s.clips.find(*fromItem)) == "key@0 E minor, chord@0 Cm");
+    // context_at replays the context the user saw: C minor.
+    const auto fromPlace = model::clipAt(s, id("tr_1"), id("sc_2"));
+    REQUIRE(fromPlace);
+    CHECK(pointsOf(*s.clips.find(*fromPlace)) == "key@0 C minor, chord@0 Cm");
 }
 
 TEST_CASE("clip.add records the chord symbols of its notation, by precedence") {

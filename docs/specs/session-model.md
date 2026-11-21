@@ -2125,9 +2125,12 @@ bars.
   `clip.chords_set` (also when the clip had none), and keeps its keys. A text without symbols leaves
   the context alone.
 - **`scene.capture`** gives each clip the context under its item.
-- **History** records `context_at`, and the context taken under an item,
-  as the resolved `context` text, so a replay on another branch gives the
-  clip the same points.
+- **History.** A command that takes project material by reference (an
+  item, a region: `clip.add {item}`, `scene.capture`) keeps the reference, and
+  a replay on another branch re-reads all of it there, the notes and the
+  context together. Only `context_at`, which states a place for the context
+  alone, records what it resolved to: the `context` text, so a replay gives
+  the clip the points the user saw.
 - **Copies.**
   - `clip.duplicate` and `clip.move` keep `context` and `follow`.
   - `take.extract` from a clip and `item.export` copy the notes, with no
