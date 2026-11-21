@@ -1700,12 +1700,16 @@ it is laid; it needs a key at the clip's start. When you lay a clip or a
 scene on the timeline, the status line at the bottom says what happened to
 its keys: "Bass followed to D minor, +2" for a clip that was moved to the
 song's key, or "Keys copied: its key C minor differs from D minor at bar 21"
-for one laid as written under a different key. Clips launch under a master playrate, but
+for one laid as written under a different key. A Capture take that copied
+clips under a different key says so the same way. A clip with its own key
+shows it in the corner of its cell ("Dm", "G dor"), with "≈" before it
+when the clip follows. Clips launch under a master playrate, but
 while it keeps the pitch an audio clip can't be launched: the pane draws
 those clips (and the scenes holding one) dimmed, and a click says why in
 the status line.
 
-In the piano roll a clip starts at its own bar 1. It has no place in the
+In the piano roll a clip starts at its own bar 1, and its end is marked
+"end", with the time after it shaded. It has no place in the
 song, so it keeps the key and chords it was written against, and the roll
 shows those: the key button names its key, its chords are in the strip over
 the roll (keys in a row under the chords), and the rows and note names

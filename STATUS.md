@@ -135,7 +135,8 @@ instructions are in `docs/guides/installing.md`.
   pooled sharer in another key) are in; on a launcher clip they, and
   `midi.get`, read the clip's own context (ADR-0098, below). In the app
   (C3): key changes in the ruler's meter half and a chord row (shown with the
-  first chord, or by View > Chord row), both edited there (a key change's
+  first chord, or by View > Chord row; the last chord held to the project's
+  end), both edited there (a key change's
   flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
@@ -223,9 +224,10 @@ instructions are in `docs/guides/installing.md`.
   `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
   clip plays as written), `write_context` (X5). The roll shows and edits a
   clip's context, and the clip inspector sets Follow (X3). A clip or scene
-  laid from the clip launcher says in the status line how its keys were
-  followed or why a clip was copied (`followed.mismatch` names the keys that
-  differ).
+  laid from the clip launcher, or written by Capture (`launch.commit`'s
+  `mismatches`), says in the status line how its keys were followed or why a
+  clip was copied (`followed.mismatch` names the keys that differ); a
+  launcher cell shows its clip's key, marked "≈" when the clip follows.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
@@ -311,7 +313,8 @@ instructions are in `docs/guides/installing.md`.
     the same Lanes menu and lanes, snapping to a seconds grid, and a key
     button for its one key point), which edits no audio;
   - an item's take FX have lanes on the timeline, drawn across the whole
-    timeline although only the item's span plays;
+    timeline although only the item's span plays (titled with their item
+    when two items on a track automate the same effect's parameter);
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole

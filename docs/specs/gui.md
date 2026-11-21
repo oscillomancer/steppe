@@ -715,8 +715,12 @@ one place (`ArrangeView::setRulerRows`).
 and hidden otherwise; View > Chord row (`ui.view.chords`, ticked while shown)
 chooses for the project instead, and the UI file keeps that choice
 (`arrange.chords`; absent: the rule). Each chord is a cell from its beat to
-the next chord point, in the uniform cell of the launcher's slots (raised,
-an outline), named in letters as the notation writes it ("Bbmaj7", "F/A"),
+the next chord point, the last one to the project's end (the bar line after
+the last item or section, `views::barAfterArrangement`; the view's edge when
+the chord starts past it), as the engine holds it, in the uniform cell of
+the launcher's slots (raised, an outline), named in letters as the notation
+writes it ("Bbmaj7", "F/A"); a chord that began left of the view keeps its
+name at the view's left edge,
 with a trailing "?" in quiet ink when this build cannot read the symbol; a
 name too long for its cell ends in an ellipsis after a whole character, and
 a cell too narrow for one character and the ellipsis shows no name. A "no chord" point ends the cell before it
@@ -884,11 +888,18 @@ titled "Send → destination · Volume"). A plug-in parameter's lane is titled
 with its effect (the instance's label, else the plug-in's name) and the
 name the plug-in's description gives the parameter: "Marram · Filter 1
 Cutoff" (`views::envTitle` with the lane's scale); a parameter the plug-in
-does not describe shows its key after the effect. An item's take FX
+does not describe shows its key after the effect. A plug-in described by a
+list (a VST3, a CLAP without semantic parameters) gives the lane of a
+parameter its modulation or a visible envelope shows the scale of the list
+entry whose `id` is the envelope's parameter (`gui::PluginScales`). An item's take FX
 automate on the item's track, in timeline position as the model keeps them:
 a visible envelope (or a modulated parameter) on one has a lane there like
 any other, titled with "(take)" after it, and it follows the item to
-another track. A clip's take FX have none here: their envelopes are in clip
+another track. Titles that would be the same say what tells them apart: an
+effect with another of its name in its chain gets its place there ("Teasel
+2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
+14)", the take's name and the item's first bar) when another item on the
+track has the same effect's same parameter. A clip's take FX have none here: their envelopes are in clip
 time. A send's visible lanes sit under the
 strip it leaves, after the strip's own and its effects' lanes; `route.set`
 records into them in touch, latch and write like `track.set`.
@@ -1634,6 +1645,9 @@ anchors use exact model timing rather than the rounded `midi.notes` query.
 
 **A clip's own key and chords** (ADR-0098 X3). The roll is the one place a
 clip is edited, its context included:
+- The roll shades before the clip's or item's start and past its end, over
+  the grid, and marks the end with a line and "end" as the audio form does
+  (none when the end is scrolled out of view).
 - What the roll shows on a clip is the clip's context: its key at the start
   names the key button and its keys shade the rows and spell the notes; its
   chord points fill the strip's chord row, the last cell ending with the
@@ -2713,7 +2727,12 @@ same heights, scroll and colours.
   next one; a click on the lit cell ends the capture, commits it and turns
   it off. A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
-  item in the way) shows its message in the status line.
+  item in the way) shows its message in the status line. A commit that
+  copied clips under another key (the answer's `mismatches`, with the
+  `context.mismatch` warning) says so there as laying does: "Committed:
+  Root copied: its key D minor differs from C minor at bar 1"
+  (`views::followNotice` with `launch.commit`, through
+  `CaptureControl::onNotice`).
 - **After a commit made while stopped** (at stop, or the cell turned off
   while stopped) every track returns to the arrangement where playing
   starts (`launch.arrangement`), so play plays the take just committed, not
@@ -2782,8 +2801,13 @@ same heights, scroll and colours.
   text is drawn in it.
 - **A clip** is a small item: a name bar in its colour (the track's when it
   has none) and its content drawn by the shared item-body functions
-  (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
-  muted clip is dimmed, as a muted item is. Clips launch under a master
+  (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A clip
+  with a key at its start shows it short (`views::clipKeyMark`: "Dm", "F#",
+  "G dor", "Eb hm") right-aligned in a 12-unit strip at the foot of its
+  body, under the preview, with "≈" before it in full ink when the clip
+  follows the key or the chords, in quiet ink when it plays as written; a
+  body lower than two strips shows no key. A muted clip is dimmed, as a
+  muted item is. Clips launch under a master
   playrate; the engine refuses only an audio clip while the playrate keeps
   the pitch at other than a steady 1 (`launch.playrate`), and the pane dims
   exactly those, and the scenes' ▶ whose launch would start one, the same
@@ -2855,7 +2879,8 @@ same heights, scroll and colours.
     copied, with up to three names each.
 
   A clip with nothing to say (no key change, its key the song's, or
-  already in the key) says nothing, so the last note stays.
+  already in the key: a run moved by 0 or by degree into its own key) says
+  nothing, so the last note stays.
 - **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
   Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
   empty cell to its right; none left is an error in the status line), Lay on
