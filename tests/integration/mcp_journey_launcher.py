@@ -9,7 +9,8 @@ with the content commands, and the scenes are launched on the dummy audio backen
 a quantized launch, a stop, a `once` clip ending, a return to the arrangement,
 read back with launch.state. A performance is captured (launch.capture) and committed
 to the timeline (launch.commit), and the committed timeline renders as what was
-launched. Then the scenes become a song (scene.insert,
+launched. An envelope on a clip take's FX is taken in clip time and heard where the
+clip is laid on the timeline. Then the scenes become a song (scene.insert,
 scene.capture, arrangement.build), chords are written over it, and offline renders
 of the arrangement are measured against what the scenes hold: the same song laid by
 hand renders bit-identically, a clip playing live changes nothing in a render, and
@@ -268,20 +269,47 @@ def scenes(j):
 
 
 def refusals_before(j, ids):
-    """Timeline commands refuse a clip, and a clip's FX cannot be automated yet."""
+    """Timeline commands refuse a clip."""
     clip = ids[("sc_1", "tr_3")]["clip"]
     for command, args in (("item.set", {"item": clip, "position": 4}),
                           ("item.remove", {"item": clip})):
         error = j.refused(command, args, "item.kind", f"{command} given a clip.")
         assert "clip.set" in error["hint"] or "clip.remove" in error["hint"], error
-    take = ids[("sc_1", "tr_3")]["takes"][0]
-    added = j.exec("fx.add", {"take": take, "plugin": PLUGIN + "gain"},
-                   "An effect on the clip take's own chain.")
-    error = j.refused("env.add", {"fx": added["fx"], "param": "gain",
-                                  "points": [{"beat": 0, "value": 0}]}, "clip.unsupported",
-                      "Automating that effect: a clip's FX do not play yet.")
-    assert "track" in error["hint"], error
-    j.undo()  # the effect
+
+
+def clip_fx_envelope(j):
+    """An envelope on a clip take's FX is in clip time (C2): it is taken, and heard where
+    the clip is laid on the timeline. On a track of its own, undone afterwards."""
+    before = j.described()
+    track = j.exec("track.add", {"name": "Lead", "type": "channel"},
+                   "A track with no FX of its own.")["track"]
+    made = j.exec("clip.add", {"track": track, "scene": "sc_1", "notation": VERSE_BASS},
+                  "A bass clip on it.")
+    take = made["takes"][0]
+    j.exec("fx.add", {"take": take, "plugin": PLUGIN + "marram"},
+           "The clip take plays its own synth.")
+    gain = j.exec("fx.add", {"take": take, "plugin": PLUGIN + "gain"},
+                  "And a Gain after it, on the clip take's chain.")["fx"]
+    # At bar 2, so the points move: clip beats are not timeline beats there.
+    j.exec("item.add", {"track": track, "clip": made["clip"], "bar": 2},
+           "A copy of the clip on the timeline, before any envelope.")
+    plain = j.render(end_beat=8)
+    j.undo()  # the copy
+    env = j.exec("env.add", {"fx": gain, "param": "gain", "points": [
+        {"beat": 0, "value": 0}, {"beat": 2, "value": 0}, {"beat": 2.05, "value": -32}]},
+        "The Gain down 32 dB from the clip's third beat, in beats from the clip's start.")
+    assert env["points"] == 3, env
+    row = next(e for e in j.exec("env.list")["envelopes"] if e["env"] == env["env"])
+    assert row["target"] == gain and row["param"] == "gain" and row["active"], row
+    j.exec("item.add", {"track": track, "clip": made["clip"], "bar": 2},
+           "The same copy: the envelope comes with it, in timeline position.")
+    shaped = j.render(end_beat=8)
+    # A beat is 0.25 s and the copy starts at 1 s: its first two beats are as before,
+    # its last two 32 dB down.
+    assert difference(plain, shaped, [(1.0, 1.45)]) < 1e-4, "the first two beats changed"
+    down, level = energy(shaped, 1.6, 2.0), energy(plain, 1.6, 2.0)
+    assert level > 0 and down < 0.1 * level, (down, level)
+    j.undo_to(before)
 
 
 def live(j, ids):
@@ -588,6 +616,7 @@ def main():
             j = Launcher(client)
             ids = scenes(j)
             refusals_before(j, ids)
+            clip_fx_envelope(j)
             live(j, ids)
             performance(j, ids)
             first, built, mix = song(j, ids)
