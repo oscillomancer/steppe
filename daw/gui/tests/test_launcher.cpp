@@ -1149,7 +1149,7 @@ TEST_CASE("launcher: the clip clipboard holds only for the project it was filled
 }
 
 TEST_CASE("launcher: a cell shows its clip's key, with a mark when the clip follows") {
-    // gui.md §4.15: under the preview, "≈" before the key for Follow.
+    // gui.md §4.15: under the preview, kFollowMark before the key for Follow.
     LauncherFixture f;
     f.song();
     // Root (Bass, Verse) in D minor, following the key; a Keys clip in G
@@ -1161,11 +1161,15 @@ TEST_CASE("launcher: a cell shows its clip's key, with a mark when the clip foll
     std::map<std::string, std::string> keys;
     for (std::size_t i = 0; i < pane.stats.names.size(); ++i)
         keys[pane.stats.names[i]] = pane.stats.keys.at(i);
-    CHECK(keys == std::map<std::string, std::string>{
-                      {"Kit A", ""}, {"Kit B", ""}, {"Root", "≈Dm"}, {"Modal", "G dor"}});
+    CHECK(keys ==
+          std::map<std::string, std::string>{{"Kit A", ""},
+                                             {"Kit B", ""},
+                                             {"Root", std::string(views::kFollowMark) + "Dm"},
+                                             {"Modal", "G dor"}});
     // Following the chords marks it too; none takes the mark away.
     f.exec("clip.set", R"({"clip":"cl_3","follow":"chords"})");
-    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "≈Dm");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) ==
+          std::string(views::kFollowMark) + "Dm");
     f.exec("clip.set", R"({"clip":"cl_3","follow":"none"})");
     CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "Dm");
     // Short names: minor "m", major bare, the minors' variants and the modes.

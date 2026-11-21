@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "supple/base/result.h"
@@ -133,9 +134,13 @@ bool sceneLaunchRefused(const model::Session& session, model::Id scene);
 std::optional<std::string> followNotice(const model::Session& session, const std::string& command,
                                         const json::Value& args, const json::Value& answer);
 
+// The mark before a following clip's key (gui.md §4.15): the one place it
+// is spelled.
+inline constexpr std::string_view kFollowMark = "\u2248";
+
 // A clip's key at its start, short, for its launcher cell (gui.md §4.15):
-// "Dm", "G", "D dor", "A hm"; with "≈" before it when the clip follows the
-// key or the chords. "" when the clip has no readable key.
+// "Dm", "G", "D dor", "A hm"; with kFollowMark before it when the clip
+// follows the key or the chords. "" when the clip has no readable key.
 std::string clipKeyMark(const model::Clip& clip);
 
 // The clip in a channel's cell of a scene.
@@ -189,7 +194,7 @@ class LauncherPane : public ui::Node {
     struct Stats {
         std::size_t cells = 0, clips = 0, empty = 0;
         std::vector<std::string> names;  // the clips' names as drawn
-        std::vector<std::string> keys;   // their key marks as drawn ("≈Dm"; "" for none)
+        std::vector<std::string> keys;   // their key marks as drawn ("Dm"; "" for none)
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
         int refused = 0;  // clips drawn dimmed: their launch is refused (launchRefused)

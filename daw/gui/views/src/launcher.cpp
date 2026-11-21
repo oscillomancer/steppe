@@ -216,7 +216,8 @@ std::string clipKeyMark(const model::Clip& clip) {
         default:  // dorian, phrygian, ...: the mode's first three letters
             text += " " + std::string(harmony::scaleName(key->scale).substr(0, 3));
     }
-    return (clip.follow != model::ClipFollow::None ? "\u2248" : "") + text;
+    return (clip.follow != model::ClipFollow::None ? std::string(kFollowMark) : std::string()) +
+           text;
 }
 
 bool launchRefused(const model::Session& s, const model::Clip& clip) {
@@ -543,7 +544,7 @@ void LauncherPane::paint(ui::Canvas& c) {
             else
                 drawPlay(c, {name.x + 1, name.y, 14, name.h}, t.color("ink").withAlpha(dim));
             // The clip's own key in a strip at the foot of the body, under the
-            // preview (keyStrip), right-aligned, "≈" before it when it follows.
+            // preview (keyStrip), right-aligned, kFollowMark before it when it follows.
             const std::string keyMark = clipKeyMark(*clip);
             const ui::Rect body = bodyRect(cell);
             const float strip = keyStrip(body, keyMark);
