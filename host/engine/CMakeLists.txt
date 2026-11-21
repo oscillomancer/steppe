@@ -171,6 +171,14 @@ if(SUPPLE_BUILD_TESTS)
       COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey_launcher.py
               $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
     set_tests_properties(engine.mcp-journey-launcher PROPERTIES LABELS "engine;slow")
+    # One song with all three features (the context track, modulation, the clip
+    # launcher): chords in three keys, scenes written against them, three modulators,
+    # a performance captured and committed, the song built over the chords, and every
+    # claim measured on offline renders. Decides nothing by a clock.
+    add_test(NAME engine.mcp-journey-song
+      COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/mcp_journey_song.py
+              $<TARGET_FILE:${PRODUCT_SLUG}-engine> ${CMAKE_BINARY_DIR}/plugins/clap)
+    set_tests_properties(engine.mcp-journey-song PROPERTIES LABELS "engine;slow")
   endif()
 endif()
 
