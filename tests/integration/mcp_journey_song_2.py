@@ -716,6 +716,14 @@ def edit_after(j, built):
     report = j.exec("analyze.track", {"track": "tr_2", "start_beat": 20.5, "end_beat": 23.5},
                     "The bass over bar 6, heard.")
     assert report["harmonic"]["note"].startswith("A#"), report["harmonic"]
+    # The keys are heard on the new chord too, from a render of bars 5-8 (beats 16-32): bar 6 is
+    # Bb's tones, and bars 5 and 7 are still Am's and E7's (one chord moved, nothing re-laid).
+    stem = j.stems(["tr_3"], 16, 32, "Render the keys over bars 5-8.")["Keys"][0]
+    for bar, symbol in ((5, "Am"), (6, "Bb"), (7, "E7")):
+        start = (bar - 5) * 4.0 * BEAT_S + 0.15
+        top = keys_chroma_top(stem, start, start + 4.0 * BEAT_S - 0.3)
+        pcs = chord_tones(symbol)[1]
+        assert top == pcs or (len(pcs) == 4 and top <= pcs), (bar, symbol, top, pcs)
     j.undo()  # the context change
     CHANGED.clear()
 
