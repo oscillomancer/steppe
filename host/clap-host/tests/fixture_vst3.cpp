@@ -39,6 +39,9 @@ const FUID kStatelessId(0x11000109, 0x22000202, 0x33000303, 0x44000404);
 const FUID kStatelessControllerId(0x1100010A, 0x22000202, 0x33000303, 0x44000404);
 // Note output (ADR-0068): an event input and an event output bus.
 const FUID kNoteEchoId(0x1100010B, 0x22000202, 0x33000303, 0x44000404);
+// Echoes (review round 81 E2): a stepped parameter reported back quantized,
+// and an editor edit the host can ask for.
+const FUID kSteppedEchoId(0x1100010C, 0x22000202, 0x33000303, 0x44000404);
 constexpr double kTau = 6.28318530717958647692;
 
 // The host must call the edit controller on the thread that initialized the
@@ -173,7 +176,25 @@ class Fixture final : public SingleComponentEffect {
     // (note on/off, same channel, id and velocity); each note on is followed by
     // a legacy CC 74 = velocity and a poly pressure 0.5 on the new key, and a
     // pitch bend (LSB 1, MSB 64) and a data (SysEx) event at the block's end.
-    enum Kind { Gain, Sine, Delay, Sidechain, Separate, MultiOut, Adapter, Stateless, NoteEcho };
+    // SteppedEcho (review round 81 E2): "Steps" (id 1) has four steps, and
+    // each value the host sends Steps or Level comes back in the processor's
+    // output, a Steps value as the step it lands on, as a stepped plug-in
+    // reports what it plays. Setting "Edit" (id 2) to v > 0 is the editor
+    // moving the continuous "Level" (id 3) to v (beginEdit, performEdit,
+    // endEdit through the component handler, on the main thread, as a real
+    // editor's callback).
+    enum Kind {
+        Gain,
+        Sine,
+        Delay,
+        Sidechain,
+        Separate,
+        MultiOut,
+        Adapter,
+        Stateless,
+        NoteEcho,
+        SteppedEcho
+    };
     explicit Fixture(Kind kind, bool controller = false)
         : controller_(controller), kind_(kind), value_(kind == Delay ? 0.0 : 0.5) {}
     tresult PLUGIN_API initialize(FUnknown* context) override {
@@ -187,6 +208,13 @@ class Fixture final : public SingleComponentEffect {
             addAudioOutput(STR16("Kick"), SpeakerArr::kStereo, BusTypes::kAux, 0);
         if (kind_ == Sine || kind_ == NoteEcho) addEventInput(STR16("Notes"));
         if (kind_ == NoteEcho) addEventOutput(STR16("Notes Out"));
+        if (kind_ == SteppedEcho) {
+            parameters.addParameter(STR16("Steps"), nullptr, 3, 0, ParameterInfo::kCanAutomate, 1);
+            parameters.addParameter(STR16("Edit"), nullptr, 0, 0, ParameterInfo::kCanAutomate, 2);
+            parameters.addParameter(STR16("Level"), nullptr, 0, 0.5, ParameterInfo::kCanAutomate,
+                                    3);
+            return kResultOk;
+        }
         parameters.addParameter(kind_ == Gain || kind_ == Sidechain ? STR16("Gain")
                                 : kind_ == Delay                    ? STR16("Latency")
                                                                     : STR16("Level"),
@@ -274,6 +302,15 @@ class Fixture final : public SingleComponentEffect {
     tresult PLUGIN_API setEditorState(IBStream* stream) override { return setState(stream); }
     tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) override {
         if (EditControllerEx1::setParamNormalized(id, value) != kResultOk) return kResultFalse;
+        if (kind_ == SteppedEcho) {
+            if (id == 2 && value > 0 && componentHandler) {
+                EditControllerEx1::setParamNormalized(3, value);
+                componentHandler->beginEdit(3);
+                componentHandler->performEdit(3, value);
+                componentHandler->endEdit(3);
+            }
+            return kResultOk;
+        }
         value_ = value;
         if (kind_ == Delay && componentHandler) componentHandler->restartComponent(kLatencyChanged);
         return kResultOk;
@@ -306,6 +343,27 @@ class Fixture final : public SingleComponentEffect {
                     }
                 }
             }
+            return kResultOk;
+        }
+        if (kind_ == SteppedEcho) {
+            for (int32 q = 0; data.inputParameterChanges && data.outputParameterChanges &&
+                              q < data.inputParameterChanges->getParameterCount();
+                 ++q) {
+                auto* changes = data.inputParameterChanges->getParameterData(q);
+                if (changes->getParameterId() == 2) continue;  // Edit is the test's trigger
+                int32 queueIndex = 0;
+                auto* output = data.outputParameterChanges->addParameterData(
+                    changes->getParameterId(), queueIndex);
+                for (int32 point = 0; output && point < changes->getPointCount(); ++point) {
+                    int32 offset = 0, pointIndex = 0;
+                    double value = 0;
+                    changes->getPoint(point, offset, value);
+                    if (changes->getParameterId() == 1) value = std::round(value * 3) / 3;
+                    output->addPoint(offset, value, pointIndex);
+                }
+            }
+            for (int32 c = 0; c < data.outputs[0].numChannels; ++c)
+                std::fill_n(data.outputs[0].channelBuffers32[c], data.numSamples, 0.0f);
             return kResultOk;
         }
         if (kind_ == MultiOut) {
@@ -438,13 +496,13 @@ class Factory final
         *info = PFactoryInfo("Supple Audio", "https://supple.audio", "dev@supple.audio", 0);
         return kResultOk;
     }
-    int32 PLUGIN_API countClasses() override { return 11; }
+    int32 PLUGIN_API countClasses() override { return 12; }
     tresult PLUGIN_API getClassInfo(int32 index, PClassInfo* info) override {
-        if (!info || index < 0 || index >= 11) return kInvalidArgument;
+        if (!info || index < 0 || index >= 12) return kInvalidArgument;
         const FUID ids[] = {
             kGainId,     kSineId,       kDelayId,   kSidechainId, kSeparateId,
             kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId,
-            kNoteEchoId};
+            kNoteEchoId, kSteppedEchoId};
         const char* names[] = {"Test VST3 Gain",
                                "Test VST3 Sine",
                                "Test VST3 Latency",
@@ -455,7 +513,8 @@ class Factory final
                                "Test VST3 Mono Adapter",
                                "Test VST3 Stateless Controller Gain",
                                "Test VST3 Stateless Controller",
-                               "Test VST3 Note Echo"};
+                               "Test VST3 Note Echo",
+                               "Test VST3 Stepped Echo"};
         *info = PClassInfo(
             ids[index], PClassInfo::kManyInstances,
             index == 6 || index == 9 ? kVstComponentControllerClass : kVstAudioEffectClass,
@@ -463,11 +522,11 @@ class Factory final
         return kResultOk;
     }
     tresult PLUGIN_API getClassInfo2(int32 index, PClassInfo2* info) override {
-        if (!info || index < 0 || index >= 11) return kInvalidArgument;
+        if (!info || index < 0 || index >= 12) return kInvalidArgument;
         const FUID ids[] = {
             kGainId,     kSineId,       kDelayId,   kSidechainId, kSeparateId,
             kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId,
-            kNoteEchoId};
+            kNoteEchoId, kSteppedEchoId};
         const char* names[] = {"Test VST3 Gain",
                                "Test VST3 Sine",
                                "Test VST3 Latency",
@@ -478,7 +537,8 @@ class Factory final
                                "Test VST3 Mono Adapter",
                                "Test VST3 Stateless Controller Gain",
                                "Test VST3 Stateless Controller",
-                               "Test VST3 Note Echo"};
+                               "Test VST3 Note Echo",
+                               "Test VST3 Stepped Echo"};
         *info = PClassInfo2(
             ids[index], PClassInfo::kManyInstances,
             index == 6 || index == 9 ? kVstComponentControllerClass : kVstAudioEffectClass,
@@ -492,7 +552,7 @@ class Factory final
         const FUID ids[] = {
             kGainId,     kSineId,       kDelayId,   kSidechainId, kSeparateId,
             kMultiOutId, kControllerId, kAdapterId, kStatelessId, kStatelessControllerId,
-            kNoteEchoId};
+            kNoteEchoId, kSteppedEchoId};
         for (int i = 0; i < 6; ++i) {
             if (std::memcmp(cid, ids[i], 16) != 0) continue;
             auto* plugin = new Fixture(static_cast<Fixture::Kind>(i));
@@ -502,6 +562,12 @@ class Factory final
         }
         if (std::memcmp(cid, kAdapterId, 16) == 0) {
             auto* plugin = new Fixture(Fixture::Adapter);
+            const auto result = plugin->queryInterface(iid, obj);
+            plugin->release();
+            return result;
+        }
+        if (std::memcmp(cid, kSteppedEchoId, 16) == 0) {
+            auto* plugin = new Fixture(Fixture::SteppedEcho);
             const auto result = plugin->queryInterface(iid, obj);
             plugin->release();
             return result;

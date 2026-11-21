@@ -129,16 +129,34 @@ class Handler : public Steinberg::U::Implements<Steinberg::U::Directly<vst::ICom
     }
     std::atomic<Steinberg::int32> restart{0};
     std::atomic<bool> edited{false};
-    // An edit from the plug-in's editor (main thread): forwarded to the processor.
-    std::function<bool(vst::ParamID, vst::ParamValue)> edit;
-    Steinberg::tresult PLUGIN_API beginEdit(vst::ParamID) override { return kResultOk; }
+    // An edit from the plug-in's editor (main thread): forwarded to the
+    // processor, which reports it with its gesture (review round 81 E2): the
+    // editor's own move, recorded and holding a writing lane as a CLAP
+    // plug-in's gesture does, never taken for an echo of the host. A
+    // performEdit outside beginEdit/endEdit is a gesture of its own.
+    std::function<bool(vst::ParamID, vst::ParamValue, PendingEdits::Kind)> edit;
+    std::vector<vst::ParamID> open;  // main thread: parameters inside beginEdit
+    Steinberg::tresult PLUGIN_API beginEdit(vst::ParamID id) override {
+        if (std::find(open.begin(), open.end(), id) != open.end()) return kResultOk;
+        if (!edit || !edit(id, 0, PendingEdits::Begin)) return kResultFalse;
+        open.push_back(id);
+        return kResultOk;
+    }
     Steinberg::tresult PLUGIN_API performEdit(vst::ParamID id, vst::ParamValue value) override {
-        const bool accepted = edit && edit(id, value);
+        const bool inside = std::find(open.begin(), open.end(), id) != open.end();
+        const bool accepted = edit && (inside || edit(id, 0, PendingEdits::Begin)) &&
+                              edit(id, value, PendingEdits::Edited) &&
+                              (inside || edit(id, 0, PendingEdits::End));
         edited = true;
         notifyMain();
         return accepted ? kResultOk : kResultFalse;
     }
-    Steinberg::tresult PLUGIN_API endEdit(vst::ParamID) override { return kResultOk; }
+    Steinberg::tresult PLUGIN_API endEdit(vst::ParamID id) override {
+        const auto it = std::find(open.begin(), open.end(), id);
+        if (it == open.end()) return kResultOk;
+        open.erase(it);
+        return edit && edit(id, 0, PendingEdits::End) ? kResultOk : kResultFalse;
+    }
     Steinberg::tresult PLUGIN_API restartComponent(Steinberg::int32 flags) override {
         restart.fetch_or(flags, std::memory_order_release);
         notifyMain();
@@ -450,6 +468,9 @@ struct Vst3Instance::State {
     vst::EventList inputEvents{static_cast<Steinberg::int32>(kMaxEvents)};
     OutputEventList outputEvents{static_cast<Steinberg::int32>(kMaxEvents)};
     PendingEdits changes;
+    // This block's editor gestures and values (audio thread; review round 81 E2).
+    std::array<OutputEvent, 64> editorOutput{};
+    std::size_t editorOutputs = 0;
     std::atomic<std::uint32_t> dropped{0};
     std::atomic<bool> latencyChanged{false};
     std::atomic<bool> restartWanted{false};  // kLatencyChanged: reactivate to apply
@@ -516,8 +537,9 @@ Result<std::unique_ptr<Vst3Instance>> Vst3Instance::create(const PluginInfo& inf
     }
     if (s.controller) s.controller->setComponentHandler(s.handler);
     // Editor edits reach the processor through the same queue as setParam().
-    s.handler->edit = [state = &s](vst::ParamID param, vst::ParamValue normalized) {
-        return state->changes.push(param, normalized);
+    s.handler->edit = [state = &s](vst::ParamID param, vst::ParamValue normalized,
+                                   PendingEdits::Kind kind) {
+        return state->changes.push(param, normalized, kind);
     };
     for (auto& channel : s.midiParams) channel.fill(vst::kNoParamId);
     if (s.controller) {
@@ -773,6 +795,7 @@ Result<std::vector<std::uint8_t>> Vst3Instance::saveState() {
     if (!s.active && !s.changes.pending().empty()) {
         s.inputChanges.clear();
         for (const auto& edit : s.changes.pending()) {
+            if (edit.kind == PendingEdits::Begin || edit.kind == PendingEdits::End) continue;
             Steinberg::int32 queueIndex = 0, pointIndex = 0;
             auto* queue = s.inputChanges.addParameterData(edit.id, queueIndex);
             if (!queue || queue->addPoint(0, edit.value, pointIndex) != kResultOk)
@@ -978,8 +1001,26 @@ bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_
     // paramsNormalized()). No edit-controller call happens on this thread: the
     // controller is not the processor, is not real-time safe, and the host
     // calls it from the main thread only.
+    // The editor's gestures and values (review round 81 E2) go out after what
+    // the processor reports in this block: its report of the lanes' values
+    // stays outside them (an echo, dropped), and a gesture's last value is
+    // the hand's.
+    s.editorOutputs = 0;
     PendingEdits::Change change{};
-    while (s.changes.pop(change)) addNormalized(change.id, change.value, 0);
+    while (s.changes.pop(change)) {
+        if (change.kind == PendingEdits::Value || change.kind == PendingEdits::Edited)
+            addNormalized(change.id, change.value, 0);
+        if (change.kind == PendingEdits::Value) continue;
+        const OutputEvent e{
+            .kind = change.kind == PendingEdits::Begin ? OutputEvent::Kind::GestureBegin
+                    : change.kind == PendingEdits::End ? OutputEvent::Kind::GestureEnd
+                                                       : OutputEvent::Kind::ParamValue,
+            .time = 0,
+            .paramId = change.id,
+            .value = change.value,
+            .noteId = -1};
+        if (s.editorOutputs < s.editorOutput.size()) s.editorOutput[s.editorOutputs++] = e;
+    }
     auto endNotes = [&](std::int16_t port, std::int16_t channel, std::int16_t key, std::int32_t id,
                         std::uint32_t time, float velocity) {
         if (port != -1 && port != 0) return true;
@@ -1160,6 +1201,12 @@ bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_
     // buffer cannot repeat the previous block.
     for (std::uint32_t c = std::min(block.outputChannels, s.outputs); c < block.outputChannels; ++c)
         std::fill_n(block.outputs[c], block.frames, 0.0f);
+    const auto push = [&](const OutputEvent& e) {
+        if (out->count == out->storage.size())
+            ++out->dropped;
+        else
+            out->storage[out->count++] = e;
+    };
     if (out) {
         for (Steinberg::int32 i = 0; i < s.outputChanges.getParameterCount(); ++i) {
             auto* q = s.outputChanges.getParameterData(i);
@@ -1181,6 +1228,7 @@ bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_
                                               .noteId = -1};
             }
         }
+        for (std::size_t i = 0; i < s.editorOutputs; ++i) push(s.editorOutput[i]);
         collectNoteOutput(s.outputEvents, block.frames, *out);
     }
     return ok;

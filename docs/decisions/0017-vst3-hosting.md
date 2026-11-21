@@ -94,6 +94,10 @@ The VST3 SDK is MIT-licensed from 3.8.0 (ADR-0003, "re-verify at use").
      for editors (Phase 5): `performEdit` currently drops the value, so a
      plug-in that reports its own parameter changes does not update the
      session, and `kIoChanged`/`kReloadComponent` are ignored.
+     *(Note 2026-11-21: `performEdit` reaches the processor, and with
+     `beginEdit`/`endEdit` it reports the editor's edit as the plug-in's
+     gesture; engine.md §1.4.1 (the M4 echo filter), review
+     round 81 E2.)*
 5. **No semantic view**: VST3 plugins have no semantic extension
    (`info().semantic` false). The LLM-facing commands work through plain
    parameters and their text conversion, exactly as for non-semantic CLAPs.

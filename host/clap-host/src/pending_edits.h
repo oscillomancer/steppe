@@ -17,15 +17,20 @@ static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 
 class PendingEdits {
   public:
+    // `kind`: a value (Value), or, from a VST3 editor (round 81 E2), a value
+    // it performed (Edited) or the begin or end of its gesture, which carry no
+    // value for the processor.
+    enum Kind : std::uint8_t { Value, Edited, Begin, End };
     struct Change {
         std::uint32_t id;
         double value;
         std::uint64_t generation, sequence;
+        Kind kind = Value;
     };
     PendingEdits() { pending_.reserve(1025); }
-    bool push(std::uint32_t id, double value) {
+    bool push(std::uint32_t id, double value, Kind kind = Value) {
         prune();
-        Change change{id, value, generation_.load(), ++sequence_};
+        Change change{id, value, generation_.load(), ++sequence_, kind};
         if (!queue_.push(change)) return false;
         pending_.push_back(change);
         return true;

@@ -2878,21 +2878,29 @@ void holdGestures(Stage& st, bool playing) SUPPLE_RT {
     }
 }
 
-// The parameter values this block sends the plug-in (Stage::sentParam).
+// This block's parameter values, sent by the stage's lanes: each lane that
+// sends one notes the block (ParamLane::sentBlock, Stage::blocks).
 void noteSentValues(Stage& st) SUPPLE_RT {
+    ++st.blocks;
     for (const host::Event& e : st.blockEvents) {
         if (e.kind != host::Event::Kind::Param) continue;
-        st.sentParam[st.sentNext] = e.paramId;
-        st.sentValue[st.sentNext] = e.value;
-        st.sentNext = (st.sentNext + 1) % Stage::kSentValues;
-        st.sentCount = std::min(st.sentCount + 1, Stage::kSentValues);
+        for (ParamLane& ln : st.lanes)
+            if (ln.clapId == e.paramId) {
+                ln.sentBlock = st.blocks;
+                break;
+            }
     }
 }
 
-// Drops the plug-in's echoes of what the host sent it (Stage::sentParam):
-// a global parameter value equal to a recent sent one, outside the plug-in's
-// own gesture on that parameter. Gestures, other parameters and notes stay.
-// Equal within float precision: a plug-in may keep values as floats.
+// Drops the plug-in's echoes of what the host sent it: a global parameter
+// value outside the plug-in's own gesture on that parameter, for a parameter
+// its lane sent a value this block or the one before (review round 81 E1:
+// by the lane, not by a store of values, so no count of lanes or points can
+// overflow it, and a plug-in that rounds what it repeats is caught too).
+// Gestures, other parameters and notes stay. An echo later than the next
+// block, after the lane stopped sending, passes: the main thread then takes
+// the route's offset off it (commitOutputGesture), so a lane holding still
+// is not an edit either.
 void dropEchoes(Stage& st) SUPPLE_RT {
     using Kind = host::OutputEvent::Kind;
     const auto open = [&](std::uint32_t id) {
@@ -2900,11 +2908,9 @@ void dropEchoes(Stage& st) SUPPLE_RT {
             if (st.openGesture[g] == id) return true;
         return false;
     };
-    const auto sent = [&](std::uint32_t id, double value) {
-        for (std::size_t k = 0; k < st.sentCount; ++k)
-            if (st.sentParam[k] == id &&
-                std::abs(st.sentValue[k] - value) <= 1e-6 * std::max(1.0, std::abs(value)))
-                return true;
+    const auto sent = [&](std::uint32_t id) {
+        for (const ParamLane& ln : st.lanes)
+            if (ln.clapId == id) return ln.sentBlock != 0 && st.blocks - ln.sentBlock <= 1;
         return false;
     };
     std::size_t kept = 0;
@@ -2920,7 +2926,7 @@ void dropEchoes(Stage& st) SUPPLE_RT {
                     break;
                 }
         } else if (e.kind == Kind::ParamValue && e.noteId == -1 && e.port == -1 &&
-                   e.channel == -1 && e.key == -1 && !open(e.paramId) && sent(e.paramId, e.value))
+                   e.channel == -1 && e.key == -1 && !open(e.paramId) && sent(e.paramId))
             continue;  // the host's own value, repeated
         st.outEvents.storage[kept++] = e;
     }
@@ -4686,8 +4692,13 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                 for (const ParamLane& ol : os.lanes)
                     if (ol.clapId == ln.clapId) {
                         ln.modSum = ol.modSum;
+                        ln.sentBlock = ol.sentBlock;  // echoes of its last block (E1)
                         break;
                     }
+            // The echo window's clock and the plug-in's open gestures.
+            st.blocks = os.blocks;
+            st.openGesture = os.openGesture;
+            st.openGestures = os.openGestures;
             // Its write hold (ADR-0061, amended), by CLAP id: a gesture still
             // open, and a latch the main thread has not let go of. The new
             // plan's slots are published before any executor adopts it.

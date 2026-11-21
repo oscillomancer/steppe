@@ -881,13 +881,29 @@ struct Edge {
     // (12). Mode 7 rescales its own size in response, as a plug-in may.
     double guiScale = 0;
     std::uint32_t guiScaleCalls = 0;
+    // Mode 37: the parameter values echoed one process call late (audio thread).
+    std::array<clap_event_param_value_t, 512> late{};
+    std::size_t lateCount = 0;
 };
 Edge* E(const clap_plugin_t* p) { return static_cast<Edge*>(p->plugin_data); }
 
-uint32_t CLAP_ABI edgeParamCount(const clap_plugin_t* pl) { return E(pl)->removed ? 1 : 2; }
+// Modes 36 and 37 (echoes) add parameters 20 and 21, automatable like 7.
+bool edgeEchoes(const clap_plugin_t* pl) {
+    return E(pl)->config[0] == 36 || E(pl)->config[0] == 37;
+}
+uint32_t CLAP_ABI edgeParamCount(const clap_plugin_t* pl) {
+    return edgeEchoes(pl) ? 4 : E(pl)->removed ? 1 : 2;
+}
 bool CLAP_ABI edgeParamInfo(const clap_plugin_t* pl, uint32_t index, clap_param_info_t* info) {
-    if (index > 1) return false;
+    if (index > (edgeEchoes(pl) ? 3u : 1u)) return false;
     std::memset(info, 0, sizeof(*info));
+    if (index >= 2) {
+        info->id = index == 2 ? 20 : 21;
+        info->flags = CLAP_PARAM_IS_AUTOMATABLE;
+        std::snprintf(info->name, sizeof(info->name), index == 2 ? "Extra A" : "Extra B");
+        info->max_value = 1e9;
+        return true;
+    }
     info->id = index == 0 && !E(pl)->removed ? 7 : 8;
     // Mode 53: a state-dependent macro parameter, absent in the default state.
     if (E(pl)->config[0] == 53 && index == 0) info->id = 105;
@@ -917,6 +933,10 @@ bool CLAP_ABI edgeParamValue(const clap_plugin_t* pl, clap_id id, double* out) {
     }
     if (id == 10) {
         *out = E(pl)->mainCalls;
+        return true;
+    }
+    if ((id == 20 || id == 21) && edgeEchoes(pl)) {
+        *out = 0;
         return true;
     }
     if (id == 11 || id == 12) {
@@ -980,16 +1000,26 @@ void edgeHostInput(const clap_plugin_t* pl, const clap_input_events_t* in) {
 }
 // Mode 36: each parameter value the host sends comes straight back as the
 // plug-in's output, as some plug-ins echo them (the gui-lead's second walk,
-// defect 1): the host must not take it for the plug-in's own edit.
+// defect 1): the host must not take it for the plug-in's own edit. Mode 37
+// sends them back one call later (review round 81 E1: an echo a block late).
 void edgeEcho(const clap_plugin_t* pl, const clap_input_events_t* in,
               const clap_output_events_t* out) {
-    if (E(pl)->config[0] != 36 || !out) return;
+    if (!edgeEchoes(pl) || !out) return;
+    Edge& edge = *E(pl);
+    if (edge.config[0] == 37) {
+        for (std::size_t i = 0; i < edge.lateCount; ++i) out->try_push(out, &edge.late[i].header);
+        edge.lateCount = 0;
+    }
     for (uint32_t i = 0; i < in->size(in); ++i) {
         const auto* h = in->get(in, i);
         if (h->space_id != CLAP_CORE_EVENT_SPACE_ID || h->type != CLAP_EVENT_PARAM_VALUE) continue;
         clap_event_param_value_t echo = *reinterpret_cast<const clap_event_param_value_t*>(h);
         echo.header.flags = CLAP_EVENT_IS_LIVE;
-        out->try_push(out, &echo.header);
+        echo.header.time = 0;
+        if (edge.config[0] == 36)
+            out->try_push(out, &echo.header);
+        else if (edge.lateCount < edge.late.size())
+            edge.late[edge.lateCount++] = echo;
     }
 }
 void CLAP_ABI edgeFlush(const clap_plugin_t* pl, const clap_input_events_t* in,
