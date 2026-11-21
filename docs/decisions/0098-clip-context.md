@@ -360,3 +360,12 @@ there. Not in X1 or X2.
   context taken under an item with `context_at`, is superseded by this for the
   item case. A replay of either on another branch gives the clip the context
   that branch holds under the item.
+- *(2026-11-21, X1 review round 73, F3.)* Two sentences of the body are
+  superseded by what the code does and `notation.md` now says. A chord symbol
+  whose quality this build does not know is a compile error
+  (`notation.unknown_chord`), not a warning, so it adds no entry because the
+  text does not compile. A bar range (`2-4: …`) belongs to grid voices, which
+  hold no chord symbols; only a copy line repeats the bars of a chord voice.
+  And `context.no_key` is warned for an explicit `context_at` only: an item
+  (`clip.add {item}`) or `scene.capture` takes what lies under the item
+  without a warning.

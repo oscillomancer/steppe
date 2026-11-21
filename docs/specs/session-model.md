@@ -2097,7 +2097,10 @@ bars.
   - `context_at` reads the project's context from that place for the clip's
     length: the key and the chord holding there become points at 0, and the
     points inside the span follow, shifted. With no key there, the clip gets
-    no key and the answer warns `context.no_key`. It gives the place's points
+    no key and the answer warns `context.no_key` (only for an explicit
+    `context_at`: `clip.add {item}` and `scene.capture` take what is under the
+    item without a warning, as most projects have no context track). It gives
+    the place's points
     as a stated `context` with them would, so the resolved text in history
     replays exactly (below).
   - `clip.add {item}` takes the context under the item the same way, from
