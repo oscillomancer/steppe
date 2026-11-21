@@ -254,13 +254,18 @@ instructions are in `docs/guides/installing.md`.
   a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
   `context.no_key` warning on every context edit, and `session.describe`. Not
   built: the engine's use of it (X4c): a take's `follow` is stored and nothing
-  plays by it yet, and `item.glue` is not registered. The GUI shows it (X4e, the
-  model's part): a following take's roll draws its notes where they sound with the
-  written pitches outlined, and a Written cell; the strip shows the song's and the
-  take's chords; the item carries "→D" and a thumbnail at the sounding pitches; the
-  inspector says what the take was written in. Not yet: Follow and Bake in the
-  inspector and the Item menu, editing the take's context in the roll, degree steps on
-  a following take, and the placement and context-edit status lines.
+  plays by it yet, and `item.glue` is not registered. The GUI (X4e): a following
+  take's roll draws its notes where they sound with the written pitches outlined, and
+  a Written cell; the strip shows the song's chords and the take's, whose row is edited
+  as a clip's (`take.set {context}`); a degree drag steps the written pitch in the
+  take's key, as it sounds; the item carries "→D" and a thumbnail at the sounding
+  pitches; the inspector has Follow (None, Key, Chords; a take with no context takes
+  the song's under the item) and Bake, and says what the take was written in; the
+  Item menu has Play as written, Follow the song's key or chords and Bake into notes
+  (`ui.take.bake`); the status line words placement, a GUI key or chord edit that
+  moves following items, a bake, and a sounding-view drag that merges two written
+  pitches. Until X4c the timeline plays a following item as written, so what the GUI
+  shows is not heard yet.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`

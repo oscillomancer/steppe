@@ -1710,11 +1710,12 @@ their own project: after you open another one, there is nothing to paste. The in
 colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
 chords) says how the clip's notes are to be mapped onto the song's key when
 it is laid; it needs a key at the clip's start. When you lay a clip or a
-scene on the timeline, the status line at the bottom says what happened to
-its keys: "Bass followed to D minor, +2" for a clip that was moved to the
-song's key, or "Keys copied: its key C minor differs from D minor at bar 21"
-for one laid as written under a different key. A Capture take that copied
-clips under a different key says so the same way. A clip with its own key
+scene on the timeline, its notes are laid as written and the status line at
+the bottom says how they sound: "Bass follows: sounds in D minor, +2" for a
+clip that follows the song's key, or "Keys is laid as written: its key C
+minor differs from D minor at bar 21" for one that doesn't, under a
+different key. A Capture take laid under a different key says so the same
+way. A clip with its own key
 shows it in the corner of its cell ("Dm", "G dor"), with "→" before it
 when the clip follows. Clips launch under a master playrate, but
 while it keeps the pitch an audio clip can't be launched: the pane draws
@@ -1733,9 +1734,28 @@ chords at the playhead, or clear them; double-click a chord to change it.
 Without a key the key button is off. While the clip plays, the playhead
 shows where.
 
+An item laid from a clip that follows keeps the clip's key and chords, and
+its notes stay as written: they sound in the song's key (or chords) under
+the item, so they move when you change the song's chords later. The item
+shows "→D" (the key it was written in) in its name bar. To make a part you
+wrote on the timeline follow the song from now on, select its item and set
+**Follow** to Key or Chords in the inspector (or **Follow the song's key**
+in the Item menu): it takes the song's key and chords under it as its own,
+so nothing changes until the song does. **Bake** (or **Bake into notes**)
+writes the notes as they sound and stops following. A key or chord change
+on the ruler says in the status line which items followed it ("Bass and
+Keys follow the new key at bar 9: G major"). In the piano roll such an item
+is drawn where its notes sound, with the written pitches outlined;
+**Written** shows the notes as written instead. The strip shows the song's
+chords and, under them, the item's own ("take"), which you edit as a
+clip's. With the key button lit, dragging a note steps it by the scale's
+degrees, as it sounds. (Playback doesn't follow yet: for now an item plays
+its notes as written, though the roll and the item's thumbnail show where
+they will sound.)
+
 Notes outside the key at their place are outlined in amber, and the roll's
 title counts them ("3 outside A minor"). That is how you see a clip laid into a song in another
-key: its notes are copied as they are, and the ones that clash stand out.
+key without following: its notes play as written, and the ones that clash stand out.
 
 An audio clip opens in the same pane, as its waveform: time in seconds
 from the clip's start, its end marked, and under it the same **Lanes**
