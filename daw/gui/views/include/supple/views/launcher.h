@@ -142,6 +142,11 @@ inline constexpr std::string_view kFollowMark = "\u2192";
 // "Dm", "G", "D dor", "A hm"; with kFollowMark before it when the clip
 // follows the key or the chords. "" when the clip has no readable key.
 std::string clipKeyMark(const model::Clip& clip);
+// A following take's mark for its item's name bar (gui.md §4.3): kFollowMark
+// and the take's own key where its content starts, short, as a cell's ("→D");
+// the arrow alone when that key is unreadable. "" for a take that does not
+// follow.
+std::string takeFollowMark(const model::Take& take);
 
 // The clip in a channel's cell of a scene.
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);

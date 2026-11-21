@@ -5,6 +5,7 @@
 
 #include "supple/views/envelope_lane.h"
 #include "supple/views/item_body.h"
+#include "supple/views/launcher.h"
 
 #include <algorithm>
 #include <cmath>
@@ -105,13 +106,24 @@ class LaneLabels : public ui::Node {
                     c.text(badge, follows, ui::Font::Mono, t.type("caption"),
                            t.color("ink-quiet").withAlpha(alpha), ui::kCenter | ui::kMiddle);
                 }
+                // A following take (gui.md §4.3): the Follow mark and its own
+                // key, as a launcher cell shows a following clip's, left of the
+                // badges, in the name's ink.
+                const std::string followMark = take ? takeFollowMark(*take) : std::string();
+                float followW = 0;
+                if (!followMark.empty() && r.w > 60 && barShown) {
+                    followW = c.textWidth(followMark, ui::Font::UiBold, t.type("caption")) + 8;
+                    c.text({badgeRight - timebaseW - followW, r.y, followW - 4, Lanes::kNameBar},
+                           followMark, ui::Font::UiBold, t.type("caption"),
+                           t.color("ink").withAlpha(alpha), ui::kRight | ui::kMiddle);
+                }
                 // Keep the label clear of the padlock and the snowflake an item may carry.
                 const float markX = item->locked ? r.x + 18.0f : r.x + 4.0f;
                 if (frozen && barShown)
                     ui::drawSnowflake(c, {markX + 5, r.y + 8}, 5.5f,
                                       t.color("ink").withAlpha(alpha));
                 const float textX = frozen ? markX + 14.0f : markX;
-                const float textW = std::max(0.0f, r.right() - textX - 26.0f - timebaseW);
+                const float textW = std::max(0.0f, r.right() - textX - 26.0f - timebaseW - followW);
                 if (barShown)
                     c.text({textX, r.y, textW, Lanes::kNameBar}, name, ui::Font::UiBold,
                            t.type("caption"), t.color("ink").withAlpha(alpha),
@@ -233,6 +245,8 @@ Lanes::Lanes(peaks::PeakService& peaks, Resolve resolve, const TrackLayout& rowL
 }
 
 void Lanes::rebuild() {
+    sounding_.clear();
+    soundingVersion_ = ~std::uint64_t{0};
     ++indexStats_.rebuilds;
     const model::Session& s = layout_.session();
     rowItems_.assign(layout_.rowCount(), {});
@@ -592,7 +606,8 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
                     if (const model::MediaSource* m = s.media.find(*tk->source))
                         drawAudio(frame, lane, *item, *tk, *m, ink);
                     else if (const model::MidiSource* src = s.midi.find(*tk->source))
-                        drawMidi(lane, *item, *tk, *src, heard ? note : ink, noteBorder);
+                        drawMidi(lane, *item, *tk, *src, heard ? note : ink, noteBorder,
+                                 heard ? std::optional<model::Id>(id) : std::nullopt);
                 }
             } else {
                 const ui::Rect inner{r.x, r.y + 15, r.w,
@@ -600,7 +615,7 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
                 if (const model::MediaSource* m = s.media.find(*take->source))
                     drawAudio(frame, inner, *item, *take, *m, wave);
                 else if (const model::MidiSource* src = s.midi.find(*take->source))
-                    drawMidi(inner, *item, *take, *src, note, noteBorder);
+                    drawMidi(inner, *item, *take, *src, note, noteBorder, id);
             }
             drawFades(fadeArea(r), *item, wave, shade);
         }
@@ -667,8 +682,28 @@ void Lanes::drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::
     stats_.columns += drawAudioBody(*strips_, frame, r, *pyramid, take, window, gain, rgba);
 }
 
+const std::vector<model::SoundingNote>& Lanes::soundingOf(model::Id item) {
+    const model::Session& s = layout_.session();
+    if (s.version != soundingVersion_) {
+        sounding_.clear();
+        soundingVersion_ = s.version;
+    }
+    auto it = sounding_.find(item);
+    if (it == sounding_.end()) {
+        const model::Item* found = s.items.find(item);
+        std::vector<model::SoundingNote> heard;
+        if (found) {
+            const model::ItemSpan span = model::itemSpan(s, *found);
+            heard = model::soundingNotes(s, item, span.startBeat, s.timeMap->beatAt(span.endSec));
+        }
+        it = sounding_.emplace(item, std::move(heard)).first;
+    }
+    return it->second;
+}
+
 void Lanes::drawMidi(const ui::Rect& r, const model::Item& item, const model::Take& take,
-                     const model::MidiSource& source, std::uint32_t rgba, std::uint32_t border) {
+                     const model::MidiSource& source, std::uint32_t rgba, std::uint32_t border,
+                     std::optional<model::Id> heard) {
     const time::TimeMap& tm = *layout_.session().timeMap;
     const model::ItemSpan span = model::itemSpan(layout_.session(), item);
     const double itemBeat = span.startBeat;
@@ -680,6 +715,12 @@ void Lanes::drawMidi(const ui::Rect& r, const model::Item& item, const model::Ta
         std::min(window.length, tm.beatAt(std::max(0.0, timeAt(bounds().right()))) - itemBeat);
     window.end = xAt(span.endSec);
     window.loop = item.loop;
+    // A following take: its notes where they sound (gui.md §4.3).
+    if (heard && take.follow != model::ClipFollow::None) {
+        stats_.notes += drawSoundingBody(*notes_, r, soundingOf(*heard), take, source, window,
+                                         itemBeat, rgba, border);
+        return;
+    }
     stats_.notes += drawMidiBody(*notes_, r, take, source, window, rgba, border);
 }
 

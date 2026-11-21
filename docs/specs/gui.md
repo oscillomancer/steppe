@@ -804,7 +804,12 @@ colour (§7), else in its strip type's (`Lanes::itemColor`): a body at
 about a quarter of the colour's strength, an outline, and across its top a
 15-unit **name bar** at about twice the body's strength. The bar carries the
 label in bold ink and the item's marks (padlock, snowflake, timebase badge,
-take count). The label is the heard take's name; an unnamed audio take is
+take count, and a following take's mark). A heard take that follows its
+context (ADR-0098 amended) is marked as a launcher cell marks a following
+clip: the Follow arrow (`views::kFollowMark`) and the take's own key where
+its content starts, short ("→D", "→Dm": `views::takeFollowMark`), in the
+name's ink, left of the badges; a take that does not follow, a baked one
+included, carries none. The label is the heard take's name; an unnamed audio take is
 called by its media file, without the folder and the extension; an item with
 neither shows its id (`Lanes::itemLabel`). A stretched take adds its rate. An
 item that begins before the view keeps its label at the view's left edge. An
@@ -814,8 +819,12 @@ item under 30 units high (a compact row) has no bar and its label sits on the
 body. Waveforms are ink; MIDI notes are the item's colour drawn 45% of the
 way to the ink (`Lanes::noteColor`), lighter than the body in a dark theme
 and darker in a light one, so a yellow item's notes read on its yellow body.
-The waveform and the notes are drawn by `views::drawAudioBody` and
-`views::drawMidiBody` (`item_body.h`), which know a take, a rect and a
+A following take's notes are drawn where they sound: each heard occurrence
+from `model::soundingNotes` (cached by the session's version, since a
+context edit moves them without touching the item) at its song beat and the
+pitch it sounds (`views::drawSoundingBody`); a take lane of another take
+draws as written. The waveform and the notes are drawn by
+`views::drawAudioBody` and `views::drawMidiBody` (`item_body.h`), which know a take, a rect and a
 content window (where each second or beat of the body's content lands, its
 length, the part in view, whether the take loops) but not the item, so
 anything that shows a take's content in a box draws it the same way; the

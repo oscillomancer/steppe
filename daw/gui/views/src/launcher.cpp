@@ -10,6 +10,7 @@
 
 #include "supple/harmony/harmony.h"
 #include "supple/model/context.h"
+#include "supple/model/follow.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/canvas.h"
 #include "supple/ui/popup.h"
@@ -189,8 +190,11 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
     return text;
 }
 
-std::string clipKeyMark(const model::Clip& clip) {
-    const model::ContextPoint* p = model::keyPointAt(clip, 0);
+namespace {
+
+// A key point's words, short (a launcher cell, an item's name bar): "Dm",
+// "G", "D dor", "A hm"; "" when the point is missing or unreadable.
+std::string shortKey(const model::ContextPoint* p) {
     const auto key = p ? model::parseKey(*p) : std::nullopt;
     if (!key) return {};
     using S = harmony::Scale;
@@ -216,8 +220,24 @@ std::string clipKeyMark(const model::Clip& clip) {
         default:  // dorian, phrygian, ...: the mode's first three letters
             text += " " + std::string(harmony::scaleName(key->scale).substr(0, 3));
     }
+    return text;
+}
+
+}  // namespace
+
+std::string clipKeyMark(const model::Clip& clip) {
+    const std::string text = shortKey(model::keyPointAt(clip, 0));
+    if (text.empty()) return {};
     return (clip.follow != model::ClipFollow::None ? std::string(kFollowMark) : std::string()) +
            text;
+}
+
+std::string takeFollowMark(const model::Take& take) {
+    if (take.follow == model::ClipFollow::None) return {};
+    // The take's key where its content starts: its first, before any point.
+    const std::string text = shortKey(
+        model::contextKeyPointAt(take.context, model::contextBeatOf(take, take.startOffset)));
+    return std::string(kFollowMark) + text;
 }
 
 bool launchRefused(const model::Session& s, const model::Clip& clip) {
