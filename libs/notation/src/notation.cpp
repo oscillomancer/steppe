@@ -164,6 +164,11 @@ class Compiler {
         }
         if (!errors_.empty()) return errorResult();
         for (auto& voice : voices_) compileVoice(voice);
+        // Voices compile in declaration order, so a stable sort by tick keeps the
+        // earlier-declared voice first at one tick.
+        std::stable_sort(
+            result_.chords.begin(), result_.chords.end(),
+            [](const ChordSymbol& a, const ChordSymbol& b) { return a.tick < b.tick; });
         for (const auto& lane : lanes_) compileLane(lane);
         for (const auto& events : events_) compileEvents(events);
         if (!errors_.empty()) return errorResult();
@@ -756,7 +761,8 @@ class Compiler {
         return std::pair<int, std::int64_t>{static_cast<int>(*bar), start + within};
     }
 
-    std::optional<std::vector<int>> chord(std::string_view text, int octave, const Token& at) {
+    std::optional<std::vector<int>> chord(std::string_view text, int octave, const Token& at,
+                                          std::optional<harmony::Chord>* parsedChord = nullptr) {
         const auto slash = text.find('/');
         const auto symbol = text.substr(0, slash);
         if (symbol.empty()) return std::nullopt;
@@ -765,7 +771,10 @@ class Compiler {
         auto parsed = harmony::parseChord(text);
         auto pitches = parsed ? harmony::chordPitches(*parsed, octave)
                               : Result<std::vector<int>>(parsed.error());
-        if (pitches) return *pitches;
+        if (pitches) {
+            if (parsedChord) *parsedChord = *parsed;
+            return *pitches;
+        }
         const std::string& code = pitches.error().code;
         if (code == "chord.bad_root") {
             add("bad_pitch", "Invalid chord root.", at, "Use a root such as C or Bb.");
@@ -838,6 +847,7 @@ class Compiler {
                         continue;
                     }
                     std::vector<int> pitches;
+                    std::optional<harmony::Chord> symbol;  // a {SYMBOL} that compiled
                     const auto head = std::string_view(s).substr(0, colon);
                     if (head.starts_with('[') && head.ends_with(']')) {
                         std::istringstream stream(std::string(head.substr(1, head.size() - 2)));
@@ -852,7 +862,8 @@ class Compiler {
                             add("duplicate_pitch", "Chord repeats a pitch.", token,
                                 "Remove the duplicate pitch.");
                     } else if (head.starts_with('{') && head.ends_with('}')) {
-                        auto value = chord(head.substr(1, head.size() - 2), voice.octave, token);
+                        auto value =
+                            chord(head.substr(1, head.size() - 2), voice.octave, token, &symbol);
                         if (value) pitches = std::move(*value);
                     } else {
                         Token p{std::string(head), token.line, token.column};
@@ -926,6 +937,7 @@ class Compiler {
                                 "Continue the same pitch exactly at the note end.");
                             tie.reset();
                         }
+                        if (symbol) result_.chords.push_back({start, *symbol, voice.name});
                         Tie next{pitches, {}, start + noteLength, token};
                         for (int p : pitches) {
                             next.indices.push_back(result_.sequence.notes.size());

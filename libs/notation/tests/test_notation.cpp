@@ -460,3 +460,54 @@ TEST_CASE("decompile spells pitches by the key it is given") {
     CHECK(back->sequence.notes.size() == 2);
     CHECK(back->sequence.notes[0].pitch == 70);
 }
+
+namespace {
+std::string chordsOf(const Compiled& c) {
+    std::string out;
+    for (const auto& s : c.chords)
+        out += std::to_string(s.tick) + " " + s.voice + " " + supple::harmony::printChord(s.chord) +
+               "\n";
+    return out;
+}
+}  // namespace
+
+TEST_CASE("notation hands over the chord symbols as compiled (ADR-0098)") {
+    SUBCASE("two voices, a tie, a slash chord") {
+        const auto c = compile(
+            "voice bass\n1: {Cm7}:h~ {Cm7}:h\n2: {F/A}:w\nvoice lead\n1: {Cm7}:w\n2: C4:w\n");
+        REQUIRE(c);
+        // The tied continuation adds none; at tick 0 the earlier-declared voice is first.
+        CHECK(chordsOf(*c) == "0 bass Cm7\n0 lead Cm7\n3840 bass F/A\n");
+    }
+    SUBCASE("a text with no voice line has one implicit voice") {
+        const auto c = compile("1: {C}:h {G7}:h\n");
+        REQUIRE(c);
+        CHECK(chordsOf(*c) == "0 main C\n1920 main G7\n");
+    }
+    SUBCASE("a bad quality fails the compile, so no entries are handed over") {
+        const auto c = compile("voice bass\n1: {Czz}:w\n");
+        REQUIRE_FALSE(c);
+        CHECK(c.error().code == "notation.unknown_chord");
+    }
+    SUBCASE("a copy line gives entries for the bars it repeats") {
+        // A bar range (2-4: ...) is for grid voices only, which hold no chord symbols.
+        const auto c = compile("voice a\n1: {C}:w\n2: {G}:w\n3-4 = 1-2\n5: {F}:w\n6-7 = 5\n");
+        REQUIRE(c);
+        CHECK(chordsOf(*c) ==
+              "0 a C\n3840 a G\n7680 a C\n11520 a G\n15360 a F\n19200 a F\n"
+              "23040 a F\n");
+    }
+    SUBCASE("declaration order decides a tie, whatever order the events were written in") {
+        const auto c = compile("voice first\n2: {Am}:w\nvoice second\n1: {C}:w\n2: {Dm}:w\n");
+        REQUIRE(c);
+        CHECK(chordsOf(*c) == "0 second C\n3840 first Am\n3840 second Dm\n");
+    }
+    SUBCASE("notes, length and the other members are as before") {
+        const auto withSymbol = compile("voice a\n1: {Cm7}:w\n");
+        const auto plain = compile("voice a\n1: [C3 Eb3 G3 Bb3]:w\n");
+        REQUIRE(withSymbol);
+        REQUIRE(plain);
+        CHECK(dump(withSymbol->sequence) == dump(plain->sequence));
+        CHECK(plain->chords.empty());
+    }
+}
