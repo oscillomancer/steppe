@@ -4,6 +4,7 @@
 // What a clip knows of the harmony it was written against (ADR-0098, session-model
 // "Clip context"): its lead sheet text in clip bars, the project's context taken under
 // a span, the chord points a notation's symbols make, and the precedence between them.
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +16,15 @@
 namespace supple::engine::detail {
 
 // A warning a command gives: its code, message and path.
+// What a `context.mismatch` note says, for the answer's `followed.mismatch`: what differs, a key
+// (`clip_key`, `key`) or, in the same key, a chord (`clip_chord`, `chord`), and the first project
+// bar where it does.
+struct ContextMismatch {
+    std::string kind;  // "key" | "chord"
+    std::optional<std::string> clipKey, key, clipChord, chord;
+    std::int64_t bar = 0;
+};
+
 struct ClipNote {
     std::string code, message, path;
 };
@@ -94,10 +104,12 @@ std::vector<model::ContextPoint> composeContext(
 // they differ. In the same key (or with none to compare) it is also given for the first beat
 // at which the clip's chord and the project's both hold and differ (root, quality or bass),
 // naming both chords. A clip with no note off channel 10 (drums, or empty) gives none, and
-// neither does an enharmonic spelling.
+// neither does an enharmonic spelling. For a key mismatch, `what` (when given) gets the keys
+// and the bar; a chord mismatch leaves it as it is.
 std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
                                      const model::Clip& clip, double start, double length,
-                                     double phase = 0, const std::string& path = "/clip");
+                                     double phase = 0, const std::string& path = "/clip",
+                                     ContextMismatch* what = nullptr);
 
 // The key a clip's points say at beat 0 (a readable one), for describe and the checks.
 std::optional<std::string> clipKeyWords(const model::Clip& clip);

@@ -74,7 +74,9 @@ keeps the harmony at a place. Say it when you make the clip:
   with its notes copied as they are gives a `context.mismatch` warning when the clip's key is
   not the project's under the item, or, in the same key, when its chord at some beat is not the
   chord the project has there (once per item, naming the first bar that differs; once per
-  launched clip in `launch.commit`). A clip with no chords has none to compare.
+  launched clip in `launch.commit`). A clip with no chords has none to compare. The answer's
+  `followed.mismatch` says what differs without reading the message: `kind: "key"` with
+  `clip_key` and `key`, or `kind: "chord"` with `clip_chord` and `chord`, and the `bar`.
 - Shortening a clip drops the context points past its end (`clip.context_dropped`); a
   context change that leaves no key at the start resets `follow` (`clip.follow_reset`).
 

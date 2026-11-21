@@ -111,11 +111,24 @@ std::optional<views::EnvScale> PluginScales::operator()(const model::Envelope& e
         args["full"] = true;
         auto described = dispatcher_.execute(
             {"fx.describe", std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+        // A semantic plug-in describes its parameters by key; another (a
+        // VST3, an unmarked CLAP) as a list whose ids are the envelope's
+        // param ("1").
+        const json::Value* entry = nullptr;
         if (described)
-            if (const json::Value* ps = described->find("params"); ps && ps->isObject())
-                if (const json::Value* entry = ps->find(env.target.param))
-                    if (auto spec = params::fromDescription(env.target.param, *entry); spec)
-                        found = std::shared_ptr<const params::DescribedParam>(std::move(*spec));
+            if (const json::Value* ps = described->find("params")) {
+                if (ps->isObject()) entry = ps->find(env.target.param);
+                if (ps->isArray())
+                    for (const json::Value& p : ps->asArray())
+                        if (const json::Value* id = p.find("id");
+                            id && id->isNumber() &&
+                            std::to_string(static_cast<std::int64_t>(id->asDouble())) ==
+                                env.target.param)
+                            entry = &p;
+            }
+        if (entry)
+            if (auto spec = params::fromDescription(env.target.param, *entry); spec)
+                found = std::shared_ptr<const params::DescribedParam>(std::move(*spec));
         it = cache_.emplace(key, std::move(found)).first;
     }
     if (!it->second) return std::nullopt;

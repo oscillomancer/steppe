@@ -443,12 +443,22 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 nameItemFromClip(t, clip, item);
                 // A clip played as written says when its key is not the project's under the
                 // item, once for the stretch however many periods (items) it is laid as.
-                if (midi && outcome == model::ClipFollow::None && !mismatchGiven)
+                if (midi && outcome == model::ClipFollow::None && !mismatchGiven) {
+                    detail::ContextMismatch what;
                     if (auto note = detail::mismatchNote(now, clipId, clip, beat0, beat1 - beat0,
-                                                         phase, path)) {
+                                                         phase, path, &what)) {
                         ctx.warn(note->code, note->message, note->path);
+                        if (!what.kind.empty()) {  // what differs: the keys, or the chords
+                            if (!done.mismatches) done.mismatches.emplace();
+                            done.mismatches->push_back({clipId.str(), std::move(what.kind),
+                                                        std::move(what.clipKey),
+                                                        std::move(what.key),
+                                                        std::move(what.clipChord),
+                                                        std::move(what.chord), what.bar});
+                        }
                         mismatchGiven = true;
                     }
+                }
                 done.items.push_back(t.create(std::move(item)).str());
                 return {};
             };

@@ -9,8 +9,10 @@
 #include <utility>
 #include <vector>
 
+#include "mod_source.h"
 #include "modulation_status.h"
 #include "pan_menu.h"
+#include "rack_engine.h"
 #include "selection_edit.h"
 #include "strip_learn.h"
 #include "supple/ui/popup.h"
@@ -92,6 +94,9 @@ struct Builder {
             }));
         if (auto idle = inertItem(actions.dispatcher(), s, {object, param}))
             items.push_back(std::move(*idle));
+        const auto catalog = racks::catalog(actions.app());
+        for (auto& item : modSourceItems(actions, s, catalog.get(), {object, param}))
+            items.push_back(std::move(item));
     }
     // Show or hide the parameter's lane, as the lanes decide it: through
     // its envelope and its modulation routes (laneShown, setLaneShown).

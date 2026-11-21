@@ -1561,6 +1561,10 @@ TEST_CASE("laying a clip copies its notes and warns when its key is not the proj
               .find("pitch")
               ->asInt() == 33);  // copied: A1
     CHECK(laid.find("followed")->find("mode")->asString() == "none");
+    // The followed block says the same for a program: the two keys and the bar.
+    const json::Value* mismatch = laid.find("followed")->find("mismatch");
+    REQUIRE(mismatch);
+    CHECK(json::writeCompact(*mismatch) == R"({"kind":"key","clip_key":"D minor","key":"C minor","bar":5})");
     // The clip's own follow is the default: a clip that follows the key is mapped, with no
     // mismatch warning (the notes were moved), and follow: none overrides it.
     l.run("clip.set", R"({"clip": "cl_1", "follow": "key"})");
@@ -1570,6 +1574,7 @@ TEST_CASE("laying a clip copies its notes and warns when its key is not the proj
     // The notes stay as written (A1); they sound as C minor's G1, D minor's fifth.
     CHECK(pitchesOf(l, followed.find("item")->asString()) == "33@0");
     CHECK(soundsOf(l, followed.find("item")->asString()) == "31@0");
+    CHECK(followed.find("followed")->find("mismatch") == nullptr);
     CHECK(warningCodes(
               l.run("item.add", R"({"track": "tr_1", "bar": 9, "clip": "cl_1", "follow": "none"})"))
               .find("context.mismatch") != std::string::npos);
@@ -1638,6 +1643,12 @@ TEST_CASE("laying a clip as written warns when its chords are not the project's,
     CHECK(warningCodes(laid) == "context.mismatch ");
     CHECK(message.find("cl_1 \"Verse bass\" was written over Dm and sits under Gm from bar 2") !=
           std::string::npos);
+    // `followed.mismatch` names what differs: here, in one key, the chords and the bar.
+    REQUIRE(laid.find("followed") != nullptr);
+    const json::Value* chordMismatch = laid.find("followed")->find("mismatch");
+    REQUIRE(chordMismatch);
+    CHECK(json::writeCompact(*chordMismatch) ==
+          R"({"kind":"chord","clip_chord":"Dm","chord":"Gm","bar":2})");
     // One warning for the item, whatever the number of bars that differ; the same chords do not.
     l.run("item.remove", R"({"item": ")" + laid.find("item")->asString() + R"("})");
     l.run("context.write", R"({"text": "2: {Dm}:w"})");

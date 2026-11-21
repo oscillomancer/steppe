@@ -297,6 +297,31 @@ only what the DAW needs, designed for virtualized, data-heavy views.
   `modulation.set`, one undo step per drag (Origin gesture). The FX window
   holds its rows still while a bar is dragged (`Slider::depthDragging`) and
   redraws that slider's bar from each new depth.
+- **The modulation mark.** "~" (`views::kModMark`, spelled once) in
+  `signal-cv` says that a plug-in parameter is modulated, by any route,
+  enabled or not (`views::fxModulated`): at the right of the plug-in's slot
+  in a mixer strip (the name centred in the room left of it; the slot's
+  accessible text ends "(modulated)"), and after "fx" in the track panel and
+  the mixer strip alike when a plug-in in the track's chain or input chain
+  is (`views::chainModulated`, drawn by `ui::Button::setMark`). It is
+  static: what moves is the controls' bars and the lane's curve. A strip's
+  own fader and pan carry their bars, not the mark. Where every route onto
+  its target is off (the plug-in's, the chain's), the mark is drawn dimmed
+  in `ink-faint` (`views::fxModulationOn`, `chainModulationOn`; the slot's
+  accessible text ends "(modulation off)"); one route on draws it normal.
+- **The source.** A route's source is the module cabled into its Mod Out
+  input (the first cable by id), named as the rack window titles it, else
+  "Mod N" (`gui::modSourceName`). The app action `ui.modulation.source
+  {modulation}` opens the rack window on the Mod Out's rack with the Mod Out
+  and every module cabled into that input selected and in view
+  (`RackWindow::showModulationSource`). One click reaches it from a lane's
+  **mod** (§4.3): one route at once, several a menu of them ("LFO
+  (Modulators)", "(off)" after a disabled one). A control's bar never opens
+  it, since a press there is the depth drag. Instead the control's
+  right-click menu (the strips' menu in the track panel and the mixer, the
+  FX window's parameter menu) has **Show modulation source** for one route
+  and one row per route for several ("Show modulation source: LFO
+  (Modulators)"; `gui::modSourceItems`).
 - **Damage.** Each window keeps a dirty-rect list; nodes invalidate
   themselves; a frame redraws only damaged regions (scissored). Removed nodes
   survive the current input dispatch; focus, hover and capture are resolved
@@ -559,7 +584,8 @@ track's groups are small colour tabs under the name's start.
 
 "fx" and "+" are quiet buttons (`ui::Button::quiet`): their text alone in
 quiet ink, a box under the pointer; "fx" is in full ink when the track's
-chain or input chain holds a plug-in. The input, "env" and "out" are boxed,
+chain or input chain holds a plug-in, and carries the modulation mark (§2)
+when one of those plug-ins is modulated. The input, "env" and "out" are boxed,
 as the input and "out" are on a mixer strip, so the routing buttons look
 the same in both views.
 A master that is armed or holds items has a row too, its **lane** (ADR-0057):
@@ -715,8 +741,12 @@ one place (`ArrangeView::setRulerRows`).
 and hidden otherwise; View > Chord row (`ui.view.chords`, ticked while shown)
 chooses for the project instead, and the UI file keeps that choice
 (`arrange.chords`; absent: the rule). Each chord is a cell from its beat to
-the next chord point, in the uniform cell of the launcher's slots (raised,
-an outline), named in letters as the notation writes it ("Bbmaj7", "F/A"),
+the next chord point, the last one to the project's end (the bar line after
+the last item or section, `views::barAfterArrangement`; the view's edge when
+the chord starts past it), as the engine holds it, in the uniform cell of
+the launcher's slots (raised, an outline), named in letters as the notation
+writes it ("Bbmaj7", "F/A"); a chord that began left of the view keeps its
+name at the view's left edge,
 with a trailing "?" in quiet ink when this build cannot read the symbol; a
 name too long for its cell ends in an ellipsis after a whole character, and
 a cell too narrow for one character and the ellipsis shows no name. A "no chord" point ends the cell before it
@@ -739,8 +769,11 @@ ink: "F major", "Eb harmonic minor", written with a trailing "?" when this
 build cannot read the point. A key that starts on a meter change's beat
 follows the meter's label; any other has its own tick. Each label stops short
 of the next flag in that half (a key or a meter change), ending in an
-ellipsis when the words do not fit, or showing none. A double-click on a
-key's label opens a field with its words: a tonic and a scale ("Eb major",
+ellipsis when the words do not fit, or showing none. The key that holds at
+the view's left edge, its change scrolled out of view, is named there
+without a tick, as the held chord is; it is not a flag (it does not drag,
+and the menus and double-click act on the beat under the pointer). A
+double-click on a key's label opens a field with its words: a tonic and a scale ("Eb major",
 "F# dorian"; the scale's spaces are its underscores), Enter runs `key.set` at
 its beat, and text that is not a key is a `key.text` message with the field
 kept. A right-click on a key's label offers Change key… and Delete key change
@@ -771,7 +804,12 @@ colour (§7), else in its strip type's (`Lanes::itemColor`): a body at
 about a quarter of the colour's strength, an outline, and across its top a
 15-unit **name bar** at about twice the body's strength. The bar carries the
 label in bold ink and the item's marks (padlock, snowflake, timebase badge,
-take count). The label is the heard take's name; an unnamed audio take is
+take count, and a following take's mark). A heard take that follows its
+context (ADR-0098 amended) is marked as a launcher cell marks a following
+clip: the Follow arrow (`views::kFollowMark`) and the take's own key where
+its content starts, short ("→D", "→Dm": `views::takeFollowMark`), in the
+name's ink, left of the badges; a take that does not follow, a baked one
+included, carries none. The label is the heard take's name; an unnamed audio take is
 called by its media file, without the folder and the extension; an item with
 neither shows its id (`Lanes::itemLabel`). A stretched take adds its rate. An
 item that begins before the view keeps its label at the view's left edge. An
@@ -781,8 +819,12 @@ item under 30 units high (a compact row) has no bar and its label sits on the
 body. Waveforms are ink; MIDI notes are the item's colour drawn 45% of the
 way to the ink (`Lanes::noteColor`), lighter than the body in a dark theme
 and darker in a light one, so a yellow item's notes read on its yellow body.
-The waveform and the notes are drawn by `views::drawAudioBody` and
-`views::drawMidiBody` (`item_body.h`), which know a take, a rect and a
+A following take's notes are drawn where they sound: each heard occurrence
+from `model::soundingNotes` (cached by the session's version, since a
+context edit moves them without touching the item) at its song beat and the
+pitch it sounds (`views::drawSoundingBody`); a take lane of another take
+draws as written. The waveform and the notes are drawn by
+`views::drawAudioBody` and `views::drawMidiBody` (`item_body.h`), which know a take, a rect and a
 content window (where each second or beat of the body's content lands, its
 length, the part in view, whether the take loops) but not the item, so
 anything that shows a take's content in a box draws it the same way; the
@@ -884,11 +926,18 @@ titled "Send → destination · Volume"). A plug-in parameter's lane is titled
 with its effect (the instance's label, else the plug-in's name) and the
 name the plug-in's description gives the parameter: "Marram · Filter 1
 Cutoff" (`views::envTitle` with the lane's scale); a parameter the plug-in
-does not describe shows its key after the effect. An item's take FX
+does not describe shows its key after the effect. A plug-in described by a
+list (a VST3, a CLAP without semantic parameters) gives the lane of a
+parameter its modulation or a visible envelope shows the scale of the list
+entry whose `id` is the envelope's parameter (`gui::PluginScales`). An item's take FX
 automate on the item's track, in timeline position as the model keeps them:
 a visible envelope (or a modulated parameter) on one has a lane there like
 any other, titled with "(take)" after it, and it follows the item to
-another track. A clip's take FX have none here: their envelopes are in clip
+another track. Titles that would be the same say what tells them apart: an
+effect with another of its name in its chain gets its place there ("Teasel
+2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
+14)", the take's name and the item's first bar) when another item on the
+track has the same effect's same parameter. A clip's take FX have none here: their envelopes are in clip
 time. A send's visible lanes sit under the
 strip it leaves, after the strip's own and its effects' lanes; `route.set`
 records into them in touch, latch and write like `track.set`.
@@ -1007,6 +1056,21 @@ Under each track, envelope lanes come first, in their order, then
 modulated-only lanes by target. Its row sits under the strip that owns the
 target, as an envelope's lane does (an FX's track, the strip a send leaves).
 Turning the last route's `lane` off removes the lane.
+**The lane's header** in the track panel, indented under its strip, says
+the parameter first and then what owns it, "Filter 1 Cutoff · Marram",
+"Volume · Send → Verb" (`views::laneTitle`, `LaneTitle::headerText`; the
+lane's own caption keeps `envTitle`'s order). When the words do not fit,
+the owner is elided first, then the parameter. Its cells sit in fixed
+columns, the same in every lane: **mod** in `signal-cv` (shown while a
+route, enabled or not, reaches the target, dimmed in `ink-faint` while
+every one of them is off, `views::routeOn`: one click asks the app for the
+source, §2), the automation mode (read → touch → latch → write → trim),
+**on** (whether the envelope is heard) and **hide**. A lane without an
+envelope (a modulated parameter) has its title, **mod** and **hide**, the
+other columns empty. Hide turns the envelope's `visible` and every route's
+`lane` off in one undo step; they keep playing. From 32 units tall the
+title has a line of its own over the cells; a lower lane puts the cells
+beside it.
 **The band.** On a modulated target's lane, the enabled routes' span
 (`views::modulationBand`, summed as a control's span, §2) is drawn around
 the base in faint `signal-cv`, under the curve and any automation items. The
@@ -1603,7 +1667,8 @@ Commands: `route.*`, `track.set {record_input}`.
 
 **Launcher clips** (ADR-0097) open here as items do (a double-click on a
 clip, Alt+E with a clip selected after a launcher click, or the first MIDI
-clip when the project has no MIDI item). A clip has no place in time: the
+clip when the project has no MIDI item); an audio clip opens in the pane's
+audio form (below). A clip has no place in time: the
 roll places it at beat 0 with its own length, so its bars count from its
 start; it reads the clip's own context (ADR-0098 X3), in clip beats, as
 `midi.edit` does, for the shading, the spelling, the key button, a degree
@@ -1633,6 +1698,9 @@ anchors use exact model timing rather than the rounded `midi.notes` query.
 
 **A clip's own key and chords** (ADR-0098 X3). The roll is the one place a
 clip is edited, its context included:
+- The roll shades before the clip's or item's start and past its end, over
+  the grid, and marks the end with a line and "end" as the audio form does
+  (none when the end is scrolled out of view).
 - What the roll shows on a clip is the clip's context: its key at the start
   names the key button and its keys shade the rows and spell the notes; its
   chord points fill the strip's chord row, the last cell ending with the
@@ -1684,6 +1752,58 @@ midi.edit does", "a clip opens with all its notes in view under its taller strip
 clip laid in another key shows its notes outside the key", "a launcher clip opens at beat 0 in its own key and chords", and
 "clip context edit: the printed lead sheet …".
 
+**A following take** (ADR-0098 amended, "following is playback"; X4e,
+mocks 133 and 134). An item's heard MIDI take whose `follow` is key or
+chords sounds mapped from its own context to the song's; its notes stay as
+written. The roll shows both, from `model::soundingNotes` (what the engine
+compiles) and, for a place no note has yet, `model::placeAt` and
+`soundsAt`:
+- **The sounding view** is the default: each note drawn where it sounds,
+  its name spelled in the song's key; its written pitch a 1-unit outline in
+  the notes' colour at 60%, under the notes, with no name, only where the
+  two differ. A note not heard (outside the loop window, past the end), and
+  channel 10, have no outline. Clicks and the marquee hit a note where it is
+  drawn, never its outline.
+- **Written** (`midi.written`), a cell in the header shown only while the
+  take follows, turns the **written view** on: the written pitches drawn,
+  the sounding ones outlined. It is a view setting saved with the editor's
+  layout (`"written"`).
+- **The strip's rows.** A take with a context adds a second chord row,
+  dim and read-only, and the keyboard column names both: in the sounding
+  view **song** (the project's chords, as on any item) then **take** (the
+  take's own: each point at every repeat of its context beat on the roll's
+  axis, the chord holding at the left carried in, the last ending with the
+  item); in the written view **take** first and **song** second. Only the
+  song's row is edited here (a double-click, as on the ruler); the take's
+  becomes editable with `take.set {context}` (X4d).
+- **Key, shading, spelling, title.** The sounding view reads the song's
+  key; the written view the take's own at each note's context beat, and
+  its key button names the take's key where the content starts. The title
+  says "follows D major → E minor" (the take's key at its start, the
+  song's at the item's start) or "written in D major", and its "outside
+  the key" count counts the notes as drawn.
+- **Notation and List** always show and edit written notes, the take's
+  text: the notation pane's title reads "Notation · written" and the list's
+  header says "written" while the take follows.
+- **Edits act on written notes**, through `midi.edit`. In the sounding
+  view a pitch drag steps the written pitch by semitones and previews where
+  it will sound (the place it lands, the start rule); a move in time keeps
+  the written pitch and follows the new place. A double-click writes the
+  written pitch nearest the row that sounds as it there (within an
+  octave); where none does, it writes nothing and the status line says
+  "MIDI: nothing written sounds as G#4 here: draw it in Written". Degree
+  mode is off on a following take until `midi.edit`'s degrees read the
+  take's own context (X4d), when a sounding-view drag steps by degrees.
+- **Passes.** A looped item whose passes sound differently shows the pass
+  chosen in **Pass 1 of 4** (`midi.pass`, shown only then; its menu lists
+  "Pass 2 · bar 3"...), the first by default; edits change every pass.
+- A clip has no place: its roll stays as written (`midi.sounding_clip`).
+
+Tests: test_midi_editor "a following take's roll: where its notes sound,
+the written outlined, Written, two rows", "…: the pencil writes what
+sounds as the row, or says it cannot" and "a take that does not follow
+opens its roll as written, with no Written cell".
+
 **Lanes.** One menu owns every lane under the roll: **Lanes** in the header
 (it replaced the CC button). It shows Velocity and five controllers (CC 1
 mod, 7 volume, 10 pan, 11 expression, 64 sustain), checked when shown;
@@ -1696,13 +1816,33 @@ edited in its roll, not on the timeline. For a MIDI clip:
 - a visible envelope on its active take (volume, pan, mute) or on one of
   its take FX has a lane under the CC lane, on the roll's axis in clip beats,
   in that order (volume, pan, mute, then the take FX in chain order). It is
-  titled "Volume (take)" or "Teasel · Drive (take)", with the parameter's
-  name and **hide** (`env.set {visible: false}`; the envelope still plays) at
-  the left. An item's roll shows none: its take lanes are on the timeline
+  titled "Volume (take)" or "Teasel · Drive (take)" in its title row, its
+  one name (the keyboard-wide column at the left, too narrow for the names,
+  holds only **hide**: `env.set {visible: false}`; the envelope still
+  plays). An item's roll shows none: its take lanes are on the timeline
   (§4.3);
-- a click adds a point and drags it; a point drags in beat (snapped to the
-  grid, kept between its neighbours and inside the clip) and value; a right-
-  or Alt-click removes one. Each is one `env.points.set`. Before the clip's
+- points are taken as on the timeline's lanes (§4.3): a click on a point
+  selects it, Ctrl+click adds or takes one out, a click on empty space adds
+  a point there, selected; dragging a selected point moves every selected
+  point in its lane by the same time (on the grid, inside the clip; Shift
+  frees it) and the same share of the lane's height; Alt+click deletes a
+  point; Delete removes the selection. A right-drag draws a marquee in the
+  lane that selects the points inside it (with Shift or Ctrl it adds to
+  them), as does a Ctrl-drag from empty space (adding). A right-click
+  without a drag opens the lane's menu: **Insert point**, **Select all
+  points**, **Copy**/**Cut**/**Paste points** (paste at the pointer,
+  replacing the points over the pasted span, `views::pastePoints`; points
+  of another kind keep their height on the lane), **Delete points**,
+  **Point shape…** (linear, square, slow start/end, fast start, fast end,
+  bezier) and **Hide**. After a press on a lane the editor's Ctrl+C,
+  Ctrl+X and Ctrl+V take its points instead of notes; Ctrl+V pastes into
+  the lane pressed last at the clip time the points were copied from. The
+  lanes' clipboard is the editor's own, not the timeline's. One lane's
+  points are selected at a time, named by position and value, so a marquee
+  stays in its lane and a drag moves one lane's points; a press on the
+  roll takes the selection away and gives the keys back to the notes, a
+  lane's press clears the note selection. Selected points draw as the timeline's,
+  filled in the focus colour. Each edit is one `env.points.set`. Before the clip's
   start and past its end the lane is dimmed as the roll is, and the curve
   holds its end value there, dashed. Clip time takes no writing mode and no
   automation items, so a lane has no read/write cell;
@@ -1715,12 +1855,48 @@ edited in its roll, not on the timeline. For a MIDI clip:
   envelope's: 0 dB, centre, unmuted); unticking hides it. Refusals go to the
   status line.
 
-An audio clip has no roll yet; its pane (mock 93) comes after X3 of
-ADR-0098.
+**An audio clip's pane** (mock 93). An audio clip opens in the same panel
+(a double-click on it in the launcher, or Alt+E with it picked there or
+open last) in an audio form; an audio item does not, its take being on the
+timeline:
+- its active take's waveform (`views::drawAudioBody`, as the launcher
+  cell's, from the app's peak service) where the roll's notes are, on an
+  axis in seconds of played time from the clip's start (the clip's own
+  unit, as its length): the time ruler above it (m:ss.d at a step that
+  fits), the clip shaded outside its span and its end marked "end", the
+  take's name in the keyboard's column, and the playhead where the launcher
+  plays it. The wheel zooms and scrolls it as the roll; nothing on it edits
+  the audio;
+- the header has the title ("Audio · Keys — Break · clip · 2.00 s"), the
+  key button, Lanes and Close; grid, Snap, Quantize, Notation, List, and the
+  velocity and CC lanes are hidden, and come back for a MIDI take (the
+  notation pane as it was);
+- the key button names the clip's one key point (ADR-0098: an audio clip
+  has at most a key at 0, and no chords or degrees) and opens its menu:
+  **Key…** (the key field, from the clip's key, else the project's),
+  **Remove key**, and **Take from the project at bar N** (`clip.set
+  {context_at}` at the playhead). An audio clip's text is bar 1 only, a key
+  and holds;
+- the Lanes menu and clip-time lanes are a MIDI clip's, in seconds: no
+  Velocity or CC rows, Take volume, pan and mute without the instrument
+  rule, the take FX and their parameters; the points go to `env.add` and
+  `env.points.set` as `seconds`. They snap to a seconds grid set by the zoom
+  (`RollState::audioGrid`: the finest of 0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+  1 s and up at least 20 px wide), drawn faint over the waveform under the
+  ruler's labelled lines; **Snap** stays in the header and turns it off
+  ("· snap off" in the title).
+
+Tests: test_midi_editor "an audio clip opens as its take's waveform in
+seconds, its end marked" (golden `audio-clip-pane-dark.png`), "an audio
+clip's Lanes menu and clip-time lanes are in seconds" (golden
+`audio-clip-lanes-dark.png`) and "an audio clip's key button sets its one
+key point".
 
 Tests: test_midi_editor "the Lanes menu shows and hides the velocity and CC
 lanes", "a clip's take envelopes and take FX parameters get lanes in clip
-beats", and the CC lane case.
+beats", "a clip-time lane selects points, moves them together, shapes
+them", "a clip-time lane takes a marquee, and copies, cuts and pastes
+points", and the CC lane case.
 
 **Roll appearance.** The notes are drawn in the colour their item has in
 the arrangement (`views::Lanes::itemColor`: the item's own, else its
@@ -2559,11 +2735,12 @@ inspector adds no command:
 | Name (`inspector.name`) | The active take's name; unnamed, the file's name as a placeholder | Any text | `name` |
 | Start (`inspector.start`) | "3.1.000": bar, beat of that bar's meter, thousandths of the beat, each from 1 | "3", "3.2" or "3.2.500"; the third part is the digits after the beat's decimal point, up to three, so "3.2.5" is "3.2.500" and "3.2.005" five thousandths (`inspectorParseBars`) | `position` (beats) |
 | Length (`inspector.length`) | "32 beats" | A number, with or without "beats" | `length` |
-| Follows (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
+| Timebase (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
+| Written in (`inspector.written_in`) | One item whose heard MIDI take has a context (ADR-0098 amended): the take's own key where its content starts, "D major" ("no key" when that point is unreadable) | Read only | |
 
 When the heard take plays audio, its speed and pitch follow
 (`inspector.take`), each one `take.set` on that take:
@@ -2589,7 +2766,7 @@ Edits made elsewhere, an agent's included, show at the next pass, except
 in the field being typed in. A locked item's fields are disabled, all but
 Lock, under a line that says so. An item with no take cannot be named.
 
-**Several items** show the fields they can share: Follows, Gain, the
+**Several items** show the fields they can share: Timebase, Gain, the
 fades and the three cells. Name, Start, Length, the take settings, the
 take list and the file are for one item only. A field shows the value all
 of them have, and is empty with the placeholder "mixed" when they differ;
@@ -2609,6 +2786,7 @@ tracks), each one `track.set` per track, several in one transaction:
 | Colour (`inspector.track.color`) | The eight track colours as swatches and an empty square for none; the colour all of them have is ringed | A click; or, with the row focused (Tab), Left and Right (Home, End) to move a focus ring that starts on the tracks' colour, and Enter or Space to pick | `color` |
 | Volume (`inspector.track.volume_db`) | "-6.0 dB", or empty and "mixed" | A number, with or without "dB" | `volume_db` |
 | Pan (`inspector.track.pan`) | "-30 %" (negative is left), or empty and "mixed" | A number, with or without "%" | `pan` |
+| Modulation (`inspector.track.modulation`), one track only, and only while a route moves something of it (its controls, its effects' parameters, its sends'; `gui::modRoutesOfTrack`) | A line per route, boxed as a field: the parameter as its lane names it and, after it in `signal-cv`, "~ LFO" (its source, `gui::modSourceName`; "(off)" after a disabled one, whose mark is dimmed in `ink-faint`, as "N routes"'s is when all are off). Past four routes, one line, "5 routes" | A click on a line shows its source in the rack window (§2, `ui.modulation.source`); on "N routes", a menu of them, each doing the same | — |
 | Notes (`inspector.track.notes`), one track only | The track's notes, five lines in view, under its label and as wide as the panel, with a rule around it | Any text over several lines (a `TextArea` without line numbers: Enter is a new line, long lines scroll, they do not wrap). Ctrl+Enter or leaving the field applies it; Escape puts back the track's | `notes` |
 
 Inputs, outputs, sends and record settings stay where they are (the track
@@ -2656,7 +2834,12 @@ same heights, scroll and colours.
   next one; a click on the lit cell ends the capture, commits it and turns
   it off. A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
-  item in the way) shows its message in the status line.
+  item in the way) shows its message in the status line. A commit that
+  copied clips under another key (the answer's `mismatches`, with the
+  `context.mismatch` warning) says so there as laying does: "Committed:
+  Root copied: its key D minor differs from C minor at bar 1"
+  (`views::followNotice` with `launch.commit`, through
+  `CaptureControl::onNotice`).
 - **After a commit made while stopped** (at stop, or the cell turned off
   while stopped) every track returns to the arrangement where playing
   starts (`launch.arrangement`), so play plays the take just committed, not
@@ -2725,8 +2908,13 @@ same heights, scroll and colours.
   text is drawn in it.
 - **A clip** is a small item: a name bar in its colour (the track's when it
   has none) and its content drawn by the shared item-body functions
-  (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A
-  muted clip is dimmed, as a muted item is. Clips launch under a master
+  (`views::drawAudioBody` / `drawMidiBody`, §4.3) over one period. A clip
+  with a key at its start shows it short (`views::clipKeyMark`: "Dm", "F#",
+  "G dor", "Eb hm") right-aligned in a 12-unit strip at the foot of its
+  body, under the preview, with "→" before it in full ink when the clip
+  follows the key or the chords, in quiet ink when it plays as written; a
+  body lower than two strips shows no key. A muted clip is dimmed, as a
+  muted item is. Clips launch under a master
   playrate; the engine refuses only an audio clip while the playrate keeps
   the pitch at other than a steady 1 (`launch.playrate`), and the pane dims
   exactly those, and the scenes' ▶ whose launch would start one, the same
@@ -2759,7 +2947,7 @@ same heights, scroll and colours.
 - **Click the body** of a clip: select it (Ctrl adds to the selection). It
   never launches. A click on the lanes clears that selection.
 - **Double-click the body**: open it in the piano roll (MIDI) or the
-  inspector (audio). The editors and content commands take the clip as
+  bottom pane's audio form (audio: its waveform and clip-time lanes, §4.7). The editors and content commands take the clip as
   they take an item (ADR-0097, "The take owner").
 - No click does two things: a clip's ▶ only launches and its body only
   selects; an empty cell's square only stops and the rest of the cell
@@ -2777,6 +2965,29 @@ same heights, scroll and colours.
   while the item is over it (an occupied one in `meter-clip`, refusing it).
   A refused drop shows the error's message in the status line (a warped
   take, `clip.unsupported`).
+- **What laying did with the keys.** A clip or scene laid on the timeline
+  from the pane (a drag, Lay on timeline at playhead, Insert at playhead or
+  at end) says in the status line, without a dialog, what its clips' keys
+  did, read from the answer's `followed` blocks (`views::followNotice`,
+  routed from `ArrangeView::runLauncher` through
+  `LauncherCallbacks::onNotice`):
+  - a clip that followed: "Bass followed to D minor, +2" (each run of bars
+    the notes moved over: its key and the interval, or "by degree", "by
+    chord"; a second run "then F minor, +3 from bar 7", more counted;
+    notes folded into range counted);
+  - a clip copied under another key (`followed.mismatch`, with the
+    `context.mismatch` warning): "Keys copied: its key C minor differs from
+    D minor at bar 21";
+  - a clip that could not follow (`copied`): "Drums copied: drums don't
+    follow", "… audio doesn't follow", "… it has no key to follow from",
+    "… it has no notes to move";
+  - a scene: "Verse at bar 21: " and each such clip's phrase, joined by
+    "; ", or, past 110 characters, how many followed and how many were
+    copied, with up to three names each.
+
+  A clip with nothing to say (no key change, its key the song's, or
+  already in the key: a run moved by 0 or by degree into its own key) says
+  nothing, so the last note stays.
 - **Right-click** a clip: Rename, Colour…, Mode: Loop / Mode: Once,
   Quantize… (Project, Bar, Beat, 1/2 … 1/32, None), Duplicate (into the next
   empty cell to its right; none left is an error in the status line), Lay on
@@ -2845,6 +3056,14 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
 - A scene dragged onto the lanes (its ghost, the command, the section and
   items after), refused on an occupied span; the menu's inserts at the
   playhead and the end; an empty scene refused; the bar arithmetic.
+- Laying with following: a clip dragged to the timeline that followed the
+  key, one copied under another key from its menu, one with nothing to say,
+  and a scene inserted from its menu, each as the status line's words
+  ("laying clips on the timeline says in the status line what their keys
+  did"); `followNotice`'s wording of runs, degrees, chords, folding,
+  copied reasons and a scene too long for the line; and in `test_app.cpp`
+  the app's status line after a scene insert (snapshot
+  `launcher-follow-status.png`).
 - Paste in the clipboard's layout, refused past the last channel and onto
   occupied cells, and a cut's paste moving the clip; a diagonal cut pasted
   over its own cells; the clipboard emptied by another project.
@@ -2931,8 +3150,9 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   play/stop, R record (also Ctrl+R), L loop, Delete or Alt+C deletes the
   selection (items, tracks or points; notes over the MIDI editor), Ctrl+M or
   Alt+D the mixer,
-  Alt+E the MIDI editor on the item it had last (else the selected or first
-  MIDI item; nothing without one). Space is never a button's: buttons and
+  Alt+E the MIDI editor on the item it had last (else the clip picked in the
+  launcher, an audio clip included, else the selected or first MIDI item;
+  nothing without one). Space is never a button's: buttons and
   toggles take Enter, so Space after a click still plays or stops, and a
   rename that ends gives the keys back to the shortcuts.
 - **Macros:** a sequence of actions (or a Lua script) run as one batch (one

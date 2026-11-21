@@ -191,6 +191,7 @@ void RackSpace::arrange(const ui::Canvas& canvas, const ui::Rect& b) {
         frameOnLayout_ = false;
         frameAll();
     }
+    if (!revealOnLayout_.empty() && !b.empty()) reveal(std::exchange(revealOnLayout_, {}));
 }
 
 void RackSpace::setView(View v) {

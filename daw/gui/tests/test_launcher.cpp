@@ -53,6 +53,7 @@ struct LauncherFixture {
     views::ArrangeView* view = nullptr;
     std::vector<std::string> commands;
     std::vector<Error> errors;
+    std::vector<std::string> notices;  // the status line's notes (onNotice)
     std::vector<model::Id> opened, selected, takeFx;
 
     LauncherFixture() {
@@ -91,7 +92,8 @@ struct LauncherFixture {
              [this](const std::vector<model::Id>& clips) { selected = clips; },
              {},
              {},
-             [this](model::Id take) { takeFx.push_back(take); }});
+             [this](model::Id take) { takeFx.push_back(take); },
+             [this](const std::string& notice) { notices.push_back(notice); }});
         sync();
     }
     ~LauncherFixture() {
@@ -733,6 +735,54 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: a Capture commit says which clips it copied under another key") {
+    // gui.md §4.15: the commit's mismatches in the status line, as a lay's.
+    LauncherFixture f;
+    f.song();
+    f.exec("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key D minor ~:w"})");
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    std::vector<std::string> notices;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    capture.onNotice = [&](const std::string& n) { notices.push_back(n); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    // Root (Bass), written in D minor, launched under C minor.
+    const double at = f.exec("launch.clip", R"({"clip":"cl_3"})")["beat"].asDouble();
+    const model::Id bass = *model::Id::parse("tr_2");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == bass && t.plays == engine::Engine::TrackLaunch::Plays::Clip) return true;
+        return false;
+    };
+    const auto service = [&] { capture.service(); };
+    REQUIRE(f.runUntil(playing, at, "Root heard", service));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Root", service));
+    f.exec("transport.stop", "{}");
+    f.app->tick();
+    capture.service();
+    CHECK(refused.empty());
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0] == "Committed: Root copied: its key D minor differs from C minor at bar 1");
+    // Kit A, with no key, commits with nothing to say.
+    const double kit = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto kitPlaying = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    REQUIRE(f.runUntil(kitPlaying, kit, "Kit A heard", service));
+    REQUIRE(
+        f.runUntil([&] { return f.playingBeat() >= kit + 1; }, kit, "a beat of Kit A", service));
+    REQUIRE(capture.set(false));
+    CHECK(notices.size() == 1);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: a refused capture commit keeps the performance; a click commits it") {
     LauncherFixture f;
     f.song();
@@ -1096,4 +1146,154 @@ TEST_CASE("launcher: the clip clipboard holds only for the project it was filled
     CHECK(pasted.error().code == "clip.paste");
     CHECK(f.app->head().version == before);
     CHECK(f.app->head().clips.find(*model::Id::parse("cl_1"))->track == model::Id::parse("tr_1"));
+}
+
+TEST_CASE("launcher: a cell shows its clip's key, with a mark when the clip follows") {
+    // gui.md §4.15: under the preview, kFollowMark before the key for Follow.
+    LauncherFixture f;
+    f.song();
+    // Root (Bass, Verse) in D minor, following the key; a Keys clip in G
+    // dorian as written; Kits A and B have no key.
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key D minor ~:w","follow":"key"})");
+    f.exec("clip.add", R"({"track":"tr_3","scene":"sc_2","notation":"voice k; 1: D4:w",)"
+                       R"("context":"1: key G dorian ~:w","name":"Modal"})");
+    const views::LauncherPane& pane = f.view->launcherPane();
+    std::map<std::string, std::string> keys;
+    for (std::size_t i = 0; i < pane.stats.names.size(); ++i)
+        keys[pane.stats.names[i]] = pane.stats.keys.at(i);
+    CHECK(keys ==
+          std::map<std::string, std::string>{{"Kit A", ""},
+                                             {"Kit B", ""},
+                                             {"Root", std::string(views::kFollowMark) + "Dm"},
+                                             {"Modal", "G dor"}});
+    // Following the chords marks it too; none takes the mark away.
+    f.exec("clip.set", R"({"clip":"cl_3","follow":"chords"})");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) ==
+          std::string(views::kFollowMark) + "Dm");
+    f.exec("clip.set", R"({"clip":"cl_3","follow":"none"})");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "Dm");
+    // Short names: minor "m", major bare, the minors' variants and the modes.
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key Eb harmonic_minor ~:w"})");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "Eb hm");
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key F# major ~:w"})");
+    CHECK(views::clipKeyMark(*f.app->head().clips.find(*model::Id::parse("cl_3"))) == "F#");
+    f.snapshot("launcher-keys.png");
+}
+
+TEST_CASE("launcher: laying clips on the timeline says in the status line what their keys did") {
+    // gui.md §4.15: the answers' followed blocks, in a few words, no dialog.
+    LauncherFixture f;
+    f.song();
+    views::LauncherPane& pane = f.view->launcherPane();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    // C minor, then F minor from bar 7. Root (Verse, Bass) is in D minor and
+    // follows the key; Pad (Verse, Keys) is in D minor and follows nothing.
+    f.exec("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    f.exec("key.set", R"({"at": 24, "tonic": "F", "scale": "minor"})");
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key D minor ~:w","follow":"key"})");
+    f.exec("clip.add", R"({"track":"tr_3","scene":"sc_2","notation":"voice k; 1: D4:w",)"
+                       R"("context":"1: key D minor ~:w","name":"Pad"})");
+    auto beatX = [&](double beat) { return f.view->xAt(f.app->head().timeMap->secondsAt(beat)); };
+    // Root dragged onto the Bass lane at bar 5: moved down a tone.
+    const ui::Point from = centre(views::LauncherPane::bodyRect(pane.cellRect(f.row("tr_2"), 1)));
+    const ui::Rect lane = f.view->rowRect(f.row("tr_2"));
+    f.drag(from, {beatX(16) + 1, lane.y + lane.h / 2});
+    REQUIRE(f.commands == std::vector<std::string>{"item.add"});
+    REQUIRE(f.notices.size() == 1);
+    CHECK(f.notices[0] == "Root followed to C minor, −2");
+    // The clip menu's Lay on timeline at playhead: Pad at bar 9 is copied
+    // under F minor, and says so.
+    auto layAtPlayhead = [&](std::size_t row, std::size_t column, double beat) {
+        f.view->setPlayhead(f.app->head().timeMap->secondsAt(beat));
+        f.click(centre(views::LauncherPane::bodyRect(pane.cellRect(row, column))), 0, 1, 3);
+        ui::Node* menu = f.root->find("launcher.clip.menu");
+        REQUIRE(menu);
+        std::function<void()> lay;
+        for (const auto& item : ui::menuItems(*menu))
+            if (item.label == "Lay on timeline at playhead") lay = item.run;
+        REQUIRE(lay);
+        f.root->closePopups();
+        lay();
+        f.sync();
+    };
+    layAtPlayhead(f.row("tr_3"), 1, 32);
+    REQUIRE(f.notices.size() == 2);
+    CHECK(f.notices[1] == "Pad copied: its key D minor differs from F minor at bar 9");
+    // A clip with nothing to say (Kit B: no key, follows nothing) says nothing.
+    layAtPlayhead(f.row("tr_1"), 1, 64);
+    CHECK(f.notices.size() == 2);
+    // The scene menu's Insert at playhead: Verse at bar 21, each clip that
+    // followed or was copied in another key (Kit B says nothing).
+    f.view->setPlayhead(f.app->head().timeMap->secondsAt(80));
+    f.click({header.sceneRect(1).x + 40, header.sceneRect(1).y + 8}, 0, 1, 3);
+    ui::Node* menu = f.root->find("launcher.scene.menu");
+    REQUIRE(menu);
+    const auto insert = ui::menuItems(*menu)[2].run;
+    f.root->closePopups();
+    insert();
+    f.sync();
+    REQUIRE(f.notices.size() == 3);
+    CHECK(f.notices[2] ==
+          "Verse at bar 21: Root followed to F minor, +3; Pad copied: its key D "
+          "minor differs from F minor at bar 21");
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: followNotice words key changes, chords, folding, and sums up a long scene") {
+    LauncherFixture f;
+    f.song();
+    const model::Session& s = f.app->head();
+    auto item = [](const std::string& followed) {
+        return *json::parse(R"({"item":"it_1","followed":)" + followed + "}");
+    };
+    const json::Value root = *json::parse(R"({"clip":"cl_3"})");
+    // Two runs of bars: the second says where it starts.
+    CHECK(
+        views::followNotice(
+            s, "item.add", root,
+            item(
+                R"({"mode":"key","regions":[)"
+                R"({"from_bar":5,"to_bar":6,"from_key":"D minor","to_key":"C minor","by":"transpose","interval":-2},)"
+                R"({"from_bar":7,"to_bar":8,"from_key":"D minor","to_key":"F minor","by":"degree"}],"folded":2})")) ==
+        "Root followed to C minor, −2, then F minor by degree from bar 7 (2 folded into range)");
+    // Chords; a run already in the key (copy) is not a change.
+    CHECK(views::followNotice(s, "item.add", root,
+                              item(R"({"mode":"chords","regions":[{"from_bar":1,"to_bar":1,)"
+                                   R"("from_key":"C minor","to_key":"C minor","by":"copy"},)"
+                                   R"({"from_bar":2,"to_bar":2,"from_key":"C minor",)"
+                                   R"("to_key":"C minor","by":"chords"}]})")) ==
+          "Root followed to C minor by chord");
+    CHECK_FALSE(
+        views::followNotice(s, "item.add", root,
+                            item(R"({"mode":"key","regions":[{"from_bar":1,"to_bar":1,)"
+                                 R"("from_key":"C minor","to_key":"C minor","by":"copy"}]})")));
+    // Already in the key as the engine answers it (Walk, C major under C
+    // major): a transpose by 0, or degrees from a key to itself, say nothing.
+    CHECK_FALSE(views::followNotice(
+        s, "item.add", root,
+        item(R"({"mode":"key","regions":[{"from_bar":23,"to_bar":23,"from_key":"C major",)"
+             R"("to_key":"C major","by":"transpose","interval":0}]})")));
+    CHECK_FALSE(views::followNotice(
+        s, "item.add", root,
+        item(R"({"mode":"key","regions":[{"from_bar":23,"to_bar":23,"from_key":"C major",)"
+             R"("to_key":"C major","by":"degree"}]})")));
+    CHECK(views::followNotice(s, "item.add", root, item(R"({"mode":"none","copied":"drums"})")) ==
+          "Root copied: drums don't follow");
+    CHECK(views::followNotice(s, "item.add", root, item(R"({"mode":"none","copied":"audio"})")) ==
+          "Root copied: audio doesn't follow");
+    CHECK_FALSE(views::followNotice(s, "item.add", root, item(R"({"mode":"none"})")));
+    // A scene whose phrases would not fit the line: counts and names.
+    const std::string moved =
+        R"({"mode":"key","regions":[{"from_bar":3,"to_bar":4,"to_key":"G minor","by":"transpose","interval":5}]})";
+    const std::string off =
+        R"({"mode":"none","mismatch":{"clip_key":"D minor","key":"G minor","bar":3}})";
+    const json::Value answer =
+        *json::parse(R"({"items":[{"clip":"cl_1","followed":)" + moved +
+                     R"(},{"clip":"cl_2","followed":)" + moved + R"(},{"clip":"cl_3","followed":)" +
+                     off + R"(},{"clip":"cl_2","followed":{"mode":"none"}}]})");
+    CHECK(views::followNotice(s, "scene.insert", *json::parse(R"({"scene":"sc_2","bar":3})"),
+                              answer) ==
+          "Verse at bar 3: 2 followed the key (Kit A, Kit B); 1 copied as written (Root)");
+    // Other commands, and refusals' empty answers, say nothing.
+    CHECK_FALSE(views::followNotice(s, "clip.duplicate", root, item(moved)));
 }

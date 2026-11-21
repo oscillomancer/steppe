@@ -466,6 +466,8 @@ void ParamPanel::openMenu(const std::string& key, const std::string& name, bool 
         root_, dispatcher_, [this] { return app_.head(); }, name, std::move(modTarget), owner,
         modulatable && !(owner && s.tracks.find(*owner)->freeze), anchor, error));
     if (auto idle = inertItem(dispatcher_, s, target)) items.push_back(std::move(*idle));
+    if (sourceItems)
+        for (auto& item : sourceItems(target)) items.push_back(std::move(item));
     if (learnable && lane) {
         const bool shown = laneShown(s, target);
         items.push_back({(shown ? "Hide lane: " : "Show lane: ") + name, "",

@@ -135,7 +135,8 @@ instructions are in `docs/guides/installing.md`.
   pooled sharer in another key) are in; on a launcher clip they, and
   `midi.get`, read the clip's own context (ADR-0098, below). In the app
   (C3): key changes in the ruler's meter half and a chord row (shown with the
-  first chord, or by View > Chord row), both edited there (a key change's
+  first chord, or by View > Chord row; the last chord held to the project's
+  end), both edited there (a key change's
   flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
@@ -217,15 +218,19 @@ instructions are in `docs/guides/installing.md`.
   on each laid MIDI take (nothing is unrolled, and a pooled item may follow); the
   answer's `followed` says how the notes sound, by bar, read from
   `model::soundingNotes`. Notes on channel 10 are never mapped, a clip that cannot follow
-  is laid without following and says why, and `launch.commit` copies what was heard and
-  warns `context.mismatch` when a clip's key (or, in the same key, chord) is not the
-  project's under it. `scene.insert` and `arrangement.build` take
+  is laid without following and says why, and `launch.commit` lays the notes as written with
+  each clip's context and the follow the plan used, warning `context.mismatch` only for a
+  clip played as written whose key (or, in the same key, chord) is not the project's under it. `scene.insert` and `arrangement.build` take
   `write_context` (X5): the scenes' own harmony is written to the context
   track under each section that has none. Not built: the engine playing a take's
   `follow` (X4c) and a launched clip following live (X4a): until they land a laid item
   and a launched clip play as written, and `launch.clip` and `launch.scene` warn
   `launch.unfollowed`. The roll shows
-  and edits a clip's context, and the clip inspector sets Follow (X3).
+  and edits a clip's context, and the clip inspector sets Follow (X3). A clip or scene
+  laid from the clip launcher, or written by Capture (`launch.commit`'s
+  `mismatches`), says in the status line how its keys were followed or why a
+  clip was copied (`followed.mismatch` names what differs: a key or a chord); a
+  launcher cell shows its clip's key, marked "→" when the clip follows.
 - **Take context and follow** (ADR-0098 amended, "following is playback"; step
   X4b the model, X4d the commands; session-model "Take context and follow", schema 2.21): a
   MIDI take of an item carries `context`, `context_period`, `context_phase` and
@@ -249,7 +254,13 @@ instructions are in `docs/guides/installing.md`.
   a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
   `context.no_key` warning on every context edit, and `session.describe`. Not
   built: the engine's use of it (X4c): a take's `follow` is stored and nothing
-  plays by it yet, and `item.glue` is not registered.
+  plays by it yet, and `item.glue` is not registered. The GUI shows it (X4e, the model's part): a following take's roll draws
+  its notes where they sound with the written pitches outlined, and a Written
+  cell; the strip shows the song's and the take's chords; the item carries
+  "→D" and a thumbnail at the sounding pitches; the inspector says what the
+  take was written in. Not yet: Follow and Bake in the inspector and the Item
+  menu, editing the take's context in the roll, and degree steps on a following
+  take.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
@@ -333,14 +344,16 @@ instructions are in `docs/guides/installing.md`.
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;
-  - a double-click on an audio clip opens the inspector, as there is no
-    audio clip editor;
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
-    roll (clip-time lanes, with point add, drag and remove; no shape menu or
-    point selection yet); an audio clip's have no lane until its pane is
-    built (after ADR-0098 X3), so they are edited by command only;
+    roll (clip-time lanes, with point selection, the marquee, moves,
+    shapes, copy and paste and the lane's menu as on the timeline, one lane
+    at a time); an audio
+    clip's in its pane (a double-click opens its waveform, in seconds, with
+    the same Lanes menu and lanes, snapping to a seconds grid, and a key
+    button for its one key point), which edits no audio;
   - an item's take FX have lanes on the timeline, drawn across the whole
-    timeline although only the item's span plays;
+    timeline although only the item's span plays (titled with their item
+    when two items on a track automate the same effect's parameter);
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole
@@ -866,7 +879,13 @@ instructions are in `docs/guides/installing.md`.
   the playhead, and an editable row for each modulatable parameter of a
   plain CLAP plug-in. With M4 a parameter reached through its envelope
   (`modulatable_by_envelope`, any VST3 one) takes Modulate too, and an
-  inert route draws idle, with the reason in the parameter menu. The FX window's live value on a modulated slider is
+  inert route draws idle, with the reason in the parameter menu. A
+  modulated plug-in shows "~" on its mixer slot and on its chain's "fx"
+  (track panel and mixer). A lane's header names the parameter first and
+  has a "mod" cell (a modulation-only lane gets title, mod and hide). The
+  inspector lists one track's routes (past four, "N routes"), and the
+  controls' menus have Show modulation source; each opens the rack window
+  with the source picked. The FX window's live value on a modulated slider is
   untested with a running plug-in (the mixer's, which shares its code, is
   tested with the engine running). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next

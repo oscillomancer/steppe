@@ -8,7 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 
+#include "supple/model/follow.h"
 #include "supple/model/session.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/gl.h"
@@ -46,5 +48,14 @@ std::size_t drawAudioBody(ui::StripRenderer& strips, const ui::GlFrame& frame, c
 std::size_t drawMidiBody(ui::RectRenderer& notes, const ui::Rect& r, const model::Take& take,
                          const model::MidiSource& source, const MidiWindow& window,
                          std::uint32_t rgba, std::uint32_t border);
+
+// A following take's notes where they sound (ADR-0098 amended, gui.md §4.3):
+// each heard occurrence (model::soundingNotes) at its song beat less
+// `itemBeat`, at the pitch it sounds, the range fitted as drawMidiBody fits
+// it; at most 8192 glyphs. Returns the notes drawn.
+std::size_t drawSoundingBody(ui::RectRenderer& notes, const ui::Rect& r,
+                             std::span<const model::SoundingNote> heard, const model::Take& take,
+                             const model::MidiSource& source, const MidiWindow& window,
+                             double itemBeat, std::uint32_t rgba, std::uint32_t border);
 
 }  // namespace supple::views

@@ -4,6 +4,7 @@
 // captured performance written onto the timeline as ordinary items.
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,10 +42,19 @@ struct CommittedSection {
     std::string scene, region;
     double start = 0, end = 0;  // beats
 };
+// A launched stretch of a MIDI clip copied under a key that is not the
+// clip's: what its context.mismatch warning says, for a caller to word.
+struct CommittedMismatch {
+    std::string clip;
+    std::string kind;  // "key" | "chord", as followed.mismatch
+    std::optional<std::string> clipKey, key, clipChord, chord;
+    std::int64_t bar = 0;  // the first project bar where they differ
+};
 struct CommitDone {
     std::vector<std::string> tracks, items;
     std::vector<CommittedSection> sections;
-    double from = 0, to = 0;  // beats
+    std::optional<std::vector<CommittedMismatch>> mismatches;  // with context.mismatch
+    double from = 0, to = 0;                                   // beats
 };
 // Lays `perf` out linearly from where it began, by running time (L-f): on
 // each track that left the arrangement, its clip, stopped and held

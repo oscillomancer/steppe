@@ -54,6 +54,7 @@
 #include "meter_feed.h"
 #include "midi_editor.h"
 #include "mixer.h"
+#include "mod_source.h"
 #include "mouse_dialog.h"
 #include "plugin_windows.h"
 #include "preferences.h"
@@ -468,6 +469,13 @@ int frontendMain(int argc, char** argv) {
     };
     pluginWindows.setOwner(window->get());
     gui::MidiEditor midiEditor(root, appActions, dispatcher, **app, uiState);
+    // An audio clip's waveform reads the arrangement's peaks, and repaints
+    // when one arrives as the lanes do.
+    midiEditor.setPeaks(&peaks);
+    peaks.onReady = [previous = std::move(peaks.onReady), &midiEditor](const std::string& key) {
+        if (previous) previous(key);
+        midiEditor.peaksReady();
+    };
     gui::RoutingMatrix routing(routingPanel, appActions, dispatcher, **app);
     shell.onRouting = [&routing](const model::Id&, const ui::Rect& anchor) {
         routing.open(anchor);
@@ -540,6 +548,10 @@ int frontendMain(int argc, char** argv) {
             [&](const std::string& incident) {
                 SDL_RaiseWindow((*window)->sdl());
                 helpActions.crashReports().open(incident);
+            },
+            [&](const model::EnvTarget& target) {
+                const auto catalog = gui::racks::catalog(**app);
+                return gui::modSourceItems(appActions, (*app)->head(), catalog.get(), target);
             }},
         gui::Favourites::defaultFile(product::kSlug));
     // A plugin dragged out of the browser lands on the strip or the track
@@ -586,6 +598,17 @@ int frontendMain(int argc, char** argv) {
     appActions.addUiFor("ui.fx.chain", "FX: chain…", "track", [&](const json::Value& v) -> Status {
         return fxWindow.openFor(uiState, v);
     });
+    // A modulation route's source in the rack window (gui.md §2): a lane's
+    // "mod", the inspector's lines and the parameter menus run it.
+    appActions.addUiFor(
+        "ui.modulation.source", "Modulation: show source", "modulation",
+        [&](const json::Value& v) -> Status {
+            const auto route = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;
+            if (!route || route->kind != model::Kind::Modulation)
+                return Error("modulation.source", "name a modulation route", "/modulation",
+                             "Pass {\"modulation\": \"mr_N\"}; modulation.list names them.");
+            return racks.showModulationSource(*route);
+        });
     appActions.addUi("ui.fx.move_up", "FX: move the selected plugin up the chain",
                      [&] { fxWindow.moveSelected(-1); });
     appActions.addUi("ui.fx.move_down", "FX: move the selected plugin down the chain",
@@ -877,12 +900,10 @@ int frontendMain(int argc, char** argv) {
          [&](model::Id clip) {
              const model::Clip* c = (*app)->head().clips.find(clip);
              if (!c) return;
-             if (c->kind == model::ClipKind::Midi) {
-                 if (auto r = midiEditor.open(clip.str()); !r && appActions.onError)
-                     appActions.onError("MIDI: " + r.error().message);
-             } else {
-                 appActions.invoke("ui.inspector");
-             }
+             // A MIDI clip's roll, or an audio clip's waveform and lanes.
+             if (auto r = midiEditor.open(clip.str()); !r && appActions.onError)
+                 appActions.onError((c->kind == model::ClipKind::Midi ? "MIDI: " : "Audio: ") +
+                                    r.error().message);
          },
          [&](const std::vector<model::Id>& clips) {
              uiState.selectedClips.clear();
@@ -907,11 +928,15 @@ int frontendMain(int argc, char** argv) {
          [&](model::Id take) {
              if (auto r = fxWindow.openTake(take); !r && appActions.onError)
                  appActions.onError("Take FX: " + r.error().message);
-         }});
+         },
+         // What a clip or scene laid on the timeline did with its key.
+         [&shell](const std::string& notice) { shell.setStatus(notice); }});
     // A capture's commit at stop, or the next one's arming, refused.
     shell.capture().onError = [&appActions](const Error& e) {
         if (appActions.onError) appActions.onError("Capture: " + e.message);
     };
+    // What a commit copied under another key (gui.md §4.15), as a lay says it.
+    shell.capture().onNotice = [&shell](const std::string& notice) { shell.setStatus(notice); };
     shell.arrange()->setRulerCallbacks(
         {[&dispatcher](const std::string& command, json::Value args) {
              return dispatcher.execute(

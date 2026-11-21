@@ -343,7 +343,7 @@ bool sameChord(const harmony::Chord& a, const harmony::Chord& b) {
 
 std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
                                      const model::Clip& clip, double start, double length,
-                                     double phase, const std::string& path) {
+                                     double phase, const std::string& path, ContextMismatch* what) {
     if (clip.kind != model::ClipKind::Midi || !(clip.length > 0) || !(length > 0)) return {};
     if (clip.context.empty()) return {};
     // Notes off channel 10 (stored 9): a drum clip, or an empty one, has no pitch to move.
@@ -382,22 +382,38 @@ std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
         const auto pk = pp ? model::parseKey(*pp) : std::nullopt;
         if (ck && pk &&
             !(harmony::pitchClassNumber(ck->tonic) == harmony::pitchClassNumber(pk->tonic) &&
-              ck->scale == pk->scale))
+              ck->scale == pk->scale)) {
+            if (what) {
+                *what = {};
+                what->kind = "key";
+                what->clipKey = model::keyWords(*cp);
+                what->key = model::keyWords(*pp);
+                what->bar = s.timeMap->barBeat(std::max(0.0, b)).bar;
+            }
             return ClipNote{"context.mismatch",
                             name + " was written in " + model::keyWords(*cp) + " and sits under " +
                                 model::keyWords(*pp) + " from " + barWords(s, b) +
                                 ": its notes are copied as they are",
                             path};
+        }
         // The same key (or none to compare) but other chords: the clip's chord at its beat
         // against the project's at this one, where both hold one this build reads.
         const auto cc = model::chordAt(clip, std::max(0.0, inClip));
         const auto pc = model::chordAt(s, b);
-        if (cc && pc && !sameChord(*cc, *pc))
+        if (cc && pc && !sameChord(*cc, *pc)) {
+            if (what) {
+                *what = {};
+                what->kind = "chord";
+                what->clipChord = harmony::printChord(*cc);
+                what->chord = harmony::printChord(*pc);
+                what->bar = s.timeMap->barBeat(std::max(0.0, b)).bar;
+            }
             return ClipNote{"context.mismatch",
                             name + " was written over " + harmony::printChord(*cc) +
                                 " and sits under " + harmony::printChord(*pc) + " from " +
                                 barWords(s, b) + ": its notes are copied as they are",
                             path};
+        }
     }
     return {};
 }

@@ -14,6 +14,24 @@
 
 namespace supple::engine::detail {
 
+schema::Schema<ContextMismatch> contextMismatchSchema() {
+    return schema::object<ContextMismatch>("followed_mismatch")
+        .field("kind", &ContextMismatch::kind,
+               schema::enumeration<std::string>({{"key", "key"}, {"chord", "chord"}})
+                   .doc("What differs: the key, or (in the same key) the chord."))
+        .field("clip_key", &ContextMismatch::clipKey,
+               schema::string().doc("kind key: the clip's key."))
+        .field("key", &ContextMismatch::key,
+               schema::string().doc("kind key: the project's key there, which differs."))
+        .field("clip_chord", &ContextMismatch::clipChord,
+               schema::string().doc("kind chord: the chord the clip was written over."))
+        .field("chord", &ContextMismatch::chord,
+               schema::string().doc("kind chord: the project's chord there, which differs."))
+        .field("bar", &ContextMismatch::bar,
+               schema::integer().doc("The first project bar where they differ."))
+        .build();
+}
+
 schema::Schema<FollowedInfo> followedSchema() {
     auto region = schema::object<FollowRegion>("followed_region")
                       .field("from_bar", &FollowRegion::fromBar,
@@ -41,6 +59,10 @@ schema::Schema<FollowedInfo> followedSchema() {
                                                  {"audio", "audio"},
                                                  {"no_key", "no_key"},
                                                  {"no_notes", "no_notes"}}))
+        .field("mismatch", &FollowedInfo::mismatch,
+               contextMismatchSchema().doc(
+                   "Set with the context.mismatch warning: the notes were copied as they are "
+                   "under a key, or in the same key over a chord, that is not the clip's."))
         .build();
 }
 
@@ -241,8 +263,11 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
     if (outcome == model::ClipFollow::None) {
         info.mode = "none";
         if (copiedBecause) info.copied = copiedBecause;
-        if (auto note = mismatchNote(s, clipId, clip, itemStart, itemBeats, 0.0, path))
+        ContextMismatch what;
+        if (auto note = mismatchNote(s, clipId, clip, itemStart, itemBeats, 0.0, path, &what)) {
             notes.push_back(std::move(*note));
+            if (!what.kind.empty()) info.mismatch = std::move(what);
+        }
         return info;
     }
     info.mode = outcome == model::ClipFollow::Chords ? "chords" : "key";

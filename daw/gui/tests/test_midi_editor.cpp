@@ -7,12 +7,18 @@
 #include "test_support.h"
 
 #include <SDL3/SDL.h>
+#include <stb_image.h>
 
 #include <array>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <set>
+#include <thread>
 
 #include "app_actions.h"
 #include "clip_context_edit.h"
@@ -22,11 +28,14 @@
 #include "midi_event_list.h"
 #include "mixer.h"
 #include "routing_matrix.h"
+#include "supple/audio/audio_file.h"
 #include "supple/base/fader.h"
 #include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
+#include "supple/json/write.h"
 #include "supple/params/params.h"
+#include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/text_area.h"
@@ -34,6 +43,7 @@
 #include "supple/ui/widgets.h"
 #include "supple/views/chord_field.h"
 #include "supple/views/lanes.h"
+#include "supple/views/launcher.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -202,6 +212,37 @@ struct Fixture {
     ui::Point grip() const {
         const ui::Rect b = root->find("midi.grip")->bounds();
         return {b.x + b.w / 2, b.y + b.h / 2};
+    }
+    // The window against daw/gui/tests/golden/<name> (Linux; written when
+    // missing or under SUPPLE_UPDATE_GOLDEN), as the launcher's tests do.
+    void golden(const char* name) {
+        root->damageAll();
+        root->frame(false);
+        const gui::Image image = root->readBack();
+#if !defined(__linux__)
+        REQUIRE(image.width > 0);
+        return;
+#endif
+        const auto path = std::filesystem::path(SUPPLE_GUI_GOLDEN_DIR) / name;
+        if (std::getenv("SUPPLE_UPDATE_GOLDEN") || !std::filesystem::exists(path)) {
+            REQUIRE(gui::writePng(path, image));
+            MESSAGE("golden written: " << path.string());
+            return;
+        }
+        int w = 0, h = 0, n = 0;
+        unsigned char* data = stbi_load(path.string().c_str(), &w, &h, &n, 4);
+        REQUIRE(data);
+        REQUIRE(w == image.width);
+        REQUIRE(h == image.height);
+        std::size_t off = 0;
+        for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
+            int d = 0;
+            for (int c = 0; c < 3; ++c)
+                d = std::max(d, std::abs(int(image.rgba[i + c]) - int(data[i + c])));
+            off += d > 48;
+        }
+        stbi_image_free(data);
+        CHECK(off < image.rgba.size() / 4 / 200);
     }
     void snapshot(const char* name, ui::Root* source = nullptr) {
         const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS");
@@ -3611,11 +3652,9 @@ TEST_CASE("MIDI editor: a clip's take envelopes and take FX parameters get lanes
     f.pointer(ui::PointerEvent::Type::Up, {xAt(11), yAt(0.5)});
     CHECK(points()[1].pos == doctest::Approx(8));
     f.snapshot("midi-editor-clip-lanes.png");
-    // A right-click on a point removes it.
-    ui::PointerEvent right{ui::PointerEvent::Type::Down, {xAt(8), yAt(0.5)}, 3};
-    f.root->pointer(right);
-    right.type = ui::PointerEvent::Type::Up;
-    f.root->pointer(right);
+    // Alt+click on a point removes it (a right-click opens the lane's menu).
+    f.pointer(ui::PointerEvent::Type::Down, {xAt(8), yAt(0.5)}, 1, ui::kAlt);
+    f.pointer(ui::PointerEvent::Type::Up, {xAt(8), yAt(0.5)}, 1, ui::kAlt);
     f.frame();
     CHECK(points().size() == 1);
     // With an instrument in the take FX, the take's volume has a lane: before
@@ -3645,8 +3684,8 @@ TEST_CASE("MIDI editor: a clip's take envelopes and take FX parameters get lanes
     ui::Node* volumeLane = f.root->find("midi.env." + volumeEnv.str());
     REQUIRE(volumeLane);
     const ui::Rect vr = volumeLane->bounds();
-    f.pointer(ui::PointerEvent::Type::Down, {vr.x + 10, vr.y + 26});
-    f.pointer(ui::PointerEvent::Type::Up, {vr.x + 10, vr.y + 26});
+    f.pointer(ui::PointerEvent::Type::Down, {vr.x + 10, vr.y + 10});
+    f.pointer(ui::PointerEvent::Type::Up, {vr.x + 10, vr.y + 10});
     REQUIRE(s.envLanes.size() == 1);
     CHECK(s.envLanes[0].env == env);
     CHECK_FALSE(f.root->find("midi.env." + volumeEnv.str()));
@@ -3660,6 +3699,42 @@ TEST_CASE("MIDI editor: a clip's take envelopes and take FX parameters get lanes
     CHECK(s.envLanes.empty());
     CHECK_FALSE(f.root->find("midi.env." + env.str()));
     CHECK(f.lanesMenu().size() == 6);
+}
+
+TEST_CASE("MIDI editor: a clip's roll marks its end as an audio clip's pane does") {
+    // gui.md §4.7: shaded past the end over the grid, a line and "end".
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec("clip.add",
+               R"({"track":")" + track +
+                   R"(","scene":"sc_1","name":"Riff","notation":"voice v; 1: C4:q D4:q r:h"})")
+            .find("clip")
+            ->asString();
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 60;
+    s.scrollBeat = -0.25;
+    f.frame();
+    // One bar: the end at beat 4, in view.
+    REQUIRE(s.endMarkX);
+    CHECK(*s.endMarkX == doctest::Approx(static_cast<double>(f.at(4, 60).x)).epsilon(0.001));
+    f.golden("midi-clip-end-dark.png");
+    // Scrolled so the end is left of the view: no mark.
+    s.scrollBeat = 6;
+    f.root->damageAll();  // the state set from here: nothing asked for the repaint
+    f.frame();
+    CHECK_FALSE(s.endMarkX);
+    // An item's roll marks its end the same way.
+    REQUIRE(f.editor->open(f.item));
+    s.scrollBeat = s.itemLength - 2;
+    f.root->damageAll();
+    f.frame();
+    REQUIRE(s.endMarkX);
+    CHECK(*s.endMarkX ==
+          doctest::Approx(static_cast<double>(f.at(s.itemLength, 60).x)).epsilon(0.001));
 }
 
 TEST_CASE("MIDI editor: a clip in another key than the project's: degrees preview what commits") {
@@ -3893,6 +3968,523 @@ TEST_CASE("clip context axis: the roll reads each note's key where midi.edit doe
     // Both keys were met: Eb4 (Eb major) and E4 (C major).
     CHECK(sixtyThree > 0);
     CHECK(sixtyThree < 16);
+}
+
+// An audio clip for the pane (gui.md §4.7, mock 93): eight decaying hits
+// over two seconds, as a drum break, in the Verse scene on the Keys.
+static std::string audioClip(Fixture& f) {
+    audio::AudioData hits;
+    hits.sampleRate = 48000;
+    hits.channels.assign(1, std::vector<float>(96000, 0.0f));
+    for (std::size_t i = 0; i < hits.channels[0].size(); ++i) {
+        const double t = static_cast<double>(i % 12000) / 48000;
+        hits.channels[0][i] =
+            static_cast<float>(0.8 * std::exp(-t * 18) * std::sin(static_cast<double>(i) * 0.09));
+    }
+    const auto wav = f.dir / "break.wav";
+    REQUIRE(audio::writeWav(wav, hits));
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    json::Value add = json::Value::object();
+    add["track"] = track;
+    add["scene"] = "sc_1";
+    add["name"] = "Break";
+    add["audio_file"] = wav.string();
+    return f.exec("clip.add", *json::write(add))["clip"].asString();
+}
+
+// Frames until the pane's waveform has its peaks. The deadline only guards
+// a hang: the peak worker can take seconds under a parallel ctest.
+static void settleWave(Fixture& f) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (std::chrono::steady_clock::now() < deadline) {
+        f.root->damageAll();
+        f.frame();
+        if (!f.editor->state().wavePending && f.editor->state().waveColumns > 0) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    FAIL("the waveform's peaks never arrived");
+}
+
+TEST_CASE("MIDI editor: an audio clip opens as its take's waveform in seconds, its end marked") {
+    Fixture f;
+    if (!f.ok) return;
+    peaks::PeakService peaks(f.dir / "peaks", [](std::function<void()>) {});
+    f.editor->setPeaks(&peaks);
+    const std::string clip = audioClip(f);
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    CHECK(s.audio);
+    CHECK(s.itemLength == doctest::Approx(2.0));  // seconds, the clip's unit
+    REQUIRE(s.wave);
+    CHECK(s.wave->label == "Take 1");
+    s.pixelsPerBeat = 300;  // seconds on this axis
+    s.scrollBeat = -0.1;
+    settleWave(f);
+    // Only what an audio clip has: the title, Snap (its lanes' seconds grid),
+    // the key button, Lanes, Close; no grid lengths, Quantize, notation,
+    // event list, velocity or CC.
+    const std::string title = f.root->find("midi.title")->valueText();
+    CHECK(title == "Audio · Keys — Break · clip · 2.00 s");
+    for (const char* id : {"midi.grid.1/4", "midi.quantize", "midi.notation.toggle",
+                           "midi.list.toggle", "midi.notation", "midi.velocity", "midi.cc"}) {
+        INFO(id);
+        CHECK_FALSE(f.root->find(id)->visible);
+    }
+    for (const char* id : {"midi.snap", "midi.key", "midi.lanes", "midi.close", "midi.roll"}) {
+        INFO(id);
+        CHECK(f.root->find(id)->visible);
+    }
+    CHECK(f.editor->keyText() == "No key");
+    CHECK(f.editor->keyButton()->enabled);  // it sets the clip's key
+    f.golden("audio-clip-pane-dark.png");
+    // A press on the waveform edits nothing; the note actions do nothing.
+    const auto version = f.app->head().version;
+    const ui::Rect roll = f.root->find("midi.roll")->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {roll.x + 100, roll.y + 60});
+    f.pointer(ui::PointerEvent::Type::Up, {roll.x + 100, roll.y + 60});
+    f.actions->invoke("ui.midi.quantize");
+    CHECK(f.app->head().version == version);
+    // A MIDI item again: the roll, its controls and the notation are back.
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    CHECK_FALSE(s.audio);
+    for (const char* id :
+         {"midi.grid.1/4", "midi.snap", "midi.notation.toggle", "midi.notation", "midi.velocity"}) {
+        INFO(id);
+        CHECK(f.root->find(id)->visible);
+    }
+    // Alt+E reopens the audio clip it had last.
+    REQUIRE(f.editor->open(clip));
+    f.editor->close();
+    f.actions->invoke("ui.midi.toggle");
+    CHECK(f.editor->state().item == clip);
+
+    f.editor->setPeaks(nullptr);
+}
+
+TEST_CASE("MIDI editor: an audio clip's Lanes menu and clip-time lanes are in seconds") {
+    Fixture f({SUPPLE_CLAP_DIR});  // the stock plug-ins only
+    if (!f.ok) return;
+    peaks::PeakService peaks(f.dir / "peaks", [](std::function<void()>) {});
+    f.editor->setPeaks(&peaks);
+    const std::string clip = audioClip(f);
+    const model::Id take = *f.app->head().clips.find(*model::Id::parse(clip))->activeTake;
+    // A stock effect with a continuous parameter on the clip's take.
+    std::string fxId, name;
+    const json::Value listed = f.exec("plugin.list", "{}");
+    for (const json::Value& p : listed.find("plugins")->asArray()) {
+        if (!fxId.empty() || (p.find("instrument") && p.find("instrument")->asBool())) continue;
+        auto added =
+            f.dispatcher->execute({"fx.add",
+                                   json::parse(R"({"take":")" + take.str() + R"(","plugin":")" +
+                                               p.find("id")->asString() + R"("})")
+                                       .value(),
+                                   kTest});
+        if (!added) continue;
+        const std::string id = (*added)["fx"].asString();
+        const json::Value d = f.exec("fx.describe", R"({"fx":")" + id + R"(","full":true})");
+        if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+            for (const auto& m : ps->asObject()) {
+                auto desc = params::fromDescription(m.key, m.value);
+                if (!desc || (*desc)->spec.type != params::Type::Float ||
+                    ((*desc)->spec.flags & (params::kReadonly | params::kHidden)))
+                    continue;
+                fxId = id;
+                name = (*desc)->name.empty() ? m.key : (*desc)->name;
+                break;
+            }
+        if (fxId.empty()) f.exec("fx.remove", R"({"fx":")" + id + R"("})");
+    }
+    if (fxId.empty()) {
+        MESSAGE("skipped: no stock effect with a continuous parameter");
+        return;
+    }
+    const model::FxInstance& fx = *f.app->head().fx.find(*model::Id::parse(fxId));
+    const std::string effect = fx.label.empty() ? fx.plugin.name : fx.label;
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 300;
+    s.scrollBeat = -0.1;
+    f.frame();
+    // No velocity or CC rows; an audio take's envelopes need no instrument.
+    {
+        REQUIRE(f.root->click("midi.lanes"));
+        f.root->frame(false);
+        ui::Node* menu = f.root->find("midi.lanes.menu");
+        REQUIRE(menu);
+        std::map<std::string, bool> enabled;
+        for (const auto& m : ui::menuItems(*menu))
+            if (!m.separator) enabled[m.label] = m.enabled;
+        f.root->closePopup();
+        CHECK(enabled == std::map<std::string, bool>{{"Take volume", true},
+                                                     {"Take pan", true},
+                                                     {"Take mute", true},
+                                                     {effect + ": parameters…", true}});
+    }
+    // Take volume: an envelope with a point at the clip's start, in seconds.
+    f.pickLane("Take volume");
+    f.frame();
+    REQUIRE(s.envLanes.size() == 1);
+    CHECK(s.envLanes[0].title == "Volume (take)");
+    const model::Id volume = s.envLanes[0].env;
+    const auto points = [&](model::Id env) { return f.app->head().envelopes.find(env)->points; };
+    REQUIRE(points(volume).size() == 1);
+    CHECK(points(volume)[0].pos == 0);
+    // The lanes snap to a seconds grid set by the zoom: 0.1 s at 300 px a
+    // second, so a click at 1.23 s adds a point at 1.2 s, not on a beat.
+    ui::Node* lane = f.root->find("midi.env." + volume.str());
+    REQUIRE(lane);
+    const ui::Rect r = lane->bounds();
+    const float y = r.y + 14 + (r.bottom() - 4 - r.y - 14) / 2;
+    auto click = [&](double seconds) {
+        f.pointer(ui::PointerEvent::Type::Down, {f.at(seconds, 60).x, y});
+        f.pointer(ui::PointerEvent::Type::Up, {f.at(seconds, 60).x, y});
+        f.frame();
+    };
+    CHECK(s.audioGrid() == doctest::Approx(0.1));
+    click(1.23);
+    REQUIRE(points(volume).size() == 2);
+    CHECK(points(volume)[1].pos == doctest::Approx(1.2));
+    // Zoomed in to 1000 px a second the grid is 0.02 s.
+    s.pixelsPerBeat = 1000;
+    s.scrollBeat = 1.0;
+    f.frame();
+    CHECK(s.audioGrid() == doctest::Approx(0.02));
+    click(1.333);
+    REQUIRE(points(volume).size() == 3);
+    CHECK(points(volume)[2].pos == doctest::Approx(1.34));
+    // Snap off (the title says so): a click lands where it is.
+    REQUIRE(f.root->click("midi.snap"));
+    f.frame();
+    CHECK(f.root->find("midi.title")->valueText().ends_with("· snap off"));
+    click(1.457);
+    REQUIRE(points(volume).size() == 4);
+    CHECK(points(volume)[3].pos == doctest::Approx(1.457).epsilon(0.002));
+    REQUIRE(f.root->click("midi.snap"));
+    s.pixelsPerBeat = 300;
+    s.scrollBeat = -0.1;
+    f.frame();
+    // The effect's parameter: its envelope is in time (an audio clip's FX),
+    // its lane under the take's.
+    f.pickLane(effect + ": parameters…");
+    ui::Node* params = f.root->find("midi.lanes.params");
+    REQUIRE(params);
+    std::function<void()> pick;
+    for (const auto& m : ui::menuItems(*params))
+        if (m.label == name) pick = m.run;
+    REQUIRE(pick);
+    f.root->closePopup();
+    pick();
+    f.frame();
+    REQUIRE(s.envLanes.size() == 2);
+    CHECK(s.envLanes[0].env == volume);
+    CHECK(s.envLanes[1].title == effect + " · " + name + " (take)");
+    const model::Envelope& drive = *f.app->head().envelopes.find(s.envLanes[1].env);
+    CHECK(drive.timebase == model::Timebase::Time);
+    REQUIRE(drive.points.size() == 1);
+    CHECK(drive.points[0].pos == 0);
+    settleWave(f);
+    f.golden("audio-clip-lanes-dark.png");
+    f.editor->setPeaks(nullptr);
+}
+
+TEST_CASE("MIDI editor: an audio clip's key button sets its one key point") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"A","scale":"minor"})");
+    const std::string clip = audioClip(f);
+    const model::Id id = *model::Id::parse(clip);
+    // Nothing open yet: Alt+E opens the audio clip picked in the launcher
+    // (before the MIDI item it would open otherwise).
+    f.ui.selectedClips = {clip};
+    f.ui.clipsFocused = true;
+    f.actions->invoke("ui.midi.toggle");
+    CHECK(f.editor->state().item == clip);
+    f.editor->close();
+    REQUIRE(f.editor->open(clip));
+    f.frame();
+    auto& s = f.editor->state();
+    const auto context = [&] { return f.app->head().clips.find(id)->context; };
+    // The button opens the clip's key menu; it never turns degrees on.
+    auto menu = [&] {
+        REQUIRE(f.root->click("midi.key"));
+        f.root->frame(false);
+        ui::Node* m = f.root->find("midi.key.menu");
+        REQUIRE(m);
+        std::map<std::string, std::function<void()>> rows;
+        for (const auto& item : ui::menuItems(*m))
+            if (!item.separator) rows[item.label] = item.run;
+        f.root->closePopup();
+        CHECK_FALSE(s.degrees);
+        CHECK_FALSE(f.editor->keyButton()->on());
+        return rows;
+    };
+    auto type = [&](const char* typed) {
+        f.root->frame(false);
+        f.root->text(typed);
+        f.root->key(SDLK_RETURN);
+        f.frame();
+    };
+    auto rows = menu();
+    CHECK(rows.size() == 2);
+    REQUIRE(rows.contains("Key…"));
+    REQUIRE(rows.contains("Take from the project at bar 1"));
+    // Key…: the field starts from the project's key; D minor becomes the
+    // clip's key at 0, written as bar 1 of holds.
+    rows.at("Key…")();
+    REQUIRE(f.root->find("midi-key-field"));
+    CHECK(f.root->find("midi-key-field")->valueText() == "A minor");
+    type("D minor");
+    CHECK_FALSE(f.root->popupOpen());
+    REQUIRE(context().size() == 1);
+    CHECK(context()[0].type == model::ContextType::Key);
+    CHECK(context()[0].beat == 0);
+    CHECK(context()[0].tonic == "D");
+    CHECK(f.editor->keyText() == "D minor");
+    // What the button sent, which the engine read back to the point above.
+    CHECK(gui::clipLeadSheet(context(), *f.app->head().timeMap, 0.0) == "1: key D minor ~:w\n");
+    // A bad key is refused into the status line, the field kept.
+    std::vector<std::string> said;
+    f.actions->onError = [&](const std::string& message) { said.push_back(message); };
+    menu().at("Key…")();
+    type("H major");  // the field's text is selected: it is replaced
+    CHECK(f.root->popupOpen());
+    REQUIRE(said.size() == 1);
+    f.root->closePopup();
+    // Remove key D minor: none; Take from the project: A minor again.
+    rows = menu();
+    REQUIRE(rows.contains("Remove key D minor"));
+    rows.at("Remove key D minor")();
+    f.frame();
+    CHECK(context().empty());
+    CHECK(f.editor->keyText() == "No key");
+    menu().at("Take from the project at bar 1")();
+    f.frame();
+    REQUIRE(context().size() == 1);
+    CHECK(context()[0].tonic == "A");
+    CHECK(f.editor->keyText() == "A minor");
+}
+
+TEST_CASE("MIDI editor: a clip-time lane selects points, moves them together, shapes them") {
+    // As the timeline's lanes (gui.md §4.3): a click selects, Ctrl+click
+    // adds, a drag moves the selection, the menu shapes it, Delete removes it.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string clip = audioClip(f);  // its take envelopes need no instrument
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 300;
+    s.scrollBeat = -0.1;
+    f.frame();
+    f.pickLane("Take volume");
+    REQUIRE(s.envLanes.size() == 1);
+    const model::Id env = s.envLanes[0].env;
+    f.exec("env.points.set",
+           R"({"env":")" + env.str() +
+               R"(","points":[{"seconds":0,"value":0},{"seconds":0.5,"value":-6},)"
+               R"({"seconds":1,"value":-6},{"seconds":1.5,"value":0}]})");
+    f.frame();
+    const views::EnvScale scale = s.envLanes[0].scale;
+    ui::Node* lane = f.root->find("midi.env." + env.str());
+    REQUIRE(lane);
+    const ui::Rect r = lane->bounds();
+    const float top = r.y + 14, bottom = r.bottom() - 4;
+    const auto yAt = [&](double value) {
+        return bottom - static_cast<float>(scale.toNorm(value)) * (bottom - top);
+    };
+    const auto at = [&](double seconds, double value) {
+        return ui::Point{f.at(seconds, 60).x, yAt(value)};
+    };
+    const auto points = [&] { return f.app->head().envelopes.find(env)->points; };
+    const auto steps = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+    auto click = [&](ui::Point p, unsigned mods = 0) {
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, mods);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, mods);
+        f.frame();
+    };
+    // A click selects a point; Ctrl+click adds another; neither edits.
+    const auto s0 = steps();
+    click(at(0.5, -6));
+    CHECK(s.envSel.size() == 1);
+    click(at(1.0, -6), ui::kCtrl);
+    CHECK(s.envSel.size() == 2);
+    CHECK(steps() == s0);
+    // Dragging one moves both by the same time (Shift: off the grid) and the
+    // same share of the lane: one step.
+    f.pointer(ui::PointerEvent::Type::Down, at(0.5, -6), 1, ui::kShift);
+    f.pointer(ui::PointerEvent::Type::Move, at(0.6, -6), 1, ui::kShift);
+    f.pointer(ui::PointerEvent::Type::Move, at(0.75, -6), 1, ui::kShift);
+    f.pointer(ui::PointerEvent::Type::Up, at(0.75, -6), 1, ui::kShift);
+    f.frame();
+    REQUIRE(points().size() == 4);
+    CHECK(points()[1].pos == doctest::Approx(0.75).epsilon(0.01));
+    CHECK(points()[2].pos == doctest::Approx(1.25).epsilon(0.01));
+    CHECK(points()[1].value == doctest::Approx(-6).epsilon(0.05));
+    CHECK(points()[0].pos == 0);
+    CHECK(points()[3].pos == doctest::Approx(1.5));
+    CHECK(steps() == s0 + 1);
+    CHECK(s.envSel.size() == 2);  // the selection follows its points
+    // The lane's menu: Point shape… > Square shapes the two selected only.
+    auto menu = [&](ui::Point p) {
+        ui::PointerEvent right{ui::PointerEvent::Type::Down, p, 3};
+        f.root->pointer(right);
+        right.type = ui::PointerEvent::Type::Up;
+        f.root->pointer(right);
+        f.root->frame(false);
+        ui::Node* m = f.root->find("midi.env.menu");
+        REQUIRE(m);
+        std::map<std::string, std::pair<bool, std::function<void()>>> rows;
+        for (const auto& item : ui::menuItems(*m))
+            if (!item.separator) rows[item.label] = {item.enabled, item.run};
+        f.root->closePopup();
+        return rows;
+    };
+    auto rows = menu(at(1.8, -12));
+    for (const char* row :
+         {"Insert point", "Select all points", "Delete points", "Point shape…", "Hide"}) {
+        INFO(row);
+        REQUIRE(rows.contains(row));
+        CHECK(rows.at(row).first);
+    }
+    rows.at("Point shape…").second();
+    ui::Node* shapes = f.root->find("midi.env.shape.menu");
+    REQUIRE(shapes);
+    std::function<void()> square;
+    for (const auto& m : ui::menuItems(*shapes))
+        if (m.label == "Square") square = m.run;
+    REQUIRE(square);
+    f.root->closePopup();
+    square();
+    f.frame();
+    CHECK(points()[0].shape == model::PointShape::Linear);
+    CHECK(points()[1].shape == model::PointShape::Square);
+    CHECK(points()[2].shape == model::PointShape::Square);
+    CHECK(points()[3].shape == model::PointShape::Linear);
+    f.snapshot("midi-editor-lane-selection.png");
+    // Delete removes the selected points, one step.
+    const auto s1 = steps();
+    f.root->key(SDLK_DELETE);
+    f.frame();
+    REQUIRE(points().size() == 2);
+    CHECK(points()[1].pos == doctest::Approx(1.5));
+    CHECK(steps() == s1 + 1);
+    CHECK(s.envSel.empty());
+    // Select all points, then a press on the waveform takes the selection away.
+    menu(at(1.8, -12)).at("Select all points").second();
+    CHECK(s.envSel.size() == 2);
+    const ui::Rect roll = f.root->find("midi.roll")->bounds();
+    click({roll.x + 80, roll.y + 40});
+    CHECK(s.envSel.empty());
+    // Without a selection, Delete points and Point shape… are disabled.
+    rows = menu(at(1.8, -12));
+    CHECK_FALSE(rows.at("Delete points").first);
+    CHECK_FALSE(rows.at("Point shape…").first);
+}
+
+TEST_CASE("MIDI editor: a clip-time lane takes a marquee, and copies, cuts and pastes points") {
+    // As the timeline's lanes (gui.md §4.3): a right-drag or a Ctrl-drag from
+    // empty space selects the points inside; the editor's keys and the lane's
+    // menu copy, cut and paste them.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string clip = audioClip(f);
+    REQUIRE(f.editor->open(clip));
+    auto& s = f.editor->state();
+    s.pixelsPerBeat = 300;
+    s.scrollBeat = -0.1;
+    f.frame();
+    f.pickLane("Take volume");
+    f.pickLane("Take pan");
+    REQUIRE(s.envLanes.size() == 2);
+    const model::Id volume = s.envLanes[0].env, pan = s.envLanes[1].env;
+    f.exec("env.points.set",
+           R"({"env":")" + volume.str() +
+               R"(","points":[{"seconds":0,"value":0},{"seconds":0.5,"value":-6},)"
+               R"({"seconds":1,"value":-6},{"seconds":1.5,"value":0}]})");
+    f.frame();
+    const ui::Rect r = f.root->find("midi.env." + volume.str())->bounds();
+    const float top = r.y + 15, bottom = r.bottom() - 5;
+    const auto x = [&](double seconds) { return f.at(seconds, 60).x; };
+    const auto points = [&](model::Id env) { return f.app->head().envelopes.find(env)->points; };
+    const auto steps = [&] { return f.exec("history.list", "{}")["versions"].size(); };
+    const auto s0 = steps();
+    auto rightButton = [&](ui::PointerEvent::Type type, ui::Point p) {
+        ui::PointerEvent e{type, p, 3};
+        f.root->pointer(e);
+        f.frame();
+    };
+    // A right-drag over 0.4-1.1 s takes the two points there, drawn while held.
+    rightButton(ui::PointerEvent::Type::Down, {x(0.4), top});
+    rightButton(ui::PointerEvent::Type::Move, {x(0.8), bottom});
+    rightButton(ui::PointerEvent::Type::Move, {x(1.1), bottom});
+    f.snapshot("midi-editor-lane-marquee.png");
+    rightButton(ui::PointerEvent::Type::Up, {x(1.1), bottom});
+    CHECK_FALSE(f.root->find("midi.env.menu"));  // a drag, not a click
+    CHECK(s.envSel.size() == 2);
+    CHECK(s.envSelLane == volume);
+    // A Ctrl-drag from empty space adds the one at 1.5 s, and adds no point.
+    f.pointer(ui::PointerEvent::Type::Down, {x(1.3), top}, 1, ui::kCtrl);
+    f.pointer(ui::PointerEvent::Type::Move, {x(1.7), bottom}, 1, ui::kCtrl);
+    f.pointer(ui::PointerEvent::Type::Up, {x(1.7), bottom}, 1, ui::kCtrl);
+    f.frame();
+    CHECK(s.envSel.size() == 3);
+    CHECK(points(volume).size() == 4);
+    CHECK(steps() == s0);
+    // Ctrl+X takes them out, one step; Ctrl+V puts them back where they were.
+    f.root->key(SDLK_X, ui::kCtrl);
+    f.frame();
+    REQUIRE(points(volume).size() == 1);
+    CHECK(steps() == s0 + 1);
+    f.root->key(SDLK_V, ui::kCtrl);
+    f.frame();
+    REQUIRE(points(volume).size() == 4);
+    CHECK(points(volume)[1].pos == doctest::Approx(0.5));
+    CHECK(points(volume)[2].value == doctest::Approx(-6));
+    CHECK(points(volume)[3].pos == doctest::Approx(1.5));
+    CHECK(s.envSel.size() == 3);  // the pasted points are the selection
+    CHECK(steps() == s0 + 2);
+    // The pan lane's menu (a right-click without a drag): Paste points at the
+    // pointer, 0.2 s, keeping their offsets.
+    const ui::Rect pr = f.root->find("midi.env." + pan.str())->bounds();
+    ui::PointerEvent right{ui::PointerEvent::Type::Down, {x(0.2), pr.y + 30}, 3};
+    f.root->pointer(right);
+    right.type = ui::PointerEvent::Type::Up;
+    f.root->pointer(right);
+    f.root->frame(false);
+    ui::Node* menu = f.root->find("midi.env.menu");
+    REQUIRE(menu);
+    std::map<std::string, std::pair<bool, std::function<void()>>> rows;
+    for (const auto& item : ui::menuItems(*menu))
+        if (!item.separator) rows[item.label] = {item.enabled, item.run};
+    f.root->closePopup();
+    for (const char* row : {"Copy points", "Cut points", "Paste points"}) {
+        INFO(row);
+        REQUIRE(rows.contains(row));
+    }
+    CHECK(rows.at("Paste points").first);
+    rows.at("Paste points").second();
+    f.frame();
+    std::vector<double> at;
+    for (const model::EnvPoint& p : points(pan)) at.push_back(p.pos);
+    REQUIRE(at.size() >= 3);
+    CHECK(std::count_if(at.begin(), at.end(), [](double v) { return std::abs(v - 0.2) < 1e-6; }) ==
+          1);
+    CHECK(std::count_if(at.begin(), at.end(), [](double v) { return std::abs(v - 0.7) < 1e-6; }) ==
+          1);
+    CHECK(std::count_if(at.begin(), at.end(), [](double v) { return std::abs(v - 1.2) < 1e-6; }) ==
+          1);
+    CHECK(s.envSelLane == pan);
+    // A press on the waveform gives the keys back to the notes: no lane paste.
+    const ui::Rect roll = f.root->find("midi.roll")->bounds();
+    f.pointer(ui::PointerEvent::Type::Down, {roll.x + 80, roll.y + 40});
+    f.pointer(ui::PointerEvent::Type::Up, {roll.x + 80, roll.y + 40});
+    f.frame();
+    CHECK_FALSE(s.envLastLane);
+    const auto s1 = steps();
+    f.root->key(SDLK_V, ui::kCtrl);
+    f.frame();
+    CHECK(steps() == s1);
 }
 
 TEST_CASE("MIDI editor: a clip's key and chords are edited in its roll") {
@@ -4249,4 +4841,159 @@ TEST_CASE("MIDI editor: a launcher clip opens at beat 0 in its own key and chord
     f.exec("clip.remove", R"({"clip":")" + clip + R"("})");
     f.frame();
     CHECK_FALSE(f.editor->isOpen());
+}
+
+namespace {
+
+// The fixture item's heard take given its own context and follow (schema
+// 2.21) through a save and an open: no command sets them before X4d.
+// `context` is the points' JSON array, `follow` "key" or "chords".
+void followTake(Fixture& f, const std::string& context, const std::string& follow) {
+    const auto itemId = model::Id::parse(f.item);
+    REQUIRE(itemId);
+    const model::Item* item = f.app->head().items.find(*itemId);
+    REQUIRE(item);
+    REQUIRE(item->activeTake);
+    const std::string take = item->activeTake->str();
+    const auto path = f.dir / ("follow." + std::string(product::kSlug));
+    auto args = json::Value::object();
+    args["path"] = path.string();
+    REQUIRE(f.dispatcher->execute({"project.save", args, kTest}));
+    std::string bytes;
+    {
+        std::ifstream in(path, std::ios::binary);
+        bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    auto doc = json::parse(bytes);
+    REQUIRE(doc);
+    json::Value& tk = (*doc)["takes"][take];
+    tk["context"] = json::parse(context).value();
+    tk["follow"] = follow;
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << json::writeCompact(*doc);
+    }
+    REQUIRE(f.app->open(path));
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+}
+
+std::string labelText(Fixture& f, const char* id) {
+    auto* label = dynamic_cast<ui::Label*>(f.root->find(id));
+    REQUIRE(label);
+    return label->text();
+}
+
+}  // namespace
+
+// gui.md §4.7 "A following take" (ADR-0098 amended, X4e).
+TEST_CASE(
+    "a following take's roll: where its notes sound, the written outlined, Written, two rows") {
+    Fixture f;
+    if (!f.ok) return;
+    // The song in E minor, Em from the item's start (beat 4); the take written
+    // in C major over C then F, following the key: C4 E4 G4 C5 sound as E4 G4
+    // B4 E5 (harmony.md §5 step 4, C major degrees onto E minor's).
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    f.exec("chord.set", R"({"at":4,"symbol":"Em"})");
+    followTake(f,
+               R"([{"beat":0,"type":"key","tonic":"C","scale":"major"},
+                   {"beat":0,"type":"chord","symbol":"C"},
+                   {"beat":2,"type":"chord","symbol":"F"}])",
+               "key");
+    auto& s = f.editor->state();
+    REQUIRE(s.following);
+    REQUIRE(s.notes.size() == 4);
+    auto pitches = [&] {
+        std::vector<int> drawn, outlined;
+        for (std::size_t i = 0; i < s.notes.size(); ++i) {
+            drawn.push_back(s.drawnPitch(i, s.notes[i]));
+            outlined.push_back(s.outlinePitch(i, s.notes[i]).value_or(-1));
+        }
+        return std::pair{drawn, outlined};
+    };
+    // The sounding view by default: the notes where they sound, the written
+    // pitches outlined.
+    CHECK(s.soundingView());
+    CHECK(pitches().first == std::vector<int>{64, 67, 71, 76});
+    CHECK(pitches().second == std::vector<int>{60, 64, 67, 72});
+    REQUIRE(f.editor->writtenButton());
+    CHECK(f.editor->writtenButton()->visible);
+    CHECK_FALSE(f.editor->passButton()->visible);  // one pass
+    CHECK(f.editor->keyText() == "E minor");
+    CHECK_FALSE(f.editor->keyButton()->enabled);  // no degree mode on a following take yet
+    CHECK(labelText(f, "midi.title")
+              .find("follows C major " + std::string(views::kFollowMark) + " E minor") !=
+          std::string::npos);
+    // The notation is the take's text: written, and says so.
+    CHECK(labelText(f, "midi.notation.title") == "Notation \u00b7 written");
+    // The strip: the song's chords, then the take's, dim.
+    CHECK(f.editor->chordLabels() == std::vector<std::string>{"Em"});
+    CHECK(f.editor->otherChordLabels() == std::vector<std::string>{"C", "F"});
+    f.golden("midi-following-sounding.png");
+    // A click hits a note where it is drawn, not its outline.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 64));
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.5, 64));
+    CHECK(s.selected == std::set<std::size_t>{0});
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 60));
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.5, 60));
+    CHECK(s.selected.empty());
+
+    // Written: the written pitches, the sounding ones outlined, the take's
+    // key and chords first, the song's second; remembered with the layout.
+    REQUIRE(f.root->click("midi.written"));
+    f.frame();
+    CHECK(s.written);
+    CHECK_FALSE(s.soundingView());
+    CHECK(pitches().first == std::vector<int>{60, 64, 67, 72});
+    CHECK(pitches().second == std::vector<int>{64, 67, 71, 76});
+    CHECK(f.editor->keyText() == "C major");
+    CHECK(labelText(f, "midi.title").find("written in C major") != std::string::npos);
+    CHECK(f.editor->chordLabels() == std::vector<std::string>{"C", "F"});
+    CHECK(f.editor->otherChordLabels() == std::vector<std::string>{"Em"});
+    const json::Value layout = f.editor->saveLayout();
+    REQUIRE(layout.find("written"));
+    CHECK(layout.find("written")->asBool());
+    REQUIRE(f.root->click("midi.written"));
+    f.frame();
+    CHECK(s.soundingView());
+}
+
+TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or says it cannot") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"}])", "key");
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    // D5 sounds from B4 (C major's seventh degree onto E minor's).
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.6, 74), 2);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.6, 74), 2);
+    bool written = false;
+    const json::Value notes = f.notes();
+    for (const json::Value& n : notes.asArray())
+        if (n.find("pitch")->asInt() == 71 && std::abs(n.find("start")->asDouble() - 0.5) < 1e-9)
+            written = true;
+    CHECK(written);
+    CHECK(errors.empty());
+    // No written pitch sounds as G#4 here (C major's E and F go to G and A):
+    // nothing is written, and the status line says so.
+    const auto before = f.notes().asArray().size();
+    f.pointer(ui::PointerEvent::Type::Down, f.at(2.6, 68), 2);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(2.6, 68), 2);
+    CHECK(f.notes().asArray().size() == before);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0] == "MIDI: nothing written sounds as G#4 here: draw it in Written");
+}
+
+TEST_CASE("a take that does not follow opens its roll as written, with no Written cell") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    CHECK_FALSE(f.editor->state().following);
+    CHECK_FALSE(f.editor->writtenButton()->visible);
+    CHECK_FALSE(f.editor->passButton()->visible);
+    CHECK(labelText(f, "midi.notation.title") == "Notation");
+    CHECK(f.editor->otherChordLabels().empty());
 }

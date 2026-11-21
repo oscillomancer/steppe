@@ -30,10 +30,14 @@ struct FollowedInfo {
     std::string mode = "none";  // none | key | chords: what was done
     std::optional<std::vector<FollowRegion>> regions;
     std::optional<std::int64_t> folded;  // notes that were folded into range
-    std::optional<std::string> copied;   // why a clip that could not follow was copied
+    std::optional<std::string> copied;    // why a clip that could not follow was copied
+    std::optional<ContextMismatch> mismatch;  // with context.mismatch: what differs, and the bar
 };
 
 schema::Schema<FollowedInfo> followedSchema();
+
+// The `mismatch` object: kind key (clip_key, key) or chord (clip_chord, chord), and bar.
+schema::Schema<ContextMismatch> contextMismatchSchema();
 
 // The `follow` argument as the commands take it.
 schema::Schema<model::ClipFollow> followArgSchema();

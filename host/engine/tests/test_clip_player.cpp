@@ -1663,6 +1663,10 @@ TEST_CASE("launch.commit copies a launched clip and warns when its key is not th
     for (const auto& w : warnings->asArray())
         mismatch |= w.find("code")->asString() == "context.mismatch";
     CHECK(mismatch);
+    // The answer says the same for a program: the clip, both keys and the bar.
+    REQUIRE(done.find("mismatches"));
+    CHECK(json::writeCompact(*done.find("mismatches")) ==
+          R"([{"clip":"cl_1","kind":"key","clip_key":"D minor","key":"C minor","bar":1}])");
     // A clip laid one item per period (its length twice its content) says it once per stretch,
     // not once per period.
     p.run("clip.set", R"({"clip": "cl_1", "length": 8})");
@@ -1675,9 +1679,11 @@ TEST_CASE("launch.commit copies a launched clip and warns when its key is not th
     for (const auto& w : laid.find("warnings")->asArray())
         mismatches += w.find("code")->asString() == "context.mismatch";
     CHECK(mismatches == 1);
+    CHECK(laid.find("mismatches")->size() == 1);
     p.run("clip.set", R"({"clip": "cl_1", "length": 4})");
     // The notes are as they were played: nothing was mapped.
     p.run("clip.set", R"({"clip": "cl_1", "context": "1: key C minor ~:w"})");
     json::Value again = p.runArgs("launch.commit", args);
     CHECK_FALSE(again.find("warnings"));
+    CHECK_FALSE(again.find("mismatches"));
 }

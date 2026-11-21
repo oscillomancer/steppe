@@ -1250,7 +1250,10 @@ and naming. All `edit` unless marked (q) query or (a) action.
   one of its tracks is launched again or the capture ends, in the same
   undo step; a clip launched alone, or some of a scene's, writes none, and
   committing again keeps a section already there; answers `{tracks, items,
-  sections: [{scene, region, start, end}], from, to}`. `performance` is filled from the
+  sections: [{scene, region, start, end}], mismatches?: [{clip, kind,
+  clip_key?, key?, clip_chord?, chord?, bar}], from, to}`, where `mismatches` lists each
+  stretch that gave `context.mismatch`, as the warning words it (the object is
+  `followed.mismatch`'s, with the clip). `performance` is filled from the
   capture and recorded in history: `{sample_rate, start, frames, loop?,
   launches: [{frame, track, action, clip?, scene?, anchor, anchor_beat}]}`;
   `scene` names the scene when `launch.scene` launched it (none for a
@@ -2389,7 +2392,14 @@ whose start rule is the only rule.)*
   `harmony::follow`; the answer counts the notes with `folded`.
 - **The answer** gains per laid item `followed: {mode, regions?: [{from_bar,
   to_bar, from_key?, to_key?, by, interval?}], folded?, unrolled?,
-  copied?}`.
+  copied?, mismatch?: {kind, clip_key?, key?, clip_chord?, chord?, bar}}`.
+  - `mismatch` is set exactly when the item gives `context.mismatch`, and names
+    what differs: `kind: "key"` with `clip_key` and `key` (the clip's key, the
+    project's), or, in the same key, `kind: "chord"` with `clip_chord` and
+    `chord`; and in both `bar`, the first project bar where they differ, as the
+    warning words them, so a caller need not read the message (a scene's
+    warning points at `/scene`, not at the item). `launch.commit`'s
+    `mismatches` carry the same object with the clip's id.
   - A region is a maximal run of project bars over which the clip's key, the
     place's key and the way notes were mapped stay the same. Regions are read
     from the bars where notes start; a bar where none does (a rest, a held

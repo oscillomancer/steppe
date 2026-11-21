@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "app_actions.h"
+#include "plugin_scales.h"
 #include "supple/base/result.h"
 #include "supple/engine/app.h"
 #include "supple/model/session.h"
@@ -90,6 +91,9 @@ class Inspector {
     void readTracks(bool force);
     void readClip(bool force);
     void commitNotes(const std::string& text);  // one track's notes, when they changed
+    // One track's Modulation row (gui.md §4.14): a line per route, "N routes"
+    // past four; shown only while something of the track is modulated.
+    void readModulation(model::Id id);
     ui::Root& root_;
     engine::EngineApp& app_;
     const UiState& selection_;
@@ -99,12 +103,16 @@ class Inspector {
     ui::Node* trackBox_ = nullptr;           // the track fields
     ui::Node* colors_ = nullptr;             // the track colour swatches
     ui::TextArea* notes_ = nullptr;          // one track's notes
+    ui::Node* modLines_ = nullptr;           // the Modulation row's lines
+    std::string modShown_;                   // what they were built from
+    std::unique_ptr<PluginScales> scales_;   // plug-in parameters' names
     std::string notesShown_;                 // as the session has them
     std::map<std::string, ui::Node*> rows_;  // a field's row, to hide with it
     std::map<std::string, Field> fields_;
     std::map<std::string, ui::Toggle*> states_;
     ui::Dropdown* timebase_ = nullptr;
-    ui::Node* clipBox_ = nullptr;  // one launcher clip's fields (clip.set)
+    ui::Label* writtenIn_ = nullptr;  // the heard take's own key (Written in)
+    ui::Node* clipBox_ = nullptr;     // one launcher clip's fields (clip.set)
     ui::Node* clipColors_ = nullptr;
     ui::Dropdown* clipMode_ = nullptr;
     ui::Dropdown* clipQuantize_ = nullptr;

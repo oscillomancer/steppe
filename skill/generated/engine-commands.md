@@ -305,6 +305,40 @@ Kind: `edit`. Exposure: `mcp-exec`.
                     "copied": {
                       "type": "string",
                       "enum": ["drums", "audio", "no_key", "no_notes"]
+                    },
+                    "mismatch": {
+                      "type": "object",
+                      "title": "followed_mismatch",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["key", "chord"],
+                          "description": "What differs: the key, or (in the same key) the chord."
+                        },
+                        "clip_key": {
+                          "type": "string",
+                          "description": "kind key: the clip's key."
+                        },
+                        "key": {
+                          "type": "string",
+                          "description": "kind key: the project's key there, which differs."
+                        },
+                        "clip_chord": {
+                          "type": "string",
+                          "description": "kind chord: the chord the clip was written over."
+                        },
+                        "chord": {
+                          "type": "string",
+                          "description": "kind chord: the project's chord there, which differs."
+                        },
+                        "bar": {
+                          "type": "integer",
+                          "description": "The first project bar where they differ."
+                        }
+                      },
+                      "required": ["kind", "bar"],
+                      "additionalProperties": false,
+                      "description": "Set with the context.mismatch warning: the notes were copied as they are under a key, or in the same key over a chord, that is not the clip's."
                     }
                   },
                   "required": ["mode"],
@@ -9454,6 +9488,40 @@ Kind: `edit`. Exposure: `mcp-tool`.
         "copied": {
           "type": "string",
           "enum": ["drums", "audio", "no_key", "no_notes"]
+        },
+        "mismatch": {
+          "type": "object",
+          "title": "followed_mismatch",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["key", "chord"],
+              "description": "What differs: the key, or (in the same key) the chord."
+            },
+            "clip_key": {
+              "type": "string",
+              "description": "kind key: the clip's key."
+            },
+            "key": {
+              "type": "string",
+              "description": "kind key: the project's key there, which differs."
+            },
+            "clip_chord": {
+              "type": "string",
+              "description": "kind chord: the chord the clip was written over."
+            },
+            "chord": {
+              "type": "string",
+              "description": "kind chord: the project's chord there, which differs."
+            },
+            "bar": {
+              "type": "integer",
+              "description": "The first project bar where they differ."
+            }
+          },
+          "required": ["kind", "bar"],
+          "additionalProperties": false,
+          "description": "Set with the context.mismatch warning: the notes were copied as they are under a key, or in the same key over a chord, that is not the clip's."
         }
       },
       "required": ["mode"],
@@ -11111,6 +11179,46 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "required": ["scene", "region", "start", "end"],
         "additionalProperties": false
       }
+    },
+    "mismatches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "committed_mismatch",
+        "properties": {
+          "clip": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["key", "chord"],
+            "description": "What differs: the key, or (in the same key) the chord."
+          },
+          "clip_key": {
+            "type": "string",
+            "description": "kind key: the clip's key."
+          },
+          "key": {
+            "type": "string",
+            "description": "kind key: the project's key there, which differs."
+          },
+          "clip_chord": {
+            "type": "string",
+            "description": "kind chord: the chord the clip was written over."
+          },
+          "chord": {
+            "type": "string",
+            "description": "kind chord: the project's chord there, which differs."
+          },
+          "bar": {
+            "type": "integer",
+            "description": "The first project bar where they differ."
+          }
+        },
+        "required": ["clip", "kind", "bar"],
+        "additionalProperties": false
+      },
+      "description": "Each launched stretch of a MIDI clip copied under a key that is not the clip's, as its context.mismatch warning says it."
     },
     "from": {
       "type": "number"
@@ -18901,6 +19009,40 @@ Kind: `edit`. Exposure: `mcp-exec`.
               "copied": {
                 "type": "string",
                 "enum": ["drums", "audio", "no_key", "no_notes"]
+              },
+              "mismatch": {
+                "type": "object",
+                "title": "followed_mismatch",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["key", "chord"],
+                    "description": "What differs: the key, or (in the same key) the chord."
+                  },
+                  "clip_key": {
+                    "type": "string",
+                    "description": "kind key: the clip's key."
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "kind key: the project's key there, which differs."
+                  },
+                  "clip_chord": {
+                    "type": "string",
+                    "description": "kind chord: the chord the clip was written over."
+                  },
+                  "chord": {
+                    "type": "string",
+                    "description": "kind chord: the project's chord there, which differs."
+                  },
+                  "bar": {
+                    "type": "integer",
+                    "description": "The first project bar where they differ."
+                  }
+                },
+                "required": ["kind", "bar"],
+                "additionalProperties": false,
+                "description": "Set with the context.mismatch warning: the notes were copied as they are under a key, or in the same key over a chord, that is not the clip's."
               }
             },
             "required": ["mode"],
@@ -19864,6 +20006,40 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "copied": {
           "type": "string",
           "enum": ["drums", "audio", "no_key", "no_notes"]
+        },
+        "mismatch": {
+          "type": "object",
+          "title": "followed_mismatch",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["key", "chord"],
+              "description": "What differs: the key, or (in the same key) the chord."
+            },
+            "clip_key": {
+              "type": "string",
+              "description": "kind key: the clip's key."
+            },
+            "key": {
+              "type": "string",
+              "description": "kind key: the project's key there, which differs."
+            },
+            "clip_chord": {
+              "type": "string",
+              "description": "kind chord: the chord the clip was written over."
+            },
+            "chord": {
+              "type": "string",
+              "description": "kind chord: the project's chord there, which differs."
+            },
+            "bar": {
+              "type": "integer",
+              "description": "The first project bar where they differ."
+            }
+          },
+          "required": ["kind", "bar"],
+          "additionalProperties": false,
+          "description": "Set with the context.mismatch warning: the notes were copied as they are under a key, or in the same key over a chord, that is not the clip's."
         }
       },
       "required": ["mode"],

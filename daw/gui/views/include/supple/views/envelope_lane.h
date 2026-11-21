@@ -53,12 +53,40 @@ std::string envTitle(const model::Envelope& env);
 // (others as above).
 std::string envTitle(const model::Envelope& env, const model::Session& session,
                      const EnvScale* scale = nullptr);
+// That title in its parts: the parameter ("Filter 1 Cutoff", "Volume"),
+// what owns it ("Marram", "Teasel 2", "Send → Reverb", a group's name,
+// "Bells » Osc"; "" for a strip's own), and a note ("(take)", "(take:
+// Stabs, bar 14)"). envTitle is "owner · param note"; a lane's header says
+// the parameter first (headerText: "Filter 1 Cutoff · Marram"), since that
+// is what tells two lanes apart.
+struct LaneTitle {
+    std::string param, owner, note;
+    std::string headerText() const;
+};
+LaneTitle laneTitle(const model::Envelope& env, const model::Session& session,
+                    const EnvScale* scale = nullptr);
 // The envelope's value at a beat (points are in beats), with the segment
 // shapes the engine plays; `fallback` when it has no points.
 double envValueAt(const model::Envelope& env, double beat, double fallback);
 // The order lanes appear under their track: volume, pan, mute, then others,
 // then its sends' (volume, pan, mute).
 int envOrder(const model::Envelope& env);
+
+// The modulation mark (gui.md §2), drawn in `signal-cv` wherever something
+// is modulated: a plug-in's slot, a chain's "fx". The one place it is
+// spelled.
+inline constexpr std::string_view kModMark = "~";
+// The routes on `target`, enabled or not, in id order.
+std::vector<model::Id> routesOn(const model::Session& session, const model::EnvTarget& target);
+// Whether some route, enabled or not, moves a parameter of the effect `fx`.
+bool fxModulated(const model::Session& session, model::Id fx);
+// Whether some plug-in in the track's chain or input chain is modulated.
+bool chainModulated(const model::Session& session, model::Id track);
+// The same with an enabled route: where every route is off, the mark (and a
+// lane's "mod") is drawn dimmed, in `ink-faint` (gui.md §2).
+bool routeOn(const model::Session& session, const model::EnvTarget& target);
+bool fxModulationOn(const model::Session& session, model::Id fx);
+bool chainModulationOn(const model::Session& session, model::Id track);
 
 // Modulation (ADR-0096). Whether a route's source input carries 0..1 (every
 // cable into it from a unipolar, gate or phase output); the app supplies it

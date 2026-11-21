@@ -12,6 +12,7 @@
 #include <set>
 
 #include "learn_dialog.h"
+#include "mod_source.h"
 #include "plugin_browser.h"
 #include "supple/engine/midi_control.h"
 #include "supple/rack/host_modules.h"
@@ -879,6 +880,19 @@ std::string RackWindow::status() const {
     if (waitsForPlay()) out += "  ·  Stopped: press play to start the patch";
     if (!notice_.empty() && app_.head().version == noticeVersion_) out += "  ·  " + notice_;
     return out;
+}
+
+Status RackWindow::showModulationSource(model::Id route) {
+    const model::Session s = app_.head();
+    const auto view = modSourceView(s, route);
+    if (!view)
+        return Error("modulation.source", route.str() + " is not a modulation route", "",
+                     "Pick a route that exists: modulation.list names them.");
+    open(view->rack);
+    if (!space_) return Error("rack.window", "the rack window could not open", "", "");
+    space_->select(view->modules);
+    space_->revealWhenLaidOut(view->modules);
+    return {};
 }
 
 void RackWindow::open(std::optional<model::Id> rack) {
