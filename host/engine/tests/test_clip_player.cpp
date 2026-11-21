@@ -144,7 +144,7 @@ struct Live {
 };
 Live playLive(const model::Session& s, const fs::path& dir, const EngineOptions& options,
               std::uint32_t block, std::int64_t frames, const std::vector<Step>& steps,
-              const Loop& loop = {}) {
+              const Loop& loop = {}, double start = 0.0) {
     InstancePool pool = makePool();
     MediaCache media;
     DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
@@ -152,6 +152,7 @@ Live playLive(const model::Session& s, const fs::path& dir, const EngineOptions&
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
     REQUIRE(engine.load(s, dir));
     if (loop) engine.setLoop(loop->first, loop->second, true);
+    if (start > 0.0) engine.seek(start);
     engine.play();
     const auto run = [&](std::int64_t cycles) {
         if (cycles <= 0) return;
@@ -466,6 +467,46 @@ TEST_CASE("live launches play as the offline replay of their log, in both execut
                 REQUIRE(plain);
                 CHECK(maxDiff(live.left, live.latency, plain->audio.channels[0], 48000 * 5) > 0.0);
             }
+}
+
+TEST_CASE("a replay from a play start past 0 places the launches as live, looped or not" *
+          doctest::description("rt")) {
+    // Round 74 F1: the log's anchors are timeline samples, and the replay's
+    // plan counts from its start. Played from 2 s, with the loop at 1-3 s
+    // (the start after the loop's start) and without it.
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    const std::int64_t frames = 48000 * 4 + 8192;
+    for (const Loop& loop : {Loop{}, kWrapBeforeAnchor})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("looped " << bool(loop) << ", anticipative " << options.anticipative);
+            constexpr std::uint32_t block = 128;
+            Engine::LaunchRequest stop = backTo("tr_2");
+            stop.action = LaunchLogEntry::Action::Stop;
+            const std::vector<Step> steps{{20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}},
+                                          {(96000 + 4000) / block, {backTo("tr_1"), stop}}};
+            const Live live =
+                playLive(s, p.app->projectDir(), options, block, frames, steps, loop, 2.0);
+            REQUIRE(live.log.size() == 4);
+            // Bar 2 after the wrap at 3 s, or bar 3 (4 s) without the loop.
+            CHECK(live.log[0].anchorSample == (loop ? 96000 : 192000));
+            CHECK(live.log[0].runningFrame == 96000);
+            InstancePool pool = makePool();
+            OfflineSettings settings;
+            settings.startSeconds = 2.0;
+            settings.endSeconds = 6.0;
+            settings.projectDir = p.app->projectDir();
+            settings.launches = live.log;
+            settings.loop = loop;
+            auto offline = renderOffline(s, pool, settings);
+            REQUIRE(offline);
+            CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 4) == 0.0);
+            settings.launches.clear();
+            auto plain = renderOffline(s, pool, settings);
+            REQUIRE(plain);
+            CHECK(maxDiff(live.left, live.latency, plain->audio.channels[0], 48000 * 4) > 0.0);
+        }
 }
 
 TEST_CASE("live launches through the bridge play as the offline replay" *
