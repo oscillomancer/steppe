@@ -477,7 +477,8 @@ std::string durationText(std::int64_t ticks, int ppq);
   including the bars that a copy line (`3-4 = 1-2`) or a bar range
   (`2-4: …`) repeats.
 - Entries are ordered by tick, then by voice declaration order (the order of
-  the voices' first `voice` lines).
+  the voices' first `voice` lines). The implicit voice ("Implicit voice":
+  bars before any `voice` line) counts as declared first.
 - A tied continuation adds none, and a symbol that failed (with its warning)
   adds none.
 - The text format, `compile`'s notes and `decompile` are unchanged.

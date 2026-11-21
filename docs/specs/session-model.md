@@ -2064,8 +2064,8 @@ bars.
   end. What is checked is the points: each lies in `[0, length)`
   (`clip.context_range`, naming the bar).
 - On an audio clip the text holds only `key TONIC SCALE` at the start of bar
-  1, with holds or rests, whose durations are not compared with the clip's
-  length.
+  1, with holds (`~:DUR`) only, whose durations are not compared with the
+  clip's length. A rest there is `clip.context_audio`.
 
 **Commands (X1).**
 - **`clip.add {context?, context_at?, follow?}`** takes at most one of
@@ -2074,7 +2074,9 @@ bars.
   - `context_at` reads the project's context from that place for the clip's
     length: the key and the chord holding there become points at 0, and the
     points inside the span follow, shifted. With no key there, the clip gets
-    no key and the answer warns `context.no_key`.
+    no key and the answer warns `context.no_key`. It gives the place's points
+    as a stated `context` with them would, so the resolved text in history
+    replays exactly (below).
   - `clip.add {item}` takes the context under the item the same way, from
     the item's start, unless `context` or `context_at` is given, which wins.
     An audio clip takes the key only.
@@ -2088,14 +2090,16 @@ bars.
   - Of two different symbols at one tick, the one in the earlier-declared
     voice wins, with `clip.chord_conflict`.
   - Equal neighbours collapse, and a rest does not end a chord.
-  - With a stated `context` holding chords, or with `context_at`, the
-    symbols are ignored with `clip.chords_ignored`. A stated `context`
-    holding only a key takes the symbols' chords too.
+  - With a stated `context` holding chords, or a `context_at` (or an item)
+    whose span holds a chord, the symbols are ignored with
+    `clip.chords_ignored`. A stated `context` holding only a key, and a
+    `context_at` or item span with no chord, take the symbols' chords. So
+    `context_at` and its resolved `context` text give the same points.
 - **`clip.set {context?, context_at?, follow?}`:** `context: ""` clears the
   context, and `follow` goes as in `clip.add`.
 - **`midi.write` on a clip** whose text holds chord symbols replaces the
   clip's chord points when they differ from the symbols', with
-  `clip.chords_replaced`, and keeps its keys. A text without symbols leaves
+  `clip.chords_set` (also when the clip had none), and keeps its keys. A text without symbols leaves
   the context alone.
 - **`scene.capture`** gives each clip the context under its item.
 - **History** records `context_at`, and the context taken under an item,
@@ -2105,11 +2109,15 @@ bars.
   - `clip.duplicate` and `clip.move` keep `context` and `follow`.
   - `take.extract` from a clip and `item.export` copy the notes, with no
     following and no warning.
-- **`midi.get` on a MIDI clip** answers its `context` in the item shape
-  (schema `midi_context`):
-  - `keys` and `chords` are runs `{item_bar, what, beat}`, with the clip bar
-    as `item_bar`, `beat` from the clip's start, and `project_bar` omitted;
-  - plus `text`, the canonical clip lead sheet, and `follow`.
+- **`midi.get` on a MIDI clip** answers its `context` in the item shape,
+  one schema (`midi_context`) for both:
+  - `keys` and `chords` are runs `{item_bar, project_bar?, beat?, what}`. On
+    an item, as today: `project_bar` present, `beat` absent. On a clip:
+    the clip bar as `item_bar`, `beat` from the clip's start, `project_bar`
+    absent.
+  - `context.text`, the canonical clip lead sheet, is present on clips only.
+  - `follow` is a top-level member of `midi.get`'s result, present on clips
+    only.
   - Its pitch names follow the clip's own key at its start (none: the
     default table); the project's start is no longer read.
   - There is no `clip.get`: `session.describe` writes a clip's key at 0
@@ -2118,7 +2126,8 @@ bars.
   - `clip.context_syntax` and the lead sheet's own errors, naming the clip
     bar;
   - `clip.context_range`;
-  - `clip.context_audio` (chords, or a key not at 0, on an audio clip);
+  - `clip.context_audio` (chords, a key not at 0, or a rest, on an audio
+    clip);
   - `clip.context_args`;
   - `clip.no_key` (`follow` without a readable key at 0);
   - `clip.follow_audio`;
@@ -2138,14 +2147,19 @@ bars.
 
 **Laying a clip (X1: the warning; X2: following).**
 - **Where.** `item.add {clip}`, `scene.insert` and `arrangement.build` take
-  `follow?: none | key | chords`, defaulting to each clip's `follow`.
+  `follow?: none | key | chords` (X2), defaulting to each clip's `follow`.
   `launch.commit` copies, as heard (ADR-0098).
+- **Until X2** those three copy every clip as `none`, whatever its `follow`,
+  and give the mismatch warning below. The `follow` argument and the
+  mapping arrive with X2.
 - **Following never refuses and never fails.**
   - A `follow` other than `none` applies to each clip that can follow: a
     MIDI clip with a readable key at 0 and a note off channel 10 (stored
     channel 9).
   - Any other clip is copied, and its item's answer says why:
-    `followed: {mode: "none", copied: "drums" | "audio" | "no_key"}`.
+    `followed: {mode: "none", copied: "drums" | "audio" | "no_key" |
+    "no_notes"}`, `no_notes` for a MIDI clip without notes (it has no
+    `regions`).
 - **A note's sounding beat** is where it starts from the item's start,
   through the take's start offset and playrate and the item's loop.
   - Its place is the item's start plus its sounding beat.
@@ -2173,11 +2187,14 @@ bars.
     the mapped source.
   - Otherwise it is laid unrolled: loop off, its passes written out and each
     mapped at its place. The answer says `unrolled: true`.
+  - An unrolled item's other takes are unrolled alike, by plain repetition
+    and unmapped, so every take of the item has the same length and loop
+    state, and activating one later plays it over the whole item.
   - `pooled: true` with a mapping that moves any note: `clip.follow_pooled`
     (the one refusal; it is about the shared source, not the mapping).
 - **Range.** A mapped pitch outside 0..127 is folded by octaves inside
   `harmony::follow`; the answer counts the notes with `folded`.
-- **The answer** gains per laid item `followed: {mode, regions: [{from_bar,
+- **The answer** gains per laid item `followed: {mode, regions?: [{from_bar,
   to_bar, from_key?, to_key?, by, interval?}], folded?, unrolled?,
   copied?}`.
   - A region is a maximal run of project bars over which the clip's key, the
