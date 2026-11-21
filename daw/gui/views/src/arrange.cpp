@@ -1784,8 +1784,15 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
     if (!launcherCallbacks_.run)
         return Error("gui.launcher", "the clip launcher has no command path", {},
                      "wire ArrangeView::setLauncherCallbacks");
+    // Clips laid on the timeline: what they did with their keys goes to the
+    // status line (gui.md §4.15).
+    const bool lays = command == "item.add" || command == "scene.insert";
+    const json::Value asked = lays ? args : json::Value();
     auto r = launcherCallbacks_.run(command, std::move(args));
     if (!r && launcherCallbacks_.onError) launcherCallbacks_.onError(r.error());
+    if (r && lays && launcherCallbacks_.onNotice)
+        if (const auto notice = followNotice(session(), command, asked, *r))
+            launcherCallbacks_.onNotice(*notice);
     return r;
 }
 void ArrangeView::setCaptureArmed(bool armed) {

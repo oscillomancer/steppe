@@ -912,7 +912,9 @@ int frontendMain(int argc, char** argv) {
          [&](model::Id take) {
              if (auto r = fxWindow.openTake(take); !r && appActions.onError)
                  appActions.onError("Take FX: " + r.error().message);
-         }});
+         },
+         // What a clip or scene laid on the timeline did with its key.
+         [&shell](const std::string& notice) { shell.setStatus(notice); }});
     // A capture's commit at stop, or the next one's arming, refused.
     shell.capture().onError = [&appActions](const Error& e) {
         if (appActions.onError) appActions.onError("Capture: " + e.message);

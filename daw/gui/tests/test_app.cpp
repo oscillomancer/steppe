@@ -57,11 +57,13 @@
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/shortcut.h"
 #include "supple/ui/text_field.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/launcher.h"
 #include "tap_tempo_button.h"
 #include "transport_bar.h"
 #include "ui_persistence.h"
@@ -5727,4 +5729,71 @@ TEST_CASE("the FX window's lane lookup finds an envelope added by the parameter'
     REQUIRE(gui::setLaneShown(dispatcher, app.head(), byKey, true, envArgs, 0.0));
     CHECK(gui::laneShown(app.head(), byKey));
     CHECK(app.head().envelopes.size() == 1);
+}
+
+TEST_CASE("a scene inserted from the launcher says in the status line what its clips' keys did") {
+    // gui.md §4.15, wired as the app wires it: onNotice to Shell::setStatus.
+    App a(1400, 900);
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    struct Detach {
+        ui::Root& root;
+        ~Detach() { root.setContent(std::make_unique<ui::Node>("detached")); }
+    } detach{*a.root};
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    views::ArrangeView& arrange = *shell.arrange();
+    std::vector<std::string> errors;
+    views::LauncherCallbacks callbacks;
+    callbacks.run = [&](const std::string& command, json::Value args) {
+        return a.dispatcher->execute(
+            {command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+    };
+    callbacks.onError = [&](const Error& e) { errors.push_back(e.message); };
+    callbacks.onNotice = [&](const std::string& notice) { shell.setStatus(notice); };
+    arrange.setLauncherCallbacks(callbacks);
+    auto exec = [&](const char* command, const std::string& args) {
+        auto r = a.dispatcher->execute(
+            {command, json::parse(args).value(), {cmd::Origin::Type::Ui, "gui", {}}});
+        INFO(command << ": " << (r ? std::string() : r.error().toString()));
+        REQUIRE(r);
+    };
+    for (const char* name : {"Drums", "Bass", "Keys"})
+        exec("track.add", std::string(R"({"type":"channel","name":")") + name + R"("})");
+    exec("scene.add", R"({"name":"Verse"})");
+    exec("key.set", R"({"at": 0, "tonic": "D", "scale": "minor"})");
+    exec("clip.add", R"({"track":"tr_1","scene":"sc_1","name":"Kit",)"
+                     R"("notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    exec("clip.add", R"({"track":"tr_2","scene":"sc_1","name":"Bass","follow":"key",)"
+                     R"("context":"1: key C minor ~:w","notation":"voice b; 1: C2:h G1:h"})");
+    exec("clip.add", R"({"track":"tr_3","scene":"sc_1","name":"Keys",)"
+                     R"("context":"1: key C minor ~:w","notation":"voice k; 1: [C4 Eb4 G4]:w"})");
+    shell.sync();
+    a.root->frame(false);
+    // Verse's menu: Insert at playhead, at bar 1.
+    views::LauncherHeader& header = arrange.launcherHeader();
+    const ui::Rect verse = header.sceneRect(0);
+    for (auto type : {ui::PointerEvent::Type::Down, ui::PointerEvent::Type::Up}) {
+        ui::PointerEvent e{type, {verse.x + 40, verse.y + 8}, 3};
+        a.root->pointer(e);
+    }
+    a.root->frame(false);
+    ui::Node* menu = a.root->find("launcher.scene.menu");
+    REQUIRE(menu);
+    std::function<void()> insert;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label == "Insert at playhead") insert = item.run;
+    REQUIRE(insert);
+    a.root->closePopups();
+    insert();
+    shell.sync();
+    a.root->frame(false);
+    CHECK(errors.empty());
+    const ui::Node* status = a.root->find("status");
+    REQUIRE(status);
+    CHECK(status->valueText().ends_with(
+        " · Verse at bar 1: Bass followed to D minor, +2; Keys copied: its key C minor differs "
+        "from D minor at bar 1"));
+    a.snapshot("launcher-follow-status.png");
 }

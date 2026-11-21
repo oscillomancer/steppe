@@ -65,6 +65,9 @@ struct LauncherCallbacks {
     std::function<void(bool on)> capture;
     // The clip menu's Take FX…: open the chain of the clip's active take.
     std::function<void(model::Id take)> takeFx;
+    // What laying clips on the timeline did with their keys (followNotice),
+    // for the status line; not called when there is nothing to say.
+    std::function<void(const std::string&)> onNotice;
 };
 
 // The pane's geometry, shared by its body and its header cell: one column
@@ -117,6 +120,16 @@ bool launchRefused(const model::Session& session, const model::Clip& clip);
 // A scene's launch is refused when one of the clips it would start is:
 // Engine::launch takes them together (launch.scene skips frozen tracks).
 bool sceneLaunchRefused(const model::Session& session, model::Id scene);
+
+// What a command that laid clips on the timeline did with their keys, in a
+// few words for the status line (gui.md §4.15), read from the answer's
+// `followed` blocks: "Bass followed to D minor, +2", "Keys copied: its key C
+// minor differs from D minor at bar 21", "Drums copied: drums don't follow";
+// for scene.insert the scene and its bar, then each clip, or counts when
+// they would not fit. `command` and `args` are what ran (item.add {clip} or
+// scene.insert); nothing when no clip was mapped or copied in another key.
+std::optional<std::string> followNotice(const model::Session& session, const std::string& command,
+                                        const json::Value& args, const json::Value& answer);
 
 // The clip in a channel's cell of a scene.
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);

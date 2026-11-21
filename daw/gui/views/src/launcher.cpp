@@ -43,6 +43,124 @@ int barAtOrAfter(const time::TimeMap& map, double beat) {
     return map.beatOfBar(at.bar) < beat - 1e-9 ? at.bar + 1 : at.bar;
 }
 
+namespace {
+
+// "+2", "−3": semitones as the status line says them.
+std::string semitones(std::int64_t n) {
+    return (n < 0 ? "\u2212" : "+") + std::to_string(n < 0 ? -n : n);
+}
+
+std::string jsonText(const json::Value* v) {
+    return v && v->isString() ? v->asString() : std::string();
+}
+
+// A laid clip's name for the status line: its own, else its track's.
+std::string laidName(const model::Session& s, const std::string& clipId) {
+    const auto id = model::Id::parse(clipId);
+    const model::Clip* clip = id ? s.clips.find(*id) : nullptr;
+    if (!clip) return "The clip";
+    if (!clip->name.empty()) return clip->name;
+    if (const model::Track* t = s.tracks.find(clip->track); t && !t->name.empty()) return t->name;
+    return "The clip";
+}
+
+enum class Laid { Quiet, Followed, Copied };
+
+// One laid clip's phrase, and whether it was mapped or copied in another key.
+std::pair<Laid, std::string> laidPhrase(const std::string& name, const json::Value* followed) {
+    if (!followed || !followed->isObject()) return {Laid::Quiet, {}};
+    const std::string mode = jsonText(followed->find("mode"));
+    if (mode == "key" || mode == "chords") {
+        // Each run of bars the notes moved over: its key, and how far.
+        std::vector<std::string> runs;
+        const json::Value* regions = followed->find("regions");
+        if (regions && regions->isArray())
+            for (const json::Value& r : regions->asArray()) {
+                const std::string by = jsonText(r.find("by"));
+                if (by == "copy") continue;
+                std::string run = jsonText(r.find("to_key"));
+                if (run.empty()) run = "the chords";
+                if (const json::Value* iv = r.find("interval"); by == "transpose" && iv)
+                    run += ", " + semitones(iv->asInt());
+                else if (by == "degree")
+                    run += " by degree";
+                else if (by == "chords")
+                    run += " by chord";
+                if (!runs.empty())
+                    if (const json::Value* from = r.find("from_bar"))
+                        run += " from bar " + std::to_string(from->asInt());
+                runs.push_back(std::move(run));
+            }
+        if (runs.empty()) return {Laid::Quiet, {}};  // already in the key: nothing moved
+        std::string text = name + " followed to " + runs[0];
+        if (runs.size() > 1) text += ", then " + runs[1];
+        if (runs.size() > 2) text += ", and " + std::to_string(runs.size() - 2) + " more";
+        if (const json::Value* folded = followed->find("folded"); folded && folded->asInt() > 0)
+            text += " (" + std::to_string(folded->asInt()) + " folded into range)";
+        return {Laid::Followed, std::move(text)};
+    }
+    if (const json::Value* m = followed->find("mismatch"); m && m->isObject())
+        return {Laid::Copied, name + " copied: its key " + jsonText(m->find("clip_key")) +
+                                  " differs from " + jsonText(m->find("key")) + " at bar " +
+                                  std::to_string(m->find("bar") ? m->find("bar")->asInt() : 1)};
+    const std::string copied = jsonText(followed->find("copied"));
+    if (copied == "drums") return {Laid::Copied, name + " copied: drums don't follow"};
+    if (copied == "audio") return {Laid::Copied, name + " copied: audio doesn't follow"};
+    if (copied == "no_key") return {Laid::Copied, name + " copied: it has no key to follow from"};
+    if (copied == "no_notes") return {Laid::Copied, name + " copied: it has no notes to move"};
+    return {Laid::Quiet, {}};
+}
+
+}  // namespace
+
+std::optional<std::string> followNotice(const model::Session& s, const std::string& command,
+                                        const json::Value& args, const json::Value& answer) {
+    if (!answer.isObject()) return std::nullopt;
+    if (command == "item.add") {
+        const std::string clip = jsonText(args.find("clip"));
+        if (clip.empty()) return std::nullopt;
+        auto [laid, text] = laidPhrase(laidName(s, clip), answer.find("followed"));
+        if (laid == Laid::Quiet) return std::nullopt;
+        return text;
+    }
+    if (command != "scene.insert") return std::nullopt;
+    const json::Value* items = answer.find("items");
+    if (!items || !items->isArray()) return std::nullopt;
+    std::vector<std::string> phrases, followed, copied;
+    for (const json::Value& item : items->asArray()) {
+        const std::string name = laidName(s, jsonText(item.find("clip")));
+        auto [laid, text] = laidPhrase(name, item.find("followed"));
+        if (laid == Laid::Quiet) continue;
+        phrases.push_back(std::move(text));
+        (laid == Laid::Followed ? followed : copied).push_back(name);
+    }
+    if (phrases.empty()) return std::nullopt;
+    std::string head = "The scene";
+    if (const auto id = model::Id::parse(jsonText(args.find("scene"))))
+        if (const model::Scene* sc = s.scenes.find(*id); sc && !sc->name.empty()) head = sc->name;
+    if (const json::Value* bar = args.find("bar"); bar && bar->isNumber())
+        head += " at bar " + std::to_string(bar->asInt());
+    std::string all;
+    for (const std::string& p : phrases) all += (all.empty() ? "" : "; ") + p;
+    if (all.size() <= 110) return head + ": " + all;
+    // Too long for the line: how many followed and how many were copied in
+    // another key or for a reason, by name.
+    auto names = [](const std::vector<std::string>& v) {
+        std::string out;
+        for (std::size_t i = 0; i < v.size() && i < 3; ++i) out += (i ? ", " : "") + v[i];
+        if (v.size() > 3) out += ", \u2026";
+        return out;
+    };
+    std::string text = head + ":";
+    if (!followed.empty())
+        text +=
+            " " + std::to_string(followed.size()) + " followed the key (" + names(followed) + ")";
+    if (!copied.empty())
+        text += std::string(followed.empty() ? " " : "; ") + std::to_string(copied.size()) +
+                " copied as written (" + names(copied) + ")";
+    return text;
+}
+
 bool launchRefused(const model::Session& s, const model::Clip& clip) {
     // launch_runtime.cpp:323: plan->rateStretch && the clip is not MIDI.
     if (clip.kind == model::ClipKind::Midi || !s.project) return false;
