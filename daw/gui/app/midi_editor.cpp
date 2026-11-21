@@ -2828,7 +2828,7 @@ void MidiEditor::openEnvLaneMenu(model::Id env, ui::Point at, double pos, double
         std::vector<model::EnvPoint> next = points;
         next.insert(
             std::upper_bound(next.begin(), next.end(), pos,
-                             [](double at, const model::EnvPoint& p) { return at < p.pos; }),
+                             [](double beat, const model::EnvPoint& p) { return beat < p.pos; }),
             pt);
         state_.envSelLane = env;
         state_.envSel = {{pos, value}};
