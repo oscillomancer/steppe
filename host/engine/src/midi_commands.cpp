@@ -797,13 +797,13 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
             return std::tie(tick, channel, pitch) < std::tie(o.tick, o.channel, o.pitch);
         }
     };
-    const auto collect = [](const model::Session& at, Id item) {
+    const auto collect = [](const model::Session& at, Id of) {
         std::vector<Heard> out;
-        const double itemStart = model::itemSpan(at, *at.items.find(item)).startBeat;
-        for (const model::SoundingNote& h : model::soundingNotes(at, item, -1e18, 1e18)) {
+        const double itemStart = model::itemSpan(at, *at.items.find(of)).startBeat;
+        for (const model::SoundingNote& h : model::soundingNotes(at, of, -1e18, 1e18)) {
             const double beat = std::max(h.songBeat, itemStart);
             out.push_back({std::llround(beat * 960.0), h.channel + 1,
-                           h.channel == 9 ? h.written : h.sounds.pitch, item, beat});
+                           h.channel == 9 ? h.written : h.sounds.pitch, of, beat});
         }
         return out;
     };

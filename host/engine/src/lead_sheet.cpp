@@ -108,11 +108,10 @@ Result<LeadSheet> parseLeadSheet(const time::TimeMap& map, std::string_view text
     // One bar of a statement: `tokens[0]` is its `N:` (or empty after a `|`), the items follow.
     // Bars run in order; the first one a sheet names sets where it starts.
     const auto readBar = [&](int bar, const std::vector<std::string>& tokens,
-                             std::size_t lineNumber) -> std::optional<Error> {
+                             std::size_t atLine) -> std::optional<Error> {
         if (bar < 1)
-            return Error("context.syntax",
-                         "line " + std::to_string(lineNumber) + ": bars start at 1", "/text",
-                         "the first project bar is 1");
+            return Error("context.syntax", "line " + std::to_string(atLine) + ": bars start at 1",
+                         "/text", "the first project bar is 1");
         if (sheet.points.empty() && previous == 0) {
             sheet.firstBar = bar;
         } else if (bar != previous + 1) {
