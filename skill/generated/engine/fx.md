@@ -1,6 +1,6 @@
 # `fx` commands
 
-Plug-ins on tracks and takes: add, parameters, patches, chains.
+Plug-ins on tracks and takes: add, set, parameters, patches, presets.
 
 Generated from the command registry; `index.md` lists the groups.
 

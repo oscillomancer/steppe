@@ -116,7 +116,8 @@ class McpTools(unittest.TestCase):
         extra += [("describe", {"group": "nonesuch"}), ("describe", {"text": "e"}),
                   ("describe", {"text": "automate"}), ("describe", {"text": "AUTOMATE"}),
                   ("describe", {"kind": "Query"}), ("describe", {"tag": "nonesuch"}),
-                  ("describe", {"text": "zzzzq"}), ("describe", {"group": "fxx"})]
+                  ("describe", {"text": "zzzzq"}), ("describe", {"group": "fxx"}),
+                  ("describe", {"text": "sidechain"})]
         for options in [(), ("--tools", "core"), ("--tools", "all")]:
             with self.subTest(options=options):
                 lines = self.exchange(extra, *options)
@@ -211,6 +212,8 @@ class McpTools(unittest.TestCase):
                 self.assertIn("describe {}", empty["structuredContent"]["hint"])
                 self.assertEqual(wrong["structuredContent"]["code"], "command.unknown_group")
                 self.assertIn("describe {}", wrong["structuredContent"]["hint"])
+                # A word only a group's line says leads there: sidechain is route's.
+                self.assertIn("route", replies[base + 8]["structuredContent"]["hint"])
 
     def test_registry_groups_on_the_command_line(self):
         groups = json.loads(subprocess.run([BINARY, "registry", "--groups"], capture_output=True,

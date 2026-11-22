@@ -1,6 +1,6 @@
 # `batch` commands
 
-Run several commands as one step of history.
+Run several commands atomically (in the DAW, one undo step).
 
 Generated from the command registry; `index.md` lists the groups.
 

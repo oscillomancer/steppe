@@ -1,6 +1,6 @@
 # `route` commands
 
-Sends and MIDI routes between tracks and channels.
+Sends, sidechain keys and MIDI routes between tracks.
 
 Generated from the command registry; `index.md` lists the groups.
 

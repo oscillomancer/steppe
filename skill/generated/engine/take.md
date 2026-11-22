@@ -1,6 +1,6 @@
 # `take` commands
 
-Takes of an item: add, activate, bake, extract, hits, context.
+Takes of an item: add, activate, bake, extract, hits, stretch.
 
 Generated from the command registry; `index.md` lists the groups.
 

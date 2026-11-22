@@ -485,7 +485,7 @@ Registry::Registry() {
         },
         {"List one group", json::Value::object(), json::Value::object(), "empty"});
     describeGroup("registry", "The command registry: list, describe and group the commands.");
-    describeGroup("batch", "Run several commands as one step of history.");
+    describeGroup("batch", "Run several commands atomically (in the DAW, one undo step).");
     describeGroup("job", "Background jobs: status, wait and cancel.");
     auto stepSchema =
         objectSchema({{"command", string}, {"args", anyObject}, {"as", string}}, {"command"});

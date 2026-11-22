@@ -3,7 +3,7 @@
   "product": "Steppe",
   "version": "0.6.0",
   "groups": {
-    "batch": "Run several commands as one step of history.",
+    "batch": "Run several commands atomically (in the DAW, one undo step).",
     "job": "Background jobs: status, wait and cancel.",
     "registry": "The command registry: list, describe and group the commands."
   },

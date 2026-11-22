@@ -1,6 +1,6 @@
 # `item` commands
 
-Items on tracks: add, move, edit, consolidate, heal and export.
+Items on tracks: add, set, move, split, paste, consolidate, export.
 
 Generated from the command registry; `index.md` lists the groups.
 

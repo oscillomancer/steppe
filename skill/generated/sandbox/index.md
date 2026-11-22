@@ -5,7 +5,7 @@ Generated from the command registry. Read this index, then the file of the group
 | Group | Commands | What it is |
 | --- | --- | --- |
 | [`analyze`](analyze.md) | 1 | Analyze a render or audio file: loudness, spectrum, pitch. |
-| [`batch`](batch.md) | 1 | Run several commands as one step of history. |
+| [`batch`](batch.md) | 1 | Run several commands atomically (in the DAW, one undo step). |
 | [`compare`](compare.md) | 1 | Compare two renders or files by their descriptors. |
 | [`dsp`](dsp.md) | 8 | DSP scripts: write, check, test, preview and export. |
 | [`job`](job.md) | 5 | Background jobs: status, wait and cancel. |

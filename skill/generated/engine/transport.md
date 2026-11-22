@@ -1,6 +1,6 @@
 # `transport` commands
 
-Transport: play, pause, loop, punch, metronome, play rate.
+Transport: play, stop, seek, record, loop, punch, metronome, rate.
 
 Generated from the command registry; `index.md` lists the groups.
 

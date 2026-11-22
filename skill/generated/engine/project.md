@@ -1,6 +1,6 @@
 # `project` commands
 
-The project: new, open, save, recover and its settings.
+The project: new, open, save, recover, templates and its settings.
 
 Generated from the command registry; `index.md` lists the groups.
 

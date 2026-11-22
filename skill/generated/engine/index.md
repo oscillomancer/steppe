@@ -9,7 +9,7 @@ Generated from the command registry. Read this index, then the file of the group
 | [`audio`](audio.md) | 3 | Audio items: quantize hits, detach or reset warping. |
 | [`audition`](audition.md) | 3 | Audition a file or item: play it, stop it, see what is playing. |
 | [`autoitem`](autoitem.md) | 6 | Automation items on envelopes: add, duplicate, set, pool, remove. |
-| [`batch`](batch.md) | 1 | Run several commands as one step of history. |
+| [`batch`](batch.md) | 1 | Run several commands atomically (in the DAW, one undo step). |
 | [`branch`](branch.md) | 7 | Project branches: create, switch, diff, merge, render A/B. |
 | [`cable`](cable.md) | 3 | Cables inside a rack: connect outputs to inputs or knobs. |
 | [`chord`](chord.md) | 2 | Chord points of the song context: set or remove one at a beat. |
@@ -19,10 +19,10 @@ Generated from the command registry. Read this index, then the file of the group
 | [`dsp`](dsp.md) | 8 | DSP scripts: write, check, test, preview and export as plug-ins. |
 | [`engine`](engine.md) | 5 | The audio engine: devices, inputs, start, stop and status. |
 | [`env`](env.md) | 5 | Envelopes: automate a mixer or plug-in parameter with points. |
-| [`fx`](fx.md) | 25 | Plug-ins on tracks and takes: add, parameters, patches, chains. |
+| [`fx`](fx.md) | 25 | Plug-ins on tracks and takes: add, set, parameters, patches, presets. |
 | [`group`](group.md) | 7 | Track groups: members, links and targets. |
 | [`history`](history.md) | 3 | Undo, redo and the list of recent versions. |
-| [`item`](item.md) | 13 | Items on tracks: add, move, edit, consolidate, heal and export. |
+| [`item`](item.md) | 13 | Items on tracks: add, set, move, split, paste, consolidate, export. |
 | [`job`](job.md) | 5 | Background jobs: status, wait and cancel. |
 | [`key`](key.md) | 2 | Key points of the song context: set or remove one at a beat. |
 | [`launch`](launch.md) | 7 | Launcher playback: launch scenes and clips, stop, capture, commit. |
@@ -33,20 +33,20 @@ Generated from the command registry. Read this index, then the file of the group
 | [`modulation`](modulation.md) | 5 | Rack modulation routes: Mod Out to plug-in parameters. |
 | [`module`](module.md) | 16 | Rack modules: add, edit, copy, fork, and their knobs. |
 | [`plugin`](plugin.md) | 4 | Scanned plug-ins: list, scan and override their metadata. |
-| [`project`](project.md) | 13 | The project: new, open, save, recover and its settings. |
+| [`project`](project.md) | 13 | The project: new, open, save, recover, templates and its settings. |
 | [`rack`](rack.md) | 15 | Modular racks on channels: add, arrange, patch, levels, presets. |
 | [`region`](region.md) | 4 | Named regions in beats: add, list, set, remove. |
 | [`registry`](registry.md) | 3 | The command registry: list, describe and group the commands. |
 | [`render`](render.md) | 13 | Render the mix or stems: presets, queue, dry run, regions. |
-| [`route`](route.md) | 8 | Sends and MIDI routes between tracks and channels. |
+| [`route`](route.md) | 8 | Sends, sidechain keys and MIDI routes between tracks. |
 | [`scene`](scene.md) | 7 | Launcher scenes (columns): add, insert, move, capture, set. |
 | [`script`](script.md) | 1 | Run a Lua script on the command bus. |
 | [`session`](session.md) | 1 | Describe the whole session as compact text. |
 | [`sync`](sync.md) | 2 | External sync settings (clock, MTC, LTC) and their status. |
-| [`take`](take.md) | 12 | Takes of an item: add, activate, bake, extract, hits, context. |
+| [`take`](take.md) | 12 | Takes of an item: add, activate, bake, extract, hits, stretch. |
 | [`tempo`](tempo.md) | 1 | The tempo map: replace its points. |
 | [`time`](time.md) | 1 | Convert seconds, beats and bars to one another. |
 | [`timesig`](timesig.md) | 2 | Meter changes by bar: set or remove. |
-| [`track`](track.md) | 16 | Tracks, channels and busses: add, move, describe, freeze, learn. |
-| [`transport`](transport.md) | 12 | Transport: play, pause, loop, punch, metronome, play rate. |
+| [`track`](track.md) | 16 | Tracks, channels, busses: add, set level/pan/arm, move, freeze. |
+| [`transport`](transport.md) | 12 | Transport: play, stop, seek, record, loop, punch, metronome, rate. |
 | [`vca`](vca.md) | 7 | VCA faders: add, members, learn. |

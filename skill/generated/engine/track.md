@@ -1,6 +1,6 @@
 # `track` commands
 
-Tracks, channels and busses: add, move, describe, freeze, learn.
+Tracks, channels, busses: add, set level/pan/arm, move, freeze.
 
 Generated from the command registry; `index.md` lists the groups.
 
