@@ -458,7 +458,8 @@ optional and Structured Content permits JSON-object results independently:
 3. `describe {command: <name>}` is unchanged: full args/result schemas, errors, examples and
    command metadata. Budget: under 16,000 bytes for any command.
 
-`tag`, `kind` and `text` (names and summaries) search across all groups, alone or with `group`,
+`tag`, `kind` and `text` (names and summaries, ASCII letters in either case: `automate` finds
+"Automate a parameter") search across all groups, alone or with `group`,
 and answer in the step-2 shape. At most 60 rows come back; a longer answer is never cut
 silently: it carries `truncated: true` and a `hint` to narrow the filter with `group`, `kind`,
 `tag` or a longer `text`, and no count. Search budget: under 6,000 bytes. Tests with the real

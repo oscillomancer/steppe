@@ -648,6 +648,15 @@ std::vector<const CommandInfo*> Registry::all() const {
     }
     return out;
 }
+namespace {
+// Letters A-Z folded to a-z; every other byte, UTF-8 included, is left as it is.
+std::string asciiLower(std::string_view text) {
+    std::string out(text);
+    for (char& ch : out)
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+    return out;
+}
+}  // namespace
 json::Value Registry::groupsResult(std::string_view group) const {
     json::Value result = json::Value::object();
     result["groups"] = json::Value::array();
@@ -665,14 +674,15 @@ json::Value Registry::listResult(std::string_view tag, std::string_view kind, st
                                  std::string_view group) const {
     json::Value result = json::Value::object();
     result["commands"] = json::Value::array();
+    const std::string needle = asciiLower(text);
     for (auto* info : all()) {
         if (!group.empty() && groupOf(info->name) != group) continue;
         if (!tag.empty() &&
             std::find(info->tags.begin(), info->tags.end(), tag) == info->tags.end())
             continue;
         if (!kind.empty() && kindName(info->kind) != kind) continue;
-        if (!text.empty() && info->name.find(text) == std::string::npos &&
-            info->summary.find(text) == std::string::npos)
+        if (!needle.empty() && asciiLower(info->name).find(needle) == std::string::npos &&
+            asciiLower(info->summary).find(needle) == std::string::npos)
             continue;
         json::Value item = json::Value::object();
         item["name"] = info->name;

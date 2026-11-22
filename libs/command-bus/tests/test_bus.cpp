@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <thread>
 using namespace supple;
 using namespace supple::cmd;
@@ -411,6 +412,29 @@ TEST_CASE("the reference splits by group: an index, then one file per group") {
     for (const auto& group : registry.groupInfos())
         CHECK(std::filesystem::exists(directory / (group.name + ".md")));
     std::filesystem::remove_all(directory);
+}
+TEST_CASE("registry.list text matches names and summaries in any ASCII case") {
+    auto registry = makeRegistry();
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    const auto named = [&](const char* text) {
+        json::Value args = json::Value::object();
+        args["text"] = text;
+        auto listed = call(dispatcher, "registry.list", args);
+        REQUIRE(listed);
+        std::set<std::string> names;
+        for (const auto& entry : listed->find("commands")->asArray())
+            names.insert(entry.find("name")->asString());
+        return names;
+    };
+    // toy.add's summary is "Add to the toy counter."
+    CHECK(named("add to the").count("toy.add") == 1);
+    CHECK(named("ADD TO THE").count("toy.add") == 1);
+    CHECK(named("Add To The").count("toy.add") == 1);
+    CHECK(named("TOY.ADD").count("toy.add") == 1);  // names too
+    CHECK(named("nothing like this").empty());
+    // Only ASCII is folded: a non-ASCII letter matches itself and nothing else.
+    CHECK(named("\xC3\x89").empty());
 }
 TEST_CASE("meta commands, generators and examples") {
     auto registry = makeRegistry();

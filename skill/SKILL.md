@@ -19,7 +19,7 @@ tools need no lookup. To find any other command, walk `describe` in three steps:
 `describe {}` lists the command groups, one line each (`fx`, `track`, `render`, ...);
 `describe {"group": "fx"}` lists that group's commands (name, kind, summary);
 `describe {"command": "fx.patch.list"}` gives its arguments, result schema, errors
-and examples. `describe {"text": "patch"}` searches names and summaries across groups
+and examples. `describe {"text": "patch"}` searches names and summaries across groups, in any case
 (a long answer says `truncated`: add `group` or a longer text). Call the command with
 `exec {"command": "fx.patch.list", "args": {"fx": "fx_2"}}`, or use `query`
 with the same arguments for read-only commands. Dedicated tools omit result

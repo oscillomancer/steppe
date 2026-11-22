@@ -113,7 +113,8 @@ class McpTools(unittest.TestCase):
         expected = {name.replace(".", "_") for name in self.CORE} | {"describe", "exec", "query"}
         extra = [("describe", {"group": g}) for g in groups]
         extra += [("describe", {"command": n}) for n in public_names]
-        extra += [("describe", {"group": "nonesuch"}), ("describe", {"text": "e"})]
+        extra += [("describe", {"group": "nonesuch"}), ("describe", {"text": "e"}),
+                  ("describe", {"text": "automate"}), ("describe", {"text": "AUTOMATE"})]
         for options in [(), ("--tools", "core"), ("--tools", "all")]:
             with self.subTest(options=options):
                 lines = self.exchange(extra, *options)
@@ -192,6 +193,10 @@ class McpTools(unittest.TestCase):
                 self.assertIn("narrow", capped["hint"])
                 self.assertEqual(sum(len(g) for g in capped["namespaces"].values()), 60)
                 self.assertLess(self.compact(capped), self.SEARCH_BUDGET)
+                # Search ignores the case of ASCII letters: summaries start with a capital.
+                for reply in (replies[base + 2], replies[base + 3]):
+                    found = reply["structuredContent"]["namespaces"]
+                    self.assertIn("env.add", {r[0] for rows in found.values() for r in rows})
 
     def test_registry_groups_on_the_command_line(self):
         groups = json.loads(subprocess.run([BINARY, "registry", "--groups"], capture_output=True,
