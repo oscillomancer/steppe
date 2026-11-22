@@ -168,8 +168,8 @@ Result<NoteContext> takeNoteContext(const model::Session& s, model::Id itemId, s
     const model::Take* take = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
     const model::MidiSource* source = take && take->source ? s.midi.find(*take->source) : nullptr;
     if (!source)
-        return Error("midi.no_key", "the item's MIDI is missing from the model", path,
-                     "reload the project");
+        return Error("midi.source", "the item's MIDI is missing from the model", path,
+                     "reload the project, or undo to a version that has it");
     // The context beat of each place the note is heard, by pass; one that is never heard reads
     // where its content sits.
     std::vector<double> beats;

@@ -3290,7 +3290,8 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
                  "the item " + kept->str() +
                      " follows the project's context, so the played notes are a new item "
                      "beside it, not merged into it: it sounds as before",
-                 "", "take.bake it first to overdub into what it sounds as, or keep both layered",
+                 "/item",
+                 "take.bake it first to overdub into what it sounds as, or keep both layered",
                  r.track.str(), r.file.string()});
         }
         std::optional<Id> active;

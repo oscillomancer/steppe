@@ -898,8 +898,13 @@ void registerMidiCommands(cmd::Registry& registry) {
             "Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their "
             "position in this list. start/length/beat are in beats from the item's start; channel "
             "is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them "
-            "too. For writing whole phrases, midi.write with notation is usually better.";
+            "too. For writing whole phrases, midi.write with notation is usually better. Errors: "
+            "midi.sounding_clip (sounding on a clip: what it sounds as depends on where it is "
+            "launched).";
         c.tags = {"midi"};
+        c.errors = {{"midi.sounding_clip", "sounding was asked of a clip",
+                     "launch.state says how a launched clip follows; lay the clip on the "
+                     "timeline (item.add {clip}) to read what sounds"}};
         c.args = schema::object<NotesArgs>("midi_notes_args")
                      .field("item", &NotesArgs::item, ownerIdArg())
                      .field("sounding", &NotesArgs::sounding,
@@ -915,7 +920,11 @@ void registerMidiCommands(cmd::Registry& registry) {
         c.examples = {
             {"Notes of a MIDI item", j(R"({"item": "it_1"})"),
              j(R"({"item": "it_1", "ppq": 960, "length": "<any>", "position": "<any>", "notes": "<any>", "cc": "<any>"})"),
-             "song_with_item"}};
+             "song_with_item"},
+            {"A following take's notes with the pitches they sound as",
+             j(R"({"item": "it_1", "sounding": true})"),
+             j(R"({"item": "it_1", "ppq": 960, "length": "<any>", "position": "<any>", "notes": "<any>", "cc": "<any>"})"),
+             "song_following"}};
         c.run = [](const NotesArgs& a, Context& ctx) -> Result<json::Value> {
             const model::Session s = ctx.service<EngineApp>().view();
             auto t = midiTarget(s, a.item);

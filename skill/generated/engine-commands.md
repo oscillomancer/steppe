@@ -9656,6 +9656,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `item.consolidate_*`: invalid material, stale inputs or failed capture Hint: repair the selected sources/layout and retry consolidation
+- `item.follow_merge`: merging following MIDI takes would change how a note sounds Hint: take.bake the following takes first, then consolidate
 - `item.selection`: selection omits linked peers Hint: select the full group or suspend its edit link
 - `warp.peers`: incomplete or invalid warp bundle Hint: select every bundle owner or detach it first
 
@@ -12257,7 +12258,7 @@ Result:
 
 List a MIDI item's or clip's notes and CC points (beats from its start).
 
-Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their position in this list. start/length/beat are in beats from the item's start; channel is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them too. For writing whole phrases, midi.write with notation is usually better.
+Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their position in this list. start/length/beat are in beats from the item's start; channel is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them too. For writing whole phrases, midi.write with notation is usually better. Errors: midi.sounding_clip (sounding on a clip: what it sounds as depends on where it is launched).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -12275,6 +12276,10 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```
 
+### Errors
+
+- `midi.sounding_clip`: sounding was asked of a clip Hint: launch.state says how a launched clip follows; lay the clip on the timeline (item.add {clip}) to read what sounds
+
 ### Examples
 
 **Notes of a MIDI item** (`song_with_item`)
@@ -12282,6 +12287,30 @@ Kind: `query`. Exposure: `mcp-exec`.
 ```json
 {
   "item": "it_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "item": "it_1",
+  "ppq": 960,
+  "length": "<any>",
+  "position": "<any>",
+  "notes": "<any>",
+  "cc": "<any>"
+}
+
+```
+
+**A following take's notes with the pitches they sound as** (`song_following`)
+
+```json
+{
+  "item": "it_1",
+  "sounding": true
 }
 
 ```
@@ -20481,7 +20510,7 @@ Result:
 
 ## `take.set@1`
 
-Set a take's gain, pan, channel mode, name, offset, playrate or pitch.
+Set a take's gain, pan, offset, rate or pitch, or its MIDI context or follow.
 
 
 
@@ -20527,7 +20556,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 ### Errors
 
 - `take.no_key`: follow needs a key in the take's context Hint: give the take a context with a key: take.set {context: "1: key D minor ~:w"}
-- `take.follow_audio`: a take that is not MIDI holds no context or follow Hint: context and follow apply to MIDI takes
+- `take.follow_audio`: a take that is not MIDI holds no context or follow Hint: set context and follow on a MIDI take (take.list shows each take's source), or leave them out
 - `take.in_clip`: a clip's take holds no context or follow Hint: the clip's context and follow are the clip's: clip.set {context, follow}
 - `take.context_syntax`: the lead sheet text could not be read (syntax, bar order, bar length or length) Hint: write bars as context.write does, e.g. "1: key A minor {Am}:w"
 - `take.context_range`: a point lies at or past the context's period Hint: move it earlier, inside the period

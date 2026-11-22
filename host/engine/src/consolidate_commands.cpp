@@ -333,12 +333,15 @@ void registerConsolidateCommands(cmd::Registry& registry) {
         "cap; existing render/source sample budgets apply. job.get returns resulting items/files.";
     command.args = argsSchema();
     command.result = schema::any();
-    command.errors = {{"item.consolidate_*", "invalid material, stale inputs or failed capture",
-                       "repair the selected sources/layout and retry consolidation"},
-                      {"item.selection", "selection omits linked peers",
-                       "select the full group or suspend its edit link"},
-                      {"warp.peers", "incomplete or invalid warp bundle",
-                       "select every bundle owner or detach it first"}};
+    command.errors = {
+        {"item.consolidate_*", "invalid material, stale inputs or failed capture",
+         "repair the selected sources/layout and retry consolidation"},
+        {"item.follow_merge", "merging following MIDI takes would change how a note sounds",
+         "take.bake the following takes first, then consolidate"},
+        {"item.selection", "selection omits linked peers",
+         "select the full group or suspend its edit link"},
+        {"warp.peers", "incomplete or invalid warp bundle",
+         "select every bundle owner or detach it first"}};
     command.examples = {{"Consolidate the active audio take", *json::parse(R"({"items":["it_1"]})"),
                          *json::parse(R"({"job":"<any>"})"), "song_with_audio"}};
     command.run = [](const Args& a, cmd::Context& ctx) -> Result<json::Value> {

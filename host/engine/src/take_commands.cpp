@@ -464,7 +464,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set a take's gain, pan, channel mode, name, offset, playrate or pitch.";
+        c.summary = "Set a take's gain, pan, offset, rate or pitch, or its MIDI context or follow.";
         c.tags = {"take"};
         c.args =
             schema::object<TakeSetArgs>("take_set_args")
@@ -541,7 +541,8 @@ void registerTakeCommands(cmd::Registry& registry) {
             {"take.no_key", "follow needs a key in the take's context",
              "give the take a context with a key: take.set {context: \"1: key D minor ~:w\"}"},
             {"take.follow_audio", "a take that is not MIDI holds no context or follow",
-             "context and follow apply to MIDI takes"},
+             "set context and follow on a MIDI take (take.list shows each take's source), or leave "
+             "them out"},
             {"take.in_clip", "a clip's take holds no context or follow",
              "the clip's context and follow are the clip's: clip.set {context, follow}"},
             {"take.context_syntax",
