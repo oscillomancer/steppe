@@ -59,6 +59,14 @@ void setBridgeLivenessForTests(int checks);
 // Tests only: how many of those answers have not been given yet.
 int bridgeLivenessLeftForTests();
 
+// How long ~BridgeProcess waits, after the host closed the control socket, for a bridge to end by
+// itself before the host ends it (the host's own kill; its status is then read, so a bridge that
+// was dying of a fault the whole time still reads as its own end). 2000 ms by default. Tests
+// only, and reachable from no command or setting: a different wait in milliseconds, or a
+// negative value for the default. The outcome never depends on it: a bridge that outlasts any
+// wait is killed, one that ends by itself reads as its end. Process-wide.
+void setBridgeExitWaitForTests(std::int64_t milliseconds);
+
 class BridgeProcess {
   public:
     static constexpr int kHung = -2;

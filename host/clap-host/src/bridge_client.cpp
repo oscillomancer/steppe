@@ -117,6 +117,20 @@ bool forcedAlive() noexcept {
     return left > 0;
 }
 }  // namespace
+namespace {
+std::atomic<std::int64_t> gExitWaitMs{-1};
+std::int64_t exitWaitMs() {
+    const std::int64_t set = gExitWaitMs.load(std::memory_order_relaxed);
+    return set >= 0 ? set : 2000;
+}
+// The wait for a bridge the host has killed: a kill ends a process at once (an uninterruptible
+// kernel wait aside), so this is a bound on a stuck system call, not a decision.
+constexpr std::int64_t kKilledExitWaitMs = 5000;
+}  // namespace
+void setBridgeExitWaitForTests(std::int64_t milliseconds) {
+    gExitWaitMs.store(milliseconds, std::memory_order_relaxed);
+}
+
 void setBridgeLivenessForTests(int checks) {
     gForcedAlive.store(checks, std::memory_order_relaxed);
 }
@@ -463,13 +477,26 @@ BridgeProcess::~BridgeProcess() {
     if (watcher_.joinable()) watcher_.join();
     closeControl(sock_);
     if (child_) {
-        if (child_->waitable().valid()) {
-            WaitItem exited{child_->waitable()};
-            (void)waitFor(std::span(&exited, 1), 2000);
-        } else {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-            while (child_->alive() && std::chrono::steady_clock::now() < deadline)
-                (void)waitFor({}, 10);
+        const auto awaitExit = [&](std::int64_t milliseconds) {
+            if (child_->waitable().valid()) {
+                WaitItem exited{child_->waitable()};
+                (void)waitFor(std::span(&exited, 1), static_cast<int>(milliseconds));
+            } else {
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+                while (child_->alive() && std::chrono::steady_clock::now() < deadline)
+                    (void)waitFor({}, 10);
+            }
+        };
+        awaitExit(exitWaitMs());
+        // Still there: the host ends it, and reads how it ended. A bridge whose core or dump is
+        // still being written is alive until that is done, however long it takes; it does not get
+        // to be read as the host's end because the wait above ran out. The kill cuts the dump
+        // short and leaves the fault's status, which classifyBridgeEnd tells from the kill's
+        // own (below). A bridge that is merely stuck ends with the kill's status: the host's.
+        if (child_->alive()) {
+            killBridge();
+            awaitExit(kKilledExitWaitMs);
         }
     }
     // A bridge that was still there when the host let go may be dying of its own fault at that
