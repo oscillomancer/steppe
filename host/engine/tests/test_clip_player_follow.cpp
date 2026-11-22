@@ -5,6 +5,8 @@
 // written, live as the replay, and plan swaps mid-note. Its own ctest entry,
 // as the other test_clip_player files.
 #include <supple/model/follow.h>
+#include <algorithm>
+#include <chrono>
 #include <map>
 
 #include "clip_player_support.h"
@@ -733,4 +735,41 @@ TEST_CASE("a clip played by its take's own instrument holds its chord across a p
             REQUIRE(live.log.size() == 1);
             endsAt(live, 5.0, 6.0);
         }
+}
+
+TEST_CASE("following at compile, measured (prints; decides nothing)" * doctest::skip()) {
+    // Round 86 H9: a context edit compiles while anything follows. Its cost:
+    // compile and prepare of sessions with `items` laid one-bar items of 16
+    // notes, following nothing, the key or the chords; the extra per
+    // following note-on. Run with -tc="following at compile*" --no-skip.
+    const char* bar16 =
+        "voice keys; 1: D3:s F3:s A3:s D4:s D3:s F3:s A3:s D4:s "
+        "D3:s F3:s A3:s D4:s D3:s F3:s A3:s D4:s";
+    for (const int items : {28, 400}) {
+        double none = 0;
+        for (const model::ClipFollow follow :
+             {model::ClipFollow::None, model::ClipFollow::Key, model::ClipFollow::Chords}) {
+            Project p;
+            followingClip(p, "none", bar16, "1: key D minor {Dm}:h {Gm}:h");
+            for (int i = 0; i < items; ++i) layFollowing(p, 1 + i, follow);
+            const model::Session s = p.app->head();
+            InstancePool pool = makePool();
+            std::vector<double> ms;
+            for (int rep = 0; rep < 7; ++rep) {
+                const auto t0 = std::chrono::steady_clock::now();
+                auto plan = detail::compile(s, pool, 0, 128);
+                REQUIRE(plan);
+                REQUIRE(detail::prepare(*plan, s));
+                ms.push_back(
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                        .count());
+            }
+            std::sort(ms.begin(), ms.end());
+            const double median = ms[ms.size() / 2];
+            if (follow == model::ClipFollow::None) none = median;
+            const double perNote = (median - none) * 1000.0 / double(items * 16);
+            MESSAGE("items " << items << " follow " << int(follow) << ": compile+prepare " << median
+                             << " ms (median of 7), " << perNote << " us per following note-on");
+        }
+    }
 }

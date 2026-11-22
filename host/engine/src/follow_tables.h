@@ -46,8 +46,9 @@ ProjectFollow projectFollow(const model::Session& s);
 enum class FollowOutcome : std::uint8_t { None, Key, Chords };
 
 // A following clip's tables. `keyOnly`: they index the project's `keys` regions.
-// `pool` is the plan's (a retiring player carried into a later plan keeps the
-// rows it was built with).
+// `pool` is the plan's. They are read only with their own plan's ProjectFollow:
+// another plan's project regions would index other rows, out of bounds (no
+// MIDI player retires into a later plan: addRetiring keeps audio ones only).
 struct ClipFollowTables {
     bool keyOnly = true;
     FollowRegions clip;  // clip beats

@@ -1178,8 +1178,9 @@ results.
   key. Nothing is added to the audio path, and there is no budget.
 - **Launched clips: the live tables.** X4's tables keep their rows (128 keys,
   one per pair of places) in one pool per plan, deduplicated by content across
-  all clip players; each clip's tables hold a reference to the pool, so a
-  retiring player carried into a later plan keeps the rows it was built with.
+  all clip players; each clip's tables hold a reference to the pool and are
+  read only with their own plan's project regions (another plan's would index
+  other rows, out of bounds; no MIDI player retires into a later plan).
   A clip's places are read as `model::soundingKey` reads a context (its first
   key and chord hold before their first points; the project's nothing before
   its first). The budget stays per clip: its own pairs, counted before
