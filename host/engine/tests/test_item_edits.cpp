@@ -372,6 +372,37 @@ TEST_CASE("consolidating MIDI items refuses when only some follow, or a chased n
     CHECK(f.app->head().items.size() == 3);  // nothing changed
 }
 
+TEST_CASE("consolidating an item whose context is longer than a take holds refuses (round 91 M3)") {
+    Fixture f(false);
+    f.run("track.add", R"({"name":"Keys"})");  // tr_1
+    f.run("scene.add", R"({"name":"One"})");   // sc_1
+    f.run("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+    f.run("item.add", R"({"track":"tr_1","bar":1,"notation":"voice keys; 1: E2:q r:*"})");
+    f.run("take.set",
+          (R"({"take":")" + f.app->head().items.find({model::Kind::Item, 1})->activeTake->str() +
+           R"(","context":"1: key C major ~:w","follow":"key"})")
+              .c_str());
+    // A one-bar clip with sixteen chord changes laid over 260 bars repeats them 4160 times, past
+    // the 4096 a take holds; consolidating it with another item cannot carry them.
+    f.run("clip.add", R"({"track":"tr_1","scene":"sc_1","notation":"voice keys; 1: C2:w",
+          "context":"1: key C major {C}:s {D}:s {E}:s {F}:s {G}:s {A}:s {B}:s {C}:s {D}:s {E}:s {F}:s {G}:s {A}:s {B}:s {C}:s {D}:s",
+          "follow":"key"})");
+    const auto laid = f.run("scene.insert", R"({"scene":"sc_1","bar":9,"bars":260})");
+    const std::string item = laid.find("items")->at(0).find("item")->asString();
+    f.finished = false;
+    const auto job = f.run("item.consolidate", (R"({"items":["it_1",")" + item + R"("]})").c_str());
+    {
+        std::unique_lock lock(f.mutex);
+        f.done.wait(lock, [&] { return f.finished; });
+    }
+    f.bus->flushJobEvents();
+    const auto status = f.bus->jobs().status(job.find("job")->asString());
+    REQUIRE(status);
+    const std::string text = json::writeCompact(*status);
+    CHECK(text.find("item.follow_merge") != std::string::npos);
+    CHECK(text.find("context too long") != std::string::npos);
+}
+
 TEST_CASE("consolidating a lone following item keeps a note held into its start (round 85 G11)") {
     Fixture f;
     f.run("track.add", R"({"name":"Keys"})");  // tr_2

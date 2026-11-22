@@ -2760,6 +2760,33 @@ TEST_CASE("a clip made from an item whose context is longer than a clip holds sa
     CHECK(clip.context.size() <= model::kMaxContextPoints * 2);
 }
 
+// A one-bar clip with sixteen chord changes, laid over 260 bars: its take repeats them 4160
+// times, past the 4096 chord points a take holds.
+static void longContextItem(Launcher& l) {
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w",
+          "context": "1: key C major {C}:s {D}:s {E}:s {F}:s {G}:s {A}:s {B}:s {C}:s {D}:s {E}:s {F}:s {G}:s {A}:s {B}:s {C}:s {D}:s",
+          "follow": "key"})");
+    l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 260})");
+}
+
+TEST_CASE("scene.capture of an item whose context is longer than a clip holds says so (K4)") {
+    Launcher l;
+    longContextItem(l);
+    l.run("region.add", R"({"start": 32, "end": 1072, "name": "Long"})");
+    l.run("scene.add", R"({"name": "Take"})");
+    const auto captured = l.run("scene.capture", R"({"region": "rg_1", "name": "Taken"})");
+    const std::string codes = warningCodes(captured);
+    CHECK(codes.find("clip.context_dropped") != std::string::npos);
+    bool named = false;
+    if (const auto* warnings = captured.find("warnings"))
+        for (const auto& w : warnings->asArray())
+            if (const auto* path = w.find("path"))
+                named |= w.find("code")->asString() == "clip.context_dropped" &&
+                         path->asString() == "/region";
+    CHECK(named);
+}
+
 TEST_CASE(
     "midi.get {sounding} of a looped item answers the first pass's controls, not every pass's") {
     Launcher l;
