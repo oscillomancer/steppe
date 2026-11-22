@@ -206,6 +206,10 @@ TEST_CASE("live launches of clips with take chains play as the offline replay" *
                 settings.loop = loop;
                 auto offline = renderOffline(s, pool, settings);
                 REQUIRE(offline);
+                // Said only on a failure (macOS once differed here, intermittently).
+                INFO(differences(live.left, live.latency, offline->audio.channels[0], 48000 * 5));
+                INFO("live steps and counters:" << live.report);
+                INFO("replay log:" << describe(live.log));
                 CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 5) ==
                       0.0);
                 settings.launches.clear();

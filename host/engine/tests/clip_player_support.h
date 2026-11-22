@@ -144,7 +144,35 @@ struct Live {
     std::vector<float> left;
     std::uint32_t latency = 0;
     std::vector<LaunchLogEntry> log;
+    // For a failure's message: each step's request frame and where the engine
+    // placed it, then the engine's counters as the run ended.
+    std::string report;
 };
+// A launch log, one entry per line, for a failure's message.
+inline std::string describe(const std::vector<LaunchLogEntry>& log) {
+    std::string out;
+    for (const LaunchLogEntry& e : log)
+        out += "\n  action " + std::to_string(int(e.action)) + " " + e.track.str() + " " +
+               e.clip.str() + ": running frame " + std::to_string(e.runningFrame) +
+               ", anchor sample " + std::to_string(e.anchorSample) + ", anchor beat " +
+               std::to_string(e.anchorBeat) + ", epoch " + std::to_string(e.epoch);
+    return out;
+}
+// Where `a` from `aFrom` and `b` differ over `n` frames: the first such frame
+// with both values, and how many differ.
+inline std::string differences(const std::vector<float>& a, std::size_t aFrom,
+                               const std::vector<float>& b, std::size_t n) {
+    std::size_t count = 0, first = n;
+    for (std::size_t i = 0; i < n; ++i)
+        if (a[aFrom + i] != b[i]) {
+            if (!count) first = i;
+            ++count;
+        }
+    if (!count) return "no frame differs";
+    return "first differing frame " + std::to_string(first) + " (live " +
+           std::to_string(a[aFrom + first]) + ", replay " + std::to_string(b[first]) + "), " +
+           std::to_string(count) + " of " + std::to_string(n) + " frames differ";
+}
 inline Live playLive(const model::Session& s, const fs::path& dir, const EngineOptions& options,
                      std::uint32_t block, std::int64_t frames, const std::vector<Step>& steps,
                      const Loop& loop = {}, double start = 0.0) {
@@ -157,6 +185,7 @@ inline Live playLive(const model::Session& s, const fs::path& dir, const EngineO
     if (loop) engine.setLoop(loop->first, loop->second, true);
     if (start > 0.0) engine.seek(start);
     engine.play();
+    std::string report;
     const auto run = [&](std::int64_t cycles) {
         if (cycles <= 0) return;
         if (options.anticipative)
@@ -175,6 +204,10 @@ inline Live playLive(const model::Session& s, const fs::path& dir, const EngineO
         }
         auto placed = engine.launch(step.requests, step.quantize);
         REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
+        report += "\n  step at frame " + std::to_string(step.cycle * block) + ": placed epoch " +
+                  std::to_string(placed->epoch) + ", stream " + std::to_string(placed->stream) +
+                  ", anchor sample " + std::to_string(placed->anchorSample) + ", anchor beat " +
+                  std::to_string(placed->anchorBeat);
     }
     run(frames / block - done);
     engine.service();
@@ -182,7 +215,15 @@ inline Live playLive(const model::Session& s, const fs::path& dir, const EngineO
     CHECK(engine.bridgeLateCycles() == 0);  // a late live block is silent by design
     engine.stop();
     CHECK(engine.processErrors() == 0);
-    return {backend.capture().channels[0], engine.outputLatency(), engine.launchLog()};
+    report += "\n  anticipation misses " + std::to_string(engine.anticipationMisses()) +
+              ", bridge late cycles " + std::to_string(engine.bridgeLateCycles()) +
+              ", process errors " + std::to_string(engine.processErrors()) +
+              ", plug-in output drops " + std::to_string(engine.pluginOutputDrops()) +
+              ", control MIDI drops " + std::to_string(engine.controlMidiDrops()) +
+              ", modulation deferred " + std::to_string(engine.modulationDeferred()) + ", cycles " +
+              std::to_string(engine.cycles());
+    return {backend.capture().channels[0], engine.outputLatency(), engine.launchLog(),
+            std::move(report)};
 }
 
 inline Engine::LaunchRequest request(const char* track, const char* clip) {
