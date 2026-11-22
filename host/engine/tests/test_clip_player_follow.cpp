@@ -694,7 +694,10 @@ TEST_CASE("one written pitch on two channels, or overlapping, is carried note by
     // D3 on channel 1 for a beat and on channel 2 for two: after the swap
     // channel 1's ends at beat 5 and channel 2's at 6. Overlapping D3s on one
     // channel (beats 4-6 and 5-7, origins apart by their start) both play on
-    // past the swap; the sine ends every voice of a key at a note-off.
+    // past the swap; the sine ends every voice of a key at a note-off (the
+    // carry of each to its own source is checked on the plan, above). The
+    // two-channel case passes without H1 too, the channel parting the notes;
+    // it guards the address's written key.
     for (const char* follow : {"none", "chords"})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             CAPTURE(follow);
@@ -714,6 +717,59 @@ TEST_CASE("one written pitch on two channels, or overlapping, is carried note by
                 endsAt(live, 5.5, 6.0);
             }
         }
+}
+
+TEST_CASE("overlapping notes of one written pitch are each carried to their own source") {
+    // Round 87's note on H1's overlapping subcase: the sine ends every voice
+    // of a key at a note-off, so its sound cannot tell a carry that crossed two
+    // D3s from one that did not. The plan can: after a context edit at beat
+    // 5.5, while both are held (beats 4-6 and 5-7), each carried voice names
+    // the new source of its own note (its start tick), following or not.
+    for (const model::ClipFollow follow : {model::ClipFollow::None, model::ClipFollow::Key}) {
+        CAPTURE(follow == model::ClipFollow::Key);
+        Project p;
+        followingClip(p, "none", "voice a; 1: D3:h r:h; voice b; 1: r:q D3:h r:q",
+                      "1: key D minor {Dm}:w");
+        layFollowing(p, 2, follow);
+        p.runArgs("context.write", contextText(kCMinor));
+        const model::Session before = p.app->head();
+        swapEdit(p, SwapBy::ContextEdit);
+        const model::Session after = p.app->head();
+        InstancePool pool = makePool();
+        constexpr std::uint32_t block = 128;
+        auto old = detail::compile(before, pool, 0, block).value();
+        REQUIRE(detail::prepare(old, before));
+        for (auto* instance : old.instances) REQUIRE(instance->startProcessing());
+        const std::int64_t swap = std::int64_t(5.5 * double(kBeat)) / block * block;
+        for (std::int64_t pos = 0; pos < swap; pos += block)
+            REQUIRE(detail::processBlock(old, pos, block));
+        auto next = detail::compile(after, pool, 0, block).value();  // as the engine does
+        REQUIRE(detail::prepare(next, after));
+        detail::carryMix(old, next, -1);
+        const auto track = [&](detail::Plan& plan) -> detail::Stage& {
+            auto& node = *std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                       [](const auto& n) { return n.id == id("tr_1"); });
+            REQUIRE(node.noteTarget >= 0);
+            return node.chain[std::size_t(node.noteTarget)];
+        };
+        const detail::Stage& was = track(old);
+        const detail::Stage& stage = track(next);
+        REQUIRE(was.voices.size() == 2);
+        REQUIRE(stage.voices.size() == 2);
+        CHECK(was.voices[0].origin.tick != was.voices[1].origin.tick);
+        for (std::size_t v = 0; v < 2; ++v) {
+            const auto& voice = stage.voices[v];
+            CAPTURE(v);
+            CHECK_FALSE(voice.release);
+            REQUIRE(voice.sourceId >= 0);
+            REQUIRE(std::size_t(voice.sourceId) < stage.noteSources.size());
+            const auto& source = stage.noteSources[std::size_t(voice.sourceId)];
+            CHECK(source.origin.tick == was.voices[v].origin.tick);
+        }
+        CHECK(stage.voices[0].sourceId != stage.voices[1].sourceId);
+        CHECK(stage.voices[0].key == stage.voices[1].key);  // one pitch, two notes
+        for (auto* instance : old.instances) instance->stopProcessing();
+    }
 }
 
 TEST_CASE("a held chord ends at its note-offs whichever way its take's following changes" *
