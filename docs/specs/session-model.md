@@ -1136,7 +1136,7 @@ and naming. All `edit` unless marked (q) query or (a) action.
   one result per track, no rendering; exact eligibility in engine.md),
   `item.remove`, `item.move`, `item.set`, `item.split {item, at, snap?: none|zero_crossing}`
   (default none; audio zero-crossing search and errors in engine.md),
-  `item.duplicate`, `item.glue` (a+edit), `take.add`, `take.remove`,
+  `item.duplicate`, `take.add`, `take.remove`,
   `item.paste {version?, items: [{item, track, position}]}` copies the retained
   version's takes and their FX, including referenced opaque state blobs when
   the current session no longer contains them (for example after undo),
@@ -1176,6 +1176,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   unrolled, notes ending by their item's end; gaps empty, overlaps layered),
   or a lone item's MIDI takes layered into one take; the earliest item, its
   settings and take FX are kept.
+  There is no separate glue command: `item.consolidate` renders audio and
+  merges MIDI (a background action, MIDI-only selections included), and
+  `item.heal` rejoins the pieces of one source as an edit.
 - **FX**: `fx.add {track?|take?, plugin, index?, patch?, chain?}`
   (exactly one of track or take), `fx.remove`,
   `fx.move`, `fx.copy {fx, track, index?, chain?}` (live settings),
@@ -2637,7 +2640,6 @@ missing from this table is a defect of this contract.
 | `item.explode-takes`, `take.extract` (from an item) | The four members go with the take unchanged. |
 | `take.extract` (from a clip) | As placement lays the clip, with the clip's `follow`. |
 | `item.consolidate` (MIDI) | What sounds is preserved, and checked. Items of one track into one item: when the heard takes all follow in one mode, the result follows in it; its context, in the result's source beats, is each source's `contextOver` its span, beats divided by that source's playrate (onto the result's axis, which runs at the result's playrate of 1), placed where the source sat, not repeating; the result's `context_phase` is 0. A note chased at the first source's start keeps its true start in the result's source, before the result's start (its `start_offset` positive), so it is chased there and maps as before. A note chased at a later source's start is written, as today, as a note at that source's old start, where its place changes. The command computes every heard note's sounding key before and after with `soundingNotes`, and refuses (`item.follow_merge`, naming the item and the note's song beat; hint: `take.bake` the following takes first) when any would differ, and also when a following source's context is too long to carry into the result (more points than a take holds: a repeated context over many bars), even when only chord points are cut on a take that follows `key` and nothing would sound differently (conservative; the hint is the same). When none follow, as today; mixed modes (some following, some not, or different modes) are refused with the same error. A lone item's takes layered into one take: allowed when none follow, or when all follow in one mode with the same `contextOver` the item's span; else `item.follow_merge`. |
-| `item.glue` | Named in §4 but not registered (not built). When built, as `item.consolidate` (MIDI). |
 | `item.heal` | Audio pieces only; MIDI takes are not healed. |
 | `midi.write` (on a take) | Replaces the written notes; the context and `follow` stay, and the answer carries `follows: "key" | "chords"` when the take follows. Chord symbols in the text do not change a take's context (`take.set` does). |
 | `midi.edit` | Below. |

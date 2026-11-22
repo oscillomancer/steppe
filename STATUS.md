@@ -261,8 +261,9 @@ instructions are in `docs/guides/installing.md`.
   `scene.capture` (a following take's context becomes the clip's), `take.add`,
   a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
   `context.no_key` warning on every context edit, and `session.describe`. The
-  engine plays a take's `follow` (X4c, engine.md "Following at playback"). Not
-  built: `item.glue` is not registered. The GUI (X4e): a following
+  engine plays a take's `follow` (X4c, engine.md "Following at playback"). There
+  is no `item.glue`: `item.consolidate` renders and merges, `item.heal` rejoins
+  split pieces as an edit. The GUI (X4e): a following
   take's roll draws its notes where they sound with the written pitches outlined, and
   a Written cell; the strip shows the song's chords and the take's, whose row is edited
   as a clip's (`take.set {context}`); a degree drag steps the written pitch in the
