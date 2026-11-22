@@ -379,11 +379,8 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             // take follows. A drum-only clip, one with no readable key, and audio follow nothing.
             model::ClipFollow outcome = model::ClipFollow::None;
             if (midi) {
-                bool pitched = false;
-                if (take.source && take.source->kind == model::Kind::Midi)
-                    if (const model::MidiSource* source = s.midi.find(*take.source))
-                        for (const midi::Note& n : source->sequence.notes)
-                            pitched |= n.channel != 9;
+                // Pitched as the player compiles it: the notes it plays, not its source.
+                const bool pitched = detail::clipPlaysPitched(s, clipId);
                 // Its outcome is the plan's: a clip's pairs are counted before
                 // the pool's deduplication, so this pool's contents do not matter.
                 detail::ProjectFollow projectTables = detail::projectFollow(s);
@@ -428,7 +425,11 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 const double span = midi ? beat1 - beat0 : double(end - (perf.start + f0)) / rate;
                 // So do its take's own envelopes over a looped item of more
                 // than one period: on an item they would run once.
-                const bool passes = item.loop && span > period + 1e-9 * std::max(1.0, period);
+                // From the phase heard (review round 86 H5): a shorter span that
+                // crosses the period's end restarts them too.
+                const double inPeriod = midi ? phase : phase / rate;
+                const bool passes =
+                    item.loop && inPeriod + span > period + 1e-9 * std::max(1.0, period);
                 auto copied = copyTakesFor(
                     t, now, clip.takes, pooled, envelopePos, path,
                     fxEnvelopesFromClip(now, clip.kind, pos, midi ? phase : phase / rate, period,

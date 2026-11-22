@@ -572,11 +572,17 @@ struct NoteOrigin {
     std::int64_t tick = 0;
     std::int32_t pass = 0;
     // A following take's note (ADR-0098 X4c): its key is the mapped one, so a
-    // plan swap carries it, and its note-off pairs with it, without the key, as
-    // a launched clip's (kClipOrigin). Not part of the address.
+    // plan swap carries it, and its note-off pairs with it, by its written key,
+    // as a launched clip's (kClipOrigin). Not part of the address.
     bool followed = false;
+    // The source note's written key. A keyless note is addressed by it in place
+    // of the key it sounds at, which its context may change: the notes of a
+    // chord share the rest of their address (review round 86 H1).
+    std::int16_t written = 0;
     auto address() const { return std::tuple{item, take, source, tick, pass}; }
     bool keyless() const { return (item & kClipOrigin) != 0 || followed; }
+    // The key a note source is addressed by: the written one for a keyless note.
+    std::int16_t addressKey(std::int16_t key) const { return keyless() ? written : key; }
 };
 struct NoteSource {
     NoteOrigin origin{};
@@ -585,7 +591,7 @@ struct NoteSource {
     std::uint32_t ordinal = 0;
     std::int32_t id = -1;
     auto addressWithoutOrdinal() const {
-        return std::tuple_cat(origin.address(), std::tuple{port, channel, key});
+        return std::tuple_cat(origin.address(), std::tuple{port, channel, origin.addressKey(key)});
     }
     auto address() const { return std::tuple_cat(addressWithoutOrdinal(), std::tuple{ordinal}); }
 };

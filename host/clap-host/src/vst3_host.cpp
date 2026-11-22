@@ -146,6 +146,11 @@ class Handler : public Steinberg::U::Implements<Steinberg::U::Directly<vst::ICom
     // executor raced the rendered gesture and dropped it. An instance that is
     // not processing reports nothing: its state is captured (`edited`).
     void editorEdit() {
+        // The edit was pushed (edit()); stopProcessing stores the flag, then
+        // reads the queue. A seq_cst fence on each side, between its store
+        // and its load, lets at least one see the other's store: acquire and
+        // release alone allow both to miss (review round 86 H6).
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         if (processing && processing->load(std::memory_order_acquire))
             request->store(true, std::memory_order_release);
         else
@@ -918,6 +923,9 @@ bool Vst3Instance::startProcessing() SUPPLE_RT {
 void Vst3Instance::stopProcessing() SUPPLE_RT {
     auto& s = *state_;
     s.processingNow.store(false, std::memory_order_release);
+    // Pairs with editorEdit's fence: an edit pushed after it sees the flag
+    // down and captures the state itself; one before it is in the queue here.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
     s.processor->setProcessing(false);
     // Editor edits it will now not report: their state is captured instead.
     if (s.changes.queued()) {

@@ -5,6 +5,8 @@
 // written, live as the replay, and plan swaps mid-note. Its own ctest entry,
 // as the other test_clip_player files.
 #include <supple/model/follow.h>
+#include <algorithm>
+#include <chrono>
 #include <map>
 
 #include "clip_player_support.h"
@@ -567,4 +569,207 @@ TEST_CASE("launching a clip the follow budget holds back warns launch.follow_bud
     CHECK(track.find("followed")->asString() == "key");
     CHECK(track.find("follow_budget")->asBool());
     p.app->stopEngine();
+}
+
+// --- Chords across a plan swap (review round 86 H1) --------------------------
+
+namespace {
+// The project's context before a swap: C minor, a chord a bar.
+constexpr const char* kCMinor = "1: key C minor {Cm}:w\n2: {Cm}:w\n3: {Cm}:w";
+// What makes the swap: a context edit, an edit elsewhere (a track renamed), or
+// new pitch tables (the clip's own context, or the laid take's).
+enum class SwapBy { ContextEdit, TrackSet, TableChange };
+const char* nameOf(SwapBy by) {
+    return by == SwapBy::ContextEdit ? "context edit"
+           : by == SwapBy::TrackSet  ? "track.set"
+                                     : "table change";
+}
+void swapEdit(Project& p, SwapBy by, const std::optional<model::Id>& take = std::nullopt) {
+    switch (by) {
+        case SwapBy::ContextEdit:
+            p.runArgs("context.write", contextText("1: key E minor {Em}:w\n2: {Em}:w\n3: {Em}:w"));
+            break;
+        case SwapBy::TrackSet:
+            p.run("track.set", R"({"track": "tr_1", "name": "Moved"})");
+            break;
+        case SwapBy::TableChange: {
+            json::Value set = j(R"({"context": "1: key G minor {Gm}:w"})");
+            if (take)
+                set["take"] = take->str();
+            else
+                set["clip"] = "cl_1";
+            p.runArgs(take ? "take.set" : "clip.set", set);
+            break;
+        }
+    }
+}
+// Silent from `silentFrom` (its last note-off, in beats) to bar 3, and
+// sounding before it from `heardFrom` (after the swap).
+void endsAt(const Live& live, double heardFrom, double silentFrom) {
+    const auto at = [&](double beats) { return std::int64_t(beats * double(kBeat)); };
+    std::size_t heard = 0;
+    for (std::int64_t t = at(heardFrom) + kFade; t < at(silentFrom) - kFade; ++t)
+        heard += live.left[std::size_t(t + live.latency)] != 0.0f;
+    CHECK(heard > std::size_t((at(silentFrom) - at(heardFrom)) / 2));
+    for (std::int64_t t = at(silentFrom) + kFade; t < 8 * kBeat; ++t)
+        REQUIRE_MESSAGE(live.left[std::size_t(t + live.latency)] == 0.0f, "frame " << t);
+}
+// cl_1 launched on bar 2 with `notation`, a swap at `swapBeat`.
+Live launchedAcrossSwap(Project& p, const char* follow, const char* notation, SwapBy by,
+                        const EngineOptions& options, double swapBeat) {
+    followingClip(p, follow, notation, "1: key D minor {Dm}:w");
+    p.runArgs("context.write", contextText(kCMinor));
+    const model::Session before = p.app->head();
+    swapEdit(p, by);
+    const model::Session after = p.app->head();
+    constexpr std::uint32_t block = 128;
+    const Live live = playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192,
+                               {{20, {request("tr_1", "cl_1")}},
+                                {std::int64_t(swapBeat * double(kBeat)) / block, {}, {}, &after}});
+    REQUIRE(live.log.size() == 1);
+    CHECK(live.log[0].anchorSample == 4 * kBeat);
+    return live;
+}
+}  // namespace
+
+TEST_CASE("a launched clip's chord ends at its note-offs across any plan swap" *
+          doctest::description("rt")) {
+    // A chord's notes share their origin and their ordinal (counted per
+    // key): the carry tells them apart by their written pitch, which a
+    // following clip's mapping leaves alone, so each voice keeps its own note
+    // and its note-off ends it. Following or not, whatever compiles.
+    for (const char* follow : {"none", "key", "chords"})
+        for (const SwapBy by : {SwapBy::ContextEdit, SwapBy::TrackSet, SwapBy::TableChange})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                CAPTURE(follow);
+                CAPTURE(nameOf(by));
+                CAPTURE(options.anticipative);
+                Project p;
+                const Live live = launchedAcrossSwap(p, follow, "voice keys; 1: [D3 F3 A3]:h r:h",
+                                                     by, options, 5.0);
+                endsAt(live, 5.0, 6.0);
+            }
+}
+
+TEST_CASE("a following item's chord ends at its note-offs across any plan swap" *
+          doctest::description("rt")) {
+    // The same for a laid take that follows (X4c): its chord, mapped at
+    // compile, is carried by written pitch.
+    for (const model::ClipFollow follow : {model::ClipFollow::Key, model::ClipFollow::Chords})
+        for (const SwapBy by : {SwapBy::ContextEdit, SwapBy::TrackSet, SwapBy::TableChange})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                CAPTURE(follow == model::ClipFollow::Key ? "key" : "chords");
+                CAPTURE(nameOf(by));
+                CAPTURE(options.anticipative);
+                Project p;
+                followingClip(p, "none", "voice keys; 1: [D3 F3 A3]:h r:h",
+                              "1: key D minor {Dm}:w");
+                const model::Id item = layFollowing(p, 2, follow);
+                const model::Id take = *p.app->head().items.find(item)->activeTake;
+                p.runArgs("context.write", contextText(kCMinor));
+                const model::Session before = p.app->head();
+                swapEdit(p, by, take);
+                const model::Session after = p.app->head();
+                constexpr std::uint32_t block = 128;
+                const Live live =
+                    playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192,
+                             {{(5 * kBeat) / block, {}, {}, &after}});
+                endsAt(live, 5.0, 6.0);
+            }
+}
+
+TEST_CASE("one written pitch on two channels, or overlapping, is carried note by note" *
+          doctest::description("rt")) {
+    // D3 on channel 1 for a beat and on channel 2 for two: after the swap
+    // channel 1's ends at beat 5 and channel 2's at 6. Overlapping D3s on one
+    // channel (beats 4-6 and 5-7, origins apart by their start) both play on
+    // past the swap; the sine ends every voice of a key at a note-off.
+    for (const char* follow : {"none", "chords"})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            CAPTURE(follow);
+            CAPTURE(options.anticipative);
+            {
+                Project p;
+                const Live live = launchedAcrossSwap(
+                    p, follow, "voice a ch 1; 1: D3:q r:q r:h; voice b ch 2; 1: D3:h r:h",
+                    SwapBy::ContextEdit, options, 4.5);
+                endsAt(live, 5.0, 6.0);
+            }
+            {
+                Project p;
+                const Live live =
+                    launchedAcrossSwap(p, follow, "voice a; 1: D3:h r:h; voice b; 1: r:q D3:h r:q",
+                                       SwapBy::ContextEdit, options, 5.5);
+                endsAt(live, 5.5, 6.0);
+            }
+        }
+}
+
+TEST_CASE("a clip played by its take's own instrument holds its chord across a plan swap" *
+          doctest::description("rt")) {
+    // Round 86 H4: cl_1's instrument is in its take's chain (ADR-0097's clip
+    // chain), not on the track. Its chord, carried by its notes' sources,
+    // plays on past a context edit to its note-offs (beat 6), then is silent.
+    for (const char* follow : {"none", "key"})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            CAPTURE(follow);
+            CAPTURE(options.anticipative);
+            Project p;
+            p.runArgs("context.write", contextText(kCMinor));
+            json::Value clip = j(R"({"track": "tr_1", "scene": "sc_1",
+                                     "notation": "voice keys; 1: [D3 F3 A3]:h r:h",
+                                     "context": "1: key D minor {Dm}:w"})");
+            clip["follow"] = follow;
+            p.runArgs("clip.add", clip);
+            json::Value fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
+            fx["take"] = p.app->head().clips.find(id("cl_1"))->activeTake->str();
+            p.runArgs("fx.add", fx);
+            const model::Session before = p.app->head();
+            swapEdit(p, SwapBy::ContextEdit);
+            p.run("track.set", R"({"track": "tr_1", "name": "Moved"})");  // a compile either way
+            const model::Session after = p.app->head();
+            constexpr std::uint32_t block = 128;
+            const Live live =
+                playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192,
+                         {{20, {request("tr_1", "cl_1")}}, {(5 * kBeat) / block, {}, {}, &after}});
+            REQUIRE(live.log.size() == 1);
+            endsAt(live, 5.0, 6.0);
+        }
+}
+
+TEST_CASE("following at compile, measured (prints; decides nothing)" * doctest::skip()) {
+    // Round 86 H9: a context edit compiles while anything follows. Its cost:
+    // compile and prepare of sessions with `items` laid one-bar items of 16
+    // notes, following nothing, the key or the chords; the extra per
+    // following note-on. Run with -tc="following at compile*" --no-skip.
+    const char* bar16 =
+        "voice keys; 1: D3:s F3:s A3:s D4:s D3:s F3:s A3:s D4:s "
+        "D3:s F3:s A3:s D4:s D3:s F3:s A3:s D4:s";
+    for (const int items : {28, 400}) {
+        double none = 0;
+        for (const model::ClipFollow follow :
+             {model::ClipFollow::None, model::ClipFollow::Key, model::ClipFollow::Chords}) {
+            Project p;
+            followingClip(p, "none", bar16, "1: key D minor {Dm}:h {Gm}:h");
+            for (int i = 0; i < items; ++i) layFollowing(p, 1 + i, follow);
+            const model::Session s = p.app->head();
+            InstancePool pool = makePool();
+            std::vector<double> ms;
+            for (int rep = 0; rep < 7; ++rep) {
+                const auto t0 = std::chrono::steady_clock::now();
+                auto plan = detail::compile(s, pool, 0, 128);
+                REQUIRE(plan);
+                REQUIRE(detail::prepare(*plan, s));
+                ms.push_back(
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                        .count());
+            }
+            std::sort(ms.begin(), ms.end());
+            const double median = ms[ms.size() / 2];
+            if (follow == model::ClipFollow::None) none = median;
+            const double perNote = (median - none) * 1000.0 / double(items * 16);
+            MESSAGE("items " << items << " follow " << int(follow) << ": compile+prepare " << median
+                             << " ms (median of 7), " << perNote << " us per following note-on");
+        }
+    }
 }

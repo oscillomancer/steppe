@@ -1690,3 +1690,167 @@ TEST_CASE("launch.commit copies a launched clip and warns when its key is not th
     CHECK_FALSE(again.find("warnings"));
     CHECK_FALSE(again.find("mismatches"));
 }
+
+TEST_CASE("a followed performance commits as it was heard" * doctest::description("rt")) {
+    // Round 86 H3, a contract row (ADR-0098 X4d): launch.commit lays notes as
+    // written with each clip's context and the follow the plan used, so the
+    // committed arrangement sounds as the performance did. Three cases:
+    // - a looped clip over two keys: launched on bar 2 (C minor, {Cm} then
+    //   {Fm}), its second pass in bar 3 is in E minor;
+    // - the same with a capture begun mid-period (beat 5.5): its first
+    //   fragment chases the note under way, which retriggers there, so the
+    //   comparison starts at the next note (beat 6);
+    // - a clip the budget held to its key: its chords and the project's make
+    //   more pairs than a clip may hold, so it followed the key (C major into
+    //   D major), and the commit lays what was heard, not the chords.
+    enum class Case { TwoKeys, MidPeriod, Budget };
+    for (const Case c : {Case::TwoKeys, Case::MidPeriod, Case::Budget})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            CAPTURE(int(c));
+            CAPTURE(options.anticipative);
+            Project p;
+            p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+            json::Value context = json::Value::object();
+            json::Value clip = j(R"({"track": "tr_1", "scene": "sc_1", "follow": "chords"})");
+            if (c == Case::Budget) {
+                const char* roots[] = {"C",  "Db", "D",  "Eb", "E",  "F",
+                                       "Gb", "G",  "Ab", "A",  "Bb", "B"};
+                const char* kinds[] = {"", "m", "7", "m7"};
+                std::string project = "1: key D major", own = "1: key C major";
+                for (int i = 0; i < 48; ++i) {
+                    const std::string chord =
+                        std::string(" {") + roots[i / 4] + kinds[i % 4] + "}:q";
+                    if (i % 4 == 0 && i > 0) {
+                        project += "\n" + std::to_string(i / 4 + 1) + ":";
+                        own += "\n" + std::to_string(i / 4 + 1) + ":";
+                    }
+                    project += chord;
+                    own += chord;
+                }
+                context["text"] = project;
+                clip["notation"] = "voice bass; 1: C3:q E3:q G3:q B3:q";
+                p.runArgs("context.write", context);
+                clip.asObject().erase("follow");  // a follow needs the key first
+                p.runArgs("clip.add", clip);
+                p.run("clip.set", R"({"clip": "cl_1", "length": 48})");
+                json::Value set = j(R"({"clip": "cl_1", "follow": "chords"})");
+                set["context"] = own;
+                p.runArgs("clip.set", set);
+            } else {
+                context["text"] =
+                    "1: key C minor {Cm}:h {Fm}:h\n2: {Cm}:h {Fm}:h\n"
+                    "3: key E minor {Em}:w\n4: {Em}:w";
+                clip["notation"] = "voice bass; 1: D3:q F3:q A3:q Bb3:q";
+                clip["context"] = "1: key D minor {Dm}:h {Gm}:h";
+                p.runArgs("context.write", context);
+                p.runArgs("clip.add", clip);
+            }
+            const std::int64_t frames = 48000 * 6 + 16384;
+            AppLive live(p, options, 128, frames);
+            if (c != Case::MidPeriod) p.run("launch.capture", R"({"on": true})");
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            const json::Value launched = p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+            if (c == Case::Budget) {
+                bool budget = false;
+                if (const json::Value* w = launched.find("warnings"))
+                    for (const json::Value& e : w->asArray())
+                        budget |= e.find("code")->asString() == "launch.follow_budget";
+                CHECK(budget);
+            }
+            if (c == Case::MidPeriod) {
+                live.until(5 * kBeat + kBeat / 2);
+                p.run("launch.capture", R"({"on": true})");
+            }
+            live.until(48000 * 5);
+            const json::Value done = p.run("launch.commit", "{}");
+            const std::vector<float> heard = live.stop();
+            const std::int64_t end =
+                std::min(std::int64_t(done.find("to")->asDouble() * double(kBeat)),
+                         live.cycles * 128 - std::int64_t(live.latency));
+            CHECK(end > 8 * kBeat);  // into bar 3, the second key
+            const std::vector<float> committed = arrangement(p, 5.0);
+            const std::int64_t from = c == Case::MidPeriod ? 6 * kBeat : 0;
+            const auto [worst, first] = compare(heard, live.latency, committed, from, end);
+            CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+            // It sounded: the clip's notes from bar 2.
+            CHECK(heard[std::size_t(6 * kBeat + 1000 + live.latency)] != 0.0f);
+        }
+}
+
+TEST_CASE("a clip take's own envelope commits as heard over a short span across the period" *
+          doctest::description("rt")) {
+    // Round 86 H5: a capture begun at 0.75 of a pass for half a period lays
+    // one looped item from that phase that crosses the period's end in less
+    // than a period. The take's volume, a ramp over the 1 s pass, restarts
+    // at the pass boundary as heard; laid once it would hold its end.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        latentClip(p);
+        p.run("clip.set", R"({"clip": "cl_1", "length": 1})");  // the ramp's 48000 frames
+        auto env = j(R"({"param": "volume", "points": [{"seconds": 0, "value": "-24 dB"},
+                                                       {"seconds": 1, "value": 0}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: frame 96000
+        live.until(96000 + 36000);                    // 0.75 into the first pass
+        p.run("launch.capture", R"({"on": true})");
+        live.until(96000 + 60000);  // 0.25 into the second
+        p.run("launch.capture", R"({"on": false})");
+        live.until(96000 + 72000);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const auto from = std::int64_t(done["from"].asDouble() * double(kBeat));
+        const auto to = std::int64_t(done["to"].asDouble() * double(kBeat));
+        REQUIRE(from < 96000 + 48000);  // the span crosses the pass boundary
+        REQUIRE(to > 96000 + 48000);
+        REQUIRE(to - from < 48000);  // in less than a period
+        const std::vector<float> committed = arrangement(p, 5.0);
+        // Past the item's 5 ms fades at either end.
+        const auto [worst, first] =
+            compare(heard, live.latency, committed, from + 480, to - 480, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+        // The second pass starts near -24 dB again.
+        CHECK(double(committed[std::size_t(96000 + 48000 + 600)]) < 0.2 * chained(600));
+    }
+}
+
+TEST_CASE("launch.commit lays a clip whose loop plays only drums as following nothing") {
+    // Round 86 H8: cl_1 (D minor, follow key) is two beats long; they hold
+    // only channel-10 notes, and its source's pitched D3 lies past the clip's
+    // end. (A looped clip cannot show this: a commit needs its loop over the
+    // whole source.) Live it follows
+    // nothing (no pitched note plays), so the commit lays its takes with
+    // follow none, as heard, not follow key.
+    Project p;
+    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+    p.run("context.write", R"({"text": "1: key C minor ~:w\n2: ~:w\n3: ~:w"})");
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "context": "1: key D minor ~:w",
+                          "follow": "key",
+                          "notation": "voice kick ch 10; 1: C2:q C2:q r:h; voice bass; 1: r:h D3:h"})");
+    p.run("clip.set", R"({"clip": "cl_1", "length": 2})");
+    AppLive live(p, kInCallback, 128, 48000 * 5 + 16384);
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * 128);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+    live.until(48000 * 4);
+    const json::Value done = p.run("launch.commit", "{}");
+    live.stop();
+    const model::Session s = p.app->head();
+    std::size_t laid = 0;
+    for (const json::Value& row : done.find("items")->asArray()) {
+        const json::Value* item = row.find("item");
+        const model::Item* it =
+            s.items.find(*model::Id::parse(item ? item->asString() : row.asString()));
+        REQUIRE(it);
+        CHECK(s.takes.find(*it->activeTake)->follow == model::ClipFollow::None);
+        ++laid;
+    }
+    CHECK(laid > 0);
+}

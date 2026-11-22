@@ -83,8 +83,13 @@ void midiEvents(ClipPlayer& pl, const model::Clip& clip, Id clipId, const model:
             if (!(off - at > 1e-9)) continue;
             ClipEvent a;
             a.beat = a.start = at;
-            a.origin = {
-                kClipOrigin | clipId.n, clip.activeTake->n, take.source->n, n.start, r, false};
+            a.origin = {kClipOrigin | clipId.n,
+                        clip.activeTake->n,
+                        take.source->n,
+                        n.start,
+                        r,
+                        false,
+                        static_cast<std::int16_t>(n.pitch)};
             a.event.kind = host::Event::Kind::NoteOn;
             a.event.channel = n.channel;
             a.event.key = n.pitch;
@@ -151,7 +156,39 @@ void makeReader(PlayerReader& r, const Plan& p) {
     if (!r.state) r.state = std::make_unique<RateClipState>(launchTapeTable(), 2, p.rate, false);
 }
 
+// A following clip's tables (ADR-0098 X4): what placement would follow, by
+// tables within the budget, else by its key, else as written. Its player and a
+// Notes feed's player of it share them.
+ClipFollowBuild followPlayer(Plan& p, const ClipPlayer& pl, const model::Clip& clip,
+                             const Session& s) {
+    const bool pitched = std::any_of(pl.events.begin(), pl.events.end(), [](const ClipEvent& e) {
+        return e.event.kind == host::Event::Kind::NoteOn && e.event.channel != 9;
+    });
+    if (!p.follow) p.follow = projectFollow(s);
+    return buildClipFollow(clip, pitched, *p.follow);
+}
+void givePlayer(ClipPlayer& pl, ClipFollowBuild built) {
+    pl.follow = std::move(built.tables);
+    pl.followed = built.outcome;
+    pl.followBudget = built.overBudget;
+}
 }  // namespace
+
+bool clipPlaysPitched(const Session& s, Id clipId) {
+    const model::Clip* clip = s.clips.find(clipId);
+    if (!clip || clip->kind != model::ClipKind::Midi || !clip->activeTake) return false;
+    const model::Take* take = s.takes.find(*clip->activeTake);
+    const model::MidiSource* src = take && take->source && take->source->kind == model::Kind::Midi
+                                       ? s.midi.find(*take->source)
+                                       : nullptr;
+    if (!src) return false;
+    ClipPlayer pl;
+    std::int32_t nextId = 0;
+    midiEvents(pl, *clip, clipId, *take, *src, nextId);
+    return std::any_of(pl.events.begin(), pl.events.end(), [](const ClipEvent& e) {
+        return e.event.kind == host::Event::Kind::NoteOn && e.event.channel != 9;
+    });
+}
 
 void compileClipPlayers(Plan& p, Node& n, const Session& s) {
     n.players.clear();
@@ -197,21 +234,14 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
             // Following live (ADR-0098 X4): what placement would follow, by
             // tables within the budget, else by its key, else as written.
             if (clip.follow != model::ClipFollow::None) {
-                const bool pitched =
-                    std::any_of(pl.events.begin(), pl.events.end(), [](const ClipEvent& e) {
-                        return e.event.kind == host::Event::Kind::NoteOn && e.event.channel != 9;
-                    });
-                if (!p.follow) p.follow = projectFollow(s);
-                ClipFollowBuild built = buildClipFollow(clip, pitched, *p.follow);
+                ClipFollowBuild built = followPlayer(p, pl, clip, s);
                 if (built.overBudget)
                     p.warnings.push_back(
                         id.str() + ": launch.follow_budget: its context and the project's make " +
                         "too many pairs of places to follow " +
                         (built.outcome == FollowOutcome::Key ? "the chords; it follows the key"
                                                              : "live; it plays as written"));
-                pl.follow = std::move(built.tables);
-                pl.followed = built.outcome;
-                pl.followBudget = built.overBudget;
+                givePlayer(pl, std::move(built));
             }
             const auto [voices, window] = midiSizing(pl, blockBeats);
             n.clipVoices = std::max(n.clipVoices, voices);
@@ -1131,6 +1161,10 @@ void compileFeedClips(Plan& p, NotesFeed& feed, const Session& s) {
                 ? s.midi.find(*take->source)
                 : nullptr;
         if (src) midiEvents(pl, clip, e.id, *take, *src, nextId);
+        // The feed takes the notes as the track sounds them (review round 86
+        // H2): the same tables as its player (compileClipPlayers, which warns
+        // of the budget).
+        if (clip.follow != model::ClipFollow::None) givePlayer(pl, followPlayer(p, pl, clip, s));
         const auto [v, w] = midiSizing(pl, blockBeats);
         voices = std::max(voices, v);
         window = std::max(window, w);

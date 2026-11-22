@@ -200,6 +200,7 @@ void dumpOrigin(Dump& d, std::string_view a, const NoteOrigin& o) {
                                       static_cast<std::int64_t>(o.take),
                                       static_cast<std::int64_t>(o.source), o.tick, o.pass});
     if (o.followed) d.put(a, "followed", true);  // a following take's (ADR-0098 X4c)
+    if (o.keyless()) d.put(a, "written", static_cast<std::int64_t>(o.written));  // its address
 }
 
 void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& events) {

@@ -176,3 +176,54 @@ TEST_CASE("a launch missed before it is decided lands on neither the track nor i
         }
     }
 }
+
+namespace {
+// tr_1 plays the sine from a launched clip cl_1 (`notation`, written in D
+// minor with `follow`) under C minor; tr_2's rack takes tr_1's notes through a
+// Notes module (mo_2) and outputs their pitch.
+void feedsPitch(Project& p, const char* notation, const char* follow) {
+    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+    p.run("context.write", R"({"text": "1: key C minor ~:w\n2: ~:w\n3: ~:w\n4: ~:w"})");
+    json::Value clip = j(R"({"track": "tr_1", "scene": "sc_1", "context": "1: key D minor ~:w"})");
+    clip["notation"] = notation;
+    clip["follow"] = follow;
+    p.runArgs("clip.add", clip);
+    p.run("track.add", R"({"name": "Pitches"})");  // tr_2
+    p.run("rack.add", R"({"track": "tr_2"})");     // rk_1, its Out mo_1
+    p.run("module.add", R"({"rack": "rk_1", "type": "notes", "source": "tr_1"})");  // mo_2
+    p.run("cable.add", R"({"from": "mo_2.pitch", "to": "mo_1.l"})");
+}
+}  // namespace
+
+TEST_CASE(
+    "a rack's Notes feed takes a following clip's sounding pitches, launched and under a rate") {
+    // Round 86 H2: the feed's players follow as the track's own do. cl_1 in D
+    // minor follows the key into C minor: D3 F3 A3 C4 sound C3 Eb3 G3 Bb3. The
+    // feed's pitch and the track's sound equal those of the clip written in C
+    // minor that follows nothing, at rate 1 and under a master playrate.
+    for (const bool rated : {false, true}) {
+        CAPTURE(rated);
+        Project following, written;
+        feedsPitch(following, "voice bass; 1: D3:q F3:q A3:q C4:q", "key");
+        feedsPitch(written, "voice bass; 1: C3:q Eb3:q G3:q Bb3:q", "none");
+        if (rated) {
+            underRate(following, false);
+            underRate(written, false);
+        }
+        const double seconds = rated ? 6.0 / 0.75 : 6.0;
+        // Under the rate, the log a live launch gives (its song and device
+        // frames differ); the two projects place it alike.
+        std::vector<LaunchLogEntry> log{launch(4 * kBeat, "cl_1")};
+        if (rated)
+            log = playLive(following.app->head(), following.app->projectDir(), kInCallback, 128,
+                           std::int64_t(seconds * 48000) + 16384, {{20, {request("tr_1", "cl_1")}}})
+                      .log;
+        REQUIRE(log.size() == 1);
+        const auto pitch = gates(following, seconds, log);
+        CHECK(pitch == gates(written, seconds, log));
+        CHECK(following.render(seconds, log) == written.render(seconds, log));
+        // And it moved: as written, the feed's pitch differs.
+        following.run("clip.set", R"({"clip": "cl_1", "follow": "none"})");
+        CHECK(gates(following, seconds, log) != pitch);
+    }
+}
