@@ -390,6 +390,41 @@ TEST_CASE("an empty marker dated in the future is judged by its lock, not taken 
     CHECK(listing->liveRuns == 1);
     releaseMarker(*live);
 }
+TEST_CASE("an empty marker stamped just ahead of the clock is still one being created") {
+    // A file system may stamp a file with a finer clock than the one the product reads for "now"
+    // (multigrain timestamps): a marker created at the end of a second can carry the next
+    // second's time while the coarse clock still shows the old one. No clock granularity decides:
+    // a time up to a second ahead is young.
+    Root root;
+    emptyMarker(root, 1);
+    // Stamped with the start of the next whole second: always ahead of the clock by under a
+    // second, and in a later second than the one the coarse clock shows now.
+    namespace chrono = std::chrono;
+    const auto system = chrono::system_clock::now();
+    const auto nextSecond = chrono::floor<chrono::seconds>(system) + chrono::seconds(1) - system;
+    fs::last_write_time(file(root, 1, ".run"),
+                        fs::file_time_type::clock::now() +
+                            chrono::duration_cast<fs::file_time_type::duration>(nextSecond));
+    auto listing = listReports(root.path);
+    REQUIRE(listing);
+    CHECK(listing->liveRuns == 1);
+    CHECK(listing->unreported.empty());
+}
+TEST_CASE("whether an empty marker is young depends on the two times, not on a clock's grain") {
+    constexpr std::int64_t second = 1'000'000'000;
+    const std::int64_t now = 1'700'000'000 * second + 999'000'000;
+    CHECK(markerIsYoung(now, now));
+    CHECK(markerIsYoung(now - 59 * second, now));
+    CHECK_FALSE(markerIsYoung(now - 60 * second, now));
+    CHECK_FALSE(markerIsYoung(now - 5 * 60 * second, now));
+    // Ahead of the clock by less than a second: the file system's finer clock, young.
+    CHECK(markerIsYoung(now + 1, now));
+    CHECK(markerIsYoung(now + second / 2, now));
+    CHECK(markerIsYoung(now + second, now));
+    // Further ahead: the clock was set back, which is not young.
+    CHECK_FALSE(markerIsYoung(now + second + 1, now));
+    CHECK_FALSE(markerIsYoung(now + 2 * 3600 * second, now));
+}
 TEST_CASE("an empty marker that stays empty is a run that ended, not one being created") {
     // A marker is empty for the instant between its creation and its first write. One left empty
     // (the creator failed in between) must not read as held for ever: it could never be listed,

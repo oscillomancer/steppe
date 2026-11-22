@@ -385,8 +385,15 @@ namespace {
 // How long an empty marker is taken to be one being created. Creation takes microseconds; an
 // older empty marker is left by a creator that failed between its creation and its first write,
 // and is judged by its lock like any other (held only if someone really holds it).
-constexpr std::int64_t kEmptyMarkerGraceSeconds = 60;
+constexpr std::int64_t kEmptyMarkerGraceNs = 60'000'000'000;
+// How far ahead of "now" a modification time may be and still be the creator's own: the file
+// system's clock and the one read here differ in granularity (see markerIsYoung).
+constexpr std::int64_t kClockSlackNs = 1'000'000'000;
 }  // namespace
+bool markerIsYoung(std::int64_t mtimeNs, std::int64_t nowNs) {
+    const std::int64_t age = nowNs - mtimeNs;
+    return age >= -kClockSlackNs && age < kEmptyMarkerGraceNs;
+}
 MarkerState probeMarker(const fs::path& path) {
 #if defined(_WIN32)
     HANDLE file = CreateFileW(
@@ -405,14 +412,13 @@ MarkerState probeMarker(const fs::path& path) {
         !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
         FILETIME nowTime{};
         GetSystemTimeAsFileTime(&nowTime);
-        const auto ticks = [](const FILETIME& t) {
-            return (static_cast<std::uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+        // 100 ns units since 1601, taken to nanoseconds since 1970 so that they fit.
+        const auto nanoseconds = [](const FILETIME& t) {
+            const auto ticks =
+                (static_cast<std::uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
+            return (static_cast<std::int64_t>(ticks) - 116'444'736'000'000'000LL) * 100;
         };
-        // 100 ns units; a time in the future (the clock was set back) is not young: the lock
-        // decides, as for any older empty marker.
-        const bool young =
-            ticks(info.ftLastWriteTime) <= ticks(nowTime) &&
-            ticks(info.ftLastWriteTime) + kEmptyMarkerGraceSeconds * 10'000'000ULL > ticks(nowTime);
+        const bool young = markerIsYoung(nanoseconds(info.ftLastWriteTime), nanoseconds(nowTime));
         if (info.nFileSizeHigh == 0 && info.nFileSizeLow == 0 && young) {
             result = MarkerState::Held;
         } else {
@@ -433,9 +439,19 @@ MarkerState probeMarker(const fs::path& path) {
     MarkerState result = MarkerState::Unreadable;
     struct stat info{};
     if (::fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_uid == ::geteuid()) {
-        // A modification time ahead of the clock (it was set back) is not young either.
-        const std::int64_t age = static_cast<std::int64_t>(::time(nullptr)) - info.st_mtime;
-        if (info.st_size == 0 && age >= 0 && age < kEmptyMarkerGraceSeconds)
+        // The time of the file system's clock at full resolution against the same clock's "now":
+        // the whole-second time() can be a second behind a file just made.
+        timespec now{};
+        ::clock_gettime(CLOCK_REALTIME, &now);
+#if defined(__APPLE__)
+        const timespec modified = info.st_mtimespec;
+#else
+        const timespec modified = info.st_mtim;
+#endif
+        const auto nanoseconds = [](const timespec& t) {
+            return static_cast<std::int64_t>(t.tv_sec) * 1'000'000'000 + t.tv_nsec;
+        };
+        if (info.st_size == 0 && markerIsYoung(nanoseconds(modified), nanoseconds(now)))
             result = MarkerState::Held;  // being created
         else if (::flock(fd, LOCK_SH | LOCK_NB) == 0)
             result = MarkerState::Free;  // the lock goes with the descriptor, on close
