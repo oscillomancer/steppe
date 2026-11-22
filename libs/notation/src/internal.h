@@ -108,6 +108,9 @@ inline std::optional<int> pitch(std::string_view text) {
 inline std::string pitchName(int pitch, const std::optional<harmony::Key>& key = std::nullopt) {
     return harmony::spell(pitch, key);
 }
+inline std::string pitchName(int pitch, const harmony::Place& place) {
+    return harmony::spell(pitch, place);
+}
 
 inline std::optional<std::int64_t> duration(std::string_view token, int ppq, bool& fraction) {
     fraction = false;

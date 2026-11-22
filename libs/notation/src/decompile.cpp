@@ -76,16 +76,22 @@ struct Piece {
     std::string token;
 };
 
+// The place a note at `tick` is named in: `placeAt` when given, else the constant key.
+harmony::Place placeOf(const DecompileOptions& options, std::int64_t tick) {
+    if (options.placeAt) return options.placeAt(tick);
+    return harmony::Place{options.key, std::nullopt};
+}
+
 std::string noteToken(const Group& group, std::int64_t length, int ppq, int baseVelocity, bool tied,
-                      const std::optional<harmony::Key>& key) {
+                      const harmony::Place& place) {
     std::string result;
     if (group.pitches.size() == 1)
-        result = internal::pitchName(group.pitches[0], key);
+        result = internal::pitchName(group.pitches[0], place);
     else {
         result = "[";
         for (std::size_t i = 0; i < group.pitches.size(); ++i) {
             if (i != 0) result += " ";
-            result += internal::pitchName(group.pitches[i], key);
+            result += internal::pitchName(group.pitches[i], place);
         }
         result += "]";
     }
@@ -353,9 +359,11 @@ Result<std::string> decompile(const midi::Sequence& source, const DecompileOptio
             for (const auto& group : voice.groups) {
                 auto at = group.start;
                 auto remaining = group.length;
+                // Names follow the place at the note's start, whichever bar a piece lands in.
+                const harmony::Place place = placeOf(options, group.start);
                 if (remaining == 0) {
                     bars[time.bar(at)].push_back(
-                        {at, 0, noteToken(group, 0, s.ppq, baseVelocity, false, options.key)});
+                        {at, 0, noteToken(group, 0, s.ppq, baseVelocity, false, place)});
                     continue;
                 }
                 while (remaining > 0) {
@@ -367,9 +375,9 @@ Result<std::string> decompile(const midi::Sequence& source, const DecompileOptio
                                      {},
                                      "Use positive whole-tick bar lengths."};
                     const auto take = std::min(remaining, available);
-                    bars[bar].push_back({at, take,
-                                         noteToken(group, take, s.ppq, baseVelocity,
-                                                   remaining > take, options.key)});
+                    bars[bar].push_back(
+                        {at, take,
+                         noteToken(group, take, s.ppq, baseVelocity, remaining > take, place)});
                     remaining -= take;
                     at += take;
                 }
@@ -483,7 +491,9 @@ Result<std::string> decompile(const midi::Sequence& source, const DecompileOptio
                 body += "pressure";
                 break;
             case midi::ControlKind::PolyPressure:
-                body += "poly " + internal::pitchName(number, options.key);
+                body += "poly " +
+                        internal::pitchName(
+                            number, placeOf(options, points.empty() ? 0 : points.front().tick).key);
                 break;
             case midi::ControlKind::ProgramChange:
                 break;

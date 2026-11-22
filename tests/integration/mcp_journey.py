@@ -159,14 +159,16 @@ def context(j):
 
 
 def spelling(j):
-    """Notes are spelled by the key at the item's start."""
+    """Notes are spelled by the key and the chord at each note's start."""
     j.exec("midi.write", {"item": "it_2", "notation": "voice bass; 1: F#2:q D#2:q A#1:q G#2:q"},
            "Write sharps.")
     flat = j.exec("midi.get", {"item": "it_2"}, "In C minor they read back as flats.")["text"]
     assert "Gb2:q Eb2:q Bb1:q Ab2:q" in flat and "#" not in flat, flat
     j.exec("key.set", {"at": 0, "tonic": "D", "scale": "major"}, "Change to D major.")
     sharp = j.exec("midi.get", {"item": "it_2"}, "In D major, the same notes are sharps.")["text"]
-    assert "F#2:q" in sharp and "A#1:q" in sharp, sharp
+    # The key is D major, but the chord holding under the item is Cm: its third reads Eb, the
+    # flat seventh and flat sixth read Bb and Ab (ADR-0100), and F#, a note of D major, stays F#.
+    assert "1: F#2:q Eb2:q Bb1:q Ab2:q" in sharp, sharp
     j.undo()  # the key
     j.undo()  # the sharps: back to the bass line
     assert "Gb2" in j.exec("midi.get", {"item": "it_2"})["text"]

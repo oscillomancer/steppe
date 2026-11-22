@@ -538,7 +538,13 @@ Canonical output, in order:
    Pitches are named by `harmony::spell` (`specs/harmony.md` §3): with no key
    (`DecompileOptions::key` unset) the table `C C# D Eb E F F# G Ab A Bb B`,
    which is the output's spelling today, else by the key; every spelling
-   compiles back to the same pitch.
+   compiles back to the same pitch. `DecompileOptions::placeAt` (ADR-0100), a
+   function from an item tick to the key and chord holding there, names each
+   note by the place at the note's start (a tied continuation by its first
+   piece's, a `[...]` token by its one start; a `lane poly` line by the key at
+   its first point), so a chord tone reads by its degree (`G#4` over E, `Bbb3`
+   in a diminished seventh on C); `key` is not read when it is set. The names
+   may carry `##` and `bb`, which the compiler reads.
    Gaps become rests. Durations are written as the shortest correct token:
    single symbolic (`q`, `e.`, `e3`, ...), else a `+` sum of at most two
    symbolic values, else `Nt`. Velocities different from the voice's `vel`
