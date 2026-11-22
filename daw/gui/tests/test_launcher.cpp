@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -26,6 +27,7 @@
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
 #include "supple/peaks/peaks.h"
+#include "supple/time/timeline.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/views/arrange.h"
@@ -731,6 +733,62 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     CHECK_FALSE(capture.armed());
     CHECK_FALSE(f.app->launchCapturing());
     CHECK(f.app->head().version == before + 1);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: Capture turned off while playing ends on the next bar, then commits") {
+    // gui.md §4.15: off while playing ends the capture on the project's launch
+    // quantize boundary, as a launch made then would land; the commit follows
+    // once the engine has heard it, and nothing is armed after it.
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    const auto service = [&] { capture.service(); };
+    REQUIRE(f.runUntil(playing, at, "Kit A heard", service));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Kit A", service));
+    const std::uint64_t before = f.app->head().version;
+    REQUIRE(capture.set(false));
+    const auto pending = f.app->engine()->launchCapture();
+    REQUIRE(pending);
+    REQUIRE(pending->endsBeat);
+    const double ends = *pending->endsBeat;
+    CHECK(ends > at + 1);
+    CHECK(std::fmod(ends, 4.0) == 0.0);  // a bar line (4/4)
+    // Still capturing, lit, and nothing written until the boundary is heard.
+    CHECK(capture.ending());
+    CHECK_FALSE(capture.armed());
+    CHECK(capture.lit());
+    CHECK(f.app->head().version == before);
+    REQUIRE(
+        f.runUntil([&] { return !f.app->launchCapturing(); }, ends, "the capture's end", service));
+    capture.service();
+    CHECK(refused.empty());
+    CHECK_FALSE(capture.ending());
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(f.app->launchCapturing());
+    CHECK(f.app->head().version == before + 1);  // one undo step
+    bool laid = false;
+    for (const auto& e : f.app->head().items) laid = laid || e.value->track == drums;
+    CHECK(laid);
+    // It ended on that boundary exactly.
+    const auto done = f.app->engine()->launchCapture();
+    REQUIRE(done);
+    const model::Session s = f.app->head();
+    const double rate = f.app->engine()->config().sampleRate;
+    CHECK(done->startSample + done->frames == time::samplesAt(s.timeMap->secondsAt(ends), rate));
     f.exec("engine.stop", "{}");
     CHECK(f.errors.empty());
 }

@@ -2884,8 +2884,12 @@ same heights, scroll and colours.
   keeps the launches while the transport runs. When a stop, a seek or a
   loop change ends the capture, the app commits it (`launch.commit`, one
   undo step, as a recording is committed at stop) and, still lit, arms the
-  next one; a click on the lit cell ends the capture, commits it and turns
-  it off. A capture in which every track followed the arrangement writes
+  next one; a click on the lit cell turns it off and ends the capture:
+  while playing on the next boundary of the project's launch quantize
+  (`launch.capture {on: false, quantize}`, as a launch made then would
+  land), the cell staying lit until the engine has heard it, then commits
+  it (`CaptureControl::ending`); stopped, at once. A click before that
+  boundary arms it again and cancels the end. A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
   item in the way) shows its message in the status line. A commit that
   laid clips as written under another key (the answer's `mismatches`, with

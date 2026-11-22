@@ -1805,7 +1805,10 @@ queued, `followed`: what it follows by (`none`, `key` or `chords`).
 ### Capturing a performance
 
 `launch.capture {on: true}` starts keeping what you launch; `launch.capture
-{on: false}` stops. `launch.commit` then writes the performance onto the
+{on: false}` stops, at once, or with `quantize` (`"bar"`, `"beat"`, …) on
+that grid's next line, so the performance ends on the bar. The Capture
+button, turned off while playing, ends it on the project's launch quantize
+and commits it there. `launch.commit` then writes the performance onto the
 timeline as ordinary items, in one undo step. It is laid out as it ran:
 from where the capture began, each launch as many seconds later as it was
 heard, even if the transport loop jumped back meanwhile. On each track that
