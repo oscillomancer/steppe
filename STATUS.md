@@ -25,11 +25,10 @@ protocol and standalone MCP/proxy have native coverage on both platforms
 Both native platforms enable and test audio-file I/O, recording recovery,
 engine/CLI, dummy/offline rendering and sandbox. PortAudio builds CoreAudio on
 macOS and WASAPI/ASIO on Windows; fake-device tests verify RT/offline equivalence
-in both executors. Actual hardware trials remain opt-in and unmeasured. Most of
-`engine.tests` has not run there yet: 17 of its files (513 of 1238 cases),
-including the dummy-backend real-time = offline null tests, `test_app.cpp` with
-the command-example test, and `test_commands.cpp`, build on Linux only
-(CONTRIBUTING.md, "Temporary port gates"); the port is in progress. The
+in both executors. Actual hardware trials remain opt-in and unmeasured. `engine.tests`
+builds one source list on all three platforms (the real-time = offline null
+tests, `test_app.cpp` with the command-example test, `test_commands.cpp`
+among them); the cases still Linux-only are listed under Known limits. The
 GUI gate is lifted (ADR-0039), with native editor embedding (ADR-0040);
 the combined native DAW builds and hermetic tests pass CI on both platforms.
 Portable libraries, the session model, stock DSP cores
@@ -1521,6 +1520,16 @@ Library boundaries:
   while its backlog has room.
 
 Engine and hosting:
+- `engine.tests` cases that run on Linux only (CONTRIBUTING.md, "Temporary
+  port gates"), each fenced with its reason: the JACK backend's (`test_jack`,
+  `test_bench`, six JACK cases in `test_app`/`test_realtime`) and the Linux
+  protections (`test_runtime_protection`), by design; media identity's inode
+  and nanosecond checks (`test_offline`), recording header errors through a
+  `/proc/self/fd` fault and the OS thread role names (`test_realtime`), until
+  native variants land; the restricted CPU mask (`test_realtime`,
+  `test_workers`) and the `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` refusals
+  (`test_realtime`). Not on Windows: a bridged note plug-in's lost block
+  (its gate is POSIX shared memory).
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue

@@ -126,12 +126,13 @@ core-base native waits/wakes/thread setup, command bus, control-protocol/MCP,
 Lua, DSP/Console 9/analysis, MIDI/notation/timeline/optimizer,
 session model, plugin support, all stock SDK-free DSP engines, and the
 script compiler/runtime and suite semantic layer. Audio-file I/O, engine/CLI,
-dummy/offline rendering and sandbox build and run on all three platforms, but
-`engine.tests` is still two source lists (`host/engine/CMakeLists.txt`): 17 of
-its files run on Linux only, among them the real-time = offline null tests
-(`test_realtime*.cpp`), `test_app.cpp` (with the command-example test),
-`test_commands.cpp` and `test_offline.cpp`, 513 of its 1238 cases. They are
-being ported; the table below lists them until then. Native core-base sources/tests, JSON-RPC control transport/model loop
+dummy/offline rendering, sandbox and their tests run on all three platforms:
+`engine.tests` builds one source list everywhere (`host/engine/CMakeLists.txt`,
+`_engine_test_sources`) and adds only Linux's own on Linux. A case in a
+portable file that needs Linux is fenced with a one-line reason above it, and
+`engine.portable-sources` fails on a POSIX-only header or call outside a
+conditional there. `SUPPLE_TEST_PORTABLE_ONLY=ON` builds the portable list
+alone on Linux, a local check before native CI. Native core-base sources/tests, JSON-RPC control transport/model loop
 and standalone MCP/proxy no longer share the hosting gate (ADR-0035).
 Linux-specific descriptor/permission/signal probes and memory-residency/rlimit
 tests remain guarded with portable boundary coverage alongside them.
@@ -140,7 +141,11 @@ These gates are explicit, with no no-op RT implementations:
 | Gate | Off on | Reason / follow-up |
 |---|---|---|
 | JACK/fake JACK and hardware capacity benchmark | macOS, Windows | Linux graph/hardware tooling; native device audio uses PortAudio (ADR-0038) |
-| 16 more `engine.tests` files (`test_realtime*`, `test_app`, `test_commands`, `test_offline`, `test_context_commands`, `test_dsp`, `test_learn`, `test_scripts`, `test_strips`, `test_meters`, `test_workers`, `test_live_workers`, `test_runtime_protection`) | macOS, Windows | not a platform need for most: never moved to the portable list; being ported |
+| `engine.tests`: `test_jack`, `test_bench` and six JACK cases in `test_app`/`test_realtime` (`SUPPLE_TEST_JACK`) | macOS, Windows | the JACK backend through the stand-in libjack (above) |
+| `engine.tests`: `test_runtime_protection` | macOS, Windows | Linux THP, mlock and `/dev/cpu_dma_latency`; the other platforms' unsupported paths have no test yet |
+| `engine.tests` cases: media identity (`test_offline`), recording header errors, thread role names (`test_realtime`) | macOS, Windows | Linux mechanisms for now (`st_mtim`/`utimensat`, a `/proc/self/fd` fault, `/proc/self/task` names); native variants to follow |
+| `engine.tests` cases: the restricted CPU mask (`test_realtime`, `test_workers`) and elevation refusals (`test_realtime`) | macOS, Windows | Linux CPU affinity and `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` |
+| `engine.tests` cases: a bridged note plug-in's lost block (`test_realtime`); CLAP posix-fd service (`test_app`) | Windows | a POSIX shared-memory gate (a Windows one to follow); CLAP's posix-fd extension is not offered on Windows, which the test checks |
 
 Research GUI spikes and host fuzzers reject configuration on non-Linux
 platforms rather than silently building incomplete targets. Renders must
