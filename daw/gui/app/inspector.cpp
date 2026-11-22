@@ -830,12 +830,29 @@ void Inspector::readItems(bool force) {
                             : own  ? model::keyWords(*own)
                                    : std::string("no key");
         // The rest counted, not named (the roll's take row shows them all): the
-        // take's other key points, as a bake across key changes leaves them.
+        // changes of key the item plays, as a bake across key changes leaves
+        // them. Its notes read context beats from phase + start_offset for its
+        // length × playrate (model::contextOver unrolls repeats and carries
+        // `own` in at 0), so points outside that span, which a split part or a
+        // left trim keeps, are not counted.
         if (shown) {
-            const auto changes = std::count_if(
-                take->context.begin(), take->context.end(), [&](const model::ContextPoint& p) {
-                    return p.type == model::ContextType::Key && &p != own;
-                });
+            const model::ItemSpan span = model::itemSpan(s, *item);
+            const double length = std::max(0.0, s.timeMap->beatAt(span.endSec) - span.startBeat);
+            const double rate = take->playrate > 0 ? take->playrate : 1.0;
+            const double u0 = take->contextPhase + take->startOffset;
+            int changes = 0;
+            std::optional<model::ContextPoint> last;
+            for (model::ContextPoint p : model::contextOver(*take, u0, u0 + length * rate)) {
+                if (p.type != model::ContextType::Key) continue;
+                const double beat = p.beat;
+                if (last) {
+                    p.beat = last->beat;
+                    if (p == *last) continue;  // the same key again: no change
+                    ++changes;
+                }
+                p.beat = beat;
+                last = std::move(p);
+            }
             if (changes > 0)
                 words += ", " + std::to_string(changes) + (changes == 1 ? " change" : " changes");
         }

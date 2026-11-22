@@ -485,9 +485,10 @@ TEST_CASE("inspector: one item's Timebase, and Written in while its take has a c
     auto* written = dynamic_cast<ui::Label*>(f.node("inspector.written_in"));
     REQUIRE(written);
     CHECK(written->text() == "D minor");
-    // Key changes in the take's context: the first named, the rest counted (a
-    // bake across the song's key changes leaves them; the roll's take row
-    // names them all).
+    // Key changes the item plays: the first named, the rest counted (a bake
+    // across the song's key changes leaves them; the roll's take row names
+    // them all). The item lengthened to three bars to reach them.
+    f.exec("item.set", R"({"item":")" + item + R"(","length":12})");
     f.exec("take.set",
            R"({"take":")" + take + R"(","context":"1: key D minor ~:w\n2: key F major ~:w"})");
     f.pass();
@@ -495,6 +496,14 @@ TEST_CASE("inspector: one item's Timebase, and Written in while its take has a c
     f.exec("take.set",
            R"({"take":")" + take +
                R"(","context":"1: key D minor ~:w\n2: key F major ~:w\n3: key A minor ~:w"})");
+    f.pass();
+    CHECK(written->text() == "D minor, 2 changes");
+    // A point the item does not reach is not counted: trimmed to its first
+    // bar, no change is heard.
+    f.exec("item.set", R"({"item":")" + item + R"(","length":4})");
+    f.pass();
+    CHECK(written->text() == "D minor");
+    f.exec("item.set", R"({"item":")" + item + R"(","length":12})");
     f.pass();
     CHECK(written->text() == "D minor, 2 changes");
     // Several items: no row.
@@ -505,6 +514,16 @@ TEST_CASE("inspector: one item's Timebase, and Written in while its take has a c
     f.ui.selectedItems = {item, other};
     f.pass();
     CHECK_FALSE(f.inView("inspector.row.written_in"));
+    // A split's right part keeps the whole context but plays from bar 2: it
+    // starts in F major and hears one change, not the one before it.
+    const std::string right =
+        f.exec("item.split", R"({"item":")" + item + R"(","at":4})")["right"].asString();
+    f.ui.selectedItems = {right};
+    f.pass();
+    REQUIRE(f.inView("inspector.row.written_in"));
+    written = dynamic_cast<ui::Label*>(f.node("inspector.written_in"));
+    REQUIRE(written);
+    CHECK(written->text() == "F major, 1 change");
 }
 
 TEST_CASE("inspector: a track's Modulation row leads to each source, 'N routes' past four") {
