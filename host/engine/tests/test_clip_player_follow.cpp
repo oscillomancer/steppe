@@ -925,6 +925,35 @@ TEST_CASE("a clip played by its take's own instrument holds its chord across a p
         }
 }
 
+TEST_CASE("a following figure moves as a block in chords mode, whatever the song's key" *
+          doctest::description("rt")) {
+    // E1 through the engine: cl_1's Bm figure B4 A4 F#4 D4, written in D
+    // major, follows the song's B7. In A minor it split across octaves (B3 A4
+    // F#3 D#3); now it sounds B4 A4 F#4 D#4 there as in E minor: the same
+    // samples, in both executors, as that figure written out and not followed.
+    const auto play = [](const char* follow, const char* notation, const char* song,
+                         const EngineOptions& options) {
+        Project p;
+        followingClip(p, follow, notation, "1: key D major {Bm}:w");
+        p.runArgs("context.write", contextText(song));
+        constexpr std::uint32_t block = 128;
+        const Live live = playLive(p.app->head(), p.app->projectDir(), options, block,
+                                   10 * kBeat + 8192, {{20, {request("tr_1", "cl_1")}}});
+        REQUIRE(live.log.size() == 1);
+        return live;
+    };
+    for (const char* song : {"1: key A minor {B7}:w\n2: {B7}:w\n3: {B7}:w",
+                             "1: key E minor {B7}:w\n2: {B7}:w\n3: {B7}:w"})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            CAPTURE(std::string(song).substr(0, 15));
+            CAPTURE(options.anticipative);
+            const Live following =
+                play("chords", "voice a; 1: B4:q A4:q F#4:q D4:q", song, options);
+            const Live written = play("none", "voice a; 1: B4:q A4:q F#4:q D#4:q", song, options);
+            sameAsHeld(following, written, 10 * kBeat);
+        }
+}
+
 TEST_CASE("following at compile, measured (prints; decides nothing)" * doctest::skip()) {
     // Round 86 H9: a context edit compiles while anything follows. Its cost:
     // compile and prepare of sessions with `items` laid one-bar items of 16

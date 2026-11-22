@@ -309,6 +309,8 @@ In short:
   rotation of the scale's degrees). They move by the root interval when the
   scales differ in size or a root is outside its scale.
 - **The octave** is the one nearest the key-followed pitch, with a tie down.
+  *(Amended 2026-11-21, note E1 below: in Chords mode, the pitch moved by the
+  roots' interval.)*
 - **Out of range** is folded by octaves.
 
 ### The other direction (X5)
@@ -538,4 +540,26 @@ its contracts.
   chord inside the clip is written as a "no chord from here" point, as the
   project reads it, and an unreadable key (there is no "no key" point) is named
   in the warning as leaving the earlier key in force over that stretch.
+- *(2026-11-21, E1, from the GUI lead's third walk; the co-director's
+  decision, which Nate may overrule.)* In Chords mode, a note mapped by chords
+  (both chords present) takes the octave nearest `pitch + iv(from.root,
+  to.root)`, never the Key-mode result: the figure moves as a block by the
+  roots' nearest interval, and each note takes its target class nearest to
+  that, a tie down.
+  - Why: with the key reference, a Bm figure B4 A4 F#4 D4 written in D major
+    sounded B3 A4 F#3 D#3 under B7 in A minor. The keys are 5 down, a tritone
+    from three of its four targets, and the tie went down. Under B7 in E minor
+    it sounded B4 A4 F#4 D#4. A looped cell over Am played an octave apart
+    when only the song's key differed (A4 to G5 in E minor, A3 to G4 in A
+    minor).
+  - Now one pair of chords gives one voicing whatever the keys, and no chord
+    tone or kept degree lands a tritone from the block (`harmony.md` §5 step
+    6, "Octave").
+  - A known limit, kept: a slash bass that is not a tone lands a tritone from
+    the block when the two basses sit a tritone apart above their roots
+    (C/F# → G, C/D → G/Eb), and goes down with every note of its class.
+    `follow` maps each note on its own and does not know which note is
+    lowest, so no rule tells the bass from a melody note of its class.
+  - A note that falls back to Key mode (a chord missing on a side) is
+    unchanged.
 

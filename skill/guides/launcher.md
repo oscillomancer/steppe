@@ -99,6 +99,8 @@ is the same whether the chords under it differ from the clip's or match them.
   major): by degree. Different sizes (a pentatonic): a transpose, with `context.scale_shape`.
 - `chords`: each note goes from its chord tone (root, third, fifth, seventh, extensions) to
   the same tone of the chord under it; a note with no chord on either side follows by key.
+  A figure moves as a block by the interval between the two roots, each note to its tone
+  nearest that, so one pair of chords always gives one voicing, whatever the keys.
 - Notes on channel 10 (drums) are never moved. A drum-only, empty, keyless or audio clip is
   laid without following, and `followed.copied` says why (`drums`, `no_notes`, `no_key`,
   `audio`).
