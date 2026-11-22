@@ -464,7 +464,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set a take's gain, pan, offset, rate or pitch, or its MIDI context or follow.";
+        c.summary = "Set a take's gain, pan, name, rate, pitch, context, follow and more.";
         c.tags = {"take"};
         c.args =
             schema::object<TakeSetArgs>("take_set_args")

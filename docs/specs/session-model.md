@@ -2617,7 +2617,6 @@ missing from this table is a defect of this contract.
 | `launch.commit` | Lays notes as written, each take with its clip's context converted as above and `follow` the outcome the plan used for that clip (`none`, `key` or `chords`, after the budget: `engine.md`). `pooled` allowed. |
 | `take.set {take, context?, follow?}` | Below. |
 | `take.bake {take}` | Below: the notes are written as they sound and the take's context becomes the song's under the item (follow `none`, no period). |
-| `take.bake {take}` | Below. |
 | `item.split`, `item.set` (position, length, loop), `take.set {start_offset, rebase_seconds, playrate}`, `item.move`, `item.duplicate`, `item.paste`, `track.duplicate` | The four members go with each take unchanged ("Invariance"; a wrapped offset adds to the phase). |
 | `item.explode-takes`, `take.extract` (from an item) | The four members go with the take unchanged. |
 | `take.extract` (from a clip) | As placement lays the clip, with the clip's `follow`. |
