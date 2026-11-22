@@ -402,6 +402,16 @@ bool markerIsYoung(std::int64_t mtimeNs, std::int64_t nowNs) {
         age = nowNs - mtimeNs;
     return age >= -kClockSlackNs && age < kEmptyMarkerGraceNs;
 }
+std::int64_t unixNanoseconds(std::int64_t seconds, std::int64_t nanoseconds) {
+    constexpr std::int64_t kBillion = 1'000'000'000;
+    constexpr std::int64_t kMost = std::numeric_limits<std::int64_t>::max();
+    constexpr std::int64_t kLeast = std::numeric_limits<std::int64_t>::min();
+    if (seconds > kMost / kBillion) return kMost;
+    if (seconds < kLeast / kBillion) return kLeast;
+    const std::int64_t whole = seconds * kBillion;
+    const std::int64_t part = std::clamp<std::int64_t>(nanoseconds, 0, kBillion - 1);
+    return whole > 0 && part > kMost - whole ? kMost : whole + part;
+}
 std::int64_t unixNanosecondsOfFileTime(std::uint64_t ticks) {
     constexpr std::uint64_t kUnixEpoch = 116'444'736'000'000'000ULL;  // 1970 in 1601's ticks
     constexpr std::uint64_t kMostTicks =
@@ -470,7 +480,7 @@ MarkerState probeMarker(const fs::path& path) {
         const timespec modified = info.st_mtim;
 #endif
         const auto nanoseconds = [](const timespec& t) {
-            return static_cast<std::int64_t>(t.tv_sec) * 1'000'000'000 + t.tv_nsec;
+            return unixNanoseconds(static_cast<std::int64_t>(t.tv_sec), t.tv_nsec);
         };
         if (info.st_size == 0 && markerIsYoung(nanoseconds(modified), nanoseconds(now)))
             result = MarkerState::Held;  // being created

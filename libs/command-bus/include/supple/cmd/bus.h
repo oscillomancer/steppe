@@ -9,6 +9,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -206,6 +207,27 @@ class Registry {
     }
     const CommandInfo* find(std::string_view name, int version = 0) const;
     std::vector<const CommandInfo*> all() const;
+    // The group of a command is the part of its name before the first '.' (the whole name for one
+    // without a dot). describeGroup gives a group the one line the agent index shows for it, in
+    // at most kMaxGroupSummary characters; a second line for a group replaces nothing and asserts.
+    void describeGroup(std::string prefix, std::string summary);
+    const std::map<std::string, std::string>& groups() const { return groups_; }
+    // Every group that has a public (not Internal) command, by name: how many commands, and its
+    // line (empty when none was declared; a test fails on that).
+    struct GroupInfo {
+        std::string name, summary;
+        std::size_t commands = 0;
+    };
+    std::vector<GroupInfo> groupInfos() const;
+    static constexpr std::size_t kMaxGroupSummary = 70;
+    // The results of registry.groups and registry.list, computed here so that the commands and
+    // the command line's `registry --groups` / `--group` give the same answer.
+    // A group, kind or tag that does not exist is an error naming the valid ones; a search that
+    // finds nothing is an empty list, with `groups` naming the groups whose line has the text.
+    Result<json::Value> groupsResult(std::string_view group = {}) const;
+    Result<json::Value> listResult(std::string_view tag, std::string_view kind,
+                                   std::string_view text, std::string_view group) const;
+    static std::string groupOf(std::string_view commandName);
     // The name of each command by id (a name once per version: the same name twice).
     std::vector<std::string_view> namesById() const;
     Error unknown(std::string_view name) const;
@@ -214,6 +236,7 @@ class Registry {
   private:
     void addInfo(CommandInfo info);
     std::map<std::pair<std::string, int>, CommandInfo> commands_;
+    std::map<std::string, std::string> groups_;
     std::uint32_t nextId_ = 0;
 };
 
@@ -398,8 +421,28 @@ using FixtureFactory = std::function<std::unique_ptr<Host>(std::string_view)>;
 using FixtureAvailable = std::function<bool(std::string_view)>;
 Status runExamples(const Registry&, const FixtureFactory&, const FixtureAvailable& = {});
 // allTools includes every non-Internal command, regardless of MCP exposure.
+// The agent's way into the registry, in three steps (spec command-bus.md, "Describe"): the
+// groups with one line each, one group's (or a search's) rows, then one command by
+// registry.describe. Both builders take a command's result, so the MCP server (which may only hold
+// an RPC connection) and the command line shape them alike.
+inline constexpr std::size_t kIndexRowCap = 60;
+// registry.groups' result as {columns: [group, count, summary], groups: [[...]], hint}.
+json::Value groupIndex(const json::Value& groupsResult);
+// registry.list's result as {columns: [name, kind, summary], namespaces: {group: [[...]]}}:
+// the public commands only, at most kIndexRowCap rows; a longer answer says so (truncated: true,
+// with a hint to narrow the filter) and is never cut silently.
+json::Value rowIndex(const json::Value& listResult);
+// The error for a group that does not exist, its hint listing the groups.
+Error unknownGroup(std::string_view group, const json::Value& groupsResult);
 json::Value mcpToolList(const Registry&, bool allTools = false);
 std::string markdownReference(const Registry&);
+// The reference split by group, as the skill reads it: an index of the groups with one line each,
+// then one file per group (every command of the group, internal ones included).
+std::string markdownIndex(const Registry&);
+std::string markdownGroup(const Registry&, std::string_view group);
+// Writes index.md and <group>.md for each group into `directory` (created if missing). Files of
+// other names in it are left alone.
+Status writeMarkdownDirectory(const Registry&, const std::filesystem::path& directory);
 // LuaLS annotations of the generated bindings (ADR-0006): the `q` table a
 // script sees — one class per command's arguments and result, one per command
 // namespace, and the root. The script language itself is `libs/lua-bus`.

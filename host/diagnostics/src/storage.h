@@ -83,6 +83,9 @@ MarkerState probeMarker(const std::filesystem::path& path);
 // (multigrain timestamps, a coarse tick), so a marker made this instant may carry a time a
 // little in the future. Further ahead the clock was set back, which is not young.
 bool markerIsYoung(std::int64_t mtimeNs, std::int64_t nowNs);
+// Seconds and nanoseconds since 1970 (a POSIX timespec) as nanoseconds, saturating at the ends of
+// the range (a file's time can be set to any 64-bit second) instead of overflowing.
+std::int64_t unixNanoseconds(std::int64_t seconds, std::int64_t nanoseconds);
 // A Windows FILETIME (100 ns units since 1601) as nanoseconds since 1970, saturating at the ends
 // of the range (a time of 0, or one past the year 2262) instead of overflowing.
 std::int64_t unixNanosecondsOfFileTime(std::uint64_t ticks);

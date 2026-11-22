@@ -14,12 +14,16 @@ history; queries and rendering alone do not.
 ## Tools: core set + describe/exec/query
 
 The engine lists 38 common command tools plus `describe`, `exec` and `query` by
-default. A proxy to the GUI also lists its existing `gui_selection` tool. `describe {}` lists every command as compact rows grouped by namespace;
-`describe {"command": "fx.patch.list"}` gives arguments, result schema, errors
-and examples. Call the rest with
+default. A proxy to the GUI also lists its existing `gui_selection` tool. Dedicated
+tools need no lookup. To find any other command, walk `describe` in three steps:
+`describe {}` lists the command groups, one line each (`fx`, `track`, `render`, ...);
+`describe {"group": "fx"}` lists that group's commands (name, kind, summary);
+`describe {"command": "fx.patch.list"}` gives its arguments, result schema, errors
+and examples. `describe {"text": "patch"}` searches names and summaries across groups, in any case
+(a long answer says `truncated`: add `group` or a longer text). Call the command with
 `exec {"command": "fx.patch.list", "args": {"fx": "fx_2"}}`, or use `query`
 with the same arguments for read-only commands. Dedicated tools omit result
-schemas; use `describe` when you need one. Clients that defer tool loading can
+schemas; use `describe {"command": ...}` when you need one. Clients that defer tool loading can
 start `steppe-mcp --tools all` or `steppe-engine --mcp --tools all` to list every
 non-Internal command as a dedicated tool. The sandbox's dedicated set is unchanged.
 
@@ -96,7 +100,7 @@ tool (or as `args` through `exec`).
 | Writing a plugin of your own: an effect or an instrument as a DSP script (`exec {"command": "dsp.write"}`, then `fx_add`) | `guides/dsp-workflow.md`, `guides/dsp-language.md`, `generated/dsp-examples.md` |
 | Modular racks: modules and cables on a channel, generative patches, a plug-in in a rack, a rack as an effect, rack presets | `guides/rack.md`, `generated/rack-modules.md` |
 | Writing a rack module of your own (`exec {"command": "module.write"}`, then `exec {"command": "rack.patch"}`) | `guides/modules.md` |
-| Exact command arguments and results | `generated/sandbox-commands.md` (sandbox), `generated/engine-commands.md` (DAW), or the `describe` tool |
+| Exact command arguments and results | `generated/sandbox/index.md` (sandbox) or `generated/engine/index.md` (DAW): read the index, then one group's file (`generated/engine/fx.md`); or the `describe` tool |
 | A stock plugin's parameters and patch format | its guide, and `plugin_describe` (sandbox) or `fx_describe` (DAW) for every field, unit and range |
 | Echoes: in time or free, ping-pong, groove, tape and analog, pitch-shifted, reversed or smeared, ducked or frozen (Bracken) | `guides/delay.md` |
 | Chorus, stereo widening, string ensemble, multi-voice doubling and vibrato, with lows kept dry (Withy) | `guides/chorus.md` |

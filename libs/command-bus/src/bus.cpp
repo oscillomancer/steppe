@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <fstream>
 #include <set>
 
 namespace supple::cmd {
@@ -436,36 +437,19 @@ Registry::Registry() {
         "timeout_clamped_s.";
     addMeta(
         "registry.list", Kind::Query, Exposure::McpExec, "List available commands.",
-        objectSchema({{"tag", string}, {"kind", string}, {"text", string}}), anyObject,
+        objectSchema({{"tag", string}, {"kind", string}, {"text", string}, {"group", string}}),
+        anyObject,
         [](const json::Value& args) -> Status {
-            SUPPLE_TRY(validateFields(args, {}, {"tag", "kind", "text"}));
-            for (auto key : {"tag", "kind", "text"})
+            SUPPLE_TRY(validateFields(args, {}, {"tag", "kind", "text", "group"}));
+            for (auto key : {"tag", "kind", "text", "group"})
                 if (auto* value = args.find(key); value && !value->isString())
                     return Error("schema.type", "expected string", json::pointerJoin("", key));
             return {};
         },
         [](const json::Value& args, Context& ctx) -> Result<json::Value> {
-            json::Value result = json::Value::object();
-            result["commands"] = json::Value::array();
-            auto tag = stringField(args, "tag"), kind = stringField(args, "kind");
-            auto text = stringField(args, "text");
-            for (auto* info : ctx.service<const Registry>().all()) {
-                if (!tag.empty() &&
-                    std::find(info->tags.begin(), info->tags.end(), tag) == info->tags.end())
-                    continue;
-                if (!kind.empty() && kindName(info->kind) != kind) continue;
-                if (!text.empty() && info->name.find(text) == std::string::npos &&
-                    info->summary.find(text) == std::string::npos)
-                    continue;
-                json::Value item = json::Value::object();
-                item["name"] = info->name;
-                item["version"] = info->version;
-                item["kind"] = kindName(info->kind);
-                item["summary"] = info->summary;
-                item["exposure"] = exposureName(info->exposure);
-                result["commands"].push_back(std::move(item));
-            }
-            return result;
+            return ctx.service<const Registry>().listResult(
+                stringField(args, "tag"), stringField(args, "kind"), stringField(args, "text"),
+                stringField(args, "group"));
         },
         {"List commands", json::Value::object(), json::Value::object(), "empty"});
     addMeta(
@@ -486,6 +470,23 @@ Registry::Registry() {
             return commandJson(*info);
         },
         {"Describe registry.list", json::Value::object(), json::Value::object(), "empty"});
+    addMeta(
+        "registry.groups", Kind::Query, Exposure::McpExec,
+        "List the command groups, with one line each.", objectSchema({{"group", string}}),
+        anyObject,
+        [](const json::Value& args) -> Status {
+            SUPPLE_TRY(validateFields(args, {}, {"group"}));
+            if (auto* value = args.find("group"); value && !value->isString())
+                return Error("schema.type", "expected string", "/group");
+            return {};
+        },
+        [](const json::Value& args, Context& ctx) -> Result<json::Value> {
+            return ctx.service<const Registry>().groupsResult(stringField(args, "group"));
+        },
+        {"List one group", json::Value::object(), json::Value::object(), "empty"});
+    describeGroup("registry", "The command registry: list, describe and group the commands.");
+    describeGroup("batch", "Run several commands atomically (in the DAW, one undo step).");
+    describeGroup("job", "Background jobs: status, wait and cancel.");
     auto stepSchema =
         objectSchema({{"command", string}, {"args", anyObject}, {"as", string}}, {"command"});
     auto stepsSchema = typeSchema("array");
@@ -583,6 +584,14 @@ Registry::Registry() {
     auto& describe = commands_.at({"registry.describe", 1}).examples.front();
     describe.args["command"] = "registry.list";
     describe.result = commandJson(commands_.at({"registry.list", 1}));
+    auto& groupsExample = commands_.at({"registry.groups", 1}).examples.front();
+    groupsExample.args["group"] = "registry";
+    groupsExample.result["groups"] = json::Value::array();
+    json::Value oneGroup = json::Value::object();
+    oneGroup["name"] = "registry";
+    oneGroup["count"] = 3;
+    oneGroup["summary"] = groups_.at("registry");
+    groupsExample.result["groups"].push_back(std::move(oneGroup));
     auto& batchExample = commands_.at({"batch", 1}).examples.front();
     batchExample.args["steps"] = json::Value::array();
     batchExample.result["label"] = "";
@@ -639,6 +648,118 @@ std::vector<const CommandInfo*> Registry::all() const {
     }
     return out;
 }
+namespace {
+// Letters A-Z folded to a-z; every other byte, UTF-8 included, is left as it is.
+std::string asciiLower(std::string_view text) {
+    std::string out(text);
+    for (char& ch : out)
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+    return out;
+}
+json::Value groupsJson(const Registry& registry, std::string_view group) {
+    json::Value result = json::Value::object();
+    result["groups"] = json::Value::array();
+    for (const auto& info : registry.groupInfos()) {
+        if (!group.empty() && info.name != group) continue;
+        json::Value item = json::Value::object();
+        item["name"] = info.name;
+        item["count"] = static_cast<long long>(info.commands);
+        item["summary"] = info.summary;
+        result["groups"].push_back(std::move(item));
+    }
+    return result;
+}
+}  // namespace
+Result<json::Value> Registry::groupsResult(std::string_view group) const {
+    auto result = groupsJson(*this, group);
+    if (!group.empty() && result.find("groups")->asArray().empty())
+        return unknownGroup(group, groupsJson(*this, {}));
+    return result;
+}
+Result<json::Value> Registry::listResult(std::string_view tag, std::string_view kind,
+                                         std::string_view text, std::string_view group) const {
+    if (!kind.empty() && kind != "query" && kind != "edit" && kind != "action")
+        return Error("command.invalid_args", "unknown kind \"" + std::string(kind) + "\"", "/kind",
+                     "kind is one of query, edit, action (lowercase)");
+    if (!group.empty() && groupsJson(*this, group).find("groups")->asArray().empty())
+        return unknownGroup(group, groupsJson(*this, {}));
+    if (!tag.empty()) {
+        std::set<std::string> tags;
+        for (auto* info : all()) tags.insert(info->tags.begin(), info->tags.end());
+        if (!tags.count(std::string(tag))) {
+            std::string names;
+            for (const auto& known : tags) names += (names.empty() ? "" : ", ") + known;
+            return Error("command.invalid_args", "unknown tag \"" + std::string(tag) + "\"", "/tag",
+                         names.empty() ? "no command carries a tag; search with text instead"
+                                       : "tag is one of " + names);
+        }
+    }
+    json::Value result = json::Value::object();
+    result["commands"] = json::Value::array();
+    const std::string needle = asciiLower(text);
+    for (auto* info : all()) {
+        if (!group.empty() && groupOf(info->name) != group) continue;
+        if (!tag.empty() &&
+            std::find(info->tags.begin(), info->tags.end(), tag) == info->tags.end())
+            continue;
+        if (!kind.empty() && kindName(info->kind) != kind) continue;
+        if (!needle.empty() && asciiLower(info->name).find(needle) == std::string::npos &&
+            asciiLower(info->summary).find(needle) == std::string::npos)
+            continue;
+        json::Value item = json::Value::object();
+        item["name"] = info->name;
+        item["version"] = info->version;
+        item["kind"] = kindName(info->kind);
+        item["summary"] = info->summary;
+        item["exposure"] = exposureName(info->exposure);
+        result["commands"].push_back(std::move(item));
+    }
+    if (result.find("commands")->asArray().empty()) {
+        // Say which filters found nothing, so the hint can fit them.
+        result["filters"] = json::Value::object();
+        for (const auto& [key, value] : {std::pair<const char*, std::string_view>{"group", group},
+                                         {"kind", kind},
+                                         {"tag", tag},
+                                         {"text", text}})
+            if (!value.empty()) result["filters"][key] = std::string(value);
+        // A word nothing's summary has may still be said by a group's line ("sidechain" is
+        // route's): name those groups, those other than the one searched, for it is the wrong
+        // group that the pointer is for.
+        if (!needle.empty()) {
+            result["groups"] = json::Value::array();
+            for (const auto& info : groupInfos())
+                if (info.name != group &&
+                    asciiLower(info.summary).find(needle) != std::string::npos)
+                    result["groups"].push_back(info.name);
+        }
+    }
+    return result;
+}
+std::string Registry::groupOf(std::string_view commandName) {
+    return std::string(commandName.substr(0, commandName.find('.')));
+}
+void Registry::describeGroup(std::string prefix, std::string summary) {
+    assert(!prefix.empty() && prefix.find('.') == std::string::npos);
+    assert(!summary.empty() && summary.size() <= kMaxGroupSummary);
+    [[maybe_unused]] const bool added =
+        groups_.emplace(std::move(prefix), std::move(summary)).second;
+    assert(added);
+}
+std::vector<Registry::GroupInfo> Registry::groupInfos() const {
+    std::map<std::string, std::size_t> counts;
+    std::string last;
+    for (const auto& [key, info] : commands_) {
+        if (info.exposure == Exposure::Internal || key.first == last) continue;
+        last = key.first;  // a command with several versions counts once
+        ++counts[groupOf(key.first)];
+    }
+    std::vector<GroupInfo> out;
+    for (const auto& [name, count] : counts) {
+        const auto line = groups_.find(name);
+        out.push_back({name, line == groups_.end() ? std::string() : line->second, count});
+    }
+    return out;
+}
 Error Registry::unknown(std::string_view name) const {
     std::vector<std::string_view> names;
     std::string last;
@@ -656,13 +777,18 @@ Error Registry::unknown(std::string_view name) const {
         names.erase(std::remove(names.begin(), names.end(), choice), names.end());
     }
     return Error("command.unknown", "unknown command \"" + std::string(name) + "\"", "/command",
-                 hint.empty() ? "use registry.list" : "did you mean " + hint + "?");
+                 hint.empty() ? "describe {} lists the command groups, describe {group} a group's "
+                                "commands, describe {text} searches (over a control socket: "
+                                "registry.groups, registry.list)"
+                              : "did you mean " + hint + "?");
 }
 json::Value Registry::exportJson() const {
     json::Value out = json::Value::object();
     out["schema"] = "supple.command-registry/1.0";
     out["product"] = std::string(product::kName);
     out["version"] = std::string(product::kVersion);
+    out["groups"] = json::Value::object();
+    for (const auto& [name, summary] : groups_) out["groups"][name] = summary;
     out["commands"] = json::Value::object();
     for (auto* info : all())
         out["commands"][info->name + "@" + std::to_string(info->version)] = commandJson(*info);
@@ -1007,6 +1133,101 @@ Status runExamples(const Registry& registry, const FixtureFactory& factory,
     }
     return {};
 }
+json::Value groupIndex(const json::Value& groupsResult) {
+    json::Value out = json::Value::object();
+    out["columns"] = json::Value::array();
+    for (auto column : {"group", "count", "summary"}) out["columns"].push_back(column);
+    out["groups"] = json::Value::array();
+    if (const auto* groups = groupsResult.find("groups"); groups && groups->isArray())
+        for (const auto& item : groups->asArray()) {
+            json::Value row = json::Value::array();
+            row.push_back(stringField(item, "name"));
+            const auto* count = item.find("count");
+            row.push_back(count && count->isNumber() ? count->asInt() : 0LL);
+            row.push_back(stringField(item, "summary"));
+            out["groups"].push_back(std::move(row));
+        }
+    out["hint"] =
+        "describe {group: <name>} lists a group's commands; describe {text: <words>} searches "
+        "names and summaries; describe {command: <name>} gives one command's arguments.";
+    return out;
+}
+json::Value rowIndex(const json::Value& listResult) {
+    json::Value out = json::Value::object();
+    out["columns"] = json::Value::array();
+    for (auto column : {"name", "kind", "summary"}) out["columns"].push_back(column);
+    out["namespaces"] = json::Value::object();
+    bool truncated = false;
+    std::size_t rows = 0;
+    if (const auto* commands = listResult.find("commands"); commands && commands->isArray())
+        for (const auto& item : commands->asArray()) {
+            if (stringField(item, "exposure") == "internal") continue;
+            if (rows == kIndexRowCap) {
+                truncated = true;
+                break;
+            }
+            ++rows;
+            const auto name = stringField(item, "name");
+            auto& group = out["namespaces"][Registry::groupOf(name)];
+            if (!group.isArray()) group = json::Value::array();
+            json::Value row = json::Value::array();
+            row.push_back(name);
+            row.push_back(stringField(item, "kind"));
+            row.push_back(stringField(item, "summary"));
+            group.push_back(std::move(row));
+        }
+    if (rows == 0) {
+        std::string given, others;
+        const auto* filters = listResult.find("filters");
+        std::string group, text;
+        if (filters && filters->isObject())
+            for (const auto& member : filters->asObject()) {
+                if (member.value.isString()) {
+                    given +=
+                        (given.empty() ? "" : ", ") + member.key + " " + member.value.asString();
+                    if (member.key == "group") group = member.value.asString();
+                    if (member.key == "text") text = member.value.asString();
+                }
+            }
+        if (const auto* named = listResult.find("groups"); named && named->isArray())
+            for (const auto& name : named->asArray())
+                others += (others.empty() ? "" : ", ") + name.asString();
+        std::string hint =
+            "No command matches" + (given.empty() ? std::string() : " " + given) + ".";
+        if (!text.empty())
+            hint += " text searches command names and one-line summaries, in any case.";
+        if (!others.empty())
+            hint +=
+                group.empty()
+                    ? " Groups whose line mentions it: " + others + "."
+                    : " Not in this group; in other groups whose line mentions it: " + others + ".";
+        hint += group.empty() ? " describe {} lists the groups, describe {group: <name>} a group's "
+                                "commands."
+                              : " describe {group: " + group +
+                                    "} alone lists the whole group; "
+                                    "describe {} lists the groups.";
+        out["hint"] = std::move(hint);
+    }
+    if (truncated) {
+        out["truncated"] = true;
+        out["hint"] =
+            "More commands match than are shown: narrow the filter with group, kind, tag or a "
+            "longer text.";
+    }
+    return out;
+}
+Error unknownGroup(std::string_view group, const json::Value& groupsResult) {
+    std::string names;
+    if (const auto* groups = groupsResult.find("groups"); groups && groups->isArray())
+        for (const auto& item : groups->asArray()) {
+            if (!names.empty()) names += ", ";
+            names += stringField(item, "name");
+        }
+    return Error("command.unknown_group", "unknown command group \"" + std::string(group) + "\"",
+                 "/group",
+                 "a group is the part of a command name before its first '.'; one of: " + names +
+                     ". describe {} lists them with one line each.");
+}
 json::Value mcpToolList(const Registry& registry, bool allTools) {
     json::Value tools = json::Value::array();
     for (auto* info : registry.all()) {
@@ -1121,44 +1342,91 @@ void nestedRows(std::string& text, const std::string& key, const json::Value& sc
 }
 }  // namespace
 
+namespace {
+constexpr const char* kReferenceNotes =
+    "\nSuccessful replies may include `warnings`: command warnings followed by bus "
+    "diagnostics `{code: string, message: string, path: string}`. Paths are retained as "
+    "supplied by the decoder or "
+    "handler. "
+    "Batch steps carry their own warnings in `results[i].warnings`. A non-object "
+    "result with bus warnings is `{result: <value>, warnings: [...]}`. "
+    "Replies without bus warnings keep their original shape.\n"
+    "\nIn an argument table, a member of an object argument is listed under it as "
+    "`argument.member` (`argument[].member` for a list of objects).\n";
+void appendCommandMarkdown(std::string& text, const CommandInfo* info) {
+    text += "\n## `" + info->name + "@" + std::to_string(info->version) + "`\n\n";
+    text += info->summary + "\n\n" + info->description + "\n\n";
+    text += "Kind: `" + kindName(info->kind) + "`. Exposure: `" + exposureName(info->exposure) +
+            "`.\n\n";
+    text += "### Arguments\n\n| Field | Type | Unit | Range | Default | Description |\n";
+    text += "| --- | --- | --- | --- | --- | --- |\n";
+    if (auto* properties = info->argsSchema.find("properties");
+        properties && properties->isObject())
+        for (const auto& field : properties->asObject()) {
+            argumentRow(text, field.key, field.value);
+            nestedRows(text, field.key, field.value);
+        }
+    text += "\n### Result\n\n```json\n" + json::writeCanonical(info->resultSchema) + "\n```\n";
+    if (!info->errors.empty()) {
+        text += "\n### Errors\n\n";
+        for (const auto& error : info->errors)
+            text += "- `" + error.code + "`: " + error.when + " Hint: " + error.hint + "\n";
+    }
+    text += "\n### Examples\n";
+    for (const auto& example : info->examples)
+        text += "\n**" + example.title + "** (`" + example.fixture + "`)\n\n```json\n" +
+                json::writeCanonical(example.args) + "\n```\n\nResult:\n\n```json\n" +
+                json::writeCanonical(example.result) + "\n```\n";
+}
+}  // namespace
+
 std::string markdownReference(const Registry& registry) {
     std::string text =
-        "# Command reference\n\nGenerated from the command registry.\n"
-        "\nSuccessful replies may include `warnings`: command warnings followed by bus "
-        "diagnostics `{code: string, message: string, path: string}`. Paths are retained as "
-        "supplied by the decoder or "
-        "handler. "
-        "Batch steps carry their own warnings in `results[i].warnings`. A non-object "
-        "result with bus warnings is `{result: <value>, warnings: [...]}`. "
-        "Replies without bus warnings keep their original shape.\n"
-        "\nIn an argument table, a member of an object argument is listed under it as "
-        "`argument.member` (`argument[].member` for a list of objects).\n";
-    for (auto* info : registry.all()) {
-        text += "\n## `" + info->name + "@" + std::to_string(info->version) + "`\n\n";
-        text += info->summary + "\n\n" + info->description + "\n\n";
-        text += "Kind: `" + kindName(info->kind) + "`. Exposure: `" + exposureName(info->exposure) +
-                "`.\n\n";
-        text += "### Arguments\n\n| Field | Type | Unit | Range | Default | Description |\n";
-        text += "| --- | --- | --- | --- | --- | --- |\n";
-        if (auto* properties = info->argsSchema.find("properties");
-            properties && properties->isObject())
-            for (const auto& field : properties->asObject()) {
-                argumentRow(text, field.key, field.value);
-                nestedRows(text, field.key, field.value);
-            }
-        text += "\n### Result\n\n```json\n" + json::writeCanonical(info->resultSchema) + "\n```\n";
-        if (!info->errors.empty()) {
-            text += "\n### Errors\n\n";
-            for (const auto& error : info->errors)
-                text += "- `" + error.code + "`: " + error.when + " Hint: " + error.hint + "\n";
-        }
-        text += "\n### Examples\n";
-        for (const auto& example : info->examples)
-            text += "\n**" + example.title + "** (`" + example.fixture + "`)\n\n```json\n" +
-                    json::writeCanonical(example.args) + "\n```\n\nResult:\n\n```json\n" +
-                    json::writeCanonical(example.result) + "\n```\n";
-    }
+        std::string("# Command reference\n\nGenerated from the command registry.\n") +
+        kReferenceNotes;
+    for (auto* info : registry.all()) appendCommandMarkdown(text, info);
     return text;
+}
+std::string markdownGroup(const Registry& registry, std::string_view group) {
+    const auto line = registry.groups().find(std::string(group));
+    std::string text = "# `" + std::string(group) + "` commands\n\n" +
+                       (line == registry.groups().end() ? std::string() : line->second + "\n\n") +
+                       "Generated from the command registry; `index.md` lists the groups.\n" +
+                       kReferenceNotes;
+    for (auto* info : registry.all())
+        if (Registry::groupOf(info->name) == group) appendCommandMarkdown(text, info);
+    return text;
+}
+std::string markdownIndex(const Registry& registry) {
+    std::string text =
+        "# Command groups\n\nGenerated from the command registry. Read this index, then the file "
+        "of "
+        "the group you need (`<group>.md`: every command of the group with its arguments, result, "
+        "errors and examples). The live `describe` tool gives the same walk: groups, a group's "
+        "commands, one command.\n\n| Group | Commands | What it is |\n| --- | --- | --- |\n";
+    for (const auto& group : registry.groupInfos())
+        text += "| [`" + group.name + "`](" + group.name + ".md) | " +
+                std::to_string(group.commands) + " | " + group.summary + " |\n";
+    return text;
+}
+Status writeMarkdownDirectory(const Registry& registry, const std::filesystem::path& directory) {
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+    if (ec)
+        return Error("io.write", "cannot create " + directory.string() + ": " + ec.message(),
+                     "/directory", "choose a directory that can be created");
+    const auto write = [&](const std::string& file, const std::string& text) -> Status {
+        std::ofstream out(directory / file, std::ios::binary);
+        out << text;
+        if (!out.good())
+            return Error("io.write", "cannot write " + (directory / file).string(), "/directory",
+                         "check the directory is writable");
+        return {};
+    };
+    SUPPLE_TRY(write("index.md", markdownIndex(registry)));
+    for (const auto& group : registry.groupInfos())
+        SUPPLE_TRY(write(group.name + ".md", markdownGroup(registry, group.name)));
+    return {};
 }
 schema::Schema<Ref> refSchema() {
     json::Value exported = json::Value::object();
