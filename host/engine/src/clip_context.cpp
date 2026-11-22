@@ -113,7 +113,9 @@ Result<std::vector<model::ContextPoint>> takeContextFromText(const time::TimeMap
     if (!sheet) {
         Error e = std::move(sheet).error();
         const auto fix = [&](Error& x) {
-            if (x.code == "context.syntax") x.code = "take.context_syntax";
+            // Every way the lead sheet can be wrong (syntax, bar order, bar length, too long) is
+            // the one take error; the message says which.
+            if (x.code.rfind("context.", 0) == 0) x.code = "take.context_syntax";
             x.path = path;
         };
         fix(e);

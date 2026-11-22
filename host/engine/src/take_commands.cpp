@@ -544,7 +544,8 @@ void registerTakeCommands(cmd::Registry& registry) {
              "context and follow apply to MIDI takes"},
             {"take.in_clip", "a clip's take holds no context or follow",
              "the clip's context and follow are the clip's: clip.set {context, follow}"},
-            {"take.context_syntax", "the lead sheet text could not be read",
+            {"take.context_syntax",
+             "the lead sheet text could not be read (syntax, bar order, bar length or length)",
              "write bars as context.write does, e.g. \"1: key A minor {Am}:w\""},
             {"take.context_range", "a point lies at or past the context's period",
              "move it earlier, inside the period"}};
@@ -663,12 +664,14 @@ void registerTakeCommands(cmd::Registry& registry) {
                        .field("followed", &TakeBakeResult::followed, detail::followedSchema())
                        .field("unrolled", &TakeBakeResult::unrolled, schema::boolean())
                        .build();
-        c.errors = {{"take.not_following", "the take's follow is none: its notes sound as written",
-                     "set follow first (take.set {follow: \"key\"}), or there is nothing to bake"},
-                    {"take.not_active", "the take is not its item's active take",
-                     "take.activate it first: what sounds is the active take's"},
-                    {"take.bake_replay", "the recorded pitches do not match the heard notes",
-                     "run take.bake without pitches"}};
+        c.errors = {
+            {"take.not_following", "the take's follow is none: its notes sound as written",
+             "set follow first (take.set {follow: \"key\"}), or there is nothing to bake"},
+            {"take.not_active", "the take is not its item's active take",
+             "take.activate it first: what sounds is the active take's"},
+            {"take.bake_replay", "the recorded pitches do not match the heard notes",
+             "run take.bake without pitches"},
+            {"take.source", "the take's MIDI source is missing", "undo to a version that has it"}};
         c.run = [](const TakeBakeArgs& a, Context& ctx) -> Result<TakeBakeResult> {
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();

@@ -2431,6 +2431,16 @@ TEST_CASE("take.set context on a part cut from a take reads bar 1 at the item's 
     CHECK(place->take.key.has_value());
 }
 
+TEST_CASE("take.set names every lead-sheet fault take.context_syntax (round 85 G13)") {
+    Launcher l;
+    for (const char* text : {"2: {C}:w\n1: {G}:w\n", "{C}:w\n", "1: {C}:w\n1: {G}:w\n"}) {
+        json::Value args = j(R"({"take": "tk_1"})");
+        args["context"] = text;
+        const auto err = l.fails("take.set", json::writeCompact(args));
+        CHECK_MESSAGE(err.code == "take.context_syntax", text, ": ", err.code);
+    }
+}
+
 TEST_CASE("take.set {context: \"\"} clears the period and the phase with the points") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");

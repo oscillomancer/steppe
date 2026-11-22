@@ -20076,6 +20076,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `take.not_following`: the take's follow is none: its notes sound as written Hint: set follow first (take.set {follow: "key"}), or there is nothing to bake
 - `take.not_active`: the take is not its item's active take Hint: take.activate it first: what sounds is the active take's
 - `take.bake_replay`: the recorded pitches do not match the heard notes Hint: run take.bake without pitches
+- `take.source`: the take's MIDI source is missing Hint: undo to a version that has it
 
 ### Examples
 
@@ -20528,7 +20529,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `take.no_key`: follow needs a key in the take's context Hint: give the take a context with a key: take.set {context: "1: key D minor ~:w"}
 - `take.follow_audio`: a take that is not MIDI holds no context or follow Hint: context and follow apply to MIDI takes
 - `take.in_clip`: a clip's take holds no context or follow Hint: the clip's context and follow are the clip's: clip.set {context, follow}
-- `take.context_syntax`: the lead sheet text could not be read Hint: write bars as context.write does, e.g. "1: key A minor {Am}:w"
+- `take.context_syntax`: the lead sheet text could not be read (syntax, bar order, bar length or length) Hint: write bars as context.write does, e.g. "1: key A minor {Am}:w"
 - `take.context_range`: a point lies at or past the context's period Hint: move it earlier, inside the period
 
 ### Examples
