@@ -663,6 +663,13 @@ instructions are in `docs/guides/installing.md`.
   CLAP descriptor dispatch ignores registrations removed by an earlier
   callback in the same readiness snapshot, as VST3 dispatch already does;
   the Linux regression passes and macOS validation is pending.
+  Known limit: a VST3 editor edit made while the instance is active but not
+  processing stays queued for the processor, so a state capture then
+  (`saveState`) holds a component state without it, and processing resuming
+  reports it again as a second "Plug-in parameter edit" step; an editor
+  closed mid-drag in that state leaves a Begin that nothing ends. Flushing in
+  `saveState` while active would call the processor outside an executor's
+  start, which may race it; a handshake with the executors is the fix.
   Plug-ins' note and MIDI output (ADR-0068) reaches the host
   library's output sink from CLAP (notes, MIDI 1.0, MIDI 2.0 where one short
   message expresses it, pressure expressions) and VST3 (notes, poly pressure,
