@@ -174,6 +174,9 @@ struct RollState {
         double beat = 0;
         std::string text;
         bool known = true;
+        // A take row's cell that only names where the take's key changes
+        // ("A minor: Am" over the chord holding there): no point to edit.
+        bool keyOnly = false;
     };
     std::vector<ChordMark> chords;
     // A clip's key points (text: "D dorian"), drawn and dragged in the

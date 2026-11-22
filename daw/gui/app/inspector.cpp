@@ -826,9 +826,19 @@ void Inspector::readItems(bool force) {
                 : nullptr;
         const bool shown = one && take && !take->context.empty();
         rows_["written_in"]->visible = shown;
-        const std::string words = !shown ? std::string()
-                                  : own  ? model::keyWords(*own)
-                                         : std::string("no key");
+        std::string words = !shown ? std::string()
+                            : own  ? model::keyWords(*own)
+                                   : std::string("no key");
+        // The rest counted, not named (the roll's take row shows them all): the
+        // take's other key points, as a bake across key changes leaves them.
+        if (shown) {
+            const auto changes = std::count_if(
+                take->context.begin(), take->context.end(), [&](const model::ContextPoint& p) {
+                    return p.type == model::ContextType::Key && &p != own;
+                });
+            if (changes > 0)
+                words += ", " + std::to_string(changes) + (changes == 1 ? " change" : " changes");
+        }
         if (writtenIn_->text() != words) writtenIn_->setText(words);
     }
     // One item whose heard take is MIDI: its Follow, and Bake while it

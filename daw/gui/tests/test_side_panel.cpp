@@ -485,6 +485,18 @@ TEST_CASE("inspector: one item's Timebase, and Written in while its take has a c
     auto* written = dynamic_cast<ui::Label*>(f.node("inspector.written_in"));
     REQUIRE(written);
     CHECK(written->text() == "D minor");
+    // Key changes in the take's context: the first named, the rest counted (a
+    // bake across the song's key changes leaves them; the roll's take row
+    // names them all).
+    f.exec("take.set",
+           R"({"take":")" + take + R"(","context":"1: key D minor ~:w\n2: key F major ~:w"})");
+    f.pass();
+    CHECK(written->text() == "D minor, 1 change");
+    f.exec("take.set",
+           R"({"take":")" + take +
+               R"(","context":"1: key D minor ~:w\n2: key F major ~:w\n3: key A minor ~:w"})");
+    f.pass();
+    CHECK(written->text() == "D minor, 2 changes");
     // Several items: no row.
     const std::string other =
         f.exec("item.add",

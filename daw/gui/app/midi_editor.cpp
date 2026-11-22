@@ -1192,9 +1192,11 @@ class BarStrip : public ui::Node {
                               : lastEnd            ? *lastEnd
                                                    : row.right() + 2;
             if (end < row.x) continue;
+            // A key change's own cell holds no chord point: nothing to grab.
+            std::vector<ChordHit>* cellHits = m.keyOnly ? nullptr : hits;
             if (m.text.empty()) {
                 c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint"));
-                if (hits) hits->push_back({m.beat, {x - 4, row.y, 8, row.h}});
+                if (cellHits) cellHits->push_back({m.beat, {x - 4, row.y, 8, row.h}});
                 continue;
             }
             const ui::Rect cell{x + 1, row.y + 2, std::max(0.0f, end - x - 2), row.h - 5};
@@ -1208,8 +1210,8 @@ class BarStrip : public ui::Node {
             const float shown = std::min(room, cell.right() - 4 - textX);
             const std::string fit = c.elide(m.text, ui::Font::Ui, size, std::max(0.0f, shown));
             const float fitW = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
-            if (hits)
-                hits->push_back(
+            if (cellHits)
+                cellHits->push_back(
                     {m.beat, {x - 4, row.y, std::max(8.0f, textX + fitW + 8 - (x - 4)), row.h}});
             if (fit.empty()) continue;
             c.text({textX, row.y, shown + 4, row.h - 1}, fit, ui::Font::Ui, size,
@@ -2650,16 +2652,40 @@ void takeContextMarks(const model::Take& take, double itemPosition, double lo, d
     const model::ContextPoint* lastChord = model::contextChordPointAt(take.context, from);
     if (lastKey) keys.push_back({itemPosition + lo, model::parseKey(*lastKey)});
     if (lastChord) chords.push_back(chordMarkOf(itemPosition + lo, *lastChord));
+    std::vector<std::pair<double, std::string>> keyChanges;
     for (const Mark& m : marks) {
         if (m.point->type == model::ContextType::Key) {
             if (m.point == lastKey) continue;
             lastKey = m.point;
             keys.push_back({itemPosition + m.at, model::parseKey(*m.point)});
+            keyChanges.emplace_back(itemPosition + m.at, model::keyWords(*m.point));
         } else {
             if (m.point == lastChord) continue;
             lastChord = m.point;
             chords.push_back(chordMarkOf(itemPosition + m.at, *m.point));
         }
+    }
+    // Each key change after the one holding at lo is named in the row (gui.md
+    // §4.7): on the cell of a chord at the same beat, else on a cell of its
+    // own over the chord holding there.
+    const std::vector<RollState::ChordMark> plain = chords;  // the chords alone, unnamed
+    for (const auto& [beat, words] : keyChanges) {
+        auto at = std::find_if(chords.begin(), chords.end(), [&](const RollState::ChordMark& c) {
+            return c.beat >= beat - model::kPlaceSlack;
+        });
+        if (at != chords.end() && at->beat <= beat + model::kPlaceSlack) {
+            at->text = at->text.empty() ? words : words + ": " + at->text;
+            continue;
+        }
+        RollState::ChordMark own{beat, words, true, true};
+        const auto holding = std::find_if(
+            plain.rbegin(), plain.rend(),
+            [&](const RollState::ChordMark& c) { return c.beat < beat - model::kPlaceSlack; });
+        if (holding != plain.rend()) {
+            if (!holding->text.empty()) own.text += ": " + holding->text;
+            own.known = holding->known;
+        }
+        chords.insert(at, std::move(own));
     }
 }
 

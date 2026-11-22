@@ -5017,6 +5017,32 @@ TEST_CASE("a following take's roll: a note outside the item is dim, where it wou
     CHECK(s.drawnPitch(0, s.notes[0]) == 64);
 }
 
+TEST_CASE("a following take's strip: its take row names each change of the take's key") {
+    // gui.md §4.7: a bake across the song's key changes leaves them in the
+    // take's context; the row names each where it starts.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f,
+               R"([{"beat":0,"type":"key","tonic":"C","scale":"major"},
+                   {"beat":0,"type":"chord","symbol":"C"},
+                   {"beat":2,"type":"key","tonic":"A","scale":"minor"},
+                   {"beat":2,"type":"chord","symbol":"Am"},
+                   {"beat":3,"type":"key","tonic":"G","scale":"major"}])",
+               "key");
+    // On a chord's cell at the same beat, or a cell of its own over the
+    // chord holding there, which takes no gestures.
+    std::vector<std::string> texts;
+    std::vector<bool> keyOnly;
+    for (const auto& m : f.editor->state().otherChords) {
+        texts.push_back(m.text);
+        keyOnly.push_back(m.keyOnly);
+    }
+    CHECK(texts == std::vector<std::string>{"C", "A minor: Am", "G major: Am"});
+    CHECK(keyOnly == std::vector<bool>{false, false, true});
+    CHECK(f.editor->otherChordLabels().front() == "C");
+}
+
 TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or says it cannot") {
     Fixture f;
     if (!f.ok) return;
