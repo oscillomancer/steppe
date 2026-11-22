@@ -2032,7 +2032,12 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
             Take t = *e.value;
             const auto notes =
                 fitTakeContext(t, clipTakes.contains(e.id) ? TakeHome::Clip : TakeHome::Item);
-            if (notes.empty() && t.context == e.value->context) continue;
+            // Anything the fit changed is kept, a silent rounding of the period included (the
+            // open never fails: a period off the 1/960 grid is rounded onto it).
+            if (notes.empty() && t.context == e.value->context &&
+                t.contextPeriod == e.value->contextPeriod &&
+                t.contextPhase == e.value->contextPhase && t.follow == e.value->follow)
+                continue;
             changed = true;
             for (const auto& n : notes)
                 warn(n.code, "take " + e.id.str() + ": " + n.message,

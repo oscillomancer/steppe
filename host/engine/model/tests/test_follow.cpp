@@ -261,6 +261,34 @@ TEST_CASE("take context: the open never fails, and says what it dropped") {
         CHECK(s->takes.find(r.take)->context.size() == 2);
         CHECK(hasCode(warnings, "take.context_dropped"));
     }
+    SUBCASE("a period or a point off the 1/960 grid is rounded onto it, and the file opens") {
+        std::vector<schema::Warning> warnings;
+        auto s = openChanged(
+            r.s, r.take,
+            [&](json::Value& tk) {
+                tk["context_period"] = 8.0 + 0.4 / 960.0;
+                auto points = json::Value::array();
+                points.push_back(pointJson(keyPt(0, "C", "major")));
+                points.push_back(pointJson(keyPt(4 + 0.4 / 960.0, "Eb", "major")));
+                tk["context"] = std::move(points);
+            },
+            warnings);
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        const Take& take = *s->takes.find(r.take);
+        CHECK(take.contextPeriod == std::optional<double>(8.0));
+        CHECK(take.context ==
+              std::vector<ContextPoint>{keyPt(0, "C", "major"), keyPt(4, "Eb", "major")});
+        CHECK(take.follow == ClipFollow::Key);
+    }
+    SUBCASE("a period off the grid alone (no point changes) is rounded too") {
+        std::vector<schema::Warning> warnings;
+        auto s = openChanged(
+            r.s, r.take, [](json::Value& tk) { tk["context_period"] = 2.5 / 960.0; }, warnings);
+        REQUIRE_MESSAGE(s, (s ? "" : s.error().toString()));
+        const auto period = s->takes.find(r.take)->contextPeriod;
+        REQUIRE(period.has_value());
+        CHECK(*period * 960.0 == doctest::Approx(3.0));
+    }
     SUBCASE("a follow this build does not know reads as none") {
         std::vector<schema::Warning> warnings;
         auto s =
