@@ -588,7 +588,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 if (kind == detail::LaunchState::Kind::Clip && a.player < 0) return;
                 a.anchorSample = anchorSample;
                 a.anchorBeat = anchorBeat;
-                detail::applyLaunch(p, n, a, target + n.timelineShift + p.rateOrigin);
+                detail::applyLaunch(n, a);
                 if (relocated) detail::launchRelocated(n);
                 LaunchAck ack;
                 ack.track = track.n;

@@ -798,7 +798,12 @@ revision records step 1 as built.
 - **The 5 ms switch crossfade is in device frames, as heard.** On a
   playrate plan `LaunchState::fadeStart` is the node's frame at the switch
   (`launchClock`). A crossfade in progress when a plan changes between the
-  unity and playrate paths ends there.
+  unity and playrate paths ends there. *(Note 2026-11-22, S3 step B: no
+  longer. The crossfade is 240 song samples on the playrate path too, from
+  the anchor, each frame's share by its song position, so it is heard as
+  5 ms divided by the rate, always, whether or not a capture runs; a
+  committed item's fade, in song time, then equals it. See the revision
+  "S3 step B".)*
 - **Clip time (C2).** Clip-time lanes and a clip chain's take envelopes
   are not bound to the rate timeline. They read the clip position from the
   song position, now fractional.
@@ -904,6 +909,14 @@ the boundary.
   it was heard, with a warning naming the clip. (An audio launch under a
   pitch-keeping rate is refused until step D; then the launch goes ahead
   and the capture ends at its switch.)
+- **The switch crossfade is 240 song samples** under a master playrate
+  as at unity, each frame's share by its song position (`launchClock`),
+  live always and not only in a capture: a committed item's fade runs in
+  song time, and live must not depend on whether a capture is armed. It is
+  heard as 5 ms divided by the rate. At rate 1 nothing changes. (Step 1
+  ran it over 240 device frames; at 0.75 a commit then differed from what
+  played by up to 0.023 through each switch.) D's and C's clip fades
+  follow the same rule.
 
 **Consequences.** A capture under a constant rate, an envelope, a rate edit
 over a loop wrap, a glide back to 1 and a clock chase commits every launch

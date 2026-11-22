@@ -333,16 +333,16 @@ int playerOf(const Node& n, Id clip) SUPPLE_RT {
     return -1;
 }
 
-void applyLaunch(Plan& p, Node& n, const LaunchAction& a, std::int64_t device) SUPPLE_RT {
+void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
     LaunchState& L = n.launch;
     L.fadeFrom = L.kind == LaunchState::Kind::Arrangement ? -1
                  : L.kind == LaunchState::Kind::Clip      ? L.player
                                                           : -2;
     L.fadeAnchorSample = L.anchorSample;
     L.fadeAnchorBeat = L.anchorBeat;
-    // The crossfade's clock (launchClock): the anchor's song sample, or on
-    // a playrate plan the node's frame here, 5 ms as heard.
-    L.fadeStart = p.rateEnabled ? device : a.anchorSample;
+    // The crossfade's clock (launchClock): from the anchor's song sample,
+    // on a playrate plan too (S3 B).
+    L.fadeStart = a.anchorSample;
     // Its early half (prelaunch) is done; a later launch's may already be
     // waiting, launches closer together than the lead.
     const LaunchAction& next = n.launchNext;
@@ -604,20 +604,22 @@ void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPl
 void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
     n.arrangementGain = nullptr;
     const std::int64_t song0 = pos - n.timelineShift;
-    const std::int64_t clock0 = launchClock(p, n, pos);
-    if (n.launch.fadeFrom == -3 && n.launch.fadeStart == kFadeAtNext) n.launch.fadeStart = clock0;
+    const double clock0 = launchClock(p, n, pos);
+    if (n.launch.fadeFrom == -3 && n.launch.fadeStart == kFadeAtNext)
+        n.launch.fadeStart = static_cast<std::int64_t>(std::floor(clock0));
     // A frozen node fades its print in after writing it (retiringIntoPrint).
     if (n.players.empty() && (n.launch.fadeFrom != -3 || n.frozenAudio)) return;
     const LaunchState& L = n.launch;
     const std::int64_t F = n.launchFadeFrames;
-    const bool fading = L.fadeFrom != -2 && clock0 < L.fadeStart + F;
+    const bool fading = L.fadeFrom != -2 && clock0 < double(L.fadeStart + F);
     const bool arrangement = L.kind == LaunchState::Kind::Arrangement;
     if (arrangement && !fading) return;  // the arrangement alone: nothing changes
-    // x: how far into the crossfade frame i is, 0 to 1 (1 past it).
+    // x: how far into the crossfade frame i is, 0 to 1 (1 past it), by its
+    // song position (launchClock).
     const auto x = [&](std::uint32_t i) {
         if (!fading) return 1.0;
-        const double k = double(clock0 + i - L.fadeStart) / double(F);
-        return std::clamp(k, 0.0, 1.0);
+        const double clock = i == 0 ? clock0 : launchClock(p, n, pos + i);
+        return std::clamp((clock - double(L.fadeStart)) / double(F), 0.0, 1.0);
     };
     for (std::uint32_t i = 0; i < frames; ++i) {
         const double in = x(i);
@@ -937,18 +939,18 @@ ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT {
     return in;
 }
 
-bool clipChainHeard(const Node& n, int player, std::int64_t clock) SUPPLE_RT {
+bool clipChainHeard(const Node& n, int player, double clock) SUPPLE_RT {
     const LaunchState& L = n.launch;
     if (player < 0) return false;
     if (L.kind == LaunchState::Kind::Clip && L.player == player) return true;
-    return L.fadeFrom == player && clock < L.fadeStart + n.launchFadeFrames;
+    return L.fadeFrom == player && clock < double(L.fadeStart + n.launchFadeFrames);
 }
 
-double launchWeight(const Node& n, int player, std::int64_t clock) SUPPLE_RT {
+double launchWeight(const Node& n, int player, double clock) SUPPLE_RT {
     const LaunchState& L = n.launch;
     const std::int64_t F = n.launchFadeFrames;
-    const bool fading = L.fadeFrom != -2 && clock < L.fadeStart + F;
-    const double x = fading ? std::clamp(double(clock - L.fadeStart) / double(F), 0.0, 1.0) : 1.0;
+    const bool fading = L.fadeFrom != -2 && clock < double(L.fadeStart + F);
+    const double x = fading ? std::clamp((clock - double(L.fadeStart)) / double(F), 0.0, 1.0) : 1.0;
     double w = 0;
     if (L.kind == LaunchState::Kind::Clip && L.player == player) w += x;
     if (fading && L.fadeFrom == player) w += 1.0 - x;

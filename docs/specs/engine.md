@@ -565,7 +565,8 @@ the same.*
   was left's sounding notes at the switch sample. Returning to the
   arrangement does not chase notes (`trackEvents`, engine.md §1.1). An
   audio switch crossfades over a fixed 5 ms of timeline samples, in the
-  source like an item's fade, in both executors and offline.
+  source like an item's fade, in both executors and offline; under a
+  master playrate too, so it is heard as 5 ms divided by the rate.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
   the epoch's terms), its song position, the scene when `launch.scene`
@@ -688,8 +689,10 @@ the same.*
     each event at the first frame whose song position reaches it; what is
     held ends where the song enters a new loop pass; a switch's first frame
     reaches back to the anchor (`ClipWindow::Anchor`).
-  - *The switch crossfade* runs in device frames, 5 ms as heard
-    (`launchClock`; `LaunchState::fadeStart` is the node's frame there).
+  - *The switch crossfade* runs over the same 240 song samples as at
+    unity, from the anchor (`LaunchState::fadeStart`), each frame's share
+    by its song position (`launchClock`), as a committed item's fade is:
+    it is heard as 5 ms divided by the rate (ADR-0097, note 2026-11-22).
   - *Clip-time lanes and a clip chain's take envelopes* are not bound to
     the rate timeline; they read the clip position from the song position.
   - A frozen track's print cuts in on a playrate plan (no

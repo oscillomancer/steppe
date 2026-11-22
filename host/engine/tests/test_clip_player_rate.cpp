@@ -339,10 +339,12 @@ TEST_CASE("a capture under a master playrate commits by the song positions heard
             }
 }
 
-TEST_CASE("under a master playrate a switch crossfades over 5 ms as heard, in device frames") {
-    // At 0.75 bar 2 (song 96000) is device frame 128000. The crossfade runs
-    // over the next 240 device frames (180 song samples), the arrangement's
-    // ramp out and the clip's in, each read through the tape converter.
+TEST_CASE("under a master playrate a switch crossfades over 240 song samples, by song position") {
+    // S3 B (ADR-0097, note 2026-11-22): at 0.75 bar 2 (song 96000) is device
+    // frame 128000. The crossfade runs over the next 240 song samples (320
+    // device frames, 5 ms over the rate as heard), each frame's share by its
+    // song position as a committed item's fade, the arrangement's ramp out
+    // and the clip's in, each read through the tape converter.
     Project p;
     auto args = j(R"({"track": "tr_1", "bar": 1})");
     args["audio_file"] = p.ramp("item.wav", 240000).string();
@@ -359,8 +361,8 @@ TEST_CASE("under a master playrate a switch crossfades over 5 ms as heard, in de
     REQUIRE(out.size() > 130000);
     for (std::int64_t d = 120000; d < 128000; d += 97)
         REQUIRE(out[std::size_t(d)] == plain[std::size_t(d)]);
-    for (std::int64_t k = 60; k < kFade; k += 30) {
-        const double x = double(k) / double(kFade);
+    for (std::int64_t k = 60; k < 320; k += 30) {
+        const double x = 0.75 * double(k) / double(kFade);
         const double clip = double(rampAt(static_cast<std::int64_t>(0.75 * double(k))));
         const double want = double(plain[std::size_t(128000 + k)]) * (1 - x) + clip * x;
         REQUIRE_MESSAGE(double(out[std::size_t(128000 + k)]) == doctest::Approx(want).epsilon(0.01),

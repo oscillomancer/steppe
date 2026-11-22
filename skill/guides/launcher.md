@@ -158,7 +158,8 @@ launch is refused (`launch.playrate`). `launch.capture` runs in song time under 
 through rate edits: the committed arrangement plays the same song positions, not the same
 durations, at another rate. It is refused while a launched audio clip plays and the playrate
 keeps the pitch (stop that clip first), and a playrate that starts keeping the pitch then ends
-a running capture with a warning naming the clip. A clip's FX and envelopes play through its own chain; a rack's Notes module
+a running capture with a warning naming the clip. A switch's 5 ms crossfade is 5 ms of song
+(240 samples at 48 kHz): under a playrate you hear it as 5 ms divided by the rate. A clip's FX and envelopes play through its own chain; a rack's Notes module
 and the track's MIDI sends follow launches.
 
 Two things to expect when polling. A launch given just as the transport started (the

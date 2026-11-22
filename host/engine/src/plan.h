@@ -907,7 +907,8 @@ struct LaunchState {
     bool unanchored = false;
     // The switch's crossfade: what was left (-1 the arrangement, a player,
     // -2 nothing, -3 the retiring player `fadeRetiring`) and the song sample
-    // where the switch began (kFadeAtNext: the next block the node plays).
+    // where the switch began (kFadeAtNext: the next block the node plays),
+    // on launchClock.
     int fadeFrom = -2;
     std::int64_t fadeStart = 0, fadeAnchorSample = 0;  // the left player's anchor
     double fadeAnchorBeat = 0;
@@ -1590,10 +1591,9 @@ void syncMix(Plan& p, int liveClass) SUPPLE_RT;
 // clip notes continue from). Main thread, at compile.
 void compileClipPlayers(Plan& p, Node& n, const Session& s);
 // Applies a launch at the start of the block where the channel's song
-// position is `a.anchorSample`: notes sounding end there, audio crossfades.
-// `device`: the node's position there, from which a playrate plan's switch
-// crossfade runs (LaunchState::fadeStart; S3).
-void applyLaunch(Plan& p, Node& n, const LaunchAction& a, std::int64_t device = 0) SUPPLE_RT;
+// position is `a.anchorSample`: notes sounding end there, audio crossfades
+// from that song sample (LaunchState::fadeStart, launchClock).
+void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
 // The node's player for `clip`, or -1.
 int playerOf(const Node& n, Id clip) SUPPLE_RT;
 // This block's arrangement gain (Node::arrangementGain; null when the
@@ -1632,18 +1632,21 @@ struct ClipChainInput {
     bool unanchored = false;
 };
 ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT;
-// The clock a switch's crossfade runs on (LaunchState::fadeStart): the song
-// sample on a unity plan, the node's device frame on a playrate plan (the
-// crossfade is 5 ms as heard; S3).
-inline std::int64_t launchClock(const Plan& p, const Node& n, std::int64_t pos) SUPPLE_RT {
-    return p.rateEnabled ? pos : pos - n.timelineShift;
+// The clock a switch's crossfade runs on (LaunchState::fadeStart) at the
+// node's frame `pos`: its song position, whole samples on a unity plan and
+// the rate timeline's (fractional) on a playrate plan. The crossfade is
+// launchFadeFrames song samples, heard as 5 ms divided by the rate, as a
+// committed item's fade is (S3 B; ADR-0097, dated note 2026-11-22).
+inline double launchClock(const Plan& p, const Node& n, std::int64_t pos) SUPPLE_RT {
+    const std::int64_t device = pos - n.timelineShift;
+    return p.rateEnabled ? p.timelines[n.live ? 1 : 0]->position(device) : double(device);
 }
 // Whether `player`'s output is heard anywhere from `clock` (launchClock) on
 // in this block (it plays, or fades out).
-bool clipChainHeard(const Node& n, int player, std::int64_t clock) SUPPLE_RT;
+bool clipChainHeard(const Node& n, int player, double clock) SUPPLE_RT;
 // `player`'s share of the output at `clock` (launchClock): 1 while it plays,
 // the switch's crossfade at its edges, 0 otherwise (as launchAudio weighs it).
-double launchWeight(const Node& n, int player, std::int64_t clock) SUPPLE_RT;
+double launchWeight(const Node& n, int player, double clock) SUPPLE_RT;
 // A clip chain's input audio for the block at timeline `pos` (song `pos -
 // timelineShift`), read `lead` ahead and folded over the transport loop as
 // the output will be: the raw clip, its gain and pan applied after the chain.
