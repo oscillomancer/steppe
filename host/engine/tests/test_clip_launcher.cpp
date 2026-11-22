@@ -2465,6 +2465,31 @@ TEST_CASE("take.bake replays on another branch with the pitches the user heard")
     CHECK(l.head().takes.find(id("tk_1"))->follow == model::ClipFollow::None);
 }
 
+TEST_CASE("midi.get {sounding} answers in item time, and counts what it answered (G9, G10)") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    // The middle two notes (E2 G2 sounding as G2 Bb2): the take starts a beat in, the item
+    // lasts two.
+    l.run("take.set", R"({"take": "tk_1", "start_offset": 1})");
+    l.run("item.set", R"({"item": "it_1", "length": 2})");
+    const auto whole = l.run("midi.get", R"({"item": "it_1", "sounding": true})");
+    const std::string text = whole.find("text")->asString();
+    // Item time: the first heard note is at the item's start, not a beat in.
+    CHECK(text.find("G2:q Bb2:q") != std::string::npos);
+    CHECK(text.find("r:q") == std::string::npos);
+    CHECK(whole.find("sounding_differs")->asInt() == 2);
+    // A range counts the notes of the range.
+    const auto range =
+        l.run("midi.get", R"({"item": "it_1", "sounding": true, "from": 0, "to": 1})");
+    CHECK(range.find("sounding_differs")->asInt() == 1);
+    // A take that does not follow answers in item time too.
+    l.run("take.set", R"({"take": "tk_1", "follow": "none"})");
+    const auto plain = l.run("midi.get", R"({"item": "it_1", "sounding": true})");
+    CHECK(plain.find("text")->asString().find("E2:q G2:q") != std::string::npos);
+    CHECK(plain.find("text")->asString().find("r:q") == std::string::npos);
+}
+
 TEST_CASE("midi.notes {sounding} adds each note's sounding pitch beside the written one") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");

@@ -8,6 +8,7 @@
 #include "clip_follow.h"
 #include "clip_launcher.h"
 #include "command_helpers.h"
+#include "heard_midi.h"
 #include "supple/model/context.h"
 #include "supple/model/follow.h"
 #include "supple/model/launcher.h"
@@ -927,77 +928,78 @@ void registerItemCommands(cmd::Registry& registry) {
             const midi::Sequence* shown = &s.midi.find(*take->source)->sequence;
             midi::Sequence heardSeq;  // what sounds, when asked (a following take only)
             MidiGetResult extra;      // the following-take fields
+            // What was answered, in item time: the heard notes of a range, else (sounding) the
+            // first pass of a looped item, else the item. `heardSeq` carries the controls placed
+            // as the item plays them and each answered note at its place.
+            const model::Item* itemObj = clip ? nullptr : s.items.find(*id);
+            const auto answer = [&](const std::vector<model::SoundingNote>& notes, bool following) {
+                const midi::Sequence& written = *shown;
+                const double itemStart = model::itemSpan(s, *itemObj).startBeat;
+                heardSeq.ppq = written.ppq;
+                heardSeq.length = std::llround(model::itemLengthBeats(s, *itemObj) * written.ppq);
+                detail::heardMidi(s, *itemObj, *take, written, 0.0, heardSeq);
+                heardSeq.notes.clear();
+                for (const auto& h : notes) {
+                    midi::Note note = written.notes[h.note];
+                    if (following && note.channel != 9)
+                        note.pitch = static_cast<std::uint8_t>(h.sounds.pitch);
+                    const double on = std::max(h.songBeat, itemStart) - itemStart;
+                    note.start = std::llround(on * written.ppq);
+                    note.length = std::max<std::int64_t>(
+                        0, std::llround((h.endBeat - itemStart) * written.ppq) - note.start);
+                    heardSeq.notes.push_back(note);
+                }
+                heardSeq.canonicalize();
+                shown = &heardSeq;
+            };
+            const auto firstPass = [](std::vector<model::SoundingNote> notes) {
+                notes.erase(std::remove_if(notes.begin(), notes.end(),
+                                           [](const model::SoundingNote& h) { return h.pass > 0; }),
+                            notes.end());
+                return notes;
+            };
+            const auto differing = [](const std::vector<model::SoundingNote>& notes) {
+                std::int64_t n = 0;
+                for (const auto& h : notes)
+                    if (h.channel != 9 && h.sounds.pitch != h.written) ++n;
+                return n;
+            };
             if (!clip && take->follow != model::ClipFollow::None) {
                 const auto heard = model::soundingNotes(s, *id, -1e18, 1e18);
-                std::vector<std::int64_t> sounded;
-                std::int64_t differs = 0;
-                for (const auto& h : heard) {
-                    sounded.push_back(h.channel == 9 ? h.written : h.sounds.pitch);
-                    if (h.channel != 9 && h.sounds.pitch != h.written) ++differs;
-                }
-                const double itemStart = model::itemSpan(s, *s.items.find(*id)).startBeat;
+                const double itemStart = model::itemSpan(s, *itemObj).startBeat;
                 extra.follow = take->follow == model::ClipFollow::Chords ? "chords" : "key";
                 extra.takeContext =
                     detail::takeContextText(detail::takeBarMap(s, itemStart), *take);
-                extra.soundingDiffers = differs;
+                extra.soundingDiffers = differing(heard);
                 if (a.sounding) {
-                    const midi::Sequence& written = *shown;
-                    heardSeq.ppq = written.ppq;
-                    heardSeq.length = written.length;
                     if (a.from || a.to) {
-                        // The heard notes of the range, each at its place in item time.
+                        // The heard notes of the range, each at its place in item time; the
+                        // count is of those.
                         const auto range = model::soundingNotes(s, *id, a.from.value_or(-1e18),
                                                                 a.to.value_or(1e18));
-                        for (const auto& h : range) {
-                            midi::Note note = written.notes[h.note];
-                            if (note.channel != 9)
-                                note.pitch = static_cast<std::uint8_t>(h.sounds.pitch);
-                            const double on = std::max(h.songBeat, itemStart) - itemStart;
-                            note.start = std::llround(on * written.ppq);
-                            note.length = std::max<std::int64_t>(
-                                0,
-                                std::llround((h.endBeat - itemStart) * written.ppq) - note.start);
-                            heardSeq.notes.push_back(note);
-                        }
-                        heardSeq.length = std::max<std::int64_t>(
-                            heardSeq.length,
-                            std::llround(model::itemLengthBeats(s, *s.items.find(*id)) *
-                                         written.ppq));
+                        extra.soundingDiffers = differing(range);
+                        answer(range, true);
                     } else {
+                        // The first pass, in item time, as the item plays it; later passes that
+                        // sound otherwise are said (`differs_by_pass`).
+                        std::vector<std::int64_t> sounded;
+                        for (const auto& h : heard)
+                            sounded.push_back(h.channel == 9 ? h.written : h.sounds.pitch);
                         const model::LeadPitches lead =
-                            model::leadPitches(heard, sounded, itemStart, written.notes.size());
-                        heardSeq.notes = written.notes;
-                        for (std::size_t i = 0; i < heardSeq.notes.size(); ++i)
-                            if (lead.keep[i] && heardSeq.notes[i].channel != 9)
-                                heardSeq.notes[i].pitch = static_cast<std::uint8_t>(*lead.keep[i]);
-                        heardSeq.controls = written.controls;
-                        heardSeq.sysex = written.sysex;
+                            model::leadPitches(heard, sounded, itemStart, shown->notes.size());
+                        const auto first = firstPass(heard);
+                        extra.soundingDiffers = differing(first);
+                        answer(first, true);
                         if (!lead.alike) extra.differsByPass = true;
                     }
-                    heardSeq.canonicalize();
-                    shown = &heardSeq;
                 }
             } else if (a.sounding && !clip) {
-                // A take that does not follow sounds as written: the notes, and the range
-                // asked for is only a filter on them (the heard notes of the item).
-                if (a.from || a.to) {
-                    const auto range =
-                        model::soundingNotes(s, *id, a.from.value_or(-1e18), a.to.value_or(1e18));
-                    const midi::Sequence& written = *shown;
-                    const double itemStart = model::itemSpan(s, *s.items.find(*id)).startBeat;
-                    heardSeq.ppq = written.ppq;
-                    heardSeq.length = written.length;
-                    for (const auto& h : range) {
-                        midi::Note note = written.notes[h.note];
-                        const double on = std::max(h.songBeat, itemStart) - itemStart;
-                        note.start = std::llround(on * written.ppq);
-                        note.length = std::max<std::int64_t>(
-                            0, std::llround((h.endBeat - itemStart) * written.ppq) - note.start);
-                        heardSeq.notes.push_back(note);
-                    }
-                    heardSeq.canonicalize();
-                    shown = &heardSeq;
-                }
+                // A take that does not follow sounds as written, in item time like the rest: the
+                // heard notes of the range, or of the first pass.
+                answer((a.from || a.to) ? model::soundingNotes(s, *id, a.from.value_or(-1e18),
+                                                               a.to.value_or(1e18))
+                                        : firstPass(model::soundingNotes(s, *id, -1e18, 1e18)),
+                       false);
             }
             auto text = notation::decompile(*shown, options);
             if (!text) return std::move(text).error();
