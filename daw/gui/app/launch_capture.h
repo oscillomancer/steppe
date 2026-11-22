@@ -43,11 +43,12 @@ class CaptureControl {
     // holds, also one another caller armed: while playing at the next
     // boundary of the project's launch quantize (ending() until then, still
     // lit), stopped at once. Off again while ending (the cell's click, lit)
-    // ends it at once.
+    // ends it at once, also an end another caller asked for.
     Status set(bool on);
-    // Turned off while playing: the capture runs to its boundary, then
-    // service() commits it.
-    bool ending() const { return ending_; }
+    // A quantized end is pending: the toggle's own (the capture runs to its
+    // boundary, then service() commits it) or another caller's
+    // (launch.capture {on: false, quantize}, which that caller commits).
+    bool ending() const { return ending_ || app_.launchCaptureEnding(); }
     // Once a pass: a capture the engine ended (a stop, a seek, a loop change)
     // is committed and the toggle, still lit, arms the next one; a refused
     // commit keeps the performance and the toggle goes dark. An ending

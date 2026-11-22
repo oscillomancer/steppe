@@ -590,7 +590,8 @@ the same.*
   made then would be, so a scene launch made with it lands there too. One
   track's launch, with a nearer floor (a live track in the anticipative
   engine), can land a boundary earlier, and is then in the capture. The
-  capture runs until that boundary is heard (`endsFrame`) and then ends on
+  capture runs until that boundary is heard (`endsFrame`;
+  `Engine::launchCaptureEnding` says one is pending) and then ends on
   it, on the sample a launch there switches on; a launch applied from the
   boundary on is not in it. `endsBeat` (`ends_at`) is that sample's beat,
   which the commit's `to` will be; after a transport loop wrap it is the

@@ -2909,7 +2909,11 @@ same heights, scroll and colours.
 - **The cell follows the engine's capture**, whoever armed it: an agent's
   `launch.capture` lights it too (`CaptureControl::lit`). A click on a cell
   lit that way ends that capture and commits it, as the toggle's own; at
-  stop the app commits only a capture its toggle armed.
+  stop the app commits only a capture its toggle armed. An end the agent
+  asked for (`launch.capture {on: false, quantize}`) shows as the toggle's
+  does, dashed until its boundary (the engine's pending end,
+  `EngineApp::launchCaptureEnding`), and a click then ends the capture at
+  once and commits it, as a second click does.
 - **A refused commit keeps the performance.** When `launch.commit` refuses
   (a locked item under a track that left the arrangement, a clip loop with
   no item equivalent, a captured track or clip deleted meanwhile), nothing
@@ -3127,6 +3131,8 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   it on the next launch quantize boundary, the cell lit until then, and
   commits it. Off while playing ends on the next bar, then commits; the
   cell is dashed meanwhile, and a second click ends it at once and commits.
+  An agent's quantized end dashes the cell too, and a click then ends the
+  capture at once and commits it.
 - A master playrate: at a rate that moves the pitch nothing dims; keeping
   the pitch, the audio clip and its scene's ▶ dim and nothing else (golden
   `launcher-refused-dark.png`), its ▶ click is refused with

@@ -899,6 +899,9 @@ class Engine {
     // first. Collects the executors' acknowledgements first.
     std::optional<LaunchCapture> launchCapture();
     bool launchCapturing() const { return capture_.on; }  // main thread
+    // Main thread: a running capture waits for a quantized end's boundary
+    // (launch.state's capture_ends), whoever asked for it.
+    bool launchCaptureEnding() const { return capture_.on && capture_.ending; }
 
     std::uint32_t outputLatency() const;
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
