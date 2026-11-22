@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <fstream>
 #include <set>
 
 namespace supple::cmd {
@@ -1253,44 +1254,91 @@ void nestedRows(std::string& text, const std::string& key, const json::Value& sc
 }
 }  // namespace
 
+namespace {
+constexpr const char* kReferenceNotes =
+    "\nSuccessful replies may include `warnings`: command warnings followed by bus "
+    "diagnostics `{code: string, message: string, path: string}`. Paths are retained as "
+    "supplied by the decoder or "
+    "handler. "
+    "Batch steps carry their own warnings in `results[i].warnings`. A non-object "
+    "result with bus warnings is `{result: <value>, warnings: [...]}`. "
+    "Replies without bus warnings keep their original shape.\n"
+    "\nIn an argument table, a member of an object argument is listed under it as "
+    "`argument.member` (`argument[].member` for a list of objects).\n";
+void appendCommandMarkdown(std::string& text, const CommandInfo* info) {
+    text += "\n## `" + info->name + "@" + std::to_string(info->version) + "`\n\n";
+    text += info->summary + "\n\n" + info->description + "\n\n";
+    text += "Kind: `" + kindName(info->kind) + "`. Exposure: `" + exposureName(info->exposure) +
+            "`.\n\n";
+    text += "### Arguments\n\n| Field | Type | Unit | Range | Default | Description |\n";
+    text += "| --- | --- | --- | --- | --- | --- |\n";
+    if (auto* properties = info->argsSchema.find("properties");
+        properties && properties->isObject())
+        for (const auto& field : properties->asObject()) {
+            argumentRow(text, field.key, field.value);
+            nestedRows(text, field.key, field.value);
+        }
+    text += "\n### Result\n\n```json\n" + json::writeCanonical(info->resultSchema) + "\n```\n";
+    if (!info->errors.empty()) {
+        text += "\n### Errors\n\n";
+        for (const auto& error : info->errors)
+            text += "- `" + error.code + "`: " + error.when + " Hint: " + error.hint + "\n";
+    }
+    text += "\n### Examples\n";
+    for (const auto& example : info->examples)
+        text += "\n**" + example.title + "** (`" + example.fixture + "`)\n\n```json\n" +
+                json::writeCanonical(example.args) + "\n```\n\nResult:\n\n```json\n" +
+                json::writeCanonical(example.result) + "\n```\n";
+}
+}  // namespace
+
 std::string markdownReference(const Registry& registry) {
     std::string text =
-        "# Command reference\n\nGenerated from the command registry.\n"
-        "\nSuccessful replies may include `warnings`: command warnings followed by bus "
-        "diagnostics `{code: string, message: string, path: string}`. Paths are retained as "
-        "supplied by the decoder or "
-        "handler. "
-        "Batch steps carry their own warnings in `results[i].warnings`. A non-object "
-        "result with bus warnings is `{result: <value>, warnings: [...]}`. "
-        "Replies without bus warnings keep their original shape.\n"
-        "\nIn an argument table, a member of an object argument is listed under it as "
-        "`argument.member` (`argument[].member` for a list of objects).\n";
-    for (auto* info : registry.all()) {
-        text += "\n## `" + info->name + "@" + std::to_string(info->version) + "`\n\n";
-        text += info->summary + "\n\n" + info->description + "\n\n";
-        text += "Kind: `" + kindName(info->kind) + "`. Exposure: `" + exposureName(info->exposure) +
-                "`.\n\n";
-        text += "### Arguments\n\n| Field | Type | Unit | Range | Default | Description |\n";
-        text += "| --- | --- | --- | --- | --- | --- |\n";
-        if (auto* properties = info->argsSchema.find("properties");
-            properties && properties->isObject())
-            for (const auto& field : properties->asObject()) {
-                argumentRow(text, field.key, field.value);
-                nestedRows(text, field.key, field.value);
-            }
-        text += "\n### Result\n\n```json\n" + json::writeCanonical(info->resultSchema) + "\n```\n";
-        if (!info->errors.empty()) {
-            text += "\n### Errors\n\n";
-            for (const auto& error : info->errors)
-                text += "- `" + error.code + "`: " + error.when + " Hint: " + error.hint + "\n";
-        }
-        text += "\n### Examples\n";
-        for (const auto& example : info->examples)
-            text += "\n**" + example.title + "** (`" + example.fixture + "`)\n\n```json\n" +
-                    json::writeCanonical(example.args) + "\n```\n\nResult:\n\n```json\n" +
-                    json::writeCanonical(example.result) + "\n```\n";
-    }
+        std::string("# Command reference\n\nGenerated from the command registry.\n") +
+        kReferenceNotes;
+    for (auto* info : registry.all()) appendCommandMarkdown(text, info);
     return text;
+}
+std::string markdownGroup(const Registry& registry, std::string_view group) {
+    const auto line = registry.groups().find(std::string(group));
+    std::string text = "# `" + std::string(group) + "` commands\n\n" +
+                       (line == registry.groups().end() ? std::string() : line->second + "\n\n") +
+                       "Generated from the command registry; `index.md` lists the groups.\n" +
+                       kReferenceNotes;
+    for (auto* info : registry.all())
+        if (Registry::groupOf(info->name) == group) appendCommandMarkdown(text, info);
+    return text;
+}
+std::string markdownIndex(const Registry& registry) {
+    std::string text =
+        "# Command groups\n\nGenerated from the command registry. Read this index, then the file "
+        "of "
+        "the group you need (`<group>.md`: every command of the group with its arguments, result, "
+        "errors and examples). The live `describe` tool gives the same walk: groups, a group's "
+        "commands, one command.\n\n| Group | Commands | What it is |\n| --- | --- | --- |\n";
+    for (const auto& group : registry.groupInfos())
+        text += "| [`" + group.name + "`](" + group.name + ".md) | " +
+                std::to_string(group.commands) + " | " + group.summary + " |\n";
+    return text;
+}
+Status writeMarkdownDirectory(const Registry& registry, const std::filesystem::path& directory) {
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+    if (ec)
+        return Error("io.write", "cannot create " + directory.string() + ": " + ec.message(),
+                     "/directory", "choose a directory that can be created");
+    const auto write = [&](const std::string& file, const std::string& text) -> Status {
+        std::ofstream out(directory / file, std::ios::binary);
+        out << text;
+        if (!out.good())
+            return Error("io.write", "cannot write " + (directory / file).string(), "/directory",
+                         "check the directory is writable");
+        return {};
+    };
+    SUPPLE_TRY(write("index.md", markdownIndex(registry)));
+    for (const auto& group : registry.groupInfos())
+        SUPPLE_TRY(write(group.name + ".md", markdownGroup(registry, group.name)));
+    return {};
 }
 schema::Schema<Ref> refSchema() {
     json::Value exported = json::Value::object();

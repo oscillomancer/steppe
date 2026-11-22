@@ -100,7 +100,7 @@ tool (or as `args` through `exec`).
 | Writing a plugin of your own: an effect or an instrument as a DSP script (`exec {"command": "dsp.write"}`, then `fx_add`) | `guides/dsp-workflow.md`, `guides/dsp-language.md`, `generated/dsp-examples.md` |
 | Modular racks: modules and cables on a channel, generative patches, a plug-in in a rack, a rack as an effect, rack presets | `guides/rack.md`, `generated/rack-modules.md` |
 | Writing a rack module of your own (`exec {"command": "module.write"}`, then `exec {"command": "rack.patch"}`) | `guides/modules.md` |
-| Exact command arguments and results | `generated/sandbox-commands.md` (sandbox), `generated/engine-commands.md` (DAW), or the `describe` tool |
+| Exact command arguments and results | `generated/sandbox/index.md` (sandbox) or `generated/engine/index.md` (DAW): read the index, then one group's file (`generated/engine/fx.md`); or the `describe` tool |
 | A stock plugin's parameters and patch format | its guide, and `plugin_describe` (sandbox) or `fx_describe` (DAW) for every field, unit and range |
 | Echoes: in time or free, ping-pong, groove, tape and analog, pitch-shifted, reversed or smeared, ducked or frozen (Bracken) | `guides/delay.md` |
 | Chorus, stereo widening, string ensemble, multi-voice doubling and vibrato, with lows kept dry (Withy) | `guides/chorus.md` |

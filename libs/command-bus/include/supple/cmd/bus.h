@@ -9,6 +9,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
@@ -433,6 +434,13 @@ json::Value rowIndex(const json::Value& listResult);
 Error unknownGroup(std::string_view group, const json::Value& groupsResult);
 json::Value mcpToolList(const Registry&, bool allTools = false);
 std::string markdownReference(const Registry&);
+// The reference split by group, as the skill reads it: an index of the groups with one line each,
+// then one file per group (every command of the group, internal ones included).
+std::string markdownIndex(const Registry&);
+std::string markdownGroup(const Registry&, std::string_view group);
+// Writes index.md and <group>.md for each group into `directory` (created if missing). Files of
+// other names in it are left alone.
+Status writeMarkdownDirectory(const Registry&, const std::filesystem::path& directory);
 // LuaLS annotations of the generated bindings (ADR-0006): the `q` table a
 // script sees — one class per command's arguments and result, one per command
 // namespace, and the root. The script language itself is `libs/lua-bus`.

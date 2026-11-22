@@ -379,6 +379,39 @@ TEST_CASE("the group index and the row index shape the registry's answers") {
     CHECK(error.code == "command.unknown_group");
     CHECK(error.hint.find("toy") != std::string::npos);
 }
+TEST_CASE("the reference splits by group: an index, then one file per group") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to and read.");
+    const auto index = markdownIndex(registry);
+    CHECK(index.find("[`toy`](toy.md)") != std::string::npos);
+    CHECK(index.find("A counter that tests add to and read.") != std::string::npos);
+    CHECK(index.find("toy.add") == std::string::npos);  // the index lists groups, not commands
+    const auto toy = markdownGroup(registry, "toy");
+    CHECK(toy.find("## `toy.add@1`") != std::string::npos);
+    CHECK(toy.find("A counter that tests add to and read.") != std::string::npos);
+    CHECK(toy.find("## `batch@1`") == std::string::npos);
+    CHECK(markdownGroup(registry, "batch").find("## `batch@1`") != std::string::npos);
+    // Every command is in exactly one group's file, the whole reference being their union.
+    std::size_t headings = 0;
+    for (const auto& group : registry.groupInfos()) {
+        const auto text = markdownGroup(registry, group.name);
+        for (auto at = text.find("\n## `"); at != std::string::npos;
+             at = text.find("\n## `", at + 1))
+            ++headings;
+    }
+    std::size_t expected = 0;
+    const auto whole = markdownReference(registry);
+    for (auto at = whole.find("\n## `"); at != std::string::npos; at = whole.find("\n## `", at + 1))
+        ++expected;
+    CHECK(headings == expected);
+    const auto directory = std::filesystem::temp_directory_path() / "supple-bus-md-test";
+    std::filesystem::remove_all(directory);
+    REQUIRE(writeMarkdownDirectory(registry, directory));
+    CHECK(std::filesystem::exists(directory / "index.md"));
+    for (const auto& group : registry.groupInfos())
+        CHECK(std::filesystem::exists(directory / (group.name + ".md")));
+    std::filesystem::remove_all(directory);
+}
 TEST_CASE("meta commands, generators and examples") {
     auto registry = makeRegistry();
     FakeHost host;

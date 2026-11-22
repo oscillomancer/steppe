@@ -114,7 +114,12 @@ command, by name, `count` being those commands (a command with several versions 
 `group` narrows it to one. `registry.list {group}` lists one group's commands, every version
 and every exposure as before. `Registry::groupInfos()` and `Registry::groups()` let a test
 say which prefix has no line and which line has no commands (each binary's tests fail on both).
-`exportJson` carries the lines as `groups: {prefix: summary}`.
+`exportJson` carries the lines as `groups: {prefix: summary}`. The Markdown reference for the
+skill is split by group: `registry --markdown-dir DIR` writes `index.md` (the groups, one line
+each, linked) and `<group>.md` (every command of the group, internal ones included, with its
+arguments, result, errors and examples) for each group with a public command;
+`skill/generated/{engine,sandbox}/` holds them and the drift tests compare the whole tree, its
+file list included. (`registry --markdown` still prints the one long reference.)
 
 Each `registry.list` row identifies one registered command version. `exposure`
 is `mcp-tool`, `mcp-exec` or `internal`, matching that version's declaration.
