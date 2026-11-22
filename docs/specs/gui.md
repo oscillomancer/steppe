@@ -3120,7 +3120,9 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   again and still kept, then after unlocking a click committing it in one
   undo step and arming; refused twice, a third click drops it. After a
   commit at stop the tracks are back on the arrangement, or queued to it.
-  An agent's capture lights the cell, and a click on it ends and commits it.
+  An agent's capture lights the cell, and a click on it while playing ends
+  it on the next launch quantize boundary, the cell lit until then, and
+  commits it. Off while playing ends on the next bar, then commits.
 - A master playrate: at a rate that moves the pitch nothing dims; keeping
   the pitch, the audio clip and its scene's ▶ dim and nothing else (golden
   `launcher-refused-dark.png`), its ▶ click is refused with

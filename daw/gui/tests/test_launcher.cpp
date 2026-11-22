@@ -937,7 +937,9 @@ TEST_CASE("launcher: a refused capture commit keeps the performance; a click com
     CHECK(f.errors.empty());
 }
 
-TEST_CASE("launcher: the Capture cell is lit by an agent's capture; a click ends and commits it") {
+TEST_CASE(
+    "launcher: the Capture cell is lit by an agent's capture; a click ends it on the quantize and "
+    "commits it") {
     LauncherFixture f;
     f.song();
     views::LauncherHeader& header = f.view->launcherHeader();
@@ -969,9 +971,21 @@ TEST_CASE("launcher: the Capture cell is lit by an agent's capture; a click ends
     };
     REQUIRE(f.runUntil(playing, at, "Kit A heard", show));
     REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Kit A", show));
-    // A click on the lit cell ends that capture and commits it.
+    // A click on the lit cell ends that capture on the next launch quantize
+    // boundary, as the toggle's own; the cell stays lit until it is heard,
+    // then the app commits it.
     const std::uint64_t before = f.app->head().version;
     f.click(centre(header.captureRect()));
+    show();
+    CHECK(capture.ending());
+    CHECK(capture.lit());
+    CHECK(header.stats.captureLit);
+    CHECK(f.app->head().version == before);
+    const auto pending = f.app->engine()->launchCapture();
+    REQUIRE(pending);
+    REQUIRE(pending->endsBeat);
+    REQUIRE(f.runUntil([&] { return !f.app->launchCapturing(); }, *pending->endsBeat,
+                       "the capture's end", show));
     show();
     CHECK_FALSE(f.app->launchCapturing());
     CHECK_FALSE(capture.lit());
