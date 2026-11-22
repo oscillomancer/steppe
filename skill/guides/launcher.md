@@ -100,7 +100,10 @@ is the same whether the chords under it differ from the clip's or match them.
 - `chords`: each note goes from its chord tone (root, third, fifth, seventh, extensions) to
   the same tone of the chord under it; a note with no chord on either side follows by key.
   A figure moves as a block by the interval between the two roots, each note to its tone
-  nearest that, so one pair of chords always gives one voicing, whatever the keys.
+  nearest where that puts it. Chord tones give one voicing for one pair of chords, whatever
+  the keys; a note that is not a chord tone keeps its scale degree, so it depends on the keys
+  too. Neighbouring notes can cross where their targets cross: A4 B4 over Cmaj7 in C major
+  sounds Ab4 Gb4 under Cdim in C minor.
 - Notes on channel 10 (drums) are never moved. A drum-only, empty, keyless or audio clip is
   laid without following, and `followed.copied` says why (`drums`, `no_notes`, `no_key`,
   `audio`).
