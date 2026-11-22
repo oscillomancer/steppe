@@ -1025,13 +1025,23 @@ void registerItemCommands(cmd::Registry& registry) {
                 const bool heard = shown == &heardSeq;
                 const double ppq = shown->ppq > 0 ? static_cast<double>(shown->ppq) : 960.0;
                 const bool own = !clip && !heard && take->follow != model::ClipFollow::None;
-                options.placeAt = [&s, clip, own, take, start, ppq](std::int64_t tick) {
+                // A source note sounds where `model::notePlace` puts it (the take's start offset
+                // and playrate), and reads the take's context at its own context beat (phase and
+                // period): the mapping the roll uses. A heard note is already in item time.
+                options.placeAt = [&s, clip, own, heard, take, start, ppq](std::int64_t tick) {
                     const double beat = static_cast<double>(tick) / ppq;
+                    if (heard) {
+                        const double at = start + beat + model::kPlaceSlack;
+                        return harmony::Place{model::keyAt(s, at), model::chordAt(s, at)};
+                    }
+                    const model::NotePlace where =
+                        model::notePlace(*take, clip ? 0.0 : start, beat);
                     if (clip)
-                        return harmony::Place{model::keyAt(*clip, beat + model::kPlaceSlack),
-                                              model::chordAt(*clip, beat + model::kPlaceSlack)};
-                    if (own) return model::takePlaceAt(take->context, beat, true);
-                    const double at = start + beat + model::kPlaceSlack;
+                        return harmony::Place{
+                            model::keyAt(*clip, where.songBeat + model::kPlaceSlack),
+                            model::chordAt(*clip, where.songBeat + model::kPlaceSlack)};
+                    if (own) return model::takePlaceAt(take->context, where.contextBeat, true);
+                    const double at = where.songBeat + model::kPlaceSlack;
                     return harmony::Place{model::keyAt(s, at), model::chordAt(s, at)};
                 };
             }

@@ -1658,9 +1658,12 @@ changes and the chord runs by project bar, and it now lists the tempo and
 meter changes after the first, which it omitted. `midi.get` gains a `context`
 field: the key and chords over the item's span, with item bars and project bars
 both named. Names follow the key and chord that hold at each note's start
-(ADR-0100, `specs/harmony.md` §3): the song's at the note's beat for an item, a
-clip's own at its clip beat, a following take's own for its written notes and the
-song's for `sounding`. A key change inside an item changes the names where it
+(ADR-0100, `specs/harmony.md` §3): the song's where the note sounds for an item, a
+clip's own at the clip beat it sounds at, a following take's own at the note's context
+beat for its written notes, and the song's for `sounding`. A written note sounds where
+`notePlace` puts it (the take's start offset and playrate), so the right half of a
+split item, a trimmed or a rate-changed take names each note by the chord it sounds
+under, and a take's context phase and period decide the context beat. A key change inside an item changes the names where it
 holds, and an item with no chord and one key reads as before.
 
 **Lead sheet.** `context.get`'s `text` and `context.write {text}` use one line per
