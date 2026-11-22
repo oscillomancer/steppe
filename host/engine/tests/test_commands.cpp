@@ -71,6 +71,22 @@ double peak(const fs::path& path) {
 }
 }  // namespace
 
+TEST_CASE("every engine command group has its line, and every line a group") {
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    std::set<std::string> prefixes;
+    for (const auto& group : registry.groupInfos()) {
+        INFO("group " << group.name << " has no line: add it to registerEngineGroups");
+        CHECK_FALSE(group.summary.empty());
+        CHECK(group.summary.size() <= cmd::Registry::kMaxGroupSummary);
+        prefixes.insert(group.name);
+    }
+    for (const auto& [name, line] : registry.groups()) {
+        INFO("group line " << name << " has no commands: remove it or restore them");
+        CHECK(prefixes.count(name) == 1);
+    }
+    CHECK(registry.groups().size() == prefixes.size());
+}
 TEST_CASE("project.set schema remaps render matrix references") {
     cmd::Registry registry;
     registerEngineCommands(registry);

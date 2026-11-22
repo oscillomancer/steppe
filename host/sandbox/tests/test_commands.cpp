@@ -4,6 +4,7 @@
 #include <supple/product.h>
 #include <algorithm>
 #include <array>
+#include <set>
 #include "../../../tests/file_platform.h"
 #include "../../../tests/fuzz/command_inputs.h"
 
@@ -48,6 +49,35 @@ const cmd::Origin kTest{cmd::Origin::Type::Test, "unit", ""};
 
 }  // namespace
 
+TEST_CASE("every sandbox command group has its line, and every line a group") {
+    cmd::Registry registry;
+    registerCommands(registry);
+    std::set<std::string> prefixes;
+    for (const auto& group : registry.groupInfos()) {
+        INFO("group " << group.name << " has no line: add it to registerCommands");
+        CHECK_FALSE(group.summary.empty());
+        CHECK(group.summary.size() <= cmd::Registry::kMaxGroupSummary);
+        prefixes.insert(group.name);
+    }
+    for (const auto& [name, line] : registry.groups()) {
+        INFO("group line " << name << " has no commands: remove it or restore them");
+        CHECK(prefixes.count(name) == 1);
+    }
+    CHECK(registry.groups().size() == prefixes.size());
+}
+TEST_CASE("the sandbox's describe levels stay inside their budgets") {
+    cmd::Registry registry;
+    registerCommands(registry);
+    // The canonical writer pads, so these bytes are an upper bound of the compact JSON an agent
+    // reads.
+    const auto groups = cmd::groupIndex(*registry.groupsResult());
+    CHECK(json::writeCanonical(groups).size() < 3000);
+    for (const auto& group : registry.groupInfos()) {
+        INFO("group " << group.name << " is over its budget: split it or shorten summaries");
+        CHECK(json::writeCanonical(cmd::rowIndex(*registry.listResult("", "", "", group.name)))
+                  .size() < 2500);
+    }
+}
 TEST_CASE("registered sandbox argument mutations return structured errors") {
     constexpr std::uint64_t seed = 0xc017a01;
     Root root;

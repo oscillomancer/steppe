@@ -3,12 +3,14 @@
 Everything in this directory is produced from the code and must never be
 edited by hand:
 
-- `sandbox-commands.md` — the sandbox's command reference
-  (`<slug>-sandbox registry --markdown`); the engine's is `engine-commands.md`.
+- `sandbox/` — the sandbox's command reference, split by group
+  (`<slug>-sandbox registry --markdown-dir`): read `sandbox/index.md` (the groups,
+  one line each), then the one group's file (`sandbox/<group>.md`). The engine's is
+  `engine/`.
 - `sandbox-mcp-tools.json` — the MCP tool definitions the sandbox serves
   (`<slug>-sandbox registry --mcp-tools`).
-- `engine-commands.md`, `engine-mcp-tools.json` — the same for the headless
-  DAW (`<slug>-engine registry …`).
+- `engine/` (the same split for the headless DAW, `<slug>-engine registry …`) and
+  `engine-mcp-tools.json`.
 - `engine.lua`, `sandbox.lua` — LuaLS annotations of the scripting bindings
   (`<slug>-engine registry --lua`): the `q` table of a script, generated from
   the same schemas (`guides/lua.md`).

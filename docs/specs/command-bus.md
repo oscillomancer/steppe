@@ -101,8 +101,30 @@ struct CommandInfo {
 ```
 
 The library registers its own meta commands: `registry.list` (filter by
-tag/kind/text; returns name, version, kind, summary, exposure) and `registry.describe`
-(one command: full schemas, errors, examples). Both `Query`, `McpExec`.
+tag/kind/text/group; returns name, version, kind, summary, exposure), `registry.describe`
+(one command: full schemas, errors, examples) and `registry.groups` (the command groups, one
+line each). All `Query`, `McpExec`.
+
+*Groups.* A command's group is the part of its name before the first `.` (the whole name for
+one without a dot: `batch`). Each binary declares one line per group beside its commands
+(`Registry::describeGroup(prefix, summary)`, at most 70 characters, once per group; the library
+declares `registry`, `batch` and `job` itself). `registry.groups {group?}` returns
+`{groups: [{name, count, summary}]}` for the groups that have a public (not `internal`)
+command, by name, `count` being those commands (a command with several versions counts once);
+`group` narrows it to one. `registry.list {group}` lists one group's commands, every version
+and every exposure as before. A `group`, `kind` (`query`, `edit` or `action`) or `tag` that does
+not exist is an error, never an empty list: `command.unknown_group` at `/args/group` (also from
+`registry.groups`) or `command.invalid_args` at `/args/kind` or `/args/tag`, the hint naming the
+valid values. A search that matches nothing is an empty list carrying `filters` (the ones given)
+and, for a `text`, `groups`: the groups other than the `group` searched whose line has the word,
+for the wrong group is what the pointer is for. `Registry::groupInfos()` and `Registry::groups()` let a test
+say which prefix has no line and which line has no commands (each binary's tests fail on both).
+`exportJson` carries the lines as `groups: {prefix: summary}`. The Markdown reference for the
+skill is split by group: `registry --markdown-dir DIR` writes `index.md` (the groups, one line
+each, linked) and `<group>.md` (every command of the group, internal ones included, with its
+arguments, result, errors and examples) for each group with a public command;
+`skill/generated/{engine,sandbox}/` holds them and the drift tests compare the whole tree, its
+file list included. (`registry --markdown` still prints the one long reference.)
 
 Each `registry.list` row identifies one registered command version. `exposure`
 is `mcp-tool`, `mcp-exec` or `internal`, matching that version's declaration.
@@ -228,6 +250,7 @@ Registered by the library, `Kind::Edit`, `McpTool`.
 {
   "schema": "supple.command-registry/1.0",
   "product": "<name from product.h>", "version": "<version>",
+  "groups": { "<group>": "<its one line>", … },
   "commands": {
     "patch.merge@1": { "name": "patch.merge", "version": 1, "kind": "edit", "exposure": "mcp-tool",
                         "summary": "…", "description": "…", "tags": [...],
@@ -242,9 +265,15 @@ results checked by a drift test):
 
 - `mcpToolList(registry, bool allTools = false)` — dedicated MCP definitions (§4.2);
   false selects McpTool, true selects every non-Internal command.
-- `markdownReference(registry)` → `skill/generated/*-commands.md`: per command,
-  heading, summary, description, an args table (field, type, unit, range,
-  default, description), result shape, errors with hints, examples as JSON.
+- `markdownReference(registry)`: the whole reference as one text (`registry --markdown`): per
+  command, heading, summary, description, an args table (field, type, unit, range, default,
+  description), result shape, errors with hints, examples as JSON.
+- `markdownIndex(registry)` and `markdownGroup(registry, group)` split it by group, and
+  `writeMarkdownDirectory(registry, dir)` writes `index.md` and `<group>.md` for each group
+  with a public command → `skill/generated/{engine,sandbox}/` (`registry --markdown-dir`); the
+  drift tests compare the whole tree, its file list included.
+- `groupIndex`, `rowIndex` and `unknownGroup`: the answers `describe` and `registry --groups` /
+  `--group` give (§1.3, §4.2); not generated files.
 - `luaStubs(registry)` → LuaLS annotations (`skill/generated/*.lua`).
 
 ### 1.7 Command log
@@ -270,8 +299,9 @@ native offscreen renderer to succeed. The binary `dsp_player_export` fixture run
 
 ### 1.9 Error codes owned by the bus
 
-`command.unknown`, `command.version`, `command.invalid_args`,
-`command.bad_result`, `batch.step_failed`, `batch.bad_reference`,
+`command.unknown`, `command.version`, `command.invalid_args` (also an unknown
+`registry.list` `kind` or `tag`), `command.unknown_group` (a `group` that no public command
+has: `registry.list`, `registry.groups`, MCP `describe`), `command.bad_result`, `batch.step_failed`, `batch.bad_reference`,
 `batch.too_many_steps`, `batch.not_transactional` (an Action that is not
 transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
 
@@ -369,7 +399,7 @@ adapters refresh peer metadata before relying on cached admission decisions.
 
 Tool name = command name with `.` replaced by `_` (`patch.merge` →
 `patch_merge`); `@version` is not exposed (tools always call the latest
-version). Generic tools: `describe` (→ `registry.describe`/`registry.list`),
+version). Generic tools: `describe` (→ `registry.groups`/`registry.list`/`registry.describe`),
 `exec` (→ one invocation or a batch: `{"command", "args"}` or
 `{"batch": {...}}`), and in the engine, `query`.
 
@@ -389,8 +419,8 @@ selected by the chosen mode. Its startup command-request count is therefore
 hydrated at startup. Kind metadata from the full index supports `query` for
 commands outside the dedicated set. A named `describe` fetches its full contract
 on demand; `exec` forwards directly to the dispatcher for validation and
-execution without a schema-prefetch request. The compact MCP describe index
-continues to contain only name, kind and summary.
+execution without a schema-prefetch request. The describe index (below) carries only names,
+kinds, summaries and group lines; the full index is fetched only as the proxy's startup list.
 
 The proxy requires a valid exposure on each latest index row. Missing or
 unknown values fail startup with `mcp.registry` at `/commands` and a hint to
@@ -427,16 +457,33 @@ structured content. MCP 2025-06-18 Tools / Output Schema makes the schema
 optional and Structured Content permits JSON-object results independently:
 <https://modelcontextprotocol.io/specification/2025-06-18/server/tools>.
 
-`describe {}` returns `{columns: ["name", "kind", "summary"], namespaces:
-{<namespace>: [[<name>, <kind>, <summary>], ...]}}`. Namespace is the first
-name segment; standalone `batch` has its own group. Rows retain the registry's
-name/version order and include every registered command; summaries are at most
-80 characters. The full engine index targets less than 25,000 UTF-8 bytes.
-Existing `tag`, `kind`, and `text` filters apply before grouping (`text`
-searches names and summaries). `describe {command: <name>}` is unchanged:
-full args/result schemas, errors, examples and command metadata. The underlying
-`registry.list` contract is unchanged. Initialize instructions explain the
-common tools, describe/exec/query workflow and argument-free index.
+*Describe, in three steps.* An agent reads what it needs and no more:
+
+1. `describe {}` returns the groups (§1.3), one line each:
+   `{columns: ["group", "count", "summary"], groups: [[<group>, <count>, <summary>], ...],
+   hint}`, by group name; `count` is the group's public commands and `summary` its line (at
+   most 70 characters). Budget: under 5,000 UTF-8 bytes (compact JSON) and at most 60 groups.
+2. `describe {group: <name>}` returns that group's commands:
+   `{columns: ["name", "kind", "summary"], namespaces: {<group>: [[<name>, <kind>,
+   <summary>], ...]}}`, in the registry's name order; the public commands only (not
+   `internal` ones); summaries at most 80 characters. Budget: under 4,000 bytes for any group.
+   An unknown group is `command.unknown_group` at `/group`, its hint listing the groups.
+3. `describe {command: <name>}` is unchanged: full args/result schemas, errors, examples and
+   command metadata. Budget: under 16,000 bytes for any command.
+
+`tag`, `kind` and `text` (names and summaries, ASCII letters in either case: `automate` finds
+"Automate a parameter") search across all groups, alone or with `group`,
+and answer in the step-2 shape. At most 60 rows come back; a longer answer is never cut
+silently: it carries `truncated: true` and a `hint` to narrow the filter with `group`, `kind`,
+`tag` or a longer `text`, and no count. An answer with no rows carries a `hint` too, fitted to the filters given (it names them; it
+explains text search only when a `text` was given; inside a group it says `describe {group}`
+alone lists the whole group), and names the other groups whose line has the word. An unknown `group`, `kind` or `tag` is the error above. Search budget: under 6,000 bytes. Tests with the real
+registries (`engine.cli-numbers`) fail with the name of the group or command that breaks a
+budget; split the group or shorten its summaries rather than raising a budget. The command line
+shows the same answers: `<slug>-engine registry --groups` and `registry --group NAME` (and the
+sandbox's). The old whole-registry `describe {}` (`namespaces` for every command, about 25 KB)
+is gone; `<slug>-engine registry` is the complete document. Initialize instructions explain
+the common tools and this walk.
 
 ### 4.3 Calls and results
 
