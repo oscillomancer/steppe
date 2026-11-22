@@ -1153,6 +1153,130 @@ TEST_CASE("anticipative: an edit takes effect after the audio already rendered, 
     engine.stop();
 }
 
+TEST_CASE("anticipative: a start plays its first cycle whole or not at all" *
+          doctest::description("rt")) {
+    // A 512-frame device cycle against 256-frame render blocks. With only the
+    // first block rendered, the cycle is pre-roll (silent, time holding
+    // still, no miss), not 256 frames and a gap no counter shows. Then the
+    // output is the offline render from its first frame.
+    const model::Session s = synthSession(0.0);
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, EngineOptions{.renderBlock = 256, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 512}));
+    REQUIRE(engine.load(s));
+    engine.holdRendererFrom(256);
+    engine.play();
+    REQUIRE(engine.awaitRendered(256));
+    backend.run(2);
+    CHECK(engine.anticipationMisses() == 0);
+    CHECK(engine.transport().sample == 0);
+    engine.holdRendererFrom(INT64_MAX);
+    runAhead(engine, backend, 80, 512);
+    CHECK(engine.anticipationMisses() == 0);
+    engine.stop();
+    auto offline = renderOffline(s, pool, {.startSeconds = 0, .endSeconds = 1.0}).value();
+    CHECK(maxDiff(backend.capture().channels[0], 2 * 512, offline.audio.channels[0], 40000) == 0.0);
+}
+
+TEST_CASE("anticipative: a start's first cycle plays on past a loop wrap" *
+          doctest::description("rt")) {
+    // Review round 96, S1: a 200-frame loop makes 200-frame chunks. With
+    // 1200 frames rendered the pre-roll passes, the cycle plays 200 frames to
+    // the wrap, and the rest of it is played by a second pull. That pull
+    // asked the pre-roll again (1000 frames ahead now, under the block) and
+    // left 56 frames silent, time held and no miss counted. The held run must
+    // play as one whose renderer is well ahead.
+    const model::Session s = synthSession(0.0);
+    const auto play = [&](bool hold, DummyBackend& backend) {
+        auto pool = makePool();
+        MediaCache media;
+        Engine engine(pool, media, EngineOptions{.workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(s));
+        engine.setLoop(0.0, 200.0 / 48000.0, true);
+        if (hold) engine.holdRendererFrom(1200);
+        engine.play();
+        REQUIRE(engine.awaitRendered(hold ? 1200 : 4096));
+        backend.run(1);
+        const auto sample = engine.transport().sample;
+        CHECK(engine.anticipationMisses() == 0);
+        engine.holdRendererFrom(INT64_MAX);
+        engine.stop();
+        return sample;
+    };
+    DummyBackend ahead({.mode = DummyBackend::Mode::Manual, .captureFrames = 256});
+    const auto reference = play(false, ahead);
+    DummyBackend held({.mode = DummyBackend::Mode::Manual, .captureFrames = 256});
+    CHECK(play(true, held) == reference);
+    const auto& out = held.capture().channels[0];
+    REQUIRE(out.size() >= 256);
+    CHECK(std::any_of(out.begin() + 200, out.begin() + 256, [](float v) { return v != 0; }));
+    for (std::size_t c = 0; c < 2; ++c)
+        CHECK((held.capture().channels[c] == ahead.capture().channels[c]));
+}
+
+TEST_CASE("anticipative: a start and a locate are heard as soon as their first render block is" *
+          doctest::description("rt")) {
+    // Pre-roll waits for a whole render block, which a plain start or a
+    // locate renders first: the cycle after it plays, as it always did.
+    const model::Session s = synthSession(0.0);
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, EngineOptions{.workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+    REQUIRE(engine.load(s));
+    engine.holdRendererFrom(1024);
+    engine.play();
+    REQUIRE(engine.awaitRendered(1024));
+    backend.run(1);
+    CHECK(engine.transport().sample == 256);
+    engine.holdRendererFrom(INT64_MAX);
+    runAhead(engine, backend, 10, 256);
+    engine.holdRendererFrom(1024);  // each epoch's stream: the locate's first block
+    engine.seek(1.0);
+    engine.awaitTransport();
+    REQUIRE(engine.awaitRendered(1024));
+    backend.run(1);
+    CHECK(engine.transport().sample == 48000 + 256);
+    CHECK(engine.anticipationMisses() == 0);
+    engine.holdRendererFrom(INT64_MAX);
+    engine.stop();
+}
+
+TEST_CASE("anticipative: a cycle that plays audio and then runs short counts a miss" *
+          doctest::description("rt")) {
+    // The render-ahead span at its floor (10 ms, 480 frames) is shorter than
+    // the device's 1024-frame cycle, so the first cycle can find only the
+    // 512 frames rendered (64-frame blocks, the renderer held there: else it
+    // may add some while the cycle plays). It plays them and is silent for
+    // the rest. That silence is a gap: it is counted, also in the cycle that
+    // starts the play.
+    const model::Session s = synthSession(0.0);
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 4096});
+    Engine engine(pool, media,
+                  EngineOptions{.renderBlock = 64, .renderAheadMs = 10.0, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 1024}));
+    REQUIRE(engine.load(s));
+    engine.holdRendererFrom(512);
+    engine.play();
+    REQUIRE(engine.awaitRendered(512));
+    backend.run(1);
+    CHECK(engine.anticipationMisses() == 1);
+    CHECK(engine.transport().sample == 512);
+    const auto& out = backend.capture().channels[0];
+    double heard = 0, after = 0;
+    for (std::size_t i = 0; i < 512; ++i) heard = std::max(heard, std::fabs(double(out[i])));
+    for (std::size_t i = 512; i < 1024; ++i) after = std::max(after, std::fabs(double(out[i])));
+    CHECK(heard > 0.0);
+    CHECK(after == 0.0);
+    engine.stop();
+}
+
 TEST_CASE("anticipative: a renderer that falls behind counts misses and plays silence") {
     auto pool = makePool();
     MediaCache media;
@@ -4371,6 +4495,49 @@ TEST_CASE("a loop shorter than a render block still lets the renderer get its le
     CHECK_FALSE(full());
     CHECK(engine.anticipationMisses() == 0);
     engine.stop();
+}
+
+TEST_CASE("a loop too short for a render block in the rings still starts, as with room to spare" *
+          doctest::description("rt")) {
+    // With a 10 ms render-ahead time the rings hold 4 chunks; a 200-frame
+    // loop makes every chunk 200 frames, so they fill at 800 frames, short
+    // of the whole render block (1024) a start's pre-roll waits for. The
+    // renderer then waits for room, and the start must not wait for it.
+    for (bool split : {false, true}) {
+        CAPTURE(split);
+        const auto session = split ? frontierSession() : synthSession(-12.0, nullptr, 2);
+        const auto play = [&](double aheadMs, DummyBackend& backend) {
+            auto pool = makePool();
+            MediaCache media;
+            Engine engine(pool, media, {.renderAheadMs = aheadMs, .workers = 1});
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 64, .inputs = 2}));
+            REQUIRE(engine.load(session));
+            REQUIRE(EngineTestAccess::latestPlan(engine).split == split);
+            engine.setLoop(0.0, 200.0 / 48000.0, true);
+            engine.play();
+            // Each cycle waits on the renderer's state: its whole lead, or no
+            // room left. The deadline only reports a hang.
+            const auto hang = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            for (int cycle = 0; cycle < 64; ++cycle) {
+                while (EngineTestAccess::lead(engine) < EngineTestAccess::aheadFrames(engine) &&
+                       !EngineTestAccess::rendererWaitsForRoom(engine)) {
+                    REQUIRE_MESSAGE(std::chrono::steady_clock::now() < hang, "renderer hung");
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+                backend.run(1);
+            }
+            CHECK(engine.anticipationMisses() == 0);
+            engine.stop();
+        };
+        DummyBackend roomy({.mode = DummyBackend::Mode::Manual, .captureFrames = 4096});
+        play(200.0, roomy);
+        DummyBackend tight({.mode = DummyBackend::Mode::Manual, .captureFrames = 4096});
+        play(10.0, tight);
+        const auto& reference = roomy.capture().channels[0];
+        REQUIRE(std::any_of(reference.begin(), reference.end(), [](float v) { return v != 0; }));
+        for (std::size_t c = 0; c < 2; ++c)
+            CHECK((tight.capture().channels[c] == roomy.capture().channels[c]));
+    }
 }
 
 TEST_CASE("renderer waits for full master and frontier rings to release a chunk") {

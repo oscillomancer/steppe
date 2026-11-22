@@ -699,7 +699,9 @@ class Engine {
     void awaitTransport(double timeoutSeconds = 1.0);
     // Anticipative, main thread: waits until `frames` of the current
     // transport epoch are rendered ahead of the playhead (at most the
-    // render-ahead amount), or the transport is paused. False on timeout.
+    // render-ahead amount; before the epoch is heard, at least the whole
+    // render block its pre-roll waits for), until the renderer can hold no
+    // more, or the transport is paused. False on timeout.
     bool awaitRendered(std::int64_t frames, double timeoutSeconds = 10.0);
     // Main thread (tests, tools): waits until the renderer has adopted the
     // newest plan and queued it for the callback, whose next cycle adopts it
@@ -744,6 +746,13 @@ class Engine {
         wakeRenderer();
     }
     bool awaitRendererHeld(double timeoutSeconds = 10.0);
+    // Tests: the renderer renders each epoch until its stream reaches `stream`
+    // and holds there (INT64_MAX: no hold). awaitRendered(stream) then says
+    // it has got there, so a manual backend can play into what it left.
+    void holdRendererFrom(std::int64_t stream) {
+        holdFrom_.store(stream, std::memory_order_release);
+        wakeRenderer();
+    }
     const EngineOptions& options() const { return options_; }
     unsigned liveHelpers() const;  // main thread: enabled capacity, 0 when serial
     // Main thread: the threads that work to the device's deadline, the
@@ -834,8 +843,22 @@ class Engine {
         model::Id clip;                  // Clip and Held
         std::optional<double> position;  // Clip: in its period, in the clip's unit
         std::optional<LaunchPending> queued;
+        // What the plan's player for the clip it plays (else the one it has
+        // queued) follows by (ADR-0098 X4), and whether the follow budget
+        // forced that; unset when it plays no clip and has none queued.
+        enum class Followed : std::uint8_t { None, Key, Chords };
+        std::optional<Followed> followed;
+        bool followBudget = false;
     };
     std::vector<TrackLaunch> launchState() const;
+    // Main thread: what the running plan's player for `clip` on `track`
+    // follows by, and whether the follow budget forced that (ADR-0098 X4c);
+    // unset when the plan has no such player.
+    struct ClipFollowed {
+        TrackLaunch::Followed followed = TrackLaunch::Followed::None;
+        bool budget = false;
+    };
+    std::optional<ClipFollowed> clipFollowed(model::Id track, model::Id clip) const;
     // Main thread: the clips the running plan left out of the memory
     // budget (they cannot be launched; launch.memory).
     std::vector<model::Id> clipsSkipped() const;
@@ -1020,6 +1043,12 @@ class Engine {
     };
     Pulled pullAhead(float* const* out, std::uint32_t frames) SUPPLE_RT;
     static constexpr std::int64_t kNothingPlayed = INT64_MIN;
+    // Pre-roll (ADR-0012): whether the callback may start hearing `epoch`, a
+    // cycle of `frames` at its start. The renderer must have rendered a whole
+    // render block of it and the whole cycle (the cycle at most the
+    // render-ahead span): a first chunk cut short (a launch's switch frame on
+    // a compensated track, a loop wrap) is not enough.
+    bool primeReady(std::uint64_t epoch, std::uint32_t frames) const SUPPLE_RT;
     // Bounded transport reads. The audio thread gives up quickly (the writer's
     // window is a handful of atomic stores) and keeps what it has; the
     // renderer — its plugins' audio thread — uses the same bound rather than
@@ -1377,6 +1406,10 @@ class Engine {
     // One-shot stream threshold, or INT64_MAX while not waiting for space.
     std::atomic<std::int64_t> rendererWakeAt_{INT64_MAX};
     std::atomic<bool> rendererQuit_{false}, hold_{false}, holdSeen_{false};
+    // Tests: holdRendererFrom().
+    std::atomic<std::int64_t> holdFrom_{INT64_MAX};
+    // aheadFrames_ for the callback's pre-roll: set after the device starts.
+    std::atomic<std::int64_t> primeAhead_{INT64_MAX};
     std::int64_t aheadFrames_ = 0;                 // render-ahead target
     std::atomic<std::uint64_t> epoch_{0};          // main thread: seek, pause, setLoop
     std::atomic<std::uint64_t> epochDone_{0};      // renderer: the epoch it has relocated for

@@ -246,10 +246,15 @@ class Fixture final : public SingleComponentEffect {
             std::fill_n(text, 128, u'V');
             return kResultOk;
         }
+        // Asking the Stepped Echo for Edit's text acts as its editor too: an
+        // edit the host itself sent nothing for (so it asked nothing to process).
+        if (kind_ == SteppedEcho && id == 2 && value > 0) editorActs(value);
         return SingleComponentEffect::getParamStringByValue(id, value, text);
     }
     IPlugView* PLUGIN_API createView(FIDString name) override {
-        return controller_ && std::strcmp(name, ViewType::kEditor) == 0 ? new TestView : nullptr;
+        return (controller_ || kind_ == SteppedEcho) && std::strcmp(name, ViewType::kEditor) == 0
+                   ? new TestView
+                   : nullptr;
     }
     tresult PLUGIN_API getControllerClassId(TUID id) override {
         if (kind_ != Separate && kind_ != Stateless) return kResultFalse;
@@ -304,16 +309,7 @@ class Fixture final : public SingleComponentEffect {
     tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) override {
         if (EditControllerEx1::setParamNormalized(id, value) != kResultOk) return kResultFalse;
         if (kind_ == SteppedEcho) {
-            if (id == 2 && value > 0 && componentHandler) {
-                if (value < 0.1) {
-                    componentHandler->beginEdit(3);
-                } else if (value >= 0.9) {
-                    componentHandler->endEdit(3);
-                } else {
-                    EditControllerEx1::setParamNormalized(3, value);
-                    componentHandler->performEdit(3, value);
-                }
-            }
+            if (id == 2 && value > 0) editorActs(value);
             return kResultOk;
         }
         value_ = value;
@@ -442,6 +438,19 @@ class Fixture final : public SingleComponentEffect {
     }
     OBJ_METHODS(Fixture, SingleComponentEffect)
   private:
+    // The Stepped Echo's editor acting on Level (id 3) for an Edit value v:
+    // below 0.1 it grabs Level, from 0.9 it lets go, else it moves it to v.
+    void editorActs(ParamValue value) {
+        if (!componentHandler) return;
+        if (value < 0.1) {
+            componentHandler->beginEdit(3);
+        } else if (value >= 0.9) {
+            componentHandler->endEdit(3);
+        } else {
+            EditControllerEx1::setParamNormalized(3, value);
+            componentHandler->performEdit(3, value);
+        }
+    }
     void echoNotes(ProcessData& data) {
         if (!data.inputEvents || !data.outputEvents) return;
         auto* out = data.outputEvents;

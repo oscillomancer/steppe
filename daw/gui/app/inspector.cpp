@@ -11,19 +11,27 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <tuple>
 #include <utility>
 
+#include "mod_source.h"
+#include "rack_engine.h"
 #include "supple/base/chars.h"
+#include "supple/model/context.h"
+#include "supple/model/follow.h"
 #include "supple/model/launcher.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
 #include "supple/views/lanes.h"
 #include "supple/views/launcher.h"
+#include "take_follow.h"
 
 namespace supple::gui {
 namespace {
@@ -315,8 +323,7 @@ InspectorSubject inspectorSubject(const model::Session& s, const UiState& select
         out.detail = on.size() == 1 ? "On " + model::trackLabel(s, *on.begin())
                                     : "On " + std::to_string(on.size()) + " tracks";
     } else {
-        out.title = "Nothing selected";
-        out.detail = "Click an item or a track to see it here.";
+        out.title = "Nothing selected";  // no hint line: the empty panel says only that
     }
     return out;
 }
@@ -390,6 +397,32 @@ Inspector::Inspector(ui::Root& root, engine::EngineApp& app, const UiState& sele
 namespace {
 
 // A row of the form: its label at the left, the control filling the rest.
+// A line of the Modulation row: boxed as a field is, its words at the left
+// and the source after them (ui::Button's mark, in signal-cv); a click shows
+// the source.
+class ModLine : public ui::Button {
+  public:
+    using Button::Button;
+    void paint(ui::Canvas& c) override {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        c.fillRound(b, t.radius("s"),
+                    pressed() || hovered() ? t.color("selection") : t.color("raised"));
+        c.strokeRound(b, t.radius("s"), focused() ? t.color("focus") : t.color("rule"));
+        const float size = t.type("small");
+        const float markW = mark().empty() ? 0.0f : c.textWidth(mark(), ui::Font::Ui, size) + 6;
+        const float room = std::max(0.0f, b.w - 12 - markW);
+        const std::string words = c.elide(valueText(), ui::Font::Ui, size, room);
+        const float wordsW = c.textWidth(words, ui::Font::Ui, size);
+        c.text({b.x + 6, b.y, wordsW + 1, b.h}, words, ui::Font::Ui, size, t.color("ink"),
+               ui::kLeft | ui::kMiddle);
+        if (!mark().empty())
+            c.text({b.x + 6 + wordsW + 6, b.y, markW, b.h}, mark(), ui::Font::Ui, size,
+                   t.color(markColor().empty() ? "signal-cv" : markColor().c_str()),
+                   ui::kLeft | ui::kMiddle);
+    }
+};
+
 ui::Node& formRow(ui::Node& parent, const std::string& key, const std::string& label) {
     auto& row = parent.emplace<ui::Node>("inspector.row." + key);
     row.layout.dir = ui::Layout::Dir::Row;
@@ -464,7 +497,8 @@ std::unique_ptr<ui::Node> Inspector::build() {
     field(box, "name", "Name");
     field(box, "start", "Start");
     field(box, "length", "Length");
-    auto& follows = formRow(box, "timebase", "Follows");
+    // Timebase: "Follows" read as Follow's neighbour once a take follows a key.
+    auto& follows = formRow(box, "timebase", "Timebase");
     rows_["timebase"] = &follows;
     timebase_ = &follows.emplace<ui::Dropdown>(
         "inspector.timebase", std::vector<ui::Choice>{{"track", "Its track's setting"},
@@ -481,6 +515,28 @@ std::unique_ptr<ui::Node> Inspector::build() {
     state(states, "mute", "Mute", "mute");
     state(states, "loop", "Loop", "accent");
     state(states, "locked", "Lock", "accent");
+    // How the heard MIDI take sounds (ADR-0098 amended, gui.md §4.14): as
+    // written, or following the song's key or chords; Bake writes what it
+    // sounds as into its notes.
+    auto& followRow = formRow(box, "follow", "Follow");
+    rows_["follow"] = &followRow;
+    follow_ = &followRow.emplace<ui::Dropdown>(
+        "inspector.follow",
+        std::vector<ui::Choice>{{"none", "None"}, {"key", "Key"}, {"chords", "Chords"}});
+    follow_->layout.width = ui::SizeRule::fraction();
+    follow_->layout.height = ui::SizeRule::fixed(22);
+    follow_->onChange = [this](const std::string& value) { setFollow(value); };
+    bake_ = &followRow.emplace<ui::Button>("inspector.bake", "Bake", [this] { bake(); });
+    bake_->layout.width = ui::SizeRule::content();
+    bake_->layout.height = ui::SizeRule::fixed(22);
+    followRow.visible = false;
+    // The heard MIDI take's own key (ADR-0098 amended, gui.md §4.14): what its
+    // notes were written in, while it has a context; read-only.
+    auto& writtenIn = formRow(box, "written_in", "Written in");
+    rows_["written_in"] = &writtenIn;
+    writtenIn_ = &writtenIn.emplace<ui::Label>("inspector.written_in", "", ui::Font::Ui, "small");
+    writtenIn_->layout.width = ui::SizeRule::fraction();
+    writtenIn.visible = false;
 
     // The heard take, when it plays audio: each one take.set.
     auto& take = box.emplace<ui::Node>("inspector.take");
@@ -591,6 +647,24 @@ std::unique_ptr<ui::Node> Inspector::build() {
     colors_ = &swatches;
     field(tracks, "track.volume_db", "Volume");
     field(tracks, "track.pan", "Pan");
+    // Modulation (ADR-0096): one track's modulated parameters, each a line to
+    // its source; the row is not there while nothing is modulated.
+    auto& modRow = tracks.emplace<ui::Node>("inspector.row.track.modulation");
+    rows_["track.modulation"] = &modRow;
+    modRow.layout.dir = ui::Layout::Dir::Row;
+    modRow.layout.height = ui::SizeRule::content();
+    modRow.layout.gap = 8;
+    modRow.visible = false;
+    auto& modName = modRow.emplace<ui::Label>("inspector.label.track.modulation", "Modulation",
+                                              ui::Font::Ui, "small", "ink-quiet");
+    modName.layout.width = ui::SizeRule::fixed(72);
+    modName.layout.height = ui::SizeRule::fixed(22);
+    auto& lines = modRow.emplace<ui::Node>("inspector.track.modulation");
+    lines.layout.dir = ui::Layout::Dir::Column;
+    lines.layout.width = ui::SizeRule::fraction();
+    lines.layout.height = ui::SizeRule::content();
+    lines.layout.gap = 4;
+    modLines_ = &lines;
     // Notes: several lines, for one track. Leaving the field or Ctrl+Enter
     // applies them; Escape puts back what the track has.
     // The label is above the field, which takes the panel's width: lines
@@ -688,8 +762,12 @@ void Inspector::readClip(bool force) {
 void Inspector::readItems(bool force) {
     const model::Session& s = app_.head();
     std::vector<const model::Item*> items;
+    model::Id itemId;  // the first's
     for (const model::Id& id : ids_)
-        if (const model::Item* item = s.items.find(id)) items.push_back(item);
+        if (const model::Item* item = s.items.find(id)) {
+            if (items.empty()) itemId = id;
+            items.push_back(item);
+        }
     if (items.empty()) return;
     const bool one = items.size() == 1;
     const model::Item* item = items.front();
@@ -737,6 +815,66 @@ void Inspector::readItems(bool force) {
                                      : "Some of these are locked. Turn Lock off to edit.";
     if (locked_->text() != note) locked_->setText(note);
     locked_->visible = locked;
+    // One item whose heard take has a context: the key its notes were written
+    // in, where the content starts (model::contextKeyPointAt; "no key" when
+    // that point is unreadable).
+    {
+        const model::ContextPoint* own =
+            take && !take->context.empty()
+                ? model::contextKeyPointAt(take->context,
+                                           model::contextBeatOf(*take, take->startOffset))
+                : nullptr;
+        const bool shown = one && take && !take->context.empty();
+        rows_["written_in"]->visible = shown;
+        std::string words = !shown ? std::string()
+                            : own  ? model::keyWords(*own)
+                                   : std::string("no key");
+        // The rest counted, not named (the roll's take row shows them all): the
+        // changes of key the item plays, as a bake across key changes leaves
+        // them. Its notes read context beats from phase + start_offset for its
+        // length × playrate (model::contextOver unrolls repeats and carries
+        // `own` in at 0), so points outside that span, which a split part or a
+        // left trim keeps, are not counted.
+        if (shown) {
+            const model::ItemSpan span = model::itemSpan(s, *item);
+            const double length = std::max(0.0, s.timeMap->beatAt(span.endSec) - span.startBeat);
+            const double rate = take->playrate > 0 ? take->playrate : 1.0;
+            const double u0 = take->contextPhase + take->startOffset;
+            int changes = 0;
+            std::optional<model::ContextPoint> last;
+            for (model::ContextPoint p : model::contextOver(*take, u0, u0 + length * rate)) {
+                if (p.type != model::ContextType::Key) continue;
+                const double beat = p.beat;
+                if (last) {
+                    p.beat = last->beat;
+                    if (p == *last) continue;  // the same key again: no change
+                    ++changes;
+                }
+                p.beat = beat;
+                last = std::move(p);
+            }
+            if (changes > 0)
+                words += ", " + std::to_string(changes) + (changes == 1 ? " change" : " changes");
+        }
+        if (writtenIn_->text() != words) writtenIn_->setText(words);
+    }
+    // One item whose heard take is MIDI: its Follow, and Bake while it
+    // follows. Key and Chords say why when the take cannot follow.
+    {
+        const bool shown = one && take && model::takeIsMidi(*take);
+        rows_["follow"]->visible = shown;
+        if (shown) {
+            const auto why = followRefusal(s, itemId);
+            const std::string tail = why ? " (" + *why + ")" : std::string();
+            follow_->setChoices(
+                {{"none", "None"}, {"key", "Key" + tail, !why}, {"chords", "Chords" + tail, !why}});
+            follow_->setValue(take->follow == model::ClipFollow::Key      ? "key"
+                              : take->follow == model::ClipFollow::Chords ? "chords"
+                                                                          : "none");
+            follow_->enabled = !locked;
+            bake_->enabled = !locked && take->follow != model::ClipFollow::None;
+        }
+    }
     const model::MediaSource* media = take && take->source ? s.media.find(*take->source) : nullptr;
     takeBox_->visible = media != nullptr;
     if (media) {
@@ -791,6 +929,8 @@ void Inspector::readTracks(bool force) {
     auto* row = static_cast<ColorRow*>(colors_);
     row->current = common(tracks, [](const model::Track& t) { return t.color; });
     row->invalidate();
+    rows_["track.modulation"]->visible = false;
+    if (one) readModulation(ids_.front());
     rows_["track.notes"]->visible = one;
     if (one) {
         notesShown_ = tracks.front()->notes;
@@ -798,6 +938,65 @@ void Inspector::readTracks(bool force) {
         if ((force || root_.focused() != notes_) && notes_->text() != notesShown_)
             notes_->setText(notesShown_);
     }
+}
+
+void Inspector::readModulation(model::Id id) {
+    const model::Session& s = app_.head();
+    const auto routes = modRoutesOfTrack(s, id);
+    rows_["track.modulation"]->visible = !routes.empty();
+    if (!scales_) scales_ = std::make_unique<PluginScales>(dispatcher_, &app_);
+    const auto catalog = racks::catalog(app_);
+    // Each route: its parameter as its lane names it, and its source.
+    std::vector<std::tuple<model::Id, std::string, std::string>> shown;
+    for (model::Id route : routes) {
+        const model::Modulation& m = *s.modulations.find(route);
+        model::Envelope probe;
+        probe.target = m.target;
+        const auto scale = probe.target.object.kind == model::Kind::Fx ? (*scales_)(probe)
+                                                                       : views::envScale(probe);
+        std::string what = views::envTitle(probe, s, scale ? &*scale : nullptr);
+        std::string source = std::string(views::kModMark) + " " +
+                             modSourceName(s, catalog.get(), route) + (m.enabled ? "" : " (off)");
+        shown.emplace_back(route, std::move(what), std::move(source));
+    }
+    std::string key;
+    for (const auto& [route, what, source] : shown) key += route.str() + what + source + ";";
+    if (key == modShown_) return;
+    modShown_ = key;
+    modLines_->clear();
+    AppActions* a = &actions_;
+    ui::Root* r = &root_;
+    // A source mark dims where its route is off (all of them, on "N routes").
+    auto on = [&](model::Id route) { return s.modulations.find(route)->enabled; };
+    auto line = [&](const std::string& nodeId, const std::string& text, const std::string& mark,
+                    bool lit, std::function<void()> click) {
+        auto& b = modLines_->emplace<ModLine>(nodeId, text, std::move(click));
+        b.setMark(mark, lit ? "signal-cv" : "ink-faint");
+        b.layout.width = ui::SizeRule::fraction();
+        b.layout.height = ui::SizeRule::fixed(22);
+        return &b;
+    };
+    if (shown.size() <= 4) {
+        for (const auto& [route, what, source] : shown)
+            line("inspector.track.modulation." + route.str(), what, source, on(route),
+                 [a, route] { showModSource(*a, route); });
+    } else {
+        // Past four: one line, its menu listing them all.
+        std::vector<ui::MenuItem> items;
+        for (const auto& [route, what, source] : shown)
+            items.push_back({what + " " + source, "", [a, route] { showModSource(*a, route); }});
+        const bool any = std::any_of(shown.begin(), shown.end(),
+                                     [&](const auto& entry) { return on(std::get<0>(entry)); });
+        line("inspector.track.modulation.all", std::to_string(shown.size()) + " routes",
+             std::string(views::kModMark), any, [r, items] {
+                 const ui::Node* at = r->find("inspector.track.modulation.all");
+                 if (!at) return;
+                 r->openPopup(
+                     ui::makeMenu("inspector.modulation.menu", items, [r] { r->closePopup(); }),
+                     at->bounds(), ui::Placement::Below);
+             });
+    }
+    root_.relayout();
 }
 
 void Inspector::commitNotes(const std::string& text) {
@@ -880,6 +1079,31 @@ void Inspector::setTake(const std::string& key, json::Value value) {
     run("take.set", std::move(args));
 }
 
+void Inspector::setFollow(const std::string& value) {
+    if (kind_ != InspectorSubject::Kind::Item || ids_.empty()) return;
+    const model::ClipFollow follow = value == "key"      ? model::ClipFollow::Key
+                                     : value == "chords" ? model::ClipFollow::Chords
+                                                         : model::ClipFollow::None;
+    auto args = takeFollowArgs(app_.head(), ids_.front(), follow);
+    if (!args) {
+        fail(args.error().message);
+        return;
+    }
+    run("take.set", std::move(*args));
+}
+
+void Inspector::bake() {
+    if (kind_ != InspectorSubject::Kind::Item || ids_.empty()) return;
+    auto r = bakeItems(dispatcher_, kOrigin, app_.head(), {ids_.front()});
+    if (!r) {
+        fail(r.error().hint.empty() ? r.error().message
+                                    : r.error().message + ": " + r.error().hint);
+        return;
+    }
+    if (actions_.onNotice) actions_.onNotice(*r);
+    finish(json::Value::object());
+}
+
 void Inspector::commit(const std::string& key, const std::string& text) {
     if (ids_.empty() || text == fields_[key].shown) return;
     if (key == "name" || key == "track.name" || key == "clip.name") {
@@ -942,6 +1166,7 @@ void Inspector::sync() {
     clipsFocused_ = selection_.clipsFocused;
     if (title_->text() != subject.title) title_->setText(subject.title);
     if (detail_->text() != subject.detail) detail_->setText(subject.detail);
+    detail_->visible = !subject.detail.empty();
     static_cast<Swatch*>(swatch_)->color = subject.color;
     swatch_->visible = subject.color.has_value();
     kind_ = subject.kind;

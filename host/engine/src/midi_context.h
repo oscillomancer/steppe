@@ -49,6 +49,14 @@ Result<NoteContext> clipNoteContext(const model::Clip& clip, const model::Take& 
                                     std::int64_t tick, bool needKey, bool needChord,
                                     const std::string& path);
 
+// A following take's note context (ADR-0098, following is playback): the take's own key and
+// chord at the context beat each of its heard occurrences of the note starting at `tick` reads,
+// never the project's. `item` is the item whose active take is read. Refuses with
+// `midi.context_varies` when the occurrences disagree on a part that is asked for, `midi.no_key`
+// or `midi.no_chord` when none holds (or the point is one this build does not read).
+Result<NoteContext> takeNoteContext(const model::Session& s, model::Id item, std::int64_t tick,
+                                    bool needKey, bool needChord, const std::string& path);
+
 Result<NoteContext> noteContext(const model::Session& s, model::Id source, std::int64_t tick,
                                 double fallbackBeat, bool needKey, bool needChord,
                                 const std::string& path);

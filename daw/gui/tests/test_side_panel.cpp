@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,15 +28,18 @@
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
+#include "supple/model/context.h"
 #include "supple/ui/controls.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/gl.h"
 #include "supple/ui/list.h"
+#include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/envelope_lane.h"
 
 using namespace supple;
 
@@ -304,6 +309,7 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     gui::InspectorSubject subject = gui::inspectorSubject(s, sel, theme);
     CHECK(subject.kind == Kind::Nothing);
     CHECK(subject.title == "Nothing selected");
+    CHECK(subject.detail.empty());  // no hint text in an empty panel
     CHECK_FALSE(subject.color);
 
     sel.selectedItems = {empty};
@@ -346,6 +352,7 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     f.side->show("inspector");
     f.pass();
     CHECK(f.text("inspector.title") == "Nothing selected");
+    CHECK_FALSE(f.inView("inspector.detail"));
     f.ui.selectedTracks = {bass};
     f.ui.tracksFocused = true;
     f.pass();
@@ -370,6 +377,222 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     f.side->show("inspector");
     f.pass();
     CHECK(f.text("inspector.title") == "buss_1");
+}
+
+TEST_CASE("inspector: a MIDI take's Follow and Bake") {
+    // gui.md §4.14 (ADR-0098 amended, X4e): take.set {follow}, and take.bake.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string keys = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    const std::string item =
+        f.exec("item.add", R"({"track":")" + keys +
+                               R"(","bar":1,"notation":"voice v; 1: C4:q E4:q G4:q C5:q"})")["item"]
+            .asString();
+    const auto itemId = *model::Id::parse(item);
+    auto take = [&]() -> const model::Take& {
+        return *f.app->head().takes.find(*f.app->head().items.find(itemId)->activeTake);
+    };
+    std::vector<std::string> notices, errors;
+    f.actions->onNotice = [&](const std::string& n) { notices.push_back(n); };
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    f.side->show("inspector");
+    f.ui.selectedItems = {item};
+    f.ui.tracksFocused = false;
+    f.pass();
+    REQUIRE(f.inView("inspector.row.follow"));
+    auto* follow = dynamic_cast<ui::Dropdown*>(f.node("inspector.follow"));
+    REQUIRE(follow);
+    // No key in the song and none of its own: Key and Chords say why.
+    REQUIRE(follow->choices().size() == 3);
+    CHECK(follow->choices()[1].label == "Key (no key in the song here)");
+    CHECK_FALSE(follow->choices()[1].enabled);
+    CHECK_FALSE(f.node("inspector.bake")->enabled);
+    // With a key in the song, Key gives the take the song's context under the
+    // item in the same take.set: nothing sounds otherwise yet.
+    f.exec("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+    f.pass();
+    CHECK(follow->choices()[1].label == "Key");
+    follow->choose("key");
+    f.pass();
+    CHECK(errors.empty());
+    CHECK(take().follow == model::ClipFollow::Key);
+    REQUIRE(take().context.size() == 1);
+    CHECK(model::keyWords(take().context[0]) == "C major");
+    CHECK(f.text("inspector.written_in") == "C major");
+    CHECK(f.node("inspector.bake")->enabled);
+    // The song moves to E minor: the notes sound there; Bake writes them.
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    f.pass();
+    REQUIRE(f.root->click("inspector.bake"));
+    f.pass();
+    CHECK(errors.empty());
+    CHECK(take().follow == model::ClipFollow::None);
+    std::vector<int> pitches;
+    const json::Value notes = f.exec("midi.notes", R"({"item":")" + item + R"("})")["notes"];
+    for (const json::Value& n : notes.asArray())
+        pitches.push_back(static_cast<int>(n.find("pitch")->asInt()));
+    CHECK(pitches == std::vector<int>{64, 67, 71, 76});
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0].ends_with(" baked: 4 notes written as they sound"));
+    CHECK(follow->valueText().find("None") != std::string::npos);
+    CHECK_FALSE(f.node("inspector.bake")->enabled);
+}
+
+TEST_CASE("inspector: one item's Timebase, and Written in while its take has a context") {
+    // gui.md §4.14 (ADR-0098 amended, X4e): the take's own key, read-only.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string keys = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    const std::string item =
+        f.exec("item.add",
+               R"({"track":")" + keys + R"(","bar":1,"notation":"voice v; 1: C4:w"})")["item"]
+            .asString();
+    f.side->show("inspector");
+    f.ui.selectedItems = {item};
+    f.ui.tracksFocused = false;
+    f.pass();
+    REQUIRE(f.inView("inspector.item"));
+    auto* timebase = dynamic_cast<ui::Label*>(f.node("inspector.label.timebase"));
+    REQUIRE(timebase);
+    CHECK(timebase->text() == "Timebase");
+    CHECK_FALSE(f.inView("inspector.row.written_in"));  // no context: no row
+    // The take given a context in D minor through a save and an open (no
+    // command sets one before X4d).
+    const auto itemId = model::Id::parse(item);
+    REQUIRE(itemId);
+    const std::string take = f.app->head().items.find(*itemId)->activeTake->str();
+    const auto path = f.dir / ("written-in." + std::string(product::kSlug));
+    auto args = json::Value::object();
+    args["path"] = path.string();
+    REQUIRE(f.dispatcher->execute({"project.save", args, kTest}));
+    std::string bytes;
+    {
+        std::ifstream in(path, std::ios::binary);
+        bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    auto doc = json::parse(bytes);
+    REQUIRE(doc);
+    (*doc)["takes"][take]["context"] =
+        json::parse(R"([{"beat":0,"type":"key","tonic":"D","scale":"minor"}])").value();
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << json::writeCompact(*doc);
+    }
+    REQUIRE(f.app->open(path));
+    f.ui.selectedItems = {item};
+    f.pass();
+    REQUIRE(f.inView("inspector.row.written_in"));
+    auto* written = dynamic_cast<ui::Label*>(f.node("inspector.written_in"));
+    REQUIRE(written);
+    CHECK(written->text() == "D minor");
+    // Key changes the item plays: the first named, the rest counted (a bake
+    // across the song's key changes leaves them; the roll's take row names
+    // them all). The item lengthened to three bars to reach them.
+    f.exec("item.set", R"({"item":")" + item + R"(","length":12})");
+    f.exec("take.set",
+           R"({"take":")" + take + R"(","context":"1: key D minor ~:w\n2: key F major ~:w"})");
+    f.pass();
+    CHECK(written->text() == "D minor, 1 change");
+    f.exec("take.set",
+           R"({"take":")" + take +
+               R"(","context":"1: key D minor ~:w\n2: key F major ~:w\n3: key A minor ~:w"})");
+    f.pass();
+    CHECK(written->text() == "D minor, 2 changes");
+    // A point the item does not reach is not counted: trimmed to its first
+    // bar, no change is heard.
+    f.exec("item.set", R"({"item":")" + item + R"(","length":4})");
+    f.pass();
+    CHECK(written->text() == "D minor");
+    f.exec("item.set", R"({"item":")" + item + R"(","length":12})");
+    f.pass();
+    CHECK(written->text() == "D minor, 2 changes");
+    // Several items: no row.
+    const std::string other =
+        f.exec("item.add",
+               R"({"track":")" + keys + R"(","bar":3,"notation":"voice v; 1: E4:w"})")["item"]
+            .asString();
+    f.ui.selectedItems = {item, other};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.row.written_in"));
+    // A split's right part keeps the whole context but plays from bar 2: it
+    // starts in F major and hears one change, not the one before it.
+    const std::string right =
+        f.exec("item.split", R"({"item":")" + item + R"(","at":4})")["right"].asString();
+    f.ui.selectedItems = {right};
+    f.pass();
+    REQUIRE(f.inView("inspector.row.written_in"));
+    written = dynamic_cast<ui::Label*>(f.node("inspector.written_in"));
+    REQUIRE(written);
+    CHECK(written->text() == "F major, 1 change");
+}
+
+TEST_CASE("inspector: a track's Modulation row leads to each source, 'N routes' past four") {
+    // gui.md §4.14: shown only while something of the track is modulated.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string bass = f.exec("track.add", R"({"name":"Bass"})")["track"].asString();
+    std::vector<std::string> shown;
+    f.actions->addUiFor("ui.modulation.source", "Modulation: show source", "modulation",
+                        [&](const json::Value& v) -> Status {
+                            shown.push_back(v.asString());
+                            return {};
+                        });
+    f.side->show("inspector");
+    f.ui.selectedTracks = {bass};
+    f.ui.tracksFocused = true;
+    f.pass();
+    REQUIRE(f.inView("inspector.track"));
+    CHECK_FALSE(f.inView("inspector.row.track.modulation"));  // nothing modulated: no row
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + bass + R"(","param":"volume"},"source":"lfo"})");
+    const std::string route = made["modulation"].asString();
+    const std::string modOut = made["mod_out"].asString();
+    f.pass();
+    REQUIRE(f.inView("inspector.row.track.modulation"));
+    auto* line = dynamic_cast<ui::Button*>(f.node("inspector.track.modulation." + route));
+    REQUIRE(line);
+    CHECK(line->valueText() == "Volume");
+    CHECK(line->mark() == std::string(views::kModMark) + " LFO");
+    CHECK(line->markColor() == "signal-cv");
+    // One click: its source.
+    f.root->click(line->id());
+    CHECK(shown == std::vector<std::string>{route});
+    // Its route off: "(off)", the mark dimmed.
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
+    f.pass();
+    line = dynamic_cast<ui::Button*>(f.node("inspector.track.modulation." + route));
+    REQUIRE(line);
+    CHECK(line->mark() == std::string(views::kModMark) + " LFO (off)");
+    CHECK(line->markColor() == "ink-faint");
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})");
+    f.pass();
+    // Five routes: one line, "5 routes", whose menu lists them.
+    for (int i = 2; i <= 5; ++i)
+        f.exec("modulation.add", R"({"source":{"module":")" + modOut + R"(","input":"in_)" +
+                                     std::to_string(i) + R"("},"target":{"track":")" + bass +
+                                     R"(","param":")" + (i % 2 ? "volume" : "pan") +
+                                     R"("},"depth":2})");
+    f.pass();
+    CHECK_FALSE(f.root->find("inspector.track.modulation." + route));
+    auto* all = dynamic_cast<ui::Button*>(f.node("inspector.track.modulation.all"));
+    REQUIRE(all);
+    CHECK(all->valueText() == "5 routes");
+    f.root->click(all->id());
+    f.pass();
+    ui::Node* menu = f.root->find("inspector.modulation.menu");
+    REQUIRE(menu);
+    const auto items = ui::menuItems(*menu);
+    REQUIRE(items.size() == 5);
+    CHECK(items[0].label == "Volume " + std::string(views::kModMark) + " LFO");
+    CHECK(items[1].label == "Pan " + std::string(views::kModMark) + " Mod 2");
+    items[1].run();
+    CHECK(shown.size() == 2);
+    f.root->closePopups();
+    // Two tracks selected: no row (it is one track's).
+    const std::string keys = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    f.ui.selectedTracks = {bass, keys};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.row.track.modulation"));
 }
 
 TEST_CASE("inspector: positions read and write as bar.beat.thousandths, in the bar's meter") {

@@ -22,6 +22,7 @@
 #include "fx_window.h"
 #include "generate.h"
 #include "learn_dialog.h"
+#include "mod_source.h"
 #include "plugin_browser.h"
 #include "plugin_drag.h"
 #include "render_dialog.h"
@@ -115,8 +116,12 @@ struct Fixture {
             const bool typing = source.focused() && source.focused()->role() == ui::Role::TextField;
             return actions->key(e.key, e.mods, typing, gui::keySections(source));
         };
-        fx = std::make_unique<gui::FxWindow>(*app, *dispatcher, *root, *panel,
-                                             gui::FxWindow::Hooks{},
+        gui::FxWindow::Hooks hooks;
+        // The parameter menu's "Show modulation source" rows, as the app gives them.
+        hooks.sourceItems = [this](const model::EnvTarget& target) {
+            return gui::modSourceItems(*actions, app->head(), nullptr, target);
+        };
+        fx = std::make_unique<gui::FxWindow>(*app, *dispatcher, *root, *panel, std::move(hooks),
                                              gui::Favourites::defaultFile(gui::test::slug()));
         render = std::make_unique<gui::RenderDialog>(*app, *dispatcher, *root);
         actions->addUi("ui.fx.chain", "FX: chain…", "track",
@@ -1142,10 +1147,14 @@ TEST_CASE("a parameter reached through its envelope takes Modulate; an idle rout
     REQUIRE_MESSAGE(env, "modulate added the envelope that carries the route");
     f.fx->tick();
     f.frame();
-    // It plays: no idle row.
+    // It plays: no idle row. The route's source is a row away (gui.md §2).
     menu = openMenu();
     REQUIRE(menu);
     for (const std::string& l : labels(menu)) CHECK(l.find("idle") == std::string::npos);
+    {
+        const auto all = labels(menu);
+        CHECK(std::count(all.begin(), all.end(), "Show modulation source") == 1);
+    }
     f.uiRoot().closePopup();
     // With its envelope off the route is idle, and the menu says why.
     REQUIRE(f.run("env.set", f.args({{"env", env->str()}, {"active", false}})));

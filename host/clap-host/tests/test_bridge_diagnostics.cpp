@@ -62,12 +62,20 @@ struct Sink {
     }
 };
 // A guard against a lost event, not a timing assertion: the bridge is gone well before this.
-void awaitEnded(const BridgeProcess& process) {
+void awaitEnded(const BridgeProcess& process, const char* why = "the bridge is still alive") {
     const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     while (process.alive() && std::chrono::steady_clock::now() < limit)
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    REQUIRE_FALSE(process.alive());
+    REQUIRE_MESSAGE(!process.alive(), why);
 }
+
+// The process-wide deadline for a bridged call, raised for a case that decides by what a bridge
+// did, not by how fast a loaded machine answered; restored when the case ends.
+struct LongDeadline {
+    int previous = bridgeDeadlineMs();
+    LongDeadline() { setBridgeDeadlineMs(120000); }
+    ~LongDeadline() { setBridgeDeadlineMs(previous); }
+};
 }  // namespace
 
 TEST_CASE("a bridge's ordinals count from one and are never reused") {
@@ -235,6 +243,13 @@ TEST_CASE("only a death that may be reported names a report") {
 // hold for every way a plug-in can end its bridge are made here: the end is not the host's, and a
 // signal or an exception names a report while an exit does not.
 static diagctx::Event endBridgeWith(double mode) {
+    // The bridge ends in its own time: a loaded machine can be slow to take its core or finish its
+    // handler, long enough for the process() call to give up on it as hung. The host would then
+    // kill it after the grace and the end would be its own, not the one under test.
+    struct Grace {
+        Grace() { setBridgeKillGraceForTests(3600LL * 1'000'000'000); }
+        ~Grace() { setBridgeKillGraceForTests(-1); }
+    } grace;
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;
     auto process = createBridgeProcess();
@@ -255,7 +270,9 @@ static diagctx::Event endBridgeWith(double mode) {
     block.inputChannels = block.outputChannels = 1;
     block.frames = 64;
     (void)instance.process(block);
-    awaitEnded(**process);
+    awaitEnded(**process,
+               "the bridge did not end by itself in a minute: a hang, for example abort()'s "
+               "dialog on Windows, which the host would have killed and read as its own");
     (*process)->reap();
     diagctx::Event end;
     for (const auto& event : Sink::of(diagctx::EventKind::Bridge))
@@ -277,7 +294,8 @@ static diagctx::Event endBridgeWith(double mode) {
 // bridge sets its runtime at start (no dialog, no report to wait on, a SIGABRT handler) so that
 // abort() ends it at once with a fast-fail's status, an exception. The first native run
 // (CI 44242073297) had the debug runtime's abort wait until the host's deadline killed the bridge,
-// which reads as the host's end with status 1; this case fails naming that if it happens again.
+// which reads as the host's end with status 1; this case fails naming a hang if it happens again
+// (the bridge is given the time to end itself, so a hang shows as one that never ended).
 TEST_CASE("a bridge ended by abort() is told as the system ended it, and the result is recorded") {
     const auto end = endBridgeWith(6.0);  // abort() in the next process()
 #if defined(_WIN32)
@@ -354,6 +372,15 @@ TEST_CASE("a bridge ended by std::terminate is told as the system ended it") {
 // is alive when the host lets go, and what it did next is what the end reads as.
 TEST_CASE("a bridge that faults as the host lets go is its own end, not the host's") {
     setBridgeExecutable(BRIDGE_PATH);
+    // The host waits for the end of the bridge, not for a clock: a bridge starved for two seconds
+    // before it reaches the fault would be killed by the host and read as its own kill, rightly.
+    setBridgeExitWaitForTests(120000);
+    struct Restore {
+        ~Restore() { setBridgeExitWaitForTests(-1); }
+    } restore;
+    // Nor does a clock decide the process() that starts it: a bridge starved past its deadline
+    // would answer late and the call would fail.
+    const LongDeadline deadline;
     Sink sink;
     auto process = createBridgeProcess();
     REQUIRE(process);
@@ -386,6 +413,37 @@ TEST_CASE("a bridge that faults as the host lets go is its own end, not the host
     CHECK(end.status != 0);
 }
 
+#if !defined(_WIN32)
+// A bridge the host lets go of that is still there once the wait for its end has run out is
+// ended by the host, and its status is read: the kill's. Before, the wait running out left the
+// end as "the host's, status 0", so a bridge that was dying of a fault all along (its dump
+// outlasting the wait) read as the host's end too. The state of dying in a dump cannot be held
+// by a test (nothing here makes a dump take longer than a wait), so the case that is held is the
+// one beside it: a bridge that cannot end by itself, stopped with SIGSTOP, so that it outlasts
+// any wait. Whatever the wait, the host ends it, and the end says how (the host's, with the
+// kill's status); the rule that a fault's status wins over a kill's is classifyBridgeEnd's, by
+// the first case of this file. Windows has no counterpart (no stop here that cannot be
+// answered); the shared code is the same.
+TEST_CASE("a bridge still there after the wait is ended by the host, and its status is read") {
+    setBridgeExecutable(BRIDGE_PATH);
+    setBridgeExitWaitForTests(0);
+    struct Restore {
+        ~Restore() { setBridgeExitWaitForTests(-1); }
+    } restore;
+    Sink sink;
+    auto process = createBridgeProcess();
+    REQUIRE(process);
+    const auto ordinal = (*process)->ordinal();
+    REQUIRE(::kill((*process)->pid(), SIGSTOP) == 0);  // alive, and cannot end by itself
+    process->reset();
+    diagctx::Event end;
+    for (const auto& event : Sink::of(diagctx::EventKind::Bridge))
+        if (event.bridge == ordinal && event.how != diagctx::BridgeHow::None) end = event;
+    CHECK(end.how == diagctx::BridgeHow::Host);
+    CHECK(end.status == SIGKILL);  // the kill's status, read after it: not 0
+}
+#endif
+
 // The host kills a bridge that is already dying of its own fault when a request finds its socket
 // closed before the process is gone (the liveness check says "alive": call() fails the bridge as
 // hung and kills it, which does nothing to a process that is exiting). The bridge's status is
@@ -394,6 +452,7 @@ TEST_CASE("a bridge that faults as the host lets go is its own end, not the host
 // what faults), and the liveness answers are set by the seam.
 TEST_CASE("a bridge killed by the host while it died of its own fault is still its own end") {
     setBridgeExecutable(BRIDGE_PATH);
+    const LongDeadline deadline;  // process() is answered however late a loaded machine is
     Sink sink;
     auto process = createBridgeProcess();
     REQUIRE(process);

@@ -453,7 +453,9 @@ busses only; `track.strip_type` on masters),
 `{track: "tr_0", param: playrate}` (one global master-rate envelope only),
 `{route: id, param: volume|pan|mute}`, `{fx: id, param: <key, id or name>}`
 (stored canonical; "Plug-in parameter references"),
-`{take: id, param: volume|pan|pitch|mute}`, `{tempo: true}` (the tempo map is
+`{take: id, param: volume|pan|pitch|mute}` (`pitch` in semitones is valid in
+a file and checked on load, but `env.add` refuses it, `env.param`, and the engine
+does not play it: engine.md, ItemPlayer), `{tempo: true}` (the tempo map is
 edited through `tempo.*`, not envelopes); `mode`
 (`trim|read|touch|latch|latch_preview|write`); `active`, `armed`,
 `visible`; `points`: array of `[pos, value, shape, tension]` in the
@@ -603,12 +605,16 @@ deduplicated, reference-counted across versions.
 ## 2. In-memory representation
 
 - Every object type is an immutable C++ value struct; collections are
-  `ImmutableMap<Id, std::shared_ptr<const T>>` (a sorted vector for ≤ 256
-  entries, a persistent HAMT beyond — behind one interface so it can start
-  as a sorted vector and upgrade without touching callers; ADR-0008 allows
-  `immer` if needed). Large arrays (MIDI events, envelope points) are chunked
-  (`ChunkedArray<T>`, 4096 elements per chunk) so editing one note copies one
-  chunk.
+  `IdMap<T>` (`supple/model/idmap.h`): a sorted vector of `{id, rev,
+  std::shared_ptr<const T>}`. Copying a map is a pointer copy; an edit copies
+  the entry vector once per transaction and shares every untouched object.
+  *(21 Nov 2026: the text before this said a persistent HAMT beyond 256
+  entries and a `ChunkedArray<T>` of 4096-element chunks for MIDI events and
+  envelope points. Neither was built. Both are plain `std::vector`s inside
+  their object, ``midi::Sequence::notes` and `Envelope::points`, so editing one
+  note or point copies that object's whole array. The interface leaves room for a
+  persistent trie (ADR-0008 allows `immer`); nothing needs one at the limits
+  the model enforces, and one is to be added only for a measured cost.)*
 - `Session` holds the root pointers; edits produce a new `Session` sharing
   everything untouched. Readers on any thread hold a `std::shared_ptr<const
   Session>`; nothing is ever mutated in place.
@@ -645,7 +651,8 @@ never a user error — user errors are caught by command validation first.
   order as in §1, then ID). Large arrays diff as summaries (`notes: 3 added,
   1 changed`) with an optional detailed form. Used by `session.changed`
   events, branch reviews and the undo history display.
-- `describe(session, scope, detail)` → compact text for LLMs, e.g.
+- `describe(session)` → compact text for LLMs (no scope or detail argument: it
+  prints the whole session), e.g.
 
 ```
 Project "Demo" · 48 kHz · 120 BPM 4/4 · 16 bars (0:32.0)
@@ -658,7 +665,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.19`)
+## 5. Project file (`supple.project/2.21`)
 
 ### 5.1 Shape
 
@@ -677,9 +684,12 @@ route is dropped, with a `project.hw_output_route` warning.
 Schema 2.16 adds modulation routes (ADR-0096); 2.17 adds the context
 track's points (ADR-0095); 2.18 adds scenes, clips and
 `launch_quantize` (ADR-0097, "Scenes and clips"); 2.19 puts the envelopes
-on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2).
+on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2); 2.20
+adds a clip's `context` and `follow` (ADR-0098); 2.21 adds a MIDI take's
+`context`, `context_period`, `context_phase` and `follow` ("Take context and
+follow").
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.19,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.21,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
@@ -1089,8 +1099,13 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `project.template.save` (a), `project.template.load {name}` (a, a new
   unsaved project), `project.template.list` (q), `project.template.delete`
   (a).
-- **session**: `session.describe {scope, detail}` (q), `session.query
-  {kind, filter, fields}` (q), `session.get {id, fields}` (q).
+- **session**: `session.describe` (q, no arguments): the compact text of §4 and
+  the ids to use with other commands. *(21 Nov 2026: this list also named
+  `session.query {kind, filter, fields}` and `session.get {id, fields}`. They
+  were never built; the per-kind queries (`scene.list`, `take.list`, `route.list`,
+  `env.list`, `region.list`, `marker.list`, `rack.list`, `modulation.list`, … and
+  each family's `get`) answer what they were for, and error hints name
+  `session.describe`. The sandbox has its own `session.get`.)*
 - **tempo/meter**: `tempo.set {points}`, `tempo.add`, `tempo.remove`,
   `timesig.set {bar, meter: "3/4"}`, `timesig.remove`,
   `time.convert {from, to, value}` (q).
@@ -1147,7 +1162,12 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `midi.quantize`, `midi.humanize {seed}`; Standard MIDI Files are read by
   `item.add {midi_file}` (notes keep their beats and follow the project's
   tempo) and written by `item.export`. `midi.edit` note indices are a set per operation: repeated
-  indices edit each original note once. Tick conversions and all resulting
+  indices edit each original note once. `quantize` snaps a note to the project's grid at
+  its place in the item's roll: for a looped item the roll wraps the take's `start_offset`
+  as playback wraps it (in item beats at the take's playrate), so a part cut from a loop at
+  a playrate whose passes are not a whole number of grid steps still lands on the grid the
+  user sees. A note written before the wrapped offset is drawn before the item's start
+  there, and is snapped at that place, though it first plays a pass later. Tick conversions and all resulting
   starts, ends, lengths and sequence lengths are checked before publication;
   out-of-range arithmetic returns structured `midi.range` with a repair hint,
   leaving the session unchanged. MIDI items are merged by
@@ -1228,14 +1248,20 @@ and naming. All `edit` unless marked (q) query or (a) action.
   running time; on each track that left the arrangement its clip,
   stopped and held stretches replace the arrangement, each clip as
   copies of its takes at the phase heard, MIDI copied unless `pooled`,
-  the envelopes on their FX repeated pass after pass over each copy; a
+  the envelopes on their FX repeated pass after pass over each copy, and
+  the takes' own envelopes too over a looped copy that crosses its period's
+  end, and from the value heard at its start over a copy laid from within a
+  pass (on an item they would run once from its start); a
   scene launched whole (every clip of it that could play, on a track not
   frozen, started on one frame) writes a section (a region with `section`
   true) named after the scene and in its colour, from that boundary until
   one of its tracks is launched again or the capture ends, in the same
   undo step; a clip launched alone, or some of a scene's, writes none, and
   committing again keeps a section already there; answers `{tracks, items,
-  sections: [{scene, region, start, end}], from, to}`. `performance` is filled from the
+  sections: [{scene, region, start, end}], mismatches?: [{clip, kind,
+  clip_key?, key?, clip_chord?, chord?, bar}], from, to}`, where `mismatches` lists each
+  stretch that gave `context.mismatch`, as the warning words it (the object is
+  `followed.mismatch`'s, with the clip). `performance` is filled from the
   capture and recorded in history: `{sample_rate, start, frames, loop?,
   launches: [{frame, track, action, clip?, scene?, anchor, anchor_beat}]}`;
   `scene` names the scene when `launch.scene` launched it (none for a
@@ -1634,7 +1660,13 @@ field: the key and chords over the item's span, with item bars and project bars
 both named.
 
 **Lead sheet.** `context.get`'s `text` and `context.write {text}` use one line per
-project bar: `N: ` then items. `{SYMBOL}:DUR` is a chord point at the cursor,
+project bar: `N: ` then items. The reader takes notation's bar separators too
+(*21 Nov 2026*): a `;` outside braces ends a bar like a newline, so `1: … ; 2: …` is two
+lines; a `|` written as a token of its own ends the bar and goes on with the next one on the
+same line, and a number after it is accepted when it names that bar (`1: … | 2: …` reads
+as `1: … | …`), any other is `context.bar_order`; a `#` comment still ends the whole line,
+the `;` after it included; a trailing `|` is an empty bar (`context.bar_length`). Printing
+is unchanged: one line per bar. The same reader reads a clip's context. `{SYMBOL}:DUR` is a chord point at the cursor,
 `r:DUR` a chord point with an empty symbol, `~:DUR` a hold (no point) and
 `key TONIC SCALE` a key point at the cursor that takes no time; `DUR` is the
 notation's duration (`notation::parseDuration`, at 960 ppq) and a bar's durations
@@ -1854,6 +1886,13 @@ keeps playing its print.
   `modulation.duplicate`,
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
+- Stacking: an enabled route added (`modulation.add`, and `modulate`, which adds
+  through it) onto a target that another enabled route already reaches from the
+  same kind of source (the type of the module cabled into its Mod Out input; an
+  LFO and a Random source are both an LFO) is allowed, with the warning
+  `modulation.stacked` at `/target` naming the new route and the routes already
+  there: their offsets add. A route whose input nothing feeds has no kind and
+  does not warn.
 - `modulation.list` reports each route's signal range (`bipolar` −1..1 or
   `unipolar` 0..1, from the Mod Out input) and `inert` with its reason when
   the plan cannot apply it (`source`, `target`, `envelope` when the envelope
@@ -2036,7 +2075,7 @@ commands move material between the launcher and the timeline. They change
 the model only (no launch), each is one undo step, and a refusal changes
 nothing.
 
-- `scene.insert {scene, at | bar, bars, name?, pooled?}` (edit): lays the
+- `scene.insert {scene, at | bar, bars, name?, pooled?, follow?, write_context?}` (edit): lays the
   scene's clips on the timeline as items and adds a section over them.
   - The span starts at `bar` (1-based) or at `at` (beats), which must be on a
     bar line (`scene.at`), and lasts `bars` whole bars (≥ 1; `scene.bars`)
@@ -2056,7 +2095,10 @@ nothing.
     - `loop` and the clip at least as long as the span: one item for the span.
   - The takes are copied, and a MIDI source with them unless `pooled`. The
     envelopes on their FX, in clip time, are written in timeline position
-    pass after pass over the item (schema 2.19).
+    pass after pass over the item (schema 2.19); the takes' own envelopes
+    (volume, pan, mute), in item-relative beats, pass after pass too when
+    the item loops over more than one period, since on an item they run
+    once from its start.
   - An item already on a track that receives a clip and overlapping the span
     is `scene.insert.occupied` (named in the message); other tracks' items are
     not touched. A scene with no clip is `scene.empty`. A frozen track or one
@@ -2064,7 +2106,12 @@ nothing.
   - It adds one region over the span: `section` true, named after the scene
     (`name` overrides), with the scene's colour. Existing regions are never
     edited.
-  - Result: `{items: [{clip, item, track}], region, start, end}` (beats).
+  - `write_context: true` (ADR-0098 X5, "Writing the context from scenes" below)
+    writes the scene's own harmony onto the context track under the span, in the
+    same undo step, before the clips are laid, so a clip that follows finds the
+    context it was written against.
+  - Result: `{items: [{clip, item, track, followed?}], region, start, end,
+    context?}` (beats); `context` is present when `write_context` was true.
 - `scene.capture {region, name?, pooled?}` (edit): makes a scene from the items
   of a section.
   - For each channel, the items overlapping the region must be one item
@@ -2083,7 +2130,8 @@ nothing.
   - Errors beside the above: `scene.limit`, `clip.limit`, `clip.memory`
     (audio), as `scene.add` and `clip.add`.
   - Result: `{scene, clips: [{clip, source_item, track}]}`.
-- `arrangement.build {sequence: [{scene, bars}…], at | bar?, pooled?}` (edit):
+- `arrangement.build {sequence: [{scene, bars}…], at | bar?, pooled?, follow?,
+  write_context?}` (edit):
   `scene.insert` for each entry in turn, each starting where the last ended,
   from `bar` or `at` (default bar 1), and a region for each. Every entry is
   checked before anything changes. An empty sequence, one of more than 256
@@ -2092,9 +2140,42 @@ nothing.
   with the entry's index in `path` (`/sequence/2/scene`). A scene may appear
   more than once.
   - Result: `{segments: [{scene, region, start, end, items: [{clip, item,
-    track}]}]}`.
+    track, followed?}], context?}]}`.
 - Every one of these errors carries `code`, `message`, `path` and a `hint`
   that says how to fix the call.
+
+**Writing the context from scenes (ADR-0098 X5).** `write_context: true` on
+`scene.insert` and `arrangement.build` writes, for each section, the harmony the
+scene's clips were written against onto the context track, so a song built from
+scenes has a lead sheet without writing it twice.
+
+- *Where:* a section's span `[start, end)`. If the context track already holds
+  a key or chord point at a beat in the span, nothing is written for that section
+  and the points are left alone (`reason: "present"`). Points before the span do
+  not count: a key that holds into the span is held, not "under" it.
+- *What:* each clip's `context` points (a MIDI clip's keys and chords, an audio
+  clip's key at its start), shifted to the span: a `loop` clip repeats at its
+  length for the span (a point is written for every pass), a `once` clip's points
+  are laid once from the start; points at or past the span's end are dropped. Clips
+  with no context say nothing.
+- *Agreement:* two clips whose points of one type fall at the same timeline beat
+  and differ (another key, another chord) disagree. Then nothing is written for
+  that section: `reason: "disagree"`, `clips` the two clips (the first
+  disagreement, by beat) and `bar` its project bar. Clips that merely have
+  points the others lack agree: the union is written.
+- *Redundancy:* a point equal to what holds at its beat, from the context track
+  before the span or from points this call wrote for an earlier section, is not
+  written (a Verse that repeats writes its key once). If nothing remains,
+  `written` is false with `reason: "holds"`.
+- Nothing to write because no clip has a context: `reason: "no_context"`.
+- It is part of the command's one undo step. The points are created before
+  the clips are laid, so `follow` reads them: a clip written in the key it is laid
+  under maps by a transpose of 0. `context.limit` refuses when a type would
+  exceed 4096 points.
+- Result `context` (only when `write_context` is true): `{written, keys, chords,
+  reason?, clips?, bar?, message?}`, `keys` and `chords` the points written. A
+  section that was not written for a reason other than `no_context` and `holds`
+  (`present`, `disagree`) also gives the warning `context.not_written`.
 
 **What `session.describe` prints.** After the tracks, one line per scene in
 order with its clips under it. Each clip line has its track, length in its
@@ -2114,8 +2195,9 @@ Scenes (2):
 `midi.get`, `midi.write` and the scale ops on a clip, `session.describe`, the
 `context.mismatch` warning, and following at placement (`follow` on
 `item.add {clip}`, `scene.insert` and `arrangement.build`, with `harmony::follow`).
-A launched clip following live (X4) is not built: until then it plays as it was
-written, and `launch.unfollowed` says so.*
+A launched clip follows live (X4a; `launch.state` says how): `launch.unfollowed`
+is gone. Following at placement is being replaced by the take's own context
+and follow (ADR-0098 amended; X4b to X4d).*
 
 Writers emit `supple.project/2.20`. A clip gains two members; earlier files
 load unchanged and nothing migrates. A 2.19 build drops both members with its
@@ -2184,7 +2266,10 @@ bars.
     `context_at`, an item and `scene.capture` do not take it, the answer warns
     `clip.context_dropped` naming it and its bar, and nothing unreadable is ever
     written into a resolved text, so a replay of the step is never refused for
-    it. Where the dropped point lay inside the clip, the clip does not let the
+    it. A context longer than a clip holds (an item's take repeats a short context
+    over many bars, past `kMaxContextPoints` of a type) is cut the same way: `clip.add
+    {item}` and `scene.capture` keep the first points and warn `clip.context_dropped`
+    (paths `/item` and `/region`). Where the dropped point lay inside the clip, the clip does not let the
     point before it carry on: a dropped chord becomes a "no chord from here" point
     (the project reads none there either), and a dropped key, which has no such
     point, is named in the warning as leaving the earlier key in force.
@@ -2199,8 +2284,9 @@ bars.
     voice wins, with `clip.chord_conflict`.
   - Equal neighbours collapse, and a rest does not end a chord.
   - With a stated `context` holding chords, or a `context_at` (or an item)
-    whose span holds a chord, the symbols are ignored with
-    `clip.chords_ignored`. A stated `context` holding only a key, and a
+    whose span holds a chord, the symbols are ignored; `clip.chords_ignored`
+    warns only when some symbol is not the chord the stated points hold at its
+    beat (symbols that say the same are not news). A stated `context` holding only a key, and a
     `context_at` or item span with no chord, take the symbols' chords. So
     `context_at` and its resolved `context` text give the same points.
 - **`clip.set {context?, context_at?, follow?}`:** `context: ""` clears the
@@ -2257,6 +2343,16 @@ bars.
   at the project's start (ADR-0095 amendment C-e).
 
 **Laying a clip (X1: the warning; X2: following).**
+
+*(Amended 2026-11-21, ADR-0098 "Amendment: following is playback": placement
+no longer maps notes, unrolls or refuses `pooled`; it copies notes as written
+and gives the laid take the clip's context and `follow`, and `launch.unfollowed`
+goes. "Take context and follow (schema 2.21)" below is the contract. Of the
+rest of this section, which clips can follow, channel 10, the mismatch warning,
+`harmony::follow` and the regions stand, read as what sounds; a note's sounding
+beat and place, the bullet on a note held into the item's start (round 76 H3),
+unrolling and `clip.follow_pooled` are replaced by "Take context and follow",
+whose start rule is the only rule.)*
 - **Where.** `item.add {clip}`, `scene.insert` and `arrangement.build` take
   `follow?: none | key | chords`, defaulting to each clip's `follow`.
   `launch.commit` copies, as heard (ADR-0098). `follow` with an `item.add`
@@ -2278,11 +2374,16 @@ bars.
     are copied, and do not count toward "every pass maps alike".
 - **Copied as they are:** notes on channel 10 (stored 9), controllers, bend
   and pressure.
-- **`none`.** Copied. A `context.mismatch` warning is given once per item
+- **`none`.** Laid as written: nothing is mapped. A `context.mismatch` warning is given once per item
   when the clip has a key and, at some beat b of the item's span, the clip's
   key at b's clip beat and the project's key at b both hold and differ in
   tonic pitch class or scale. It names the clip, both keys and the first
-  project bar where they differ. A clip whose notes are all on channel 10
+  project bar where they differ. In the same key (or with no key to compare)
+  it is also given when, at some beat b, the clip's chord at b's clip beat
+  and the project's chord at b both hold and differ (root, quality or bass):
+  it names the clip, both chords and the first project bar; the first bar
+  that differs, key or chord, is the one named, and an item gets one warning
+  in all. A clip with no chords, or a clip whose notes are all on channel 10
   gives none. `launch.commit` gives it once for each launched stretch of a
   clip, not for each period the stretch is laid as.
 - **`key`.** Each note goes through `harmony::follow` (`harmony.md` §5)
@@ -2306,7 +2407,14 @@ bars.
   `harmony::follow`; the answer counts the notes with `folded`.
 - **The answer** gains per laid item `followed: {mode, regions?: [{from_bar,
   to_bar, from_key?, to_key?, by, interval?}], folded?, unrolled?,
-  copied?}`.
+  copied?, mismatch?: {kind, clip_key?, key?, clip_chord?, chord?, bar}}`.
+  - `mismatch` is set exactly when the item gives `context.mismatch`, and names
+    what differs: `kind: "key"` with `clip_key` and `key` (the clip's key, the
+    project's), or, in the same key, `kind: "chord"` with `clip_chord` and
+    `chord`; and in both `bar`, the first project bar where they differ, as the
+    warning words them, so a caller need not read the message (a scene's
+    warning points at `/scene`, not at the item). `launch.commit`'s
+    `mismatches` carry the same object with the clip's id.
   - A region is a maximal run of project bars over which the clip's key, the
     place's key and the way notes were mapped stay the same. Regions are read
     from the bars where notes start; a bar where none does (a rest, a held
@@ -2320,8 +2428,10 @@ bars.
     applied.
 - **History.** Placement with `follow` replays against the branch it replays
   on, as `scene.insert` re-reads the clip.
-- **Launching, until X4.** A launched clip plays unfollowed. Launching one
-  whose `follow` is not `none` warns `launch.unfollowed` once per launch.
+- **Launching (X4a).** A launched clip follows live, as `engine.md`
+  "Following at playback" says; `launch.state` gives each track's `followed`
+  outcome. *(Until X4a, a launched clip played unfollowed and warned
+  `launch.unfollowed`; that warning is gone.)*
 - **What was built (X2).**
   - `followed` is on every laid item, `{mode: "none"}` when nothing was
     mapped. A clip placed as `none` or copied for a reason gives the
@@ -2337,5 +2447,328 @@ bars.
     item stays looped when every whole pass maps alike, and the fragment plays
     the note's own pitch. A pitched note's `folded` counts once per note
     written.
-  - `launch.clip` and `launch.scene` warn `launch.unfollowed` for a clip whose
-    `follow` is not `none`, once per launch.
+  - `launch.clip` and `launch.scene` warned `launch.unfollowed` for a clip whose
+    `follow` is not `none`, once per launch, until X4a made a launched clip
+    follow live.
+
+### Take context and follow (schema 2.21, ADR-0098 amended; the contract for X4b and X4d)
+
+*Built: X4b (model), X4c (engine, in `engine.md` "Following at playback") and
+X4d (commands); X4e (the roll and take inspector) is not. Revised after review round 82 with the
+co-director's decisions (A1 to A5, B1 to B9), and after round 82b (C1, C2,
+D1 to D4).*
+
+Writers emit `supple.project/2.21`. A take gains four members; earlier files
+load unchanged and nothing migrates. An item an X2 build laid (its notes baked)
+has none of them, so it plays as stored. A 2.20 build drops them with its
+unknown-field warnings, and the take then sounds as written there.
+
+| Take field | Meaning |
+|---|---|
+| `context` | Key and chord points, the clip `context` shapes, with `beat` in **context beats** (below), rounded to 1/960, sorted by beat and then type (key first). Written only when not empty. |
+| `context_period` | Context beats after which the context repeats; absent for a context that does not repeat. Laid from a clip, the clip's length in context beats. Written only when present. |
+| `context_phase` | Added to a note's unwrapped source beat to give its place in the context (below; default 0, not written). Only placement, `launch.commit`, `take.extract` from a clip, `item.consolidate`, `take.set {context}` and `take.bake` set it. |
+| `follow` | `none` (default, not written), `key` or `chords`: what the take's notes sound as (below). |
+
+Only a timeline item's take whose source is MIDI holds any of them; a clip's
+takes hold none (a clip's context and `follow` are the clip's). A pooled source
+may be read by takes with different contexts and follow modes.
+
+**A note's place.** A heard note occurrence (one note in one pass of the item)
+has a place of two numbers, computed by one helper (below) and by nothing else:
+- its **context beat**, where its start falls in the take's context:
+  `u = context_phase + b`, where `b` is the note's **unwrapped source beat**,
+  `start_offset + (s − item start) × playrate` (`s` the song beat of the note's
+  start, `start_offset` as stored and `playrate` the take's), never reduced
+  modulo the source's or the loop's length; the context beat is
+  `u mod context_period` when the context repeats, else `u`. So the context is
+  anchored to the source material and travels with the notes: in an unlooped
+  take a note's `b` is its own source beat whatever the item's position,
+  offset or playrate, and in a looped one each pass adds the source's length.
+- its **song beat** `s`, where its start sounds, or would have sounded.
+
+**The start rule is the only rule.** A note sounds by the place of its own start
+to its note-off. A note whose start lies before the item's left edge (chased:
+the engine retriggers notes crossing the item's start there, `engine.md` "Item
+players") or in the loop's previous pass (a crossing note) maps by that start:
+`u` from it (it may be negative: it then wraps, or the first point holds), and
+the song beat where it would have sounded. One before song beat 0 reads the
+project's context there, where no key holds, so it sounds as written. Both
+halves of a note cut by a split sound the pitch the whole note did.
+
+**Reading the context.** At context beat `c`: the last point of each type at or
+before `c`; before the first key point the first key holds, and before the
+first chord point the first chord (a take's analogue of a clip's key at 0, so a
+left trim or a pickup never leaves the take without a key). Unreadable points
+are kept as data and read as no key or no chord, as on a clip.
+
+**The helpers (X4b, `supple/model/follow.h`).**
+
+```cpp
+// One heard note occurrence of `item`'s active take in [fromBeat, toBeat) of the
+// song: as `model::SourceBeatMapping` plays it (passes, chased notes, the preceding
+// cycle's crossing notes), with its place and what it sounds as.
+struct SoundingNote {
+    std::uint32_t note;      // index of the note in the source
+    std::int32_t pass;       // the item's pass it sounds in (-1: the preceding cycle)
+    double songBeat;         // where its start sounds or would have sounded
+    double contextBeat;      // where its start falls in the take's context
+    int channel, written;    // as stored (channel 0..15)
+    harmony::Followed sounds;
+};
+std::vector<SoundingNote> soundingNotes(const Session& s, Id item, double fromBeat,
+                                        double toBeat);
+// What a note written as `key` on `channel` sounds as at a place: the per-note step
+// the helper above, the engine's live tables for launched clips and the tests use.
+harmony::Followed soundingKey(std::span<const ContextPoint> context, ClipFollow follow,
+                              const ContextView& project, double contextBeat,
+                              double songBeat, int channel, int key);
+// The take's context over context beats [u0, u1), repeats unrolled, re-based to
+// start at 0, with the key and the chord in force at u0 carried in at 0.
+std::vector<ContextPoint> contextOver(const Take& take, double u0, double u1,
+                                      bool* truncated = nullptr);
+```
+
+- Every caller takes places and sounding keys from `soundingNotes`: the engine's
+  compile, `take.bake`, `midi.get {sounding}`, `item.export`, placement's
+  `followed` answer, and the GUI's ghosts (in process, for a visible range: no
+  command is needed). So they agree by construction, for loop wraps, chased and
+  crossing notes too.
+- A launched clip's notes are placed by the engine (its context beat is its clip
+  beat by the launch's phase, modulo the clip's length) and mapped with
+  `soundingKey`.
+- **Never mapped:** channel 10 (stored 9); controllers, bend and pressure.
+- **`key`** maps from the take's key at the context beat to the project's key at
+  the song beat; **`chords`** from chord to chord, a note with either chord
+  missing or unreadable following by key. Where no readable key holds on either
+  side the note sounds as written.
+- **Order with the take's `pitch`:** follow first, then the take's pitch shift.
+- Which takes follow: `follow` other than `none`, a MIDI source, and a note off
+  channel 10.
+
+**Invariants (checked at commit).**
+- **Points.** At most one point of a type at a beat, and at most 4096 of a
+  type. Each lies on the 1/960 grid (the fit rounds it; a file's off-grid point is
+  rounded at the open), and with `context_period` in `[0, context_period)`.
+- **`context_period`** is finite, on the 1/960 grid and at least 1/960 of a beat; `context_phase`
+  is finite and within a billion beats. (`contextOver` walks at most a million repeats and sets
+  `truncated` past them, so no value in a file can send a reader round a loop without end.)
+- **`follow` other than `none`** needs a readable key in the context (its first
+  key holds before it). A clip keeps its own rule, a readable key at 0
+  (`clip.no_key`).
+- **Audio.** An audio take, or an empty one, holds none of the four.
+- **Clips.** A clip's takes hold none of the four.
+
+**Edits that would break an invariant** keep it in the same step; the answer says
+what changed; undo restores it. A context edit that leaves no readable key resets
+`follow` to `none`, with `take.follow_reset` naming the take.
+
+**Load.** A point against the rules is dropped with `take.context_dropped`; a
+`context_period` that is not finite or under 1/960 of a beat is dropped (the context then
+does not repeat; one off the grid is rounded onto it) and a `context_phase` that is not
+finite or beyond a billion beats reads as 0, each with `take.context_dropped`; a `follow` that is unknown, on a non-MIDI take, or with
+no readable key reads as `none` with `take.follow_reset`. The open never fails
+for any of this.
+
+**Invariance.** Because `u` is the context phase plus the note's unwrapped
+source beat, no edit that moves, cuts or copies a take touches its phase, and
+none changes any surviving note's context beat: `item.move`, trims from either
+side (as `item.set {position, length}` with `take.set {start_offset}` or
+`{rebase_seconds}`, in one call or several), `item.split`, loop on and off, a
+playrate change, a slip, `item.duplicate`, `item.paste`, `track.duplicate`,
+`item.explode-takes` and `take.extract`. Only placement, `launch.commit`,
+`take.extract` from a clip, `item.consolidate` and `take.set {context}` set a
+phase.
+- Split, trims and loop changes keep each surviving note's song beat too, so
+  it sounds as before.
+- A move, duplicate or paste changes the song beat, so the note follows its new
+  place, by design.
+- A slip and a playrate change keep each note's context beat (the context moves
+  with the notes) and move the notes against the song, unlike a clip's slip,
+  which moves its notes under its context.
+- A command that stores a take's `start_offset` wrapped modulo the source's
+  length adds the amount it took off to the take's `context_phase`, so `u`
+  stays continuous. `item.split` does not wrap today: it adds the split's
+  distance times the playrate to the right part's offset as it is.
+
+**Converting between a clip and a take.** A clip's context is in clip beats
+(played beats); a take's in context beats, which run at the take's playrate `r`.
+- **Clip to take** (placement, `launch.commit`, `take.extract` from a clip): the
+  laid take's `context` is the clip's with each beat times `r`,
+  `context_period` the clip's length times `r`, and `context_phase`
+  `c0 × r − o`, where `c0` is the clip beat at the item's start (0 for
+  placement; for `launch.commit`, where the laid stretch begins in the clip's
+  period) and `o` the laid take's `start_offset`. A note heard `d` beats after
+  the item's start then reads context beat `(c0 + d) × r`, modulo the period:
+  its clip beat, as the launcher reads it (`engine.md`, "Following at
+  playback"). So a clip of length 8 over 4 beats of looping content, with C at
+  clip beat 0 and Eb at 4, reads Eb in its second pass on the timeline exactly
+  as in the launcher, at any playrate.
+- A point the take's 1/960 grid rounds onto the period (a clip point in its last
+  1/960 beat at a playrate under 0.5, say) is dropped with `take.context_dropped`, which
+  placement, `launch.commit` and `take.extract` give among their warnings (once per
+  message).
+- **Take to clip** (`clip.add {item}`, `scene.capture`): the clip's context is
+  `contextOver(take, u0, u1)` over the span copied, beats divided by `r`, and
+  its `follow` the take's. The key in force at the span's start is carried in
+  at 0, so `clip.no_key` cannot break. From a take whose `follow` is `none`,
+  the context under the item, as today. The clip's copied take holds none of
+  the four: they are cleared after the clip's context is built.
+
+**Commands that create, copy, merge or rewrite a MIDI take (X4d).** A command
+missing from this table is a defect of this contract.
+
+| Command | Rule |
+|---|---|
+| `item.add {clip}`, `scene.insert`, `arrangement.build` | Copy notes as written; each laid take gets the clip's context converted as above and `follow`: the argument, else the clip's own. `pooled: true` is allowed with any `follow`. Nothing is unrolled (`unrolled` leaves the answer; `clip.follow_pooled` is no longer given). `followed: {mode, regions?, folded?, copied?}` stays, from `soundingNotes`. |
+| `item.add` (notation, file, empty), `take.add` (new), `rack.capture`, `rack.capture.commit` | A take with no context, `follow: none` (the rack's captured MIDI is a new item with a default take, as `item.add` makes). |
+| `take.add {from}` | On an item, the copy takes the source take's four members; on a clip, neither holds any. |
+| `launch.commit` | Lays notes as written, each take with its clip's context converted as above and `follow` the outcome the plan used for that clip (`none`, `key` or `chords`, after the budget: `engine.md`). `pooled` allowed. |
+| `take.set {take, context?, follow?}` | Below. |
+| `take.bake {take}` | Below: the notes are written as they sound and the take's context becomes the song's under the item (follow `none`, no period). |
+| `item.split`, `item.set` (position, length, loop), `take.set {start_offset, rebase_seconds, playrate}`, `item.move`, `item.duplicate`, `item.paste`, `track.duplicate` | The four members go with each take unchanged ("Invariance"; a wrapped offset adds to the phase). |
+| `item.explode-takes`, `take.extract` (from an item) | The four members go with the take unchanged. |
+| `take.extract` (from a clip) | As placement lays the clip, with the clip's `follow`. |
+| `item.consolidate` (MIDI) | What sounds is preserved, and checked. Items of one track into one item: when the heard takes all follow in one mode, the result follows in it; its context, in the result's source beats, is each source's `contextOver` its span, beats divided by that source's playrate (onto the result's axis, which runs at the result's playrate of 1), placed where the source sat, not repeating; the result's `context_phase` is 0. A note chased at the first source's start keeps its true start in the result's source, before the result's start (its `start_offset` positive), so it is chased there and maps as before. A note chased at a later source's start is written, as today, as a note at that source's old start, where its place changes. The command computes every heard note's sounding key before and after with `soundingNotes`, and refuses (`item.follow_merge`, naming the item and the note's song beat; hint: `take.bake` the following takes first) when any would differ, and also when a following source's context is too long to carry into the result (more points than a take holds: a repeated context over many bars), even when only chord points are cut on a take that follows `key` and nothing would sound differently (conservative; the hint is the same). When none follow, as today; mixed modes (some following, some not, or different modes) are refused with the same error. A lone item's takes layered into one take: allowed when none follow, or when all follow in one mode with the same `contextOver` the item's span; else `item.follow_merge`. |
+| `item.glue` | Named in §4 but not registered (not built). When built, as `item.consolidate` (MIDI). |
+| `item.heal` | Audio pieces only; MIDI takes are not healed. |
+| `midi.write` (on a take) | Replaces the written notes; the context and `follow` stay, and the answer carries `follows: "key" | "chords"` when the take follows. Chord symbols in the text do not change a take's context (`take.set` does). |
+| `midi.edit` | Below. |
+| Recording (`record.commit`) | Below. |
+| `item.apply-fx`, `item.mix-to-track`, `track.freeze` | Render what sounds (compiled events); the results are audio and hold none of the four. |
+| `item.export` (MIDI files) | Writes what sounds, from `soundingNotes`. |
+
+**`take.set {take, context?, follow?}`.** `context` is lead-sheet text in bars of
+the meter in force at the item's position, bar 1 at context beat 0, in context
+beats (not scaled again by the playrate); `""` clears it whole (no points, and no `context_period` or `context_phase` either). Bar 1 is the item's start, so
+`context_phase` is set to `−start_offset` (the offset after the same call's `start_offset`,
+if any): a part cut from a longer take, with its offset inside the source, reads the text from
+its first heard beat. With
+`context_period`, a point at or past it is `take.context_range`, naming the
+bar. `follow` is `none | key | chords`. Errors: `take.no_key` (hint: give the
+take a context with a key), `take.follow_audio` (a take that is not MIDI), and
+the lead sheet's errors as `take.context_syntax`. Turning `follow` off returns
+the notes as written. History records the text.
+
+**`take.bake {take}`** writes the sounding pitches into the take's notes and sets
+its `follow` to `none`, and **replaces the take's context with the song's under the item**,
+so the take says truthfully what its notes are now written in, and `take.set {follow}` on it
+later starts from there.
+- The new context is `contextUnder` the project's context over the span the heard notes
+  cover: from the earlier of the item's start and the first heard note (a note held in
+  from before the start is heard there), to the item's end. The key and the chord holding at
+  the span's start come first, at the source beat of the earliest heard note (0 once the take
+  is unrolled; a project with no chord there writes none, as `clip.add {item}` does), the
+  points inside the span follow, each placed as below, and `context_period` is dropped. The
+  context is on the source axis (`context_phase` 0, so a note's context beat is its source
+  beat), where the notes' starts
+  are on the 1/960 grid: a song beat `s` is the context beat `start_offset + (s − item start)
+  × playrate`, with the offset and rate after the bake (0 and 1 once unrolled), and each point
+  is rounded **up** to the grid, less the slack a place is read with. Rounding up is exact
+  for a note on the grid (it is before the point exactly when it is before the song's
+  change); rounding to the nearest is not (a note a hair before a change could land in the new
+  key). Points of one type that round onto one beat (a playrate below 1 puts song beats
+  1/960 apart less than a grid step apart) keep the last: every note at or after that beat is
+  past all of them in the song. This is exact for any source whose `ppq` divides 960, which
+  is every source a writer here makes; a source with another `ppq` has notes off the grid,
+  and a point within 1/960 of such a note may fall either side.
+- Where the song has no readable key anywhere under the span, the take's context is dropped
+  (no points, no period, phase 0). A point this build cannot read is left out with
+  `clip.context_dropped`, as when a clip takes the song's.
+- So, while the song is unchanged, bake then `take.set {follow: "key"}` sounds exactly
+  as before the bake (every note maps from the song's key to the song's key); and when
+  the song later changes, the take follows that change from the written notes.
+- A take that does not follow is not baked (`take.not_following`); the other takes of the
+  item keep their own contexts (rescaled when the item is unrolled).
+- A pooled source is first made the take's own copy.
+- Every heard note, chased and crossing fragments included, is counted. When
+  every pass of a looped item sounds alike, and every fragment held into the item's
+  start sounds as the pass that follows it, the loop stays; otherwise the item
+  is unrolled (loop off, its passes written out, each at its place), its other
+  takes repeated alike, as X2 laid items; the answer says `unrolled: true`. So a
+  render after the bake equals the render before it.
+- The answer is the `followed` block of what was baked. On a take whose
+  `follow` is `none`: `take.not_following`. On a take that is not its item's
+  active take (what sounds is the active take's): `take.not_active`, hint:
+  `take.activate` it first.
+- A pooled source no take reads any more is removed (the bake's own copy replaces it).
+- One undo step, with the copy and the unroll. Its history step records the
+  notes it wrote over (resolved: `pitches`, one `{was, at, pitch}` per heard note, in
+  `soundingNotes` order: the pitch written, where it is heard in 1/960 beats, and the
+  pitch it sounded as), so a replay on another branch writes what the user heard. A replay
+  that finds other notes there (a count or a `was` or `at` that differs) is refused,
+  `take.bake_replay`; `pitches` is for history, a caller leaves it out.
+
+**`midi.get`** answers written notes by default.
+- `sounding: true` answers what sounds, in item time. On a looped item whose
+  passes sound differently it answers the first pass and says
+  `differs_by_pass: true`; `from` and `to` (song beats, with `sounding` only)
+  answer the heard notes of that range instead, passes as they fall.
+- Every answer for a following take carries `sounding_differs: n`, the number
+  of heard notes in what was answered whose key differs from the written one.
+- On a clip, `sounding` is refused (`midi.sounding_clip`): what a clip sounds as
+  depends on where it is launched; `launch.state` says how it follows.
+- `midi.notes {sounding: true}` lists the same notes with `pitch` as written and
+  `sounds` as each sounds (its first whole pass; `differs_by_pass` when later passes
+  differ), for callers that need numbers; clips are refused alike.
+
+**`midi.edit`** ops act on written notes. The pitch-reading ops (`snap_to_scale`,
+`fit_to_chord`, pitch filters, `transpose_degrees`) read, on a take that follows,
+its own context at each note's context beat, and answer `acts_on: "written"`
+when any note sounds otherwise; on any other take, the project's context at the
+note's place, as today.
+
+**Recording.** A recording pass never changes what a following take sounds, and
+never loses what was played. The rule holds where the pass is committed: a
+`midi_overdub` whose merge target (the MIDI item under its first heard position,
+ADR-0016) has an active take that follows does not merge into it. The played
+notes are committed as `midi_replace` commits them, as new items (one per run,
+or one on the loop with a take per pass), with `follow: none` and no context;
+overlapping MIDI items on a track are layered, so the following item sounds as
+before under them. The commit warns `record.follow_kept`, naming the item.
+Nothing is refused at `transport.record`. Fixed and comp lanes are not built
+(items carry a `lane` that playback does not read): the new items get no
+`lane`, as recorded items do today. When
+lanes are built, the new items go on a lane that plays beside the following
+item's, never on one that replaces it; in comp mode they are a new lane outside
+the comp.
+
+**Comps and take lanes.** A lane item's takes keep their own members; a comp
+plays each piece by its take, as a split does.
+
+**Context edits.** A context edit (`context.write` and the other context
+commands) answers `context.no_key` naming each following item that now has a
+heard note with no readable key at its place (the first project bar), since such
+notes sound as written without another trace.
+
+**History.** Placement records nothing resolved: notes are laid as written,
+and the take's context comes from the clip as it is on the branch the step
+replays on. `take.set {context}` records its text; `take.bake` its notes.
+
+**`session.describe`** writes a following take's first key and its `follow`,
+after the take's name.
+
+**Tests (X4b, X4d).**
+- A save and reopen round trip with the four members and each load rule; the
+  invariant resets with undo; a 2.20 file opens unchanged.
+- `soundingKey` against `harmony::follow` over the `harmony.md` §5 list, plus
+  channel 10; `soundingNotes` for a chased note, a note before song beat 0, a
+  crossing note, and both halves of a split note.
+- Invariance: for split (also of a looped item past its first pass), trims
+  from each side done as two separate calls, loop on and off, a slip, a
+  playrate change, move, duplicate, paste, explode and extract, each surviving
+  note's context beat before equals that after, and for split, trims and loop
+  changes its sounding pitch too. A command that wraps a stored offset keeps
+  `u` continuous.
+- Timeline equals launcher for the same clip: the clip of length 8 over 4 beats
+  of content with C at 0 and Eb at 4, laid and launched; and with a take
+  playrate of 2.
+- A split, then `scene.capture` of the right part: the clip has a key at 0,
+  and its take holds none of the four.
+- Consolidate keeps a first-source chased note's pitch, and refuses when a
+  later source's chased note would change; `take.bake` of an inactive take is
+  `take.not_active`.
+- Consolidate in one mode, and refused for mixed modes; an overdub over a
+  following item lands as its own item and the following item sounds as
+  before.
+- Each command above, its errors and its history replay on another branch.

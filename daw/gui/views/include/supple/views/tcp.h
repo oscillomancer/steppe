@@ -85,6 +85,10 @@ struct TcpCallbacks {
     std::function<void(const model::Id& track, float height)> resizeTrack;
     // The arrange lanes accept drops too, with the TCP's shared row geometry.
     std::function<ui::Rect()> lanesRect;
+    // A lane header's "mod" (gui.md §4.3): the target's modulation source,
+    // the app opening the rack on it (or a menu of the routes, anchored at
+    // the cell's window rect, when there are several).
+    std::function<void(const model::EnvTarget& target, const ui::Rect& anchor)> modulationSource;
 };
 
 class TcpPanel : public ui::Node {
@@ -99,8 +103,11 @@ class TcpPanel : public ui::Node {
     // Values come from this session snapshot; the rows are rebound.
     void setSession(const model::Session& session);
     // Geometry stayed fixed: refresh only affected controls without rebinding.
+    // `modulations`: some route changed; the lanes' "mod" cells are refreshed
+    // (the tracks of the routes' targets are in `tracks`).
     void updateSession(const model::Session& session, const std::set<model::Id>& tracks,
-                       const std::set<model::Id>& envelopes, const std::set<model::Id>& routes);
+                       const std::set<model::Id>& envelopes, const std::set<model::Id>& routes,
+                       bool modulations = false);
     void refresh();  // values only (after a bus edit)
     // The modulated controls only, with the layout's live offsets (each pass
     // while they change).
@@ -116,8 +123,11 @@ class TcpPanel : public ui::Node {
     ui::Node* controlNode(const model::Id& track, std::string_view what) const;
     // Starts the in-place rename of the row showing `track` (false: not shown).
     bool rename(const model::Id& track);
-    // An automation lane's header control ("title", "mode", "active", "hide").
+    // An automation lane's header control ("title", "mod", "mode", "active",
+    // "hide"), by its envelope or by its target (a modulation-only lane has no
+    // envelope).
     ui::Node* envControl(const model::Id& env, std::string_view what) const;
+    ui::Node* laneControl(const model::EnvTarget& target, std::string_view what) const;
 
     void arrange(const ui::Canvas& canvas, const ui::Rect& r) override;
     void paint(ui::Canvas& canvas) override;

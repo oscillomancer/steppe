@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -8,6 +9,7 @@
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
 #include "supple/midi/midi.h"
+#include "supple/model/follow.h"
 #include "supple/model/item_edits.h"
 #include "supple/model/schemas.h"
 
@@ -289,6 +291,141 @@ TEST_CASE("consolidation joins MIDI items across a gap, and layers a lone item's
     f.finish(f.run("item.consolidate", R"({"items":["it_2"]})"));
     CHECK(f.app->head().items.find({model::Kind::Item, 2})->takes.size() == 1);
     CHECK(f.run("midi.notes", R"({"item":"it_2"})").find("notes")->asArray().size() == 3);
+}
+
+namespace {
+// What an item's active take sounds as: "pitch@beat", by beat (ADR-0098).
+std::vector<std::pair<long long, int>> heardBy(const model::Session& s, model::Id item) {
+    std::vector<std::pair<long long, int>> out;
+    const double start = model::itemSpan(s, *s.items.find(item)).startBeat;
+    for (const auto& n : model::soundingNotes(s, item, -1e9, 1e9))
+        out.emplace_back(std::llround(std::max(n.songBeat, start) * 960.0), n.sounds.pitch);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+}  // namespace
+
+TEST_CASE(
+    "consolidating following MIDI items keeps what sounds, and refuses what would change it") {
+    Fixture f;
+    f.run("track.add", R"({"name":"Keys"})");  // tr_2
+    f.run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+    f.run("item.add", R"({"track":"tr_2","bar":1,"notation":"voice keys; 1: C2:q r:*"})");
+    f.run("item.add", R"({"track":"tr_2","bar":5,"notation":"voice keys; 1: E2:q r:*"})");
+    const model::Id one{model::Kind::Item, 2}, two{model::Kind::Item, 3};
+    const auto takeOf = [&](model::Id item) { return *f.app->head().items.find(item)->activeTake; };
+    for (const model::Id item : {one, two})
+        f.run("take.set", (R"({"take":")" + takeOf(item).str() +
+                           R"(","context":"1: key C major ~:w","follow":"key"})")
+                              .c_str());
+    const auto before1 = heardBy(f.app->head(), one);
+    const auto before2 = heardBy(f.app->head(), two);
+    REQUIRE(before1.size() == 1);
+    CHECK(before1[0].second == 39);  // C to Eb
+    CHECK(before2[0].second == 43);  // E to G
+    f.finish(f.run("item.consolidate", R"({"items":["it_2","it_3"]})"));
+    REQUIRE(f.app->head().items.find(one));
+    const model::Take& merged = *f.app->head().takes.find(takeOf(one));
+    CHECK(merged.follow == model::ClipFollow::Key);
+    CHECK_FALSE(merged.context.empty());
+    CHECK_FALSE(merged.contextPeriod);
+    const auto after = heardBy(f.app->head(), one);
+    REQUIRE(after.size() == 2);
+    CHECK(after[0] == before1[0]);
+    CHECK(after[1] == before2[0]);
+    // The result holds the notes as written.
+    auto notes = f.run("midi.notes", R"({"item":"it_2"})");
+    CHECK(notes.find("notes")->asArray()[0].find("pitch")->asInt() == 36);
+    f.run("history.undo");
+    CHECK(f.app->head().items.size() == 3);
+    CHECK(heardBy(f.app->head(), two) == before2);
+}
+
+TEST_CASE("consolidating MIDI items refuses when only some follow, or a chased note would change") {
+    const auto failedWith = [](Fixture& f, const char* args) {
+        {
+            std::unique_lock lock(f.mutex);
+            f.finished = false;
+        }
+        auto job = f.run("item.consolidate", args);
+        {
+            std::unique_lock lock(f.mutex);
+            f.done.wait(lock, [&] { return f.finished; });
+        }
+        f.bus->flushJobEvents();
+        auto status = f.bus->jobs().status(job.find("job")->asString());
+        REQUIRE(status);
+        return json::writeCompact(*status);
+    };
+    Fixture f;
+    f.run("track.add", R"({"name":"Keys"})");
+    f.run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+    f.run("item.add", R"({"track":"tr_2","bar":1,"notation":"voice keys; 1: C2:q r:*"})");
+    f.run("item.add", R"({"track":"tr_2","bar":5,"notation":"voice keys; 1: E2:q r:*"})");
+    const auto take = *f.app->head().items.find({model::Kind::Item, 2})->activeTake;
+    f.run("take.set",
+          (R"({"take":")" + take.str() + R"(","context":"1: key C major ~:w","follow":"key"})")
+              .c_str());
+    const auto text = failedWith(f, R"({"items":["it_2","it_3"]})");
+    CHECK(text.find("item.follow_merge") != std::string::npos);
+    CHECK(text.find("take.bake") != std::string::npos);
+    CHECK(f.app->head().items.size() == 3);  // nothing changed
+}
+
+TEST_CASE("consolidating an item whose context is longer than a take holds refuses (round 91 M3)") {
+    Fixture f(false);
+    f.run("track.add", R"({"name":"Keys"})");  // tr_1
+    f.run("scene.add", R"({"name":"One"})");   // sc_1
+    f.run("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+    f.run("item.add", R"({"track":"tr_1","bar":1,"notation":"voice keys; 1: E2:q r:*"})");
+    f.run("take.set",
+          (R"({"take":")" + f.app->head().items.find({model::Kind::Item, 1})->activeTake->str() +
+           R"(","context":"1: key C major ~:w","follow":"key"})")
+              .c_str());
+    // A one-bar clip with sixteen chord changes laid over 260 bars repeats them 4160 times, past
+    // the 4096 a take holds; consolidating it with another item cannot carry them.
+    f.run("clip.add", R"({"track":"tr_1","scene":"sc_1","notation":"voice keys; 1: C2:w",
+          "context":"1: key C major {C}:s {D}:s {E}:s {F}:s {G}:s {A}:s {B}:s {C}:s {D}:s {E}:s {F}:s {G}:s {A}:s {B}:s {C}:s {D}:s",
+          "follow":"key"})");
+    const auto laid = f.run("scene.insert", R"({"scene":"sc_1","bar":9,"bars":260})");
+    const std::string item = laid.find("items")->at(0).find("item")->asString();
+    f.finished = false;
+    const auto job = f.run("item.consolidate", (R"({"items":["it_1",")" + item + R"("]})").c_str());
+    {
+        std::unique_lock lock(f.mutex);
+        f.done.wait(lock, [&] { return f.finished; });
+    }
+    f.bus->flushJobEvents();
+    const auto status = f.bus->jobs().status(job.find("job")->asString());
+    REQUIRE(status);
+    const std::string text = json::writeCompact(*status);
+    CHECK(text.find("item.follow_merge") != std::string::npos);
+    CHECK(text.find("context too long") != std::string::npos);
+}
+
+TEST_CASE("consolidating a lone following item keeps a note held into its start (round 85 G11)") {
+    Fixture f;
+    f.run("track.add", R"({"name":"Keys"})");  // tr_2
+    f.run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+    f.run("key.set", R"({"at":7,"tonic":"F","scale":"major"})");
+    f.run("item.add", R"({"track":"tr_2","bar":3,"notation":"voice keys; 1: C2:w"})");
+    const model::Id item{model::Kind::Item, 2};
+    f.run("take.add", R"({"item":"it_2","from":"tk_2"})");
+    REQUIRE(f.app->head().items.find(item)->takes.size() == 2);
+    // Both takes follow alike, and start two beats into their note: it began two beats before
+    // the item does, under Eb major, and the item starts under F.
+    for (const model::Id take : f.app->head().items.find(item)->takes)
+        f.run("take.set", (R"({"take":")" + take.str() +
+                           R"(","context":"1: key C major ~:w","follow":"key","start_offset":2})")
+                              .c_str());
+    f.run("take.activate", R"({"item":"it_2","index":0})");
+    f.run("item.set", R"({"item":"it_2","length":2})");
+    const auto before = heardBy(f.app->head(), item);
+    REQUIRE(before.size() == 1);
+    f.finish(f.run("item.consolidate", R"({"items":["it_2"]})"));
+    CHECK(f.app->head().items.find(item)->takes.size() == 1);
+    const auto after = heardBy(f.app->head(), item);
+    CHECK(std::count(after.begin(), after.end(), before[0]) == 1);
 }
 
 TEST_CASE("healing restores pre-split and pre-slice audio bit for bit without take FX") {

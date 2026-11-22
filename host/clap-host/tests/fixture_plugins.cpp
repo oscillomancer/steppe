@@ -38,6 +38,7 @@
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
@@ -1581,6 +1582,15 @@ const clap_plugin_descriptor_t* crashDescriptor() {
 
 [[gnu::noinline]] void badWrite() { *reinterpret_cast<volatile int*>(8) = 1; }
 
+// A fixture that faults on purpose leaves no core file or dump to write, so that the end the host
+// reads is not held up by one (POSIX; a Windows bridge ends itself at once, bridge_main.cpp).
+void noCoreDump() {
+#if !defined(_WIN32)
+    const rlimit none{0, 0};
+    (void)setrlimit(RLIMIT_CORE, &none);
+#endif
+}
+
 // Runs the stack out: each frame touches its own page-sized buffer, and the result is used so
 // that nothing folds the recursion into a loop.
 volatile bool gStackHasEnd = false;  // never set: the recursion has no end the compiler can see
@@ -1599,7 +1609,10 @@ struct Crash {
     // Mode 5: processes like mode 0 and faults when it is destroyed, which is a crash that
     // happens only once the host lets go of a bridge that still holds the instance.
     ~Crash() {
-        if (mode.load() == 5) badWrite();
+        if (mode.load() == 5) {
+            noCoreDump();
+            badWrite();
+        }
     }
 };
 // Tests (supple_fixture_hold_process): while held, an in-process crash

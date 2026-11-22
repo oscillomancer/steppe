@@ -112,7 +112,9 @@ prefix `mo` already names rack modules, and `Id::parse` would map both to
 
 - **Sharing.** One input may feed many routes, and many routes may sum on
   one target. Two routes with the same source input and target are refused
-  (`modulation.duplicate`).
+  (`modulation.duplicate`). (21 Nov 2026: a second enabled route from the same
+  kind of source onto a target is answered with the warning
+  `modulation.stacked`, naming the routes already there.)
 - **Cascades.** Removing the source module, or the target FX, track or
   route, removes the routes that use it. The command reports each removed
   route in a `modulation.removed` warning.

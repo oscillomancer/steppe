@@ -13,11 +13,14 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 
 #include "clip_context.h"
 #include "clip_launcher.h"
 #include "command_validation.h"
+#include "follow_tables.h"
 #include "plan.h"
+#include "supple/model/follow.h"
 #include "supple/time/timeline.h"
 
 namespace supple::engine {
@@ -351,6 +354,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const Id clipId = *Id::parse(*x.e->clip);
             const model::Clip& clip = *s.clips.find(clipId);
             bool mismatchGiven = false;  // one context.mismatch per launched stretch of the clip
+            std::set<std::string> fitGiven;  // one note per kind of change the take's grid made
             const model::Take& take = *s.takes.find(*clip.activeTake);
             const bool midi = clip.kind == model::ClipKind::Midi;
             const bool once = clip.mode == model::ClipMode::Once;
@@ -371,6 +375,20 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const bool fadeOut = x.to < perf.frames && !heldBy(x, x.to);
             const double speed = take.playrate > 0 ? take.playrate : 1.0;
             const std::string path = at + "/launches";
+            // How the plan played this clip, after its budget (follow_tables.h): what each laid
+            // take follows. A drum-only clip, one with no readable key, and audio follow nothing.
+            model::ClipFollow outcome = model::ClipFollow::None;
+            if (midi) {
+                // Pitched as the player compiles it: the notes it plays, not its source.
+                const bool pitched = detail::clipPlaysPitched(s, clipId);
+                // Its outcome is the plan's: a clip's pairs are counted before
+                // the pool's deduplication, so this pool's contents do not matter.
+                detail::ProjectFollow projectTables = detail::projectFollow(s);
+                const auto built = detail::buildClipFollow(clip, pitched, projectTables);
+                outcome = built.outcome == detail::FollowOutcome::Chords ? model::ClipFollow::Chords
+                          : built.outcome == detail::FollowOutcome::Key  ? model::ClipFollow::Key
+                                                                         : model::ClipFollow::None;
+            }
 
             // One item: running frames [f0, f1), its content starting `phase`
             // into the period, at timeline beat `beat` (MIDI) or sample.
@@ -405,28 +423,61 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 // the phase heard, pass after pass over the item (C2).
                 const double period = midi ? P : double(time::samplesAt(P, rate)) / rate;
                 const double span = midi ? beat1 - beat0 : double(end - (perf.start + f0)) / rate;
-                auto copied =
-                    copyTakesFor(t, now, clip.takes, pooled, envelopePos, path,
-                                 fxEnvelopesFromClip(now, clip.kind, pos,
-                                                     midi ? phase : phase / rate, period, span));
+                // So do its take's own envelopes over a looped item of more
+                // than one period: on an item they would run once.
+                // From the phase heard (review round 86 H5): a shorter span that
+                // crosses the period's end restarts them too. An item laid from
+                // within a pass takes them windowed the same way, from the value
+                // heard at its start: shifted alone, the points before the phase
+                // would fall before the item (review round 87, H5's MIDI test).
+                const double inPeriod = midi ? phase : phase / rate;
+                const double tolerance = 1e-9 * std::max(1.0, period);
+                const bool passes =
+                    (item.loop && inPeriod + span > period + tolerance) || inPeriod > tolerance;
+                auto copied = copyTakesFor(
+                    t, now, clip.takes, pooled, envelopePos, path,
+                    fxEnvelopesFromClip(now, clip.kind, pos, midi ? phase : phase / rate, period,
+                                        span),
+                    passes ? takeEnvelopesFromClip(now, clip.kind, pos, midi ? phase : phase / rate,
+                                                   period, span)
+                           : FxEnvelopeMap{});
                 if (!copied) return std::move(copied).error();
                 const double shift = midi ? phase * speed : phase / rate * speed;
-                if (shift != 0)
+                if (shift != 0 || midi)
                     for (const Id tk : *copied)
-                        t.modify<model::Take>(tk, [&](model::Take& k) { k.startOffset += shift; });
+                        t.modify<model::Take>(tk, [&](model::Take& k) {
+                            k.startOffset += shift;
+                            // The notes are laid as written; the take carries the clip's context
+                            // and the follow the plan used for the clip, so the committed timeline
+                            // sounds as the performance did (ADR-0098, following is playback).
+                            // `phase` is the clip beat at the item's start.
+                            if (midi)
+                                for (const auto& n :
+                                     model::takeContextFromClip(k, clip, phase, outcome))
+                                    if (fitGiven.insert(n.message).second)
+                                        ctx.warn(n.code, n.message, "/items");
+                        });
                 item.takes = *copied;
                 for (std::size_t k = 0; k < clip.takes.size(); ++k)
                     if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
                 nameItemFromClip(t, clip, item);
-                // The notes are copied as they were played (a launched clip is not followed
-                // until X4): say when the clip's key is not the project's under the item, once
-                // for the stretch however many periods (items) it is laid as.
-                if (midi && !mismatchGiven)
+                // A clip played as written says when its key is not the project's under the
+                // item, once for the stretch however many periods (items) it is laid as.
+                if (midi && outcome == model::ClipFollow::None && !mismatchGiven) {
+                    detail::ContextMismatch what;
                     if (auto note = detail::mismatchNote(now, clipId, clip, beat0, beat1 - beat0,
-                                                         phase, path)) {
+                                                         phase, path, &what)) {
                         ctx.warn(note->code, note->message, note->path);
+                        if (!what.kind.empty()) {  // what differs: the keys, or the chords
+                            if (!done.mismatches) done.mismatches.emplace();
+                            done.mismatches->push_back(
+                                {clipId.str(), std::move(what.kind), std::move(what.clipKey),
+                                 std::move(what.key), std::move(what.clipChord),
+                                 std::move(what.chord), what.bar});
+                        }
                         mismatchGiven = true;
                     }
+                }
                 done.items.push_back(t.create(std::move(item)).str());
                 return {};
             };

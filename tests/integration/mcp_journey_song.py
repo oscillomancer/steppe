@@ -549,18 +549,23 @@ def other_direction(j, built):
     mismatched = j.exec("scene.insert", {"scene": "sc_2", "bars": 4, "bar": 40},
                         "The Verse, written in C minor, laid under D minor.")
     warnings = [w for w in mismatched.get("warnings", []) if w["code"] == "context.mismatch"]
-    # Only the bass: the drums have no pitch to move, and the keys clip names no key.
-    assert len(warnings) == 1 and "cl_4" in warnings[0]["message"], mismatched.get("warnings")
-    assert all("C minor" in w["message"] and "D minor" in w["message"] and "bar 40" in w["message"]
-               for w in warnings), warnings
+    # The bass (its key) and the keys clip, which names no key but was written over Cm7 where
+    # the song has A7 (its chord); the drums have no pitch to move.
+    assert [re.match(r"(cl_\d+)", w["message"]).group(1) for w in warnings] == ["cl_4", "cl_5"], \
+        mismatched.get("warnings")
+    assert "C minor" in warnings[0]["message"] and "D minor" in warnings[0]["message"], warnings
+    assert "over Cm7" in warnings[1]["message"] and "under A7" in warnings[1]["message"], warnings
+    assert all("bar 40" in w["message"] for w in warnings), warnings
     j.undo()
     # The Verse is written once, in C minor, and asked to follow the key it is laid under:
     # the bass lands in D minor (C minor's root C2 is D2, its Fm is Gm, Ab is Bb, G is A),
     # the drums are not moved, and the keys clip, which names no key, is copied and says so.
     followed = j.exec("scene.insert", {"scene": "sc_2", "bars": 4, "bar": 40, "follow": "key"},
                       "The same Verse, asked to follow the key: it lands in D minor.")
-    assert not [w for w in followed.get("warnings", []) if w["code"] == "context.mismatch"], \
-        followed.get("warnings")
+    # The bass was mapped, so it warns of nothing; the keys clip, copied as written (it names
+    # no key to follow by), still says its Cm7 sits under A7.
+    left = [w["message"] for w in followed.get("warnings", []) if w["code"] == "context.mismatch"]
+    assert len(left) == 1 and left[0].startswith("cl_5") and "under A7" in left[0], left
     rows = {row["clip"]: row for row in followed["items"]}
     bass_row = rows["cl_4"]["followed"]
     assert bass_row["mode"] == "key" and "unrolled" not in bass_row, bass_row
@@ -568,8 +573,11 @@ def other_direction(j, built):
                                     "to_key": "D minor", "by": "transpose", "interval": 2}], bass_row
     assert rows["cl_3"]["followed"]["copied"] == "drums", rows["cl_3"]
     assert rows["cl_5"]["followed"]["copied"] == "no_key", rows["cl_5"]
-    laid_bass = j.exec("midi.notes", {"item": rows["cl_4"]["item"]}, "The bass as laid.")
-    assert {n["pitch"] for n in laid_bass["notes"]} == {38, 43, 34, 33}, laid_bass["notes"]
+    # Notes are laid as written (ADR-0098, following is playback); they sound as D minor says.
+    laid_bass = j.exec("midi.notes", {"item": rows["cl_4"]["item"], "sounding": True},
+                       "The bass as laid: written, and as it sounds.")
+    assert {n["pitch"] for n in laid_bass["notes"]} == {36, 41, 32, 31}, laid_bass["notes"]
+    assert {n["sounds"] for n in laid_bass["notes"]} == {38, 43, 34, 33}, laid_bass["notes"]
     clip_bass = j.exec("midi.notes", {"item": "cl_4"}, "The bass clip, unchanged.")
     assert {n["pitch"] for n in clip_bass["notes"]} == {36, 41, 32, 31}, clip_bass["notes"]
     clip_drums = j.exec("midi.notes", {"item": "cl_3"}, "The drums clip.")

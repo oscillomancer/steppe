@@ -59,7 +59,33 @@ void Button::setText(std::string text) {
 
 Size Button::measure(const Canvas& canvas, Size) {
     const Theme& t = canvas.theme();
-    return {canvas.textWidth(text_, Font::UiBold, t.type("small")) + 2 * t.space("m"), 28};
+    const float mark =
+        mark_.empty() ? 0.0f : canvas.textWidth(mark_, Font::UiBold, t.type("small")) + 1;
+    return {canvas.textWidth(text_, Font::UiBold, t.type("small")) + mark + 2 * t.space("m"), 28};
+}
+
+void Button::setMark(std::string mark, std::string token) {
+    if (mark == mark_ && token == markColor_) return;
+    mark_ = std::move(mark);
+    markColor_ = std::move(token);
+    invalidate();
+    relayout();
+}
+
+void Button::paintText(Canvas& canvas, const Rect& b, Color ink) const {
+    const Theme& t = canvas.theme();
+    const float size = t.type("small");
+    if (mark_.empty()) {
+        canvas.text(b, text_, Font::UiBold, size, ink, kCenter | kMiddle);
+        return;
+    }
+    const float tw = canvas.textWidth(text_, Font::UiBold, size);
+    const float mw = canvas.textWidth(mark_, Font::UiBold, size);
+    const float x = b.x + std::max(0.0f, (b.w - tw - mw - 1) / 2);
+    canvas.text({x, b.y, tw + 1, b.h}, text_, Font::UiBold, size, ink, kLeft | kMiddle);
+    canvas.text({x + tw + 1, b.y, mw + 1, b.h}, mark_, Font::UiBold, size,
+                !enabled || markColor_.empty() ? ink : t.color(markColor_.c_str()),
+                kLeft | kMiddle);
 }
 
 void Button::setEmphasis(bool on) {
@@ -84,12 +110,11 @@ void Button::paint(Canvas& canvas) {
             canvas.strokeRound(b, t.radius("s"), t.color("rule"));
         }
         if (focused()) canvas.strokeRound(b, t.radius("s"), t.color("focus"));
-        canvas.text(b, text_, Font::UiBold, t.type("small"),
-                    t.color(!enabled              ? "ink-faint"
-                            : !textColor_.empty() ? textColor_.c_str()
-                            : lit || emphasis_    ? "ink"
-                                                  : "ink-quiet"),
-                    kCenter | kMiddle);
+        paintText(canvas, b,
+                  t.color(!enabled              ? "ink-faint"
+                          : !textColor_.empty() ? textColor_.c_str()
+                          : lit || emphasis_    ? "ink"
+                                                : "ink-quiet"));
         return;
     }
     const Color face = !enabled    ? t.color("panel")
@@ -98,11 +123,10 @@ void Button::paint(Canvas& canvas) {
                                    : t.color("panel");
     canvas.fillRound(b, t.radius("s"), face);
     canvas.strokeRound(b, t.radius("s"), focused() ? t.color("focus") : t.color("rule"));
-    canvas.text(b, text_, Font::UiBold, t.type("small"),
-                !enabled              ? t.color("ink-faint")
-                : !textColor_.empty() ? t.color(textColor_.c_str())
-                                      : t.color("ink"),
-                kCenter | kMiddle);
+    paintText(canvas, b,
+              !enabled              ? t.color("ink-faint")
+              : !textColor_.empty() ? t.color(textColor_.c_str())
+                                    : t.color("ink"));
 }
 
 bool Button::onPointer(const PointerEvent& e) {

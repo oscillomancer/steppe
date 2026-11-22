@@ -5,6 +5,7 @@
 #include "live_workers.h"
 #include "rack_runtime.h"
 #include "supple/model/fade_shape.h"
+#include "supple/model/follow.h"
 #include "supple/model/freeze.h"
 #include "supple/model/groups.h"
 #include "supple/model/source_mapping.h"
@@ -72,6 +73,12 @@ std::vector<TimedEvent> trackEvents(const Session& s, Id track, double startSeco
         const bool looping = it.loop && loopBeats > 0;
         const model::SourceBeatMapping mapping{take->startOffset, rateScale, loopBeats};
         const double sourceOffset = mapping.sourceOffset(looping);
+        // A following take (ADR-0098 amended, X4c): each note-on sounds as
+        // model::soundingKey says at the place of its start, which
+        // model::notePlace gives from its unwrapped source beat, as
+        // model::soundingNotes walks the same passes; its note-off ends that key.
+        const bool follows = take->follow != model::ClipFollow::None;
+        const double wholeCycles = take->startOffset - sourceOffset;
         auto toSample = [&](double contentBeat, double pass) -> std::optional<std::int64_t> {
             const double itemBeat = mapping.itemBeat(contentBeat, pass, looping);
             if (itemBeat < 0) return std::nullopt;
@@ -104,10 +111,25 @@ std::vector<TimedEvent> trackEvents(const Session& s, Id track, double startSeco
                 const std::int64_t offS = std::max(*on + 1, off ? *off : *on + 1);
                 TimedEvent a;
                 a.sample = *on;
-                a.origin = {e.id.n, it.activeTake->n, take->source->n, n.start, k};
+                a.origin = {e.id.n,
+                            it.activeTake->n,
+                            take->source->n,
+                            n.start,
+                            k,
+                            false,
+                            static_cast<std::int16_t>(n.pitch)};
                 a.event.kind = host::Event::Kind::NoteOn;
                 a.event.channel = n.channel;
                 a.event.key = n.pitch;
+                if (follows) {
+                    const model::NotePlace place = model::notePlace(
+                        *take, startBeat, b0 + static_cast<double>(k) * loopBeats + wholeCycles);
+                    a.event.key = static_cast<std::int16_t>(
+                        model::soundingKey(take->context, take->follow, *s.contextView,
+                                           place.contextBeat, place.songBeat, n.channel, n.pitch)
+                            .pitch);
+                    a.origin.followed = true;
+                }
                 a.event.noteId = noteId;
                 a.event.velocity = n.velocity / 127.0;
                 items.push_back({2, a});
@@ -1981,8 +2003,10 @@ Status prepare(Plan& p, const Session& s) {
     // Immutable musical origins let adoption rebind compiled ids after a
     // MIDI edit or time-map change. Build the lookup here, never scan a model on audio.
     // A note's ordinal counts the earlier note-ons with its origin, port,
-    // channel and key: the note-ons, sorted by that address and then by
-    // arrival, are numbered along each run. The work lists are reused.
+    // channel and key (a keyless note's written key, so a mapping that sends
+    // two written keys to one renumbers nothing): the note-ons, sorted by that
+    // address and then by arrival, are numbered along each run. The work lists
+    // are reused.
     using Address = decltype(NoteSource{}.addressWithoutOrdinal());
     std::vector<std::pair<Address, std::uint32_t>> arrivals;  // address, index in `ons`
     std::vector<std::uint32_t> ons, ordinals;                 // note-on events, their ordinals
@@ -1996,7 +2020,8 @@ Status prepare(Plan& p, const Session& s) {
                 st.noteSources.resize(static_cast<std::size_t>(event.noteId) + 1);
             if (event.kind != host::Event::Kind::NoteOn) continue;
             arrivals.push_back({std::tuple_cat(events[i].origin.address(),
-                                               std::tuple{event.port, event.channel, event.key}),
+                                               std::tuple{event.port, event.channel,
+                                                          events[i].origin.addressKey(event.key)}),
                                 static_cast<std::uint32_t>(ons.size())});
             ons.push_back(static_cast<std::uint32_t>(i));
         }
@@ -2037,27 +2062,38 @@ Status prepare(Plan& p, const Session& s) {
                              "cannot be launched; use shorter audio or fewer distinct files");
     }
     std::vector<TimedEvent> withClips;
+    // A clip's notes continue the timeline's ids (compileClipPlayers). They
+    // have no place in the song, so their sources span all of it:
+    // releaseVoices never ends one as outside its span.
+    auto addClip = [&](const ClipPlayer& pl) {
+        for (const ClipEvent& e : pl.events)
+            if (e.event.noteId >= 0)
+                withClips.push_back({e.event.kind == host::Event::Kind::NoteOn
+                                         ? std::numeric_limits<std::int64_t>::min()
+                                         : std::numeric_limits<std::int64_t>::max(),
+                                     e.event, e.origin});
+    };
     for (Node& node : p.nodes) {
-        // A clip's notes continue the timeline's ids (compileClipPlayers).
-        // They have no place in the song, so their sources span all of it:
-        // releaseVoices never ends one as outside its span.
         withClips = node.events;
-        for (const ClipPlayer& pl : node.players)
-            for (const ClipEvent& e : pl.events)
-                if (e.event.noteId >= 0)
-                    withClips.push_back({e.event.kind == host::Event::Kind::NoteOn
-                                             ? std::numeric_limits<std::int64_t>::min()
-                                             : std::numeric_limits<std::int64_t>::max(),
-                                         e.event, e.origin});
+        for (const ClipPlayer& pl : node.players) addClip(pl);
         sources(node.midiStage, withClips);
         if (node.noteTarget >= 0) {  // the same events: the same sources
             Stage& target = node.chain[static_cast<std::size_t>(node.noteTarget)];
             target.noteSources = node.midiStage.noteSources;
             target.noteSourceIndex = node.midiStage.noteSourceIndex;
         }
-        for (TakeChain& tc : node.takeChains)
-            if (tc.noteTarget >= 0)
-                sources(tc.chain[static_cast<std::size_t>(tc.noteTarget)], tc.events);
+        for (TakeChain& tc : node.takeChains) {
+            if (tc.noteTarget < 0) continue;
+            Stage& target = tc.chain[static_cast<std::size_t>(tc.noteTarget)];
+            if (tc.clipChain && tc.player >= 0) {
+                // A clip's chain plays its player's notes: their sources too,
+                // so a plan swap carries them (review round 86 H4).
+                withClips = tc.events;
+                addClip(node.players[static_cast<std::size_t>(tc.player)]);
+                sources(target, withClips);
+            } else
+                sources(target, tc.events);
+        }
     }
     SUPPLE_TRY(prepareRackMidi(p));
     for (Node& node : p.nodes)
@@ -2701,14 +2737,26 @@ void prepareNoteIds(Stage& st) SUPPLE_RT {
         } else if (event.kind == host::Event::Kind::NoteOff ||
                    event.kind == host::Event::Kind::NoteChoke) {
             if (event.noteId >= 0 && i >= st.releases) {
+                // A launched clip's note, or a following take's, ends the key
+                // its note-on sounded, whatever the context now says (ADR-0098
+                // X4, X4c). So does a voice that sounded keyless and was carried
+                // to a source that is not (its take stopped following, review
+                // round 87 J1): a carried voice keeps the origin it started
+                // with. Its source id names the note either way; a voice the
+                // carry releases is not paired.
+                const bool clip = static_cast<std::size_t>(source) < st.noteSources.size() &&
+                                  st.noteSources[static_cast<std::size_t>(source)].origin.keyless();
                 const auto voice = std::find_if(
                     st.pendingVoices.begin(), st.pendingVoices.end(), [&](const HeldVoice& v) {
-                        return v.sourceId == source &&
-                               matchesVoice(v, event.port, event.channel, event.key, -1);
+                        const bool keyless = clip || v.origin.keyless();
+                        return v.sourceId == source && !v.release &&
+                               matchesVoice(v, event.port, event.channel, keyless ? -1 : event.key,
+                                            -1);
                     });
                 // Its onset was dropped or NoteEnd already finished it.
                 if (voice == st.pendingVoices.end()) continue;
                 event.noteId = voice->noteId;
+                event.key = voice->key;
             }
             std::erase_if(st.pendingVoices, [&](const HeldVoice& v) {
                 return matchesVoice(v, event.port, event.channel, event.key, event.noteId);
@@ -2748,11 +2796,11 @@ void trackVoices(Stage& st, std::array<std::uint8_t, 16 * 128>* held,
                     if (voice.sourceId >= kBusNoteBase) {
                         // A bus note (ADR-0068): its bus id is its identity.
                         voice.live = true;
-                        voice.origin = {kBusNoteOrigin, 0, 0, 0, 0};
+                        voice.origin = {kBusNoteOrigin, 0, 0, 0, 0, false, 0};
                     } else if (st.rackMidiBase >= 0 && voice.sourceId >= st.rackMidiBase) {
                         // A routed note: its slot is its identity (carryRackMidi).
                         voice.live = true;
-                        voice.origin = {kRackNoteOrigin, 0, 0, 0, 0};
+                        voice.origin = {kRackNoteOrigin, 0, 0, 0, 0, false, 0};
                     } else if (voice.sourceId >= 0 &&
                                static_cast<std::size_t>(voice.sourceId) < st.noteSources.size()) {
                         const auto& source =
@@ -4744,11 +4792,16 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
                                 source.channel = carried.channel;
                                 source.key = carried.key;
                                 source.ordinal = carried.sourceOrdinal;
-                                const auto found = std::lower_bound(
-                                    st.noteSourceIndex.begin(), st.noteSourceIndex.end(), source,
-                                    [](const auto& a, const auto& b) {
-                                        return a.address() < b.address();
-                                    });
+                                // A launched clip's note, or a following take's,
+                                // sounds at the key its context gave it (ADR-0098
+                                // X4, X4c): its address holds its written key, which
+                                // its origin keeps, so each note of a chord is found
+                                // as itself (review round 86 H1).
+                                auto found = std::lower_bound(st.noteSourceIndex.begin(),
+                                                              st.noteSourceIndex.end(), source,
+                                                              [](const auto& a, const auto& b) {
+                                                                  return a.address() < b.address();
+                                                              });
                                 if (found != st.noteSourceIndex.end() &&
                                     found->address() == source.address())
                                     carried.sourceId = found->id;

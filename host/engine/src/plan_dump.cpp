@@ -199,6 +199,8 @@ void dumpOrigin(Dump& d, std::string_view a, const NoteOrigin& o) {
           std::array<std::int64_t, 5>{static_cast<std::int64_t>(o.item),
                                       static_cast<std::int64_t>(o.take),
                                       static_cast<std::int64_t>(o.source), o.tick, o.pass});
+    if (o.followed) d.put(a, "followed", true);  // a following take's (ADR-0098 X4c)
+    if (o.keyless()) d.put(a, "written", static_cast<std::int64_t>(o.written));  // its address
 }
 
 void dumpEvents(Dump& d, std::string_view a, const std::vector<TimedEvent>& events) {
@@ -516,6 +518,11 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
         d.put(pa, "events", static_cast<std::uint64_t>(pl.events.size()));
         d.put(pa, "audio", pl.audio.data != nullptr);
         d.put(pa, "chain", pl.chain);
+        // A following clip's tables (ADR-0098 X4): key only, regions, pairs.
+        if (pl.follow)
+            d.put(pa, "follow",
+                  std::array<std::uint64_t, 3>{pl.follow->keyOnly, pl.follow->clip.place.size(),
+                                               pl.follow->rows.size()});
     }
     // Its clip chains' lead (ADR-0097, amended 2026-11-20); launchNext is state.
     d.put(a, "launchLead", n.launchLead);
@@ -745,16 +752,17 @@ std::string dumpPlan(const Plan& p) {
                                   rateSwitchDevice, rateSafeDevice, rateControlsChanged,
                                   scalarPublication, scalarHistory, requestedScalar, rate,
                                   smoothFrames, mix, startSeconds, outputLatency, block, timeMap,
-                                  warnings, clipPlayers, gestureHolds, projectDir, preparedSources,
-                                  media, instances, graph, anyLive, heldLive, rendererNodes,
-                                  liveNodes, rendererGraph, liveGraph, rendererInstances,
-                                  liveInstances, modules, rendererModules, liveModules,
-                                  rendererMeterNodes, liveMeterNodes, meterNodes, frontier,
-                                  rateOutput, frontierRings, recordTaps, recordRings, handAt,
-                                  handEpoch, handContinuable, split, deviceIn, deviceInChannels,
-                                  deviceRecording, hardwareMidi, midiInputsSettings,
-                                  midiOutputsSettings, hardwareLead, hardwareLeadBase, deviceMidi,
-                                  deviceMidiOffset, processedInputs] = p;
+                                  warnings, clipPlayers, follow, gestureHolds, projectDir,
+                                  preparedSources, media, instances, graph, anyLive, heldLive,
+                                  rendererNodes, liveNodes, rendererGraph, liveGraph,
+                                  rendererInstances, liveInstances, modules, rendererModules,
+                                  liveModules, rendererMeterNodes, liveMeterNodes, meterNodes,
+                                  frontier, rateOutput, frontierRings, recordTaps, recordRings,
+                                  handAt, handEpoch, handContinuable, split, deviceIn,
+                                  deviceInChannels, deviceRecording, hardwareMidi,
+                                  midiInputsSettings, midiOutputsSettings, hardwareLead,
+                                  hardwareLeadBase, deviceMidi, deviceMidiOffset, processedInputs] =
+        p;
     Dump d;
     Names names;
     for (const Node& n : p.nodes) {
@@ -785,6 +793,11 @@ std::string dumpPlan(const Plan& p) {
     d.put(a, "timeMap", p.timeMap != nullptr);
     d.put(a, "warnings", p.warnings);
     d.put(a, "clipPlayers", p.clipPlayers);
+    // The project's side of following (ADR-0098 X4): its regions' sizes.
+    d.put(a, "follow",
+          p.follow ? std::array<std::uint64_t, 2>{p.follow->full.place.size(),
+                                                  p.follow->keys.place.size()}
+                   : std::array<std::uint64_t, 2>{0, 0});
     d.put(a, "gestureHolds", p.gestureHolds);
     d.put(a, "projectDir", p.projectDir.generic_string());
     d.put(a, "preparedSources", p.preparedSources != nullptr);

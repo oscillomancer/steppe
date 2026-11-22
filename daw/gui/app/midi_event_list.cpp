@@ -116,12 +116,21 @@ class EventRows : public ui::List {
 class Columns : public ui::Node {
   public:
     Columns() : Node("midi.list.columns") { layout.height = ui::SizeRule::fixed(24); }
+    // True while the take follows: the rows are its written notes, and the
+    // header says so at its right (gui.md §4.7).
+    std::function<bool()> written;
     void paint(ui::Canvas& c) override {
         static constexpr const char* labels[] = {"Position",   "Type",        "Length",
                                                  "Pitch / CC", "Vel / value", "Channel"};
         for (std::size_t i = 0; i < kColumns; ++i)
             c.text(cellRect(bounds(), i), labels[i], ui::Font::UiBold, c.theme().type("caption"),
                    c.theme().color("ink-quiet"));
+        if (written && written()) {
+            const ui::Rect b = bounds();
+            c.text({b.right() - 68, b.y, 60, b.h}, "written", ui::Font::Ui,
+                   c.theme().type("caption"), c.theme().color("ink-quiet"),
+                   ui::kRight | ui::kMiddle);
+        }
     }
 };
 }  // namespace
@@ -134,7 +143,9 @@ std::unique_ptr<ui::Node> MidiEventList::build() {
     panel->layout.dir = ui::Layout::Dir::Column;
     panel->layout.width = ui::SizeRule::fraction();
     panel->visible = false;
-    panel->emplace<Columns>();
+    auto& columns = panel->emplace<Columns>();
+    columns.written = [this] { return editor_.state().following; };
+    columns_ = &columns;
     auto& rows = panel->emplace<EventRows>();
     list_ = &rows;
     field_ = rows.field;
@@ -190,9 +201,11 @@ void MidiEventList::sync() {
         return;
     cancel();
     item_ = editor_.state().item;
+    if (columns_) columns_->invalidate();  // "written" comes and goes with following
     projectGeneration_ = app_.projectGeneration();
     version_ = s.version;
     rows_.clear();
+    frameShift_ = 0;
     selectedCc_.clear();
     anchor_.reset();
     const auto owner = midiOwner(s, item_);
@@ -202,8 +215,11 @@ void MidiEventList::sync() {
         const auto& seq = source->sequence;
         const double rate = take->playrate > 0 ? take->playrate : 1;
         tickBeat_ = 1.0 / (seq.ppq * rate);
+        // Rows sit on the roll's axis, so a looped item's events show where
+        // they play; writes take frameShift_ off for midi.edit's item beats.
+        frameShift_ = rollFrameShift(*owner);
         auto beatOf = [&](std::int64_t tick) {
-            return (static_cast<double>(tick) / seq.ppq - take->startOffset) / rate;
+            return (static_cast<double>(tick) / seq.ppq - take->startOffset) / rate + frameShift_;
         };
         for (std::size_t i = 0; i < seq.notes.size(); ++i) {
             const auto& n = seq.notes[i];
@@ -364,15 +380,15 @@ void MidiEventList::submit(const std::string& text) {
         clear["op"] = "cc.clear";
         clear["number"] = r.pitch;
         clear["channel"] = r.channel;
-        clear["from"] = r.beat;
-        clear["to"] = r.beat + tickBeat_ * 0.75;
+        clear["from"] = r.beat - frameShift_;
+        clear["to"] = r.beat - frameShift_ + tickBeat_ * 0.75;
         ops.push_back(std::move(clear));
         op = json::Value::object();
         op["op"] = "cc.set";
         op["number"] = pitch;
         op["channel"] = r.channel;
         auto point = json::Value::object();
-        point["beat"] = beat;
+        point["beat"] = beat - frameShift_;
         point["value"] = value;
         auto points = json::Value::array();
         points.push_back(std::move(point));
@@ -409,8 +425,8 @@ void MidiEventList::removeSelected() {
                 op["op"] = "cc.clear";
                 op["number"] = row.pitch;
                 op["channel"] = row.channel;
-                op["from"] = row.beat;
-                op["to"] = row.beat + tickBeat_ * 0.75;
+                op["from"] = row.beat - frameShift_;
+                op["to"] = row.beat - frameShift_ + tickBeat_ * 0.75;
                 ops.push_back(std::move(op));
             }
         }
@@ -438,7 +454,7 @@ void MidiEventList::add() {
     op["op"] = "add";
     op["pitch"] = 60;
     op["velocity"] = 96;
-    op["start"] = beat;
+    op["start"] = beat - frameShift_;
     op["length"] = 1.0;
     auto ops = json::Value::array();
     ops.push_back(std::move(op));

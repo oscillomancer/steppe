@@ -466,6 +466,154 @@ TEST_CASE("a launch while stopped applies at the play start" * doctest::descript
     }
 }
 
+TEST_CASE("a launch from stop is heard from a whole render block, not from a shorter first chunk" *
+          doctest::description("rt")) {
+    // tr_1 is shifted by 64 frames of compensation (the latent gain on another
+    // track), so a launch from stop switches it at stream 64, and the
+    // renderer's first chunk is those 64 frames. Held there, the callback's
+    // cycles are pre-roll (silent, time holding still, no miss) and never
+    // that chunk followed by a gap. Released, the output is the offline
+    // replay of the log from its first frame. With the live rack the plan is
+    // split, and the callback pulls frontier rings instead of the output ring.
+    for (const bool split : {false, true}) {
+        INFO("split " << split);
+        Project p;
+        std::vector<Engine::LaunchRequest> requests;
+        if (split) {
+            rackFollows(p, true);
+            p.run("track.add", R"({"name": "Latent"})");  // tr_3
+            auto fx =
+                p.run("fx.add", R"({"track": "tr_3", "plugin": "com.suppleaudio.test.gain"})");
+            auto merge = j(R"({"patch": {"params": {"latency": "short"}}})");
+            merge["fx"] = fx["fx"];
+            p.runArgs("fx.patch.merge", merge);
+            requests = {request("tr_1", "cl_1")};
+        } else {
+            twoTracks(p);  // tr_2's latent gain shifts tr_1
+            requests = {request("tr_1", "cl_1"), request("tr_2", "cl_2")};
+        }
+        const model::Session s = p.app->head();
+        const std::uint32_t block = 128;
+        const std::int64_t held = 3;
+        const std::int64_t frames = 48000 + 8192;
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+        Engine engine(pool, media, EngineOptions{.workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        REQUIRE(engine.outputLatency() == 64);
+        auto placed = engine.launch(requests, model::LaunchQuantize::Bar);
+        REQUIRE(placed);
+        CHECK(placed->anchorSample == 0);
+        engine.holdRendererFrom(64);
+        engine.play();
+        REQUIRE(engine.awaitRendered(64));
+        backend.run(held);
+        CHECK(engine.anticipationMisses() == 0);
+        CHECK(engine.transport().sample == 0);
+        engine.holdRendererFrom(INT64_MAX);
+        runAheadOnState(engine, backend, frames / block - held, block);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == requests.size());
+        CHECK(engine.launchLog()[0].runningFrame == 0);
+        CHECK(engine.anticipationMisses() == 0);
+        const std::uint32_t latency = engine.outputLatency();
+        engine.stop();
+        std::vector<float> live = backend.capture().channels[0];
+        live.erase(live.begin(), live.begin() + held * block);  // the pre-roll
+        OfflineSettings settings;
+        settings.endSeconds = 1.0;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = engine.launchLog();
+        auto offline = renderOffline(s, pool, settings);
+        REQUIRE(offline);
+        CHECK(maxDiff(live, latency, offline->audio.channels[0], 40000) == 0.0);
+        settings.launches.clear();  // the launches changed the output
+        auto plain = renderOffline(s, pool, settings);
+        REQUIRE(plain);
+        CHECK(maxDiff(live, latency, plain->audio.channels[0], 40000) > 0.0);
+    }
+}
+
+TEST_CASE(
+    "a scene launched from stop starts its clips on one song frame, whatever their tracks' "
+    "compensation" *
+    doctest::description("rt")) {
+    // tr_1 and tr_2 play the same audio clip, panned hard left and right.
+    // tr_2's latent gain (64 samples, 0 dB) shifts tr_1, so tr_1's node
+    // switches 64 frames later in the running stream than tr_2's: the two
+    // are one song frame. Heard, left equals right frame for frame, live in
+    // both executors and offline, and the clip starts at the play start.
+    Project p;
+    p.run("track.add", R"({"name": "Right"})");  // tr_2
+    const auto file = p.ramp("clip.wav", 48000).string();
+    for (const char* track : {"tr_1", "tr_2"}) {
+        auto args = j(R"({"scene": "sc_1"})");
+        args["track"] = track;
+        args["audio_file"] = file;
+        p.runArgs("clip.add", args);
+    }
+    p.run("clip.set", R"({"clip": "cl_1", "length": 0.25})");
+    p.run("clip.set", R"({"clip": "cl_2", "length": 0.25})");
+    p.run("fx.add", R"({"track": "tr_2", "plugin": "com.suppleaudio.test.gain"})");
+    p.run("fx.patch.merge", R"({"fx": "fx_1", "patch": {"params": {"latency": "short"}}})");
+    p.run("track.set", R"({"track": "tr_1", "pan": -1})");
+    p.run("track.set", R"({"track": "tr_2", "pan": 1})");
+    const model::Session s = p.app->head();
+    const std::uint32_t block = 128;
+    const std::int64_t frames = 24000 + 8192;
+    const std::size_t heard = 20000;
+    const auto sameOnBoth = [&](const std::vector<float>& left, const std::vector<float>& right,
+                                std::size_t from) {
+        std::size_t first = heard;
+        for (std::size_t k = 0; k < heard && first == heard; ++k)
+            if (left[from + k] != right[from + k]) first = k;
+        CHECK_MESSAGE(first == heard, "left and right first differ at frame " << first);
+        // The clip is heard from the play start (its fade-in may begin at 0).
+        std::size_t onset = heard;
+        for (std::size_t k = 0; k < heard && onset == heard; ++k)
+            if (left[from + k] != 0.0f) onset = k;
+        CHECK(onset <= 1);
+    };
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = 0.5;
+    settings.projectDir = p.app->projectDir();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        REQUIRE(engine.outputLatency() == 64);
+        Engine::LaunchRequest left = request("tr_1", "cl_1"), right = request("tr_2", "cl_2");
+        left.scene = right.scene = id("sc_1");
+        const std::vector<Engine::LaunchRequest> scene{left, right};
+        REQUIRE(engine.launch(scene, model::LaunchQuantize::Bar));
+        engine.play();
+        if (options.anticipative)
+            runAheadOnState(engine, backend, frames / block, block);
+        else
+            backend.run(frames / block);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 2);
+        for (const LaunchLogEntry& e : engine.launchLog()) CHECK(e.runningFrame == 0);
+        CHECK(engine.anticipationMisses() == 0);
+        const std::uint32_t latency = engine.outputLatency();
+        engine.stop();
+        const auto& cap = backend.capture();
+        sameOnBoth(cap.channels[0], cap.channels[1], latency);
+        settings.launches = engine.launchLog();
+        auto offline = renderOffline(s, pool, settings);
+        REQUIRE(offline);
+        sameOnBoth(offline->audio.channels[0], offline->audio.channels[1], 0);
+        CHECK(maxDiff(cap.channels[0], latency, offline->audio.channels[0], heard) == 0.0);
+        CHECK(maxDiff(cap.channels[1], latency, offline->audio.channels[1], heard) == 0.0);
+    }
+}
+
 TEST_CASE("a queued launch whose clip an edit removes is dropped, not played later") {
     Project p;
     twoTracks(p);
@@ -583,32 +731,6 @@ TEST_CASE("a render without a launch log plays the arrangement, with no clip war
     CHECK(std::any_of(
         replayed->warnings.begin(), replayed->warnings.end(),
         [](const std::string& w) { return w.find("launch.tempo") != std::string::npos; }));
-}
-
-TEST_CASE("launching a clip that follows the context warns launch.unfollowed, once per launch") {
-    // ADR-0098: a launched clip plays as written until X4, so live and the timeline differ for
-    // a clip whose follow is not none; the answer says so.
-    Project p;
-    twoTracks(p);
-    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
-    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
-    const auto unfollowed = [](const json::Value& done) {
-        int n = 0;
-        if (const json::Value* w = done.find("warnings"))
-            for (const json::Value& e : w->asArray())
-                n += e.find("code")->asString() == "launch.unfollowed";
-        return n;
-    };
-    CHECK(unfollowed(p.run("launch.clip", R"({"clip": "cl_1"})")) == 0);  // follow none
-    p.run("clip.set", R"({"clip": "cl_1", "context": "1: key D minor ~:w", "follow": "key"})");
-    json::Value one = p.run("launch.clip", R"({"clip": "cl_1"})");
-    REQUIRE(unfollowed(one) == 1);
-    CHECK(one["warnings"].at(0).find("message")->asString().find("cl_1") != std::string::npos);
-    json::Value scene = p.run("launch.scene", R"({"scene": "sc_1"})");
-    CHECK(unfollowed(scene) == 1);  // one for the scene, not one per clip
-    const std::string said = scene["warnings"].at(0).find("message")->asString();
-    CHECK(said.find("the clip cl_1 follows") != std::string::npos);  // one clip: singular
-    p.app->stopEngine();
 }
 
 TEST_CASE("a MIDI clip plays through the track's MIDI send") {
@@ -1373,6 +1495,41 @@ TEST_CASE("a clip take's FX envelope commits as it was heard, pass after pass (C
         }
 }
 
+TEST_CASE("a clip take's own envelope commits as it was heard, pass after pass" *
+          doctest::description("rt")) {
+    // A period that is its content's pass commits as one looped item: its
+    // take's volume envelope, heard from the start of each pass, is repeated
+    // pass after pass over the item, where it would otherwise run once.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        latentClip(p);
+        p.run("clip.set", R"({"clip": "cl_1", "length": 1})");  // the ramp's 48000 frames
+        auto env = j(R"({"param": "volume", "points": [{"seconds": 0, "value": 0},
+                                                       {"seconds": 1, "value": "-24 dB"}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+        live.until(48000 * 5);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const std::int64_t end = std::min(std::int64_t(done["to"].asDouble() * double(kBeat)),
+                                          live.cycles * 128 - std::int64_t(live.latency));
+        CHECK(end > 96000 + 2 * 48000);  // two passes and more
+        const std::vector<float> committed = arrangement(p, 5.0);
+        const auto [worst, first] = compare(heard, live.latency, committed, 0, end, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+        // The second pass starts near 0 dB again (through the take's -6 dB).
+        CHECK(double(committed[std::size_t(96000 + 48000 + 600)]) > 0.8 * chained(600));
+        CHECK(double(committed[std::size_t(96000 + 48000 - 600)]) < 0.1 * chained(48000 - 600));
+    }
+}
+
 TEST_CASE("launch.commit: history, undo, pooling and refusals") {
     Project p;
     twoTracks(p);
@@ -1657,6 +1814,10 @@ TEST_CASE("launch.commit copies a launched clip and warns when its key is not th
     for (const auto& w : warnings->asArray())
         mismatch |= w.find("code")->asString() == "context.mismatch";
     CHECK(mismatch);
+    // The answer says the same for a program: the clip, both keys and the bar.
+    REQUIRE(done.find("mismatches"));
+    CHECK(json::writeCompact(*done.find("mismatches")) ==
+          R"([{"clip":"cl_1","kind":"key","clip_key":"D minor","key":"C minor","bar":1}])");
     // A clip laid one item per period (its length twice its content) says it once per stretch,
     // not once per period.
     p.run("clip.set", R"({"clip": "cl_1", "length": 8})");
@@ -1669,9 +1830,271 @@ TEST_CASE("launch.commit copies a launched clip and warns when its key is not th
     for (const auto& w : laid.find("warnings")->asArray())
         mismatches += w.find("code")->asString() == "context.mismatch";
     CHECK(mismatches == 1);
+    CHECK(laid.find("mismatches")->size() == 1);
     p.run("clip.set", R"({"clip": "cl_1", "length": 4})");
     // The notes are as they were played: nothing was mapped.
     p.run("clip.set", R"({"clip": "cl_1", "context": "1: key C minor ~:w"})");
     json::Value again = p.runArgs("launch.commit", args);
     CHECK_FALSE(again.find("warnings"));
+    CHECK_FALSE(again.find("mismatches"));
+}
+
+TEST_CASE("a followed performance commits as it was heard" * doctest::description("rt")) {
+    // Round 86 H3, a contract row (ADR-0098 X4d): launch.commit lays notes as
+    // written with each clip's context and the follow the plan used, so the
+    // committed arrangement sounds as the performance did. Three cases:
+    // - a looped clip over two keys: launched on bar 2 (C minor, {Cm} then
+    //   {Fm}), its second pass in bar 3 is in E minor;
+    // - the same with a capture begun mid-period (beat 5.5): its first
+    //   fragment chases the note under way, which retriggers there, so the
+    //   comparison starts at the next note (beat 6);
+    // - a clip the budget held to its key: its chords and the project's make
+    //   more pairs than a clip may hold, so it followed the key (C major into
+    //   D major), and the commit lays what was heard, not the chords.
+    enum class Case { TwoKeys, MidPeriod, Budget };
+    for (const Case c : {Case::TwoKeys, Case::MidPeriod, Case::Budget})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            CAPTURE(int(c));
+            CAPTURE(options.anticipative);
+            Project p;
+            p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+            json::Value context = json::Value::object();
+            json::Value clip = j(R"({"track": "tr_1", "scene": "sc_1", "follow": "chords"})");
+            if (c == Case::Budget) {
+                const char* roots[] = {"C",  "Db", "D",  "Eb", "E",  "F",
+                                       "Gb", "G",  "Ab", "A",  "Bb", "B"};
+                const char* kinds[] = {"", "m", "7", "m7"};
+                std::string project = "1: key D major", own = "1: key C major";
+                for (int i = 0; i < 48; ++i) {
+                    const std::string chord =
+                        std::string(" {") + roots[i / 4] + kinds[i % 4] + "}:q";
+                    if (i % 4 == 0 && i > 0) {
+                        project += "\n" + std::to_string(i / 4 + 1) + ":";
+                        own += "\n" + std::to_string(i / 4 + 1) + ":";
+                    }
+                    project += chord;
+                    own += chord;
+                }
+                context["text"] = project;
+                clip["notation"] = "voice bass; 1: C3:q E3:q G3:q B3:q";
+                p.runArgs("context.write", context);
+                clip.asObject().erase("follow");  // a follow needs the key first
+                p.runArgs("clip.add", clip);
+                p.run("clip.set", R"({"clip": "cl_1", "length": 48})");
+                json::Value set = j(R"({"clip": "cl_1", "follow": "chords"})");
+                set["context"] = own;
+                p.runArgs("clip.set", set);
+            } else {
+                context["text"] =
+                    "1: key C minor {Cm}:h {Fm}:h\n2: {Cm}:h {Fm}:h\n"
+                    "3: key E minor {Em}:w\n4: {Em}:w";
+                clip["notation"] = "voice bass; 1: D3:q F3:q A3:q Bb3:q";
+                clip["context"] = "1: key D minor {Dm}:h {Gm}:h";
+                p.runArgs("context.write", context);
+                p.runArgs("clip.add", clip);
+            }
+            const std::int64_t frames = 48000 * 6 + 16384;
+            AppLive live(p, options, 128, frames);
+            if (c != Case::MidPeriod) p.run("launch.capture", R"({"on": true})");
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            const json::Value launched = p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+            if (c == Case::Budget) {
+                bool budget = false;
+                if (const json::Value* w = launched.find("warnings"))
+                    for (const json::Value& e : w->asArray())
+                        budget |= e.find("code")->asString() == "launch.follow_budget";
+                CHECK(budget);
+            }
+            if (c == Case::MidPeriod) {
+                live.until(5 * kBeat + kBeat / 2);
+                p.run("launch.capture", R"({"on": true})");
+            }
+            live.until(48000 * 5);
+            const json::Value done = p.run("launch.commit", "{}");
+            const std::vector<float> heard = live.stop();
+            const std::int64_t end =
+                std::min(std::int64_t(done.find("to")->asDouble() * double(kBeat)),
+                         live.cycles * 128 - std::int64_t(live.latency));
+            CHECK(end > 8 * kBeat);  // into bar 3, the second key
+            const std::vector<float> committed = arrangement(p, 5.0);
+            const std::int64_t from = c == Case::MidPeriod ? 6 * kBeat : 0;
+            const auto [worst, first] = compare(heard, live.latency, committed, from, end);
+            CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+            // It sounded: the clip's notes from bar 2.
+            CHECK(heard[std::size_t(6 * kBeat + 1000 + live.latency)] != 0.0f);
+        }
+}
+
+TEST_CASE("a clip take's own envelope commits as heard over a short span across the period" *
+          doctest::description("rt")) {
+    // Round 86 H5: a capture begun at 0.75 of a pass for half a period lays
+    // one looped item from that phase that crosses the period's end in less
+    // than a period. The take's volume, a ramp over the 1 s pass, restarts
+    // at the pass boundary as heard; laid once it would hold its end.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        latentClip(p);
+        p.run("clip.set", R"({"clip": "cl_1", "length": 1})");  // the ramp's 48000 frames
+        auto env = j(R"({"param": "volume", "points": [{"seconds": 0, "value": "-24 dB"},
+                                                       {"seconds": 1, "value": 0}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: frame 96000
+        live.until(96000 + 36000);                    // 0.75 into the first pass
+        p.run("launch.capture", R"({"on": true})");
+        live.until(96000 + 60000);  // 0.25 into the second
+        p.run("launch.capture", R"({"on": false})");
+        live.until(96000 + 72000);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const auto from = std::int64_t(done["from"].asDouble() * double(kBeat));
+        const auto to = std::int64_t(done["to"].asDouble() * double(kBeat));
+        REQUIRE(from < 96000 + 48000);  // the span crosses the pass boundary
+        REQUIRE(to > 96000 + 48000);
+        REQUIRE(to - from < 48000);  // in less than a period
+        const std::vector<float> committed = arrangement(p, 5.0);
+        // Past the item's 5 ms fades at either end.
+        const auto [worst, first] =
+            compare(heard, live.latency, committed, from + 480, to - 480, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+        // The second pass starts near -24 dB again.
+        CHECK(double(committed[std::size_t(96000 + 48000 + 600)]) < 0.2 * chained(600));
+    }
+}
+
+TEST_CASE("a clip take's own envelope commits as heard from within a pass" *
+          doctest::description("rt")) {
+    // Found with round 87's H5 MIDI test: a capture from 0.25 to 0.625 of a
+    // pass lays one item from that phase that never reaches the period's end.
+    // Its take's volume ramp is laid from the value heard at 0.25; shifted
+    // alone, its first point fell before the item and the commit was refused
+    // (time.range).
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        latentClip(p);
+        p.run("clip.set", R"({"clip": "cl_1", "length": 1})");  // the ramp's 48000 frames
+        auto env = j(R"({"param": "volume", "points": [{"seconds": 0, "value": "-24 dB"},
+                                                       {"seconds": 1, "value": 0}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: frame 96000
+        live.until(96000 + 12000);                    // 0.25 into the first pass
+        p.run("launch.capture", R"({"on": true})");
+        live.until(96000 + 30000);  // 0.625 into it
+        p.run("launch.capture", R"({"on": false})");
+        live.until(96000 + 48000);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const auto from = std::int64_t(done["from"].asDouble() * double(kBeat));
+        const auto to = std::int64_t(done["to"].asDouble() * double(kBeat));
+        REQUIRE(from > 96000);  // within the pass
+        REQUIRE(to < 96000 + 48000);
+        const std::vector<float> committed = arrangement(p, 5.0);
+        const auto [worst, first] =
+            compare(heard, live.latency, committed, from + 480, to - 480, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+    }
+}
+
+TEST_CASE("a MIDI clip take's envelope commits as heard over a short span across the period" *
+          doctest::description("rt")) {
+    // H5's MIDI branch (review round 87): the same capture of a MIDI clip,
+    // C3s on its take's sine through its 2-beat (1 s) pass, under the same
+    // volume ramp. The clip is shorter than its source, so the commit lays
+    // an item per period, the first from 1.5 beats in.
+    // The committed envelope restarts at the pass boundary as heard.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        // Eighths, so the capture (1.5 beats in) starts on a note-on: a
+        // committed item that starts mid-note retriggers it, unlike the clip.
+        p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1",
+                              "notation": "voice a; 1: C3:e C3:e C3:e C3:e r:h"})");
+        p.run("clip.set", R"({"clip": "cl_1", "length": 2})");
+        auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");  // a MIDI take's envelope
+        fx["take"] = takeOf(p, "cl_1");                             // needs its own instrument
+        p.runArgs("fx.add", fx);
+        auto env = j(R"({"param": "volume", "points": [{"beat": 0, "value": "-24 dB"},
+                                                       {"beat": 2, "value": 0}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: frame 96000
+        live.until(96000 + 36000);                    // 0.75 into the first pass
+        p.run("launch.capture", R"({"on": true})");
+        live.until(96000 + 60000);  // 0.25 into the second
+        p.run("launch.capture", R"({"on": false})");
+        live.until(96000 + 72000);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const auto from = std::int64_t(done["from"].asDouble() * double(kBeat));
+        const auto to = std::int64_t(done["to"].asDouble() * double(kBeat));
+        REQUIRE(from < 96000 + 48000);  // the span crosses the pass boundary
+        REQUIRE(to > 96000 + 48000);
+        REQUIRE(to - from < 48000);  // in less than a period
+        const std::vector<float> committed = arrangement(p, 5.0);
+        const auto [worst, first] =
+            compare(heard, live.latency, committed, from + 480, to - 480, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+        // The second pass starts near -24 dB again, against 0 dB at the
+        // first's end.
+        const auto peak = [&](std::int64_t a, std::int64_t b) {
+            float most = 0;
+            for (std::int64_t t = a; t < b; ++t)
+                most = std::max(most, std::fabs(committed[std::size_t(t)]));
+            return most;
+        };
+        const float ending = peak(96000 + 48000 - 1200, 96000 + 48000 - 600);
+        REQUIRE(ending > 0.0f);
+        CHECK(peak(96000 + 48000 + 600, 96000 + 48000 + 1200) < 0.2f * ending);
+    }
+}
+
+TEST_CASE("launch.commit lays a clip whose loop plays only drums as following nothing") {
+    // Round 86 H8: cl_1 (D minor, follow key) is two beats long; they hold
+    // only channel-10 notes, and its source's pitched D3 lies past the clip's
+    // end. (A looped clip cannot show this: a commit needs its loop over the
+    // whole source.) Live it follows
+    // nothing (no pitched note plays), so the commit lays its takes with
+    // follow none, as heard, not follow key.
+    Project p;
+    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+    p.run("context.write", R"({"text": "1: key C minor ~:w\n2: ~:w\n3: ~:w"})");
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "context": "1: key D minor ~:w",
+                          "follow": "key",
+                          "notation": "voice kick ch 10; 1: C2:q C2:q r:h; voice bass; 1: r:h D3:h"})");
+    p.run("clip.set", R"({"clip": "cl_1", "length": 2})");
+    AppLive live(p, kInCallback, 128, 48000 * 5 + 16384);
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * 128);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+    live.until(48000 * 4);
+    const json::Value done = p.run("launch.commit", "{}");
+    live.stop();
+    const model::Session s = p.app->head();
+    std::size_t laid = 0;
+    for (const json::Value& row : done.find("items")->asArray()) {
+        const json::Value* item = row.find("item");
+        const model::Item* it =
+            s.items.find(*model::Id::parse(item ? item->asString() : row.asString()));
+        REQUIRE(it);
+        CHECK(s.takes.find(*it->activeTake)->follow == model::ClipFollow::None);
+        ++laid;
+    }
+    CHECK(laid > 0);
 }

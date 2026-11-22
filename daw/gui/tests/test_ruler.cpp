@@ -874,6 +874,63 @@ TEST_CASE("ruler: an edge dragged onto the other removes a range; the menu delet
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("ruler: the key that holds at the view's left edge names itself there") {
+    // gui.md §4.3: a key change scrolled out of view, its key still holding.
+    RulerFixture f;
+    f.exec("key.set", json::parse(R"({"at": 0, "tonic": "F", "scale": "major"})").value());
+    f.exec("key.set", json::parse(R"({"at": 16, "tonic": "A", "scale": "minor"})").value());
+    const auto& stats = f.view->rulerStats();
+    const float left = f.view->ruler().bounds().x;
+    auto scrollTo = [&](double beat) {
+        auto v = f.view->viewport();
+        v.startSeconds = f.app->head().timeMap->secondsAt(beat);
+        f.view->setViewport(v);
+        f.sync();
+    };
+    // At bar 3, F major (from bar 1) holds: named at the edge, then A minor.
+    scrollTo(8);
+    REQUIRE(stats.keyLabels == std::vector<std::string>{"F major", "A minor"});
+    CHECK(stats.keyLabelXs[0] == doctest::Approx(static_cast<double>(left) + 3));
+    CHECK(stats.keyLabelXs[1] == doctest::Approx(static_cast<double>(f.at(16).x) + 3));
+    // At bar 7 only A minor holds; F major is not drawn.
+    scrollTo(24);
+    REQUIRE(stats.keyLabels == std::vector<std::string>{"A minor"});
+    CHECK(stats.keyLabelXs[0] == doctest::Approx(static_cast<double>(left) + 3));
+    // A change exactly at the edge is drawn as a flag, not as held.
+    scrollTo(16);
+    CHECK(stats.keyLabels == std::vector<std::string>{"A minor"});
+}
+
+TEST_CASE("ruler: the last chord holds to the project's end and keeps its name in view") {
+    // gui.md §4.3: as the engine holds it, drawn as the other chords.
+    RulerFixture f;
+    f.exec("track.add", json::parse(R"({"type":"channel","name":"Keys"})").value());
+    f.exec("chord.set", json::parse(R"({"at": 0, "symbol": "C"})").value());
+    f.exec("chord.set", json::parse(R"({"at": 16, "symbol": "G"})").value());
+    // The project ends at bar 9: an item over bars 1 to 8.
+    f.exec("item.add",
+           json::parse(R"({"track":"tr_1","position":0,"notation":"voice k; 1: C4:w; 8: C4:w"})")
+               .value());
+    auto v = f.view->viewport();
+    v.pixelsPerSecond = 20;  // 10 px a beat: bars 1 to 25 in view
+    v.startSeconds = 0;
+    f.view->setViewport(v);
+    f.sync();
+    const auto& stats = f.view->rulerStats();
+    CHECK(stats.chordLabels == std::vector<std::string>{"C", "G"});
+    REQUIRE(stats.chordSpans.size() == 2);
+    const float projectEnd = f.view->xAt(f.app->head().timeMap->secondsAt(32));
+    CHECK(stats.chordSpans[1].second ==
+          doctest::Approx(static_cast<double>(projectEnd) - 1).epsilon(0.01));
+    // Scrolled to bar 7, G began left of the view: it still says so.
+    v.startSeconds = f.app->head().timeMap->secondsAt(24);
+    f.view->setViewport(v);
+    f.sync();
+    CHECK(stats.chordLabels == std::vector<std::string>{"G"});
+    REQUIRE(stats.chordLabelXs.size() == 1);
+    CHECK(stats.chordLabelXs[0] >= f.view->ruler().bounds().x);  // drawn where it is seen
+}
+
 TEST_CASE("ruler: a key change's flag drags to another beat; Alt-drag copies a chord") {
     RulerFixture f;
     auto keys = [&] {

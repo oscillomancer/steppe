@@ -1513,6 +1513,52 @@ TEST_CASE("recorded MIDI notes are clipped at punch and overdub item edges") {
     CHECK(clipped->length == 192);
 }
 
+TEST_CASE("midi_overdub never merges into an item whose take follows: the notes are a new item") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    call("batch", R"({"steps": [
+        {"command": "track.add", "args": {"name": "Keys"}, "as": "k"},
+        {"command": "item.add", "args": {"track": "${k.track}", "bar": 1, "notation": "voice v; 1: C3:w"}},
+        {"command": "track.set", "args": {"track": "${k.track}", "record_mode": "midi_overdub"}}]})");
+    call("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    call("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    const model::Session before = app->head();
+    RecordedTake played;
+    played.track = model::Id{model::Kind::Track, 1};
+    played.isMidi = true;
+    played.sampleRate = 48000;
+    played.frames = 144000;
+    played.segments = {{0, 0}};
+    played.midi = {{48000, 0, {0x90, 74, 100}}, {72000, 0, {0x80, 74, 0}}};
+    auto recorded = app->commitTakes({played});
+    REQUIRE_MESSAGE(recorded, (recorded ? std::string() : recorded.error().toString()));
+    const model::Session& s = app->head();
+    REQUIRE(s.items.size() == 2);  // the played notes are an item of their own
+    // The following item is as it was: its notes, take and follow.
+    const model::Item& old = *s.items.find(model::Id{model::Kind::Item, 1});
+    CHECK(old.takes.size() == 1);
+    CHECK(s.takes.find(*old.activeTake)->follow == model::ClipFollow::Key);
+    CHECK(s.midi.find(*s.takes.find(*old.activeTake)->source)->sequence ==
+          before.midi.find(*before.takes.find(*old.activeTake)->source)->sequence);
+    // The new item follows nothing and holds no context, and says why it is not merged.
+    const model::Item& fresh = *s.items.find(model::Id{model::Kind::Item, 2});
+    const model::Take& take = *s.takes.find(*fresh.activeTake);
+    CHECK(take.follow == model::ClipFollow::None);
+    CHECK(take.context.empty());
+    REQUIRE(recorded->size() == 1);
+    REQUIRE((*recorded)[0].warnings);
+    CHECK((*recorded)[0].warnings->at(0).code == "record.follow_kept");
+    // A track whose item does not follow still merges (the case above).
+}
+
 TEST_CASE("midi_overdub merges a performance into the item under it, as a new take") {
     Root root;
     cmd::Registry registry;
@@ -4470,6 +4516,62 @@ TEST_CASE("modulation commands: a modulated track analyzes and renders as a stem
     run("render.stems", R"({"end_beat": 4, "tracks": ["tr_1"]})");
 }
 
+TEST_CASE("render.stems leaves out a channel that can produce no audio, and says why") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song_with_item");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto fileCount = [](const json::Value& r) { return r.find("files")->asArray().size(); };
+    const auto skippedReasons = [](const json::Value& r) {
+        std::string out;
+        if (const json::Value* skipped = r.find("skipped"))
+            for (const auto& e : skipped->asArray())
+                out += e.find("track")->asString() + ":" + e.find("reason")->asString() + " ";
+        return out;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+    const auto made =
+        run("modulate", R"({"target": {"fx": "fx_1", "param": "gain"}, "source": "lfo"})");
+    const std::string channel = made.find("channel")->asString();
+    // By default the Modulators channel (a rack with only a Mod Out, nothing feeding it) is
+    // left out, named with its reason, and the song's own track is rendered.
+    const auto stems = run("render.stems", R"({"end_beat": 4, "pattern": "stem-{counter}"})");
+    CHECK(skippedReasons(stems) == channel + ":no_audio ");
+    CHECK(stems.find("skipped")->at(0).find("detail") != nullptr);
+    CHECK(fileCount(stems) >= 1);
+    // The skipped channel does not move the counter: the first file is stem-1.
+    CHECK(stems.find("files")->at(0).find("path")->asString().find("stem-1.") != std::string::npos);
+    // Named in tracks, it is rendered, whatever it holds.
+    const auto named = run("render.stems", R"({"end_beat": 4, "tracks": [")" + channel + R"("]})");
+    CHECK(fileCount(named) == 1);
+    CHECK(skippedReasons(named).empty());
+    // The dry run lists the skip without a path.
+    const auto dry = run("render.dry-run", R"({"operation": "stems", "end_beat": 4})");
+    bool listed = false;
+    for (const auto& e : dry.find("files")->asArray())
+        listed |= e.find("skip") && e.find("track") && e.find("track")->asString() == channel &&
+                  e.find("reason")->asString() == "no_audio";
+    CHECK(listed);
+    // The Out that rack.add made stays silent: a control signal patched to it is still no
+    // audio, so the channel is still left out; an audio signal patched to it makes it heard.
+    const auto rack = made.find("rack")->asString();
+    const auto drum = run("module.add", R"({"rack": ")" + rack + R"(", "type": "drum"})");
+    const std::string id = drum.find("module")->asString();
+    run("cable.add", R"({"from": ")" + id + R"(.env", "to": "mo_1.l"})");
+    CHECK(skippedReasons(run("render.stems", R"({"end_beat": 4, "if_exists": "overwrite"})")) ==
+          channel + ":no_audio ");
+    run("cable.add", R"({"from": ")" + id + R"(.out", "to": "mo_1.l"})");
+    CHECK(skippedReasons(run("render.stems", R"({"end_beat": 4, "if_exists": "overwrite"})"))
+              .empty());
+}
+
 TEST_CASE(
     "modulation commands: a parameter that is not modulatable takes a route through its "
     "envelope") {
@@ -4777,6 +4879,57 @@ TEST_CASE("modulate: the whole gesture in one undo step, reusing the rack it mad
     run("history.undo", "{}");
     CHECK(app->view().modulations.size() == 1);
     CHECK(app->view().modules.size() == modules);
+}
+
+TEST_CASE("modulate: a second route of the same kind onto one target is allowed and warns") {
+    Root root;
+    auto app = makeApp(root.path);
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "song");
+    auto run = [&](std::string name, std::string_view args) {
+        auto r = d.execute({std::move(name), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return *r;
+    };
+    const auto stacked = [](const json::Value& result) {
+        std::string out;
+        if (const json::Value* w = result.find("warnings"))
+            for (const auto& e : w->asArray())
+                if (e.find("code")->asString() == "modulation.stacked")
+                    out += e.find("message")->asString();
+        return out;
+    };
+    run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})");
+    const std::string target = R"("target": {"fx": "fx_1", "param": "gain"})";
+    // The first route, and one of another kind (a macro), are fine.
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "lfo"})")).empty());
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "macro"})")).empty());
+    // A second LFO onto the same parameter, spelled another way, is allowed and names mr_1.
+    const auto second =
+        run("modulate", R"({"target": {"fx": "fx_1", "param": "Gain"}, "source": "random"})");
+    const std::string message = stacked(second);
+    CHECK(message.find("mr_3") != std::string::npos);  // the new route
+    CHECK(message.find("mr_1") != std::string::npos);  // the existing lfo route
+    CHECK(message.find("mr_2") == std::string::npos);  // the macro is another kind
+    CHECK(message.find("offsets add") != std::string::npos);
+    CHECK(app->view().modulations.size() == 3);
+    // modulation.add says the same, for a Mod Out input fed by an LFO of its own.
+    const auto lfo = run("module.add", R"({"rack": "rk_1", "type": "lfo"})");
+    const std::string out = lfo.find("module")->asString();
+    run("cable.add", R"({"from": ")" + out + R"(.out", "to": "mo_2.in_9"})");
+    const auto added = run("modulation.add", R"({"source": {"module": "mo_2", "input": "in_9"},
+        "target": {"fx": "fx_1", "param": "gain"}, "depth": 0.1})");
+    CHECK(stacked(added).find("mr_1, mr_3") != std::string::npos);
+    // A disabled route adds nothing, so it is not named, and a disabled new one warns of nothing.
+    for (const char* id : {"mr_1", "mr_3", "mr_4"})
+        run("modulation.set", std::string(R"({"modulation": ")") + id + R"(", "enabled": false})");
+    CHECK(stacked(run("modulate", "{" + target + R"(, "source": "lfo"})")).empty());
+    // Other targets are not stacked onto.
+    CHECK(stacked(run("modulate", R"({"target": {"track": "tr_1", "param": "volume"},
+        "source": "lfo"})"))
+              .empty());
 }
 
 TEST_CASE("modulate: a shared rack that would close a loop is passed over for another") {
@@ -5173,16 +5326,26 @@ TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, i
     // gestureless edit: playing in touch or latch, one edit made two steps
     // and two points, and a drag wrote each point twice. A one-shot edit
     // (performEdit alone) and a drag of two moves (beginEdit, performEdit
-    // twice, endEdit), in-callback and bridged. Within the drag the plug-in
-    // state is not captured as a step of its own (its plan swap dropped the
-    // drag's gesture): that waits for endEdit. The anticipative executor
-    // records a VST3 editor's edit as the plug-in's state (STATUS).
+    // twice, endEdit) and one whose editor closes mid-drag (no endEdit:
+    // review round 81c E6), in both executors and bridged. The plug-in's
+    // state is never captured as a step of its own while it processes (its
+    // plan swap dropped the drag's gesture).
+    enum class Hand { OneShot, Drag, Closed };
+    struct Run {
+        bool anticipative;
+        const char* isolation;
+    };
     for (const char* mode : {"touch", "latch"})
-        for (const char* isolation : {static_cast<const char*>(nullptr), "shared_bridge"})
-            for (const bool drag : {false, true}) {
+        for (const auto [anticipative, isolation] :
+             {Run{false, nullptr}, Run{true, nullptr}, Run{false, "shared_bridge"}})
+            for (const Hand hand : {Hand::OneShot, Hand::Drag, Hand::Closed}) {
+                // A bridged editor is a native window in the bridge: in-process only.
+                if (hand == Hand::Closed && isolation) continue;
                 CAPTURE(std::string(mode));
+                CAPTURE(anticipative);
                 CAPTURE(isolation != nullptr);
-                CAPTURE(drag);
+                CAPTURE(int(hand));
+                const bool drag = hand != Hand::OneShot;
                 Root root;
                 AppOptions options;
                 options.workdir = root.path;
@@ -5215,9 +5378,10 @@ TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, i
                 }
                 DummyBackend backend({.mode = DummyBackend::Mode::Manual});
                 REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
-                                        {.anticipative = false}));
+                                        {.anticipative = anticipative}));
                 const auto cycles = [&](int n) {
                     for (int i = 0; i < n; ++i) {
+                        if (anticipative) (void)app.engine()->awaitRendered(4096);
                         backend.run(1);
                         app.tick();
                     }
@@ -5229,6 +5393,8 @@ TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, i
                 auto* instance = app.instanceOf(*model::Id::parse("fx_1"));
                 REQUIRE(instance);
                 // Edit: below 0.1 grabs Level, from 0.9 lets go, else moves it.
+                if (hand == Hand::Closed)
+                    REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
                 if (drag) {
                     REQUIRE(instance->setParam(2, 0.05));
                     cycles(10);
@@ -5236,7 +5402,10 @@ TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, i
                     cycles(10);
                     REQUIRE(instance->setParam(2, 0.5));
                     cycles(10);
-                    REQUIRE(instance->setParam(2, 0.95));
+                    if (hand == Hand::Closed)
+                        instance->closeEditor();  // ends the grab
+                    else
+                        REQUIRE(instance->setParam(2, 0.95));
                 } else
                     REQUIRE(instance->setParam(2, 0.7));
                 cycles(50);
@@ -5257,17 +5426,197 @@ TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, i
             }
 }
 
+TEST_CASE("a VST3 editor closed right after a move ends its drag after that move") {
+    // Round 92b: closing the editor mid-drag ended its grab with a flag the
+    // next block handles before the editor's queue, so a move still queued
+    // then was reported after the end: a second step and a doubled point.
+    // The anticipative executor met it when its renderer had not yet run the
+    // block after the move (release timing); the renderer's hold forces that
+    // here, and the in-callback executor meets it with no cycle between.
+    for (const char* mode : {"touch", "latch"})
+        for (const bool anticipative : {false, true}) {
+            CAPTURE(std::string(mode));
+            CAPTURE(anticipative);
+            Root root;
+            AppOptions options;
+            options.workdir = root.path;
+            options.pluginPath = {FIXTURE_VST3_PATH};
+            auto made = EngineApp::create(options, {.console9 = false});
+            REQUIRE(made);
+            EngineApp& app = **made;
+            cmd::Registry registry;
+            registerEngineCommands(registry);
+            cmd::Dispatcher bus(registry, app);
+            const auto call = [&](const char* command, json::Value args) {
+                auto result = bus.execute({command, std::move(args), kTest});
+                REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+                return *result;
+            };
+            call("track.add", j("{}"));
+            call("fx.add", j(R"({"track":"tr_1","plugin":"Test VST3 Stepped Echo"})"));
+            const json::Value added = call(
+                "env.add", j(R"({"fx":"fx_1","param":"Level","points":[{"beat":0,"value":0.5}]})"));
+            const auto env = *model::Id::parse(added.find("env")->asString());
+            json::Value set = json::Value::object();
+            set["env"] = env.str();
+            set["mode"] = mode;
+            call("env.set", set);
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+            REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                    {.anticipative = anticipative}));
+            const auto cycles = [&](int n) {
+                for (int i = 0; i < n; ++i) {
+                    if (anticipative) (void)app.engine()->awaitRendered(4096);
+                    backend.run(1);
+                    app.tick();
+                }
+            };
+            REQUIRE(app.transport("play"));
+            cycles(50);
+            const auto version = app.head().version;
+            const auto points = app.head().envelopes.find(env)->points.size();
+            auto* instance = app.instanceOf(*model::Id::parse("fx_1"));
+            REQUIRE(instance);
+            REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
+            REQUIRE(instance->setParam(2, 0.05));  // grabs Level
+            cycles(10);
+            REQUIRE(instance->setParam(2, 0.3));
+            cycles(10);
+            // The last move and the close reach the processor in one block.
+            if (anticipative) {
+                app.engine()->holdRenderer(true);
+                REQUIRE(app.engine()->awaitRendererHeld());
+            }
+            REQUIRE(instance->setParam(2, 0.5));
+            instance->closeEditor();
+            if (anticipative) app.engine()->holdRenderer(false);
+            cycles(50);
+            CHECK(app.head().version == version + 1);
+            CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
+            const auto& now = app.head().envelopes.find(env)->points;
+            CHECK(now.size() == points + 3);
+            if (now.size() == points + 3) {
+                CHECK(now[points].value == doctest::Approx(0.5));
+                CHECK(now[points + 1].value == doctest::Approx(0.3));
+                CHECK(now[points + 2].value == doctest::Approx(0.5));
+            }
+            REQUIRE(app.transport("stop"));
+            app.stopEngine();
+        }
+}
+
+TEST_CASE("a bypassed VST3's editor edit is the plug-in's, recorded once") {
+    // A bypassed stage does not process unless asked: an editor edit asks, so
+    // the edit is reported as the plug-in's gesture there too, in both
+    // executors and bridged.
+    struct Run {
+        bool anticipative;
+        const char* isolation;
+    };
+    for (const auto [anticipative, isolation] :
+         {Run{false, nullptr}, Run{true, nullptr}, Run{false, "shared_bridge"}}) {
+        CAPTURE(anticipative);
+        CAPTURE(isolation != nullptr);
+        Root root;
+        AppOptions options;
+        options.workdir = root.path;
+        options.pluginPath = {FIXTURE_VST3_PATH};
+        auto made = EngineApp::create(options, {.console9 = false});
+        REQUIRE(made);
+        EngineApp& app = **made;
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher bus(registry, app);
+        const auto call = [&](json::Value args, const char* command) {
+            auto result = bus.execute({command, std::move(args), kTest});
+            REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        };
+        call(j("{}"), "track.add");
+        call(j(R"({"track":"tr_1","plugin":"Test VST3 Stepped Echo"})"), "fx.add");
+        json::Value set = j(R"({"fx":"fx_1","bypass":true})");
+        if (isolation) set["isolation"] = isolation;
+        call(set, "fx.set");
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                {.anticipative = anticipative}));
+        const auto cycles = [&](int n) {
+            for (int i = 0; i < n; ++i) {
+                if (anticipative) (void)app.engine()->awaitRendered(4096);
+                backend.run(1);
+                app.tick();
+            }
+        };
+        REQUIRE(app.transport("play"));
+        cycles(50);
+        const auto version = app.head().version;
+        auto* instance = app.instanceOf(*model::Id::parse("fx_1"));
+        REQUIRE(instance);
+        // The editor moves Level, with nothing sent by the host (which would
+        // ask the stage to process by itself).
+        REQUIRE(instance->paramText(2, 0.7));
+        cycles(100);
+        CHECK(app.head().version == version + 1);
+        CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
+        REQUIRE(app.transport("stop"));
+        app.stopEngine();
+    }
+}
+
+TEST_CASE("an editor edit a plan swap drops before it is heard is kept as the plug-in's state") {
+    // The anticipative executor renders ahead: an editor edit rendered under
+    // one plan and drained after another replaced it is dropped with that
+    // plan's outputs. The plug-in's state is captured instead, so the edit
+    // reaches the model and the history.
+    Root root;
+    AppOptions options;
+    options.workdir = root.path;
+    options.pluginPath = {FIXTURE_VST3_PATH};
+    auto made = EngineApp::create(options, {.console9 = false});
+    REQUIRE(made);
+    EngineApp& app = **made;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    cmd::Dispatcher bus(registry, app);
+    const auto call = [&](json::Value args, const char* command) {
+        auto result = bus.execute({command, std::move(args), kTest});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+    };
+    call(j("{}"), "track.add");
+    call(j(R"({"track":"tr_1","plugin":"Test VST3 Stepped Echo"})"), "fx.add");
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(
+        app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512}, {.anticipative = true}));
+    const auto cycles = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            (void)app.engine()->awaitRendered(4096);
+            backend.run(1);
+            app.tick();
+        }
+    };
+    REQUIRE(app.transport("play"));
+    cycles(50);
+    auto* instance = app.instanceOf(*model::Id::parse("fx_1"));
+    REQUIRE(instance);
+    const auto before = app.head().fx.find(*model::Id::parse("fx_1"))->state;
+    REQUIRE(instance->setParam(2, 0.7));      // the editor moves Level
+    (void)app.engine()->awaitRendered(4096);  // rendered, not heard
+    call(j("{}"), "track.add");               // a new plan
+    const auto version = app.head().version;
+    cycles(100);
+    CHECK(app.head().version == version + 1);
+    CHECK(app.head().fx.find(*model::Id::parse("fx_1"))->state != before);
+    REQUIRE(app.transport("stop"));
+    app.stopEngine();
+}
+
 TEST_CASE("a VST3 editor's edit during modulation is the plug-in's, recorded once") {
     // Review round 81, E2: the editor's beginEdit, performEdit and endEdit
     // reach the engine as the plug-in's gesture (as a CLAP plug-in's), so its
     // edit of a parameter whose lane is sending is recorded, once, while the
     // processor's echoes of the lane are not. The fixture's editor moves
-    // Level when the host sets Edit. In the anticipative executor the edit's
-    // "edited" flag captures the plug-in's state on the main thread while
-    // the rendered gesture waits to be heard, and the two race: that step's
-    // plan swap usually drops the gesture (one step, the state), but the
-    // gesture can land first and add the parameter edit (as before E2, with
-    // the echo; STATUS). Either outcome is accepted there.
+    // Level when the host sets Edit. In every executor (the anticipative one
+    // too, where a state capture on the "edited" flag raced the rendered
+    // gesture until the flag was left to instances that do not process).
     struct Run {
         bool anticipative;
         const char* isolation;
@@ -5297,14 +5646,8 @@ TEST_CASE("a VST3 editor's edit during modulation is the plug-in's, recorded onc
             REQUIRE(instance);
             REQUIRE(instance->setParam(2, 0.7));  // the editor moves Level
             cycles(100);
-            if (anticipative) {
-                const auto steps = app.head().version - version;
-                CHECK((steps == 1 || steps == 2));
-                CHECK(app.versions().history(steps).back()->txn.label == "Plug-in state");
-            } else {
-                CHECK(app.head().version == version + 1);
-                CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
-            }
+            CHECK(app.head().version == version + 1);
+            CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
             REQUIRE(app.transport("stop"));
             app.stopEngine();
         }

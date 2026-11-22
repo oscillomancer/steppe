@@ -6,6 +6,7 @@
 #include "test_support.h"
 
 #include <filesystem>
+#include <map>
 #include <mutex>
 
 #include <cmath>
@@ -24,6 +25,7 @@
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/tcp.h"
@@ -772,6 +774,294 @@ TEST_CASE("automation lanes: a plugin parameter's lane uses the plugin's range a
     CHECK(params::toNormalized(spec->spec, pts[1].value) == doctest::Approx(0.75).epsilon(0.05));
 }
 
+TEST_CASE("automation lanes: a plug-in described by a list (a VST3) gets its parameter's scale") {
+    // fx.describe lists a non-semantic plug-in's parameters by numeric id,
+    // which is the envelope's param ("1"); a semantic one keys them by name.
+    engine::AppOptions options;
+    options.workdir = std::filesystem::temp_directory_path() /
+                      ("supple-scales-test-" + std::to_string(testProcessId()));
+    {
+        auto app = engine::EngineApp::create(options);
+        REQUIRE(app);
+        cmd::Registry registry;
+        cmd::Command<json::Value, json::Value> describe;
+        describe.name = "fx.describe";
+        describe.version = 2;
+        describe.kind = cmd::Kind::Query;
+        describe.exposure = cmd::Exposure::Internal;
+        describe.args = schema::any();
+        describe.result = schema::any();
+        describe.run = [](const json::Value& a, cmd::Context&) -> Result<json::Value> {
+            if (a.find("fx")->asString() == "fx_1")  // as Test VST3 Gain answers
+                return json::parse(
+                           R"({"name":"Test VST3 Gain","params":[{"id":1.0,"name":"Gain",)"
+                           R"("min":0.0,"max":1.0,"default":0.5,"modulatable_by_envelope":true}]})")
+                    .value();
+            return json::parse(
+                       R"({"name":"Semantic","params":{"gain":{"id":7,"name":"Gain","min":-24.0,)"
+                       R"("max":24.0,"default":0.0,"type":"float","unit":"dB"}}})")
+                .value();
+        };
+        registry.add(std::move(describe));
+        cmd::Dispatcher dispatcher(registry, **app);
+        gui::PluginScales scales(dispatcher);
+        model::Envelope vst3;
+        vst3.target = {*model::Id::parse("fx_1"), "1"};
+        const auto listed = scales(vst3);
+        REQUIRE(listed);
+        REQUIRE(listed->param);
+        CHECK(listed->param->name == "Gain");
+        CHECK(listed->param->spec.max == doctest::Approx(1.0));
+        model::Envelope missing;
+        missing.target = {*model::Id::parse("fx_1"), "2"};
+        CHECK_FALSE(scales(missing));
+        model::Envelope semantic;
+        semantic.target = {*model::Id::parse("fx_2"), "gain"};
+        const auto keyed = scales(semantic);
+        REQUIRE(keyed);
+        CHECK(keyed->param->spec.max == doctest::Approx(24.0));
+    }
+    std::filesystem::remove_all(options.workdir);
+}
+
+TEST_CASE("TCP: a chain with a modulated plug-in marks its fx as the mixer does") {
+    // gui.md §4.2: views::kModMark after "fx", in signal-cv.
+    Fixture f;
+    if (!f.ok) return;
+    auto run = [&](const char* command, const std::string& args) {
+        return f.dispatcher->execute({command, json::parse(args).value(), kUi});
+    };
+    const model::Id track = f.item(f.itemOnRow(0)).track;
+    auto added = run("fx.add", R"({"track":")" + track.str() + R"(","plugin":"Hickory"})");
+    if (!added) {
+        MESSAGE("skipped: Hickory is not built (partial build)");
+        return;
+    }
+    const std::string fx = (*added)["fx"].asString();
+    f.sync();
+    auto fxButton = [&] {
+        auto* b = dynamic_cast<ui::Button*>(f.view->tcpPanel().controlNode(track, "fx"));
+        REQUIRE(b);
+        return b;
+    };
+    CHECK(fxButton()->mark().empty());
+    auto d = run("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    REQUIRE(d);
+    std::string param;
+    for (const auto& m : d->find("params")->asObject())
+        if (const json::Value* mod = m.value.find("modulatable"); mod && mod->asBool()) {
+            param = m.key;
+            break;
+        }
+    REQUIRE(!param.empty());
+    REQUIRE(run("modulate",
+                R"({"target":{"fx":")" + fx + R"(","param":")" + param + R"("},"source":"lfo"})"));
+    f.sync();
+    CHECK(fxButton()->mark() == views::kModMark);
+    CHECK(fxButton()->markColor() == "signal-cv");
+    CHECK(fxButton()->valueText() == "fx");
+    // Every route off: dimmed; one on again: normal.
+    const std::string route = f.app->head().modulations.begin()->id.str();
+    REQUIRE(run("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})"));
+    f.sync();
+    CHECK(fxButton()->mark() == views::kModMark);
+    CHECK(fxButton()->markColor() == "ink-faint");
+    REQUIRE(run("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})"));
+    f.sync();
+    CHECK(fxButton()->markColor() == "signal-cv");
+    CHECK(views::fxModulated(f.app->head(), *model::Id::parse(fx)));
+    CHECK(views::chainModulated(f.app->head(), track));
+}
+
+TEST_CASE(
+    "lane headers: the parameter first, a fixed mod column, a modulation-only lane's header") {
+    // gui.md §4.3: "Cutoff · Marram", the owner elided first; "mod" in its
+    // column, also on a lane without an envelope, whose header has title,
+    // mod and hide.
+    Fixture f;
+    if (!f.ok) return;
+    auto run = [&](const char* command, const std::string& args) {
+        auto r = f.dispatcher->execute({command, json::parse(args).value(), kUi});
+        INFO((r ? std::string() : r.error().toString()));
+        return r;
+    };
+    const model::Id track = f.item(f.itemOnRow(0)).track;
+    auto added = run("fx.add", R"({"track":")" + track.str() + R"(","plugin":"Hickory"})");
+    if (!added) {
+        MESSAGE("skipped: Hickory is not built (partial build)");
+        return;
+    }
+    const std::string fx = (*added)["fx"].asString();
+    auto scales = std::make_shared<gui::PluginScales>(*f.dispatcher);
+    f.view->trackLayout().pluginScales = [scales](const model::Envelope& e) {
+        return (*scales)(e);
+    };
+    std::vector<std::string> params;
+    auto d = run("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    REQUIRE(d);
+    for (const auto& m : d->find("params")->asObject())
+        if (const json::Value* mod = m.value.find("modulatable"); mod && mod->asBool())
+            params.push_back(m.key);
+    REQUIRE(params.size() >= 2);
+    const model::Id fxId = *model::Id::parse(fx);
+    const model::EnvTarget withEnv{fxId, params[0]}, modOnly{fxId, params[1]};
+    // The first parameter: a visible envelope and no route yet.
+    REQUIRE(run("env.add", R"({"fx":")" + fx + R"(","param":")" + params[0] +
+                               R"(","points":[{"beat":0,"value":0.5}]})"));
+    const model::Id env = f.app->head().envelopes.begin()->id;
+    REQUIRE(run("env.set", R"({"env":")" + env.str() + R"(","visible":true})"));
+    f.sync();
+    auto control = [&](const model::EnvTarget& t, const char* what) {
+        return f.view->tcpPanel().laneControl(t, what);
+    };
+    REQUIRE(control(withEnv, "mod"));
+    CHECK_FALSE(control(withEnv, "mod")->visible);  // no route: its column stays empty
+    CHECK(control(withEnv, "mode")->visible);
+    // Each parameter modulated: the second has a lane without an envelope.
+    for (const auto& p : params)
+        if (p == params[0] || p == params[1])
+            REQUIRE(run("modulate", R"({"target":{"fx":")" + fx + R"(","param":")" + p +
+                                        R"("},"source":"lfo"})"));
+    f.sync();
+    const model::Session& s = f.app->head();
+    REQUIRE(control(modOnly, "title"));
+    CHECK(control(withEnv, "mod")->visible);
+    CHECK(control(modOnly, "mod")->visible);
+    auto modColor = [&](const model::EnvTarget& t) {
+        return static_cast<ui::Button*>(control(t, "mod"))->textColor();
+    };
+    CHECK(modColor(modOnly) == "signal-cv");
+    // Its route off: "mod" dimmed, still there; on again: normal.
+    std::string modOnlyRoute;
+    for (const auto& m : f.app->head().modulations)
+        if (m.value->target == modOnly) modOnlyRoute = m.id.str();
+    REQUIRE(run("modulation.set", R"({"modulation":")" + modOnlyRoute + R"(","enabled":false})"));
+    f.sync();
+    REQUIRE(control(modOnly, "mod"));
+    CHECK(control(modOnly, "mod")->visible);
+    CHECK(modColor(modOnly) == "ink-faint");
+    CHECK(modColor(withEnv) == "signal-cv");
+    REQUIRE(run("modulation.set", R"({"modulation":")" + modOnlyRoute + R"(","enabled":true})"));
+    f.sync();
+    CHECK(modColor(modOnly) == "signal-cv");
+    CHECK_FALSE(control(modOnly, "mode")->visible);
+    CHECK_FALSE(control(modOnly, "active")->visible);
+    CHECK(control(modOnly, "hide")->visible);
+    // The same columns in both lanes.
+    CHECK(control(withEnv, "mod")->bounds().x == control(modOnly, "mod")->bounds().x);
+    CHECK(control(withEnv, "hide")->bounds().x == control(modOnly, "hide")->bounds().x);
+    // The parameter first, then the plug-in.
+    model::Envelope probe;
+    probe.target = modOnly;
+    const auto scale = f.view->trackLayout().scaleOf(probe);
+    const views::LaneTitle parts = views::laneTitle(probe, s, scale ? &*scale : nullptr);
+    CHECK(parts.owner == "Hickory");
+    CHECK(control(modOnly, "title")->valueText() == parts.param + " · Hickory");
+    // A long owner gives way before the parameter does.
+    REQUIRE(run("fx.set", R"({"fx":")" + fx +
+                              R"(","label":"A plug-in label far too long for any lane header"})"));
+    f.sync();
+    const std::string fitted = control(modOnly, "title")->valueText();
+    CHECK(fitted.starts_with(parts.param + " · A"));
+    CHECK(fitted.ends_with("…"));
+    // Two lines at this height (the title over the cells); a low lane puts
+    // the cells beside the title, in the same order.
+    CHECK(control(modOnly, "mod")->bounds().y > control(modOnly, "title")->bounds().bottom() - 1);
+    f.view->trackLayout().setGlobalHeight(20);  // lanes at their 28-unit minimum
+    f.sync();
+    f.view->tcpPanel().scrolled();
+    f.sync();
+    REQUIRE(control(modOnly, "mod"));
+    CHECK(control(modOnly, "mod")->bounds().y < control(modOnly, "title")->bounds().bottom());
+    CHECK(control(modOnly, "mod")->bounds().x > control(modOnly, "title")->bounds().x);
+    CHECK(control(withEnv, "hide")->bounds().x == control(modOnly, "hide")->bounds().x);
+    // Room for a few letters only: the parameter's, the owner gone.
+    const std::string low = control(modOnly, "title")->valueText();
+    INFO(low);
+    REQUIRE(!low.empty());
+    CHECK(low.find("Hickory") == std::string::npos);
+    CHECK(low.front() == parts.param.front());
+    // "mod" asks the app for the source of that target.
+    std::vector<model::EnvTarget> asked;
+    views::TcpCallbacks cb;
+    cb.modulationSource = [&](const model::EnvTarget& t, const ui::Rect&) { asked.push_back(t); };
+    cb.commit = [&](std::string_view command, json::Value args, std::string) {
+        REQUIRE(f.dispatcher->execute({std::string(command), std::move(args), kUi}));
+    };
+    f.view->setTcpCallbacks(std::move(cb));
+    f.root->click(control(modOnly, "mod")->id());
+    CHECK(asked == std::vector<model::EnvTarget>{modOnly});
+    // Hide on the lane without an envelope turns its route's lane off: the
+    // lane goes, in one undo step.
+    const auto versions = f.app->head().version;
+    f.root->click(control(modOnly, "hide")->id());
+    f.sync();
+    CHECK_FALSE(f.view->trackLayout().indexOfTarget(modOnly));
+    CHECK(f.app->head().version == versions + 1);
+}
+
+TEST_CASE("automation lanes: twin lanes' titles say their chain place or their item") {
+    // gui.md §4.3: two effects of one name in a chain are numbered; one
+    // effect's parameter on two items' takes of a track says each item.
+    Fixture f;
+    if (!f.ok) return;
+    auto run = [&](const char* command, const std::string& args) {
+        return f.dispatcher->execute({command, json::parse(args).value(), kUi});
+    };
+    const model::Id first = f.itemOnRow(0);
+    const model::Id track = f.item(first).track;
+    auto second = run("item.add", R"({"track":")" + track.str() +
+                                      R"(","position":64,"notation":"voice k; 1: C4:w"})");
+    REQUIRE(second);
+    const model::Id other = *model::Id::parse((*second)["item"].asString());
+    auto onTake = [&](model::Id item) -> std::optional<std::string> {
+        auto added = run(
+            "fx.add", R"({"take":")" + f.item(item).activeTake->str() + R"(","plugin":"Teasel"})");
+        if (!added) return std::nullopt;
+        return (*added)["fx"].asString();
+    };
+    const auto a = onTake(first), b = onTake(other);
+    if (!a || !b) {
+        MESSAGE("skipped: Teasel is not built (partial build)");
+        return;
+    }
+    auto envOn = [&](const std::string& fx) {
+        auto added = run(
+            "env.add", R"({"fx":")" + fx + R"(","param":"drive","points":[{"beat":0,"value":3}]})");
+        REQUIRE(added);
+        return *model::Id::parse((*added)["env"].asString());
+    };
+    const model::Id ea = envOn(*a), eb = envOn(*b);
+    const model::Session& s = f.app->head();
+    auto title = [&](model::Id env) { return views::envTitle(*s.envelopes.find(env), s, nullptr); };
+    const auto& names = s.takes.find(*f.item(first).activeTake)->name;
+    const auto& otherName = s.takes.find(*f.item(other).activeTake)->name;
+    auto barOf = [&](model::Id item) {
+        return std::to_string(s.timeMap->barBeat(model::itemSpan(s, f.item(item)).startBeat).bar);
+    };
+    CHECK(title(ea) == "Teasel · drive (take: " + (names.empty() ? "" : names + ", ") + "bar " +
+                           barOf(first) + ")");
+    CHECK(title(eb) == "Teasel · drive (take: " + (otherName.empty() ? "" : otherName + ", ") +
+                           "bar " + barOf(other) + ")");
+    CHECK(title(ea) != title(eb));
+    // A second Teasel in the first take's chain: each is numbered by its place.
+    auto twin =
+        run("fx.add", R"({"take":")" + f.item(first).activeTake->str() + R"(","plugin":"Teasel"})");
+    REQUIRE(twin);
+    const model::Id ec = envOn((*twin)["fx"].asString());
+    const model::Session& now = f.app->head();
+    auto titleNow = [&](model::Id env) {
+        return views::envTitle(*now.envelopes.find(env), now, nullptr);
+    };
+    CHECK(titleNow(ea).starts_with("Teasel 1 · drive (take"));
+    CHECK(titleNow(ec).starts_with("Teasel 2 · drive (take"));
+    // Alone on its track, a take effect's lane is just "(take)".
+    REQUIRE(run("item.remove", R"({"item":")" + other.str() + R"("})"));
+    REQUIRE(run("fx.remove", R"({"fx":")" + (*twin)["fx"].asString() + R"("})"));
+    const model::Session& alone = f.app->head();
+    CHECK(views::envTitle(*alone.envelopes.find(ea), alone, nullptr) == "Teasel · drive (take)");
+}
+
 TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item's track") {
     Fixture f;
     if (!f.ok) return;
@@ -1479,6 +1769,77 @@ TEST_CASE("arrange gestures: the menus paste where they open; the menu bar's has
         if (!row.separator)
             CHECK_MESSAGE(std::find(clicked.begin(), clicked.end(), row.label) == clicked.end(),
                           row.label);
+}
+
+TEST_CASE("arrange gestures: the Item menu sets how a MIDI take sounds against the song") {
+    // gui.md §6 (ADR-0098 amended): Play as written, Follow the song's key
+    // or chords, and Bake into notes, for an item whose heard take is MIDI.
+    Fixture f;
+    if (!f.ok) return;
+    auto& g = f.view->gestures();
+    auto exec = [&](const std::string& command, const std::string& args) {
+        auto r = f.dispatcher->execute({command, json::parse(args).value(), kUi});
+        REQUIRE(r);
+        return *r;
+    };
+    const std::string track = exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    const model::Id midi = *model::Id::parse(
+        exec("item.add", R"({"track":")" + track +
+                             R"(","bar":1,"notation":"voice v; 1: C4:q E4:q G4:q C5:q"})")["item"]
+            .asString());
+    f.sync();
+    std::vector<std::pair<model::Id, model::ClipFollow>> followed;
+    std::vector<std::vector<model::Id>> baked;
+    std::optional<std::string> refusal;
+    g.onFollow = [&](model::Id item, model::ClipFollow follow) {
+        followed.emplace_back(item, follow);
+    };
+    g.onBake = [&](const std::vector<model::Id>& items) { baked.push_back(items); };
+    g.followRefusal = [&](model::Id) { return refusal; };
+    g.setSelection({midi});
+    auto rows = [&] {
+        std::map<std::string, const ui::MenuItem*> out;
+        static std::vector<ui::MenuItem> held;
+        held = g.itemBarMenu();
+        for (const ui::MenuItem& m : held) out[m.label] = &m;
+        return out;
+    };
+    {
+        const auto r = rows();
+        REQUIRE(r.contains("Play as written"));
+        CHECK(r.at("Play as written")->checked);
+        REQUIRE(r.contains("Follow the song's key"));
+        CHECK(r.at("Follow the song's key")->enabled);
+        CHECK(r.contains("Follow the song's chords"));
+        REQUIRE(r.contains("Bake into notes"));
+        CHECK_FALSE(r.at("Bake into notes")->enabled);  // nothing follows
+    }
+    barMenu(f, midi);
+    pick(f, "Follow the song's key");
+    REQUIRE(followed.size() == 1);
+    CHECK(followed[0] == std::pair{midi, model::ClipFollow::Key});
+    // A take that cannot follow says why, and Key and Chords are greyed.
+    refusal = "no key in the song here";
+    {
+        const auto r = rows();
+        REQUIRE(r.contains("Follow the song's key (no key in the song here)"));
+        CHECK_FALSE(r.at("Follow the song's key (no key in the song here)")->enabled);
+        CHECK(r.at("Play as written")->enabled);
+    }
+    refusal.reset();
+    // Following: its entry is checked and Bake bakes it.
+    const std::string take = f.app->head().items.find(midi)->activeTake->str();
+    exec("take.set", R"({"take":")" + take + R"(","context":"1: key C major ~:w","follow":"key"})");
+    f.sync();
+    barMenu(f, midi);
+    CHECK(ui::menuItems(*f.root->find("item.menu"))[menuIndex(f, "Follow the song's key")].checked);
+    pick(f, "Bake into notes");
+    REQUIRE(baked.size() == 1);
+    CHECK(baked[0] == std::vector<model::Id>{midi});
+    // An audio item has none of them.
+    g.setSelection({f.itemOnRow(0)});
+    f.sync();
+    CHECK_FALSE(rows().contains("Play as written"));
 }
 
 TEST_CASE("arrange gestures: the Item menu sets what items follow; a time item moves by beats") {

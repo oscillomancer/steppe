@@ -9,6 +9,7 @@
 #include "clip_context.h"
 #include "command_helpers.h"
 #include "supple/model/env_shape.h"
+#include "supple/model/follow.h"
 #include "supple/model/launcher.h"
 #include "supple/model/take_owner.h"
 
@@ -176,6 +177,18 @@ FxEnvelopeMap fxEnvelopesFromClip(const model::Session& s, model::ClipKind kind,
     };
 }
 
+FxEnvelopeMap takeEnvelopesFromClip(const model::Session& s, model::ClipKind kind, double pos,
+                                    double phase, double period, double length) {
+    FxEnvelopeMap timeline = fxEnvelopesFromClip(s, kind, pos, phase, period, length);
+    return [timeline, pos](model::Envelope& env) {
+        const model::Timebase kept = env.timebase;
+        timeline(env);  // timeline beats, pass after pass
+        for (auto& p : env.points) p.pos -= pos;
+        fromZero(env.points);  // from the item's start
+        env.timebase = kept;
+    };
+}
+
 void convertTakeFxEnvelopes(model::EditTxn& t, const model::Session& s, Id take,
                             const FxEnvelopeMap& map) {
     const model::Take* tk = s.takes.find(take);
@@ -189,19 +202,20 @@ void convertTakeFxEnvelopes(model::EditTxn& t, const model::Session& s, Id take,
 Result<std::vector<Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
                                      const std::vector<Id>& takes, bool pooled,
                                      const std::function<double(double)>& envelopePos,
-                                     const std::string& path, const FxEnvelopeMap& fxEnvelope) {
+                                     const std::string& path, const FxEnvelopeMap& fxEnvelope,
+                                     const FxEnvelopeMap& takeEnvelope) {
     std::vector<Id> out;
     for (Id old : takes) {
         const model::Take* tk = s.takes.find(old);
         if (!tk)
             return Error("item.take", old.str() + " is missing", path,
                          "use a current take id from take.list");
-        if (envelopePos || fxEnvelope) {
+        if (envelopePos || fxEnvelope || takeEnvelope) {
             // Its own envelopes are measured from its owner's start, and so
             // are its FX's on a clip (C2): none of them can map automation
             // items.
             for (const auto& e : s.envelopes)
-                if ((envelopePos && e.value->target.object == old) ||
+                if (((envelopePos || takeEnvelope) && e.value->target.object == old) ||
                     (fxEnvelope && std::find(tk->chain.begin(), tk->chain.end(),
                                              e.value->target.object) != tk->chain.end()))
                     for (const auto& ai : s.autoItems)
@@ -223,7 +237,15 @@ Result<std::vector<Id>> copyTakesFor(model::EditTxn& t, const model::Session& s,
         }
         auto fresh = copyTake(s, t, old, std::move(copy));
         if (!fresh) return std::move(fresh).error();
-        if (envelopePos) convertTakeEnvelopes(t, t.preview(), *fresh, envelopePos);
+        if (takeEnvelope) {
+            const model::Session now = t.preview();
+            for (const auto& e : now.envelopes)
+                if (e.value->target.object == *fresh)
+                    t.modify<model::Envelope>(e.id,
+                                              [&](model::Envelope& env) { takeEnvelope(env); });
+        } else if (envelopePos) {
+            convertTakeEnvelopes(t, t.preview(), *fresh, envelopePos);
+        }
         if (fxEnvelope) convertTakeFxEnvelopes(t, t.preview(), *fresh, fxEnvelope);
         out.push_back(*fresh);
     }
@@ -372,7 +394,7 @@ Status checkClipMemory(EngineApp& app, const model::Session& after, const std::s
 }
 
 Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id itemId, bool pooled,
-                                 const std::string& path) {
+                                 const std::string& path, bool* truncated) {
     const model::Item& it = *s.items.find(itemId);
     model::Clip clip;
     std::optional<model::ClipKind> kind;
@@ -403,6 +425,24 @@ Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id 
                                fxEnvelopesToClip(s, clip.kind, span.startBeat, span.startSec));
     if (!copied) return std::move(copied).error();
     clip.takes = *copied;
+    // A clip's takes hold none of the four context members: the clip's context and follow are the
+    // clip's (ADR-0098, following is playback). An item whose active take follows gives the clip
+    // that take's context over the span copied, re-based and in clip beats, and its follow; the
+    // key and the chord in force at the span's start are carried in at 0, so the clip has a key.
+    for (const Id tk : clip.takes)
+        t.modify<model::Take>(
+            tk, [](model::Take& k) { model::fitTakeContext(k, model::TakeHome::Clip); });
+    if (clip.kind == model::ClipKind::Midi && it.activeTake)
+        if (const model::Take* active = s.takes.find(*it.activeTake);
+            active && active->follow != model::ClipFollow::None) {
+            const double rate = active->playrate > 0 ? active->playrate : 1.0;
+            const double u0 = active->contextPhase + active->startOffset;
+            bool cut = false;
+            clip.context = model::contextOver(*active, u0, u0 + clip.length * rate, &cut);
+            if (truncated) *truncated = cut;
+            for (model::ContextPoint& p : clip.context) p.beat /= rate;
+            clip.follow = active->follow;
+        }
     for (std::size_t k = 0; k < it.takes.size(); ++k)
         if (it.activeTake == it.takes[k]) clip.activeTake = clip.takes[k];
     if (!clip.activeTake && !clip.takes.empty()) clip.activeTake = clip.takes.front();
@@ -484,9 +524,13 @@ Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const m
     }
     // Its take FX's envelopes, in clip time, onto the timeline pass after
     // pass over the item (ADR-0097, amended, C2).
+    // Over more than one period, its take envelopes repeat as its FX's do.
+    const bool passes = item.loop && length > clip.length + tolerance;
     auto copied =
         copyTakesFor(t, s, clip.takes, pooled, shaped->envelopePos, path,
-                     fxEnvelopesFromClip(s, clip.kind, startBeat, 0, clip.length, length));
+                     fxEnvelopesFromClip(s, clip.kind, startBeat, 0, clip.length, length),
+                     passes ? takeEnvelopesFromClip(s, clip.kind, startBeat, 0, clip.length, length)
+                            : FxEnvelopeMap{});
     if (!copied) return std::move(copied).error();
     item.takes = *copied;
     for (std::size_t k = 0; k < clip.takes.size(); ++k)
@@ -1007,11 +1051,13 @@ void registerClipCommands(cmd::Registry& registry) {
             "the key and chords it was written against (context): as a lead sheet in clip bars "
             "(\"1: key D minor {Dm}:w\"), read from the project at a place (context_at), under "
             "the item it copies, or from the {SYMBOL} chords of its notation (a stated context "
-            "holding chords wins over them, clip.chords_ignored). follow (none, key or chords) "
+            "holding chords wins over them; clip.chords_ignored warns when they differ from it). "
+            "follow (none, key or chords) "
             "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying "
-            "the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the "
-            "key or chords under it (their follow argument), and a launched clip plays as "
-            "written until ADR-0098's X4 (launch.unfollowed).";
+            "the clip (item.add {clip}, scene.insert, arrangement.build) lays its notes as "
+            "written, the take carrying the clip's context and the follow (their follow "
+            "argument), so they sound as the key or chords under them say; a launched clip "
+            "follows them live (ADR-0098).";
         c.tags = {"clip launcher", "clip"};
         c.args = clipAddArgsSchema();
         c.result =
@@ -1082,6 +1128,8 @@ void registerClipCommands(cmd::Registry& registry) {
             ClipAddResult r;
             std::vector<notation::ChordSymbol> symbolsOf;        // the notation's {SYMBOL} chords
             std::optional<std::pair<double, double>> underItem;  // where an item's context is
+            std::optional<std::vector<model::ContextPoint>> fromTake;  // a following take's
+            model::ClipFollow itemFollow = model::ClipFollow::None;    // and its follow
             auto single = [&](model::Take take) {
                 const Id tk = t.create(std::move(take));
                 clip.takes = {tk};
@@ -1090,14 +1138,27 @@ void registerClipCommands(cmd::Registry& registry) {
             if (a.item) {
                 auto item = existing<model::Item>(s, *a.item, "/item");
                 if (!item) return std::move(item).error();
-                auto made = clipFromItem(t, s, *item, a.pooled, "/item");
+                bool cut = false;
+                auto made = clipFromItem(t, s, *item, a.pooled, "/item", &cut);
                 if (!made) return std::move(made).error();
+                if (cut)
+                    ctx.warn("clip.context_dropped",
+                             "the item's context is longer than a clip holds: the clip has the "
+                             "first points of it",
+                             "/item");
                 made->track = clip.track;
                 made->scene = clip.scene;
                 if (a.name) made->name = *a.name;  // else the item's
                 clip = std::move(*made);
                 const model::Item& it = *s.items.find(*item);
-                underItem = {model::itemSpan(s, it).startBeat, model::itemLengthBeats(s, it)};
+                // An item whose take follows keeps that take's context (clipFromItem); any
+                // other, the project's under it.
+                if (clip.follow != model::ClipFollow::None) {
+                    fromTake = clip.context;
+                    itemFollow = clip.follow;
+                } else {
+                    underItem = {model::itemSpan(s, it).startBeat, model::itemLengthBeats(s, it)};
+                }
             } else if (a.audioFile) {
                 auto imported = importAudioFile(app, t, s, *a.audioFile);
                 if (!imported) return std::move(imported).error().at("/audio_file");
@@ -1138,6 +1199,7 @@ void registerClipCommands(cmd::Registry& registry) {
             auto stated =
                 statedContext(ctx, s, clip.kind, clip.length, a.context, a.contextAt, underItem);
             if (!stated) return std::move(stated).error();
+            if (fromTake && !stated->points) stated->points = std::move(fromTake);
             std::vector<detail::ClipNote> notes;
             detail::SymbolChords symbols;
             if (!symbolsOf.empty())
@@ -1145,8 +1207,11 @@ void registerClipCommands(cmd::Registry& registry) {
                     detail::chordsFromSymbols(s, symbolsOf, s.project->ppq, 0.0, 1.0, clip.length);
             clip.context =
                 detail::composeContext(std::move(stated->points), std::move(symbols), notes);
-            SUPPLE_TRY(checkFollow(clip, a.follow.value_or(model::ClipFollow::None)));
-            clip.follow = a.follow.value_or(model::ClipFollow::None);
+            // A following take's follow is the default only for the context it brought.
+            const model::ClipFollow wanted =
+                a.follow.value_or(a.context || a.contextAt ? model::ClipFollow::None : itemFollow);
+            SUPPLE_TRY(checkFollow(clip, wanted));
+            clip.follow = wanted;
             warnNotes(ctx, notes);
             warnFit(ctx, model::fitClipContext(clip));
             // History replays the context the user saw, not the place it was read from:

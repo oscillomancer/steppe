@@ -8,20 +8,26 @@
 #include "plugin_scales.h"
 #include "supple/harmony/harmony.h"
 #include "supple/ui/shortcut.h"
+#include "take_follow.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 
 #include "supple/model/context.h"
+#include "supple/model/follow.h"
+#include "supple/model/source_mapping.h"
 #include "supple/notation/notation.h"
+#include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
+#include "supple/ui/gl.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/chord_field.h"
+#include "supple/views/item_body.h"
 #include "supple/views/lanes.h"
 #include "supple/views/launcher.h"
 #include "supple/views/mouse_map.h"
@@ -95,6 +101,44 @@ int nearestDegrees(int pitch, const harmony::Key& key, int semitones) {
     return best;
 }
 
+// The same for a following take's sounding view (gui.md §4.7): the written
+// pitch steps by degrees of the take's own key (what midi.edit does), and
+// the step chosen is the one whose result sounds nearest `target`, the
+// row under the pointer. `sounds` is what a written pitch sounds as there.
+int nearestSoundingDegrees(int written, const harmony::Key& key, int from, int target,
+                           const std::function<int(int)>& sounds) {
+    int best = 0, distance = std::abs(target - from);
+    for (int d = 1; d <= 84 && distance > 0; ++d)
+        for (int step : {d, -d})
+            if (const auto moved = harmony::transposeDegrees(written, key, step);
+                moved && std::abs(sounds(*moved) - target) < distance) {
+                best = step;
+                distance = std::abs(sounds(*moved) - target);
+            }
+    return best;
+}
+
+}  // namespace
+
+namespace {
+// An audio clip's time ruler (gui.md §4.7): the seconds between labels at
+// `pixelsPerSecond`, the first step at least `room` pixels wide, and a
+// label as m:ss.d (two decimals for steps under a tenth).
+double timeStep(double pixelsPerSecond, double room) {
+    for (double step : {0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0,
+                        120.0, 300.0, 600.0})
+        if (step * pixelsPerSecond >= room) return step;
+    return 1200.0;
+}
+std::string timeLabel(double seconds, double step) {
+    const double s = std::max(0.0, seconds);
+    const int minutes = static_cast<int>(s / 60);
+    char text[32];
+    std::snprintf(text, sizeof text, step < 0.1 ? "%d:%05.2f" : "%d:%04.1f", minutes,
+                  s - minutes * 60.0);
+    return text;
+}
+
 }  // namespace
 
 std::optional<harmony::Key> RollState::keyAt(double projectBeat) const {
@@ -115,7 +159,58 @@ bool RollState::outsideKey(const RollNote& note) const {
     return std::find(classes.begin(), classes.end(), pc) == classes.end();
 }
 
+std::optional<int> RollState::soundingPitch(std::size_t i, const RollNote& n) const {
+    if (!following || i >= sounds.size() || i >= notes.size() || sounds[i].pitch < 0)
+        return std::nullopt;
+    const RollNote& stored = notes[i];
+    if (n.pitch == stored.pitch && n.start == stored.start && n.channel == stored.channel)
+        return sounds[i].pitch;
+    // A preview: the note as it would be, at the place it would start (the start rule).
+    if (!soundsAt) return std::nullopt;
+    return soundsAt(n.pitch, n.channel, itemPosition + n.start + sounds[i].shift);
+}
+
+std::optional<harmony::Key> RollState::degreeKeyAt(std::size_t i, double projectBeat) const {
+    if (!following || !writtenKeyAt) return keyAt(projectBeat);
+    const double shift = i < sounds.size() && sounds[i].pitch >= 0 ? sounds[i].shift : passShift;
+    return writtenKeyAt(projectBeat + shift);
+}
+
+int RollState::drawnPitch(std::size_t i, const RollNote& n) const {
+    if (!soundingView()) return n.pitch;
+    return soundingPitch(i, n).value_or(n.pitch);
+}
+
+bool RollState::outsideItem(std::size_t i, const RollNote& n) const {
+    if (following && i < sounds.size() && sounds[i].pitch >= 0) return !sounds[i].heard;
+    constexpr double kSlack = 1e-9;
+    return n.start + n.length <= kSlack || n.start >= itemLength - kSlack;
+}
+
+std::string RollState::heldTakeChord(double beat) const {
+    std::string out = "r";
+    for (const ChordMark& m : rowLabel == "take" ? chords : otherChords) {
+        if (m.keyOnly || std::abs(m.beat - beat) >= 1e-6) continue;
+        std::string chord = m.text.substr(std::min(m.keyPrefix, m.text.size()));
+        if (!chord.empty()) out = std::move(chord);
+    }
+    return out;
+}
+
+std::optional<int> RollState::outlinePitch(std::size_t i, const RollNote& n) const {
+    // A note not heard has no outline (gui.md §4.7): it is drawn dim instead.
+    if (i < sounds.size() && !sounds[i].heard) return std::nullopt;
+    const auto heard = soundingPitch(i, n);
+    if (!heard || *heard == n.pitch) return std::nullopt;
+    return soundingView() ? n.pitch : *heard;
+}
+
+double RollState::audioGrid() const { return timeStep(pixelsPerBeat, 20); }
+
 double RollState::snapBeat(double itemBeat) const {
+    // An audio clip's axis is seconds: its grid is in seconds, set by the
+    // zoom (audioGrid), not the project's beats.
+    if (snap && audio) return std::round(itemBeat / audioGrid()) * audioGrid();
     if (!snap || grid <= 0) return itemBeat;
     const double project = itemPosition + itemBeat;
     return std::round(project / grid) * grid - itemPosition;
@@ -151,7 +246,7 @@ struct Geometry {
                 if (!s.degrees) {
                     n.pitch = std::clamp(n.pitch + s.dPitch, 0, 127);
                 } else if (s.dDegrees != 0) {  // by the key where the note lands
-                    if (const auto key = s.keyAt(s.itemPosition + n.start))
+                    if (const auto key = s.degreeKeyAt(i, s.itemPosition + n.start))
                         n.pitch =
                             harmony::transposeDegrees(n.pitch, *key, s.dDegrees).value_or(n.pitch);
                 }
@@ -172,6 +267,19 @@ struct Geometry {
                 break;
         }
         return n;
+    }
+    // The note at the pitch the view draws it at (a following take's sounding
+    // pitch, gui.md §4.7): as it is, for hit tests, and with the drag preview.
+    RollNote placed(std::size_t i) const {
+        RollNote n = s.notes[i];
+        n.pitch = s.drawnPitch(i, n);
+        return n;
+    }
+    RollNote drawn(std::size_t i) const {
+        const RollNote n = shown(i);
+        RollNote d = n;
+        d.pitch = s.drawnPitch(i, n);
+        return d;
     }
     ui::Rect rectOf(const RollNote& n) const {
         const float x = xOf(n.start);
@@ -198,6 +306,7 @@ class Roll : public ui::Node {
     Roll(RollState& s, MidiEditor& editor) : Node("midi.roll"), s_(s), editor_(editor) {
         focusable = true;
         interactive = true;
+        drawsGl = true;  // an audio clip's waveform
         layout.width = ui::SizeRule::fraction();
         layout.height = ui::SizeRule::fraction();
     }
@@ -206,8 +315,14 @@ class Roll : public ui::Node {
         const ui::Theme& t = c.theme();
         const Geometry g{s_, bounds()};
         const ui::Rect b = bounds();
+        theme_ = &t;
         c.save();
         c.clip(b);
+        if (s_.audio) {
+            paintAudio(c, g);
+            c.restore();
+            return;
+        }
         // Rows: those in the scale on the panel, the others on the darker
         // ground, per span of constant key (ADR-0095). Where no key holds,
         // the black keys' rows are the dark ones, as on the keyboard beside
@@ -234,11 +349,6 @@ class Roll : public ui::Node {
         for (int p = std::min(127, top); p >= std::max(0, bottom); --p)
             if (p % 12 == 0)
                 c.fillRect({b.x, g.yOf(p) + s_.rowHeight - 1, b.w, 1}, t.color("rule"));
-        // Outside the item: shaded.
-        const float x0 = g.xOf(0), x1 = g.xOf(s_.itemLength);
-        if (x0 > b.x) c.fillRect({b.x, b.y, x0 - b.x, b.h}, t.color("ground").withAlpha(0.6f));
-        if (x1 < b.right())
-            c.fillRect({x1, b.y, b.right() - x1, b.h}, t.color("ground").withAlpha(0.6f));
         // Grid: project grid lines, beats, bars.
         const double first = g.beatOf(b.x), last = g.beatOf(b.right());
         if (s_.grid > 0 && s_.grid * s_.pixelsPerBeat >= 6) {
@@ -253,22 +363,49 @@ class Roll : public ui::Node {
             const float x = g.xOf(bar - s_.itemPosition);
             c.fillRect({x, b.y, 1, b.h}, t.color("ink-faint"));
         }
+        // Outside the item or clip: shaded over the grid, its end marked as an
+        // audio clip's is; notes there are drawn dim (outsideItem).
+        paintBounds(c, g);
         // Notes (selected on top), names when there is room.
         std::vector<std::size_t> order(s_.notes.size());
         for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
         std::stable_partition(order.begin(), order.end(),
                               [&](std::size_t i) { return !s_.selected.contains(i); });
+        // A following take: each note's other pitch (the written one in the
+        // sounding view, the sounding one in the written) as an outline in
+        // the notes' colour, under them, where the two differ.
+        if (s_.following) {
+            const ui::Color outline = (s_.color ? s_.color(t) : t.color("accent")).withAlpha(0.6f);
+            for (std::size_t i : order) {
+                const RollNote n = g.shown(i);
+                const auto other = s_.outlinePitch(i, n);
+                if (!other) continue;
+                RollNote o = n;
+                o.pitch = *other;
+                const ui::Rect r = g.rectOf(o);
+                if (r.right() < b.x || r.x > b.right() || r.bottom() < b.y || r.y > b.bottom())
+                    continue;
+                c.strokeRound(r, 2, outline);
+            }
+        }
         for (std::size_t i : order) {
-            const RollNote n = g.shown(i);
+            const RollNote n = g.drawn(i);
             const ui::Rect r = g.rectOf(n);
             if (r.right() < b.x || r.x > b.right() || r.bottom() < b.y || r.y > b.bottom())
                 continue;
             const bool sel = s_.selected.contains(i);
-            c.fillRound(r, 2, velocityColor(t, s_, n.velocity, sel));
+            // Outside the item nothing is heard: the note is drawn dim, over
+            // the shading, still where it can be grabbed.
+            const bool outside = s_.outsideItem(i, s_.notes[i]);
+            auto dim = [outside](ui::Color col) {
+                if (outside) col.a *= 0.45f;
+                return col;
+            };
+            c.fillRound(r, 2, dim(velocityColor(t, s_, n.velocity, sel)));
             c.strokeRound(r, 2,
-                          sel                ? t.color("ink")
-                          : s_.outsideKey(n) ? t.color("meter-hot")
-                                             : t.color("ground").withAlpha(0.7f));
+                          dim(sel                ? t.color("ink")
+                              : s_.outsideKey(n) ? t.color("meter-hot")
+                                                 : t.color("ground").withAlpha(0.7f)));
             if (r.w > 34 && s_.rowHeight >= 11)
                 c.text({r.x + 3, r.y, r.w - 4, r.h},
                        harmony::spell(n.pitch, s_.keyAt(s_.itemPosition + n.start)), ui::Font::Ui,
@@ -286,7 +423,7 @@ class Roll : public ui::Node {
         for (bool selected : {true, false})
             for (std::size_t k = s_.notes.size(); k-- > 0;) {
                 if (s_.selected.contains(k) != selected) continue;
-                const ui::Rect r = g.rectOf(s_.notes[k]);
+                const ui::Rect r = g.rectOf(g.placed(k));
                 if (!r.contains(p)) continue;
                 if (edge)
                     *edge = p.x >= r.right() - kEdge && r.w > 2 * kEdge ? 1
@@ -316,9 +453,85 @@ class Roll : public ui::Node {
     }
 
     bool onPointer(const ui::PointerEvent& e) override {
+        // An audio clip's waveform is not edited: the wheel zooms and
+        // scrolls it, as the roll.
+        if (e.type == ui::PointerEvent::Type::Down) {
+            s_.envLastLane.reset();  // the editor's keys are the notes' again
+            if (!s_.envSel.empty()) {
+                s_.envSel.clear();  // a press on the roll takes the lanes' selection away
+                editor_.repaintLanes();
+            }
+        }
+        if (s_.audio && e.type != ui::PointerEvent::Type::Wheel) return false;
         const bool handled = handle(e);
+        if (s_.audio) return handled;
         noteDrag(e);
         return handled;
+    }
+
+    // An audio clip (gui.md §4.7): time lines at the ruler's labels, the
+    // clip shaded outside its span, its end marked. The waveform is drawn
+    // in paintGl.
+    void paintAudio(ui::Canvas& c, const Geometry& g) {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        c.fillRect(b, t.color("panel"));
+        // The snap grid faint, the ruler's labelled lines over it.
+        for (const auto& [step, alpha] :
+             {std::pair{s_.audioGrid(), 0.25f}, {timeStep(s_.pixelsPerBeat, 56), 0.6f}}) {
+            const double first = std::floor(std::max(0.0, g.beatOf(b.x)) / step) * step;
+            for (double at = first; g.xOf(at) <= b.right(); at += step)
+                c.fillRect({g.xOf(at), b.y, 1, b.h}, t.color("rule").withAlpha(alpha));
+        }
+        paintBounds(c, g);
+    }
+
+    // Before the start and past the end: shaded; the end a line with "end".
+    void paintBounds(ui::Canvas& c, const Geometry& g) {
+        const ui::Theme& t = c.theme();
+        const ui::Rect b = bounds();
+        const float x0 = g.xOf(0), x1 = g.xOf(s_.itemLength);
+        if (x0 > b.x) c.fillRect({b.x, b.y, x0 - b.x, b.h}, t.color("ground").withAlpha(0.6f));
+        s_.endMarkX.reset();
+        if (x1 < b.right()) {
+            const float from = std::max(x1, b.x);
+            c.fillRect({from, b.y, b.right() - from, b.h}, t.color("ground").withAlpha(0.6f));
+            if (x1 >= b.x) {  // the end itself in view
+                c.fillRect({x1, b.y, 1, b.h}, t.color("ink-quiet"));
+                c.text({x1 + 4, b.y + 2, 60, 14}, "end", ui::Font::Ui, t.type("caption"),
+                       t.color("ink-quiet"), ui::kLeft | ui::kMiddle);
+                s_.endMarkX = x1;
+            }
+        }
+    }
+
+    void paintGl(const ui::GlFrame& frame) override {
+        s_.waveColumns = 0;
+        if (!s_.audio || !s_.wave || glFailed_ || !theme_) return;
+        peaks::PeakService* service = editor_.peaks();
+        if (!service) return;
+        if (!strips_) {
+            auto made = ui::StripRenderer::create();
+            if (!made) {
+                glFailed_ = true;
+                return;
+            }
+            strips_.emplace(std::move(*made));
+        }
+        const auto pyramid = service->get(s_.wave->hash, s_.wave->path);
+        s_.wavePending = !pyramid;
+        if (!pyramid) return;  // the service's delivery repaints (peaksReady)
+        const ui::Rect b = bounds();
+        const Geometry g{s_, b};
+        const float x0 = std::max(b.x, g.xOf(0)), x1 = std::min(b.right(), g.xOf(s_.itemLength));
+        if (x1 <= x0 || b.h < 16) return;
+        const ui::Rect r{x0, b.y + 6, x1 - x0, b.h - 12};
+        const views::AudioWindow window{[g](float x) { return g.beatOf(x); }, s_.pixelsPerBeat,
+                                        s_.wave->loop};
+        const ui::Color color = s_.color ? s_.color(*theme_) : theme_->color("accent");
+        s_.waveColumns = views::drawAudioBody(*strips_, frame, r, *pyramid, s_.wave->take, window,
+                                              s_.wave->gain, ui::packRgba(color.withAlpha(0.85f)));
+        strips_->flush(frame);
     }
 
     // Edge scroll, as in the arrange view (gui.md §4.3): a note drag or a
@@ -328,6 +541,9 @@ class Roll : public ui::Node {
     // and the drag's last event is delivered again, so the notes in hand
     // stay under the pointer.
     bool autoScrolling() const { return edgeVx_ != 0 || edgeVy_ != 0; }
+    std::optional<ui::StripRenderer> strips_;  // the waveform's, made on first use
+    bool glFailed_ = false;
+    const ui::Theme* theme_ = nullptr;  // from the last paint (paintGl has no canvas)
     bool autoScroll(double seconds) {
         if (!autoScrolling()) return false;
         if (!scrollsAtEdge()) {
@@ -427,10 +643,25 @@ class Roll : public ui::Node {
                     const double start = std::max(
                         0.0, std::floor((s_.itemPosition + g.beatOf(e.pos.x)) / s_.grid) * s_.grid -
                                  s_.itemPosition);
+                    const double at = s_.snap ? start : std::max(0.0, g.beatOf(e.pos.x));
+                    int pitch = std::clamp(g.pitchOf(e.pos.y), 0, 127);
+                    // The sounding view draws where notes sound: the note
+                    // written is the one that sounds as the row clicked there.
+                    if (s_.soundingView()) {
+                        const auto written = writtenFor(pitch, at);
+                        if (!written) {
+                            editor_.refuse("MIDI: nothing written sounds as " +
+                                           harmony::spell(pitch, s_.keyAt(s_.itemPosition + at)) +
+                                           " here: draw it in Written");
+                            s_.drag = RollState::Drag::None;
+                            return true;
+                        }
+                        pitch = *written;
+                    }
                     json::Value op = json::Value::object();
                     op["op"] = "add";
-                    op["pitch"] = std::clamp(g.pitchOf(e.pos.y), 0, 127);
-                    op["start"] = s_.snap ? start : std::max(0.0, g.beatOf(e.pos.x));
+                    op["pitch"] = pitch;
+                    op["start"] = at - s_.frameShift;
                     op["length"] = s_.lastLength;
                     op["velocity"] = s_.lastVelocity;
                     json::Value ops = json::Value::array();
@@ -481,9 +712,25 @@ class Roll : public ui::Node {
                     // many degrees.
                     s_.dDegrees = 0;
                     const RollNote& anchor = s_.notes[anchor_];
+                    const double at = s_.itemPosition + anchor.start + s_.dBeats;
                     if (s_.degrees && s_.dPitch != 0)
-                        if (const auto key = s_.keyAt(s_.itemPosition + anchor.start + s_.dBeats))
-                            s_.dDegrees = nearestDegrees(anchor.pitch, *key, s_.dPitch);
+                        if (const auto key = s_.degreeKeyAt(anchor_, at)) {
+                            if (s_.soundingView()) {
+                                // Steps of the written pitch in the take's key,
+                                // the one that sounds nearest the pointer's row
+                                // where the note lands.
+                                RollNote moved = anchor;
+                                moved.start += s_.dBeats;
+                                const int from = s_.drawnPitch(anchor_, anchor);
+                                s_.dDegrees = nearestSoundingDegrees(
+                                    anchor.pitch, *key, from, from + s_.dPitch, [&](int w) {
+                                        moved.pitch = w;
+                                        return s_.soundingPitch(anchor_, moved).value_or(w);
+                                    });
+                            } else {
+                                s_.dDegrees = nearestDegrees(anchor.pitch, *key, s_.dPitch);
+                            }
+                        }
                     break;
                 }
                 case RollState::Drag::ResizeEnd:
@@ -497,7 +744,7 @@ class Roll : public ui::Node {
                                   std::abs(e.pos.x - press_.x), std::abs(e.pos.y - press_.y)};
                     s_.selected = marqueeBase_;
                     for (std::size_t i = 0; i < s_.notes.size(); ++i) {
-                        const ui::Rect r = g.rectOf(s_.notes[i]);
+                        const ui::Rect r = g.rectOf(g.placed(i));
                         if (r.x < s_.marquee.right() && r.right() > s_.marquee.x &&
                             r.y < s_.marquee.bottom() && r.bottom() > s_.marquee.y)
                             s_.selected.insert(i);
@@ -546,9 +793,38 @@ class Roll : public ui::Node {
             } else if (drag == RollState::Drag::Move && !moved_ && !(e.mods & ui::kShift)) {
                 s_.selected = {anchor_};  // a click on a selected note selects just it
             }
+            // The sounding view, by semitones: where the note in hand lands on
+            // a pitch that a neighbouring written pitch also sounds as there,
+            // say so (the mapping merges them, gui.md §4.7). A degree step
+            // lands in the scale, where a merge is with an alteration only.
+            std::string merged;
+            if (drag == RollState::Drag::Move && moved_ && !s_.degrees && s_.dPitch != 0 &&
+                s_.soundingView()) {
+                s_.drag = drag;  // the preview as it was drawn
+                const RollNote landed = g.shown(anchor_);
+                s_.drag = RollState::Drag::None;
+                if (const auto heard = s_.soundingPitch(anchor_, landed))
+                    for (const int other : {landed.pitch - 1, landed.pitch + 1}) {
+                        RollNote twin = landed;
+                        twin.pitch = std::clamp(other, 0, 127);
+                        if (twin.pitch == landed.pitch || s_.soundingPitch(anchor_, twin) != heard)
+                            continue;
+                        // The written pitches in the take's key, the sounding
+                        // one in the song's, as each view names them.
+                        const double at = s_.itemPosition + landed.start;
+                        const auto own = s_.degreeKeyAt(anchor_, at);
+                        const int lo = std::min(landed.pitch, twin.pitch);
+                        const int hi = std::max(landed.pitch, twin.pitch);
+                        merged = harmony::spell(lo, own) + " and " + harmony::spell(hi, own) +
+                                 " both sound as " + harmony::spell(*heard, s_.keyAt(at)) + " here";
+                        break;
+                    }
+            }
             s_.dBeats = s_.dLength = s_.dStart = 0;
             s_.dPitch = s_.dDegrees = 0;
-            if (ops.size() > 0) (void)editor_.edit(std::move(ops), s_.gestureVersion);
+            if (ops.size() > 0 && editor_.edit(std::move(ops), s_.gestureVersion) &&
+                !merged.empty())
+                editor_.notice(merged);
             repaintAll();
             return true;
         }
@@ -558,6 +834,19 @@ class Roll : public ui::Node {
     std::function<void()> repaintAll = [] {};
 
   private:
+    // The written pitch nearest `sounding` that sounds as it at roll beat
+    // `at` (channel 1), within an octave either way; none when no written
+    // pitch does (the mapping can merge two pitches and skip one).
+    std::optional<int> writtenFor(int sounding, double at) const {
+        if (!s_.soundsAt) return std::nullopt;
+        for (int d = 0; d <= 12; ++d)
+            for (const int w : {sounding - d, sounding + d}) {
+                if (w < 0 || w > 127) continue;
+                if (s_.soundsAt(w, 1, s_.itemPosition + at + s_.passShift) == sounding) return w;
+                if (d == 0) break;
+            }
+        return std::nullopt;
+    }
     ui::Root* Root() { return root(); }
     void focusSelf() {
         if (ui::Root* r = root()) r->focus(this);
@@ -585,6 +874,14 @@ class Keys : public ui::Node {
         c.save();
         c.clip(b);
         c.fillRect(b, t.color("raised"));
+        if (s_.audio) {  // an audio clip: its take's name, as a lane's title
+            if (s_.wave)
+                c.text({b.x + 6, b.y + 4, b.w - 8, 16}, s_.wave->label, ui::Font::Ui,
+                       t.type("caption"), t.color("ink"), ui::kLeft | ui::kMiddle);
+            c.fillRect({b.right() - 1, b.y, 1, b.h}, t.color("rule"));
+            c.restore();
+            return;
+        }
         for (int p = std::min(127, g.pitchOf(b.y)); p >= std::max(0, g.pitchOf(b.bottom())); --p) {
             const float y = g.yOf(p);
             if (blackKey(p)) c.fillRect({b.x, y, b.w * 0.62f, s_.rowHeight}, t.color("ground"));
@@ -610,6 +907,11 @@ class Keys : public ui::Node {
 // least), set by the zoom and the narrowest bar around the item (barLines),
 // never by the scroll; no two numbers ever touch.
 class BarStrip : public ui::Node {
+    struct ChordHit {
+        double beat = 0;  // the chord point's project beat
+        ui::Rect label;   // its start and name, as the last paint drew them
+    };
+
   public:
     static constexpr float kHeight = 16, kGap = 12;
     BarStrip(const RollState& s, MidiEditor& editor, std::vector<int>& labelled,
@@ -629,6 +931,7 @@ class BarStrip : public ui::Node {
     // the grid beat there.
     bool onPointer(const ui::PointerEvent& e) override {
         using T = ui::PointerEvent::Type;
+        if (s_.audio) return false;  // an audio clip's ruler: no chords or keys
         const ui::Rect b = bounds();
         const Geometry g{s_, {b.x + kKeysWidth, b.y, b.w - kKeysWidth, b.h}};
         auto snap = [&](double at) {
@@ -655,10 +958,14 @@ class BarStrip : public ui::Node {
                 const Held held = held_;
                 held_ = Held::None;
                 invalidate();
-                if (moved_ && draft_ != from_)
-                    editor_.moveClipPoint(
-                        held == Held::Chord ? model::ContextType::Chord : model::ContextType::Key,
-                        from_, draft_, copy_ && held == Held::Chord);
+                if (moved_ && draft_ != from_) {
+                    const model::ContextType type =
+                        held == Held::Chord ? model::ContextType::Chord : model::ContextType::Key;
+                    if (takeHeld_)
+                        editor_.moveTakePoint(type, from_, draft_, copy_ && held == Held::Chord);
+                    else
+                        editor_.moveClipPoint(type, from_, draft_, copy_ && held == Held::Chord);
+                }
                 return true;
             }
         }
@@ -673,7 +980,38 @@ class BarStrip : public ui::Node {
             const double at = std::max(0.0, s_.itemPosition + g.beatOf(e.pos.x));
             return s_.grid > 0 ? std::round(at / s_.grid) * s_.grid : at;
         };
+        // A timeline item's take (gui.md §4.7): its own row's chords are
+        // dragged, double-clicked and right-clicked as a clip's, each edit
+        // one take.set {context}.
+        if (!s_.clip) {
+            std::optional<double> takeHit;
+            for (const ChordHit& h : takeHits_)
+                if (h.label.contains(e.pos)) takeHit = h.beat;
+            const bool onTakeRow = takeRow_.h > 0 && takeRow_.contains(e.pos);
+            // The take's row, or anywhere while the take has no context of
+            // its own (no row yet): the song's row is edited on the ruler.
+            if (e.button == 3 && (onTakeRow || s_.rowLabel.empty())) {
+                editor_.openTakeContextMenu(gridBeat(), takeHit, e.pos);
+                return true;
+            }
+            if (onTakeRow && e.button == 1 && e.clicks == 1 && takeHit) {
+                held_ = Held::Chord;
+                takeHeld_ = true;
+                from_ = draft_ = *takeHit;
+                pressX_ = e.pos.x;
+                moved_ = false;
+                copy_ = (e.mods & ui::kAlt) != 0;
+                heldText_ = s_.heldTakeChord(from_);
+                if (ui::Root* r = root()) r->capture(this);
+                return true;
+            }
+            if (onTakeRow && e.button == 1 && e.clicks == 2) {
+                editor_.editTakeChord(takeHit ? *takeHit : gridBeat(), e.pos);
+                return true;
+            }
+        }
         if (s_.clip && e.button == 1 && e.clicks == 1 && (hit || keyHit)) {
+            takeHeld_ = false;
             held_ = hit ? Held::Chord : Held::Key;
             from_ = draft_ = hit ? *hit : *keyHit;
             pressX_ = e.pos.x;
@@ -692,7 +1030,11 @@ class BarStrip : public ui::Node {
         }
         // A double-click edits the chord there; on a clip with no chords yet,
         // anywhere on the strip starts its first.
-        const bool chordRow = !s_.chords.empty() && e.pos.y >= b.y + kHeight;
+        // The first row is the project's (or a clip's own) unless it is the
+        // take's, handled above; the second row is the take's or read-only.
+        const bool chordRow = !s_.chords.empty() && e.pos.y >= b.y + kHeight &&
+                              s_.rowLabel != "take" &&
+                              (s_.clip || e.pos.y < b.y + kHeight + kChordRowHeight);
         const bool firstChord = s_.clip && s_.chords.empty();
         if (e.button != 1 || e.clicks != 2 || !(chordRow || firstChord)) return false;
         editor_.editChord(hit ? *hit : gridBeat(), e.pos);
@@ -702,7 +1044,8 @@ class BarStrip : public ui::Node {
     // hold over the roll (ADR-0095).
     float wanted() const {
         return kHeight + (s_.chords.empty() ? 0 : kChordRowHeight) +
-               (s_.keyMarks.empty() ? 0 : kChordRowHeight);
+               (s_.keyMarks.empty() ? 0 : kChordRowHeight) +
+               (s_.otherChords.empty() ? 0 : kChordRowHeight);
     }
     void paint(ui::Canvas& c) override {
         const ui::Theme& t = c.theme();
@@ -712,7 +1055,10 @@ class BarStrip : public ui::Node {
         const Geometry g{s_, area};
         labelled_.clear();
         chordLabels_.clear();
+        otherLabels_.clear();
         chordHits_.clear();
+        takeHits_.clear();
+        takeRow_ = {};
         c.fillRect(whole, t.color("raised"));
         c.fillRect({whole.x, whole.bottom() - 1, whole.w, 1}, t.color("rule"));
         c.fillRect({area.x - 1, whole.y, 1, whole.h}, t.color("rule"));
@@ -720,11 +1066,38 @@ class BarStrip : public ui::Node {
         {
             float y = b.bottom();
             const float chordH = s_.chords.empty() ? 0.0f : kChordRowHeight;
-            if (chordH > 0 && whole.bottom() > y)
-                paintChords(c, {area.x, y, area.w, std::min(chordH, whole.bottom() - y)});
+            const Geometry rowG{s_, area};
+            // A clip's last chord ends with the clip, a take's with the item
+            // (ADR-0098: their points lie inside them); the project's runs on.
+            const std::optional<float> end = s_.clip ? std::optional<float>(rowG.xOf(s_.contextEnd))
+                                             : s_.chordsEnd
+                                                 ? std::optional<float>(rowG.xOf(*s_.chordsEnd))
+                                                 : std::nullopt;
+            if (chordH > 0 && whole.bottom() > y) {
+                const ui::Rect row{area.x, y, area.w, std::min(chordH, whole.bottom() - y)};
+                const bool take = s_.rowLabel == "take";
+                paintChords(c, row, s_.chords, end, false, take ? &takeHits_ : &chordHits_);
+                if (take) takeRow_ = row;
+                rowLabel(c, row, s_.rowLabel);
+            }
             y += chordH;
-            if (!s_.keyMarks.empty() && whole.bottom() > y)
+            if (!s_.keyMarks.empty() && whole.bottom() > y) {
                 paintKeys(c, {area.x, y, area.w, std::min(kChordRowHeight, whole.bottom() - y)});
+                y += kChordRowHeight;
+            }
+            // The context the view does not read (a take's, or the song's in
+            // the written view), dim and read-only.
+            if (!s_.otherChords.empty() && whole.bottom() > y) {
+                const ui::Rect row{area.x, y, area.w,
+                                   std::min(kChordRowHeight, whole.bottom() - y)};
+                const bool take = s_.otherLabel == "take";
+                paintChords(
+                    c, row, s_.otherChords,
+                    s_.otherEnd ? std::optional<float>(rowG.xOf(*s_.otherEnd)) : std::nullopt, true,
+                    take ? &takeHits_ : nullptr);
+                if (take) takeRow_ = row;
+                rowLabel(c, row, s_.otherLabel);
+            }
             // A point in hand: where it lands.
             if (held_ != Held::None && moved_) {
                 const float x = chordX(draft_);
@@ -732,11 +1105,15 @@ class BarStrip : public ui::Node {
                 c.save();
                 c.clip(rows);
                 c.fillRect({x, rows.y, 1.5f, rows.h}, t.color("focus"));
-                c.text({x + 4, held_ == Held::Chord ? b.bottom() : y, 160, kChordRowHeight - 1},
-                       heldText_, ui::Font::Ui, t.type("caption"), t.color("focus"),
-                       ui::kLeft | ui::kMiddle);
+                const float textY = takeHeld_ ? takeRow_.y : held_ == Held::Chord ? b.bottom() : y;
+                c.text({x + 4, textY, 160, kChordRowHeight - 1}, heldText_, ui::Font::Ui,
+                       t.type("caption"), t.color("focus"), ui::kLeft | ui::kMiddle);
                 c.restore();
             }
+        }
+        if (s_.audio) {
+            paintTime(c, b, area);
+            return;
         }
         if (s_.barLines.empty()) return;
         const float size = t.type("caption");
@@ -773,33 +1150,64 @@ class BarStrip : public ui::Node {
     }
 
   private:
+    // An audio clip's ruler: seconds from its start, labelled m:ss.d at a
+    // step that fits the label (timeStep), as the roll's time lines.
+    void paintTime(ui::Canvas& c, const ui::Rect& b, const ui::Rect& area) {
+        const ui::Theme& t = c.theme();
+        const Geometry g{s_, area};
+        const float size = t.type("caption");
+        const double step = timeStep(s_.pixelsPerBeat, 56);
+        c.save();
+        c.clip(area);
+        const double first = std::floor(std::max(0.0, g.beatOf(area.x)) / step) * step;
+        for (double at = first; g.xOf(at) <= area.right(); at += step) {
+            const float x = g.xOf(at);
+            const std::string text = timeLabel(at, step);
+            c.fillRect({x, b.bottom() - 6, 1, 5}, t.color("ink-quiet"));
+            c.text({x + 3, b.y, c.textWidth(text, ui::Font::Mono, size) + 4, b.h - 1}, text,
+                   ui::Font::Mono, size, t.color("ink"), ui::kLeft | ui::kMiddle);
+        }
+        c.restore();
+    }
+    // A row's name in the keyboard column ("song", "take"), when the strip
+    // shows two contexts.
+    void rowLabel(ui::Canvas& c, const ui::Rect& row, const std::string& text) {
+        if (text.empty()) return;
+        const ui::Theme& t = c.theme();
+        c.text({bounds().x + 4, row.y, kKeysWidth - 6, row.h - 1}, text, ui::Font::Ui,
+               t.type("caption") - 1, t.color("ink-quiet"), ui::kLeft | ui::kMiddle);
+    }
     // Each chord a cell from its beat to the next chord point, in the
-    // ruler's cell and letters; a "no chord" point a short faint tick.
-    void paintChords(ui::Canvas& c, const ui::Rect& row) {
+    // ruler's cell and letters; a "no chord" point a short faint tick. The
+    // last cell ends at `lastEnd` when given, else runs on. A `dim` row is
+    // drawn quieter and counted apart; each cell's start and name go to
+    // `hits` when given (the row that takes edits).
+    void paintChords(ui::Canvas& c, const ui::Rect& row,
+                     const std::vector<RollState::ChordMark>& marks, std::optional<float> lastEnd,
+                     bool dim, std::vector<ChordHit>* hits) {
         const ui::Theme& t = c.theme();
         const Geometry g{s_, row};
         const float size = t.type("caption");
         c.save();
         c.clip(row);
-        for (std::size_t i = 0; i < s_.chords.size(); ++i) {
-            const RollState::ChordMark& m = s_.chords[i];
+        for (std::size_t i = 0; i < marks.size(); ++i) {
+            const RollState::ChordMark& m = marks[i];
             const float x = g.xOf(m.beat - s_.itemPosition);
             if (x > row.right()) break;
-            // A clip's last chord ends with the clip (ADR-0098: its points
-            // lie inside it); the project's runs on.
-            const float end = i + 1 < s_.chords.size()
-                                  ? g.xOf(s_.chords[i + 1].beat - s_.itemPosition)
-                              : s_.clip ? g.xOf(s_.contextEnd)
-                                        : row.right() + 2;
+            const float end = i + 1 < marks.size() ? g.xOf(marks[i + 1].beat - s_.itemPosition)
+                              : lastEnd            ? *lastEnd
+                                                   : row.right() + 2;
             if (end < row.x) continue;
+            // A key change's own cell holds no chord point: nothing to grab.
+            std::vector<ChordHit>* cellHits = m.keyOnly ? nullptr : hits;
             if (m.text.empty()) {
                 c.fillRect({x, row.y + 4, 1, row.h - 8}, t.color("ink-faint"));
-                chordHits_.push_back({m.beat, {x - 4, row.y, 8, row.h}});
+                if (cellHits) cellHits->push_back({m.beat, {x - 4, row.y, 8, row.h}});
                 continue;
             }
             const ui::Rect cell{x + 1, row.y + 2, std::max(0.0f, end - x - 2), row.h - 5};
             c.fillRound(cell, 2, t.color("panel"));
-            c.strokeRound(cell, 2, t.color("rule"));
+            c.strokeRound(cell, 2, dim ? t.color("rule").withAlpha(0.6f) : t.color("rule"));
             const float room = std::max(0.0f, cell.w - 8);
             if (room <= 0) continue;
             // A cell that starts left of the roll keeps its name at the edge.
@@ -808,12 +1216,16 @@ class BarStrip : public ui::Node {
             const float shown = std::min(room, cell.right() - 4 - textX);
             const std::string fit = c.elide(m.text, ui::Font::Ui, size, std::max(0.0f, shown));
             const float fitW = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
-            chordHits_.push_back(
-                {m.beat, {x - 4, row.y, std::max(8.0f, textX + fitW + 8 - (x - 4)), row.h}});
+            if (cellHits)
+                cellHits->push_back(
+                    {m.beat, {x - 4, row.y, std::max(8.0f, textX + fitW + 8 - (x - 4)), row.h}});
             if (fit.empty()) continue;
             c.text({textX, row.y, shown + 4, row.h - 1}, fit, ui::Font::Ui, size,
-                   t.color(m.known ? "ink" : "ink-quiet"), ui::kLeft | ui::kMiddle);
-            chordLabels_.push_back(fit);
+                   t.color(dim       ? "ink-quiet"
+                           : m.known ? "ink"
+                                     : "ink-quiet"),
+                   ui::kLeft | ui::kMiddle);
+            (dim ? otherLabels_ : chordLabels_).push_back(fit);
         }
         c.restore();
     }
@@ -843,10 +1255,6 @@ class BarStrip : public ui::Node {
         }
         c.restore();
     }
-    struct ChordHit {
-        double beat = 0;  // the chord point's project beat
-        ui::Rect label;   // its start and name, as the last paint drew them
-    };
     enum class Held { None, Chord, Key };
     Held held_ = Held::None;
     double from_ = 0, draft_ = 0;  // the held point's beat, and where it would land
@@ -859,6 +1267,12 @@ class BarStrip : public ui::Node {
     std::vector<int>& labelled_;
     std::vector<std::string>& chordLabels_;
     std::vector<ChordHit> chordHits_;
+    std::vector<ChordHit> takeHits_;  // the take's row, wherever it is drawn
+    ui::Rect takeRow_{};              // that row as last painted; empty without one
+    bool takeHeld_ = false;           // the point in hand is the take's
+
+  public:
+    std::vector<std::string> otherLabels_;  // the dim row's names, as last painted (tests)
 };
 
 // ----------------------------------------------------------------- velocity lane
@@ -1072,8 +1486,8 @@ class CcLane : public ui::Node {
             clear["op"] = "cc.clear";
             clear["number"] = s_.ccNumber;
             clear["channel"] = 1;
-            clear["from"] = s_.ccFrom;
-            clear["to"] = s_.ccTo;
+            clear["from"] = s_.ccFrom - s_.frameShift;
+            clear["to"] = s_.ccTo - s_.frameShift;
             ops.push_back(std::move(clear));
             if (!s_.ccErasing) {
                 json::Value set = json::Value::object(), pts = json::Value::array();
@@ -1081,7 +1495,7 @@ class CcLane : public ui::Node {
                 set["number"] = s_.ccNumber;
                 for (const CcPoint& p : s_.ccDraft) {
                     json::Value v = json::Value::object();
-                    v["beat"] = p.beat;
+                    v["beat"] = p.beat - s_.frameShift;
                     v["value"] = p.value;
                     pts.push_back(std::move(v));
                 }
@@ -1126,9 +1540,11 @@ class EnvLane : public ui::Node {
         return {b.x + kKeysWidth, b.y + kTitle, std::max(0.0f, b.w - kKeysWidth),
                 std::max(1.0f, b.h - kTitle - 4)};
     }
+    // The header column holds only "hide": the lane's title row names it in
+    // full ("Volume (take)"), which the narrow column could only cut short.
     ui::Rect hideRect() const {
         const ui::Rect b = bounds();
-        return {b.x + 4, b.y + 20, kKeysWidth - 8, 14};
+        return {b.x + 4, b.y + 4, kKeysWidth - 8, 14};
     }
     const RollEnvLane* lane() const {
         for (const RollEnvLane& l : s_.envLanes)
@@ -1142,15 +1558,19 @@ class EnvLane : public ui::Node {
         c.fillRect({b.x, b.y, b.w, 1}, t.color("rule"));
         const RollEnvLane* l = lane();
         if (!l) return;
-        c.text({b.x + 4, b.y + 4, kKeysWidth - 6, 14}, l->name, ui::Font::Ui, t.type("caption"),
-               t.color("ink"));
         c.text(hideRect(), "hide", ui::Font::Ui, t.type("caption"), t.color("ink-faint"));
         const ui::Rect a = area();
         c.text({a.x + 4, b.y + 1, std::max(0.0f, a.w - 8), kTitle}, l->title, ui::Font::Ui,
                t.type("caption"), t.color("ink-quiet"));
         const Geometry g{s_, roll_ ? roll_->bounds() : a};
+        // The points as dragged (in the press's order, as moving_ names
+        // them), and the curve through them in position order.
         model::Envelope env = l->envelope;
         if (dragging_) env.points = draft_;
+        model::Envelope curve = env;
+        std::stable_sort(
+            curve.points.begin(), curve.points.end(),
+            [](const model::EnvPoint& x, const model::EnvPoint& y) { return x.pos < y.pos; });
         auto yOf = [&](double value) {
             return a.bottom() -
                    static_cast<float>(std::clamp(l->scale.toNorm(value), 0.0, 1.0)) * a.h;
@@ -1162,17 +1582,17 @@ class EnvLane : public ui::Node {
         const float end = g.xOf(s_.itemLength);
         // The curve to the clip's end, then its value there held, dashed.
         float px = a.x;
-        float py = yOf(views::envValueAt(env, std::max(0.0, g.beatOf(px)), l->fallback));
+        float py = yOf(views::envValueAt(curve, std::max(0.0, g.beatOf(px)), l->fallback));
         for (float x = a.x + 2; x <= std::min(a.right(), end) + 2; x += 2) {
             const float cx = std::min(x, end);
-            const float y = yOf(views::envValueAt(env, std::max(0.0, g.beatOf(cx)), l->fallback));
+            const float y = yOf(views::envValueAt(curve, std::max(0.0, g.beatOf(cx)), l->fallback));
             c.line({px, py}, {cx, y}, ink, 1.5f);
             px = cx;
             py = y;
             if (cx >= end) break;
         }
         if (end < a.right()) {
-            const float y = yOf(views::envValueAt(env, s_.itemLength, l->fallback));
+            const float y = yOf(views::envValueAt(curve, s_.itemLength, l->fallback));
             for (float x = std::max(end, a.x); x < a.right(); x += 7)
                 c.line({x, y}, {std::min(x + 4, a.right()), y}, ink.withAlpha(0.45f), 1.2f);
         }
@@ -1180,10 +1600,21 @@ class EnvLane : public ui::Node {
             const model::EnvPoint& pt = env.points[i];
             const float x = g.xOf(pt.pos), y = yOf(pt.value);
             const bool held = dragging_ && i == index_;
-            c.fillRect({x - 3, y - 3, 6, 6}, held ? t.color("focus") : ink);
+            const bool picked = dragging_ ? moving_.contains(i) : s_.envSelected(env_, pt);
+            // Selected: the timeline's filled 8 px square in the focus colour.
+            if (held || picked)
+                c.fillRect({x - 4, y - 4, 8, 8}, t.color("focus"));
+            else
+                c.fillRect({x - 3, y - 3, 6, 6}, ink);
             if (held)
                 c.text({x + 6, y - 14, 120, 12}, l->scale.text(pt.value), ui::Font::Ui,
                        t.type("caption"), t.color("ink"));
+        }
+        // A marquee being drawn.
+        if (marking_ && marked_) {
+            const ui::Rect m = markRect();
+            c.fillRect(m, t.color("focus").withAlpha(0.15f));
+            c.strokeRect(m, t.color("focus"), 1);
         }
         // Before the clip's start and past its end: not played (as the roll).
         if (const float start = g.xOf(0); start > a.x)
@@ -1198,7 +1629,7 @@ class EnvLane : public ui::Node {
         using T = ui::PointerEvent::Type;
         const RollEnvLane* l = lane();
         if (e.type == T::Cancel) {
-            dragging_ = false;
+            dragging_ = marking_ = false;
             invalidate();
             return true;
         }
@@ -1228,7 +1659,58 @@ class EnvLane : public ui::Node {
             return true;
         }
         if (e.type == T::Down && e.pos.x < a.x) return true;  // the header
-        if (e.type == T::Down && (e.button == 3 || (e.button == 1 && (e.mods & ui::kAlt)))) {
+        if (e.type == T::Down) {
+            s_.selected.clear();  // a lane's press leaves the notes
+            s_.envLastLane = env_;
+        }
+        // A marquee, as on the timeline's lanes: a right-drag (Shift or Ctrl
+        // adds to the selection), or a Ctrl-drag from empty space (adds). A
+        // right-click without a drag opens the lane's menu.
+        if (e.type == T::Down &&
+            (e.button == 3 || (e.button == 1 && (e.mods & ui::kCtrl) && !hit(e.pos)))) {
+            marking_ = true;
+            marked_ = false;
+            markButton_ = e.button;
+            markAdd_ = e.button == 1 || (e.mods & (ui::kShift | ui::kCtrl));
+            markFrom_ = markTo_ = e.pos;
+            if (ui::Root* r = root()) {
+                r->capture(this);
+                if (roll_) r->focus(roll_);
+            }
+            return true;
+        }
+        if (e.type == T::Move && marking_) {
+            markTo_ = e.pos;
+            marked_ = marked_ || std::abs(markTo_.x - markFrom_.x) > 3 ||
+                      std::abs(markTo_.y - markFrom_.y) > 3;
+            invalidate();
+            return true;
+        }
+        if (e.type == T::Up && marking_) {
+            if (ui::Root* r = root()) r->capture(nullptr);
+            marking_ = false;
+            if (marked_) {
+                // The lane's points inside it become the selection, or join it.
+                const ui::Rect m = markRect();
+                if (!markAdd_ || s_.envSelLane != env_) s_.envSel.clear();
+                s_.envSelLane = env_;
+                for (const model::EnvPoint& pt : l->envelope.points) {
+                    const float x = g.xOf(pt.pos);
+                    const float y =
+                        a.bottom() -
+                        static_cast<float>(std::clamp(l->scale.toNorm(pt.value), 0.0, 1.0)) * a.h;
+                    if (m.contains({x, y}) && !s_.envSelected(env_, pt))
+                        s_.envSel.push_back({pt.pos, pt.value});
+                }
+                editor_.repaintLanes();
+            } else if (markButton_ == 3) {
+                editor_.openEnvLaneMenu(env_, e.pos, beatAt(markFrom_.x), valueAt(markFrom_.y));
+            }
+            invalidate();
+            return true;
+        }
+        // Alt+click deletes the point under it.
+        if (e.type == T::Down && e.button == 1 && (e.mods & ui::kAlt)) {
             if (const auto i = hit(e.pos)) {
                 const std::uint64_t version = editor_.beginGesture();
                 std::vector<model::EnvPoint> pts = l->envelope.points;
@@ -1237,40 +1719,83 @@ class EnvLane : public ui::Node {
             }
             return true;
         }
+        // Ctrl+click adds a point to the selection or takes it out.
+        if (e.type == T::Down && e.button == 1 && (e.mods & ui::kCtrl)) {
+            if (const auto i = hit(e.pos)) {
+                const model::EnvPoint& pt = l->envelope.points[*i];
+                if (s_.envSelLane != env_) s_.envSel.clear();
+                s_.envSelLane = env_;
+                if (s_.envSelected(env_, pt))
+                    std::erase_if(s_.envSel, [&](const auto& sel) {
+                        return std::abs(sel.first - pt.pos) < 1e-9 &&
+                               std::abs(sel.second - pt.value) < 1e-9;
+                    });
+                else
+                    s_.envSel.push_back({pt.pos, pt.value});
+                invalidate();
+            }
+            return true;
+        }
         if (e.type == T::Down && e.button == 1) {
             version_ = editor_.beginGesture();
             l = lane();  // the gesture starts from the session as it is
             if (!l) return true;
-            draft_ = l->envelope.points;
+            draft_ = original_ = l->envelope.points;
+            moving_.clear();
             if (const auto i = hit(e.pos)) {
+                // A point: the selection moves with it (it alone when it was
+                // not selected).
+                if (!s_.envSelected(env_, original_[*i])) {
+                    s_.envSelLane = env_;
+                    s_.envSel = {{original_[*i].pos, original_[*i].value}};
+                }
+                for (std::size_t k = 0; k < original_.size(); ++k)
+                    if (s_.envSelected(env_, original_[k])) moving_.insert(k);
                 index_ = *i;
-                grab_ = {e.pos.x - g.xOf(draft_[*i].pos), 0};
+                grab_ = {e.pos.x - g.xOf(original_[*i].pos), 0};
+                moved_ = false;
             } else {
+                // Empty space: a new point there, selected, in hand.
                 model::EnvPoint pt;
                 pt.pos = beatAt(e.pos.x);
                 pt.value = valueAt(e.pos.y);
                 const auto at = std::upper_bound(
-                    draft_.begin(), draft_.end(), pt.pos,
+                    original_.begin(), original_.end(), pt.pos,
                     [](double beat, const model::EnvPoint& p) { return beat < p.pos; });
-                index_ = static_cast<std::size_t>(at - draft_.begin());
-                draft_.insert(at, pt);
+                index_ = static_cast<std::size_t>(at - original_.begin());
+                original_.insert(at, pt);
+                draft_ = original_;
+                moving_ = {index_};
+                s_.envSelLane = env_;
+                s_.envSel = {{pt.pos, pt.value}};
                 grab_ = {};
+                moved_ = true;  // a new point is an edit already
             }
             dragging_ = true;
-            moved_ = !hit(e.pos).has_value();  // a new point is an edit already
-            if (ui::Root* r = root()) r->capture(this);
+            if (ui::Root* r = root()) {
+                r->capture(this);
+                if (roll_) r->focus(roll_);  // the editor's keys: Delete takes the points
+            }
             invalidate();
             return true;
         }
         if (e.type == T::Move && dragging_) {
-            model::EnvPoint pt = draft_[index_];
-            draft_.erase(draft_.begin() + static_cast<std::ptrdiff_t>(index_));
-            pt.pos = beatAt(e.pos.x - grab_.x);
-            pt.value = valueAt(e.pos.y);
-            // It stays between its neighbours' beats, so the order holds.
-            if (index_ > 0) pt.pos = std::max(pt.pos, draft_[index_ - 1].pos);
-            if (index_ < draft_.size()) pt.pos = std::min(pt.pos, draft_[index_].pos);
-            draft_.insert(draft_.begin() + static_cast<std::ptrdiff_t>(index_), pt);
+            // Every selected point moves by the anchor's time (on the grid
+            // unless Shift) and the same share of the lane's height.
+            const model::EnvPoint& anchor = original_[index_];
+            const double to = (e.mods & ui::kShift)
+                                  ? std::clamp(g.beatOf(e.pos.x - grab_.x), 0.0, s_.itemLength)
+                                  : beatAt(e.pos.x - grab_.x);
+            double dt = to - anchor.pos;
+            for (std::size_t k : moving_)
+                dt = std::clamp(dt, -original_[k].pos, s_.itemLength - original_[k].pos);
+            const double dn = l->scale.toNorm(valueAt(e.pos.y)) - l->scale.toNorm(anchor.value);
+            draft_ = original_;
+            for (std::size_t k : moving_) {
+                draft_[k].pos = original_[k].pos + dt;
+                draft_[k].value = l->scale.fromNorm(
+                    std::clamp(l->scale.toNorm(original_[k].value) + dn, 0.0, 1.0));
+            }
             moved_ = true;
             invalidate();
             return true;
@@ -1278,7 +1803,20 @@ class EnvLane : public ui::Node {
         if (e.type == T::Up && dragging_) {
             if (ui::Root* r = root()) r->capture(nullptr);
             dragging_ = false;
-            if (moved_) (void)editor_.setEnvPoints(env_, draft_, version_);
+            if (moved_) {
+                // The selection follows its points; the order is by position.
+                s_.envSel.clear();
+                for (std::size_t k : moving_) s_.envSel.push_back({draft_[k].pos, draft_[k].value});
+                std::stable_sort(draft_.begin(), draft_.end(),
+                                 [](const model::EnvPoint& x, const model::EnvPoint& y) {
+                                     return x.pos < y.pos;
+                                 });
+                (void)editor_.setEnvPoints(env_, draft_, version_);
+            } else if (moving_.size() > 1) {
+                // A click on one of several selected points selects it alone.
+                s_.envSel = {{original_[index_].pos, original_[index_].value}};
+            }
+            moving_.clear();
             invalidate();
             return true;
         }
@@ -1290,11 +1828,24 @@ class EnvLane : public ui::Node {
     MidiEditor& editor_;
     ui::Node*& roll_;
     model::Id env_;
+    // The marquee: from where it was pressed to the pointer, inside the lane.
+    ui::Rect markRect() const {
+        const ui::Rect a = area();
+        const float x0 = std::clamp(std::min(markFrom_.x, markTo_.x), a.x, a.right());
+        const float x1 = std::clamp(std::max(markFrom_.x, markTo_.x), a.x, a.right());
+        const float y0 = std::clamp(std::min(markFrom_.y, markTo_.y), a.y, a.bottom());
+        const float y1 = std::clamp(std::max(markFrom_.y, markTo_.y), a.y, a.bottom());
+        return {x0, y0, x1 - x0, y1 - y0};
+    }
+    bool marking_ = false, marked_ = false, markAdd_ = false;
+    int markButton_ = 0;
+    ui::Point markFrom_{}, markTo_{};
     bool dragging_ = false, moved_ = false;
-    std::size_t index_ = 0;
+    std::size_t index_ = 0;         // the point in hand, in original_
+    std::set<std::size_t> moving_;  // the selected points it moves, in original_
     ui::Point grab_{};
     std::uint64_t version_ = 0;
-    std::vector<model::EnvPoint> draft_;
+    std::vector<model::EnvPoint> original_, draft_;  // at the press, and as dragged
 };
 
 // ----------------------------------------------------------------- playhead (overlay)
@@ -1346,6 +1897,16 @@ class Panel : public ui::Node {
 
 // ----------------------------------------------------------------- MidiEditor
 
+double rollFrameShift(const MidiOwner& owner) {
+    if (!owner.item || !owner.item->loop || !owner.take || !owner.source) return 0;
+    const auto& seq = owner.source->sequence;
+    if (seq.ppq <= 0 || seq.length <= 0) return 0;
+    const double rate = owner.take->playrate > 0 ? owner.take->playrate : 1.0;
+    const double cycle = static_cast<double>(seq.length) / seq.ppq;
+    const model::SourceBeatMapping mapping{owner.take->startOffset, rate, cycle};
+    return (owner.take->startOffset - mapping.sourceOffset(true)) / rate;
+}
+
 std::optional<MidiOwner> midiOwner(const model::Session& s, const std::string& text) {
     const auto id = model::Id::parse(text);
     if (!id) return std::nullopt;
@@ -1364,7 +1925,10 @@ std::optional<MidiOwner> midiOwner(const model::Session& s, const std::string& t
     }
     o.take = take ? s.takes.find(*take) : nullptr;
     o.source = o.take && o.take->source ? s.midi.find(*o.take->source) : nullptr;
-    if (!o.source) return std::nullopt;
+    // An audio clip opens too (its waveform and lanes); an audio item does
+    // not: its take is edited on the timeline.
+    if (!o.source && o.clip && o.take && o.take->source) o.audio = s.media.find(*o.take->source);
+    if (!o.source && !o.audio) return std::nullopt;
     return o;
 }
 
@@ -1408,11 +1972,21 @@ MidiEditor::MidiEditor(ui::Root& root, AppActions& actions, cmd::Dispatcher& dis
             return;
         }
         const model::Session& s = app_.head();
-        auto isMidi = [&s](const std::string& text) { return midiOwner(s, text).has_value(); };
+        // A MIDI take; an audio clip only when it was open last or picked in
+        // the launcher.
+        std::set<std::string> picked;
+        if (!lastItem_.empty()) picked.insert(lastItem_);
+        auto isMidi = [&](const std::string& text) {
+            const auto o = midiOwner(s, text);
+            return o && (o->source || picked.contains(text));
+        };
         std::vector<std::string> candidates;
         if (!lastItem_.empty()) candidates.push_back(lastItem_);
         if (ui_.clipsFocused)  // a launcher cell was clicked last
-            for (const std::string& c : ui_.selectedClips) candidates.push_back(c);
+            for (const std::string& c : ui_.selectedClips) {
+                candidates.push_back(c);
+                picked.insert(c);
+            }
         for (const std::string& it : ui_.selectedItems) candidates.push_back(it);
         for (const auto& e : s.items) candidates.push_back(e.id.str());
         for (const auto& e : s.clips) candidates.push_back(e.id.str());  // none: a clip
@@ -1479,35 +2053,60 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
                                {"1/32", 0.125},
                                {"1/8T", 1.0 / 3}}) {
         const double gv = grid;
-        header.emplace<ui::Button>(std::string("midi.grid.") + label, label, [this, gv] {
-            state_.grid = gv;
-            state_.lastLength = gv;
-            refreshTitle();
-            if (roll_) roll_->invalidate();
-        });
+        midiOnly_.push_back(
+            &header.emplace<ui::Button>(std::string("midi.grid.") + label, label, [this, gv] {
+                state_.grid = gv;
+                state_.lastLength = gv;
+                refreshTitle();
+                if (roll_) roll_->invalidate();
+            }));
     }
+    // Snap stays for an audio clip: its lanes snap to a seconds grid.
     header.emplace<ui::Button>("midi.snap", "Snap", [this] {
         state_.snap = !state_.snap;
         refreshTitle();
     });
-    header.emplace<ui::Button>("midi.quantize", "Quantize", [this] { quantize(); });
+    midiOnly_.push_back(
+        &header.emplace<ui::Button>("midi.quantize", "Quantize", [this] { quantize(); }));
+    // A following take (gui.md §4.7): Written shows the written pitches, the
+    // sounding ones outlined; Pass picks which pass of a looped item whose
+    // passes sound differently the roll shows. Each only while it applies.
+    writtenButton_ =
+        &header.emplace<ui::Toggle>("midi.written", "Written", "accent", [this](bool on) {
+            state_.written = on;
+            (void)reload();
+        });
+    writtenButton_->layout.width = ui::SizeRule::content();
+    writtenButton_->textSize = "small";
+    writtenButton_->offInk = "ink";
+    writtenButton_->visible = false;
+    passButton_ = &header.emplace<ui::Button>("midi.pass", "Pass 1", [this] { openPassMenu(); });
+    passButton_->layout.width = ui::SizeRule::content();
+    passButton_->visible = false;
     // The key at the item's start; lit, pitch drags and arrows go by degrees.
-    keyButton_ = &header.emplace<ui::Toggle>("midi.key", "No key", "accent",
-                                             [this](bool on) { state_.degrees = on; });
+    // An audio clip's is its one key point, set from the button's menu.
+    keyButton_ = &header.emplace<ui::Toggle>("midi.key", "No key", "accent", [this](bool on) {
+        if (state_.audio) {
+            keyButton_->setOn(false);
+            openAudioKeyMenu();
+            return;
+        }
+        state_.degrees = on;
+    });
     keyButton_->layout.width = ui::SizeRule::content();
     keyButton_->textSize = "small";  // as the header's buttons
     keyButton_->offInk = "ink";
     keyButton_->enabled = false;
     // One menu owns every lane under the roll (gui.md §4.7).
     lanesButton_ = &header.emplace<ui::Button>("midi.lanes", "Lanes", [this] { openLanesMenu(); });
-    header.emplace<ui::Button>("midi.notation.toggle", "Notation", [this] {
+    midiOnly_.push_back(&header.emplace<ui::Button>("midi.notation.toggle", "Notation", [this] {
         if (!notationPane_) return;
         notationPane_->visible = !notationPane_->visible;
         if (!notationPane_->visible) root_.releaseWithin(notationPane_);
         root_.relayout();
         root_.damageAll();
-    });
-    header.emplace<ui::Button>("midi.list.toggle", "List", [this] {
+    }));
+    midiOnly_.push_back(&header.emplace<ui::Button>("midi.list.toggle", "List", [this] {
         if (!listPane_ || !rollPane_) return;
         listPane_->visible = !listPane_->visible;
         rollPane_->visible = !listPane_->visible;
@@ -1516,7 +2115,7 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
         if (!listPane_->visible) root_.focus(roll_);
         root_.relayout();
         root_.damageAll();
-    });
+    }));
     header.emplace<ui::Button>("midi.close", "Close", [this] { close(); });
 
     auto& body = panel->emplace<ui::Node>("midi.body");
@@ -1565,8 +2164,8 @@ std::unique_ptr<ui::Node> MidiEditor::build() {
     pane.layout.width = ui::SizeRule::fixed(380);
     pane.layout.padding = ui::Insets{4, 8, 6, 8};
     pane.layout.gap = 4;
-    pane.emplace<ui::Label>("midi.notation.title", "Notation", ui::Font::UiBold, "caption",
-                            "ink-quiet");
+    notationTitle_ = &pane.emplace<ui::Label>("midi.notation.title", "Notation", ui::Font::UiBold,
+                                              "caption", "ink-quiet");
     auto& text = pane.emplace<ui::TextArea>("midi.notation.text");
     text_ = &text;
     text.layout.height = ui::SizeRule::fraction();
@@ -1599,11 +2198,15 @@ Status MidiEditor::open(const std::string& item) {
         return r;
     }
     lastItem_ = item;
-    // Center the view on the notes (or middle C).
+    // Center the view on the notes (or middle C): a following take's as
+    // drawn and as outlined, so both show.
     int lo = 127, hi = 0;
-    for (const RollNote& n : state_.notes) {
-        lo = std::min(lo, n.pitch);
-        hi = std::max(hi, n.pitch);
+    for (std::size_t i = 0; i < state_.notes.size(); ++i) {
+        const RollNote& n = state_.notes[i];
+        for (const int p : {n.pitch, state_.soundingPitch(i, n).value_or(n.pitch)}) {
+            lo = std::min(lo, p);
+            hi = std::max(hi, p);
+        }
     }
     const double center = state_.notes.empty() ? 60 : (lo + hi) / 2.0;
     // The roll's height as the panel will lay it out for this item: the
@@ -1679,6 +2282,7 @@ json::Value MidiEditor::saveLayout() const {
     v["height"] = static_cast<double>(height_);
     v["velocity"] = state_.velocityShown;
     v["cc"] = state_.ccShown ? state_.ccNumber : 0;
+    v["written"] = state_.written;
     return v;
 }
 
@@ -1692,6 +2296,7 @@ void MidiEditor::loadLayout(const json::Value& v) {
     }
     if (const json::Value* vel = v.find("velocity"); vel && vel->isBool())
         state_.velocityShown = vel->asBool();
+    if (const json::Value* w = v.find("written"); w && w->isBool()) state_.written = w->asBool();
     // A controller the menu offers, or 0 for none; anything else is ignored.
     if (const json::Value* cc = v.find("cc"); cc && cc->isNumber()) {
         const double n = cc->asDouble();
@@ -1713,8 +2318,41 @@ void MidiEditor::applyLanes() {
         lane->visible = shown;
         changed = true;
     };
-    show(velocity_, state_.velocityShown);
-    show(ccLane_, state_.ccShown);
+    show(velocity_, state_.velocityShown && !state_.audio);
+    show(ccLane_, state_.ccShown && !state_.audio);
+    if (!changed) return;
+    root_.relayout();
+    root_.damageAll();
+}
+
+void MidiEditor::applyMode() {
+    // An audio clip has no notes: no grid, Snap, Quantize, notation, event
+    // list, velocity or CC lane. Its pane keeps the title, the key button,
+    // Lanes, Close, the waveform and its clip-time lanes.
+    const bool audio = state_.audio;
+    bool changed = false;
+    auto show = [&](ui::Node* node, bool shown) {
+        if (!node || node->visible == shown) return;
+        if (!shown) root_.releaseWithin(node);
+        node->visible = shown;
+        changed = true;
+    };
+    for (ui::Node* n : midiOnly_) show(n, !audio);
+    if (audio) {
+        if (notationPane_ && notationPane_->visible) notationWasShown_ = true;
+        if (notationPane_ && !notationPane_->visible && !audioShown_) notationWasShown_ = false;
+        show(notationPane_, false);
+        if (listPane_ && listPane_->visible) {
+            eventList_->activate(false);
+            show(listPane_, false);
+            show(rollPane_, true);
+            show(roll_, true);
+        }
+    } else if (audioShown_) {
+        show(notationPane_, notationWasShown_);
+    }
+    audioShown_ = audio;
+    applyLanes();
     if (!changed) return;
     root_.relayout();
     root_.damageAll();
@@ -1729,13 +2367,16 @@ void MidiEditor::openLanesMenu() {
         m.run = std::move(run);
         items.push_back(std::move(m));
     };
-    add("Velocity", state_.velocityShown, [this] {
-        state_.velocityShown = !state_.velocityShown;
-        applyLanes();
-    });
+    // An audio clip has no notes: no velocity or CC lane.
+    if (!state_.audio)
+        add("Velocity", state_.velocityShown, [this] {
+            state_.velocityShown = !state_.velocityShown;
+            applyLanes();
+        });
     // The CC lane shows one controller: picking another switches it, picking
     // the shown one hides the lane.
     for (const auto& [number, name] : kCcs) {
+        if (state_.audio) break;
         const int n = number;
         add("CC " + std::to_string(n) + " " + name, state_.ccShown && state_.ccNumber == n,
             [this, n] {
@@ -1761,14 +2402,14 @@ void MidiEditor::openLanesMenu() {
             return false;
         };
         // A MIDI take's envelope shapes what an instrument in its take FX
-        // plays (env.take_midi otherwise).
-        bool instrument = false;
+        // plays (env.take_midi otherwise); an audio take's shapes its audio.
+        bool instrument = owner->audio != nullptr;
         for (model::Id fx : owner->take->chain)
             if (const model::FxInstance* f = head.fx.find(fx))
                 if (auto info = app_.findPlugin(f->plugin.id)) instrument |= info->instrument;
         ui::MenuItem rule;
         rule.separator = true;
-        items.push_back(rule);
+        if (!items.empty()) items.push_back(rule);
         for (const auto& [param, label] :
              {std::pair{"volume", "Take volume"}, {"pan", "Take pan"}, {"mute", "Take mute"}}) {
             const model::EnvTarget target{take, param};
@@ -1882,7 +2523,7 @@ Status MidiEditor::setEnvPoints(model::Id env, const std::vector<model::EnvPoint
     args["env"] = env.str();
     for (const model::EnvPoint& pt : points) {
         json::Value p = json::Value::object();
-        p["beat"] = pt.pos;
+        p[state_.audio ? "seconds" : "beat"] = pt.pos;  // the clip's unit
         p["value"] = pt.value;
         p["shape"] = shapeName(pt.shape);
         if (pt.tension != 0) p["tension"] = pt.tension;
@@ -1918,7 +2559,7 @@ Status MidiEditor::showEnvelope(const model::EnvTarget& target, bool shown) {
                 point = json::Value::object();
     args[target.object.kind == model::Kind::Fx ? "fx" : "take"] = target.object.str();
     args["param"] = target.param;
-    point["beat"] = 0.0;
+    point[state_.audio ? "seconds" : "beat"] = 0.0;  // the clip's unit
     point["value"] = views::targetValue(head, target, *scale);
     points.push_back(std::move(point));
     args["points"] = std::move(points);
@@ -1942,7 +2583,148 @@ void MidiEditor::zoomRows(float wheel, float anchorY) {
     if (keys_) keys_->invalidate();
 }
 
+// A clip's take lanes, in its unit (beats, or seconds for an audio clip);
+// an item's are on the timeline.
+void MidiEditor::collectEnvLanes(const MidiOwner& owner) {
+    state_.envLanes.clear();
+    if (owner.clip && owner.clip->activeTake) {
+        const model::Session& head = app_.head();
+        const model::Id takeId = *owner.clip->activeTake;
+        std::vector<std::pair<std::pair<int, std::uint32_t>, RollEnvLane>> lanes;
+        for (const auto& e : head.envelopes) {
+            const model::Envelope& env = *e.value;
+            if (!env.visible) continue;
+            int order = 0;
+            std::optional<views::EnvScale> scale;
+            if (env.target.object == takeId) {
+                scale = views::envScale(env);
+                order = views::envOrder(env);
+            } else if (env.target.object.kind == model::Kind::Fx) {
+                const auto at = std::find(owner.take->chain.begin(), owner.take->chain.end(),
+                                          env.target.object);
+                if (at == owner.take->chain.end()) continue;
+                scale = (*scales_)(env);
+                order = 100 + static_cast<int>(at - owner.take->chain.begin());
+            }
+            if (!scale) continue;
+            RollEnvLane lane;
+            lane.env = e.id;
+            lane.envelope = env;
+            lane.scale = *scale;
+            lane.fallback = views::targetValue(head, env.target, *scale);
+            lane.title = env.target.object == takeId ? views::envTitle(env) + " (take)"
+                                                     : views::envTitle(env, head, &*scale);
+            lanes.push_back({{order, e.id.n}, std::move(lane)});
+        }
+        std::sort(lanes.begin(), lanes.end(),
+                  [](const auto& x, const auto& y) { return x.first < y.first; });
+        for (auto& l : lanes) state_.envLanes.push_back(std::move(l.second));
+    }
+}
+
+namespace {
+
+RollState::ChordMark chordMarkOf(double beat, const model::ContextPoint& p) {
+    const bool known = p.symbol.empty() || model::parseChordPoint(p).has_value();
+    return {beat, p.symbol + (known ? "" : "?"), known};
+}
+
+// A take's own context on the roll's axis (gui.md §4.7): its points at roll
+// beats (item time, the content's first pass) in [lo, hi), each at every
+// repeat of its context beat, and the key and chord holding at lo carried in
+// there; as project beats (itemPosition + roll beat), as the strip and keyAt
+// read them. A note at roll beat t starts at unwrapped source beat
+// start_offset + t × playrate, whose context beat is the phase plus that
+// (model::contextBeatOf), so a point at context beat c falls at
+// (c + k × period − phase − start_offset) / playrate.
+void takeContextMarks(const model::Take& take, double itemPosition, double lo, double hi,
+                      std::vector<RollState::ChordMark>& chords,
+                      std::vector<RollState::KeySpan>& keys) {
+    const double rate = take.playrate > 0 ? take.playrate : 1.0;
+    struct Mark {
+        double at;
+        const model::ContextPoint* point;
+    };
+    std::vector<Mark> marks;
+    for (const model::ContextPoint& p : take.context) {
+        const double base = (p.beat - take.contextPhase - take.startOffset) / rate;
+        if (!take.contextPeriod || !(*take.contextPeriod > 0)) {
+            if (base >= lo && base < hi) marks.push_back({base, &p});
+            continue;
+        }
+        const double step = *take.contextPeriod / rate;
+        std::size_t n = 0;
+        for (double t = base + std::ceil((lo - base) / step) * step; t < hi && n < 4096;
+             t += step, ++n)
+            marks.push_back({t, &p});
+    }
+    std::stable_sort(marks.begin(), marks.end(),
+                     [](const Mark& a, const Mark& b) { return a.at < b.at; });
+    // What holds at lo is carried in there; a mark that repeats the point
+    // already holding (the first point, which holds before itself) adds no
+    // cell, so it is drawn once, from the left.
+    const double from = model::contextBeatOf(take, take.startOffset + lo * rate);
+    const model::ContextPoint* lastKey = model::contextKeyPointAt(take.context, from);
+    const model::ContextPoint* lastChord = model::contextChordPointAt(take.context, from);
+    if (lastKey) keys.push_back({itemPosition + lo, model::parseKey(*lastKey)});
+    if (lastChord) chords.push_back(chordMarkOf(itemPosition + lo, *lastChord));
+    std::vector<std::pair<double, std::string>> keyChanges;
+    for (const Mark& m : marks) {
+        if (m.point->type == model::ContextType::Key) {
+            if (m.point == lastKey) continue;
+            lastKey = m.point;
+            keys.push_back({itemPosition + m.at, model::parseKey(*m.point)});
+            keyChanges.emplace_back(itemPosition + m.at, model::keyWords(*m.point));
+        } else {
+            if (m.point == lastChord) continue;
+            lastChord = m.point;
+            chords.push_back(chordMarkOf(itemPosition + m.at, *m.point));
+        }
+    }
+    // Each key change after the one holding at lo is named in the row (gui.md
+    // §4.7): on the cell of a chord at the same beat, else on a cell of its
+    // own over the chord holding there.
+    const std::vector<RollState::ChordMark> plain = chords;  // the chords alone, unnamed
+    for (const auto& [beat, words] : keyChanges) {
+        auto at = std::find_if(chords.begin(), chords.end(), [&](const RollState::ChordMark& c) {
+            return c.beat >= beat - model::kPlaceSlack;
+        });
+        if (at != chords.end() && at->beat <= beat + model::kPlaceSlack) {
+            at->keyPrefix = at->text.empty() ? words.size() : words.size() + 2;
+            at->text = at->text.empty() ? words : words + ": " + at->text;
+            continue;
+        }
+        RollState::ChordMark own{beat, words, true, true};
+        const auto holding = std::find_if(
+            plain.rbegin(), plain.rend(),
+            [&](const RollState::ChordMark& c) { return c.beat < beat - model::kPlaceSlack; });
+        if (holding != plain.rend()) {
+            if (!holding->text.empty()) own.text += ": " + holding->text;
+            own.known = holding->known;
+        }
+        chords.insert(at, std::move(own));
+    }
+}
+
+}  // namespace
+
 Status MidiEditor::reload() {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner) return Error("gui.midi", "no MIDI source", "/item");
+    state_.frameShift = rollFrameShift(*owner);
+    if (owner->audio) {
+        // An audio clip neither follows nor has a written view.
+        state_.following = false;
+        state_.sounds.clear();
+        state_.soundsAt = nullptr;
+        state_.writtenKeyAt = nullptr;
+        state_.otherChords.clear();
+        state_.rowLabel.clear();
+        state_.otherLabel.clear();
+        if (writtenButton_) writtenButton_->visible = false;
+        if (passButton_) passButton_->visible = false;
+        return reloadAudio();
+    }
     json::Value args = json::Value::object();
     args["item"] = state_.item;
     auto r = dispatcher_.execute({"midi.notes", std::move(args), kOrigin});
@@ -1950,8 +2732,9 @@ Status MidiEditor::reload() {
     // A reload replaces note indices and CC data; an old preview cannot be
     // committed against the new sequence (including undo and item switches).
     state_.cancelGesture();
-    const auto owner = midiOwner(app_.head(), state_.item);
-    if (!owner) return Error("gui.midi", "no MIDI source", "/item");
+    state_.audio = false;
+    state_.wave.reset();
+    applyMode();
     const model::Take* take = owner->take;
     const model::MidiSource* source = owner->source;
     // A clip sits at beat 0 for the roll: its bars count from its start.
@@ -1965,61 +2748,132 @@ Status MidiEditor::reload() {
         RollNote note;
         note.pitch = n.pitch;
         note.start =
-            (static_cast<double>(n.start) / source->sequence.ppq - take->startOffset) / rate;
+            (static_cast<double>(n.start) / source->sequence.ppq - take->startOffset) / rate +
+            state_.frameShift;
         note.length = static_cast<double>(n.length) / (source->sequence.ppq * rate);
         note.velocity = n.velocity;
         note.channel = n.channel + 1;
         state_.notes.push_back(note);
     }
     std::erase_if(state_.selected, [&](std::size_t i) { return i >= state_.notes.size(); });
+    // A following take (ADR-0098 amended, gui.md §4.7): what each note sounds
+    // as, from model::soundingNotes as the engine compiles it, in the pass
+    // shown; and a reading for previews and the pencil (model::placeAt). A
+    // clip has no place: its roll is as written.
+    state_.following = false;
+    state_.sounds.clear();
+    state_.soundsAt = nullptr;
+    state_.writtenKeyAt = nullptr;
+    state_.passes = 1;
+    state_.passShift = 0;
+    state_.passesDiffer = false;
+    const auto itemId = owner->item ? model::Id::parse(state_.item) : std::nullopt;
+    if (itemId && take->follow != model::ClipFollow::None) {
+        state_.following = true;
+        const model::Session& head = app_.head();
+        const auto heard = model::soundingNotes(head, *itemId, state_.itemPosition,
+                                                state_.itemPosition + state_.itemLength);
+        int last = 0;
+        std::vector<int> first(state_.notes.size(), -1);
+        for (const model::SoundingNote& o : heard) {
+            last = std::max(last, static_cast<int>(o.pass));
+            if (o.pass < 0 || o.note >= first.size()) continue;
+            int& f = first[o.note];
+            if (f < 0)
+                f = o.sounds.pitch;
+            else if (f != o.sounds.pitch)
+                state_.passesDiffer = true;
+        }
+        state_.passes = last + 1;
+        state_.pass = std::clamp(state_.pass, 0, state_.passes - 1);
+        state_.sounds.assign(state_.notes.size(), {});
+        // Every occurrence in a pass has the same shift (the pass's whole
+        // loop lengths over the playrate), a chased note's too: its song beat
+        // is where its start would have sounded. So a pass whose heard notes
+        // all lie before the take's offset still gives the pass's shift.
+        bool shiftSet = false;
+        for (const model::SoundingNote& o : heard) {
+            if (o.pass != state_.pass || o.note >= state_.sounds.size()) continue;
+            const double shift = o.songBeat - (state_.itemPosition + state_.notes[o.note].start);
+            state_.sounds[o.note] = {o.sounds.pitch, shift};
+            if (!shiftSet) {
+                state_.passShift = shift;
+                shiftSet = true;
+            }
+        }
+        // A note not heard in this pass (before the item's start, past its
+        // end): what it would sound as there, by the place rule past the
+        // edges (model::notePlace at its unwrapped source beat, then
+        // soundingKey), not its written pitch.
+        for (std::size_t i = 0; i < state_.notes.size(); ++i) {
+            if (state_.sounds[i].pitch >= 0) continue;
+            const RollNote& n = state_.notes[i];
+            const model::NotePlace place =
+                model::notePlace(*take, state_.itemPosition,
+                                 take->startOffset + (n.start + state_.passShift) * rate);
+            // Before the song's start no item can sound, and the song has no
+            // key there: its context at beat 0 is read, as its first point
+            // holds before itself.
+            const harmony::Followed f = model::soundingKey(
+                take->context, take->follow, *head.contextView, place.contextBeat,
+                std::max(0.0, place.songBeat), n.channel - 1, n.pitch);
+            state_.sounds[i] = {f.pitch, state_.passShift, false};
+        }
+        state_.soundsAt = [this, id = *itemId](int pitch, int channel, double beat) {
+            const auto place = model::placeAt(app_.head(), id, beat);
+            if (!place) return pitch;
+            return model::soundsAt(*place, channel - 1, pitch).pitch;
+        };
+        state_.writtenKeyAt = [this, id = *itemId](double beat) -> std::optional<harmony::Key> {
+            const auto place = model::placeAt(app_.head(), id, beat);
+            return place ? place->take.key : std::nullopt;
+        };
+        // Where each pass starts sounding: its first heard note's song beat.
+        passStarts_.assign(static_cast<std::size_t>(state_.passes), -1.0);
+        for (const model::SoundingNote& o : heard) {
+            if (o.pass < 0) continue;
+            double& at = passStarts_[static_cast<std::size_t>(o.pass)];
+            if (at < 0 || o.songBeat < at) at = o.songBeat;
+        }
+    } else {
+        state_.pass = 0;
+        passStarts_.clear();
+    }
+    {
+        // The header's Written and Pass cells, only while they apply.
+        const bool written = state_.following, pass = state_.following && state_.passesDiffer;
+        bool moved = false;
+        if (writtenButton_) {
+            moved = moved || writtenButton_->visible != written;
+            writtenButton_->visible = written;
+            writtenButton_->setOn(state_.written);
+        }
+        if (passButton_) {
+            moved = moved || passButton_->visible != pass;
+            passButton_->visible = pass;
+            const std::string text =
+                "Pass " + std::to_string(state_.pass + 1) + " of " + std::to_string(state_.passes);
+            if (passButton_->valueText() != text) {
+                passButton_->setText(text);
+                moved = true;
+            }
+        }
+        // The notation and the list are the take's text: written notes,
+        // said while the roll may show others (gui.md §4.7).
+        if (notationTitle_) {
+            const std::string title = state_.following ? "Notation \u00b7 written" : "Notation";
+            if (notationTitle_->text() != title) notationTitle_->setText(title);
+        }
+        if (moved) root_.relayout();
+    }
     state_.cc.clear();
     for (const json::Value& c : (*r)["cc"].asArray()) {
         if (c.find("number")->asInt() != state_.ccNumber || c.find("channel"))
             continue;  // channel 1
-        state_.cc.push_back(
-            {c.find("beat")->asDouble(), static_cast<int>(c.find("value")->asInt())});
+        state_.cc.push_back({c.find("beat")->asDouble() + state_.frameShift,
+                             static_cast<int>(c.find("value")->asInt())});
     }
-    // A clip's take lanes, in clip beats; an item's are on the timeline.
-    state_.envLanes.clear();
-    if (owner->clip && owner->clip->activeTake) {
-        const model::Session& head = app_.head();
-        const model::Id takeId = *owner->clip->activeTake;
-        std::vector<std::pair<std::pair<int, std::uint32_t>, RollEnvLane>> lanes;
-        for (const auto& e : head.envelopes) {
-            const model::Envelope& env = *e.value;
-            if (!env.visible) continue;
-            int order = 0;
-            std::optional<views::EnvScale> scale;
-            if (env.target.object == takeId) {
-                scale = views::envScale(env);
-                order = views::envOrder(env);
-            } else if (env.target.object.kind == model::Kind::Fx) {
-                const auto at =
-                    std::find(take->chain.begin(), take->chain.end(), env.target.object);
-                if (at == take->chain.end()) continue;
-                scale = (*scales_)(env);
-                order = 100 + static_cast<int>(at - take->chain.begin());
-            }
-            if (!scale) continue;
-            RollEnvLane lane;
-            lane.env = e.id;
-            lane.envelope = env;
-            lane.scale = *scale;
-            lane.fallback = views::targetValue(head, env.target, *scale);
-            if (env.target.object == takeId) {
-                lane.name = views::envTitle(env);
-                lane.title = lane.name + " (take)";
-            } else {
-                lane.title = views::envTitle(env, head, &*scale);
-                lane.name = scale->param && !scale->param->name.empty() ? scale->param->name
-                                                                        : env.target.param;
-            }
-            lanes.push_back({{order, e.id.n}, std::move(lane)});
-        }
-        std::sort(lanes.begin(), lanes.end(),
-                  [](const auto& x, const auto& y) { return x.first < y.first; });
-        for (auto& l : lanes) state_.envLanes.push_back(std::move(l.second));
-    }
+    collectEnvLanes(*owner);
     refreshEnvLanes();
     // Bars in a generous window around the item.
     state_.barLines.clear();
@@ -2080,6 +2934,33 @@ Status MidiEditor::reload() {
             state_.chords.push_back({k.beat, p->symbol + (known ? "" : "?"), known});
         }
     }
+    // A take's own context (gui.md §4.7): the strip's second row, dim; in the
+    // written view of a following take its first, the song's second, and the
+    // shading, the spelling and the key button read the take's.
+    state_.otherChords.clear();
+    state_.rowLabel.clear();
+    state_.otherLabel.clear();
+    state_.chordsEnd.reset();
+    state_.otherEnd.reset();
+    if (!state_.clip && !take->context.empty()) {
+        std::vector<RollState::ChordMark> takeChords;
+        std::vector<RollState::KeySpan> takeKeys;
+        takeContextMarks(*take, state_.itemPosition, -64.0, state_.itemLength, takeChords,
+                         takeKeys);
+        if (state_.following && state_.written) {
+            state_.otherChords = std::move(state_.chords);
+            state_.chords = std::move(takeChords);
+            state_.keys = std::move(takeKeys);
+            state_.rowLabel = "take";
+            state_.otherLabel = "song";
+            state_.chordsEnd = state_.itemLength;
+        } else {
+            state_.otherChords = std::move(takeChords);
+            state_.rowLabel = "song";
+            state_.otherLabel = "take";
+            state_.otherEnd = state_.itemLength;
+        }
+    }
     refreshKeyButton();
     if (bars_) {
         const float h = static_cast<BarStrip*>(bars_)->wanted();
@@ -2108,11 +2989,30 @@ Status MidiEditor::reload() {
                            (label.empty() ? state_.item : label);
                 }
         titleBase_ = "MIDI · " + name + " · " + std::to_string(state_.notes.size()) + " notes";
+        // A following take says how: "follows D major → E minor" (its own key
+        // at the item's start, the song's there), or "written in D major".
+        if (state_.following) {
+            const model::ContextPoint* own = model::contextKeyPointAt(
+                take->context, model::contextBeatOf(*take, take->startOffset));
+            const std::string written = own ? model::keyWords(*own) : "no key";
+            if (state_.written) {
+                titleBase_ += " · written in " + written;
+            } else {
+                const auto songId = model::keyPointAt(app_.head(), state_.itemPosition);
+                const model::ContextPoint* song =
+                    songId ? app_.head().context.find(*songId) : nullptr;
+                titleBase_ += " · follows " + written + " " + std::string(views::kFollowMark) +
+                              " " + (song ? model::keyWords(*song) : std::string("no key"));
+            }
+        }
         // Named when one key holds over every such note: "3 outside A minor".
+        // The notes as the view draws them (a following take's sounding ones).
         std::size_t outside = 0;
         std::optional<harmony::Key> which;
         bool one = true;
-        for (const RollNote& n : state_.notes) {
+        for (std::size_t i = 0; i < state_.notes.size(); ++i) {
+            RollNote n = state_.notes[i];
+            n.pitch = state_.drawnPitch(i, n);
             if (!state_.outsideKey(n)) continue;
             const auto key = state_.keyAt(state_.itemPosition + n.start);
             one = one && (!which || which == key);
@@ -2136,8 +3036,77 @@ Status MidiEditor::reload() {
     return {};
 }
 
+// An audio clip (gui.md §4.7, mock 93): its active take's waveform in
+// seconds of played time from the clip's start, the clip's end marked, the
+// key button its one key point; no notes, chords, grid or notation.
+Status MidiEditor::reloadAudio() {
+    const model::Session& head = app_.head();
+    const auto owner = midiOwner(head, state_.item);
+    if (!owner || !owner->audio || !owner->clip) return Error("gui.midi", "no audio", "/item");
+    state_.cancelGesture();
+    state_.audio = true;
+    state_.clip = true;
+    state_.itemPosition = 0;
+    state_.itemLength = owner->clip->length;  // seconds: an audio clip's unit
+    state_.notes.clear();
+    state_.selected.clear();
+    state_.cc.clear();
+    state_.barLines.clear();
+    state_.keys.clear();
+    state_.chords.clear();
+    state_.keyMarks.clear();
+    state_.contextShift = 0;
+    state_.contextEnd = 0;
+    state_.degrees = false;
+    if (keyButton_) keyButton_->setOn(false);
+    RollState::Wave wave;
+    wave.take = *owner->take;
+    wave.hash = owner->audio->hash;
+    const std::filesystem::path path(owner->audio->path);
+    wave.path = path.is_absolute() ? path : app_.mediaDir() / path;
+    wave.gain =
+        static_cast<float>(std::pow(10.0, (owner->clip->gainDb + owner->take->gainDb) / 20));
+    wave.loop = owner->clip->loop.on;
+    wave.label = owner->take->name;
+    if (wave.label.empty()) {
+        const auto& takes = owner->clip->takes;
+        const auto at = std::find(takes.begin(), takes.end(), *owner->clip->activeTake);
+        wave.label = "Take " + std::to_string(at - takes.begin() + 1);
+    }
+    state_.wave = std::move(wave);
+    collectEnvLanes(*owner);  // in seconds, the clip's unit
+    refreshEnvLanes();
+    applyMode();
+    refreshKeyButton();
+    if (bars_ && bars_->layout.height.value != static_cast<BarStrip*>(bars_)->wanted()) {
+        bars_->layout.height = ui::SizeRule::fixed(static_cast<BarStrip*>(bars_)->wanted());
+        root_.relayout();
+    }
+    projectGeneration_ = app_.projectGeneration();
+    version_ = head.version;
+    if (title_) {
+        const model::Track* t = head.tracks.find(owner->track);
+        char seconds[32];
+        std::snprintf(seconds, sizeof seconds, "%.2f s", owner->clip->length);
+        titleBase_ = "Audio \u00b7 " + (t && !t->name.empty() ? t->name : owner->track.str()) +
+                     " \u2014 " + (owner->clip->name.empty() ? state_.item : owner->clip->name) +
+                     " \u00b7 clip \u00b7 " + seconds;
+        refreshTitle();
+    }
+    root_.damageAll();
+    return {};
+}
+
+void MidiEditor::peaksReady() {
+    if (state_.audio && roll_) roll_->invalidate();
+}
+
 void MidiEditor::refreshTitle() {
     if (!title_) return;
+    if (state_.audio) {
+        title_->setText(titleBase_ + (state_.snap ? "" : " \u00b7 snap off"));
+        return;
+    }
     const double g = state_.grid;
     std::string grid = g >= 1                         ? "1/4"
                        : g >= 0.5                     ? "1/8"
@@ -2160,7 +3129,7 @@ std::function<midi::Meter(int)> meterAtItem(const model::Session& session, doubl
 
 std::optional<std::string> MidiEditor::modelText() const {
     const auto owner = midiOwner(app_.head(), state_.item);
-    if (!owner) return std::nullopt;
+    if (!owner || !owner->source) return std::nullopt;
     notation::DecompileOptions options;
     options.meterAt = meterAtItem(
         app_.head(), owner->item ? model::itemSpan(app_.head(), *owner->item).startBeat : 0.0);
@@ -2249,6 +3218,37 @@ void MidiEditor::compileText(bool write, bool submit) {
     (void)reload();
 }
 
+void MidiEditor::openPassMenu() {
+    if (!passButton_ || state_.passes < 2) return;
+    std::vector<ui::MenuItem> items;
+    const auto& map = *app_.head().timeMap;
+    for (int k = 0; k < state_.passes; ++k) {
+        std::string text = "Pass " + std::to_string(k + 1);
+        const auto i = static_cast<std::size_t>(k);
+        if (i < passStarts_.size() && passStarts_[i] >= 0)
+            text += " \u00b7 bar " + std::to_string(map.barBeat(passStarts_[i]).bar);
+        items.push_back({std::move(text), "", [this, k] {
+                             state_.pass = k;
+                             (void)reload();
+                         }});
+    }
+    root_.openPopup(ui::makeMenu("midi.pass.menu", items, [this] { root_.closePopup(); }),
+                    passButton_->bounds(), ui::Placement::Below);
+}
+
+const std::vector<std::string>& MidiEditor::otherChordLabels() const {
+    static const std::vector<std::string> none;
+    return bars_ ? static_cast<const BarStrip*>(bars_)->otherLabels_ : none;
+}
+
+void MidiEditor::refuse(const std::string& message) {
+    if (actions_.onError) actions_.onError(message);
+}
+
+void MidiEditor::notice(const std::string& message) {
+    if (actions_.onNotice) actions_.onNotice(message);
+}
+
 std::uint64_t MidiEditor::beginGesture() {
     follow({});
     gestureGeneration_ = app_.projectGeneration();
@@ -2256,6 +3256,9 @@ std::uint64_t MidiEditor::beginGesture() {
 }
 
 Status MidiEditor::edit(json::Value ops, std::optional<std::uint64_t> expectedVersion) {
+    if (state_.audio)  // an audio clip has no notes; the note actions do nothing
+        return Error("gui.midi.audio", "an audio clip has no notes", "/item",
+                     "open a MIDI item or clip to edit notes");
     if (expectedVersion && (*expectedVersion != app_.head().version ||
                             gestureGeneration_ != app_.projectGeneration())) {
         follow({});
@@ -2420,6 +3423,206 @@ void MidiEditor::openContextMenu(double rollBeat, std::optional<double> rollChor
         ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
 }
 
+void MidiEditor::openAudioKeyMenu() {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->clip || !keyButton_) return;
+    // An audio clip holds at most one point, a key at 0 (ADR-0098): set it,
+    // remove it, or take the project's at the playhead.
+    const ui::Rect b = keyButton_->bounds();
+    const ui::Point at{b.x, b.bottom()};
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, std::function<void()> run) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.run = std::move(run);
+        items.push_back(std::move(m));
+    };
+    add("Key\u2026", [this, at] { editClipKey(0.0, at); });
+    if (const model::ContextPoint* key = model::keyPointAt(*owner->clip, 0.0)) {
+        const model::ContextPoint gone = *key;
+        add("Remove key " + model::keyWords(gone), [this, gone] {
+            if (const auto o = midiOwner(app_.head(), state_.item); o && o->clip)
+                (void)setClipContext(withContextPoint(o->clip->context, gone, true));
+        });
+    }
+    const auto t = app_.transport("get");
+    const double from = t ? t->beat : 0.0;
+    const time::TimeMap& tm = *app_.head().timeMap;
+    add("Take from the project at bar " + std::to_string(tm.barBeat(std::max(0.0, from)).bar),
+        [this, from] {
+            json::Value args = json::Value::object(), place = json::Value::object();
+            args["clip"] = state_.item;
+            place["at"] = std::max(0.0, from);
+            args["context_at"] = std::move(place);
+            (void)command("clip.set", std::move(args), {}, "Context");
+        });
+    root_.openPopup(ui::makeMenu("midi.key.menu", std::move(items), [this] { root_.closePopup(); }),
+                    ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::openEnvLaneMenu(model::Id env, ui::Point at, double pos, double value) {
+    const RollEnvLane* lane = nullptr;
+    for (const RollEnvLane& l : state_.envLanes)
+        if (l.env == env) lane = &l;
+    if (!lane) return;
+    const bool picked = state_.envSelLane == env && !state_.envSel.empty();
+    const std::vector<model::EnvPoint> points = lane->envelope.points;
+    const model::EnvTarget target = lane->envelope.target;
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, std::function<void()> run, bool enabled = true,
+                   std::string shortcut = {}) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.run = std::move(run);
+        m.enabled = enabled;
+        m.shortcut = std::move(shortcut);
+        items.push_back(std::move(m));
+    };
+    auto rule = [&] {
+        ui::MenuItem m;
+        m.separator = true;
+        items.push_back(std::move(m));
+    };
+    add("Insert point", [this, env, points, pos, value] {
+        model::EnvPoint pt;
+        pt.pos = pos;
+        pt.value = value;
+        std::vector<model::EnvPoint> next = points;
+        next.insert(
+            std::upper_bound(next.begin(), next.end(), pos,
+                             [](double beat, const model::EnvPoint& p) { return beat < p.pos; }),
+            pt);
+        state_.envSelLane = env;
+        state_.envSel = {{pos, value}};
+        (void)setEnvPoints(env, next);
+    });
+    rule();
+    add(
+        "Select all points",
+        [this, env, points] {
+            state_.envSelLane = env;
+            state_.envSel.clear();
+            for (const model::EnvPoint& p : points) state_.envSel.push_back({p.pos, p.value});
+            refreshEnvLanes();
+        },
+        !points.empty());
+    add(
+        "Copy points", [this] { copyEnvSelection(); }, picked,
+        actions_.keysFor("ui.midi.notes.copy"));
+    add(
+        "Cut points",
+        [this] {
+            copyEnvSelection();
+            deleteEnvSelection();
+        },
+        picked, actions_.keysFor("ui.midi.notes.cut"));
+    add(
+        "Paste points", [this, env, pos] { (void)pasteEnvPoints(env, pos); }, canPasteEnv(),
+        actions_.keysFor("ui.midi.notes.paste"));
+    add(
+        "Delete points", [this] { deleteEnvSelection(); }, picked,
+        actions_.keysFor("ui.midi.notes.delete"));
+    add(
+        "Point shape\u2026",
+        [this, at] {
+            std::vector<ui::MenuItem> shapes;
+            const RollEnvLane* l = nullptr;
+            for (const RollEnvLane& x : state_.envLanes)
+                if (x.env == state_.envSelLane) l = &x;
+            for (auto [label, shape] : {std::pair{"Linear", model::PointShape::Linear},
+                                        {"Square", model::PointShape::Square},
+                                        {"Slow start/end", model::PointShape::Slow},
+                                        {"Fast start", model::PointShape::FastStart},
+                                        {"Fast end", model::PointShape::FastEnd},
+                                        {"Bezier", model::PointShape::Bezier}}) {
+                ui::MenuItem m;
+                m.label = label;
+                bool all = l != nullptr, any = false;
+                if (l)
+                    for (const model::EnvPoint& p : l->envelope.points)
+                        if (state_.envSelected(l->env, p)) {
+                            any = true;
+                            all = all && p.shape == shape;
+                        }
+                m.checked = any && all;
+                const model::PointShape s = shape;
+                m.run = [this, s] { shapeEnvSelection(s); };
+                shapes.push_back(std::move(m));
+            }
+            // Opened from the lane's menu as it closes.
+            root_.openPopup(ui::makeMenu("midi.env.shape.menu", std::move(shapes),
+                                         [this] { root_.closePopup(); }),
+                            {at.x, at.y, 1, 1});
+        },
+        picked);
+    rule();
+    add("Hide", [this, target] { (void)showEnvelope(target, false); });
+    root_.openPopup(ui::makeMenu("midi.env.menu", std::move(items), [this] { root_.closePopup(); }),
+                    ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::repaintLanes() {
+    if (envColumn_)
+        for (const auto& lane : envColumn_->children()) lane->invalidate();
+}
+
+void MidiEditor::copyEnvSelection() {
+    for (const RollEnvLane& l : state_.envLanes) {
+        if (l.env != state_.envSelLane) continue;
+        std::vector<model::EnvPoint> picked;
+        for (const model::EnvPoint& p : l.envelope.points)
+            if (state_.envSelected(l.env, p)) picked.push_back(p);
+        if (picked.empty()) return;
+        envClip_ = views::copyPoints(l.envelope.points, picked, l.scale,
+                                     views::envUnit(l.envelope, l.scale));
+        envClipAt_ = picked.front().pos;
+        return;
+    }
+}
+
+bool MidiEditor::pasteEnvPoints(model::Id env, std::optional<double> pos) {
+    if (envClip_.empty()) return false;
+    for (const RollEnvLane& l : state_.envLanes) {
+        if (l.env != env) continue;
+        const views::EnvEdit edit =
+            views::pastePoints(l.envelope.points, envClip_, pos.value_or(envClipAt_), l.scale,
+                               views::envUnit(l.envelope, l.scale));
+        state_.envSelLane = env;
+        state_.envSel.clear();
+        for (const model::EnvPoint& p : edit.selected) state_.envSel.push_back({p.pos, p.value});
+        (void)setEnvPoints(env, edit.points);
+        return true;
+    }
+    return false;
+}
+
+void MidiEditor::deleteEnvSelection() {
+    for (const RollEnvLane& l : state_.envLanes) {
+        if (l.env != state_.envSelLane) continue;
+        std::vector<model::EnvPoint> next;
+        for (const model::EnvPoint& p : l.envelope.points)
+            if (!state_.envSelected(l.env, p)) next.push_back(p);
+        state_.envSel.clear();
+        if (next.size() != l.envelope.points.size()) (void)setEnvPoints(l.env, next);
+        return;
+    }
+}
+
+void MidiEditor::shapeEnvSelection(model::PointShape shape) {
+    for (const RollEnvLane& l : state_.envLanes) {
+        if (l.env != state_.envSelLane) continue;
+        std::vector<model::EnvPoint> next = l.envelope.points;
+        bool changed = false;
+        for (model::EnvPoint& p : next)
+            if (state_.envSelected(l.env, p) && p.shape != shape) {
+                p.shape = shape;
+                changed = true;
+            }
+        if (changed) (void)setEnvPoints(l.env, next);
+        return;
+    }
+}
+
 std::optional<double> MidiEditor::clipBeatAt(double rollBeat) {
     const auto owner = midiOwner(app_.head(), state_.item);
     if (!owner || !owner->clip) return std::nullopt;
@@ -2458,8 +3661,178 @@ Status MidiEditor::setClipContext(const std::vector<model::ContextPoint>& points
     if (!owner || !owner->clip) return Error("gui.midi", "no clip is open", "/clip");
     json::Value args = json::Value::object();
     args["clip"] = state_.item;
-    args["context"] = clipLeadSheet(points, *app_.head().timeMap, owner->clip->length);
+    // An audio clip's length is in seconds: its text is bar 1 only, a key
+    // and holds (ADR-0098).
+    args["context"] =
+        clipLeadSheet(points, *app_.head().timeMap, state_.audio ? 0.0 : owner->clip->length);
     return command("clip.set", std::move(args), {}, "Context");
+}
+
+std::optional<double> MidiEditor::takeBeatAt(double projectBeat) const {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    const auto id = owner && owner->item ? model::Id::parse(state_.item) : std::nullopt;
+    if (!id || !owner->take) return std::nullopt;
+    const auto place = model::placeAt(app_.head(), *id, projectBeat);
+    if (!place) return std::nullopt;
+    double beat = std::max(0.0, std::round(place->contextBeat * 960.0) / 960.0);
+    if (owner->take->contextPeriod && beat >= *owner->take->contextPeriod - 1e-9) beat = 0;
+    return beat;
+}
+
+Status MidiEditor::setTakeContext(const std::vector<model::ContextPoint>& points) {
+    const model::Session& head = app_.head();
+    const auto owner = midiOwner(head, state_.item);
+    if (!owner || !owner->item || !owner->take || !owner->item->activeTake)
+        return Error("gui.midi", "no item take is open", "/take");
+    json::Value args = json::Value::object();
+    args["take"] = owner->item->activeTake->str();
+    args["context"] = takeLeadSheet(head, *owner->item, *owner->take, points);
+    return command("take.set", std::move(args), {}, "Context");
+}
+
+void MidiEditor::editTakeChord(double projectBeat, ui::Point at) {
+    views::ChordFieldHost host{
+        [this]() -> const model::Session& { return app_.head(); },
+        [](const std::string&, json::Value) { return false; },
+        [this](double b) { return bars_ ? static_cast<BarStrip*>(bars_)->chordX(b) : 0.0f; }};
+    // The take's chord holding at that place: the field starts from it.
+    host.symbolAt = [this](double b) {
+        const auto owner = midiOwner(app_.head(), state_.item);
+        const auto beat = takeBeatAt(b);
+        if (!owner || !owner->take || !beat) return std::string();
+        const model::ContextPoint* p = model::contextChordPointAt(owner->take->context, *beat);
+        return p ? p->symbol : std::string();
+    };
+    host.run = [this](const std::string& command, json::Value args) {
+        const auto owner = midiOwner(app_.head(), state_.item);
+        if (command != "chord.set" || !owner || !owner->take) return false;
+        const auto beat = takeBeatAt(args["at"].asDouble());
+        if (!beat) return false;
+        // The chord the field was opened on is replaced where it stands.
+        model::ContextPoint p;
+        p.type = model::ContextType::Chord;
+        p.beat = *beat;
+        if (const model::ContextPoint* held =
+                model::contextChordPointAt(owner->take->context, *beat);
+            held && std::abs(held->beat - *beat) < 1.0 / 960.0)
+            p.beat = held->beat;
+        p.symbol = args["symbol"].asString();
+        return static_cast<bool>(setTakeContext(withContextPoint(owner->take->context, p)));
+    };
+    views::openChordField(root_, std::move(host), projectBeat, at);
+}
+
+void MidiEditor::editTakeKey(double projectBeat, ui::Point at) {
+    const model::Session& head = app_.head();
+    const auto owner = midiOwner(head, state_.item);
+    const auto beat = takeBeatAt(projectBeat);
+    if (!owner || !owner->take || !beat) return;
+    // It starts from the take's key there, else the song's, else C major.
+    std::string text = "C major";
+    if (const model::ContextPoint* p = model::contextKeyPointAt(owner->take->context, *beat))
+        text = model::keyWords(*p);
+    else if (const auto id = model::keyPointAt(head, projectBeat))
+        if (const model::ContextPoint* song = head.context.find(*id)) text = model::keyWords(*song);
+    auto field = std::make_unique<ui::TextField>("midi-key-field", text);
+    field->layout.width = ui::SizeRule::fixed(200);
+    field->selectAll();
+    const double contextBeat = *beat;
+    field->onSubmit = [this, contextBeat](const std::string& typed) {
+        const auto parts = views::splitKeyText(typed);
+        if (!parts) {
+            if (actions_.onError)
+                actions_.onError("Key: '" + typed +
+                                 "' is not a key: a tonic and a scale, "
+                                 "Eb major or F# dorian");
+            return;
+        }
+        const auto o = midiOwner(app_.head(), state_.item);
+        if (!o || !o->take) return;
+        model::ContextPoint p;
+        p.type = model::ContextType::Key;
+        p.beat = contextBeat;
+        p.tonic = parts->first;
+        p.scale = parts->second;
+        if (setTakeContext(withContextPoint(o->take->context, p))) root_.closePopup();
+    };
+    root_.openPopup(std::move(field), {at.x, at.y, 1, 1});
+}
+
+void MidiEditor::openTakeContextMenu(double projectBeat, std::optional<double> chord,
+                                     ui::Point at) {
+    const model::Session& head = app_.head();
+    const auto owner = midiOwner(head, state_.item);
+    if (!owner || !owner->item || !owner->take || !model::takeIsMidi(*owner->take)) return;
+    const model::Take& take = *owner->take;
+    const time::TimeMap& tm = *head.timeMap;
+    // A key goes at the start of the bar under the pointer, or at the item's
+    // start when that bar began before it.
+    const double barStart =
+        std::max(state_.itemPosition, tm.beatOfBar(tm.barBeat(std::max(0.0, projectBeat)).bar));
+    std::vector<ui::MenuItem> items;
+    auto add = [&](std::string label, bool enabled, std::function<void()> run) {
+        ui::MenuItem m;
+        m.label = std::move(label);
+        m.enabled = enabled;
+        m.run = std::move(run);
+        items.push_back(std::move(m));
+    };
+    const bool atStart = barStart <= state_.itemPosition + 1e-9;
+    add(atStart ? "Key\u2026" : "Key at bar " + std::to_string(tm.barBeat(barStart).bar) + "\u2026",
+        true, [this, barStart, at] { editTakeKey(barStart, at); });
+    add("Chord\u2026", true,
+        [this, at, beat = chord.value_or(projectBeat)] { editTakeChord(beat, at); });
+    const auto keyBeat = takeBeatAt(barStart);
+    for (const model::ContextPoint& p : take.context)
+        if (keyBeat && p.type == model::ContextType::Key &&
+            std::abs(p.beat - *keyBeat) < 1.0 / 960.0) {
+            const model::ContextPoint gone = p;
+            add("Remove key " + model::keyWords(gone), true, [this, gone] {
+                if (const auto o = midiOwner(app_.head(), state_.item); o && o->take)
+                    (void)setTakeContext(withContextPoint(o->take->context, gone, true));
+            });
+        }
+    if (chord)
+        if (const auto beat = takeBeatAt(*chord))
+            if (const model::ContextPoint* p = model::contextChordPointAt(take.context, *beat)) {
+                const model::ContextPoint gone = *p;
+                add("Remove chord" + (gone.symbol.empty() ? std::string() : " " + gone.symbol),
+                    true, [this, gone] {
+                        if (const auto o = midiOwner(app_.head(), state_.item); o && o->take)
+                            (void)setTakeContext(withContextPoint(o->take->context, gone, true));
+                    });
+            }
+    ui::MenuItem rule;
+    rule.separator = true;
+    items.push_back(rule);
+    // The song's key and chords under the item: what a part written on the
+    // timeline was written against.
+    model::Id itemId = *model::Id::parse(state_.item);
+    add("From the song's key and chords", true,
+        [this, itemId] { (void)setTakeContext(songContextUnder(app_.head(), itemId)); });
+    add("Clear the take's context", !take.context.empty(), [this] { (void)setTakeContext({}); });
+    root_.openPopup(
+        ui::makeMenu("midi.take.context.menu", std::move(items), [this] { root_.closePopup(); }),
+        ui::Rect{at.x, at.y, 0, 0}, ui::Placement::Below);
+}
+
+void MidiEditor::moveTakePoint(model::ContextType type, double fromProject, double toProject,
+                               bool copy) {
+    const auto owner = midiOwner(app_.head(), state_.item);
+    if (!owner || !owner->take) return;
+    const auto from = takeBeatAt(fromProject);
+    const auto to = takeBeatAt(std::max(state_.itemPosition, toProject));
+    if (!from || !to) return;
+    const std::vector<model::ContextPoint>& context = owner->take->context;
+    const model::ContextPoint* held = type == model::ContextType::Chord
+                                          ? model::contextChordPointAt(context, *from)
+                                          : model::contextKeyPointAt(context, *from);
+    if (!held) return;
+    std::vector<model::ContextPoint> points =
+        copy ? context : withContextPoint(context, *held, true);
+    model::ContextPoint moved = *held;
+    moved.beat = *to;
+    (void)setTakeContext(withContextPoint(std::move(points), moved));
 }
 
 namespace {
@@ -2519,17 +3892,26 @@ void MidiEditor::transposeDegrees(int degrees) {
 void MidiEditor::refreshKeyButton() {
     if (!keyButton_) return;
     const model::Session& head = app_.head();
-    // An item's key at its start; a clip's own at its start (ADR-0098).
+    // An item's key at its start; a clip's own at its start (ADR-0098); a
+    // following take's own in the written view (gui.md §4.7).
     const model::ContextPoint* point = nullptr;
-    const auto owner = state_.clip ? midiOwner(head, state_.item) : std::nullopt;
+    const auto owner =
+        state_.clip || state_.following ? midiOwner(head, state_.item) : std::optional<MidiOwner>{};
     if (owner && owner->clip) {
         point = model::keyPointAt(*owner->clip, 0.0);
+    } else if (owner && owner->take && state_.following && state_.written) {
+        point = model::contextKeyPointAt(
+            owner->take->context, model::contextBeatOf(*owner->take, owner->take->startOffset));
     } else if (const auto id = model::keyPointAt(head, state_.itemPosition)) {
         point = head.context.find(*id);
     }
     const bool known = point && model::parseKey(*point);
     std::string text = point ? model::keyWords(*point) : "No key";
-    keyButton_->enabled = known;
+    // An audio clip's button sets its key (it has no degrees), with or
+    // without one. On a following take degrees count in the take's own key
+    // (midi.edit reads it, X4d); the sounding view picks the step that
+    // sounds nearest the pointer.
+    keyButton_->enabled = known || state_.audio;
     if (!known && state_.degrees) {  // nothing to count degrees in
         state_.degrees = false;
         keyButton_->setOn(false);
@@ -2558,6 +3940,10 @@ void MidiEditor::nudge(int steps) {
 
 void MidiEditor::removeSelected() {
     if (!isOpen()) return;
+    if (!state_.envSel.empty()) {  // a clip-time lane was clicked last
+        deleteEnvSelection();
+        return;
+    }
     if (eventList_ && listPane_ && listPane_->visible) {  // its notes and controls
         eventList_->removeSelected();
         return;
@@ -2587,7 +3973,7 @@ void MidiEditor::duplicate() {
         json::Value op = json::Value::object();
         op["op"] = "add";
         op["pitch"] = n.pitch;
-        op["start"] = n.start + span;
+        op["start"] = n.start + span - state_.frameShift;
         op["length"] = n.length;
         op["velocity"] = n.velocity;
         if (n.channel != 1) op["channel"] = n.channel;
@@ -2597,7 +3983,12 @@ void MidiEditor::duplicate() {
 }
 
 void MidiEditor::copySelected() {
-    if (!isOpen() || state_.selected.empty()) return;
+    if (!isOpen()) return;
+    if (!state_.envSel.empty()) {  // a clip-time lane's points were picked last
+        copyEnvSelection();
+        return;
+    }
+    if (state_.selected.empty()) return;
     double first = 1e18;
     for (std::size_t i : state_.selected) first = std::min(first, state_.notes[i].start);
     clipboard_.clear();
@@ -2614,7 +4005,11 @@ void MidiEditor::cutSelected() {
 }
 
 void MidiEditor::paste(std::optional<double> itemBeat) {
-    if (!isOpen() || clipboard_.empty()) return;
+    if (!isOpen()) return;
+    // After a press on a clip-time lane its copied points paste there, at the
+    // clip time they were copied from.
+    if (!itemBeat && state_.envLastLane && pasteEnvPoints(*state_.envLastLane)) return;
+    if (clipboard_.empty()) return;
     const double at = itemBeat.value_or(
         state_.clip ? std::max(0.0, state_.playheadBeat)
                     : std::max(0.0, actions_.context().playheadBeats - state_.itemPosition));
@@ -2623,7 +4018,7 @@ void MidiEditor::paste(std::optional<double> itemBeat) {
         json::Value op = json::Value::object();
         op["op"] = "add";
         op["pitch"] = n.pitch;
-        op["start"] = at + n.start;
+        op["start"] = at + n.start - state_.frameShift;
         op["length"] = n.length;
         op["velocity"] = n.velocity;
         if (n.channel != 1) op["channel"] = n.channel;
