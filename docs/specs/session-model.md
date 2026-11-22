@@ -1162,7 +1162,11 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `midi.quantize`, `midi.humanize {seed}`; Standard MIDI Files are read by
   `item.add {midi_file}` (notes keep their beats and follow the project's
   tempo) and written by `item.export`. `midi.edit` note indices are a set per operation: repeated
-  indices edit each original note once. Tick conversions and all resulting
+  indices edit each original note once. `quantize` snaps a note to the project's grid at
+  the beat it plays at: for a looped item that is its place in the first heard pass, where
+  the roll draws it (the take's `start_offset` wrapped as playback wraps it, in item beats
+  at the take's playrate), so a part cut from a loop at a playrate whose passes are not a
+  whole number of grid steps still lands on the grid the user sees. Tick conversions and all resulting
   starts, ends, lengths and sequence lengths are checked before publication;
   out-of-range arithmetic returns structured `midi.range` with a repair hint,
   leaving the session unchanged. MIDI items are merged by

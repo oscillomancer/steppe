@@ -98,6 +98,11 @@ bool followingTake(const model::Session& s, model::Id owner) {
 
 struct Frame {  // item beats <-> source ticks
     double ppq = 960, offset = 0, rate = 1, itemPosition = 0;
+    // What a looped item's roll adds to an item beat of this frame: the whole passes the
+    // take's start offset skips, in item beats, so a note's beat in the first heard pass
+    // (where it plays and the roll draws it) is itemPosition + beatOf + shift. 0 when the item
+    // does not loop, and for a clip.
+    double shift = 0;
     bool clip = false;  // a launcher clip's take: no place in time (ADR-0095 C-e)
     double beatOf(std::int64_t tick) const {
         return (static_cast<double>(tick) / ppq - offset) / rate;
@@ -150,6 +155,14 @@ Result<Target> midiTarget(const model::Session& s, const std::string& text) {
     t.frame.rate = take->playrate > 0 ? take->playrate : 1.0;
     t.frame.itemPosition = ownerStartBeat(s, *id);
     t.frame.clip = clip;
+    const double cycle = midi->sequence.ppq > 0
+                             ? static_cast<double>(midi->sequence.length) / midi->sequence.ppq
+                             : 0.0;
+    if (it && it->loop && cycle > 0)
+        t.frame.shift =
+            (take->startOffset -
+             model::SourceBeatMapping{take->startOffset, 1.0, cycle}.sourceOffset(true)) /
+            t.frame.rate;
     return t;
 }
 
@@ -404,9 +417,10 @@ Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, st
             auto sel = selection(true);
             if (!sel) return std::move(sel).error();
             const double strength = std::clamp(op.strength.value_or(1.0), 0.0, 1.0);
-            // The project's grid: snap project beats, not item beats.
+            // The project's grid: snap project beats, not item beats, at the beat the note
+            // plays at (a looped item's roll draws it there: the frame's shift).
             auto snap = [&](double itemBeat) {
-                const double project = f.itemPosition + itemBeat;
+                const double project = f.itemPosition + itemBeat + f.shift;
                 const double target = std::round(project / *op.grid) * *op.grid;
                 return itemBeat + (target - project) * strength;
             };
@@ -959,8 +973,10 @@ void registerMidiCommands(cmd::Registry& registry) {
             "affected by earlier removals). Beats are from the item's start. add {pitch, start, "
             "length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; "
             "resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? "
-            "and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), "
-            "strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear "
+            "and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid, "
+            "at "
+            "the beat the note plays at), strength? 0-1, ends?}; cc.set {number, points [{beat, "
+            "value}], channel?}; cc.clear "
             "{number, from?, to?}. Scale ops read the context track (key.set, chord.set) at "
             "the project beat each note starts, in the order of the ops: transpose_degrees "
             "{notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale "

@@ -2350,6 +2350,40 @@ TEST_CASE("take.bake keeps the last of two song keys that round onto one source 
     CHECK(baked.context[1].tonic == "F");
 }
 
+TEST_CASE("midi.edit quantize puts a note of a looped part on the grid it plays on (Q2)") {
+    Launcher l;
+    // Two bars (an 8-beat loop) with one note a sixteenth into bar 2 (source beat 4.25), at
+    // playrate 1.5, laid at beat 32 and looped, then cut after one 8-beat span (beat 40): the
+    // right part starts 12 source beats in, a loop and a half, so its roll is shifted by
+    // 8 / 1.5 beats, not a whole number of grid steps.
+    const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 9, "notation":
+        "voice bass; 1: r:w; 2: r:s C2:s r:*"})");
+    const std::string whole = laid.find("item")->asString();
+    const model::Id wholeTake = *l.head().items.find(id(whole.c_str()))->activeTake;
+    l.run("take.set", R"({"take": ")" + wholeTake.str() + R"(", "playrate": 1.5})");
+    l.run("item.set", R"({"item": ")" + whole + R"(", "loop": true, "length": 24})");
+    l.run("item.split", R"({"item": ")" + whole + R"(", "at": 40})");
+    model::Id right;
+    for (const auto& e : l.head().items)
+        if (e.id != id("it_1") && e.id != id(whole.c_str())) right = e.id;
+    REQUIRE(right.n != 0);
+    const auto firstHeard = [&] {
+        double first = 1e9;
+        for (const auto& n : model::soundingNotes(l.head(), right, -1e9, 1e9))
+            first = std::min(first, n.songBeat);
+        return first;
+    };
+    CHECK(firstHeard() == doctest::Approx(40.0 + 0.25 / 1.5));
+    l.run("midi.edit",
+          R"({"item": ")" + right.str() + R"(", "ops": [{"op": "quantize", "grid": 1}]})");
+    // The note the roll draws at 0.1667 plays on the beat, not at 8.333 as before the fix.
+    CHECK(firstHeard() == doctest::Approx(40.0));
+    // A second pass is the same note, a loop later.
+    int passes = 0;
+    for (const auto& n : model::soundingNotes(l.head(), right, -1e9, 1e9)) ++passes, (void)n;
+    CHECK(passes >= 2);
+}
+
 TEST_CASE("take.bake of a song with a key change and one with none") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
