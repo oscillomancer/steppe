@@ -1202,9 +1202,15 @@ results.
     carries each held voice to its own source, a chord's notes included,
     which share the rest of their address (review round 86 H1);
   - `prepareNoteIds` pairs its note-off by source id, port and channel, taking
-    the held voice's key.
+    the held voice's key. It pairs a note-off the same way when the held voice
+    sounded keyless, whatever its new source is: a carried voice keeps the
+    origin it started with, so a take that stops following while its note is
+    held still ends the key the note sounds at (review round 87 J1).
   So a context edit while a note sounds lets it play on to its note-off at the
-  pitch it started with, and no note sticks.
+  pitch it started with, and so does a change of following (on to off, off to
+  on, key to chords, take.set or an undo): no note sticks, and none is cut
+  early unless the note itself is gone. A MIDI send's voice already ends at
+  the key it delivered.
 - **Context edits.** A context-only edit takes the compile path whenever an
   item's active take has `follow` other than `none` or the plan follows a
   clip; otherwise the shortcut above stays. The compile time on the song journey is measured in the

@@ -611,8 +611,19 @@ void endsAt(const Live& live, double heardFrom, double silentFrom) {
     for (std::int64_t t = at(heardFrom) + kFade; t < at(silentFrom) - kFade; ++t)
         heard += live.left[std::size_t(t + live.latency)] != 0.0f;
     CHECK(heard > std::size_t((at(silentFrom) - at(heardFrom)) / 2));
-    for (std::int64_t t = at(silentFrom) + kFade; t < 8 * kBeat; ++t)
-        REQUIRE_MESSAGE(live.left[std::size_t(t + live.latency)] == 0.0f, "frame " << t);
+    std::int64_t sounding = -1;  // the first frame heard after the last note-off
+    for (std::int64_t t = at(silentFrom) + kFade; t < 8 * kBeat && sounding < 0; ++t)
+        if (live.left[std::size_t(t + live.latency)] != 0.0f) sounding = t;
+    CHECK_MESSAGE(sounding == -1, "frame " << sounding);
+}
+// The same samples as `held`, the same plan played with no swap, up to
+// `until`: each held note sounded on at its pitch to its own note-off.
+void sameAsHeld(const Live& live, const Live& held, std::int64_t until) {
+    CHECK(live.latency == held.latency);
+    std::int64_t apart = -1;  // the first frame that differs
+    for (std::int64_t t = 0; t < until && apart < 0; ++t)
+        if (live.left[std::size_t(t)] != held.left[std::size_t(t)]) apart = t;
+    CHECK_MESSAGE(apart == -1, "frame " << apart);
 }
 // cl_1 launched on bar 2 with `notation`, a swap at `swapBeat`.
 Live launchedAcrossSwap(Project& p, const char* follow, const char* notation, SwapBy by,
@@ -703,6 +714,127 @@ TEST_CASE("one written pitch on two channels, or overlapping, is carried note by
                 endsAt(live, 5.5, 6.0);
             }
         }
+}
+
+TEST_CASE("a held chord ends at its note-offs whichever way its take's following changes" *
+          doctest::description("rt")) {
+    // Review round 87 J1: a held voice survives a plan swap at the pitch it
+    // sounds and ends at its written end, whether the swap turns its take's
+    // following off (take.set, or the undo of a follow), on, or from key to
+    // chords. The project's {Fm} makes chords map D minor otherwise than key
+    // does, so every swap here changes what the chord's notes sound.
+    using F = model::ClipFollow;
+    const auto nameOfFollow = [](F f) -> std::string {
+        return f == F::None ? "none" : f == F::Key ? "key" : "chords";
+    };
+    const std::pair<F, F> swaps[] = {{F::Key, F::None},   {F::Chords, F::None},
+                                     {F::None, F::Key},   {F::None, F::Chords},
+                                     {F::Key, F::Chords}, {F::Chords, F::Key}};
+    for (const auto& [from, to] : swaps)
+        for (const bool undo : {false, true})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                const std::string swap = nameOfFollow(from) + " to " + nameOfFollow(to);
+                CAPTURE(swap);
+                CAPTURE(undo);
+                CAPTURE(options.anticipative);
+                Project p;
+                followingClip(p, "none", "voice keys; 1: [D3 F3 A3]:h r:h",
+                              "1: key D minor {Dm}:w");
+                // An undo swaps back to how the item was laid: laid `to`,
+                // set `from`, undone.
+                const model::Id item = layFollowing(p, 2, undo ? to : from);
+                const model::Id take = *p.app->head().items.find(item)->activeTake;
+                p.runArgs("context.write",
+                          contextText("1: key C minor {Fm}:w\n2: {Fm}:w\n3: {Fm}:w"));
+                json::Value set = json::Value::object();
+                set["take"] = take.str();
+                set["follow"] = nameOfFollow(undo ? from : to);
+                if (undo) p.runArgs("take.set", set);
+                const model::Session before = p.app->head();
+                const auto heardBefore = p.render(3.5, {});
+                if (undo)
+                    p.run("history.undo", "{}");
+                else
+                    p.runArgs("take.set", set);
+                const model::Session after = p.app->head();
+                REQUIRE(after.takes.find(take)->follow == to);
+                REQUIRE_FALSE(sameFrom(heardBefore, p.render(3.5, {}), 4 * kBeat, 6 * kBeat));
+                constexpr std::uint32_t block = 128;
+                const Live live =
+                    playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192,
+                             {{(5 * kBeat) / block, {}, {}, &after}});
+                endsAt(live, 5.0, 6.0);
+                // At the pitch it sounded: the same samples as with no swap.
+                const Live held =
+                    playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192, {});
+                sameAsHeld(live, held, 10 * kBeat);
+            }
+}
+
+TEST_CASE("a routed held chord ends at its note-offs across a swap that moves its keys" *
+          doctest::description("rt")) {
+    // J1 through a MIDI send: tr_1 has no instrument and sends to tr_2's sine.
+    // The stream ends a held note's slot, and so the voice it sent, at the
+    // key the note-on sent, whatever key the new plan's note-off has: a
+    // following take swapped to or from following, and a launched clip across
+    // a context edit or new pitch tables. The same samples as with no swap.
+    using F = model::ClipFollow;
+    constexpr std::uint32_t block = 128;
+    const auto routedClip = [](Project& p, const char* follow) {
+        p.runArgs("context.write", contextText(kCMinor));
+        json::Value clip = j(R"({"track": "tr_1", "scene": "sc_1",
+                                 "notation": "voice keys; 1: [D3 F3 A3]:h r:h",
+                                 "context": "1: key D minor {Dm}:w"})");
+        clip["follow"] = follow;
+        p.runArgs("clip.add", clip);
+        p.run("track.add", R"({"name": "Synth"})");
+        p.run("fx.add", R"({"track": "tr_2", "plugin": "com.suppleaudio.test.sine"})");
+        p.run("route.add", R"({"from": "tr_1", "to": "tr_2", "midi": {}})");
+    };
+    const auto heldAcross = [&](Project& p, const model::Session& before,
+                                const model::Session& after, const EngineOptions& options,
+                                bool launched) {
+        std::vector<Step> plain;
+        if (launched) plain.push_back({20, {request("tr_1", "cl_1")}});
+        std::vector<Step> swapped = plain;
+        swapped.push_back({(5 * kBeat) / block, {}, {}, &after});
+        const Live live =
+            playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192, swapped);
+        endsAt(live, 5.0, 6.0);
+        const Live held =
+            playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192, plain);
+        // A launched clip's next pass, from beat 8, sounds the new context.
+        sameAsHeld(live, held, launched ? 8 * kBeat : 10 * kBeat);
+    };
+    const std::pair<F, F> swaps[] = {{F::Key, F::None}, {F::None, F::Key}, {F::Key, F::Chords}};
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        CAPTURE(options.anticipative);
+        for (const auto& [from, to] : swaps) {
+            const std::string swap = std::to_string(int(from)) + " to " + std::to_string(int(to));
+            CAPTURE(swap);
+            Project p;
+            routedClip(p, "none");
+            const model::Id item = layFollowing(p, 2, from);
+            const model::Id take = *p.app->head().items.find(item)->activeTake;
+            p.runArgs("context.write", contextText("1: key C minor {Fm}:w\n2: {Fm}:w\n3: {Fm}:w"));
+            const model::Session before = p.app->head();
+            json::Value set = json::Value::object();
+            set["take"] = take.str();
+            set["follow"] = to == F::None ? "none" : to == F::Key ? "key" : "chords";
+            p.runArgs("take.set", set);
+            heldAcross(p, before, p.app->head(), options, false);
+        }
+        for (const char* follow : {"key", "chords"})
+            for (const SwapBy by : {SwapBy::ContextEdit, SwapBy::TableChange}) {
+                const std::string clip = std::string(follow) + ", " + nameOf(by);
+                CAPTURE(clip);
+                Project p;
+                routedClip(p, follow);
+                const model::Session before = p.app->head();
+                swapEdit(p, by);
+                heldAcross(p, before, p.app->head(), options, true);
+            }
+    }
 }
 
 TEST_CASE("a clip played by its take's own instrument holds its chord across a plan swap" *
