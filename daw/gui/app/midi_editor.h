@@ -174,6 +174,12 @@ struct RollState {
         double beat = 0;
         std::string text;
         bool known = true;
+        // A take row's cell that only names where the take's key changes
+        // ("A minor: Am" over the chord holding there): no point to edit.
+        bool keyOnly = false;
+        // The length of a key change's name before the chord in `text`
+        // ("A minor: " in "A minor: Am"), so a drag shows the chord alone.
+        std::size_t keyPrefix = 0;
     };
     std::vector<ChordMark> chords;
     // A clip's key points (text: "D dorian"), drawn and dragged in the
@@ -191,6 +197,14 @@ struct RollState {
     bool following = false;
     bool written = false;
     bool soundingView() const { return following && !written; }
+    // Whether note `i`, as `n`, lies outside the item or clip (drawn dim, as
+    // nothing there is heard): a following take's note not heard in the pass
+    // shown, else one wholly before the start or from the end on.
+    bool outsideItem(std::size_t i, const RollNote& n) const;
+    // What a drag of the take row's chord at project beat `beat` shows: the
+    // chord alone, without a key change named on its cell ("Am" from
+    // "A minor: Am"), as the drag moves only the chord; "r" for none.
+    std::string heldTakeChord(double beat) const;
     // What each note sounds as in the pass shown, index for index with
     // `notes` (model::soundingNotes): its pitch (-1: not heard in that pass,
     // drawn as written) and that occurrence's song beat less the roll's
@@ -199,6 +213,10 @@ struct RollState {
     struct Sounds {
         int pitch = -1;
         double shift = 0;
+        // Not heard in the pass shown (outside the item): `pitch` is what it
+        // would sound as by the same place rule past the item's edges, so
+        // trimming the edge out over it shows it where it was drawn.
+        bool heard = true;
     };
     std::vector<Sounds> sounds;
     int pass = 0, passes = 1;   // the pass shown, of the passes the item plays

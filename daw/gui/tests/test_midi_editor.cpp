@@ -4959,6 +4959,161 @@ TEST_CASE(
     CHECK(s.soundingView());
 }
 
+TEST_CASE("a following take's roll: a note outside the item is dim, where it would sound") {
+    // gui.md §4.7: past the item's edges the same place rule gives the pitch,
+    // so trimming the edge out over a note shows it heard where it was drawn.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f,
+               R"([{"beat":0,"type":"key","tonic":"C","scale":"major"},
+                   {"beat":0,"type":"chord","symbol":"C"}])",
+               "key");
+    auto& s = f.editor->state();
+    REQUIRE(s.following);
+    REQUIRE(s.notes.size() == 4);
+    const auto id = *model::Id::parse(f.item);
+    const model::Item& item = *f.app->head().items.find(id);
+    const std::string take = item.activeTake->str();
+    const double start = model::itemSpan(f.app->head(), item).startBeat;
+    const double length = model::itemLengthBeats(f.app->head(), item);
+    auto trim = [&](double by) {  // as the left-edge drag sends it
+        f.exec("item.set", R"({"item":")" + f.item + R"(","position":)" +
+                               json::formatDouble(start + by) + R"(,"length":)" +
+                               json::formatDouble(length - by) + "}");
+        f.exec("take.set",
+               R"({"take":")" + take + R"(","start_offset":)" + json::formatDouble(by) + "}");
+        f.frame();
+    };
+    // A beat trimmed away: C4 lies before the start, not heard; drawn dim at
+    // E4, what it would sound as there, with no outline; the rest heard.
+    trim(1);
+    REQUIRE(s.notes.size() == 4);
+    CHECK(s.notes[0].start < 0);
+    CHECK(s.outsideItem(0, s.notes[0]));
+    CHECK(s.drawnPitch(0, s.notes[0]) == 64);
+    CHECK_FALSE(s.outlinePitch(0, s.notes[0]));
+    CHECK_FALSE(s.outsideItem(1, s.notes[1]));
+    CHECK(s.drawnPitch(1, s.notes[1]) == 67);
+    // Written: the written pitch, still dim.
+    REQUIRE(f.root->click("midi.written"));
+    f.frame();
+    CHECK(s.drawnPitch(0, s.notes[0]) == 60);
+    CHECK(s.outsideItem(0, s.notes[0]));
+    REQUIRE(f.root->click("midi.written"));
+    f.frame();
+    // The edge trimmed back out: heard where it was drawn, at E4.
+    trim(0);
+    CHECK_FALSE(s.outsideItem(0, s.notes[0]));
+    CHECK(s.drawnPitch(0, s.notes[0]) == 64);
+    CHECK(s.outlinePitch(0, s.notes[0]) == 60);
+    // At the song's start, a note trimmed away lies before beat 0, where the
+    // song has no key: its context at beat 0 is read, not the written pitch.
+    f.exec("item.set", R"({"item":")" + f.item + R"(","position":0,"length":)" +
+                           json::formatDouble(length - 1) + "}");
+    f.exec("take.set", R"({"take":")" + take + R"(","start_offset":1})");
+    f.frame();
+    CHECK(s.outsideItem(0, s.notes[0]));
+    CHECK(s.drawnPitch(0, s.notes[0]) == 64);
+}
+
+TEST_CASE("a following take's strip: its take row names each change of the take's key") {
+    // gui.md §4.7: a bake across the song's key changes leaves them in the
+    // take's context; the row names each where it starts.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f,
+               R"([{"beat":0,"type":"key","tonic":"C","scale":"major"},
+                   {"beat":0,"type":"chord","symbol":"C"},
+                   {"beat":2,"type":"key","tonic":"A","scale":"minor"},
+                   {"beat":2,"type":"chord","symbol":"Am"},
+                   {"beat":3,"type":"key","tonic":"G","scale":"major"}])",
+               "key");
+    // On a chord's cell at the same beat, or a cell of its own over the
+    // chord holding there, which takes no gestures.
+    std::vector<std::string> texts;
+    std::vector<bool> keyOnly;
+    for (const auto& m : f.editor->state().otherChords) {
+        texts.push_back(m.text);
+        keyOnly.push_back(m.keyOnly);
+    }
+    CHECK(texts == std::vector<std::string>{"C", "A minor: Am", "G major: Am"});
+    CHECK(keyOnly == std::vector<bool>{false, false, true});
+    CHECK(f.editor->otherChordLabels().front() == "C");
+    // A drag of a chord whose cell names a key shows the chord alone: only
+    // the chord moves. The key's own cell holds no chord.
+    const auto& s = f.editor->state();
+    CHECK(s.heldTakeChord(s.otherChords.front().beat) == "C");  // carried in at the left
+    CHECK(s.heldTakeChord(6.0) == "Am");
+    CHECK(s.heldTakeChord(7.0) == "r");
+}
+
+TEST_CASE("a following take's roll: a looped pass's unheard notes read its place") {
+    // gui.md §4.7: a note not heard in the pass shown is drawn where it would
+    // sound in that pass, at its unwrapped source beat at the take's playrate,
+    // so lengthening the item over it sounds it as drawn. The source is one
+    // bar (C4 E4 G4 C5 on its beats), slipped 2 beats and played at twice the
+    // speed: each pass lasts 2 beats, the first only 1. In a 4-beat item the
+    // third pass (item beats 3-5) is cut short after C4 and E4, which lie
+    // before the take's offset; G4 and C5 would sound at song beats 8 and
+    // 8.5, where the song turns to G major.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    f.exec("key.set", R"({"at":6,"tonic":"A","scale":"minor"})");
+    f.exec("key.set", R"({"at":8,"tonic":"G","scale":"major"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"}])", "key");
+    const auto id = *model::Id::parse(f.item);
+    const std::string take = f.app->head().items.find(id)->activeTake->str();
+    f.exec("take.set", R"({"take":")" + take + R"(","start_offset":2,"playrate":2})");
+    auto length = [&](double beats) {
+        f.exec("item.set", R"({"item":")" + f.item + R"(","position":4,"length":)" +
+                               json::formatDouble(beats) + R"(,"loop":true})");
+        f.frame();
+    };
+    auto pickPass = [&](std::size_t k) {
+        REQUIRE(f.root->click("midi.pass"));
+        f.frame();
+        ui::Node* menu = f.root->find("midi.pass.menu");
+        REQUIRE(menu);
+        const auto items = ui::menuItems(*menu);
+        REQUIRE(items.size() > k);
+        const auto run = items[k].run;
+        f.root->closePopup();
+        run();
+        f.frame();
+    };
+    length(4);
+    auto& s = f.editor->state();
+    REQUIRE(s.following);
+    REQUIRE(s.notes.size() == 4);
+    REQUIRE(s.passes == 3);
+    // The first pass: G4 heard at song beat 4, in E minor.
+    CHECK_FALSE(s.outsideItem(2, s.notes[2]));
+    const int firstPass = s.drawnPitch(2, s.notes[2]);
+    pickPass(2);
+    REQUIRE(s.pass == 2);
+    CHECK_FALSE(s.outsideItem(0, s.notes[0]));
+    CHECK_FALSE(s.outsideItem(1, s.notes[1]));
+    REQUIRE(s.outsideItem(2, s.notes[2]));
+    REQUIRE(s.outsideItem(3, s.notes[3]));
+    const int g4 = s.drawnPitch(2, s.notes[2]), c5 = s.drawnPitch(3, s.notes[3]);
+    CHECK(g4 != firstPass);  // not the first pass's place
+    // Lengthened over them: heard in that pass where they were drawn.
+    length(6);
+    REQUIRE(s.pass == 2);
+    CHECK_FALSE(s.outsideItem(2, s.notes[2]));
+    CHECK_FALSE(s.outsideItem(3, s.notes[3]));
+    CHECK(s.drawnPitch(2, s.notes[2]) == g4);
+    CHECK(s.drawnPitch(3, s.notes[3]) == c5);
+    // The second pass's G4 sounds at song beat 6, in A minor: another pitch,
+    // so each pass's place is told apart.
+    pickPass(1);
+    CHECK(s.drawnPitch(2, s.notes[2]) != g4);
+    CHECK(s.drawnPitch(2, s.notes[2]) != firstPass);
+}
+
 TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or says it cannot") {
     Fixture f;
     if (!f.ok) return;

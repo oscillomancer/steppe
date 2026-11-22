@@ -1769,7 +1769,12 @@ compiles) and, for a place no note has yet, `model::placeAt` and
   its name spelled in the song's key; its written pitch a 1-unit outline in
   the notes' colour at 60%, under the notes, with no name, only where the
   two differ. A note not heard (outside the loop window, past the end), and
-  channel 10, have no outline. Clicks and the marquee hit a note where it is
+  channel 10, have no outline. A note outside the item is drawn dim, as in
+  any roll, at the pitch it would sound as by the same place rule past the
+  item's edges (`model::notePlace` at its unwrapped source beat, then
+  `model::soundingKey`; before the song's start, where nothing sounds, the
+  song's context at beat 0), so trimming the edge out over it shows it heard
+  where it was drawn. Clicks and the marquee hit a note where it is
   drawn, never its outline.
 - **Written** (`midi.written`), a cell in the header shown only while the
   take follows, turns the **written view** on: the written pitches drawn,
@@ -1780,13 +1785,17 @@ compiles) and, for a place no note has yet, `model::placeAt` and
   view **song** (the project's chords, as on any item) then **take** (the
   take's own: each point at every repeat of its context beat on the roll's
   axis, the chord holding at the left carried in, the last ending with the
-  item); in the written view **take** first and **song** second. The
+  item; each change of the take's key after the one holding at the left
+  named where it starts: on the chord's cell at the same beat, "A minor:
+  Am", else on a cell of its own over the chord holding there, which takes
+  no gestures); in the written view **take** first and **song** second. The
   song's row is edited as on the ruler (a double-click). The take's row is
   edited with the clip strip's gestures, each edit one `take.set {context}`
   with the lead sheet in bars of the meter at the item (`gui::takeLeadSheet`)
   and each point at the context beat of its place (`model::placeAt`, so a
   repeating context's repeats edit its one period): a drag moves a chord
-  (Alt copies it); a double-click opens the chord field on the take's chord
+  (Alt copies it), its label the chord alone ("Am", not "A minor: Am": a key
+  named on its cell stays); a double-click opens the chord field on the take's chord
   there; a right-click opens its menu (`midi.take.context.menu`): Key… or
   Key at bar N…, Chord…, Remove key, Remove chord, From the song's key and
   chords (`gui::songContextUnder`: the song's under the item, replacing the
@@ -2747,7 +2756,7 @@ a track's own; none without one), its name in the title size
 | Several items | "*N* items" | "On *track*", or "On *M* tracks" |
 | One track | Its label | "Channel", "Buss" or "Master" |
 | Several tracks | "*N* tracks" | "Selected together" |
-| Nothing | "Nothing selected" | "Click an item or a track to see it here." |
+| Nothing | "Nothing selected" | none: no hint text in an empty panel |
 
 Tracks are shown when they were selected last or no item is selected, else
 items. Ids the session no longer holds are left out.
@@ -2767,7 +2776,7 @@ inspector adds no command:
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 | Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |
-| Written in (`inspector.written_in`) | One item whose heard MIDI take has a context (ADR-0098 amended): the take's own key where its content starts, "D major" ("no key" when that point is unreadable) | Read only | |
+| Written in (`inspector.written_in`) | One item whose heard MIDI take has a context (ADR-0098 amended): the take's own key where its content starts, "D major" ("no key" when that point is unreadable), and the changes of key the item plays counted, "E minor, 2 changes": over the context beats its notes read, from its content start for its length × playrate with repeats unrolled, so points a split part or a left trim keeps outside that span are not counted (the roll's take row names them) | Read only | |
 
 When the heard take plays audio, its speed and pitch follow
 (`inspector.take`), each one `take.set` on that take:

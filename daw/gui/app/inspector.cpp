@@ -323,8 +323,7 @@ InspectorSubject inspectorSubject(const model::Session& s, const UiState& select
         out.detail = on.size() == 1 ? "On " + model::trackLabel(s, *on.begin())
                                     : "On " + std::to_string(on.size()) + " tracks";
     } else {
-        out.title = "Nothing selected";
-        out.detail = "Click an item or a track to see it here.";
+        out.title = "Nothing selected";  // no hint line: the empty panel says only that
     }
     return out;
 }
@@ -827,9 +826,36 @@ void Inspector::readItems(bool force) {
                 : nullptr;
         const bool shown = one && take && !take->context.empty();
         rows_["written_in"]->visible = shown;
-        const std::string words = !shown ? std::string()
-                                  : own  ? model::keyWords(*own)
-                                         : std::string("no key");
+        std::string words = !shown ? std::string()
+                            : own  ? model::keyWords(*own)
+                                   : std::string("no key");
+        // The rest counted, not named (the roll's take row shows them all): the
+        // changes of key the item plays, as a bake across key changes leaves
+        // them. Its notes read context beats from phase + start_offset for its
+        // length × playrate (model::contextOver unrolls repeats and carries
+        // `own` in at 0), so points outside that span, which a split part or a
+        // left trim keeps, are not counted.
+        if (shown) {
+            const model::ItemSpan span = model::itemSpan(s, *item);
+            const double length = std::max(0.0, s.timeMap->beatAt(span.endSec) - span.startBeat);
+            const double rate = take->playrate > 0 ? take->playrate : 1.0;
+            const double u0 = take->contextPhase + take->startOffset;
+            int changes = 0;
+            std::optional<model::ContextPoint> last;
+            for (model::ContextPoint p : model::contextOver(*take, u0, u0 + length * rate)) {
+                if (p.type != model::ContextType::Key) continue;
+                const double beat = p.beat;
+                if (last) {
+                    p.beat = last->beat;
+                    if (p == *last) continue;  // the same key again: no change
+                    ++changes;
+                }
+                p.beat = beat;
+                last = std::move(p);
+            }
+            if (changes > 0)
+                words += ", " + std::to_string(changes) + (changes == 1 ? " change" : " changes");
+        }
         if (writtenIn_->text() != words) writtenIn_->setText(words);
     }
     // One item whose heard take is MIDI: its Follow, and Bake while it
@@ -1140,6 +1166,7 @@ void Inspector::sync() {
     clipsFocused_ = selection_.clipsFocused;
     if (title_->text() != subject.title) title_->setText(subject.title);
     if (detail_->text() != subject.detail) detail_->setText(subject.detail);
+    detail_->visible = !subject.detail.empty();
     static_cast<Swatch*>(swatch_)->color = subject.color;
     swatch_->visible = subject.color.has_value();
     kind_ = subject.kind;
