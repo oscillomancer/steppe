@@ -406,8 +406,12 @@ until it is released.
   81b, E5). A barrier that drops queued edits, a deactivation or a full
   queue ends every editor gesture still open, so a lost `endEdit` leaves
   no gesture open in the stage. The ends go out in queue order: after
-  every edit queued before them, and before any queued after (review round
-  97, T1). Closing the editor with a grab open (no
+  every edit queued before them, and before any queued after, each request
+  in its own place (review rounds 97 and 98). A block takes the editor's
+  queued edits only as far as its 64 editor events can hold them with the
+  ends that may follow; the rest waits for the next block, which it asks
+  for, so a drag made while the plug-in was not processing comes out whole
+  (round 98, U1). Closing the editor with a grab open (no
   `endEdit`, review round 81c, E6) queues each grab's end behind the
   editor's moves, so a move made just before the close stays inside its
   gesture: one step, its points once (round 92b; ending it ahead of the

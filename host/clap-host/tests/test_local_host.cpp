@@ -326,6 +326,119 @@ TEST_CASE("a VST3 editor closed mid-drag with its queue full ends the drag after
     instance.deactivate();
 }
 
+TEST_CASE("a VST3 editor drag queued while not processing comes out whole, its end last") {
+    // Review round 98, U1: a block holds 64 editor events. Drained whole, a
+    // drag made while not processing lost its moves past that and its end,
+    // and the stage forgot the gesture. The block now takes what it can hold
+    // and asks for the next, which takes the rest.
+    auto found = scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
+    REQUIRE(found);
+    const auto info = std::find_if(found->begin(), found->end(), [](const PluginInfo& p) {
+        return p.name == "Test VST3 Stepped Echo";
+    });
+    REQUIRE(info != found->end());
+    auto made = Instance::create(*info, {});
+    REQUIRE(made);
+    auto& instance = **made;
+    REQUIRE(instance.activate(48000, 1, 64));
+    REQUIRE(instance.startProcessing());
+    Buffers buffer(64);
+    std::vector<OutputEvent> storage(256);
+    OutputEvents out{storage};
+    using Kind = OutputEvent::Kind;
+    instance.stopProcessing();
+    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.setParam(2, 0.05));  // grab
+    int moves = 0;
+    SUBCASE("a hundred moves") {
+        for (; moves < 100; ++moves) REQUIRE(instance.setParam(2, 0.2 + 0.005 * (moves % 100)));
+    }
+    SUBCASE("moves until the queue is full") {
+        // Each move queues Edit's value and the editor's move; the last may
+        // queue the value and find no room for the move.
+        while (moves < 4096 && instance.setParam(2, 0.2 + 0.005 * (moves % 100))) ++moves;
+        REQUIRE(moves > 100);
+        REQUIRE(moves < 4096);
+    }
+    instance.closeEditor();  // its end is queued, or asked for if the queue is full
+    REQUIRE(instance.startProcessing());
+    std::vector<OutputEvent> level;
+    int blocks = 0;
+    for (; blocks < 100; ++blocks) {
+        (void)instance.takeProcessRequest();
+        out.clear();
+        REQUIRE(instance.process(buffer.block(64), &out));
+        CHECK(out.dropped == 0);
+        for (std::size_t k = 0; k < out.count; ++k)
+            if (storage[k].paramId == 3) level.push_back(storage[k]);
+        if (!instance.processRequested()) break;  // nothing left for another block
+    }
+    CHECK(blocks > 0);  // it took more than one block
+    REQUIRE(level.size() >= 2);
+    CHECK(level.front().kind == Kind::GestureBegin);
+    CHECK(level.back().kind == Kind::GestureEnd);
+    std::size_t values = 0;
+    for (std::size_t k = 1; k + 1 < level.size(); ++k) {
+        CHECK(level[k].kind == Kind::ParamValue);
+        values += level[k].kind == Kind::ParamValue;
+    }
+    // Every move the queue took, once (the full queue's last may be refused).
+    CHECK(values >= static_cast<std::size_t>(moves) - 1);
+    CHECK(values <= static_cast<std::size_t>(moves));
+    instance.stopProcessing();
+    instance.deactivate();
+}
+
+TEST_CASE("two end requests with edits between them each end the gestures before them") {
+    // Review round 98, U2: one request slot kept only the later of two
+    // requests made before a block, so a gesture begun before the first
+    // ended at the second, after the edits between them. Here a state load
+    // on an active instance that is not processing, a new grab, then a
+    // deactivation: the old grab ends before the new one begins.
+    auto found = scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
+    REQUIRE(found);
+    const auto info = std::find_if(found->begin(), found->end(), [](const PluginInfo& p) {
+        return p.name == "Test VST3 Stepped Echo";
+    });
+    REQUIRE(info != found->end());
+    auto made = Instance::create(*info, {});
+    REQUIRE(made);
+    auto& instance = **made;
+    REQUIRE(instance.activate(48000, 1, 64));
+    REQUIRE(instance.startProcessing());
+    Buffers buffer(64);
+    std::vector<OutputEvent> storage(16);
+    OutputEvents out{storage};
+    using Kind = OutputEvent::Kind;
+    const auto block = [&] {
+        out.clear();
+        REQUIRE(instance.process(buffer.block(64), &out));
+        return std::vector<OutputEvent>(storage.begin(), storage.begin() + out.count);
+    };
+    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.setParam(2, 0.05));  // grab
+    REQUIRE(block().size() == 1);
+    instance.stopProcessing();
+    const auto state = instance.saveState();
+    REQUIRE(state);
+    REQUIRE(instance.loadState(*state));  // the first request
+    REQUIRE(instance.setParam(2, 0.05));  // grabs again
+    REQUIRE(instance.setParam(2, 0.4));
+    instance.deactivate();  // the second
+    REQUIRE(instance.activate(48000, 1, 64));
+    REQUIRE(instance.startProcessing());
+    const auto events = block();
+    REQUIRE(events.size() == 4);
+    CHECK(events[0].kind == Kind::GestureEnd);
+    CHECK(events[1].kind == Kind::GestureBegin);
+    CHECK(events[2].kind == Kind::ParamValue);
+    CHECK(events[2].value == doctest::Approx(0.4));
+    CHECK(events[3].kind == Kind::GestureEnd);
+    for (const auto& e : events) CHECK(e.paramId == 3);
+    instance.stopProcessing();
+    instance.deactivate();
+}
+
 TEST_CASE("a barrier's end request ends only the gestures begun before it") {
     // A state load drops the queued edits and ends the open gesture; a grab
     // queued after it, taken in the same block, stays open until its own end.
