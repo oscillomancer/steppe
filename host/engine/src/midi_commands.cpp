@@ -99,9 +99,10 @@ bool followingTake(const model::Session& s, model::Id owner) {
 struct Frame {  // item beats <-> source ticks
     double ppq = 960, offset = 0, rate = 1, itemPosition = 0;
     // What a looped item's roll adds to an item beat of this frame: the whole passes the
-    // take's start offset skips, in item beats, so a note's beat in the first heard pass
-    // (where it plays and the roll draws it) is itemPosition + beatOf + shift. 0 when the item
-    // does not loop, and for a clip.
+    // take's start offset skips, in item beats, so a note's place in the roll (the wrapped
+    // frame the roll draws it in) is itemPosition + beatOf + shift. A note written before the
+    // wrapped offset is drawn before the item's start there, and first plays a pass later.
+    // 0 when the item does not loop, and for a clip.
     double shift = 0;
     bool clip = false;  // a launcher clip's take: no place in time (ADR-0095 C-e)
     double beatOf(std::int64_t tick) const {
@@ -417,8 +418,8 @@ Status applyOp(const MidiOp& op, std::size_t at, std::vector<Working>& notes, st
             auto sel = selection(true);
             if (!sel) return std::move(sel).error();
             const double strength = std::clamp(op.strength.value_or(1.0), 0.0, 1.0);
-            // The project's grid: snap project beats, not item beats, at the beat the note
-            // plays at (a looped item's roll draws it there: the frame's shift).
+            // The project's grid: snap project beats, not item beats, at the note's place in
+            // the roll (a looped item's roll wraps start_offset: the frame's shift).
             auto snap = [&](double itemBeat) {
                 const double project = f.itemPosition + itemBeat + f.shift;
                 const double target = std::round(project / *op.grid) * *op.grid;
@@ -975,7 +976,8 @@ void registerMidiCommands(cmd::Registry& registry) {
             "resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? "
             "and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid, "
             "at "
-            "the beat the note plays at), strength? 0-1, ends?}; cc.set {number, points [{beat, "
+            "the note's place in the item's roll), strength? 0-1, ends?}; cc.set {number, points "
+            "[{beat, "
             "value}], channel?}; cc.clear "
             "{number, from?, to?}. Scale ops read the context track (key.set, chord.set) at "
             "the project beat each note starts, in the order of the ops: transpose_degrees "
