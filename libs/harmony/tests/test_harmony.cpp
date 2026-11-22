@@ -597,10 +597,13 @@ TEST_CASE("follow in chords mode: slash basses, other notes, the octave, and the
     CHECK(cls(chordFollow(note("A4"), keyChord("C", Scale::Major, "G7"),
                           keyChord("D", Scale::Minor, "A7"))
                   .pitch) == 10);
-    // The octave tie: keys C major to F# major, the chord C held: C4 goes down to C3.
+    // The octave follows the roots, not the keys: keys C major to F# major, the
+    // chord C held, C4 stays C4. A tie between the roots goes down: C to F#
+    // takes C4 to F#3.
     CHECK(
         chordFollow(note("C4"), keyChord("C", Scale::Major, "C"), keyChord("F#", Scale::Major, "C"))
-            .pitch == note("C3"));
+            .pitch == note("C4"));
+    CHECK(chordFollow(note("C4"), chordOnly("C"), chordOnly("F#")).pitch == note("F#3"));
     // A chord missing on either side falls back to key mode for the note.
     const Followed missing =
         chordFollow(note("E4"), keyOnly("C", Scale::Major), keyChord("D", Scale::Minor, "Dm"));
@@ -609,6 +612,63 @@ TEST_CASE("follow in chords mode: slash basses, other notes, the octave, and the
     const Followed neither = chordFollow(61, Place{}, Place{});
     CHECK(neither.pitch == 61);
     CHECK(neither.by == FollowedBy::Copy);
+}
+
+TEST_CASE("follow in chords mode: a figure moves as a block by its roots' interval") {
+    // E1 (the GUI lead's third walk): the octave came from the key-followed
+    // pitch, so a Bm figure written in D major, under B7 in A minor (the keys
+    // -5 apart, a tritone from three of its four targets), split across
+    // octaves: B3 A4 F#3 D#3. Under B7 in E minor it was B4 A4 F#4 D#4. The
+    // reference is now the pitch moved by the roots' interval, so the figure
+    // keeps its contour whatever the keys.
+    const std::vector<int> figure = {note("B4"), note("A4"), note("F#4"), note("D4")};
+    const std::vector<int> heard = {note("B4"), note("A4"), note("F#4"), note("D#4")};
+    const Place written = keyChord("D", Scale::Major, "Bm");
+    for (const Place& to :
+         {keyChord("A", Scale::Minor, "B7"), keyChord("E", Scale::Minor, "B7"), chordOnly("B7")}) {
+        std::vector<int> got;
+        for (int p : figure) got.push_back(chordFollow(p, written, to).pitch);
+        CHECK(got == heard);
+    }
+    // A cell over Am7 plays one voicing over Am7 whatever the keys: A4 C5 E5
+    // G5 stays itself, from any key it was written in, under E minor as under
+    // A minor (it played an octave apart).
+    const std::vector<int> cell = {note("A4"), note("C5"), note("E5"), note("G5")};
+    for (const char* tonic : {"C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"})
+        for (const Scale scale : {Scale::Major, Scale::Minor}) {
+            const Place from = keyChord(tonic, scale, "Am7");
+            const std::string writtenIn = tonic;
+            CAPTURE(writtenIn);
+            for (const Place& to :
+                 {keyChord("E", Scale::Minor, "Am7"), keyChord("A", Scale::Minor, "Am7")})
+                for (int p : cell) CHECK(chordFollow(p, from, to).pitch == p);
+        }
+    // So for a chord tone in general: one pair of chords, any keys on either
+    // side, gives the pitch the chords alone give.
+    const std::vector<Place> keys = {keyOnly("C", Scale::Major), keyOnly("F#", Scale::Minor),
+                                     keyOnly("Bb", Scale::Dorian), keyOnly("E", Scale::Minor),
+                                     keyOnly("A", Scale::HarmonicMinor)};
+    for (const auto& [fromChord, toChord] :
+         {std::pair{"Bm", "B7"}, std::pair{"Cmaj7", "F#m7b5"}, std::pair{"G7", "Db9"},
+          std::pair{"Esus4", "A5"}, std::pair{"C13", "D"}}) {
+        const std::string pair = std::string(fromChord) + " to " + toChord;
+        CAPTURE(pair);
+        const auto chordTone = [&](int p) {
+            for (int interval : chordQualities().at(parseChord(fromChord)->quality))
+                if ((p - pitchClassNumber(parseChord(fromChord)->root) - interval) % 12 == 0)
+                    return true;
+            return false;
+        };
+        for (const Place& fk : keys)
+            for (const Place& tk : keys)
+                for (int p = 24; p <= 100; ++p) {
+                    if (!chordTone(p)) continue;
+                    const Place from{fk.key, *parseChord(fromChord)};
+                    const Place to{tk.key, *parseChord(toChord)};
+                    CHECK(chordFollow(p, from, to).pitch ==
+                          chordFollow(p, chordOnly(fromChord), chordOnly(toChord)).pitch);
+                }
+    }
 }
 
 TEST_CASE("follow never fails: any pitch, any pair of places, lands in range") {

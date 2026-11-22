@@ -105,4 +105,38 @@ std::size_t drawMidiBody(ui::RectRenderer& notes, const ui::Rect& r, const model
     return glyphs;
 }
 
+std::size_t drawSoundingBody(ui::RectRenderer& notes, const ui::Rect& r,
+                             std::span<const model::SoundingNote> heard, const model::Take& take,
+                             const model::MidiSource& source, const MidiWindow& window,
+                             double itemBeat, std::uint32_t rgba, std::uint32_t border) {
+    const midi::Sequence& seq = source.sequence;
+    if (heard.empty() || r.h < 4) return 0;
+    const double ppq = seq.ppq > 0 ? seq.ppq : 960;
+    const double rate = take.playrate > 0 ? take.playrate : 1.0;
+    int lo = 127, hi = 0;
+    for (const model::SoundingNote& o : heard) {
+        lo = std::min(lo, o.sounds.pitch);
+        hi = std::max(hi, o.sounds.pitch);
+    }
+    const int pitches = hi - lo + 3;  // a free row above and below
+    const float noteH = std::max(1.0f, std::min(8.0f, r.h / static_cast<float>(pitches)));
+    const float usedH = noteH * static_cast<float>(pitches);
+    const float top = r.y + (r.h - usedH) / 2;
+    std::size_t glyphs = 0;
+    for (const model::SoundingNote& o : heard) {
+        if (o.note >= seq.notes.size()) continue;
+        const midi::Note& n = seq.notes[o.note];
+        const double b0 = o.songBeat - itemBeat;
+        const double b1 = b0 + static_cast<double>(n.length) / ppq / rate;
+        if (b1 <= window.from || b0 >= window.to) continue;
+        if (glyphs >= 8192) return glyphs;
+        ++glyphs;
+        const float x0 = window.xAt(std::max(0.0, b0));
+        const float x1 = std::min(window.xAt(b1), window.end);
+        const float y = top + static_cast<float>(hi + 1 - o.sounds.pitch) * noteH;
+        notes.add({x0, y, std::max(1.0f, x1 - x0), noteH}, rgba, border);
+    }
+    return glyphs;
+}
+
 }  // namespace supple::views

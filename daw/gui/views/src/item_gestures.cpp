@@ -12,6 +12,7 @@
 #include <set>
 #include <tuple>
 
+#include "supple/model/follow.h"
 #include "supple/model/freeze.h"
 #include "supple/model/item_edits.h"
 #include "supple/ui/canvas.h"
@@ -1473,6 +1474,45 @@ std::vector<ui::MenuItem> ItemGestures::buildItemMenu(const MenuPlace& place, bo
             };
             items.push_back(std::move(m));
         }
+    }
+    // How the heard MIDI take sounds against the song (ADR-0098 amended,
+    // gui.md §6): as written, or following its key or chords; Bake writes
+    // what it sounds as into the notes. The bar's menu only, as the
+    // inspector's Follow row.
+    if (heard && model::takeIsMidi(*heard)) {
+        items.push_back(rule);
+        const auto why = followRefusal ? followRefusal(itemId) : std::nullopt;
+        for (auto [label, value] : {std::pair{"Play as written", model::ClipFollow::None},
+                                    {"Follow the song's key", model::ClipFollow::Key},
+                                    {"Follow the song's chords", model::ClipFollow::Chords}}) {
+            ui::MenuItem m;
+            m.label = label;
+            if (value != model::ClipFollow::None && why) {
+                m.label += " (" + *why + ")";
+                m.enabled = false;
+            }
+            m.checked = heard->follow == value;
+            m.run = [this, itemId, value] {
+                if (onFollow) onFollow(itemId, value);
+            };
+            items.push_back(std::move(m));
+        }
+        // The selection when the item is in it, else the item.
+        std::vector<model::Id> targets =
+            isSelected(itemId) ? selection_ : std::vector<model::Id>{itemId};
+        std::erase_if(targets, [&](model::Id id) {
+            const model::Item* it = itemOf(s, id);
+            const model::Take* tk = it && it->activeTake ? s.takes.find(*it->activeTake) : nullptr;
+            return !tk || tk->follow == model::ClipFollow::None;
+        });
+        ui::MenuItem bake;
+        bake.label = "Bake into notes";
+        if (keysFor) bake.shortcut = keysFor("ui.take.bake");
+        bake.enabled = !targets.empty();
+        bake.run = [this, targets] {
+            if (onBake) onBake(targets);
+        };
+        items.push_back(std::move(bake));
     }
     if (!pointed) return items;
     const model::Id take = *pointed;

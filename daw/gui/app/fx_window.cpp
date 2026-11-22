@@ -572,6 +572,7 @@ Status FxWindow::open(model::Id track) {
         params_ = std::make_unique<ParamPanel>(app_, dispatcher_, root());
         params_->onError = [this](const std::string& message) { setStatus(message); };
         params_->openLearn = hooks_.openLearn;
+        params_->sourceItems = hooks_.sourceItems;
     }
     root().closePopups();
     track_ = track;

@@ -136,6 +136,27 @@ class Handler : public Steinberg::U::Implements<Steinberg::U::Directly<vst::ICom
     // performEdit outside beginEdit/endEdit is a gesture of its own.
     std::function<bool(vst::ParamID, vst::ParamValue, PendingEdits::Kind)> edit;
     std::vector<vst::ParamID> open;  // main thread: parameters inside beginEdit
+    // The instance's processing flag and its process request (State's).
+    const std::atomic<bool>* processing = nullptr;
+    std::atomic<bool>* request = nullptr;
+    // An editor edit's state (review round 81b and the batch 3 follow-up): a
+    // processing instance reports the edit as its gesture, and that commit
+    // carries the state, so it asks to process (a bypassed stage then runs)
+    // and nothing captures the state apart, which in the anticipative
+    // executor raced the rendered gesture and dropped it. An instance that is
+    // not processing reports nothing: its state is captured (`edited`).
+    void editorEdit() {
+        // The edit was pushed (edit()); stopProcessing stores the flag, then
+        // reads the queue. A seq_cst fence on each side, between its store
+        // and its load, lets at least one see the other's store: acquire and
+        // release alone allow both to miss (review round 86 H6).
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (processing && processing->load(std::memory_order_acquire))
+            request->store(true, std::memory_order_release);
+        else
+            edited = true;
+        notifyMain();
+    }
     Steinberg::tresult PLUGIN_API beginEdit(vst::ParamID id) override {
         if (std::find(open.begin(), open.end(), id) != open.end()) return kResultOk;
         if (!edit || !edit(id, 0, PendingEdits::Begin)) return kResultFalse;
@@ -147,13 +168,7 @@ class Handler : public Steinberg::U::Implements<Steinberg::U::Directly<vst::ICom
         const bool accepted = edit && (inside || edit(id, 0, PendingEdits::Begin)) &&
                               edit(id, value, PendingEdits::Edited) &&
                               (inside || edit(id, 0, PendingEdits::End));
-        // The state is captured once the gesture ends (review round 81b): a
-        // capture during a drag is a step of its own, and its plan swap
-        // drops the drag's open gesture.
-        if (!inside) {
-            edited = true;
-            notifyMain();
-        }
+        editorEdit();
         return accepted ? kResultOk : kResultFalse;
     }
     Steinberg::tresult PLUGIN_API endEdit(vst::ParamID id) override {
@@ -161,8 +176,7 @@ class Handler : public Steinberg::U::Implements<Steinberg::U::Directly<vst::ICom
         if (it == open.end()) return kResultOk;
         open.erase(it);
         const bool queued = edit && edit(id, 0, PendingEdits::End);
-        edited = true;
-        notifyMain();
+        editorEdit();
         return queued ? kResultOk : kResultFalse;
     }
     Steinberg::tresult PLUGIN_API restartComponent(Steinberg::int32 flags) override {
@@ -477,15 +491,40 @@ struct Vst3Instance::State {
     OutputEventList outputEvents{static_cast<Steinberg::int32>(kMaxEvents)};
     PendingEdits changes;
     // This block's editor gestures and values (audio thread; review round 81 E2).
+    // The editor's events in a block. A block takes from the queue only
+    // while they can hold the next change's event and the ends that may
+    // follow; the rest waits for the next block, which it asks for (review
+    // round 98, U1: a drag queued while not processing, drained whole, lost
+    // its moves past this and its end, and the stage forgot the gesture).
     std::array<OutputEvent, 64> editorOutput{};
     std::size_t editorOutputs = 0;
-    // The editor gestures begun and not yet ended (audio thread), and a
-    // request to end them all (main thread: a barrier dropped queued edits,
+    // The editor gestures begun and not yet ended (audio thread), and the
+    // requests to end them all (main thread: a barrier dropped queued edits,
     // the plug-in was deactivated, or an editor edit found the queue full),
     // so an end that never comes leaves no gesture open (review round 81b).
+    // A request is the queue's next sequence when it was made: the ends go
+    // out after every change queued before it and before any queued after,
+    // as a queued end would (review round 97, T1; handled before the queue,
+    // a move still queued came out after its gesture's end, and a Begin
+    // still queued was never ended). Each request keeps its own place
+    // (round 98, U2: one slot made two requests with edits between them end
+    // the earlier gestures at the later). One with nothing queued since the
+    // last ends at the same place and is not repeated, so every pending
+    // request but the last has a queued change after it: at most the
+    // queue's capacity plus one are pending, and the ring cannot fill.
     std::array<vst::ParamID, 16> begun{};
     std::size_t begunCount = 0;
-    std::atomic<bool> endGestures{false};
+    SpscRing<std::uint64_t, 2048> endRequests;
+    static_assert(decltype(endRequests)::kCapacity > PendingEdits::kCapacity + 1);
+    std::uint64_t lastEndRequest = 0;  // main thread
+    void endGestures() {
+        if (lastEndRequest != 0 && changes.lastQueued() < lastEndRequest) return;
+        lastEndRequest = changes.nextSequence();
+        (void)endRequests.push(lastEndRequest);  // never full: see above
+    }
+    // Set while the processor processes (audio thread), and an editor edit's
+    // request to process (main thread, taken by the audio thread).
+    std::atomic<bool> processingNow{false}, editorRequest{false};
     std::atomic<std::uint32_t> dropped{0};
     std::atomic<bool> latencyChanged{false};
     std::atomic<bool> restartWanted{false};  // kLatencyChanged: reactivate to apply
@@ -552,10 +591,12 @@ Result<std::unique_ptr<Vst3Instance>> Vst3Instance::create(const PluginInfo& inf
     }
     if (s.controller) s.controller->setComponentHandler(s.handler);
     // Editor edits reach the processor through the same queue as setParam().
+    s.handler->processing = &s.processingNow;
+    s.handler->request = &s.editorRequest;
     s.handler->edit = [state = &s](vst::ParamID param, vst::ParamValue normalized,
                                    PendingEdits::Kind kind) {
         const bool queued = state->changes.push(param, normalized, kind);
-        if (!queued && kind != PendingEdits::Value) state->endGestures = true;
+        if (!queued && kind != PendingEdits::Value) state->endGestures();
         return queued;
     };
     for (auto& channel : s.midiParams) channel.fill(vst::kNoParamId);
@@ -748,7 +789,7 @@ void Vst3Instance::deactivate() {
     state_->component->setActive(false);
     state_->active = false;
     state_->handler->open.clear();
-    state_->endGestures = true;
+    state_->endGestures();
 }
 std::uint32_t Vst3Instance::latency() const {
     return state_->active ? state_->processor->getLatencySamples() : 0;
@@ -828,7 +869,7 @@ Result<std::vector<std::uint8_t>> Vst3Instance::saveState() {
             return Error("host.state", "VST3 idle parameter flush failed");
         s.changes.barrier();
         s.handler->open.clear();
-        s.endGestures = true;
+        s.endGestures();
     }
     Steinberg::ResizableMemoryIBStream component, controller;
     if (state_->component->getState(&component) != kResultOk)
@@ -884,7 +925,7 @@ Status Vst3Instance::loadState(std::span<const std::uint8_t> bytes) {
     auto previous = saveState();
     state_->changes.barrier();
     state_->handler->open.clear();
-    state_->endGestures = true;
+    state_->endGestures();
     auto status = apply(bytes);
     if (status) return status;
     Error error = status.error();
@@ -897,9 +938,29 @@ Status Vst3Instance::loadState(std::span<const std::uint8_t> bytes) {
 bool Vst3Instance::startProcessing() SUPPLE_RT {
     // kNotImplemented means "nothing to do" (the SDK documents it as OK; sfizz returns it).
     const auto result = state_->processor->setProcessing(true);
-    return result == kResultOk || result == Steinberg::kNotImplemented;
+    const bool started = result == kResultOk || result == Steinberg::kNotImplemented;
+    if (started) state_->processingNow.store(true, std::memory_order_release);
+    return started;
 }
-void Vst3Instance::stopProcessing() SUPPLE_RT { state_->processor->setProcessing(false); }
+void Vst3Instance::stopProcessing() SUPPLE_RT {
+    auto& s = *state_;
+    s.processingNow.store(false, std::memory_order_release);
+    // Pairs with editorEdit's fence: an edit pushed after it sees the flag
+    // down and captures the state itself; one before it is in the queue here.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    s.processor->setProcessing(false);
+    // Editor edits it will now not report: their state is captured instead.
+    if (s.changes.queued()) {
+        s.handler->edited = true;
+        s.handler->notifyMain();
+    }
+}
+bool Vst3Instance::processRequested() const SUPPLE_RT {
+    return state_->editorRequest.load(std::memory_order_acquire);
+}
+bool Vst3Instance::takeProcessRequest() SUPPLE_RT {
+    return state_->editorRequest.exchange(false, std::memory_order_acq_rel);
+}
 void Vst3Instance::reset() SUPPLE_RT {
     // A VST3 has no reset: the notes the host delivered and did not end are
     // remembered, and the next process() prepends their note-offs.
@@ -1029,16 +1090,39 @@ bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_
     // stays outside them (an echo, dropped), and a gesture's last value is
     // the hand's.
     s.editorOutputs = 0;
-    if (s.endGestures.exchange(false, std::memory_order_acq_rel)) {
+    const auto endBegun = [&] {
         for (std::size_t k = 0; k < s.begunCount; ++k)
-            s.editorOutput[s.editorOutputs++] = {.kind = OutputEvent::Kind::GestureEnd,
-                                                 .time = 0,
-                                                 .paramId = s.begun[k],
-                                                 .noteId = -1};
+            if (s.editorOutputs < s.editorOutput.size())
+                s.editorOutput[s.editorOutputs++] = {.kind = OutputEvent::Kind::GestureEnd,
+                                                     .time = 0,
+                                                     .paramId = s.begun[k],
+                                                     .noteId = -1};
         s.begunCount = 0;
-    }
+    };
+    // End requests are read for each change: one pushed after a request is
+    // popped only once the request is visible (release, then acquire), and
+    // once it is, every change pushed before it is too.
     PendingEdits::Change change{};
-    while (s.changes.pop(change)) {
+    std::uint64_t request = 0;
+    for (;;) {
+        if (s.editorOutputs + s.begunCount + 1 >= s.editorOutput.size()) {
+            // Full for this block: the rest waits, and asks for the next.
+            if (s.changes.queued() || s.endRequests.peek(request))
+                s.editorRequest.store(true, std::memory_order_release);
+            break;
+        }
+        if (!s.changes.pop(change)) {
+            if (!s.endRequests.peek(request)) break;
+            if (!s.changes.pop(change)) {  // nothing queued before it is left
+                endBegun();
+                s.endRequests.consume();
+                continue;
+            }
+        }
+        while (s.endRequests.peek(request) && change.sequence >= request) {
+            endBegun();
+            s.endRequests.consume();
+        }
         if (change.kind == PendingEdits::Value || change.kind == PendingEdits::Edited)
             addNormalized(change.id, change.value, 0);
         if (change.kind == PendingEdits::Value) continue;
@@ -1414,6 +1498,16 @@ Result<Instance::EditorSize> Vst3Instance::setEditorScale(double scale, double f
 
 void Vst3Instance::closeEditor() {
     auto& s = *state_;
+    // An editor closed mid-drag sends no endEdit (review round 81c E6): its
+    // grabs end here, so the drag is recorded now, not when something else
+    // ends it. Each grab's end is queued behind the editor's moves (round
+    // 92b); one the full queue refuses asks for the ends in queue order
+    // instead (edit(), endGestures()).
+    if (!s.handler->open.empty()) {
+        for (const auto id : s.handler->open) (void)s.handler->edit(id, 0, PendingEdits::End);
+        s.handler->open.clear();
+        s.handler->editorEdit();
+    }
     if (!s.view) return;
     s.view->removed();
     s.view->setFrame(nullptr);

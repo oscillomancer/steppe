@@ -54,6 +54,7 @@
 #include "meter_feed.h"
 #include "midi_editor.h"
 #include "mixer.h"
+#include "mod_source.h"
 #include "mouse_dialog.h"
 #include "plugin_windows.h"
 #include "preferences.h"
@@ -77,7 +78,9 @@
 #include "supple/rpc/model_loop.h"
 #include "supple/rpc/protocol.h"
 #include "supple/ui/root.h"
+#include "supple/views/launcher.h"
 #include "sync_dialog.h"
+#include "take_follow.h"
 #include "timecode_dialog.h"
 #include "ui_persistence.h"
 
@@ -428,6 +431,7 @@ int frontendMain(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", message.c_str());
         shell.setStatus(message);
     };
+    appActions.onNotice = [&shell](const std::string& message) { shell.setStatus(message); };
     // Before the chrome: the toolbar and menus list the actions it adds.
     gui::RackWindow racks(rackPanel, appActions, dispatcher, **app, uiState);
     auto chromeLayout = gui::ChromeLayout::load(gui::ChromeLayout::defaultFile(product::kSlug));
@@ -468,6 +472,13 @@ int frontendMain(int argc, char** argv) {
     };
     pluginWindows.setOwner(window->get());
     gui::MidiEditor midiEditor(root, appActions, dispatcher, **app, uiState);
+    // An audio clip's waveform reads the arrangement's peaks, and repaints
+    // when one arrives as the lanes do.
+    midiEditor.setPeaks(&peaks);
+    peaks.onReady = [previous = std::move(peaks.onReady), &midiEditor](const std::string& key) {
+        if (previous) previous(key);
+        midiEditor.peaksReady();
+    };
     gui::RoutingMatrix routing(routingPanel, appActions, dispatcher, **app);
     shell.onRouting = [&routing](const model::Id&, const ui::Rect& anchor) {
         routing.open(anchor);
@@ -540,6 +551,10 @@ int frontendMain(int argc, char** argv) {
             [&](const std::string& incident) {
                 SDL_RaiseWindow((*window)->sdl());
                 helpActions.crashReports().open(incident);
+            },
+            [&](const model::EnvTarget& target) {
+                const auto catalog = gui::racks::catalog(**app);
+                return gui::modSourceItems(appActions, (*app)->head(), catalog.get(), target);
             }},
         gui::Favourites::defaultFile(product::kSlug));
     // A plugin dragged out of the browser lands on the strip or the track
@@ -586,6 +601,17 @@ int frontendMain(int argc, char** argv) {
     appActions.addUiFor("ui.fx.chain", "FX: chain…", "track", [&](const json::Value& v) -> Status {
         return fxWindow.openFor(uiState, v);
     });
+    // A modulation route's source in the rack window (gui.md §2): a lane's
+    // "mod", the inspector's lines and the parameter menus run it.
+    appActions.addUiFor(
+        "ui.modulation.source", "Modulation: show source", "modulation",
+        [&](const json::Value& v) -> Status {
+            const auto route = v.isString() ? model::Id::parse(v.asString()) : std::nullopt;
+            if (!route || route->kind != model::Kind::Modulation)
+                return Error("modulation.source", "name a modulation route", "/modulation",
+                             "Pass {\"modulation\": \"mr_N\"}; modulation.list names them.");
+            return racks.showModulationSource(*route);
+        });
     appActions.addUi("ui.fx.move_up", "FX: move the selected plugin up the chain",
                      [&] { fxWindow.moveSelected(-1); });
     appActions.addUi("ui.fx.move_down", "FX: move the selected plugin down the chain",
@@ -766,6 +792,27 @@ int frontendMain(int argc, char** argv) {
             audioEdit.run(items, operation, grid);
         };
         g.onConsolidate = [&](const auto& items) { audioEdit.consolidate(items); };
+        // A MIDI take's Follow and Bake from the Item menu (gui.md §6), as
+        // the inspector sends them.
+        g.followRefusal = [&app](model::Id item) {
+            return gui::followRefusal((*app)->head(), item);
+        };
+        g.onFollow = [&](model::Id item, model::ClipFollow follow) {
+            auto args = gui::takeFollowArgs((*app)->head(), item, follow);
+            if (args)
+                args = dispatcher.execute(
+                    {"take.set", std::move(*args), {cmd::Origin::Type::Ui, "gui", {}}});
+            if (!args && appActions.onError) appActions.onError("Follow: " + args.error().message);
+        };
+        g.onBake = [&](const std::vector<model::Id>& items) {
+            auto r = gui::bakeItems(dispatcher, {cmd::Origin::Type::Ui, "gui", {}}, (*app)->head(),
+                                    items);
+            if (!r) {
+                if (appActions.onError) appActions.onError("Bake: " + r.error().message);
+                return;
+            }
+            shell.setStatus(*r);
+        };
         g.onExport = [&](model::Id item) {
             fileActions.exportItem(item, [&](const std::string& text) { shell.setStatus(text); });
         };
@@ -877,12 +924,10 @@ int frontendMain(int argc, char** argv) {
          [&](model::Id clip) {
              const model::Clip* c = (*app)->head().clips.find(clip);
              if (!c) return;
-             if (c->kind == model::ClipKind::Midi) {
-                 if (auto r = midiEditor.open(clip.str()); !r && appActions.onError)
-                     appActions.onError("MIDI: " + r.error().message);
-             } else {
-                 appActions.invoke("ui.inspector");
-             }
+             // A MIDI clip's roll, or an audio clip's waveform and lanes.
+             if (auto r = midiEditor.open(clip.str()); !r && appActions.onError)
+                 appActions.onError((c->kind == model::ClipKind::Midi ? "MIDI: " : "Audio: ") +
+                                    r.error().message);
          },
          [&](const std::vector<model::Id>& clips) {
              uiState.selectedClips.clear();
@@ -907,15 +952,30 @@ int frontendMain(int argc, char** argv) {
          [&](model::Id take) {
              if (auto r = fxWindow.openTake(take); !r && appActions.onError)
                  appActions.onError("Take FX: " + r.error().message);
-         }});
+         },
+         // What a clip or scene laid on the timeline did with its key.
+         [&shell](const std::string& notice) { shell.setStatus(notice); }});
     // A capture's commit at stop, or the next one's arming, refused.
     shell.capture().onError = [&appActions](const Error& e) {
         if (appActions.onError) appActions.onError("Capture: " + e.message);
     };
+    // What a commit copied under another key (gui.md §4.15), as a lay says it.
+    shell.capture().onNotice = [&shell](const std::string& notice) { shell.setStatus(notice); };
     shell.arrange()->setRulerCallbacks(
-        {[&dispatcher](const std::string& command, json::Value args) {
-             return dispatcher.execute(
-                 {command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+        {[&](const std::string& command, json::Value args) {
+             // A key or chord edit: what it moved of the items that follow
+             // the song, in the status line (gui.md §4.15).
+             const bool context = command == "key.set" || command == "key.remove" ||
+                                  command == "chord.set" || command == "chord.remove";
+             std::optional<model::Session> before;
+             if (context) before = (*app)->head();
+             auto r =
+                 dispatcher.execute({command, std::move(args), {cmd::Origin::Type::Ui, "gui", {}}});
+             if (r && before)
+                 if (const auto notice =
+                         views::contextFollowNotice(*before, (*app)->head(), command))
+                     shell.setStatus(*notice);
+             return r;
          },
          // A refusal (a tempo, a section captured as a scene) in the status line.
          [&appActions](const Error& e) {
@@ -1035,6 +1095,12 @@ int frontendMain(int argc, char** argv) {
     });
     appActions.addUi("ui.item.consolidate", "Item: consolidate selected items",
                      [&] { shell.arrange()->gestures().consolidateSelection(); });
+    // The selected items whose MIDI take follows the song: what they sound
+    // as written into their notes (take.bake), one undo step.
+    appActions.addUi("ui.take.bake", "Take: bake what the selected items sound as into notes", [&] {
+        auto& g = shell.arrange()->gestures();
+        if (g.onBake) g.onBake(g.selection());
+    });
     appActions.addUi("ui.item.export", "Item: export the selected item\u2019s audio or MIDI\u2026",
                      [&] {
                          const auto& g = shell.arrange()->gestures();

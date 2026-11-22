@@ -44,6 +44,10 @@ class CaptureControl {
     void service();
     // A commit's or a re-arm's refusal, from service().
     std::function<void(const Error&)> onError;
+    // What a commit did with its clips' keys (views::followNotice: the clips
+    // copied under another key), for the status line; not called when there
+    // is nothing to say.
+    std::function<void(const std::string&)> onNotice;
 
   private:
     // Ends the capture and commits it when it holds something to write: a

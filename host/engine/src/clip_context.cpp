@@ -87,6 +87,71 @@ Result<std::vector<model::ContextPoint>> clipContextFromText(const model::Sessio
     return points;
 }
 
+time::TimeMap takeBarMap(const model::Session& s, std::optional<double> itemStartBeat) {
+    const int bar = itemStartBeat ? s.timeMap->barBeat(std::max(0.0, *itemStartBeat)).bar : 1;
+    const time::MeterChange m = s.timeMap->meterAt(bar);
+    return time::TimeMap::constant(120.0, m.numerator, m.denominator);
+}
+
+std::string takeContextText(const time::TimeMap& map, const model::Take& take) {
+    if (take.context.empty()) return {};
+    int last = 1;
+    if (take.contextPeriod)
+        last = map.barBeat(std::max(0.0, *take.contextPeriod - 1.0 / 960.0)).bar;
+    for (const model::ContextPoint& p : take.context)
+        last = std::max(last, map.barBeat(p.beat).bar);
+    return printLeadSheetPoints(take.context, map, 1, last);
+}
+
+Result<std::vector<model::ContextPoint>> takeContextFromText(const time::TimeMap& map,
+                                                             const std::string& text,
+                                                             std::optional<double> period,
+                                                             const std::string& path) {
+    if (text.find_first_not_of(" \t\r\n") == std::string::npos)
+        return std::vector<model::ContextPoint>{};
+    auto sheet = parseLeadSheet(map, text);
+    if (!sheet) {
+        Error e = std::move(sheet).error();
+        const auto fix = [&](Error& x) {
+            // Every way the lead sheet can be wrong (syntax, bar order, bar length, too long) is
+            // the one take error; the message says which.
+            if (x.code.rfind("context.", 0) == 0) x.code = "take.context_syntax";
+            x.path = path;
+        };
+        fix(e);
+        for (auto& d : e.details) fix(d);
+        return e;
+    }
+    std::vector<model::ContextPoint> points;
+    std::size_t keys = 0, chords = 0;
+    for (const LeadPoint& p : sheet->points) {
+        const bool key = p.type == model::ContextType::Key;
+        if (period && p.beat >= *period - 1e-9)
+            return Error("take.context_range",
+                         "bar " + std::to_string(map.barBeat(p.beat).bar) + ": the " +
+                             (key ? "key" : "chord") + " lies at or past the context's period (" +
+                             json::formatDouble(*period) + " beats)",
+                         path,
+                         "move it earlier: the context repeats every " +
+                             json::formatDouble(*period) + " beats, so points belong before that");
+        (key ? keys : chords)++;
+        model::ContextPoint q;
+        q.beat = p.beat;
+        q.type = p.type;
+        q.tonic = p.tonic;
+        q.scale = p.scale;
+        q.symbol = p.symbol;
+        points.push_back(std::move(q));
+    }
+    if (keys > model::kMaxContextPoints || chords > model::kMaxContextPoints)
+        return Error("context.limit",
+                     "a take holds at most " + std::to_string(model::kMaxContextPoints) +
+                         " key points and as many chord points",
+                     path, "write fewer changes");
+    sortPoints(points);
+    return points;
+}
+
 ContextTaken contextUnder(const model::Session& s, double fromBeat, double lengthBeats,
                           bool keyOnly) {
     ContextTaken out;
@@ -238,23 +303,51 @@ std::vector<model::ContextPoint> composeContext(
         return p.type == model::ContextType::Chord;
     });
     if (!symbols.points.empty()) {
-        if (statedChords)
-            notes.push_back({"clip.chords_ignored",
-                             "the notation's chord symbols are ignored: the stated context holds "
-                             "chords, which win",
-                             "/context"});
-        else
+        if (statedChords) {
+            // Symbols that say what the stated chords already say (the usual way to write a
+            // keys clip: symbols for the notes, context_at for the harmony) are not news.
+            std::vector<const model::ContextPoint*> heldChords;
+            for (const auto& p : out)
+                if (p.type == model::ContextType::Chord) heldChords.push_back(&p);
+            const auto agree = [&](const model::ContextPoint& sym) {
+                const model::ContextPoint* held = nullptr;
+                for (const auto* c : heldChords)
+                    if (c->beat <= sym.beat + 1e-9) held = c;
+                if (!held) return false;
+                const auto a = model::parseChordPoint(sym);
+                const auto b = model::parseChordPoint(*held);
+                return a && b ? *a == *b : sym.symbol == held->symbol;
+            };
+            if (!std::all_of(symbols.points.begin(), symbols.points.end(), agree))
+                notes.push_back(
+                    {"clip.chords_ignored",
+                     "the notation's chord symbols are ignored: the stated context holds "
+                     "chords, which win, and they differ from the symbols'",
+                     "/context"});
+        } else
             for (auto& p : symbols.points) out.push_back(std::move(p));
     }
     sortPoints(out);
     return out;
 }
 
+namespace {
+
+bool sameChord(const harmony::Chord& a, const harmony::Chord& b) {
+    const auto bassOf = [](const harmony::Chord& c) {
+        return c.bass ? harmony::pitchClassNumber(*c.bass) : -1;
+    };
+    return harmony::pitchClassNumber(a.root) == harmony::pitchClassNumber(b.root) &&
+           a.quality == b.quality && bassOf(a) == bassOf(b);
+}
+
+}  // namespace
+
 std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
                                      const model::Clip& clip, double start, double length,
-                                     double phase, const std::string& path) {
+                                     double phase, const std::string& path, ContextMismatch* what) {
     if (clip.kind != model::ClipKind::Midi || !(clip.length > 0) || !(length > 0)) return {};
-    if (model::keyPointAt(clip, 0) == nullptr && clip.context.empty()) return {};
+    if (clip.context.empty()) return {};
     // Notes off channel 10 (stored 9): a drum clip, or an empty one, has no pitch to move.
     const model::Take* take = clip.activeTake ? s.takes.find(*clip.activeTake) : nullptr;
     const model::MidiSource* src = take && take->source && take->source->kind == model::Kind::Midi
@@ -263,15 +356,12 @@ std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
     if (!src || std::none_of(src->sequence.notes.begin(), src->sequence.notes.end(),
                              [](const midi::Note& n) { return n.channel != 9; }))
         return {};
-    // The beats at which either key can change, inside the span.
+    // The beats at which either side's key or chord can change, inside the span.
     const double end = start + length;
     std::vector<double> at{start};
     for (const auto& e : s.context)
-        if (e.value->type == model::ContextType::Key && e.value->beat > start &&
-            e.value->beat < end)
-            at.push_back(e.value->beat);
+        if (e.value->beat > start && e.value->beat < end) at.push_back(e.value->beat);
     for (const model::ContextPoint& p : clip.context) {
-        if (p.type != model::ContextType::Key) continue;
         // The first pass starts `phase` into the clip; later ones at its period.
         double first = p.beat - phase;
         if (first < 0) first += clip.length;
@@ -282,6 +372,8 @@ std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
         }
     }
     std::sort(at.begin(), at.end());
+    const std::string name =
+        clip.name.empty() ? clipId.str() : clipId.str() + " \"" + clip.name + "\"";
     for (const double b : at) {
         const double rel = b - start + phase;
         const double inClip = rel - std::floor(rel / clip.length + 1e-9) * clip.length;
@@ -290,17 +382,40 @@ std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
         const model::ContextPoint* pp = pid ? s.context.find(*pid) : nullptr;
         const auto ck = cp ? model::parseKey(*cp) : std::nullopt;
         const auto pk = pp ? model::parseKey(*pp) : std::nullopt;
-        if (!ck || !pk) continue;
-        if (harmony::pitchClassNumber(ck->tonic) == harmony::pitchClassNumber(pk->tonic) &&
-            ck->scale == pk->scale)
-            continue;
-        const std::string name =
-            clip.name.empty() ? clipId.str() : clipId.str() + " \"" + clip.name + "\"";
-        return ClipNote{"context.mismatch",
-                        name + " was written in " + model::keyWords(*cp) + " and sits under " +
-                            model::keyWords(*pp) + " from " + barWords(s, b) +
-                            ": its notes are copied as they are",
-                        path};
+        if (ck && pk &&
+            !(harmony::pitchClassNumber(ck->tonic) == harmony::pitchClassNumber(pk->tonic) &&
+              ck->scale == pk->scale)) {
+            if (what) {
+                *what = {};
+                what->kind = "key";
+                what->clipKey = model::keyWords(*cp);
+                what->key = model::keyWords(*pp);
+                what->bar = s.timeMap->barBeat(std::max(0.0, b)).bar;
+            }
+            return ClipNote{"context.mismatch",
+                            name + " was written in " + model::keyWords(*cp) + " and sits under " +
+                                model::keyWords(*pp) + " from " + barWords(s, b) +
+                                ": its notes play as written",
+                            path};
+        }
+        // The same key (or none to compare) but other chords: the clip's chord at its beat
+        // against the project's at this one, where both hold one this build reads.
+        const auto cc = model::chordAt(clip, std::max(0.0, inClip));
+        const auto pc = model::chordAt(s, b);
+        if (cc && pc && !sameChord(*cc, *pc)) {
+            if (what) {
+                *what = {};
+                what->kind = "chord";
+                what->clipChord = harmony::printChord(*cc);
+                what->chord = harmony::printChord(*pc);
+                what->bar = s.timeMap->barBeat(std::max(0.0, b)).bar;
+            }
+            return ClipNote{"context.mismatch",
+                            name + " was written over " + harmony::printChord(*cc) +
+                                " and sits under " + harmony::printChord(*pc) + " from " +
+                                barWords(s, b) + ": its notes play as written",
+                            path};
+        }
     }
     return {};
 }

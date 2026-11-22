@@ -131,6 +131,52 @@ std::optional<EnvScale> envScale(const model::Envelope& env) {
     return s;
 }
 
+std::vector<model::Id> routesOn(const model::Session& session, const model::EnvTarget& target) {
+    std::vector<model::Id> out;
+    for (const auto& m : session.modulations)
+        if (m.value->target == target) out.push_back(m.id);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+bool fxModulated(const model::Session& session, model::Id fx) {
+    if (fx.kind != model::Kind::Fx) return false;
+    for (const auto& m : session.modulations)
+        if (m.value->target.object == fx) return true;
+    return false;
+}
+
+bool chainModulated(const model::Session& session, model::Id track) {
+    const model::Track* t = session.tracks.find(track);
+    if (!t) return false;
+    for (const auto* chain : {&t->chain, &t->inputChain})
+        for (model::Id fx : *chain)
+            if (fxModulated(session, fx)) return true;
+    return false;
+}
+
+bool routeOn(const model::Session& session, const model::EnvTarget& target) {
+    for (const auto& m : session.modulations)
+        if (m.value->target == target && m.value->enabled) return true;
+    return false;
+}
+
+bool fxModulationOn(const model::Session& session, model::Id fx) {
+    if (fx.kind != model::Kind::Fx) return false;
+    for (const auto& m : session.modulations)
+        if (m.value->target.object == fx && m.value->enabled) return true;
+    return false;
+}
+
+bool chainModulationOn(const model::Session& session, model::Id track) {
+    const model::Track* t = session.tracks.find(track);
+    if (!t) return false;
+    for (const auto* chain : {&t->chain, &t->inputChain})
+        for (model::Id fx : *chain)
+            if (fxModulationOn(session, fx)) return true;
+    return false;
+}
+
 std::string envTitle(const model::Envelope& env) {
     const std::string& p = env.target.param;
     if (p == "volume") return "Volume";
@@ -363,22 +409,93 @@ double targetValue(const model::Session& session, const model::EnvTarget& target
     return scale.reference();
 }
 
-std::string envTitle(const model::Envelope& env, const model::Session& session,
-                     const EnvScale* scale) {
+namespace {
+
+std::string effectName(const model::FxInstance& fx) {
+    return fx.label.empty() ? fx.plugin.name : fx.label;
+}
+
+// The chain an effect is in (a track's, its input chain or a take's).
+const std::vector<model::Id>* chainOf(const model::Session& s, model::Id fx) {
+    auto holds = [&](const std::vector<model::Id>& chain) {
+        return std::find(chain.begin(), chain.end(), fx) != chain.end();
+    };
+    for (const auto& t : s.tracks) {
+        if (holds(t.value->chain)) return &t.value->chain;
+        if (holds(t.value->inputChain)) return &t.value->inputChain;
+    }
+    for (const auto& tk : s.takes)
+        if (holds(tk.value->chain)) return &tk.value->chain;
+    return nullptr;
+}
+
+// An effect's name as a lane says it: with its place in the chain ("Teasel
+// 2") when another effect of the chain has the same name.
+std::string effectInChain(const model::Session& s, model::Id fx) {
+    const model::FxInstance* f = s.fx.find(fx);
+    if (!f) return {};
+    const std::string name = effectName(*f);
+    const std::vector<model::Id>* chain = chainOf(s, fx);
+    if (!chain || name.empty()) return name;
+    bool twin = false;
+    for (model::Id other : *chain)
+        if (const model::FxInstance* o = other != fx ? s.fx.find(other) : nullptr)
+            twin = twin || effectName(*o) == name;
+    if (!twin) return name;
+    const auto at = std::find(chain->begin(), chain->end(), fx) - chain->begin();
+    return name + " " + std::to_string(at + 1);
+}
+
+// The item whose take holds the effect `fx`, if any.
+const model::Item* takeItemOf(const model::Session& s, model::Id fx) {
+    for (const auto& tk : s.takes)
+        if (std::find(tk.value->chain.begin(), tk.value->chain.end(), fx) != tk.value->chain.end())
+            for (const auto& item : s.items)
+                if (std::find(item.value->takes.begin(), item.value->takes.end(), tk.id) !=
+                    item.value->takes.end())
+                    return item.value.get();
+    return nullptr;
+}
+
+}  // namespace
+
+LaneTitle laneTitle(const model::Envelope& env, const model::Session& session,
+                    const EnvScale* scale) {
     if (env.target.object.kind == model::Kind::Fx) {
         const bool named = scale && scale->param && !scale->param->name.empty();
-        const std::string param = named ? scale->param->name : env.target.param;
-        std::string title = param;
-        if (const model::FxInstance* fx = session.fx.find(env.target.object)) {
-            const std::string& effect = fx->label.empty() ? fx->plugin.name : fx->label;
-            if (!effect.empty()) title = effect + " \u00b7 " + param;
-        }
+        LaneTitle title{named ? scale->param->name : env.target.param,
+                        effectInChain(session, env.target.object),
+                        {}};
         // A take's effect (its lane is under the item's track): said so,
         // after the name, which a narrow lane header keeps.
+        bool take = false;
         for (const auto& tk : session.takes)
-            if (std::find(tk.value->chain.begin(), tk.value->chain.end(), env.target.object) !=
-                tk.value->chain.end())
-                return title + " (take)";
+            take = take || std::find(tk.value->chain.begin(), tk.value->chain.end(),
+                                     env.target.object) != tk.value->chain.end();
+        if (!take) return title;
+        // Another item on the track with the same effect's same parameter
+        // would give its lane this title too: each says its item.
+        const model::Item* item = takeItemOf(session, env.target.object);
+        bool twin = false;
+        if (item)
+            for (const auto& e : session.envelopes) {
+                if (e.value->target == env.target || e.value->target.param != env.target.param ||
+                    e.value->target.object.kind != model::Kind::Fx)
+                    continue;
+                const model::Item* other = takeItemOf(session, e.value->target.object);
+                if (other && other != item && other->track == item->track &&
+                    effectInChain(session, e.value->target.object) == title.owner)
+                    twin = true;
+            }
+        if (!twin) {
+            title.note = "(take)";
+            return title;
+        }
+        const model::Take* tk = item->activeTake ? session.takes.find(*item->activeTake) : nullptr;
+        const int bar =
+            session.timeMap->barBeat(std::max(0.0, model::itemSpan(session, *item).startBeat)).bar;
+        const std::string name = tk && !tk->name.empty() ? tk->name + ", " : std::string();
+        title.note = "(take: " + name + "bar " + std::to_string(bar) + ")";
         return title;
     }
     // A rack module's knob: "Bells » Osc · fine".
@@ -391,13 +508,14 @@ std::string envTitle(const model::Envelope& env, const model::Session& session,
                 if (!name.empty())
                     name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
             }
-            return model::rackLabel(session, m->rack) + " \u00bb " + name + " \u00b7 " +
-                   envTitle(env);
+            return {envTitle(env), model::rackLabel(session, m->rack) + " \u00bb " + name, {}};
         }
+    if (const model::TrackGroup* g = session.groups.find(env.target.object))
+        return {envTitle(env), g->name, {}};
     const model::Route* r = env.target.object.kind == model::Kind::Route
                                 ? session.routes.find(env.target.object)
                                 : nullptr;
-    if (!r) return envTitle(env);
+    if (!r) return {envTitle(env), {}, {}};
     std::string to;
     if (r->to.fx) {
         if (const model::FxInstance* fx = session.fx.find(*r->to.fx))
@@ -409,7 +527,23 @@ std::string envTitle(const model::Envelope& env, const model::Session& session,
         for (std::size_t i = 0; i < r->to.hwChannels->size(); ++i)
             to += (i ? "/" : " ") + std::to_string((*r->to.hwChannels)[i]);
     }
-    return "Send \u2192 " + to + " \u00b7 " + envTitle(env);
+    return {envTitle(env), "Send \u2192 " + to, {}};
+}
+
+std::string envTitle(const model::Envelope& env, const model::Session& session,
+                     const EnvScale* scale) {
+    // A group's (VCA's) lane says its parameter alone; its header adds the group.
+    if (session.groups.find(env.target.object)) return envTitle(env);
+    const LaneTitle t = laneTitle(env, session, scale);
+    std::string out = t.owner.empty() ? t.param : t.owner + " \u00b7 " + t.param;
+    return t.note.empty() ? out : out + " " + t.note;
+}
+
+std::string LaneTitle::headerText() const {
+    std::string out = param;
+    if (!owner.empty()) out += " \u00b7 " + owner;
+    if (!note.empty()) out += " " + note;
+    return out;
 }
 
 }  // namespace supple::views

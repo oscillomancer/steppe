@@ -4,6 +4,8 @@
 
 #include <utility>
 
+#include "supple/views/launcher.h"
+
 namespace supple::gui {
 
 namespace {
@@ -74,6 +76,10 @@ Status CaptureControl::commit() {
     if (!capture || capture->frames <= 0 || capture->launches.empty()) return {};
     auto r = run("launch.commit", json::Value::object());
     if (!r) return std::move(r).error();
+    if (onNotice)
+        if (const auto notice =
+                views::followNotice(app_.head(), "launch.commit", json::Value::object(), *r))
+            onNotice(*notice);
     // Stopped (a commit at stop, or the toggle turned off while stopped):
     // every track returns to the arrangement where playing starts, so play
     // plays the take just committed, not the clips again. While playing (a

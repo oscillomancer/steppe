@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "supple/base/result.h"
@@ -65,6 +66,9 @@ struct LauncherCallbacks {
     std::function<void(bool on)> capture;
     // The clip menu's Take FX…: open the chain of the clip's active take.
     std::function<void(model::Id take)> takeFx;
+    // What laying clips on the timeline did with their keys (followNotice),
+    // for the status line; not called when there is nothing to say.
+    std::function<void(const std::string&)> onNotice;
 };
 
 // The pane's geometry, shared by its body and its header cell: one column
@@ -118,6 +122,53 @@ bool launchRefused(const model::Session& session, const model::Clip& clip);
 // Engine::launch takes them together (launch.scene skips frozen tracks).
 bool sceneLaunchRefused(const model::Session& session, model::Id scene);
 
+// What a command that laid clips on the timeline did with their keys, in a
+// few words for the status line (gui.md §4.15), read from the answer's
+// `followed` blocks. The notes are laid as written and sound as the place
+// says (ADR-0098, following is playback): "Riff follows: sounds in E minor,
+// by degree", "Stabs follows the chords: sounds in E minor", "Keys is laid as
+// written: its key C minor differs from D minor at bar 21", "Beat is laid as
+// written: drums don't follow"; for scene.insert the scene and its bar, then
+// each clip, or counts when they would not fit; for launch.commit
+// "Committed: " and each launched clip laid as written under another key
+// (`mismatches`). `command` and `args` are what ran (item.add {clip},
+// scene.insert or launch.commit); nothing when no clip sounds moved or was
+// laid as written in another key.
+std::optional<std::string> followNotice(const model::Session& session, const std::string& command,
+                                        const json::Value& args, const json::Value& answer);
+
+// What a context edit made in the GUI (key.set, key.remove, chord.set,
+// chord.remove) did to the items that follow, for the status line (gui.md
+// §4.15): the items whose notes now sound otherwise, found by comparing
+// model::soundingNotes before and after. "Riff follows the new chord at bar
+// 6", "Bass and Keys follow the new key at bar 9: G major", "3 items follow
+// the new chord at bar 6"; where a following note found no key to read,
+// "Riff sounds as written from bar 17: no key there". Nothing when no
+// following item sounds otherwise.
+std::optional<std::string> contextFollowNotice(const model::Session& before,
+                                               const model::Session& after,
+                                               const std::string& command);
+
+// What take.bake did, for the status line: "Riff baked: 6 notes written as
+// they sound", or, when the answer says `unrolled`, "Riff baked: its 4
+// passes written out, each as it sounds". `notes` and `passes` are the
+// item's heard notes and passes before the bake.
+std::string bakeNotice(const std::string& name, std::size_t notes, int passes, bool unrolled);
+
+// The mark before a following clip's key (gui.md §4.15): the one place it
+// is spelled. An arrow: "~" is the modulation mark.
+inline constexpr std::string_view kFollowMark = "\u2192";
+
+// A clip's key at its start, short, for its launcher cell (gui.md §4.15):
+// "Dm", "G", "D dor", "A hm"; with kFollowMark before it when the clip
+// follows the key or the chords. "" when the clip has no readable key.
+std::string clipKeyMark(const model::Clip& clip);
+// A following take's mark for its item's name bar (gui.md §4.3): kFollowMark
+// and the take's own key where its content starts, short, as a cell's ("→D");
+// the arrow alone when that key is unreadable. "" for a take that does not
+// follow.
+std::string takeFollowMark(const model::Take& take);
+
 // The clip in a channel's cell of a scene.
 std::optional<model::Id> clipIn(const model::Session& session, model::Id track, model::Id scene);
 
@@ -144,6 +195,11 @@ class LauncherPane : public ui::Node {
     static ui::Rect playZone(const ui::Rect& cell);
     static ui::Rect stopZone(const ui::Rect& cell);
     // A clip's content area: its cell under the name bar.
+    // The strip at the foot of a clip's body that holds its key mark
+    // (clipKeyMark), under the preview: its height, 0 for no mark or a body
+    // too low for one.
+    static constexpr float kKeyStrip = 12;
+    static float keyStrip(const ui::Rect& body, const std::string& keyMark);
     static ui::Rect bodyRect(const ui::Rect& cell);
     // What a press at `p` lands on: a clip's ▶ or body, an empty cell's stop
     // square or the rest of it, a row's Arr dot.
@@ -164,6 +220,7 @@ class LauncherPane : public ui::Node {
     struct Stats {
         std::size_t cells = 0, clips = 0, empty = 0;
         std::vector<std::string> names;  // the clips' names as drawn
+        std::vector<std::string> keys;   // their key marks as drawn ("Dm"; "" for none)
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
         int refused = 0;  // clips drawn dimmed: their launch is refused (launchRefused)

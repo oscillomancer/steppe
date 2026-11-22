@@ -44,6 +44,8 @@ class ParamPanel {
     std::function<void(const std::string&)> onError;
     // Opens the MIDI learn dialog (each row's "MIDI" button; unset: no button).
     std::function<void(LearnRequest)> openLearn;
+    // "Show modulation source" rows for a parameter (FxWindow::Hooks).
+    std::function<std::vector<ui::MenuItem>(const model::EnvTarget&)> sourceItems;
 
   private:
     // A row's MIDI learn button: the bound control, or "MIDI".

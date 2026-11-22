@@ -2,12 +2,14 @@
 // Copyright (c) 2026 Supple Audio
 // Context track commands (ADR-0095, session-model "Context track"): key and chord
 // points, and what holds at a beat. Beats only; positions are rounded to 1/960 beat.
+#include <algorithm>
 #include <cmath>
 
 #include "command_helpers.h"
 #include "lead_sheet.h"
 #include "supple/harmony/harmony.h"
 #include "supple/model/context.h"
+#include "supple/model/follow.h"
 
 namespace supple::engine {
 
@@ -283,6 +285,33 @@ auto chordInfoSchema() {
 
 }  // namespace
 
+// After a context edit (ADR-0098, following is playback): each following item that now has a
+// heard note with no key to read at its place says so, since such a note sounds as written
+// without another trace. `after` is the session with the edit applied.
+namespace {
+void warnFollowingNoKey(Context& ctx, const model::Session& after) {
+    for (const auto& e : after.items) {
+        const model::Item& it = *e.value;
+        const model::Take* tk = it.activeTake ? after.takes.find(*it.activeTake) : nullptr;
+        if (!tk || tk->follow == model::ClipFollow::None) continue;
+        std::int64_t count = 0;
+        double first = 0;
+        for (const model::SoundingNote& h : model::soundingNotes(after, e.id, -1e18, 1e18)) {
+            if (h.channel == 9 || h.sounds.by != harmony::FollowedBy::Copy) continue;
+            const double beat = std::max(h.songBeat, model::itemSpan(after, it).startBeat);
+            if (count++ == 0 || beat < first) first = beat;
+        }
+        if (count > 0)
+            ctx.warn("context.no_key",
+                     e.id.str() + " follows the context, and " + std::to_string(count) +
+                         " of its heard notes have no key to read from bar " +
+                         std::to_string(after.timeMap->barBeat(first).bar) +
+                         ": they sound as written (write a key with key.set or context.write)",
+                     "/");
+    }
+}
+}  // namespace
+
 void registerContextCommands(cmd::Registry& registry) {
     // ---------------------------------------------------------------- key.set
     [&] {
@@ -309,7 +338,9 @@ void registerContextCommands(cmd::Registry& registry) {
         c.examples = {{"E-flat major from the start", j(R"({"at":0,"tonic":"Eb","scale":"major"})"),
                        j(R"({"id":"cx_1"})"), "empty"}};
         c.run = [](const KeySetArgs& a, Context& ctx) -> Result<IdResult> {
-            return keySet(app(ctx).view(), app(ctx).txn(), a);
+            auto set = keySet(app(ctx).view(), app(ctx).txn(), a);
+            if (set) warnFollowingNoKey(ctx, app(ctx).txn().preview());
+            return set;
         };
         addChecked(registry, std::move(c));
     }();
@@ -333,6 +364,7 @@ void registerContextCommands(cmd::Registry& registry) {
             const auto id = pointAt(s, ContextType::Key, at);
             if (!id) return noPoint("key", at);
             app(ctx).txn().remove<ContextPoint>(*id);
+            warnFollowingNoKey(ctx, app(ctx).txn().preview());
             return Empty{};
         };
         addChecked(registry, std::move(c));
@@ -360,7 +392,9 @@ void registerContextCommands(cmd::Registry& registry) {
         c.examples = {{"C minor seventh at bar 2", j(R"({"at":4,"symbol":"Cm7"})"),
                        j(R"({"id":"cx_1"})"), "empty"}};
         c.run = [](const ChordSetArgs& a, Context& ctx) -> Result<IdResult> {
-            return chordSet(app(ctx).view(), app(ctx).txn(), a);
+            auto set = chordSet(app(ctx).view(), app(ctx).txn(), a);
+            if (set) warnFollowingNoKey(ctx, app(ctx).txn().preview());
+            return set;
         };
         addChecked(registry, std::move(c));
     }();
@@ -384,6 +418,7 @@ void registerContextCommands(cmd::Registry& registry) {
             const auto id = pointAt(s, ContextType::Chord, at);
             if (!id) return noPoint("chord", at);
             app(ctx).txn().remove<ContextPoint>(*id);
+            warnFollowingNoKey(ctx, app(ctx).txn().preview());
             return Empty{};
         };
         addChecked(registry, std::move(c));
@@ -547,7 +582,9 @@ void registerContextCommands(cmd::Registry& registry) {
             "chord), ~:DUR (hold: no point) and 'key TONIC SCALE' (a key point at the "
             "cursor, no time), where DUR is the notation's duration (q, h., h+q, 480t) and a "
             "bar's durations must fill it. Bars run in order from the first named to the "
-            "last. The write is a diff over that span: points equal in beat and content are "
+            "last, one per line or, as in notation, after a ; ('1: ... ; 2: ...') or after a "
+            "| token ('1: ... | 2: ...', the number after | optional). The write is a diff over "
+            "that span: points equal in beat and content are "
             "left alone (ids kept), points in the span the text omits are removed, the rest "
             "are added or replaced. History records the key.set, chord.set and remove "
             "operations it came to, so branches that write different bars merge. Keys and "
@@ -656,6 +693,7 @@ void registerContextCommands(cmd::Registry& registry) {
                 }
                 step.replace ? ++out.replaced : ++out.added;
             }
+            warnFollowingNoKey(ctx, engine.txn().preview());
             return out;
         };
         addChecked(registry, std::move(c));

@@ -3,6 +3,7 @@
 #include "supple/model/schemas.h"
 #include "migration.h"
 #include "supple/model/audio_warp.h"
+#include "supple/model/follow.h"
 #include "supple/model/launcher.h"
 #include "supple/model/render_settings.h"
 #include "supple/model/take_owner.h"
@@ -780,6 +781,14 @@ const Schema<Item>& schemaOf<Item>() {
 }
 
 template <>
+const Schema<ContextPoint>& schemaOf<ContextPoint>();
+
+namespace {
+// A `follow` member (a clip's, schema 2.20, or a take's, 2.21).
+Schema<ClipFollow> followSchema(const char* resetCode, const char* what);
+}  // namespace
+
+template <>
 const Schema<Take>& schemaOf<Take>() {
     static const Schema<Take> s = [] {
         const Take d;
@@ -845,6 +854,16 @@ const Schema<Take>& schemaOf<Take>() {
         dflt(b, d.takeMarkers);
         b.field("chain", &Take::chain, ids());
         dflt(b, d.chain);
+        // Context and follow (2.21, ADR-0098 amended). The values are read as written and
+        // made fit after the open (fitTakeContext), so a point or a period against the rules
+        // opens with a warning and never fails the file.
+        b.field("context", &Take::context, schema::arrayOf(schemaOf<ContextPoint>()));
+        dflt(b, d.context);
+        b.field("context_period", &Take::contextPeriod, num());
+        b.field("context_phase", &Take::contextPhase, num());
+        dflt(b, d.contextPhase);
+        b.field("follow", &Take::follow, followSchema("take.follow_reset", "take"));
+        dflt(b, d.follow);
         return b.build();
     }();
     return s;
@@ -1255,18 +1274,18 @@ const Schema<ContextPoint>& schemaOf<ContextPoint>();
 
 namespace {
 
-// A clip's `follow` (schema 2.20). A name this build does not know reads as
-// none with a clip.follow_reset warning, so a file from a later build opens
-// (the open never fails for the clip context, ADR-0098).
-Schema<ClipFollow> clipFollowSchema() {
+// A `follow` (a clip's, schema 2.20; a take's, 2.21). A name this build does not know reads
+// as none with a follow_reset warning, so a file from a later build opens (the open never
+// fails for a context, ADR-0098).
+Schema<ClipFollow> followSchema(const char* resetCode, const char* what) {
     const auto names = std::array<std::pair<ClipFollow, std::string_view>, 3>{
         {{ClipFollow::None, "none"}, {ClipFollow::Key, "key"}, {ClipFollow::Chords, "chords"}}};
     json::Value spec = json::Value::object();
     spec["type"] = "string";
     spec["enum"] = json::Array{"none", "key", "chords"};
-    return {"clip follow",
-            [names](const json::Value& v, ClipFollow& out, schema::DecodeCtx& ctx,
-                    const std::string& path) {
+    return {std::string(what) + " follow",
+            [names, resetCode](const json::Value& v, ClipFollow& out, schema::DecodeCtx& ctx,
+                               const std::string& path) {
                 if (!v.isString()) {
                     ctx.error("schema.type", "expected a string", path);
                     return false;
@@ -1279,7 +1298,7 @@ Schema<ClipFollow> clipFollowSchema() {
                 out = ClipFollow::None;
                 if (ctx.warnings)
                     ctx.warnings->push_back(
-                        {"clip.follow_reset",
+                        {resetCode,
                          "follow \"" + v.asString() + "\" is not none, key or chords: read as none",
                          path});
                 return true;
@@ -1332,7 +1351,7 @@ const Schema<Clip>& schemaOf<Clip>() {
         dflt(b, d.gainDb);
         b.field("context", &Clip::context, schema::arrayOf(schemaOf<ContextPoint>()));
         dflt(b, d.context);
-        b.field("follow", &Clip::follow, clipFollowSchema());
+        b.field("follow", &Clip::follow, followSchema("clip.follow_reset", "clip"));
         dflt(b, d.follow);
         return b.build();
     }();
@@ -1654,10 +1673,11 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 20 && warnings)  // 2.14: branches; 2.15: autosaved_through;
+    } else if (version->minor > 21 && warnings)  // 2.14: branches; 2.15: autosaved_through;
                                                  // 2.16: modulation; 2.17: context;
                                                  // 2.18: scenes, clips; 2.19: clip take FX
-                                                 // envelopes in clip time; 2.20: clip context
+                                                 // envelopes in clip time; 2.20: clip context;
+                                                 // 2.21: take context and follow
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never
@@ -1998,6 +2018,34 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
             fitted.put(e.id, 0, std::make_shared<const Clip>(std::move(c)));
         }
         if (changed) s.clips = fitted.build();
+    }
+    // Take context (2.21, ADR-0098 amended): the same, for the takes. A take a clip holds,
+    // or that is not MIDI, holds none of the four; any other is made fit. The open never
+    // fails for any of it.
+    {
+        std::set<Id> clipTakes;
+        for (const auto& e : s.clips)
+            for (Id t : e.value->takes) clipTakes.insert(t);
+        IdMap<Take>::Builder fitted(s.takes);
+        bool changed = false;
+        for (const auto& e : s.takes) {
+            Take t = *e.value;
+            const auto notes =
+                fitTakeContext(t, clipTakes.contains(e.id) ? TakeHome::Clip : TakeHome::Item);
+            // Anything the fit changed is kept, a silent rounding of the period included (the
+            // open never fails: a period off the 1/960 grid is rounded onto it).
+            if (notes.empty() && t.context == e.value->context &&
+                t.contextPeriod == e.value->contextPeriod &&
+                t.contextPhase == e.value->contextPhase && t.follow == e.value->follow)
+                continue;
+            changed = true;
+            for (const auto& n : notes)
+                warn(n.code, "take " + e.id.str() + ": " + n.message,
+                     "/takes/" + e.id.str() +
+                         (n.code == "take.follow_reset" ? "/follow" : "/context"));
+            fitted.put(e.id, 0, std::make_shared<const Take>(std::move(t)));
+        }
+        if (changed) s.takes = fitted.build();
     }
     if (warnings)
         for (const auto& [envelope, given] : derivedItems) {

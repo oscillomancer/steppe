@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <optional>
 
 #include "supple/harmony/harmony.h"
 #include "supple/notation/notation.h"
@@ -93,6 +94,10 @@ std::string printLeadSheetPoints(const std::vector<model::ContextPoint>& points,
 }
 
 Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text) {
+    return parseLeadSheet(*s.timeMap, text);
+}
+
+Result<LeadSheet> parseLeadSheet(const time::TimeMap& map, std::string_view text) {
     if (text.size() > kLeadSheetMaxBytes)
         return Error("context.too_long", "the lead sheet is over 1 MiB", "/text",
                      "write it in parts: each context.write covers the bars it names");
@@ -100,42 +105,13 @@ Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text)
     int previous = 0;
     std::size_t lineNumber = 0;
     std::size_t pos = 0;
-    while (pos <= text.size()) {
-        const std::size_t end = std::min(text.find('\n', pos), text.size());
-        std::string_view line = text.substr(pos, end - pos);
-        pos = end + 1;
-        ++lineNumber;
-        // A comment starts at a `#` that begins a word: F# and {F#7#9} are not comments.
-        for (std::size_t i = 0; i < line.size(); ++i)
-            if (line[i] == '#' &&
-                (i == 0 || std::isspace(static_cast<unsigned char>(line[i - 1])))) {
-                line = line.substr(0, i);
-                break;
-            }
-        std::vector<std::string> tokens;
-        for (std::size_t i = 0; i < line.size();) {
-            while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i]))) ++i;
-            std::size_t j = i;
-            while (j < line.size() && !std::isspace(static_cast<unsigned char>(line[j]))) ++j;
-            if (j > i) tokens.emplace_back(line.substr(i, j - i));
-            i = j;
-        }
-        if (tokens.empty()) continue;
-        // The bar number: `N:` at the start of the line.
-        const std::string& head = tokens.front();
-        int bar = 0;
-        if (head.size() < 2 || head.back() != ':' ||
-            !std::all_of(head.begin(), head.end() - 1,
-                         [](char c) { return std::isdigit(static_cast<unsigned char>(c)); }) ||
-            head.size() > 7)
-            return Error("context.syntax",
-                         "line " + std::to_string(lineNumber) + ": expected a bar number like '3:'",
-                         "/text", "start each line with the project bar and a colon: 1: {Cm7}:w");
-        bar = std::stoi(head.substr(0, head.size() - 1));
+    // One bar of a statement: `tokens[0]` is its `N:` (or empty after a `|`), the items follow.
+    // Bars run in order; the first one a sheet names sets where it starts.
+    const auto readBar = [&](int bar, const std::vector<std::string>& tokens,
+                             std::size_t atLine) -> std::optional<Error> {
         if (bar < 1)
-            return Error("context.syntax",
-                         "line " + std::to_string(lineNumber) + ": bars start at 1", "/text",
-                         "the first project bar is 1");
+            return Error("context.syntax", "line " + std::to_string(atLine) + ": bars start at 1",
+                         "/text", "the first project bar is 1");
         if (sheet.points.empty() && previous == 0) {
             sheet.firstBar = bar;
         } else if (bar != previous + 1) {
@@ -151,8 +127,8 @@ Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text)
                 "/text", "write it in parts");
         previous = bar;
         sheet.lastBar = bar;
-        const double b0 = gridBeat(s.timeMap->beatOfBar(bar));
-        const double b1 = gridBeat(s.timeMap->beatOfBar(bar + 1));
+        const double b0 = gridBeat(map.beatOfBar(bar));
+        const double b1 = gridBeat(map.beatOfBar(bar + 1));
         const std::int64_t barTicks = ticksBetween(b0, b1);
         std::int64_t cursor = 0;
         bool keyHere = false;
@@ -230,12 +206,90 @@ Result<LeadSheet> parseLeadSheet(const model::Session& s, std::string_view text)
                          "/text",
                          "make the durations fill the bar exactly: " +
                              notation::durationText(barTicks, kPpq) + " in all");
+        return std::nullopt;
+    };
+    while (pos <= text.size()) {
+        const std::size_t end = std::min(text.find('\n', pos), text.size());
+        std::string_view line = text.substr(pos, end - pos);
+        pos = end + 1;
+        ++lineNumber;
+        // A comment starts at a `#` that begins a word: F# and {F#7#9} are not comments.
+        for (std::size_t i = 0; i < line.size(); ++i)
+            if (line[i] == '#' &&
+                (i == 0 || std::isspace(static_cast<unsigned char>(line[i - 1])))) {
+                line = line.substr(0, i);
+                break;
+            }
+        // A `;` outside braces ends a statement, as a newline does (notation's separator).
+        std::vector<std::string_view> statements;
+        for (std::size_t i = 0, from = 0, depth = 0; i <= line.size(); ++i) {
+            if (i < line.size() && line[i] == '{') ++depth;
+            if (i < line.size() && line[i] == '}' && depth > 0) --depth;
+            if (i == line.size() || (line[i] == ';' && depth == 0)) {
+                statements.push_back(line.substr(from, i - from));
+                from = i + 1;
+            }
+        }
+        for (const std::string_view statement : statements) {
+            std::vector<std::string> tokens;
+            for (std::size_t i = 0; i < statement.size();) {
+                while (i < statement.size() &&
+                       std::isspace(static_cast<unsigned char>(statement[i])))
+                    ++i;
+                std::size_t j = i;
+                while (j < statement.size() &&
+                       !std::isspace(static_cast<unsigned char>(statement[j])))
+                    ++j;
+                if (j > i) tokens.emplace_back(statement.substr(i, j - i));
+                i = j;
+            }
+            if (tokens.empty()) continue;
+            // The bar number: `N:` at the start of the statement.
+            const auto isBarNumber = [](const std::string& token) {
+                return token.size() >= 2 && token.size() <= 7 && token.back() == ':' &&
+                       std::all_of(token.begin(), token.end() - 1, [](char c) {
+                           return std::isdigit(static_cast<unsigned char>(c));
+                       });
+            };
+            if (!isBarNumber(tokens.front()))
+                return Error(
+                    "context.syntax",
+                    "line " + std::to_string(lineNumber) + ": expected a bar number like '3:'",
+                    "/text",
+                    "start each line (or each part after a ;) with the project bar and "
+                    "a colon: 1: {Cm7}:w");
+            int bar = std::stoi(tokens.front().substr(0, tokens.front().size() - 1));
+            // `|` ends the bar and goes on with the next one; a number after it is accepted when
+            // it names that bar (`1: ... | 2: ...`), as in notation.
+            std::vector<std::string> items{tokens.front()};
+            for (std::size_t t = 1; t <= tokens.size(); ++t) {
+                if (t < tokens.size() && tokens[t] != "|") {
+                    items.push_back(tokens[t]);
+                    continue;
+                }
+                if (const auto e = readBar(bar, items, lineNumber)) return *e;
+                items.assign(1, std::string());
+                ++bar;
+                if (t + 1 < tokens.size() && isBarNumber(tokens[t + 1])) {
+                    const int written = std::stoi(tokens[t + 1]);
+                    if (written != bar)
+                        return Error("context.bar_order",
+                                     "bar " + std::to_string(written) + " follows a | where bar " +
+                                         std::to_string(bar) + " comes next",
+                                     "/text",
+                                     "drop the number after | (bar " + std::to_string(bar) +
+                                         " continues there), or start the part with " +
+                                         std::to_string(written) + ":");
+                    ++t;  // the number names the bar the | starts
+                }
+            }
+        }
     }
     if (previous == 0)
         return Error("context.empty", "the lead sheet names no bars", "/text",
                      "start with a line like 1: key C major {C}:w");
-    sheet.fromBeat = gridBeat(s.timeMap->beatOfBar(sheet.firstBar));
-    sheet.toBeat = gridBeat(s.timeMap->beatOfBar(sheet.lastBar + 1));
+    sheet.fromBeat = gridBeat(map.beatOfBar(sheet.firstBar));
+    sheet.toBeat = gridBeat(map.beatOfBar(sheet.lastBar + 1));
     // Keys before chords at one beat; the order a diff applies them in.
     std::stable_sort(
         sheet.points.begin(), sheet.points.end(), [](const LeadPoint& a, const LeadPoint& b) {

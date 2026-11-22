@@ -201,7 +201,7 @@ Result:
 
 Lay a song out from scenes, each for some bars, in order.
 
-scene.insert for each entry of sequence in turn, each starting where the last ended, from bar or at (default bar 1), with a section for each. A scene may appear more than once. Every entry's refusal (scene.empty, scene.insert.period, scene.insert.occupied) names its index in path, and changes nothing; an empty sequence or one of more than 256 entries is scene.sequence. follow, pooled and each item's followed and context.mismatch are as scene.insert's. One undo step.
+scene.insert for each entry of sequence in turn, each starting where the last ended, from bar or at (default bar 1), with a section for each. A scene may appear more than once. Every entry's refusal (scene.empty, scene.insert.period, scene.insert.occupied) names its index in path, and changes nothing; an empty sequence or one of more than 256 entries is scene.sequence. follow, pooled and each item's followed and context.mismatch are as scene.insert's. write_context writes each section's harmony from its scene's clips where the context track has none: a section with points under it is left alone, one whose clips disagree gets nothing, and each segment's context says which. One undo step.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -216,6 +216,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `bar` | integer |  | 1.0..1e+05 |  | Start bar, 1-based [1]. |
 | `pooled` | boolean |  |  | false |  |
 | `follow` | string |  |  |  | How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow. One of: none, key, chords. |
+| `write_context` | boolean |  |  | false | Write the scene's clips' own key and chords onto the context track under each section that has none (shifted to the section, repeating with a loop clip), in the same undo step, before the clips are laid. Left alone: a section with points under it; not written: one whose clips disagree. The answer's context says which (default false). |
 
 ### Result
 
@@ -301,12 +302,43 @@ Kind: `edit`. Exposure: `mcp-exec`.
                     "folded": {
                       "type": "integer"
                     },
-                    "unrolled": {
-                      "type": "boolean"
-                    },
                     "copied": {
                       "type": "string",
                       "enum": ["drums", "audio", "no_key", "no_notes"]
+                    },
+                    "mismatch": {
+                      "type": "object",
+                      "title": "followed_mismatch",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["key", "chord"],
+                          "description": "What differs: the key, or (in the same key) the chord."
+                        },
+                        "clip_key": {
+                          "type": "string",
+                          "description": "kind key: the clip's key."
+                        },
+                        "key": {
+                          "type": "string",
+                          "description": "kind key: the project's key there, which differs."
+                        },
+                        "clip_chord": {
+                          "type": "string",
+                          "description": "kind chord: the chord the clip was written over."
+                        },
+                        "chord": {
+                          "type": "string",
+                          "description": "kind chord: the project's chord there, which differs."
+                        },
+                        "bar": {
+                          "type": "integer",
+                          "description": "The first project bar where they differ."
+                        }
+                      },
+                      "required": ["kind", "bar"],
+                      "additionalProperties": false,
+                      "description": "Set with the context.mismatch warning: the notes play as written under a key, or in the same key over a chord, that is not the clip's."
                     }
                   },
                   "required": ["mode"],
@@ -316,6 +348,42 @@ Kind: `edit`. Exposure: `mcp-exec`.
               "required": ["clip", "item", "track"],
               "additionalProperties": false
             }
+          },
+          "context": {
+            "type": "object",
+            "title": "context_written",
+            "properties": {
+              "written": {
+                "type": "boolean"
+              },
+              "keys": {
+                "type": "integer",
+                "description": "Key points written under the section."
+              },
+              "chords": {
+                "type": "integer",
+                "description": "Chord points written under the section."
+              },
+              "reason": {
+                "type": "string",
+                "enum": ["present", "disagree", "holds", "no_context"],
+                "description": "Why nothing was written: the context track already has points under the section, the clips disagree, it already says the same, or no clip has a context."
+              },
+              "clips": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bar": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": ["written", "keys", "chords", "clips"],
+            "additionalProperties": false
           }
         },
         "required": ["scene", "region", "start", "end", "items"],
@@ -340,7 +408,6 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `scene.sequence`: the sequence is empty or longer than 256 entries Hint: give 1 to 256 entries of {scene, bars}
 - `scene.empty`: a scene in the sequence has no clips Hint: add clips with clip.add
 - `scene.insert.occupied`: items are already in an entry's span Hint: move or remove them, or start at another bar
-- `clip.follow_pooled`: pooled with a mapping that moves a note Hint: leave pooled off, or place the clips with follow: none
 - `scene.insert.period`: a repeating clip no single looping item reproduces Hint: loop the clip over its whole content, or ask for fewer bars
 
 ### Examples
@@ -1847,7 +1914,7 @@ Result:
 
 Add a clip to a scene's cell: from notation, a file or an item.
 
-One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097); the clip is named as the item is (its active take's name) unless name is given. Clips live on channels, one per (track, scene). A clip keeps the key and chords it was written against (context): as a lead sheet in clip bars ("1: key D minor {Dm}:w"), read from the project at a place (context_at), under the item it copies, or from the {SYMBOL} chords of its notation (a stated context holding chords wins over them, clip.chords_ignored). follow (none, key or chords) needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the key or chords under it (their follow argument), and a launched clip plays as written until ADR-0098's X4 (launch.unfollowed).
+One source at most: notation (as item.add's), midi_file, audio_file, or item (a copy of that item's takes; pooled shares its MIDI instead). Without one, an empty MIDI clip of one bar. A MIDI clip is measured in beats, as long as its notes rounded up to whole bars; an audio clip in seconds of take time, as long as the file. From an item, the length, loop and take envelopes convert at the tempo where the item sits (ADR-0097); the clip is named as the item is (its active take's name) unless name is given. Clips live on channels, one per (track, scene). A clip keeps the key and chords it was written against (context): as a lead sheet in clip bars ("1: key D minor {Dm}:w"), read from the project at a place (context_at), under the item it copies, or from the {SYMBOL} chords of its notation (a stated context holding chords wins over them; clip.chords_ignored warns when they differ from it). follow (none, key or chords) needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying the clip (item.add {clip}, scene.insert, arrangement.build) lays its notes as written, the take carrying the clip's context and the follow (their follow argument), so they sound as the key or chords under them say; a launched clip follows them live (ADR-0098).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -2521,7 +2588,7 @@ Result:
 
 Write key and chord points from a lead sheet.
 
-text is context.get's lead sheet: one line per project bar, 'N: ' then {SYMBOL}:DUR (a chord point at the cursor), r:DUR (a chord point with no chord), ~:DUR (hold: no point) and 'key TONIC SCALE' (a key point at the cursor, no time), where DUR is the notation's duration (q, h., h+q, 480t) and a bar's durations must fill it. Bars run in order from the first named to the last. The write is a diff over that span: points equal in beat and content are left alone (ids kept), points in the span the text omits are removed, the rest are added or replaced. History records the key.set, chord.set and remove operations it came to, so branches that write different bars merge. Keys and chords both follow the text: to leave the key alone, include it. Errors name the bar; nothing is changed when one occurs.
+text is context.get's lead sheet: one line per project bar, 'N: ' then {SYMBOL}:DUR (a chord point at the cursor), r:DUR (a chord point with no chord), ~:DUR (hold: no point) and 'key TONIC SCALE' (a key point at the cursor, no time), where DUR is the notation's duration (q, h., h+q, 480t) and a bar's durations must fill it. Bars run in order from the first named to the last, one per line or, as in notation, after a ; ('1: ... ; 2: ...') or after a | token ('1: ... | 2: ...', the number after | optional). The write is a diff over that span: points equal in beat and content are left alone (ids kept), points in the span the text omits are removed, the rest are added or replaced. History records the key.set, chord.set and remove operations it came to, so branches that write different bars merge. Keys and chords both follow the text: to leave the key alone, include it. Errors name the bar; nothing is changed when one occurs.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -9320,7 +9387,7 @@ Result:
 
 Add an item on a track: notation, a MIDI or audio file, or a clip's copy.
 
-position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. clip: a copy of that clip's takes, as long as the clip, its loop and take envelopes converted at the tempo where the item lands (ADR-0097); the item is named as the clip is (its active take's name) when the clip has a name. follow (none, key or chords; default: the clip's own) maps the clip's notes from the key or chords it was written against to those under the item (ADR-0098): notes on channel 10 and clips that cannot follow are copied, and the answer's followed says what was done, by bar. With none the notes are copied as they are and context.mismatch warns when the clip's key is not the project's under the item. A master holds audio items only (prints, played after its fader); busses hold none.
+position in beats (quarter notes from the start) or bar (1-based). notation: e.g. "voice bass; 1: C2:q r:q C2:q r:q | F2:h G2:h" — every bar must add up; the item is as long as the written bars unless length (beats) is given. audio_file: a path at the project's sample rate; with the app's copy-imports setting on, the project keeps its own copy in its media folder. midi_file: a Standard MIDI File (type 0 or 1, every track merged, channels kept); its notes keep their beats and follow the project's tempo (the file's tempo and meter are not applied; a warning says when they differ), and the item is as long as the file unless length is given. clip: a copy of that clip's takes, as long as the clip, its loop and take envelopes converted at the tempo where the item lands (ADR-0097); the item is named as the clip is (its active take's name) when the clip has a name. follow (none, key or chords; default: the clip's own) is set on the laid MIDI takes with the clip's context, so the notes sound as the key or chords under the item say, mapped from those they were written against (ADR-0098, following is playback): the notes stay as written, a context edit moves them, take.bake writes the sounding pitches, and notes on channel 10 and clips that cannot follow sound as written. The answer's followed says how they sound, by bar. With none context.mismatch warns when the clip's key, or in the same key its chord, is not the project's under the item. A master holds audio items only (prints, played after its fader); busses hold none.
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -9418,12 +9485,43 @@ Kind: `edit`. Exposure: `mcp-tool`.
         "folded": {
           "type": "integer"
         },
-        "unrolled": {
-          "type": "boolean"
-        },
         "copied": {
           "type": "string",
           "enum": ["drums", "audio", "no_key", "no_notes"]
+        },
+        "mismatch": {
+          "type": "object",
+          "title": "followed_mismatch",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["key", "chord"],
+              "description": "What differs: the key, or (in the same key) the chord."
+            },
+            "clip_key": {
+              "type": "string",
+              "description": "kind key: the clip's key."
+            },
+            "key": {
+              "type": "string",
+              "description": "kind key: the project's key there, which differs."
+            },
+            "clip_chord": {
+              "type": "string",
+              "description": "kind chord: the chord the clip was written over."
+            },
+            "chord": {
+              "type": "string",
+              "description": "kind chord: the project's chord there, which differs."
+            },
+            "bar": {
+              "type": "integer",
+              "description": "The first project bar where they differ."
+            }
+          },
+          "required": ["kind", "bar"],
+          "additionalProperties": false,
+          "description": "Set with the context.mismatch warning: the notes play as written under a key, or in the same key over a chord, that is not the clip's."
         }
       },
       "required": ["mode"],
@@ -9558,6 +9656,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `item.consolidate_*`: invalid material, stale inputs or failed capture Hint: repair the selected sources/layout and retry consolidation
+- `item.follow_merge`: merging following MIDI takes would change how a note sounds Hint: take.bake the following takes first, then consolidate
 - `item.selection`: selection omits linked peers Hint: select the full group or suspend its edit link
 - `warp.peers`: incomplete or invalid warp bundle Hint: select every bundle owner or detach it first
 
@@ -9820,7 +9919,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ### Errors
 
-- `item.unknown`: no such item Hint: use an id from session.query {kind: "item"}
+- `item.unknown`: no such item Hint: use an item id from session.describe (items are listed under their tracks)
 - `item.export_empty`: an empty take, or no source audio under the item Hint: pick a take with material (take.activate) or move the item onto its audio
 - `item.export_source`: the source file cannot be read Hint: restore or relink the source
 - `item.export_path`: no path, or it names the project's media Hint: choose another file
@@ -10922,7 +11021,7 @@ Result:
 
 Play a clip on its track from the next quantize boundary.
 
-It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms. A clip whose follow is not none warns launch.unfollowed: a launched clip plays as written until ADR-0098's X4.
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. Launching while stopped starts the transport. The track leaves the arrangement (or the clip it played) there: its sounding notes end and audio crossfades over 5 ms. A clip whose follow is not none follows the project's key or chords live, as it would laid there (launch.state says how); launch.follow_budget warns when its context and the project's are too varied to follow fully (a chords clip then follows its key, else it plays as written).
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -11024,7 +11123,7 @@ Result:
 
 Write the captured performance onto the timeline as items.
 
-One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start. On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A scene launched whole (launch.scene: every clip that could play started on one boundary) also writes a section named after it, from that boundary until one of its tracks is launched again or the capture ends, as scene.insert does; clips launched singly write none. A launched clip is not followed (until ADR-0098's X4): its items copy what was heard, and context.mismatch warns once for each launched clip whose key is not the project's under it, however many periods it is laid as. A running capture ends first; the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
+One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start. On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A scene launched whole (launch.scene: every clip that could play started on one boundary) also writes a section named after it, from that boundary until one of its tracks is launched again or the capture ends, as scene.insert does; clips launched singly write none. The notes are laid as written; each laid MIDI take carries its clip's context and the follow the plan used for that clip (none, key or chords, after the per-clip budget), so the committed timeline sounds as the performance did and moves with the context track as a launched clip does (take.bake writes the sounding pitches). A clip played as written warns context.mismatch once, when its key (or, in the same key, chord) is not the project's under it, however many periods it is laid as. A running capture ends first; the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -11081,6 +11180,46 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "required": ["scene", "region", "start", "end"],
         "additionalProperties": false
       }
+    },
+    "mismatches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "committed_mismatch",
+        "properties": {
+          "clip": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["key", "chord"],
+            "description": "What differs: the key, or (in the same key) the chord."
+          },
+          "clip_key": {
+            "type": "string",
+            "description": "kind key: the clip's key."
+          },
+          "key": {
+            "type": "string",
+            "description": "kind key: the project's key there, which differs."
+          },
+          "clip_chord": {
+            "type": "string",
+            "description": "kind chord: the chord the clip was written over."
+          },
+          "chord": {
+            "type": "string",
+            "description": "kind chord: the project's chord there, which differs."
+          },
+          "bar": {
+            "type": "integer",
+            "description": "The first project bar where they differ."
+          }
+        },
+        "required": ["clip", "kind", "bar"],
+        "additionalProperties": false
+      },
+      "description": "Each launched stretch of a MIDI clip copied under a key that is not the clip's, as its context.mismatch warning says it."
     },
     "from": {
       "type": "number"
@@ -11159,7 +11298,7 @@ Result:
 
 Play every clip of a scene together at one boundary.
 
-It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning, a clip past the memory budget with a launch.memory warning, and clips whose follow is not none with one launch.unfollowed warning (launched clips play as written until ADR-0098's X4).
+It applies at the next quantize boundary (the clip's quantize, else the project's launch_quantize) at or after the earliest moment every track can still take it: about one device block ahead for a track the audio callback runs, about the render-ahead (0.2 s) for one the renderer runs. beat and seconds give that song position. While the transport is stopped it applies at the play position when playing starts. All the scene's tracks switch at the same boundary, the project's launch_quantize. Tracks with no clip in the scene keep playing what they play. A frozen track is skipped with a track.frozen warning and a clip past the memory budget with a launch.memory warning. Clips whose follow is not none follow live, with launch.follow_budget for each one the follow budget holds back.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -11260,7 +11399,7 @@ Result:
 
 What each track with clips plays, and what it has queued.
 
-plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on.
+plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. followed (none, key or chords) is what the clip it plays, else the one it has queued, follows by in the running plan (ADR-0098); follow_budget: true when the follow budget forced that (a chords clip by its key, or any as written). Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -11319,6 +11458,13 @@ Kind: `query`. Exposure: `mcp-exec`.
             },
             "required": ["action", "beat", "seconds"],
             "additionalProperties": false
+          },
+          "followed": {
+            "type": "string",
+            "enum": ["none", "key", "chords"]
+          },
+          "follow_budget": {
+            "type": "boolean"
           }
         },
         "required": ["track", "plays"],
@@ -11769,7 +11915,7 @@ Result:
 
 Edit a MIDI item's notes and CCs: move, resize, quantize, fit to key or chord.
 
-ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Scale ops read the context track (key.set, chord.set) at the project beat each note starts, in the order of the ops: transpose_degrees {notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale first goes down to the scale); snap_to_scale {notes? (all), mode? nearest|down|up, key?} moves notes outside the scale to it (nearest: a tie goes down); fit_to_chord {notes? (all), chord?} moves each note to the nearest tone of the chord (a tie goes down; a slash bass counts). key is "Eb major", chord is "Cm7"; given, they replace the context. A note that is looped or shared by another item in a different key or chord is refused with midi.context_varies; none holding is midi.no_key or midi.no_chord. On a clip they read the clip's own context (the key and chords it was written against, clip.set {context}) at the clip beat each note sounds, never the project's. Returns the new indices of the notes the ops added or changed (to keep a selection).
+ops run in order and are one undo step. notes: indices into midi.notes' list as it was before this command (every op refers to that list, so later ops are not affected by earlier removals). Beats are from the item's start. add {pitch, start, length, velocity?, channel?}; remove {notes}; move {notes, beats?, semitones?}; resize {notes, length? | length_delta? | start_delta?}; velocity {notes, velocity? and/or velocity_delta?}; quantize {notes? (all), grid (beats, on the project's grid, at the note's place in the item's roll), strength? 0-1, ends?}; cc.set {number, points [{beat, value}], channel?}; cc.clear {number, from?, to?}. Scale ops read the context track (key.set, chord.set) at the project beat each note starts, in the order of the ops: transpose_degrees {notes, degrees, key?} moves notes by scale degrees (a pitch outside the scale first goes down to the scale); snap_to_scale {notes? (all), mode? nearest|down|up, key?} moves notes outside the scale to it (nearest: a tie goes down); fit_to_chord {notes? (all), chord?} moves each note to the nearest tone of the chord (a tie goes down; a slash bass counts). key is "Eb major", chord is "Cm7"; given, they replace the context. A note that is looped or shared by another item in a different key or chord is refused with midi.context_varies; none holding is midi.no_key or midi.no_chord. On a clip they read the clip's own context (the key and chords it was written against, clip.set {context}) at the clip beat each note sounds, never the project's. On an item whose take follows (take.set {follow}) they read the take's own context at each note's context beat, and act on the notes as written: the answer says acts_on: "written" when some heard note sounds otherwise (take.bake writes what sounds). Returns the new indices of the notes the ops added or changed (to keep a selection).
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -11882,6 +12028,9 @@ Kind: `query`. Exposure: `mcp-tool`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
+| `sounding` | boolean |  |  | false | Answer what sounds (a following take's notes as they play), in item time, not what is written. A clip is refused: midi.sounding_clip. |
+| `from` | number |  |  |  | With sounding: the first song beat; the heard notes of from..to answer, passes as they fall. |
+| `to` | number |  |  |  | With sounding: the end song beat. |
 
 ### Result
 
@@ -11953,6 +12102,15 @@ Kind: `query`. Exposure: `mcp-tool`.
     "follow": {
       "type": "string"
     },
+    "take_context": {
+      "type": "string"
+    },
+    "sounding_differs": {
+      "type": "integer"
+    },
+    "differs_by_pass": {
+      "type": "boolean"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -11965,6 +12123,11 @@ Kind: `query`. Exposure: `mcp-tool`.
 }
 
 ```
+
+### Errors
+
+- `midi.sounding_clip`: a clip has no place in time, so what it sounds as is not defined Hint: ask launch.state how it follows, or lay it on the timeline first
+- `midi.range_args`: from and to go with sounding Hint: give sounding: true, or leave from and to out
 
 ### Examples
 
@@ -11982,6 +12145,29 @@ Result:
 ```json
 {
   "text": "<any>"
+}
+
+```
+
+**Read what a following take sounds as** (`song_following`)
+
+```json
+{
+  "item": "it_1",
+  "sounding": true
+}
+
+```
+
+Result:
+
+```json
+{
+  "text": "<any>",
+  "context": "<any>",
+  "follow": "key",
+  "take_context": "1: key C major ~:w\n",
+  "sounding_differs": 2
 }
 
 ```
@@ -12072,7 +12258,7 @@ Result:
 
 List a MIDI item's or clip's notes and CC points (beats from its start).
 
-Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their position in this list. start/length/beat are in beats from the item's start; channel is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them too. For writing whole phrases, midi.write with notation is usually better.
+Notes are in a fixed order (by start, then pitch); midi.edit refers to them by their position in this list. start/length/beat are in beats from the item's start; channel is 1-16 (omitted for 1). pooled: other items share this MIDI, and edits change them too. For writing whole phrases, midi.write with notation is usually better. Errors: midi.sounding_clip (sounding on a clip: what it sounds as depends on where it is launched).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -12081,6 +12267,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `item` | string |  |  |  | Item or clip id, e.g. "it_1" or "cl_1". |
+| `sounding` | boolean |  |  | false | Add each note's sounding pitch as `sounds` (a following take's notes as they play; the first pass of a looped item, and differs_by_pass when later passes differ). `pitch` stays the written one. A clip is refused: midi.sounding_clip. |
 
 ### Result
 
@@ -12089,6 +12276,10 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 ```
 
+### Errors
+
+- `midi.sounding_clip`: sounding was asked of a clip Hint: launch.state says how a launched clip follows; lay the clip on the timeline (item.add {clip}) to read what sounds
+
 ### Examples
 
 **Notes of a MIDI item** (`song_with_item`)
@@ -12096,6 +12287,30 @@ Kind: `query`. Exposure: `mcp-exec`.
 ```json
 {
   "item": "it_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "item": "it_1",
+  "ppq": 960,
+  "length": "<any>",
+  "position": "<any>",
+  "notes": "<any>",
+  "cc": "<any>"
+}
+
+```
+
+**A following take's notes with the pitches they sound as** (`song_following`)
+
+```json
+{
+  "item": "it_1",
+  "sounding": true
 }
 
 ```
@@ -12206,7 +12421,7 @@ Result:
 
 Replace an item's or clip's MIDI with notation (keeping its place and length).
 
-The item or clip keeps its length: notation longer than it is stored but does not play past its end, and midi.beyond_length warns. Lengthen it first (item.set length, clip.set length), or write the notation to fit.
+The item or clip keeps its length: notation longer than it is stored but does not play past its end, and midi.beyond_length warns. Lengthen it first (item.set length, clip.set length), or write the notation to fit. The notes are stored as written: on a take that follows (take.set {follow}) its context and follow stay, so the new notes sound as the context says, and the answer's follows says key or chords. Chord symbols in the text do not change a take's context (take.set does).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -12222,8 +12437,11 @@ Kind: `edit`. Exposure: `mcp-tool`.
 ```json
 {
   "type": "object",
-  "title": "empty",
+  "title": "midi_write_result",
   "properties": {
+    "follows": {
+      "type": "string"
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -12259,7 +12477,7 @@ Result:
 
 Modulate a parameter or mixer level: LFO, follower, random, macro.
 
-The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A parameter reached through its envelope (fx.describe: modulatable_by_envelope) gets a one-point envelope at its current value first when it has none. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set.
+The whole gesture in one undo step. It takes the first rack homed on the target's track that holds a Mod Out, else the first rack named Modulators, else adds one on a new channel named Modulators (rack: choose one instead). It adds the source module (lfo: an LFO; random: an LFO's Random Steps preset; macro: a Macro, its first knob; follower: a Follower fed by an In module and a send from the track from), cables it into the first free Mod Out input (adding a Mod Out when none is free) and routes that input to the target. {module, input} routes a Mod Out input already patched. For a macro, knob names the knob to move. depth as modulation.add; default a quarter of a plug-in parameter's range, 6 dB, or 50 percent. A parameter reached through its envelope (fx.describe: modulatable_by_envelope) gets a one-point envelope at its current value first when it has none. A rack that would close a loop (it already drives the track a follower hears, or hears the target) is passed over for the next, or a new Modulators rack. Only a real cycle is refused (modulation.cycle): a follower on a track the target feeds, itself included. target: {fx, param} (a plug-in parameter by key, name or CLAP id; fx.describe full marks the modulatable ones), {track, param: volume|pan|width} or {route, param: volume}. The source module is left set to its defaults: change it with module.set {module, params} on the module this returns (an LFO's rate, shape or sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until moved, so a macro does nothing at first; module.describe {type} lists the knobs) and the route's depth with modulation.set. A second route from the same kind of source onto a target that already has one warns modulation.stacked (their offsets add).
 
 Kind: `edit`. Exposure: `mcp-tool`.
 
@@ -12371,7 +12589,7 @@ Result:
 
 Route a rack's Mod Out to a plug-in parameter or mixer level.
 
-depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset directly; one marked modulatable_by_envelope (automatable, continuous, not modulatable, or any VST3's) takes it through its active envelope, which must exist (modulation.envelope; modulate adds one), and for a VST3 depth is a fraction of its normalized range; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range.
+depth is the offset at a signal of 1: for a plug-in parameter a fraction of its CLAP range (-1..1). A parameter fx.describe marks modulatable takes the offset directly; one marked modulatable_by_envelope (automatable, continuous, not modulatable, or any VST3's) takes it through its active envelope, which must exist (modulation.envelope; modulate adds one), and for a VST3 depth is a fraction of its normalized range; for a track's or send's volume in dB (-48..48); for a track's pan or width in percent (-200..200). The offset adds to the value automation or the fader gives, and the sum stays in the target's range. Another enabled route onto the same target from the same kind of source (the module cabled into the Mod Out input) is allowed with the warning modulation.stacked, which names the routes already there: their offsets add.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -12831,7 +13049,7 @@ Result:
 
 Add a module to a rack: a type with knob values.
 
-type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin (instead of type): a plug-in id (fx.scan) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. preset: a factory preset (module.describe), params on top. Returns its size and keys.
+type: an id or a short name ("vca", "notes"; module.list). x, y: its top-left corner in the rack (default: right of the others). params: knob values by key in the knob's units (a choice by its key, a switch as a bool). Notes: source (the track whose MIDI it plays; default the rack's channel) and device (a live MIDI input it always plays; "" any). plugin (instead of type): a plug-in id (plugin.list) for a plugin module, which shows the plug-in's name and opens its editor; its ports are in_l, in_r, out_l, out_r and, for instruments, pitch, gate and velocity. preset: a factory preset (module.describe), params on top. Returns its size and keys.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -17040,7 +17258,7 @@ Result:
 
 Render the mix offline with the project's settings (default: whole song).
 
-Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -17545,7 +17763,7 @@ Result:
 
 Render each region (or the render matrix's tracks per region) to files.
 
-Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -17763,7 +17981,7 @@ Result:
 
 Render each selected track to its own file (stems).
 
-Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -18741,7 +18959,7 @@ Result:
 
 Lay a scene's clips on the timeline as items and a section.
 
-The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole bars. Each clip becomes an item on its track at the start, as item.add {clip} makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts the span, as one looping item when it repeats within it, which needs its period to be its content: loop off with its length (as clip.add makes it), or loop on over the whole content with a length of whole repeats (scene.insert.period otherwise). Takes are copied, MIDI with them unless pooled; an item takes its clip's name (its active take's) when the clip has one. follow (none, key or chords; default: each clip's own) maps a MIDI clip's notes from the key or chords it was written against to those under the item (ADR-0098), as item.add {clip} does: each item's followed says what was done, by bar, unrolled: true when a looped item had to be written out pass by pass, and copied why a clip that cannot follow was left as it is; pooled with a mapping that moves a note is refused (clip.follow_pooled). With none the notes are copied as they are, and context.mismatch warns once for each item whose clip's key is not the project's under it. An item already in the span on a track that receives a clip is refused (scene.insert.occupied), and an empty scene (scene.empty). A section named after the scene (name overrides) is added over the span. One undo step.
+The span starts at bar (1-based) or at (beats, on a bar line) and lasts bars whole bars. Each clip becomes an item on its track at the start, as item.add {clip} makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts the span, as one looping item when it repeats within it, which needs its period to be its content: loop off with its length (as clip.add makes it), or loop on over the whole content with a length of whole repeats (scene.insert.period otherwise). Takes are copied, MIDI with them unless pooled; an item takes its clip's name (its active take's) when the clip has one. follow (none, key or chords; default: each clip's own) is set on each laid MIDI take with the clip's context, so its notes sound as the key or chords under the item say, mapped from those they were written against (ADR-0098, "following is playback"): the notes stay as written, a context edit moves them, and take.bake writes the sounding pitches. Each item's followed says how they sound, by bar, and copied why a clip that cannot follow was left as it is; pooled may follow too. With none the notes sound as written, and context.mismatch warns once for each item whose clip's key (or, in the same key, chord) is not the project's under it. An item already in the span on a track that receives a clip is refused (scene.insert.occupied), and an empty scene (scene.empty). A section named after the scene (name overrides) is added over the span. write_context writes the clips' own key and chords onto the context track under the span first (context in the answer says what happened). One undo step.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -18756,6 +18974,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `name` | string |  |  |  |  |
 | `pooled` | boolean |  |  | false |  |
 | `follow` | string |  |  |  | How the clip's notes are mapped to the key (or chords) under the item (ADR-0098): none, key or chords. Default: the clip's own follow. One of: none, key, chords. |
+| `write_context` | boolean |  |  | false | Write the scene's clips' own key and chords onto the context track under each section that has none (shifted to the section, repeating with a loop clip), in the same undo step, before the clips are laid. Left alone: a section with points under it; not written: one whose clips disagree. The answer's context says which (default false). |
 
 ### Result
 
@@ -18823,12 +19042,43 @@ Kind: `edit`. Exposure: `mcp-exec`.
               "folded": {
                 "type": "integer"
               },
-              "unrolled": {
-                "type": "boolean"
-              },
               "copied": {
                 "type": "string",
                 "enum": ["drums", "audio", "no_key", "no_notes"]
+              },
+              "mismatch": {
+                "type": "object",
+                "title": "followed_mismatch",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["key", "chord"],
+                    "description": "What differs: the key, or (in the same key) the chord."
+                  },
+                  "clip_key": {
+                    "type": "string",
+                    "description": "kind key: the clip's key."
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "kind key: the project's key there, which differs."
+                  },
+                  "clip_chord": {
+                    "type": "string",
+                    "description": "kind chord: the chord the clip was written over."
+                  },
+                  "chord": {
+                    "type": "string",
+                    "description": "kind chord: the project's chord there, which differs."
+                  },
+                  "bar": {
+                    "type": "integer",
+                    "description": "The first project bar where they differ."
+                  }
+                },
+                "required": ["kind", "bar"],
+                "additionalProperties": false,
+                "description": "Set with the context.mismatch warning: the notes play as written under a key, or in the same key over a chord, that is not the clip's."
               }
             },
             "required": ["mode"],
@@ -18850,6 +19100,42 @@ Kind: `edit`. Exposure: `mcp-exec`.
       "type": "number",
       "description": "The span's end, in beats."
     },
+    "context": {
+      "type": "object",
+      "title": "context_written",
+      "properties": {
+        "written": {
+          "type": "boolean"
+        },
+        "keys": {
+          "type": "integer",
+          "description": "Key points written under the section."
+        },
+        "chords": {
+          "type": "integer",
+          "description": "Chord points written under the section."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["present", "disagree", "holds", "no_context"],
+          "description": "Why nothing was written: the context track already has points under the section, the clips disagree, it already says the same, or no clip has a context."
+        },
+        "clips": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bar": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": ["written", "keys", "chords", "clips"],
+      "additionalProperties": false
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -18869,7 +19155,6 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `scene.bars`: bars is out of range Hint: give a whole number of bars from 1
 - `scene.empty`: the scene has no clips Hint: add clips with clip.add
 - `scene.insert.occupied`: an item is already in the span on a track that gets a clip Hint: move or remove it, or choose another bar
-- `clip.follow_pooled`: pooled with a mapping that moves a note Hint: leave pooled off, or place the clip with follow: none
 - `scene.insert.period`: a repeating clip no single looping item reproduces Hint: loop the clip over its whole content, or ask for no more bars than it is long
 
 ### Examples
@@ -19688,6 +19973,161 @@ Result:
 
 ```
 
+## `take.bake@1`
+
+Write a following take's sounding pitches into its notes, and stop following.
+
+A take that follows the project's key or chords stores its notes as written and maps them as they sound. take.bake writes what sounds into the notes and sets follow to none and replaces the take's context with the song's under the item (what the notes are written in now; none when the song has no key there), so turning follow on again sounds as before and moves with a later song edit; a render after equals the render before. A pooled source is first made the take's own copy. When every pass of a looped item sounds alike the loop stays; otherwise the item is unrolled (loop off, its passes written out, each note at its place, its other takes repeated alike) and the answer says unrolled: true. followed is what was baked, as item.add's. Errors: take.not_following (follow is none), take.not_active (the take is not its item's active take: what sounds is the active take's). One undo step. pitches is recorded by history, not given.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `take` | string |  |  |  | Take id, e.g. "tk_1". |
+| `pitches` | array |  |  |  | Recorded by history, not given: each heard note's written pitch, where it is heard and the pitch it sounded as, so a replay writes what was heard. A replay that finds other notes is take.bake_replay. |
+| `pitches[].was` | integer |  | 0.0..127.0 |  |  |
+| `pitches[].at` | integer |  |  |  |  |
+| `pitches[].pitch` | integer |  | 0.0..127.0 |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "take_bake_result",
+  "properties": {
+    "followed": {
+      "type": "object",
+      "title": "followed",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["none", "key", "chords"]
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "title": "followed_region",
+            "properties": {
+              "from_bar": {
+                "type": "integer",
+                "description": "First project bar of the run."
+              },
+              "to_bar": {
+                "type": "integer",
+                "description": "Last project bar of the run (inclusive)."
+              },
+              "from_key": {
+                "type": "string"
+              },
+              "to_key": {
+                "type": "string"
+              },
+              "by": {
+                "type": "string",
+                "enum": ["transpose", "degree", "chords", "copy"]
+              },
+              "interval": {
+                "type": "integer",
+                "description": "Semitones, for transpose."
+              }
+            },
+            "required": ["from_bar", "to_bar", "by"],
+            "additionalProperties": false
+          }
+        },
+        "folded": {
+          "type": "integer"
+        },
+        "copied": {
+          "type": "string",
+          "enum": ["drums", "audio", "no_key", "no_notes"]
+        },
+        "mismatch": {
+          "type": "object",
+          "title": "followed_mismatch",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["key", "chord"],
+              "description": "What differs: the key, or (in the same key) the chord."
+            },
+            "clip_key": {
+              "type": "string",
+              "description": "kind key: the clip's key."
+            },
+            "key": {
+              "type": "string",
+              "description": "kind key: the project's key there, which differs."
+            },
+            "clip_chord": {
+              "type": "string",
+              "description": "kind chord: the chord the clip was written over."
+            },
+            "chord": {
+              "type": "string",
+              "description": "kind chord: the project's chord there, which differs."
+            },
+            "bar": {
+              "type": "integer",
+              "description": "The first project bar where they differ."
+            }
+          },
+          "required": ["kind", "bar"],
+          "additionalProperties": false,
+          "description": "Set with the context.mismatch warning: the notes play as written under a key, or in the same key over a chord, that is not the clip's."
+        }
+      },
+      "required": ["mode"],
+      "additionalProperties": false
+    },
+    "unrolled": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["followed", "unrolled"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `take.not_following`: the take's follow is none: its notes sound as written Hint: set follow first (take.set {follow: "key"}), or there is nothing to bake
+- `take.not_active`: the take is not its item's active take Hint: take.activate it first: what sounds is the active take's
+- `take.bake_replay`: the recorded pitches do not match the heard notes Hint: run take.bake without pitches
+- `take.source`: the take's MIDI source is missing Hint: undo to a version that has it
+
+### Examples
+
+**Write what sounds into the notes** (`song_following`)
+
+```json
+{
+  "take": "tk_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "followed": "<any>",
+  "unrolled": false
+}
+
+```
+
 ## `take.extract@1`
 
 Take a take out of its item or clip into an item of its own on any channel.
@@ -20070,7 +20510,7 @@ Result:
 
 ## `take.set@1`
 
-Set a take's gain, pan, channel mode, name, offset, playrate or pitch.
+Set a take's gain, pan, name, rate, pitch, context, follow and more.
 
 
 
@@ -20091,6 +20531,8 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `preserve_pitch` | boolean |  |  |  | Keep the source's pitch when the playrate changes (the default). With pitch_mode "resample" the pitch follows the speed. |
 | `pitch` | number or string | st | -48.0..48.0 |  | Pitch offset in semitones. Stretched when the pitch is preserved, otherwise a further speed factor of 2^(pitch/12). Quantity strings are range-checked by the server. |
 | `pitch_mode` | string |  |  |  | Time-stretch algorithm: "signalsmith" (pitch-preserving, the default) or "resample" (varispeed). One of: resample, signalsmith. |
+| `context` | string |  |  |  | A MIDI take's lead sheet, as context.write's text: bars of the meter at its item's position, bar 1 at context beat 0, in context beats (the take's playrate does not scale them); "" clears it. A point at or past the context's period is take.context_range. |
+| `follow` | string |  |  |  | How the take's notes sound against the project's context (ADR-0098, following is playback): none plays them as written, key or chords maps them as they play. Needs a MIDI take with a readable key in its context. The notes stay as written; take.bake writes them. One of: none, key, chords. |
 
 ### Result
 
@@ -20110,6 +20552,14 @@ Kind: `edit`. Exposure: `mcp-exec`.
 }
 
 ```
+
+### Errors
+
+- `take.no_key`: follow needs a key in the take's context Hint: give the take a context with a key: take.set {context: "1: key D minor ~:w"}
+- `take.follow_audio`: a take that is not MIDI holds no context or follow Hint: set context and follow on a MIDI take (take.list shows each take's source), or leave them out
+- `take.in_clip`: a clip's take holds no context or follow Hint: the clip's context and follow are the clip's: clip.set {context, follow}
+- `take.context_syntax`: the lead sheet text could not be read (syntax, bar order, bar length or length) Hint: write bars as context.write does, e.g. "1: key A minor {Am}:w"
+- `take.context_range`: a point lies at or past the context's period Hint: move it earlier, inside the period
 
 ### Examples
 
@@ -20171,6 +20621,24 @@ Result:
 {
   "take": "tk_1",
   "pitch": 12
+}
+
+```
+
+Result:
+
+```json
+{}
+
+```
+
+**Follow the project's key, the take written in A minor** (`song_with_item`)
+
+```json
+{
+  "take": "tk_1",
+  "context": "1: key A minor ~:w",
+  "follow": "key"
 }
 
 ```

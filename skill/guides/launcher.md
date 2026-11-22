@@ -54,7 +54,8 @@ keeps the harmony at a place. Say it when you make the clip:
   there, for the clip's length. `clip.add {item}` and `scene.capture` take the context
   under the item the same way, and `context: ""` takes none.
 - The `{Dm}` chord symbols in a clip's notation (`clip.add {notation}`, `midi.write`)
-  are recorded as its chords, unless you stated chords (`clip.chords_ignored`).
+  are recorded as its chords, unless you stated chords, which win (`clip.chords_ignored` warns
+  only when the symbols differ from the stated chords: symbols and `context_at` that agree are fine).
   An audio clip's context is a key at the start of bar 1 and holds (`~`) only.
 - `clip.set {context, context_at, follow}` changes it (`context: ""` clears it).
   `follow` (`none`, `key`, `chords`) says how the clip's notes are to be mapped
@@ -70,33 +71,60 @@ keeps the harmony at a place. Say it when you make the clip:
   with no context says `midi.no_key` / `midi.no_chord` (give it one, or pass `key` /
   `chord`).
 - Laying a clip (`item.add {clip}`, `scene.insert`, `arrangement.build`, `launch.commit`)
-  with its notes copied as they are gives a `context.mismatch` warning when the clip's key is
-  not the project's under the item (once per item; once per launched clip in `launch.commit`).
+  with its notes played as written (follow none) gives a `context.mismatch` warning when the clip's key is
+  not the project's under the item, or, in the same key, when its chord at some beat is not the
+  chord the project has there (once per item, naming the first bar that differs; once per
+  launched clip in `launch.commit`). A clip with no chords has none to compare. The answer's
+  `followed.mismatch` says what differs without reading the message: `kind: "key"` with
+  `clip_key` and `key`, or `kind: "chord"` with `clip_chord` and `chord`, and the `bar`.
 - Shortening a clip drops the context points past its end (`clip.context_dropped`); a
   context change that leaves no key at the start resets `follow` (`clip.follow_reset`).
 
 ### Following when a clip is laid
 
 `item.add {clip}`, `scene.insert` and `arrangement.build` take `follow` (`none`, `key`,
-`chords`), by default the clip's own: a MIDI clip's notes are mapped from the key it was
-written against (or its chord at that beat) to the key (or chord) under the item. Write a
-clip once in D minor with `follow: key`, and it lands in C minor, or F minor from bar 7, with
-no second copy. Each laid item's answer has `followed: {mode, regions, folded?, unrolled?,
-copied?}`; `regions` read like `5-6 transpose D minor>C minor -2` (project bars, the keys, how
-the notes moved).
+`chords`), by default the clip's own. The laid item's MIDI takes get the clip's context
+and `follow`, and the notes are copied **as written**: what sounds is worked out when the
+item plays (**following is playback**), from the key it was written against (or its chord at
+that beat) to the key (or chord) under it. Write a clip once in D minor with `follow: key`,
+and it lands in C minor, or F minor from bar 7, with no second copy. Because nothing is
+written into the notes, nothing laid goes stale: edit the context track and what follows moves
+with it. `take.bake` writes the sounding pitches into the notes when you want them fixed.
+Each laid item's answer has `followed: {mode, regions, folded?, copied?}`; `regions` is a list
+of runs, each `{from_bar, to_bar, from_key, to_key, by, interval?}` (project bars, inclusive;
+`by` is `transpose` with the `interval` in semitones, `degree`, `chords` or `copy`): the run
+`5-6 transpose D minor>C minor -2` is `{from_bar: 5, to_bar: 6, from_key: "D minor", to_key:
+"C minor", by: "transpose", interval: -2}`. A `chords` run names no chords and no interval, and
+is the same whether the chords under it differ from the clip's or match them.
 
 - Same scale: a transpose by the nearest interval. Scales of the same size (D minor to C
   major): by degree. Different sizes (a pentatonic): a transpose, with `context.scale_shape`.
 - `chords`: each note goes from its chord tone (root, third, fifth, seventh, extensions) to
   the same tone of the chord under it; a note with no chord on either side follows by key.
+  A figure moves as a block by the interval between the two roots, each note to its tone
+  nearest where that puts it. Chord tones give one voicing for one pair of chords, whatever
+  the keys; a note that is not a chord tone keeps its scale degree, so it depends on the keys
+  too. Neighbouring notes can cross where their targets cross: A4 B4 over Cmaj7 in C major
+  sounds Ab4 Gb4 under Cdim in C minor.
 - Notes on channel 10 (drums) are never moved. A drum-only, empty, keyless or audio clip is
-  copied, and `followed.copied` says why (`drums`, `no_notes`, `no_key`, `audio`).
-- Where no key holds under the item, the notes are copied with `context.no_key`.
-- A looped item stays looped when every pass maps alike; when the key changes between
-  passes the item is laid out pass by pass (`unrolled: true`).
-- `pooled: true` with a mapping that moves a note is refused (`clip.follow_pooled`).
-- A launched clip is **not** followed yet: it plays as written, and `launch.clip` /
-  `launch.scene` warn `launch.unfollowed` for a clip whose `follow` is not `none`.
+  laid without following, and `followed.copied` says why (`drums`, `no_notes`, `no_key`,
+  `audio`).
+- Where no key holds under a note, it sounds as written, with `context.no_key`.
+- A looped item stays one looped item: each pass sounds as the key under it says, so a key
+  change between passes (or, in `chords` mode, chords that differ from one pass to the next)
+  changes what the passes sound as and nothing else. A note sounds as the key where it
+  **starts**, to its end.
+- Under a bar the context track marks "no chord" (`""`), `chords` falls back to a transpose by
+  the key (`by: transpose` for that bar).
+- `pooled: true` may follow too: the mapping belongs to each take that reads the source.
+- A laid item that follows plays as its take maps it (`followed` and `midi.get {sounding}`
+  say how); `take.bake` writes those pitches into the notes.
+- A launched clip follows live as laid ones do, by the place where each note starts; a note
+  keeps its pitch to its note-off. `launch.state` gives each track's `followed` (`none`,
+  `key` or `chords`), and `follow_budget: true` when a clip's context and the project's are
+  too varied to follow fully (a chords clip then follows its key, or plays as written).
+- `launch.commit` lays notes as written and gives each laid take the clip's context and the
+  follow that was heard, so a performance of followed clips is laid as played.
 
 ## Launching
 
@@ -125,7 +153,7 @@ make bars short.
 A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.scene` skips it with a warning. `launch.stop` on a track with no clips is
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
-master playrate does not stop launches, but while it keeps the pitch an audio clip's
+master playrate (`transport.playrate.set`) does not stop launches, but while it keeps the pitch an audio clip's
 launch is refused (`launch.playrate`), and `launch.capture` is refused under any active
 playrate, and while the rate heard (`effective_rate`) is still gliding back to 1. A clip's FX and envelopes play through its own chain; a rack's Notes module
 and the track's MIDI sends follow launches.
@@ -172,6 +200,15 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   entry, one after another from `bar` (default 1), a scene as often as you like;
   one undo step, and an entry that cannot be laid changes nothing, with its
   index in the error's `path`.
+- `write_context: true` (on both): the scenes' clips' own key and chords are written onto the
+  context track under each section, in the same undo step and before the clips are laid, so
+  a song built from scenes has a lead sheet (`context.get` reads it back) and `follow` finds
+  the key. Each segment's (or the result's) `context` says `{written, keys, chords}` or why
+  not: `present` (the track already has points under that section: left alone), `disagree`
+  (two clips say different keys or chords at one beat: nothing written; `clips` and `bar` name
+  them, and `context.not_written` warns), `holds` (the track already says it), `no_context`
+  (no clip has any). A looping clip's points repeat at its length; a key that is already
+  holding is not written again.
 - `scene.capture {region, name?}`: the other way: a scene from the items in a
   section, one clip per channel, named after the region. Items are copied;
   the region and its items are unchanged.

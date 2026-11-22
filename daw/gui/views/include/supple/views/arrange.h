@@ -80,7 +80,10 @@ struct RulerStats {
     float minBarSlack = 1e9f, minTimeSlack = 1e9f;
     std::vector<int> labelledBars;         // the bars that carry a label, left to right
     std::vector<std::string> keyLabels;    // the key changes' labels, left to right
+    std::vector<float> keyLabelXs;         // where each one's text starts
     std::vector<std::string> chordLabels;  // the chord cells' labels in view, left to right
+    std::vector<std::pair<float, float>> chordSpans;  // those cells' left and right edges
+    std::vector<float> chordLabelXs;                  // where each label's text starts
 };
 
 // The ruler's rows, top to bottom (gui.md §4.3). Its height is their sum, a

@@ -5,9 +5,13 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <map>
 #include <memory>
 #include <utility>
 
+#include "supple/harmony/harmony.h"
+#include "supple/model/context.h"
+#include "supple/model/follow.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/canvas.h"
 #include "supple/ui/popup.h"
@@ -41,6 +45,318 @@ LauncherColumns launcherColumns(const model::Session& session) {
 int barAtOrAfter(const time::TimeMap& map, double beat) {
     const time::BarBeat at = map.barBeat(std::max(0.0, beat));
     return map.beatOfBar(at.bar) < beat - 1e-9 ? at.bar + 1 : at.bar;
+}
+
+namespace {
+
+// "+2", "−3": semitones as the status line says them.
+std::string semitones(std::int64_t n) {
+    return (n < 0 ? "\u2212" : "+") + std::to_string(n < 0 ? -n : n);
+}
+
+std::string jsonText(const json::Value* v) {
+    return v && v->isString() ? v->asString() : std::string();
+}
+
+// A laid clip's name for the status line: its own, else its track's.
+std::string laidName(const model::Session& s, const std::string& clipId) {
+    const auto id = model::Id::parse(clipId);
+    const model::Clip* clip = id ? s.clips.find(*id) : nullptr;
+    if (!clip) return "The clip";
+    if (!clip->name.empty()) return clip->name;
+    if (const model::Track* t = s.tracks.find(clip->track); t && !t->name.empty()) return t->name;
+    return "The clip";
+}
+
+enum class Laid { Quiet, Followed, Copied };
+
+// One laid clip's phrase, and whether it follows or was laid as written in another key.
+// The notes are stored as written and sound as the place says (ADR-0098, following is
+// playback): `followed` says where they sound. `alone` words it for one item ("Riff
+// follows: sounds in E minor, by degree"); in a list the name leads it ("Riff sounds in E
+// minor, by degree").
+std::pair<Laid, std::string> laidPhrase(const std::string& name, const json::Value* followed,
+                                        bool alone) {
+    if (!followed || !followed->isObject()) return {Laid::Quiet, {}};
+    const std::string mode = jsonText(followed->find("mode"));
+    if (mode == "key" || mode == "chords") {
+        // Each run of bars whose notes sound moved: its key, and how far.
+        struct Run {
+            std::string key, how;
+            std::int64_t bar = 1;
+        };
+        std::vector<Run> runs;
+        const json::Value* regions = followed->find("regions");
+        if (regions && regions->isArray())
+            for (const json::Value& r : regions->asArray()) {
+                const std::string by = jsonText(r.find("by"));
+                // A run already in the key moved nothing: a copy, a
+                // transpose by 0, or degrees between one key and itself.
+                const json::Value* iv = r.find("interval");
+                if (by == "copy" || (by == "transpose" && iv && iv->asInt() == 0) ||
+                    (by == "degree" && jsonText(r.find("from_key")) == jsonText(r.find("to_key"))))
+                    continue;
+                Run run;
+                run.key = jsonText(r.find("to_key"));
+                if (run.key.empty()) run.key = "the chords";
+                if (by == "transpose" && iv)
+                    run.how = ", " + semitones(iv->asInt());
+                else if (by == "degree")
+                    run.how = ", by degree";
+                if (const json::Value* from = r.find("from_bar")) run.bar = from->asInt();
+                runs.push_back(std::move(run));
+            }
+        if (runs.empty()) return {Laid::Quiet, {}};  // already in the key: nothing moved
+        // One run says how; several say where each key begins.
+        std::string where = "sounds in " + runs[0].key;
+        if (runs.size() == 1) where += runs[0].how;
+        if (runs.size() > 1)
+            where += ", then " + runs[1].key + " from bar " + std::to_string(runs[1].bar);
+        if (runs.size() > 2) where += ", and " + std::to_string(runs.size() - 2) + " more";
+        if (const json::Value* folded = followed->find("folded"); folded && folded->asInt() > 0)
+            where += " (" + std::to_string(folded->asInt()) + " folded into range)";
+        if (!alone) return {Laid::Followed, name + " " + where};
+        return {Laid::Followed,
+                name + (mode == "chords" ? " follows the chords: " : " follows: ") + where};
+    }
+    const std::string asWritten = name + " is laid as written: ";
+    if (const json::Value* m = followed->find("mismatch"); m && m->isObject()) {
+        // What differs (followed.mismatch {kind}): the key, or in the same key the chord.
+        const std::string at =
+            " at bar " + std::to_string(m->find("bar") ? m->find("bar")->asInt() : 1);
+        const std::string kind = jsonText(m->find("kind"));
+        if (kind == "chord")
+            return {Laid::Copied, asWritten + "its chord " + jsonText(m->find("clip_chord")) +
+                                      " differs from " + jsonText(m->find("chord")) + at};
+        if (kind == "key" || m->find("clip_key"))
+            return {Laid::Copied, asWritten + "its key " + jsonText(m->find("clip_key")) +
+                                      " differs from " + jsonText(m->find("key")) + at};
+        return {Laid::Copied, asWritten + "its context differs from the song's" + at};
+    }
+    const std::string copied = jsonText(followed->find("copied"));
+    if (copied == "drums") return {Laid::Copied, asWritten + "drums don't follow"};
+    if (copied == "audio") return {Laid::Copied, asWritten + "audio doesn't follow"};
+    if (copied == "no_key") return {Laid::Copied, asWritten + "it has no key to follow from"};
+    if (copied == "no_notes") return {Laid::Copied, asWritten + "it has no notes to follow"};
+    return {Laid::Quiet, {}};
+}
+
+}  // namespace
+
+std::optional<std::string> followNotice(const model::Session& s, const std::string& command,
+                                        const json::Value& args, const json::Value& answer) {
+    if (!answer.isObject()) return std::nullopt;
+    if (command == "item.add") {
+        const std::string clip = jsonText(args.find("clip"));
+        if (clip.empty()) return std::nullopt;
+        auto [laid, text] = laidPhrase(laidName(s, clip), answer.find("followed"), true);
+        if (laid == Laid::Quiet) return std::nullopt;
+        return text;
+    }
+    std::vector<std::string> phrases, followed, copied;
+    std::string head;
+    if (command == "launch.commit") {
+        // A capture's commit copies what was heard: each launched stretch
+        // copied under a key that is not its clip's, as `mismatches` says.
+        const json::Value* list = answer.find("mismatches");
+        if (!list || !list->isArray()) return std::nullopt;
+        for (const json::Value& m : list->asArray()) {
+            json::Value followedBlock = json::Value::object();
+            followedBlock["mode"] = "none";
+            followedBlock["mismatch"] = m;
+            const std::string name = laidName(s, jsonText(m.find("clip")));
+            auto [laid, text] = laidPhrase(name, &followedBlock, false);
+            if (laid == Laid::Quiet) continue;
+            phrases.push_back(std::move(text));
+            copied.push_back(name);
+        }
+        head = "Committed";
+    } else if (command == "scene.insert") {
+        const json::Value* items = answer.find("items");
+        if (!items || !items->isArray()) return std::nullopt;
+        for (const json::Value& item : items->asArray()) {
+            const std::string name = laidName(s, jsonText(item.find("clip")));
+            auto [laid, text] = laidPhrase(name, item.find("followed"), false);
+            if (laid == Laid::Quiet) continue;
+            phrases.push_back(std::move(text));
+            (laid == Laid::Followed ? followed : copied).push_back(name);
+        }
+        head = "The scene";
+        if (const auto id = model::Id::parse(jsonText(args.find("scene"))))
+            if (const model::Scene* sc = s.scenes.find(*id); sc && !sc->name.empty())
+                head = sc->name;
+        if (const json::Value* bar = args.find("bar"); bar && bar->isNumber())
+            head += " at bar " + std::to_string(bar->asInt());
+    } else {
+        return std::nullopt;
+    }
+    if (phrases.empty()) return std::nullopt;
+    std::string all;
+    for (const std::string& p : phrases) all += (all.empty() ? "" : "; ") + p;
+    if (all.size() <= 110) return head + ": " + all;
+    // Too long for the line: how many follow and how many were laid as
+    // written in another key or for a reason, by name.
+    auto names = [](const std::vector<std::string>& v) {
+        std::string out;
+        for (std::size_t i = 0; i < v.size() && i < 3; ++i) out += (i ? ", " : "") + v[i];
+        if (v.size() > 3) out += ", \u2026";
+        return out;
+    };
+    std::string text = head + ":";
+    if (!followed.empty())
+        text += " " + std::to_string(followed.size()) + " follow (" + names(followed) + ")";
+    if (!copied.empty())
+        text += std::string(followed.empty() ? " " : "; ") + std::to_string(copied.size()) +
+                " laid as written (" + names(copied) + ")";
+    return text;
+}
+
+namespace {
+
+// What each heard note of a following item sounds as, by (note, pass); empty
+// for an item whose heard take doesn't follow.
+struct Heard {
+    std::map<std::pair<std::uint32_t, std::int32_t>, const model::SoundingNote*> at;
+    std::vector<model::SoundingNote> notes;
+};
+Heard heardOf(const model::Session& s, model::Id id) {
+    Heard h;
+    const model::Item* item = s.items.find(id);
+    const model::Take* take = item && item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+    if (!take || take->follow == model::ClipFollow::None) return h;
+    h.notes = model::soundingNotes(s, id, -1e18, 1e18);
+    for (const model::SoundingNote& n : h.notes) h.at[{n.note, n.pass}] = &n;
+    return h;
+}
+
+// "Riff", "Bass and Keys", "3 items", and whether the verb is singular.
+std::pair<std::string, bool> itemNames(const std::vector<std::string>& names) {
+    if (names.size() == 1) return {names[0], true};
+    if (names.size() == 2) return {names[0] + " and " + names[1], false};
+    return {std::to_string(names.size()) + " items", false};
+}
+
+}  // namespace
+
+std::optional<std::string> contextFollowNotice(const model::Session& before,
+                                               const model::Session& after,
+                                               const std::string& command) {
+    struct Moved {
+        std::string name;
+        double first = 0;             // the first song beat where a note sounds otherwise
+        std::optional<double> noKey;  // the first where one found no key
+    };
+    std::vector<Moved> moved;
+    for (const auto& e : after.items) {
+        const Heard was = heardOf(before, e.id), now = heardOf(after, e.id);
+        if (was.notes.empty() && now.notes.empty()) continue;
+        const model::Item& item = *e.value;
+        const double start = model::itemSpan(after, item).startBeat;
+        std::optional<double> first, noKey;
+        for (const model::SoundingNote& n : now.notes) {
+            const auto it = was.at.find({n.note, n.pass});
+            const bool differs = it == was.at.end() || it->second->sounds.pitch != n.sounds.pitch ||
+                                 it->second->sounds.by != n.sounds.by;
+            if (!differs) continue;
+            const double beat = std::max(start, n.songBeat);
+            if (!first || beat < *first) first = beat;
+            if (n.channel != 9 && n.sounds.by == harmony::FollowedBy::Copy &&
+                (!noKey || beat < *noKey))
+                noKey = beat;
+        }
+        if (!first) continue;
+        moved.push_back({views::Lanes::itemLabel(after, item), *first, noKey});
+    }
+    if (moved.empty()) return std::nullopt;
+    const time::TimeMap& tm = *after.timeMap;
+    auto barOf = [&](double beat) { return std::to_string(tm.barBeat(beat).bar); };
+    // Notes that found no key to read sound as written: that is the news.
+    std::vector<std::string> lost;
+    std::optional<double> lostAt;
+    for (const Moved& m : moved)
+        if (m.noKey) {
+            lost.push_back(m.name);
+            if (!lostAt || *m.noKey < *lostAt) lostAt = m.noKey;
+        }
+    if (!lost.empty()) {
+        const auto [who, one] = itemNames(lost);
+        return who + (one ? " sounds" : " sound") + " as written from bar " + barOf(*lostAt) +
+               ": no key there";
+    }
+    std::vector<std::string> names;
+    double at = moved.front().first;
+    for (const Moved& m : moved) {
+        names.push_back(m.name);
+        at = std::min(at, m.first);
+    }
+    const auto [who, one] = itemNames(names);
+    const std::string verb = one ? " follows" : " follow";
+    if (command.rfind("key.", 0) == 0) {
+        const auto key = model::keyPointAt(after, at);
+        const model::ContextPoint* point = key ? after.context.find(*key) : nullptr;
+        return who + verb + (command == "key.set" ? " the new key" : " the key") + " at bar " +
+               barOf(at) + (point ? ": " + model::keyWords(*point) : std::string());
+    }
+    return who + verb + (command == "chord.set" ? " the new chord" : " the chords") + " at bar " +
+           barOf(at);
+}
+
+std::string bakeNotice(const std::string& name, std::size_t notes, int passes, bool unrolled) {
+    if (unrolled)
+        return name + " baked: its " + std::to_string(passes) +
+               " passes written out, each as it sounds";
+    return name + " baked: " + std::to_string(notes) + (notes == 1 ? " note" : " notes") +
+           " written as " + (notes == 1 ? "it sounds" : "they sound");
+}
+
+namespace {
+
+// A key point's words, short (a launcher cell, an item's name bar): "Dm",
+// "G", "D dor", "A hm"; "" when the point is missing or unreadable.
+std::string shortKey(const model::ContextPoint* p) {
+    const auto key = p ? model::parseKey(*p) : std::nullopt;
+    if (!key) return {};
+    using S = harmony::Scale;
+    std::string text = harmony::printPitchClass(key->tonic);
+    switch (key->scale) {
+        case S::Major:
+            break;
+        case S::Minor:
+            text += "m";
+            break;
+        case S::HarmonicMinor:
+            text += " hm";
+            break;
+        case S::MelodicMinor:
+            text += " mm";
+            break;
+        case S::MajorPentatonic:
+            text += " pent";
+            break;
+        case S::MinorPentatonic:
+            text += "m pent";
+            break;
+        default:  // dorian, phrygian, ...: the mode's first three letters
+            text += " " + std::string(harmony::scaleName(key->scale).substr(0, 3));
+    }
+    return text;
+}
+
+}  // namespace
+
+std::string clipKeyMark(const model::Clip& clip) {
+    const std::string text = shortKey(model::keyPointAt(clip, 0));
+    if (text.empty()) return {};
+    return (clip.follow != model::ClipFollow::None ? std::string(kFollowMark) : std::string()) +
+           text;
+}
+
+std::string takeFollowMark(const model::Take& take) {
+    if (take.follow == model::ClipFollow::None) return {};
+    // The take's key where its content starts: its first, before any point.
+    const std::string text = shortKey(
+        model::contextKeyPointAt(take.context, model::contextBeatOf(take, take.startOffset)));
+    return std::string(kFollowMark) + text;
 }
 
 bool launchRefused(const model::Session& s, const model::Clip& clip) {
@@ -185,6 +501,12 @@ LauncherPane::LauncherPane(ArrangeView& view, peaks::PeakService& peaks, Resolve
     interactive = true;
     clipsChildren = true;
     drawsGl = true;
+}
+
+float LauncherPane::keyStrip(const ui::Rect& body, const std::string& keyMark) {
+    // A body too low to keep a preview over it shows no key.
+    if (keyMark.empty() || body.h < 2 * kKeyStrip) return 0;
+    return kKeyStrip;
 }
 
 ui::Rect LauncherPane::bodyRect(const ui::Rect& cell) {
@@ -360,6 +682,18 @@ void LauncherPane::paint(ui::Canvas& c) {
                 drawPlaying(c, {name.x + 1, name.y, 14, name.h});
             else
                 drawPlay(c, {name.x + 1, name.y, 14, name.h}, t.color("ink").withAlpha(dim));
+            // The clip's own key in a strip at the foot of the body, under the
+            // preview (keyStrip), right-aligned, kFollowMark before it when it follows.
+            const std::string keyMark = clipKeyMark(*clip);
+            const ui::Rect body = bodyRect(cell);
+            const float strip = keyStrip(body, keyMark);
+            if (strip > 0)
+                c.text({body.x + 2, body.bottom() - strip, body.w - 4, strip}, keyMark,
+                       ui::Font::Ui, caption,
+                       t.color(clip->follow != model::ClipFollow::None ? "ink" : "ink-quiet")
+                           .withAlpha(dim),
+                       ui::kRight | ui::kMiddle);
+            stats.keys.push_back(strip > 0 ? keyMark : std::string());
             std::string label = clip->name.empty() ? id->str() : clip->name;
             const std::string fit =
                 c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
@@ -450,12 +784,13 @@ void LauncherPane::paintGl(const ui::GlFrame& frame) {
         if (row.lane() || row.type != model::StripType::Channel) continue;
         for (std::size_t col = 0; col < cols.scenes.size(); ++col) {
             ui::Rect body = bodyRect(cellRect(i, col));
-            // Cut at the Arr column; a cell scrolled out of view is skipped.
-            body.w = std::min(body.right(), cols.scenesRight()) - body.x;
-            if (body.w <= 2 || body.h < 4 || body.right() <= bounds().x) continue;
             const auto id = clipIn(s, row.track, cols.scenes[col]);
             const model::Clip* c = id ? s.clips.find(*id) : nullptr;
             if (!c || c->length <= 0 || !c->activeTake) continue;
+            body.h -= keyStrip(body, clipKeyMark(*c));  // the key's strip, under the preview
+            // Cut at the Arr column; a cell scrolled out of view is skipped.
+            body.w = std::min(body.right(), cols.scenesRight()) - body.x;
+            if (body.w <= 2 || body.h < 4 || body.right() <= bounds().x) continue;
             const model::Take* take = s.takes.find(*c->activeTake);
             if (!take || !take->source) continue;
             const float dim = c->mute || launchRefused(s, *c) ? 0.45f : 1.0f;

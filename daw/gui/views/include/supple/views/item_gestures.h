@@ -87,8 +87,16 @@ class ItemGestures {
     std::function<void(const std::vector<model::Id>&)> onSelection;  // after every change
     std::function<void(model::Id item)> onOpenMidi;                  // double-click on a MIDI item
     std::function<void(model::Id take)> onTakeFx;  // the item menu's Take FX… (the app's FX window)
-    std::function<void(double seconds)> onSeek;    // a click on empty space
-    std::function<void(const Error&)> onError;     // a refused gesture (status line)
+    // The Item menu's take entries for a MIDI take (ADR-0098 amended): Play as
+    // written and Follow the song's key or chords (take.set {follow}, the
+    // app's takeFollowArgs), greyed with followRefusal's words when the take
+    // cannot follow; and Bake into notes (take.bake) on the selected items
+    // whose heard take follows.
+    std::function<void(model::Id item, model::ClipFollow follow)> onFollow;
+    std::function<std::optional<std::string>(model::Id item)> followRefusal;
+    std::function<void(const std::vector<model::Id>& items)> onBake;
+    std::function<void(double seconds)> onSeek;  // a click on empty space
+    std::function<void(const Error&)> onError;   // a refused gesture (status line)
     // The keys bound to an app action ("Ctrl+C"), shown in the menus.
     std::function<std::string(std::string_view action)> keysFor;
     // REAPER's default: a move, copy or trim that makes two items overlap on a

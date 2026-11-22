@@ -10,18 +10,24 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <set>
 
+#include "clip_context.h"
+#include "clip_follow.h"
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "command_validation.h"
 #include "file_platform.h"
+#include "heard_midi.h"
 #include "media_files.h"
 #include "recording.h"
 #include "supple/audio/audio_file.h"
 #include "supple/base/sha256.h"
 #include "supple/engine/app.h"
+#include "supple/model/follow.h"
 #include "supple/model/schemas.h"
+#include "supple/model/source_mapping.h"
 #include "supple/model/take_owner.h"
 
 namespace supple::engine {
@@ -146,7 +152,42 @@ struct TakeSetArgs {
     std::optional<model::ChannelMode> channelMode;
     std::optional<std::string> name, pitchMode;
     std::optional<bool> preservePitch;
+    std::optional<std::string> context;       // lead-sheet text in the take's bars; "" clears
+    std::optional<model::ClipFollow> follow;  // none | key | chords
 };
+
+// One heard note as a bake wrote it: the pitch it was written as, where it is heard (in 1/960
+// beats of the song) and the pitch it sounded as.
+struct BakedPitch {
+    std::int64_t was = 0, at = 0, pitch = 0;
+};
+struct TakeBakeArgs {
+    std::string take;
+    // What history records, so a replay on another branch writes what the user heard: each heard
+    // note, in `soundingNotes` order, with the note it was written as and where. A replay that
+    // finds other notes there is refused (take.bake_replay). Leave it out: the command reads it.
+    std::optional<std::vector<BakedPitch>> pitches;
+};
+struct TakeBakeResult {
+    detail::FollowedInfo followed;
+    bool unrolled = false;
+};
+
+schema::Schema<TakeBakeArgs> takeBakeArgsSchema() {
+    return schema::object<TakeBakeArgs>("take_bake_args")
+        .field("take", &TakeBakeArgs::take, idArg("tk", "Take"))
+        .field(
+            "pitches", &TakeBakeArgs::pitches,
+            schema::arrayOf(schema::object<BakedPitch>("baked_pitch")
+                                .field("was", &BakedPitch::was, schema::integer().range(0, 127))
+                                .field("at", &BakedPitch::at, schema::integer())
+                                .field("pitch", &BakedPitch::pitch, schema::integer().range(0, 127))
+                                .build())
+                .doc("Recorded by history, not given: each heard note's written pitch, where "
+                     "it is heard and the pitch it sounded as, so a replay writes what was "
+                     "heard. A replay that finds other notes is take.bake_replay."))
+        .build();
+}
 
 struct TakeEntry {
     std::string id, name, source;
@@ -242,7 +283,8 @@ schema::Schema<RecordCommitArgs> recordCommitSchema() {
 // `position` (required), shaped by the conversion rule, its own envelopes
 // converted in place; the clip goes with its last take.
 Result<ItemResult> extractFromClip(EngineApp& app, const model::Session& s,
-                                   const TakeExtractArgs& a, Id take, Id clipId) {
+                                   const TakeExtractArgs& a, Id take, Id clipId,
+                                   std::vector<model::ClipContextNote>& fitNotes) {
     if (!a.position)
         return Error("take.position", "a clip's take needs a position on the timeline", "/position",
                      "give position in beats, e.g. {\"position\": 16}");
@@ -257,6 +299,12 @@ Result<ItemResult> extractFromClip(EngineApp& app, const model::Session& s,
     convertTakeFxEnvelopes(t, s, take, shaped->fxEnvelope);  // onto the timeline (C2)
     shaped->item.takes = {take};
     shaped->item.activeTake = take;
+    // The take is laid as placement lays a clip: it gets the clip's context in its own beats and
+    // the clip's follow (ADR-0098, following is playback); a clip with none leaves it as it is.
+    if (clip.kind == model::ClipKind::Midi && !clip.context.empty())
+        t.modify<model::Take>(take, [&](model::Take& k) {
+            fitNotes = model::takeContextFromClip(k, clip, 0.0, clip.follow);
+        });
     if (clip.takes.size() == 1) {
         t.remove<model::Clip>(clipId);
     } else {
@@ -341,6 +389,9 @@ void registerTakeCommands(cmd::Registry& registry) {
                 auto takeSource = dangling<model::Take>(s, *source, "/from");
                 if (!takeSource) return std::move(takeSource).error();
                 copy = **takeSource;
+                // A clip's takes hold none of the four; an item's copy keeps them (ADR-0098).
+                if (item->kind == model::Kind::Clip)
+                    model::fitTakeContext(copy, model::TakeHome::Clip);
                 unpoolCopiedSource(copy, s, app(ctx).txn());
                 copy.chain.clear();
                 for (Id fx : (*takeSource)->chain) {
@@ -414,7 +465,7 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.name = "take.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set a take's gain, pan, channel mode, name, offset, playrate or pitch.";
+        c.summary = "Set a take's gain, pan, name, rate, pitch, context, follow and more.";
         c.tags = {"take"};
         c.args =
             schema::object<TakeSetArgs>("take_set_args")
@@ -458,6 +509,21 @@ void registerTakeCommands(cmd::Registry& registry) {
                            {{"resample", "resample"}, {"signalsmith", "signalsmith"}})
                            .doc("Time-stretch algorithm: \"signalsmith\" (pitch-preserving, "
                                 "the default) or \"resample\" (varispeed)."))
+                .field("context", &TakeSetArgs::context,
+                       schema::string().doc(
+                           "A MIDI take's lead sheet, as context.write's text: bars of the meter "
+                           "at its item's position, bar 1 at context beat 0, in context beats (the "
+                           "take's playrate does not scale them); \"\" clears it. A point at or "
+                           "past the context's period is take.context_range."))
+                .field(
+                    "follow", &TakeSetArgs::follow,
+                    schema::enumeration<model::ClipFollow>({{model::ClipFollow::None, "none"},
+                                                            {model::ClipFollow::Key, "key"},
+                                                            {model::ClipFollow::Chords, "chords"}})
+                        .doc("How the take's notes sound against the project's context (ADR-0098, "
+                             "following is playback): none plays them as written, key or chords "
+                             "maps them as they play. Needs a MIDI take with a readable key in "
+                             "its context. The notes stay as written; take.bake writes them."))
                 .build();
         c.result = emptySchema();
         c.examples = {
@@ -468,7 +534,23 @@ void registerTakeCommands(cmd::Registry& registry) {
             {"Half speed, pitch kept", j(R"({"take":"tk_1","playrate":0.5})"), j("{}"),
              "song_with_item"},
             {"An octave up, same tempo", j(R"({"take":"tk_1","pitch":12})"), j("{}"),
+             "song_with_item"},
+            {"Follow the project's key, the take written in A minor",
+             j(R"({"take":"tk_1","context":"1: key A minor ~:w","follow":"key"})"), j("{}"),
              "song_with_item"}};
+        c.errors = {
+            {"take.no_key", "follow needs a key in the take's context",
+             "give the take a context with a key: take.set {context: \"1: key D minor ~:w\"}"},
+            {"take.follow_audio", "a take that is not MIDI holds no context or follow",
+             "set context and follow on a MIDI take (take.list shows each take's source), or leave "
+             "them out"},
+            {"take.in_clip", "a clip's take holds no context or follow",
+             "the clip's context and follow are the clip's: clip.set {context, follow}"},
+            {"take.context_syntax",
+             "the lead sheet text could not be read (syntax, bar order, bar length or length)",
+             "write bars as context.write does, e.g. \"1: key A minor {Am}:w\""},
+            {"take.context_range", "a point lies at or past the context's period",
+             "move it earlier, inside the period"}};
         c.run = [](const TakeSetArgs& a, Context& ctx) -> Result<Empty> {
             auto id = existing<model::Take>(app(ctx).view(), a.take, "/take");
             if (!id) return std::move(id).error();
@@ -477,6 +559,55 @@ void registerTakeCommands(cmd::Registry& registry) {
                 return Error("take.offset", "choose one source-position edit", "/rebase_seconds",
                              "supply rebase_seconds or start_offset, not both");
             const auto* original = app(ctx).view().takes.find(*id);
+            // The take's context and follow (ADR-0098, following is playback): worked out first
+            // on a copy, so every refusal comes before any change.
+            std::optional<model::Take> shaped;
+            std::vector<model::ClipContextNote> fitNotes;
+            if (a.context || a.follow) {
+                const model::Session& view = app(ctx).view();
+                const auto owner = model::takeOwner(view, *id);
+                if (owner && owner->kind == model::Kind::Clip)
+                    return Error("take.in_clip",
+                                 a.take + " belongs to a clip, which holds no context",
+                                 a.context ? "/context" : "/follow",
+                                 "a clip's context and follow are the clip's: clip.set {context, "
+                                 "follow}");
+                if (!model::takeIsMidi(*original))
+                    return Error("take.follow_audio",
+                                 a.take + " is not a MIDI take, so it holds no context or follow",
+                                 a.context ? "/context" : "/follow",
+                                 "context and follow apply to MIDI takes");
+                shaped = *original;
+                if (a.context) {
+                    std::optional<double> start;
+                    if (owner)
+                        if (const model::Item* it = view.items.find(*owner))
+                            start = model::itemSpan(view, *it).startBeat;
+                    const auto map = detail::takeBarMap(view, start);
+                    auto points = detail::takeContextFromText(map, *a.context,
+                                                              original->contextPeriod, "/context");
+                    if (!points) return std::move(points).error();
+                    shaped->context = std::move(*points);
+                    // The text's bar 1 is the item's start: the context beat there is 0, so the
+                    // phase cancels the offset (a part cut from a longer take starts inside it).
+                    shaped->contextPhase =
+                        -(a.startOffset ? *a.startOffset : original->startOffset);
+                    // `""` clears the context whole: no points, no period, no phase.
+                    if (shaped->context.empty()) {
+                        shaped->contextPeriod.reset();
+                        shaped->contextPhase = 0;
+                    }
+                }
+                if (a.follow) {
+                    shaped->follow = *a.follow;
+                    if (*a.follow != model::ClipFollow::None && !model::takeCanFollow(*shaped))
+                        return Error("take.no_key", a.take + " has no readable key to follow",
+                                     "/follow",
+                                     "give the take a context with a key: take.set {context: "
+                                     "\"1: key D minor ~:w\"}");
+                }
+                fitNotes = model::fitTakeContext(*shaped, model::TakeHome::Item);
+            }
             const bool validWarp = !original->stretchMarkers.empty() &&
                                    static_cast<bool>(model::validateWarpMap(*original));
             app(ctx).txn().modify<model::Take>(*id, [&](model::Take& tk) {
@@ -490,12 +621,268 @@ void registerTakeCommands(cmd::Registry& registry) {
                 if (a.preservePitch) tk.preservePitch = *a.preservePitch;
                 if (a.pitch) tk.pitch = *a.pitch;
                 if (a.pitchMode) tk.pitchMode = *a.pitchMode;
+                if (shaped) {
+                    tk.context = shaped->context;
+                    tk.contextPeriod = shaped->contextPeriod;
+                    tk.contextPhase = shaped->contextPhase;
+                    tk.follow = shaped->follow;
+                }
             });
+            for (const auto& n : fitNotes)
+                ctx.warn(n.code, n.message, n.code == "take.follow_reset" ? "/follow" : "/context");
             if (validWarp)
                 SUPPLE_TRY(model::validateWarpMap(*app(ctx).view().takes.find(*id), "/take"));
             if (const auto owner = model::takeOwner(app(ctx).view(), *id))
                 SUPPLE_TRY(checkOwnerMemory(app(ctx), *owner, "/take"));
             return Empty{};
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<TakeBakeArgs, TakeBakeResult> c;
+        c.name = "take.bake";
+        c.kind = Kind::Edit;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "Write a following take's sounding pitches into its notes, and stop following.";
+        c.description =
+            "A take that follows the project's key or chords stores its notes as written and maps "
+            "them as they sound. take.bake writes what sounds into the notes and sets follow to "
+            "none and replaces the take's context with the song's under the item (what the notes "
+            "are written in now; none when the song has no key there), so turning follow on "
+            "again sounds as before and moves with a later song edit; a render after equals the "
+            "render before. A pooled source is first made the take's own copy. When every pass of "
+            "a "
+            "looped item sounds alike the loop stays; otherwise the item is unrolled (loop off, "
+            "its passes written out, each note at its place, its other takes repeated alike) and "
+            "the answer says unrolled: true. followed is what was baked, as item.add's. Errors: "
+            "take.not_following (follow is none), take.not_active (the take is not its item's "
+            "active take: what sounds is the active take's). One undo step. pitches is recorded by "
+            "history, not given.";
+        c.tags = {"take", "midi"};
+        c.examples = {{"Write what sounds into the notes", j(R"({"take":"tk_1"})"),
+                       j(R"({"followed":"<any>","unrolled":false})"), "song_following"}};
+        c.args = takeBakeArgsSchema();
+        c.result = schema::object<TakeBakeResult>("take_bake_result")
+                       .field("followed", &TakeBakeResult::followed, detail::followedSchema())
+                       .field("unrolled", &TakeBakeResult::unrolled, schema::boolean())
+                       .build();
+        c.errors = {
+            {"take.not_following", "the take's follow is none: its notes sound as written",
+             "set follow first (take.set {follow: \"key\"}), or there is nothing to bake"},
+            {"take.not_active", "the take is not its item's active take",
+             "take.activate it first: what sounds is the active take's"},
+            {"take.bake_replay", "the recorded pitches do not match the heard notes",
+             "run take.bake without pitches"},
+            {"take.source", "the take's MIDI source is missing", "undo to a version that has it"}};
+        c.run = [](const TakeBakeArgs& a, Context& ctx) -> Result<TakeBakeResult> {
+            EngineApp& engine = app(ctx);
+            const model::Session s = engine.view();
+            auto id = existing<model::Take>(s, a.take, "/take");
+            if (!id) return std::move(id).error();
+            SUPPLE_TRY(checkUnlockedTake(s, *id, "/take"));
+            const model::Take* tk = s.takes.find(*id);
+            const auto owner = model::takeOwner(s, *id);
+            if (tk->follow == model::ClipFollow::None || !owner || owner->kind != model::Kind::Item)
+                return Error("take.not_following",
+                             a.take + " does not follow: it sounds as written", "/take",
+                             "set follow first (take.set {follow: \"key\"}), or there is nothing "
+                             "to bake");
+            const model::Item& item = *s.items.find(*owner);
+            if (item.activeTake != *id)
+                return Error("take.not_active",
+                             a.take + " is not the active take of " + owner->str() +
+                                 ": what sounds is the active take's",
+                             "/take", "take.activate it first, then bake");
+            const model::MidiSource* source = s.midi.find(*tk->source);
+            if (!source)
+                return Error("take.source", "the take's MIDI source is missing", "/take",
+                             "undo to a version that has it");
+            const midi::Sequence& seq = source->sequence;
+            const double itemStart = model::itemSpan(s, item).startBeat;
+            const double itemBeats = model::itemLengthBeats(s, item);
+
+            // What sounds, and the answer, read before anything is written.
+            const auto heard = model::soundingNotes(s, *owner, -1e18, 1e18);
+            std::vector<detail::ClipNote> notes;
+            TakeBakeResult result;
+            result.followed = detail::followedBlock(s, *owner, "/take", notes);
+            std::vector<BakedPitch> baked;
+            baked.reserve(heard.size());
+            for (const auto& h : heard)
+                baked.push_back({h.written, std::llround(std::max(h.songBeat, itemStart) * 960.0),
+                                 h.channel == 9 ? h.written : h.sounds.pitch});
+            if (a.pitches) {
+                // A replay writes what the user heard, if these are the notes it heard.
+                bool same = a.pitches->size() == heard.size();
+                for (std::size_t k = 0; same && k < heard.size(); ++k)
+                    same = (*a.pitches)[k].was == baked[k].was && (*a.pitches)[k].at == baked[k].at;
+                if (!same)
+                    return Error("take.bake_replay",
+                                 "the notes heard here are not the notes the bake was recorded "
+                                 "over (" +
+                                     std::to_string(a.pitches->size()) + " recorded, " +
+                                     std::to_string(heard.size()) + " sound here)",
+                                 "/pitches", "run take.bake without pitches");
+                baked = *a.pitches;
+            }
+            std::vector<std::int64_t> sounded;
+            sounded.reserve(baked.size());
+            for (const BakedPitch& b : baked) sounded.push_back(b.pitch);
+            // The pitch each note keeps, and whether every pass and every fragment held into
+            // the item's start sounds as the note keeps (else the item is written out).
+            const model::LeadPitches lead =
+                model::leadPitches(heard, sounded, itemStart, seq.notes.size());
+            const auto& keep = lead.keep;
+            const bool alike = lead.alike && lead.fragmentsAlike;
+            auto& txn = engine.txn();
+            // The take's own copy of a pooled source; the pooled original goes when no take
+            // reads it any more (checked at the end).
+            std::vector<Id> replaced;
+            Id sourceId = *tk->source;
+            if (source->pooled) {
+                model::MidiSource own = *source;
+                own.pooled = false;
+                sourceId = txn.create(std::move(own));
+                txn.modify<model::Take>(*id, [&](model::Take& k) { k.source = sourceId; });
+                replaced.push_back(*tk->source);
+            }
+            std::vector<model::ClipContextNote> fitNotes;
+            if (alike) {
+                txn.modify<model::MidiSource>(sourceId, [&](model::MidiSource& m) {
+                    for (std::size_t i = 0; i < m.sequence.notes.size() && i < keep.size(); ++i)
+                        if (keep[i] && m.sequence.notes[i].channel != 9)
+                            m.sequence.notes[i].pitch = static_cast<std::uint8_t>(*keep[i]);
+                    m.sequence.canonicalize();
+                });
+            } else {
+                // A pass or a fragment sounds differently from another: the item is written out
+                // note by note, each at its place, with the loop off (a render after equals
+                // the render before).
+                midi::Sequence out;
+                out.ppq = seq.ppq;
+                out.length = std::llround(itemBeats * seq.ppq);
+                detail::heardMidi(s, item, *tk, seq, 0.0, out);  // controls and sysex, placed
+                out.notes = model::soundingNoteList(s, *owner, seq.ppq, &sounded);
+                out.canonicalize();
+                txn.modify<model::MidiSource>(
+                    sourceId, [&](model::MidiSource& m) { m.sequence = std::move(out); });
+                // The other takes are laid out alike, by plain repetition, so every take keeps
+                // the item's length and loop state.
+                for (const Id other : item.takes) {
+                    if (other == *id) continue;
+                    const model::Take* ot = s.takes.find(other);
+                    const model::MidiSource* os =
+                        ot && ot->source && ot->source->kind == model::Kind::Midi
+                            ? s.midi.find(*ot->source)
+                            : nullptr;
+                    if (!os) continue;
+                    midi::Sequence plain;
+                    plain.ppq = os->sequence.ppq;
+                    detail::heardMidi(s, item, *ot, os->sequence, 0.0, plain);
+                    plain.length = std::llround(itemBeats * plain.ppq);
+                    plain.canonicalize();
+                    Id target = *ot->source;
+                    if (os->pooled) {  // a pooled source of the other take: its own copy too
+                        model::MidiSource own = *os;
+                        own.pooled = false;
+                        target = txn.create(std::move(own));
+                        txn.modify<model::Take>(other, [&](model::Take& k) { k.source = target; });
+                        replaced.push_back(*ot->source);
+                    }
+                    txn.modify<model::MidiSource>(
+                        target, [&](model::MidiSource& m) { m.sequence = std::move(plain); });
+                }
+                // Each take's offset and rate go back to 0 and 1 with the context rescaled to
+                // match, so every written note keeps its context beat (display, and any follow
+                // that is turned on again); the rescaled context is made fit (on the grid).
+                for (const Id takeId : item.takes) {
+                    const model::Take* t0 = s.takes.find(takeId);
+                    if (!t0 || !model::takeIsMidi(*t0)) continue;
+                    const double rate = t0->playrate > 0 ? t0->playrate : 1.0;
+                    txn.modify<model::Take>(takeId, [&](model::Take& k) {
+                        for (model::ContextPoint& p : k.context) p.beat /= rate;
+                        if (k.contextPeriod) *k.contextPeriod /= rate;
+                        k.contextPhase = (k.contextPhase + k.startOffset) / rate;
+                        k.startOffset = 0;
+                        k.playrate = 1.0;
+                        for (auto& n : model::fitTakeContext(k, model::TakeHome::Item))
+                            fitNotes.push_back(std::move(n));
+                    });
+                }
+                txn.modify<model::Item>(*owner, [](model::Item& it) { it.loop = false; });
+                result.unrolled = true;
+            }
+            // The take now says what its notes are written in: the song's context under the
+            // item, from where the earliest heard note sounds, on the take's axis after the bake
+            // (a note's place is its song distance from there times the rate), period dropped.
+            {
+                const double rateAfter =
+                    result.unrolled ? 1.0 : (tk->playrate > 0 ? tk->playrate : 1.0);
+                const double offsetAfter = result.unrolled ? 0.0 : tk->startOffset;
+                double from = itemStart;
+                if (!result.unrolled)
+                    for (const auto& h : heard) from = std::min(from, h.songBeat);
+                const detail::ContextTaken taken =
+                    detail::contextUnder(s, from, itemStart + itemBeats - from, false);
+                bool key = false;
+                for (const model::ContextPoint& p : taken.points)
+                    key |= p.type == model::ContextType::Key;
+                for (const detail::ClipNote& n : detail::unreadableNotes(taken, "/take"))
+                    ctx.warn(n.code, n.message, n.path);
+                txn.modify<model::Take>(*id, [&](model::Take& k) {
+                    k.context.clear();
+                    k.contextPeriod.reset();
+                    k.contextPhase = 0;
+                    if (!key) return;
+                    // On the source axis (phase 0), where the notes' starts are on the grid:
+                    // a song beat s is the context beat offset + (s - item start) x rate. Each
+                    // point is rounded UP to the 1/960 grid (less the slack a place is read
+                    // with), so a note on the grid is before it exactly when it is before the
+                    // song's change; rounding to the nearest could put a note a hair before a
+                    // change into the new key.
+                    k.context = taken.points;
+                    for (model::ContextPoint& p : k.context) {
+                        const double u = offsetAfter + (from + p.beat - itemStart) * rateAfter;
+                        p.beat = std::max(
+                            0.0, std::ceil((u - model::kPlaceSlack * rateAfter) * 960.0) / 960.0);
+                    }
+                    // Points of a type that round onto one beat (a rate below 1 spreads song
+                    // beats 1/960 apart over less than a grid step): every note at or after
+                    // that beat is past all of them in the song, so the last one is the one
+                    // it reads. The fit keeps the first of two, so drop the earlier ones here.
+                    std::map<std::pair<int, double>, std::size_t> last;
+                    for (std::size_t i = 0; i < k.context.size(); ++i)
+                        last[{static_cast<int>(k.context[i].type), k.context[i].beat}] = i;
+                    std::size_t at = 0;
+                    k.context.erase(
+                        std::remove_if(k.context.begin(), k.context.end(),
+                                       [&](const model::ContextPoint& p) {
+                                           const std::size_t i = at++;
+                                           return last[{static_cast<int>(p.type), p.beat}] != i;
+                                       }),
+                        k.context.end());
+                    for (auto& n : model::fitTakeContext(k, model::TakeHome::Item))
+                        fitNotes.push_back(std::move(n));
+                });
+            }
+            // A pooled original that no take reads now goes.
+            const model::Session after = txn.preview();
+            for (const Id old : replaced) {
+                bool used = false;
+                for (const auto& t : after.takes) used |= t.value->source == old;
+                if (!used) txn.remove<model::MidiSource>(old);
+            }
+            for (const auto& n : fitNotes) ctx.warn(n.code, n.message, "/take");
+            txn.modify<model::Take>(*id,
+                                    [](model::Take& k) { k.follow = model::ClipFollow::None; });
+            // History records the notes it wrote over, and the pitches.
+            if (!a.pitches) {
+                TakeBakeArgs resolved = a;
+                resolved.pitches = std::move(baked);
+                ctx.setResolvedArgs(takeBakeArgsSchema().encode(resolved));
+            }
+            for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
+            return result;
         };
         addChecked(registry, std::move(c));
     }();
@@ -642,8 +1029,12 @@ void registerTakeCommands(cmd::Registry& registry) {
             auto item = ownerOfTake(s, *take, "/take");
             if (!item) return std::move(item).error();
             SUPPLE_TRY(checkUnlocked(s, *item, "/take"));
-            if (item->kind == model::Kind::Clip)
-                return extractFromClip(app(ctx), s, a, *take, *item);
+            if (item->kind == model::Kind::Clip) {
+                std::vector<model::ClipContextNote> fitNotes;
+                auto done = extractFromClip(app(ctx), s, a, *take, *item, fitNotes);
+                for (const auto& n : fitNotes) ctx.warn(n.code, n.message, "/take");
+                return done;
+            }
             auto track =
                 itemTrack(s, a.track.value_or(s.items.find(*item)->track.str()), "/track", {*take});
             if (!track) return std::move(track).error();

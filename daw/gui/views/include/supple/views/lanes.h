@@ -9,10 +9,12 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
 #include <vector>
 
+#include "supple/model/follow.h"
 #include "supple/model/session.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/gl.h"
@@ -106,8 +108,16 @@ class Lanes : public ui::Node {
     friend class LaneLabels;
     void drawAudio(const ui::GlFrame& frame, const ui::Rect& r, const model::Item& item,
                    const model::Take& take, const model::MediaSource& source, std::uint32_t rgba);
+    // `heard`: the item's id when `take` is its active take, which a
+    // following take draws where it sounds (model::soundingNotes).
     void drawMidi(const ui::Rect& r, const model::Item& item, const model::Take& take,
-                  const model::MidiSource& source, std::uint32_t rgba, std::uint32_t border);
+                  const model::MidiSource& source, std::uint32_t rgba, std::uint32_t border,
+                  std::optional<model::Id> heard = std::nullopt);
+    // A following take's heard notes, by item, for the session version they
+    // were read at (a context edit moves them without touching the item).
+    const std::vector<model::SoundingNote>& soundingOf(model::Id item);
+    std::uint64_t soundingVersion_ = ~std::uint64_t{0};
+    std::map<model::Id, std::vector<model::SoundingNote>> sounding_;
     void drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t rgba,
                    std::uint32_t shade);
     void drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r);

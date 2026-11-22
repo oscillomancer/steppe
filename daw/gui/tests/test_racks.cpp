@@ -21,6 +21,7 @@
 
 #include "app_actions.h"
 #include "floating_panel.h"
+#include "mod_source.h"
 #include "plugin_scales.h"
 #include "rack_device.h"
 #include "rack_engine.h"
@@ -2512,6 +2513,81 @@ TEST_CASE("rack window: every stock module's face, at 100 %") {
         const std::string name = "rack-faces-" + std::to_string(i + 1) + ".png";
         f.snapshot(name.c_str());
     }
+}
+
+TEST_CASE("modulation: a route's source is named, and shown picked in the rack window") {
+    // gui.md §2: the module cabled into the route's Mod Out input, else
+    // "Mod N"; ui.modulation.source opens the rack on it.
+    Fixture f;
+    if (!f.ok) return;
+    const std::string a =
+        f.exec("track.add", R"({"type":"channel","name":"A"})")["track"].asString();
+    json::Value made = f.exec(
+        "modulate", R"({"target":{"track":")" + a + R"(","param":"volume"},"source":"lfo"})");
+    const auto rack = *model::Id::parse(made["rack"].asString());
+    const auto modOut = *model::Id::parse(made["mod_out"].asString());
+    const auto lfo = *model::Id::parse(made["module"].asString());
+    const auto first = *model::Id::parse(made["modulation"].asString());
+    const auto second = *model::Id::parse(
+        f.exec("modulation.add", R"({"source":{"module":")" + modOut.str() +
+                                     R"(","input":"in_3"},"target":{"track":")" + a +
+                                     R"(","param":"volume"},"depth":3})")["modulation"]
+            .asString());
+    const auto catalog = gui::racks::catalog(*f.app);
+    const model::Session s = f.app->head();
+    CHECK(gui::modSourceName(s, catalog.get(), first) == "LFO");
+    CHECK(gui::modSourceName(s, catalog.get(), second) == "Mod 3");
+    CHECK(gui::modRouteLabel(s, catalog.get(), first) == "LFO (" + model::rackLabel(s, rack) + ")");
+    const auto view = gui::modSourceView(s, first);
+    REQUIRE(view);
+    CHECK(view->rack == rack);
+    CHECK(view->modules == std::set<model::Id>{modOut, lfo});
+    CHECK(gui::modSourceView(s, second)->modules == std::set<model::Id>{modOut});
+    // The menu rows: one per route, named by source when there are several.
+    const model::EnvTarget volume{*model::Id::parse(a), "volume"};
+    auto rows = gui::modSourceItems(*f.actions, s, catalog.get(), volume);
+    REQUIRE(rows.size() == 2);
+    CHECK(rows[0].label == "Show modulation source: LFO (" + model::rackLabel(s, rack) + ")");
+    CHECK(rows[1].label == "Show modulation source: Mod 3 (" + model::rackLabel(s, rack) + ")");
+    CHECK(gui::modSourceItems(*f.actions, s, catalog.get(), {volume.object, "pan"}).empty());
+    // A row runs ui.modulation.source: the rack window opens on the rack with
+    // the source and its Mod Out picked, in view.
+    f.actions->addUiFor("ui.modulation.source", "Modulation: show source", "modulation",
+                        [&](const json::Value& v) -> Status {
+                            return f.racks->showModulationSource(*model::Id::parse(v.asString()));
+                        });
+    rows[0].run();
+    f.frame();
+    REQUIRE(f.racks->isOpen());
+    CHECK(f.racks->rack() == rack);
+    CHECK(f.racks->space()->selection() == std::set<model::Id>{modOut, lfo});
+    f.snapshot("rack-modulation-source.png");
+    const ui::Rect seen = f.racks->space()->visibleSpace();
+    for (const auto& m : f.racks->space()->scene().modules)
+        if (m.id == lfo || m.id == modOut) {
+            CHECK(seen.contains({m.rect().x, m.rect().y}));
+            CHECK(seen.contains({m.rect().right(), m.rect().bottom()}));
+        }
+    // A lane's "mod" with two routes: a menu of them.
+    gui::openModSource(*f.root, *f.actions, f.app->head(), catalog.get(), volume, {10, 10, 1, 1});
+    ui::Node* menu = f.root->find("modulation.source.menu");
+    REQUIRE(menu);
+    CHECK(ui::menuItems(*menu).size() == 2);
+    f.root->closePopups();
+    // One route alone is one click: its source at once, no menu.
+    f.exec("modulation.remove", R"({"modulation":")" + second.str() + R"("})");
+    rows = gui::modSourceItems(*f.actions, f.app->head(), catalog.get(), volume);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows[0].label == "Show modulation source");
+    f.racks->close();
+    f.frame();
+    gui::openModSource(*f.root, *f.actions, f.app->head(), catalog.get(), volume, {10, 10, 1, 1});
+    f.frame();
+    CHECK_FALSE(f.root->find("modulation.source.menu"));
+    REQUIRE(f.racks->isOpen());
+    CHECK(f.racks->space()->selection() == std::set<model::Id>{modOut, lfo});
+    // A route that is gone is an error.
+    CHECK_FALSE(f.racks->showModulationSource(second));
 }
 
 TEST_CASE("modulation: the GUI's signal range agrees with modulation.list on real routes") {

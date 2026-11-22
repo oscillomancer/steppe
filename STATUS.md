@@ -135,7 +135,8 @@ instructions are in `docs/guides/installing.md`.
   pooled sharer in another key) are in; on a launcher clip they, and
   `midi.get`, read the clip's own context (ADR-0098, below). In the app
   (C3): key changes in the ruler's meter half and a chord row (shown with the
-  first chord, or by View > Chord row), both edited there (a key change's
+  first chord, or by View > Chord row; the last chord held to the project's
+  end), both edited there (a key change's
   flag drags to another beat, Alt-drag copies a chord); the piano roll's
   strip names the chords (a double-click edits them), its rows outside the
   key's scale are shaded, and its key button moves notes by scale degree
@@ -177,7 +178,7 @@ instructions are in `docs/guides/installing.md`.
   the oldest steps. Incremental unique-payload accounting measures only new or
   changed snapshots; ordinary commits and size queries reuse retained totals. Undo to an FX's initial unsaved settings restores its factory
   state while retaining the previous processing instance until plan retirement.
-  Project format `supple.project/2.20` with migration from
+  Project format `supple.project/2.21` with migration from
   1.x, autosave (unsaved projects too, recovered from File > Recover unsaved
   work… or at start, ADR-0078), crash recovery of recordings, a per-project
   UI sidecar.
@@ -213,16 +214,63 @@ instructions are in `docs/guides/installing.md`.
   on a clip read the clip's own context at the clip beat each note sounds,
   never the project's (defect D1 fixed). `item.add {clip}`, `scene.insert` and
   `arrangement.build` take `follow` (`none`, `key`, `chords`; default the
-  clip's own) and map a MIDI clip's notes by `harmony::follow` from the key or
-  chords it was written against to those under the item; the answer's
-  `followed` says how, by bar, and a looped item whose passes map differently
-  is laid out pass by pass (`unrolled`). Notes on channel 10 are copied, a clip
-  that cannot follow is copied with its reason, and `launch.commit` copies
-  what was heard and warns `context.mismatch` when a clip's key is not the
-  project's under it. Not built: a launched clip following live (X4:
-  `launch.clip` and `launch.scene` warn `launch.unfollowed`, and a launched
-  clip plays as written), `write_context` (X5). The roll shows and edits a
-  clip's context, and the clip inspector sets Follow (X3).
+  clip's own) and, as of X4d, lay the notes as written with the clip's context and `follow`
+  on each laid MIDI take (nothing is unrolled, and a pooled item may follow); the
+  answer's `followed` says how the notes sound, by bar, read from
+  `model::soundingNotes`. Notes on channel 10 are never mapped, a clip that cannot follow
+  is laid without following and says why, and `launch.commit` lays the notes as written with
+  each clip's context and the follow the plan used, warning `context.mismatch` only for a
+  clip played as written whose key (or, in the same key, chord) is not the project's under it. `scene.insert` and `arrangement.build` take
+  `write_context` (X5): the scenes' own harmony is written to the context
+  track under each section that has none. A launched clip follows live
+  (X4a): pitch rows pooled across the plan within a budget of 1024 pairs of
+  places per clip (past it a chords clip follows its key, then plays as
+  written, with `launch.follow_budget` from `launch.clip` and `launch.scene`
+  and in the plan's warnings), a note keeps the pitch of its start, a context
+  edit compiles while a clip or take follows, and `launch.state` gives each
+  track's `followed` and `follow_budget`. A laid take that follows sounds at
+  playback as `model::soundingNotes` maps it (X4c), so a clip launched and the
+  same clip laid sound the same. The roll shows and edits a clip's context,
+  and the clip inspector sets Follow (X3); the roll's sounding ghosts and the
+  take inspector's Follow are X4e (done: below). A clip or scene
+  laid from the clip launcher, or written by Capture (`launch.commit`'s
+  `mismatches`), says in the status line how its keys were followed or why a
+  clip was copied (`followed.mismatch` names what differs: a key or a chord); a
+  launcher cell shows its clip's key, marked "→" when the clip follows.
+- **Take context and follow** (ADR-0098 amended, "following is playback"; step
+  X4b the model, X4d the commands; session-model "Take context and follow", schema 2.21): a
+  MIDI take of an item carries `context`, `context_period`, `context_phase` and
+  `follow`, loaded and saved with every older file unchanged (the open drops a
+  point against the rules with `take.context_dropped` and resets a follow
+  without a readable key with `take.follow_reset`; a clip's takes and audio
+  takes hold none of the four). `model/follow.h` has a note's place (its context
+  beat is the take's phase plus its unwrapped source beat, so the context
+  travels with the notes), `soundingNotes`, `soundingKey`, `contextOver` and
+  `placeAt`. The commands (X4d) keep to the contract's table: `take.set
+  {context, follow}` (the lead sheet in bars of the meter at the item, errors
+  `take.no_key`, `take.follow_audio`, `take.in_clip`, `take.context_syntax`,
+  `take.context_range`), `take.bake` (writes what sounds, unrolls a looped item
+  whose passes differ, and takes the song's context under the item as its own,
+  `take.not_following`, `take.not_active`, records the notes it wrote over), `midi.get {sounding, from, to}` with `sounding_differs` and
+  `differs_by_pass` (`midi.sounding_clip` on a clip), `midi.edit` reading a following
+  take's own context (`acts_on: "written"`), `midi.write` keeping context and follow
+  (`follows`), `item.consolidate` (MIDI; what sounds is preserved and checked,
+  `item.follow_merge`), `take.extract` from a clip, `clip.add {item}` and
+  `scene.capture` (a following take's context becomes the clip's), `take.add`,
+  a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
+  `context.no_key` warning on every context edit, and `session.describe`. The
+  engine plays a take's `follow` (X4c, engine.md "Following at playback"). Not
+  built: `item.glue` is not registered. The GUI (X4e): a following
+  take's roll draws its notes where they sound with the written pitches outlined, and
+  a Written cell; the strip shows the song's chords and the take's, whose row is edited
+  as a clip's (`take.set {context}`); a degree drag steps the written pitch in the
+  take's key, as it sounds; the item carries "→D" and a thumbnail at the sounding
+  pitches; the inspector has Follow (None, Key, Chords; a take with no context takes
+  the song's under the item) and Bake, and says what the take was written in; the
+  Item menu has Play as written, Follow the song's key or chords and Bake into notes
+  (`ui.take.bake`); the status line words placement, a GUI key or chord edit that
+  moves following items, a bake, and a sounding-view drag that merges two written
+  pitches.
 - **Clip launcher, playing** (ADR-0097, step L2; engine.md §1.4.2):
   - Every channel's clips compile into its node as players, and
     `launch.clip`, `launch.scene`, `launch.stop` and `launch.arrangement`
@@ -306,14 +354,16 @@ instructions are in `docs/guides/installing.md`.
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;
-  - a double-click on an audio clip opens the inspector, as there is no
-    audio clip editor;
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
-    roll (clip-time lanes, with point add, drag and remove; no shape menu or
-    point selection yet); an audio clip's have no lane until its pane is
-    built (after ADR-0098 X3), so they are edited by command only;
+    roll (clip-time lanes, with point selection, the marquee, moves,
+    shapes, copy and paste and the lane's menu as on the timeline, one lane
+    at a time); an audio
+    clip's in its pane (a double-click opens its waveform, in seconds, with
+    the same Lanes menu and lanes, snapping to a seconds grid, and a key
+    button for its one key point), which edits no audio;
   - an item's take FX have lanes on the timeline, drawn across the whole
-    timeline although only the item's span plays;
+    timeline although only the item's span plays (titled with their item
+    when two items on a track automate the same effect's parameter);
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole
@@ -645,6 +695,14 @@ instructions are in `docs/guides/installing.md`.
   frozen channel's post-FX sends carry its timeline MIDI (`track.freeze`
   warns). SysEx and per-note expressions other than pressure are dropped and
   counted. Linux tests pass; native macOS/Windows CI is pending.
+- **VST3 editor edits outside processing** (known limit): an editor edit
+  made while the instance is active but not processing, or one that races
+  `stopProcessing` (its fences keep such an edit from being lost, not from
+  being reported twice), stays queued for the processor. A state capture then
+  (`saveState`) holds a component state without it, and processing resuming
+  reports it again as a second "Plug-in parameter edit" step. Flushing in
+  `saveState` while active would call the processor outside an executor's
+  start, which may race it; a handshake with the executors is the fix.
 - **MIDI sends** (ADR-0067): channel/Note Out to channel/Notes routing, channel
   filters/remapping, tap and mute controls, relay channels without instruments,
   PDC and MIDI recording. The routing window's saved Audio/MIDI mode exposes
@@ -815,8 +873,7 @@ instructions are in `docs/guides/installing.md`.
   stepped plug-in's quantized report all count), so a modulated parameter
   adds no undo step and writes no point. Its own editor edits are recorded:
   a VST3 editor's beginEdit/performEdit/endEdit are its gesture, as a CLAP
-  plug-in's (in the anticipative executor such a VST3 edit is recorded as
-  the plug-in's state instead: see Known limits). Depth and enabled are mix values (no
+  plug-in's, in both executors and bridged. Depth and enabled are mix values (no
   compile);
   routes are compensated as sidechains into their target stage, follow
   their target between executors, and play live as offline in both
@@ -839,7 +896,13 @@ instructions are in `docs/guides/installing.md`.
   the playhead, and an editable row for each modulatable parameter of a
   plain CLAP plug-in. With M4 a parameter reached through its envelope
   (`modulatable_by_envelope`, any VST3 one) takes Modulate too, and an
-  inert route draws idle, with the reason in the parameter menu. The FX window's live value on a modulated slider is
+  inert route draws idle, with the reason in the parameter menu. A
+  modulated plug-in shows "~" on its mixer slot and on its chain's "fx"
+  (track panel and mixer). A lane's header names the parameter first and
+  has a "mod" cell (a modulation-only lane gets title, mod and hide). The
+  inspector lists one track's routes (past four, "N routes"), and the
+  controls' menus have Show modulation source; each opens the rack window
+  with the source picked. The FX window's live value on a modulated slider is
   untested with a running plug-in (the mixer's, which shares its code, is
   tested with the engine running). An FX moved to another track keeps the last offset of a
   parameter the new plan no longer modulates until the plug-in next
@@ -1454,13 +1517,6 @@ Library boundaries:
   while its backlog has room.
 
 Engine and hosting:
-- A VST3 editor's edit in the anticipative executor is recorded as the
-  plug-in's state and writes no point in touch or latch, or now and then
-  as the state and then the parameter edit (two steps): its state flag
-  captures the state on the main thread while the rendered gesture waits
-  to be heard, and that step's plan swap usually drops the gesture (review
-  round 81, E2; as before, with the processor's echo). In-callback and
-  bridged it is the plug-in's gesture, one step.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue
@@ -2036,7 +2092,13 @@ and was never reaped) are not compiled: the classification of an exception and a
 tested as a pure function, the host-kill and orderly-end cases run, and a bridge that really dies
 by an exception is exercised only by `clap-host.diagnostics-inventory` there, which has not run
 on Windows yet. The case that a bridge faulting as the host lets go is its own end (the crash fixture's
-teardown mode) is compiled on every platform and unproven on Windows and macOS until native CI runs. A known limit on Windows: a `raise(SIGSEGV)` on a thread the plug-in made itself (the runtime keeps that signal's action per thread, and the bridge installs it on the threads it registers), and one in a plug-in with a static C runtime (its own `raise()` and `abort()`, which the bridge's handlers do not reach), and, unverified, any in a release build (the handlers need the runtime's `__pxcptinfoptrs`, found by name: proven in the debug runtime by CI, which builds Debug; for the release `ucrtbase.dll` only Microsoft's documentation of it as an internal CRT function and a third-party export list say it is there), exits with code 3 and no exception and is read as an exit with no report (a real access violation or `__fastfail` is an exception and does); the worker's own Windows handlers do not cover `raise(SIGSEGV)` either (not examined in this change). `abort()` and an uncaught `std::terminate` were read as the host's end on the first native run (CI 44242073297: the bridge
+teardown mode) is compiled on every platform and unproven on Windows and macOS until native CI runs.
+A bridge that outlasts the host's exit wait (2 s) is now killed and its status read, so a crash whose
+core was still being written reads as the bridge's own end, however long the dump takes; the kill-then-read
+path is tested on POSIX (a stopped bridge reads as the host's, with the kill's status), the dump itself cannot be
+held by a test. Unproven: on macOS, whether a process held in ReportCrash's exception handling keeps the fault's
+status when the host's SIGKILL arrives (the host then reads its own kill, as it did before); on Windows nothing
+is held up (the bridge ends itself at once with the exception's status). A known limit on Windows: a `raise(SIGSEGV)` on a thread the plug-in made itself (the runtime keeps that signal's action per thread, and the bridge installs it on the threads it registers), and one in a plug-in with a static C runtime (its own `raise()` and `abort()`, which the bridge's handlers do not reach), and, unverified, any in a release build (the handlers need the runtime's `__pxcptinfoptrs`, found by name: proven in the debug runtime by CI, which builds Debug; for the release `ucrtbase.dll` only Microsoft's documentation of it as an internal CRT function and a third-party export list say it is there), exits with code 3 and no exception and is read as an exit with no report (a real access violation or `__fastfail` is an exception and does); the worker's own Windows handlers do not cover `raise(SIGSEGV)` either (not examined in this change). `abort()` and an uncaught `std::terminate` were read as the host's end on the first native run (CI 44242073297: the bridge
 did not end until the host's deadline killed it, probably on the debug runtime's abort dialog); the bridge now sets its runtime at start so that
 `abort()` ends it at once with `0xC0000409` (a `SIGABRT` handler, no dialog, no report to wait on) and the case `a bridge ended by abort()` expects the exception and
 that status; that is unproven until the next native Windows run, and does not reach a plug-in with a static runtime. `clap-host.diagnostics-inventory` asserts on Windows the four ends a plug-in's code can give besides an access violation (`raise(SIGSEGV)`, `abort()`, a stack overflow, `std::terminate`: the exception and its status, the attribution level, and the plug-in's frame in the walk), and `test_bridge_diagnostics` has a case for each of the first, second and last; none has run on Windows until native CI.

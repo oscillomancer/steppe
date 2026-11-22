@@ -39,7 +39,10 @@ are named by the key at the item's start (`Bb` in F major, `A#` in D major).
 ## The lead sheet: a whole progression in one call
 
 `context.get` also returns `text`: the points as a lead sheet, one line per
-project bar. `context.write {text}` writes one back.
+project bar. `context.write {text}` writes one back. It reads bars as notation does: a
+newline, a `;` or a ` | ` token (surrounded by spaces) ends a bar, and the number after `|`
+may be left out (`1: key C major {C}:w | {F}:w` is bars 1 and 2); what it prints is always
+one line per bar. The same goes for a clip's `context`.
 
 ```
 1: key Eb major {Ebmaj7}:w
@@ -98,13 +101,36 @@ symbols in a clip's notation (`{Dm}:w`) are recorded as its chords too. `midi.ge
 shows them as `context` (runs by clip bar and beat, and `text`) with the clip's
 `follow`. `guides/launcher.md` has the rest.
 
+## Following takes: a take with its own context
+
+An item's MIDI take can carry its own key and chords and follow the project's:
+`take.set {take, context: "1: key A minor {Am}:w", follow: "key"}` (the lead sheet is in bars of the meter at the item,
+bar 1 at the take's beat 0; `follow` is `none`, `key` or `chords`, and needs a key in that
+context). The notes stay as written; they sound as the project's key says. Laying a clip
+on the timeline (`item.add {clip}`, `scene.insert`) gives every MIDI take the clip's context and `follow`.
+- `midi.notes {item, sounding: true}` adds `sounds` (the pitch as it plays) beside each written `pitch`.
+- `midi.get {item, sounding: true}` answers what sounds (`from`, `to` in song beats for a range);
+  without it, the written notes, with `sounding_differs` counting those that sound otherwise.
+- `take.bake {take}` writes the sounding pitches into the notes and sets `follow` to `none`; a looped item
+  whose passes sound differently is unrolled first (`unrolled: true`). The take's context becomes the song's
+  under the item (it says what the notes are written in now; none when the song has no key there), so
+  `take.set {follow: "key"}` afterwards sounds as before and moves with a later song edit. Undo takes it back.
+- `midi.edit`'s `snap_to_scale`, `fit_to_chord` and `transpose_degrees` read the take's own context and act on the
+  written notes (`acts_on: "written"` says some heard note sounds otherwise); `midi.write` keeps the context.
+- `item.consolidate` of following items keeps what sounds, or refuses with `item.follow_merge`
+  (`take.bake` them first); a MIDI recording over a following item is a new item beside it
+  (`record.follow_kept`); a context edit that leaves a following item without a key warns `context.no_key`.
+
 ## Sections
 
 Regions are sections unless told otherwise. `region.add {"section": false}` or
 `region.set {"id": "rg_1", "section": false}` marks a region that is only a
 span to loop or label. `context.at` names the section at a beat: the region
 that starts latest and covers it. `scene.insert` and `arrangement.build` add a
-section for every scene they lay out, named after it (`guides/launcher.md`).
+section for every scene they lay out, named after it (`guides/launcher.md`). With
+`write_context: true` they also write the scenes' clips' key and chords onto the context
+track under each section that has none, so a song built from scenes gets its lead sheet
+without writing it twice.
 
 ## Rules of thumb
 

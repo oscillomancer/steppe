@@ -60,8 +60,9 @@ Result<Plan> planMix(const model::Session& s, const std::vector<Id>& items) {
         const std::string path = "/items/" + std::to_string(i);
         const model::Item* it = s.items.find(items[i]);
         if (!it)
-            return Error("item.unknown", "no " + items[i].str(), path,
-                         "use ids from session.query {kind: \"item\"}");
+            return Error(
+                "item.unknown", "no " + items[i].str(), path,
+                "use item ids from session.describe (items are listed under their tracks)");
         const model::Track* track = s.tracks.find(it->track);
         if (!track || track->type != model::StripType::Channel)
             return Error("item.mix_not_channel", items[i].str() + " is not on a channel", path,

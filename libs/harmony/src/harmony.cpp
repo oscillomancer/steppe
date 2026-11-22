@@ -613,9 +613,10 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode) 
     } else {
         target = floorMod(pitchClass + ivBetween(fromRoot, toRoot), 12);
     }
-    // The octave nearest the key-followed pitch, a tie down.
-    int reference = pitch + ivBetween(fromRoot, toRoot);
-    if (const auto step = keyStep(pitch, from.key, to.key)) reference = step->pitch;
+    // The octave: the figure moves as a block by the roots' nearest interval,
+    // and the note takes its target class nearest to that, a tie down. So one
+    // pair of chords gives one voicing whatever the keys (ADR-0098, E1).
+    const int reference = pitch + ivBetween(fromRoot, toRoot);
     const int d = floorMod(target - reference, 12);
     out.pitch = fold(reference + (d < 6 ? d : d - 12));  // 6 is a tie: down
     out.by = FollowedBy::Chords;

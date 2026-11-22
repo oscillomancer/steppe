@@ -4,6 +4,7 @@
 
 #include "supple/views/chord_field.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/launcher.h"
 #include "supple/views/session_changes.h"
 
 #include <SDL3/SDL.h>
@@ -378,6 +379,8 @@ class Ruler : public ui::Node {
     // Key changes (ADR-0095) in the meter half of the tempo row, in quiet
     // ink: a key that starts on a meter change's beat follows its label;
     // any other has its own tick. Each label stops short of the next flag.
+    // The key that holds at the view's left edge, its change scrolled out of
+    // view, names itself there, without a tick (nothing there to drag).
     struct KeyFlag {
         double beat = 0;
         std::string text;  // "Eb major", as written ("?") when this build cannot read it
@@ -393,35 +396,40 @@ class Ruler : public ui::Node {
         const float y = tempoRow.y + tempoRow.h / 2.0f, h = tempoRow.h / 2.0f - 1;
         const float size = t.type("caption");
         const ui::Color quiet = t.color("ink-quiet");
-        const float x1 = bounds().right();
+        const float x0 = bounds().x, x1 = bounds().right();
         for (std::size_t i = 0; i < keys.size(); ++i) {
             const model::ContextPoint* p = s.context.find(keys[i].id);
             if (!p) continue;
             const float x = view_.xAt(tm.secondsAt(keys[i].beat));
             if (x > x1) break;
-            float textX = x + 3, limit = x1;
+            const float next =
+                i + 1 < keys.size() ? view_.xAt(tm.secondsAt(keys[i + 1].beat)) : x1 + 1;
+            const bool held = x < x0 - 1;          // its change is left of the view
+            if (held && next <= x0 + 1) continue;  // and another holds by the edge
+            float textX = (held ? x0 : x) + 3, limit = x1;
             bool shared = false;
             for (const time::MeterChange& m : tm.meter()) {
                 const float mx = view_.xAt(tm.secondsAt(tm.beatOfBar(m.bar)));
-                if (std::abs(mx - x) < 1) {
+                if (!held && std::abs(mx - x) < 1) {
                     textX += c.textWidth(meterText(m), ui::Font::Mono, size) + 6;
                     shared = true;
-                } else if (mx > x) {
+                } else if (mx > textX - 3) {
                     limit = std::min(limit, mx - 3);
                 }
             }
-            if (i + 1 < keys.size())
-                limit = std::min(limit, view_.xAt(tm.secondsAt(keys[i + 1].beat)) - 3);
+            if (i + 1 < keys.size()) limit = std::min(limit, next - 3);
             std::string text = model::keyWords(*p);
             // Words too long for the room end in an ellipsis, or go.
             const std::string fit =
                 c.elide(text, ui::Font::Ui, size, std::max(0.0f, limit - textX));
             const float shown = fit.empty() ? 0.0f : c.textWidth(fit, ui::Font::Ui, size);
-            if (!shared) c.fillRect({x, y, 1, h}, quiet);
+            if (!shared && !held) c.fillRect({x, y, 1, h}, quiet);
             if (!fit.empty())
                 c.text({textX, y, shown + 4, h}, fit, ui::Font::Ui, size, quiet,
                        ui::kLeft | ui::kMiddle);
             stats.keyLabels.push_back(text);
+            stats.keyLabelXs.push_back(textX);
+            if (held) continue;
             const float left = shared ? textX - 2 : x - 5;
             keyFlags.push_back({keys[i].beat,
                                 std::move(text),
@@ -516,11 +524,15 @@ class Ruler : public ui::Node {
                          [](const Shown& a, const Shown& b) { return a.beat < b.beat; });
         const float size = t.type("caption");
         const float x0 = bounds().x, x1 = bounds().right();
+        // The last chord holds to the project's end: the bar line after its
+        // last item or section (the view's edge when it starts past that).
+        const double projectEnd = tm.beatOfBar(barAfterArrangement(s));
         for (std::size_t i = 0; i < shown.size(); ++i) {
             const float x = view_.xAt(tm.secondsAt(shown[i].beat));
             if (x > x1) break;
-            const float end =
-                i + 1 < shown.size() ? view_.xAt(tm.secondsAt(shown[i + 1].beat)) : x1 + 2;
+            const float end = i + 1 < shown.size() ? view_.xAt(tm.secondsAt(shown[i + 1].beat))
+                              : projectEnd > shown[i].beat ? view_.xAt(tm.secondsAt(projectEnd))
+                                                           : x1 + 2;
             const model::ContextPoint& p = *shown[i].point;
             const float alpha = shown[i].ghost ? 0.6f : 1.0f;
             if (p.symbol.empty()) {  // no chord from here
@@ -532,18 +544,23 @@ class Ruler : public ui::Node {
             if (end >= x0) {
                 c.fillRound(cell, 2, t.color("raised").withAlpha(alpha));
                 c.strokeRound(cell, 2, t.color("rule").withAlpha(alpha));
+                stats.chordSpans.push_back({cell.x, cell.right()});
             }
             const bool known = model::parseChordPoint(p).has_value();
             const std::string text = p.symbol + (known ? "" : "?");
             const float w = c.textWidth(text, ui::Font::Ui, size);
-            const float room = std::max(0.0f, cell.w - 8);
+            // A chord that began left of the view names itself at its left
+            // edge, so a held one is never a blank cell.
+            const float textX = std::max(cell.x, x0) + 4;
+            const float room = std::max(0.0f, cell.right() - textX - 4);
             // A name too long for its cell ends in an ellipsis, or goes.
             const std::string fit = end >= x0 ? c.elide(text, ui::Font::Ui, size, room) : "";
             if (!fit.empty()) {
-                c.text({cell.x + 4, row.y, room + 4, row.h}, fit, ui::Font::Ui, size,
+                c.text({textX, row.y, room + 4, row.h}, fit, ui::Font::Ui, size,
                        t.color(known ? "ink" : "ink-quiet").withAlpha(alpha),
                        ui::kLeft | ui::kMiddle);
                 stats.chordLabels.push_back(fit);
+                stats.chordLabelXs.push_back(textX);
             }
             chordCells.push_back(
                 {shown[i].beat,
@@ -1306,6 +1323,9 @@ ArrangeView::ArrangeView(peaks::PeakService& peaks, Resolve resolve, TransportSo
     forward.mixer = [this] {
         if (tcpCallbacks_.mixer) tcpCallbacks_.mixer();
     };
+    forward.modulationSource = [this](const model::EnvTarget& target, const ui::Rect& anchor) {
+        if (tcpCallbacks_.modulationSource) tcpCallbacks_.modulationSource(target, anchor);
+    };
     forward.menu = [this](const model::Id& id, const ui::Rect& anchor,
                           std::function<void()> rename) {
         if (tcpCallbacks_.menu) tcpCallbacks_.menu(id, anchor, std::move(rename));
@@ -1420,7 +1440,15 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
             if (auto track = model::trackOfFx(session, id)) tracks.insert(*track);
         }
     }
-    tcp_->updateSession(session, tracks, envelopes, routes);
+    // A route's change: its target's chain mark and the lanes' "mod" cells.
+    const auto modulations = changedObjects(before.modulations, session.modulations, changes);
+    for (auto id : modulations)
+        for (const model::Session* at : {&before, &session})
+            if (const model::Modulation* m = at->modulations.find(id)) {
+                if (auto track = model::trackOfFx(*at, m->target.object)) tracks.insert(*track);
+                if (m->target.object.kind == model::Kind::Track) tracks.insert(m->target.object);
+            }
+    tcp_->updateSession(session, tracks, envelopes, routes, !modulations.empty());
     for (auto id : changedObjects(before.autoItems, session.autoItems, changes)) {
         if (const auto* old = before.autoItems.find(id)) dirtyEnvelopes.insert(old->envelope);
         if (const auto* now = session.autoItems.find(id)) dirtyEnvelopes.insert(now->envelope);
@@ -1784,8 +1812,15 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
     if (!launcherCallbacks_.run)
         return Error("gui.launcher", "the clip launcher has no command path", {},
                      "wire ArrangeView::setLauncherCallbacks");
+    // Clips laid on the timeline: what they did with their keys goes to the
+    // status line (gui.md §4.15).
+    const bool lays = command == "item.add" || command == "scene.insert";
+    const json::Value asked = lays ? args : json::Value();
     auto r = launcherCallbacks_.run(command, std::move(args));
     if (!r && launcherCallbacks_.onError) launcherCallbacks_.onError(r.error());
+    if (r && lays && launcherCallbacks_.onNotice)
+        if (const auto notice = followNotice(session(), command, asked, *r))
+            launcherCallbacks_.onNotice(*notice);
     return r;
 }
 void ArrangeView::setCaptureArmed(bool armed) {

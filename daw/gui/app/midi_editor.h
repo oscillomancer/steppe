@@ -9,6 +9,8 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -22,6 +24,7 @@
 #include "supple/ui/edge_scroll.h"
 #include "supple/ui/root.h"
 #include "supple/ui/text_area.h"
+#include "supple/views/envelope_edit.h"
 #include "supple/views/envelope_lane.h"
 
 namespace supple::ui {
@@ -34,6 +37,10 @@ class TextBlock;
 namespace supple::views {
 class MouseMap;
 }  // namespace supple::views
+
+namespace supple::peaks {
+class PeakService;
+}  // namespace supple::peaks
 
 namespace supple::gui {
 
@@ -49,8 +56,16 @@ struct MidiOwner {
     const model::Item* item = nullptr;  // set for an item
     const model::Clip* clip = nullptr;  // set for a clip
     model::Id track;
+    // An audio clip's media (its take's source), when `source` is null: the
+    // pane shows its waveform and its clip-time lanes (gui.md §4.7).
+    const model::MediaSource* audio = nullptr;
 };
 std::optional<MidiOwner> midiOwner(const model::Session& session, const std::string& id);
+// The roll's frame shift for an owner (RollState::frameShift): the whole
+// loop lengths in a looped item's start_offset, over the playrate; 0 for an
+// unlooped item, a clip or audio. The event list shares it, so both show an
+// event where it plays.
+double rollFrameShift(const MidiOwner& owner);
 
 struct RollNote {
     int pitch = 60;
@@ -66,8 +81,7 @@ struct RollEnvLane {
     model::Envelope envelope;  // as the session had it at the last reload
     views::EnvScale scale;
     double fallback = 0;  // the value without points
-    std::string title;    // "Volume (take)", "Teasel · Drive (take)"
-    std::string name;     // the lane header's: "Volume", "Drive"
+    std::string title;    // "Volume (take)", "Teasel · Drive (take)": the lane's one name
 };
 
 // What the roll, keyboard and velocity lane share.
@@ -82,6 +96,13 @@ struct RollState {
     bool clip = false;        // the owner is a clip: it sits at beat 0, in its own context
     double itemPosition = 0;  // project beats
     double itemLength = 4;    // beats
+    // A looped item plays its content from start_offset wrapped into one loop
+    // length (model::SourceBeatMapping::sourceOffset), and the roll's axis
+    // wraps the same way, so a split loop's right part draws its notes where
+    // they play. The engine's item beats (midi.get, midi.edit) don't wrap:
+    // roll beat = engine beat + frameShift (the whole loop lengths in
+    // start_offset, over the playrate; 0 without a loop or for a clip).
+    double frameShift = 0;
     std::vector<RollNote> notes;
     std::set<std::size_t> selected;
     // The colour the notes are drawn in: the item's in the arrangement (its
@@ -96,6 +117,38 @@ struct RollState {
     // (volume, pan, mute, then the take FX in chain order); none for an item,
     // whose take lanes are on the timeline.
     std::vector<RollEnvLane> envLanes;
+    // The clip-time lanes' point selection (gui.md §4.7, as the timeline's):
+    // one lane's at a time, its points named by position and value, so
+    // points an edit removed simply leave it.
+    model::Id envSelLane;
+    std::vector<std::pair<double, double>> envSel;
+    // The lane pressed last (none after a press on the roll): the editor's
+    // copy and paste keys take its points.
+    std::optional<model::Id> envLastLane;
+    // Where the roll's last paint drew the end mark ("end"), if in view.
+    std::optional<float> endMarkX;
+    bool envSelected(model::Id env, const model::EnvPoint& p) const {
+        if (env != envSelLane) return false;
+        for (const auto& [pos, value] : envSel)
+            if (std::abs(pos - p.pos) < 1e-9 && std::abs(value - p.value) < 1e-9) return true;
+        return false;
+    }
+    // An audio clip (gui.md §4.7, mock 93): the roll draws its active take's
+    // waveform and the axis is in seconds of played time from the clip's
+    // start (the clip's own unit), not beats: itemLength, scrollBeat,
+    // pixelsPerBeat and the lanes' positions are seconds then.
+    bool audio = false;
+    struct Wave {
+        model::Take take;            // the active take: offset, rate, loop
+        std::string hash;            // the media's, for the peak cache
+        std::filesystem::path path;  // the media file, resolved
+        float gain = 1;              // the clip's and the take's gain
+        bool loop = false;           // the clip loops its take
+        std::string label;           // the take's name, at the left
+    };
+    std::optional<Wave> wave;
+    std::size_t waveColumns = 0;  // the last paint's waveform columns
+    bool wavePending = false;     // its peaks were not ready
     std::vector<CcPoint> cc;
     std::vector<CcPoint> ccDraft;  // a drag in progress (drawn, not yet committed)
     bool ccErasing = false;
@@ -133,6 +186,12 @@ struct RollState {
         double beat = 0;
         std::string text;
         bool known = true;
+        // A take row's cell that only names where the take's key changes
+        // ("A minor: Am" over the chord holding there): no point to edit.
+        bool keyOnly = false;
+        // The length of a key change's name before the chord in `text`
+        // ("A minor: " in "A minor: Am"), so a drag shows the chord alone.
+        std::size_t keyPrefix = 0;
     };
     std::vector<ChordMark> chords;
     // A clip's key points (text: "D dorian"), drawn and dragged in the
@@ -143,6 +202,63 @@ struct RollState {
     // gui::ClipContextAxis), its first pass only, the last chord ending at
     // contextEnd; `keys` are already in content beats (gui::clipKeySpans).
     double contextShift = 0, contextEnd = 0;
+    // A following take (ADR-0098 amended; gui.md §4.7 "A following take"): an
+    // item's heard take whose follow is key or chords. The roll draws each note
+    // where it sounds and outlines its written pitch, or, with `written` (the
+    // Written cell), the written pitches with the sounding ones outlined.
+    bool following = false;
+    bool written = false;
+    bool soundingView() const { return following && !written; }
+    // Whether note `i`, as `n`, lies outside the item or clip (drawn dim, as
+    // nothing there is heard): a following take's note not heard in the pass
+    // shown, else one wholly before the start or from the end on.
+    bool outsideItem(std::size_t i, const RollNote& n) const;
+    // What a drag of the take row's chord at project beat `beat` shows: the
+    // chord alone, without a key change named on its cell ("Am" from
+    // "A minor: Am"), as the drag moves only the chord; "r" for none.
+    std::string heldTakeChord(double beat) const;
+    // What each note sounds as in the pass shown, index for index with
+    // `notes` (model::soundingNotes): its pitch (-1: not heard in that pass,
+    // drawn as written) and that occurrence's song beat less the roll's
+    // (itemPosition + start), so a preview at a moved place reads the same
+    // pass.
+    struct Sounds {
+        int pitch = -1;
+        double shift = 0;
+        // Not heard in the pass shown (outside the item): `pitch` is what it
+        // would sound as by the same place rule past the item's edges, so
+        // trimming the edge out over it shows it where it was drawn.
+        bool heard = true;
+    };
+    std::vector<Sounds> sounds;
+    int pass = 0, passes = 1;   // the pass shown, of the passes the item plays
+    double passShift = 0;       // its song beats less the roll's, for a new note
+    bool passesDiffer = false;  // some note sounds otherwise in another pass
+    // What a note written as `pitch` on `channel` (1..16) sounds as at song
+    // beat `beat` (model::placeAt and soundsAt); set for a following take.
+    std::function<int(int pitch, int channel, double beat)> soundsAt;
+    // The take's own key at song beat `beat` (model::placeAt), which
+    // midi.edit's degrees read on a following take; set with soundsAt.
+    std::function<std::optional<harmony::Key>(double beat)> writtenKeyAt;
+    // The key a degree step of note `i` counts in, at roll-project beat
+    // `projectBeat` (itemPosition + start): a following take's own at the
+    // note's place (writtenKeyAt, in the pass shown), else the view's.
+    std::optional<harmony::Key> degreeKeyAt(std::size_t i, double projectBeat) const;
+    // What note `i` sounds as, as `n` (the note or its drag preview) has it;
+    // none when the take does not follow or the note is not heard.
+    std::optional<int> soundingPitch(std::size_t i, const RollNote& n) const;
+    // The pitch note `i` is drawn at (the view's), and its outline's: none
+    // where the two agree or the note is not heard.
+    int drawnPitch(std::size_t i, const RollNote& n) const;
+    std::optional<int> outlinePitch(std::size_t i, const RollNote& n) const;
+    // The strip's rows for a take with a context (gui.md §4.7): `chords` is
+    // the context the view reads, `otherChords` the other one, dim and
+    // read-only, each labelled in the keyboard column ("song", "take"). A
+    // take's chords end with the item (`chordsEnd`, `otherEnd`, roll beats);
+    // the song's run on.
+    std::vector<ChordMark> otherChords;
+    std::string rowLabel, otherLabel;
+    std::optional<double> chordsEnd, otherEnd;
     std::optional<harmony::Key> keyAt(double projectBeat) const;
     // A note off channel 10 whose pitch is not in the key holding at its
     // start (none holding: false). The roll outlines it, and the title
@@ -165,6 +281,9 @@ struct RollState {
         ccErasing = false;
     }
     double snapBeat(double itemBeat) const;  // to the project grid when snapping
+    // An audio clip's snap grid in seconds: the finest of 0.01, 0.02, 0.05,
+    // 0.1, 0.2, 0.5, 1 s... at least 20 px wide at the zoom.
+    double audioGrid() const;
 };
 
 class MidiEditor {
@@ -192,8 +311,8 @@ class MidiEditor {
     static constexpr float kDefaultHeight = 420, kMinHeight = 160;
     float height() const { return height_; }
     void setHeight(float height);
-    // {"height", "velocity", "cc"}: the UI sidecar's "midi" section ("cc" 0:
-    // the CC lane hidden).
+    // {"height", "velocity", "cc", "written"}: the UI sidecar's "midi" section
+    // ("cc" 0: the CC lane hidden; "written": a following take's Written cell).
     json::Value saveLayout() const;
     void loadLayout(const json::Value& v);
     // Row (key) height zoom, anchored at the window y whose pitch stays put.
@@ -202,6 +321,11 @@ class MidiEditor {
     // The mouse modifiers (Edit > Mouse modifiers): what the wheel does here
     // for `mods`, from its midi.wheel bindings (the defaults when unset).
     void setMouseMap(const views::MouseMap* map) { mouse_ = map; }
+    // The peak service an audio clip's waveform reads (the app's); none: no
+    // waveform is drawn. peaksReady() repaints it when a pyramid arrives.
+    void setPeaks(peaks::PeakService* peaks) { peaks_ = peaks; }
+    peaks::PeakService* peaks() const { return peaks_; }
+    void peaksReady();
     std::string_view wheelBehaviour(unsigned mods) const;
 
     // Tests and the actions.
@@ -211,6 +335,9 @@ class MidiEditor {
     // right, and the chords its chord row named (tests).
     const std::vector<int>& barLabels() const { return barLabels_; }
     const std::vector<std::string>& chordLabels() const { return chordLabels_; }
+    // The strip's second row's names (a take's context, or the song's in the
+    // written view), as last painted (tests).
+    const std::vector<std::string>& otherChordLabels() const;
     // Edge scroll in the piano roll (gui.md §4.7): true while a drag is held
     // at an edge of the roll; autoScroll advances it by `seconds` and is
     // true when the view moved (sync calls it with the frame's time).
@@ -219,6 +346,12 @@ class MidiEditor {
     ui::TextArea* notation() const { return text_; }
     MidiEventList* eventList() const { return eventList_.get(); }
     std::uint64_t beginGesture();
+    // A refusal the roll gives itself (the pencil in the sounding view), to
+    // the actions' error hook, so the status line says it.
+    void refuse(const std::string& message);
+    // News an edit made (a sounding-view drag that lands on a pitch another
+    // written pitch also sounds as), to the actions' notice hook.
+    void notice(const std::string& message);
     Status edit(json::Value ops, std::optional<std::uint64_t> expectedVersion =
                                      {});  // midi.edit on the open item, keeping the selection
     void selectAll();
@@ -227,6 +360,8 @@ class MidiEditor {
     void transpose(int semitones);
     void transposeDegrees(int degrees);  // midi.edit transpose_degrees on the selection
     ui::Toggle* keyButton() const { return keyButton_; }
+    ui::Toggle* writtenButton() const { return writtenButton_; }
+    ui::Button* passButton() const { return passButton_; }
     const std::string& keyText() const { return keyText_; }  // the key button's words
     // The chord field (views/chord_field.h) for the chord point at the project
     // beat `beat`, opened at the window point `at` (the strip's double-click).
@@ -243,10 +378,46 @@ class MidiEditor {
     // The clip's point of `type` at roll beat `rollFrom` moved to `rollTo`
     // (`copy`: a second one there, the first kept), as a strip drag does.
     void moveClipPoint(model::ContextType type, double rollFrom, double rollTo, bool copy = false);
+    // A timeline item's take's own context (ADR-0098 amended, gui.md §4.7),
+    // each edit one take.set {context} with the lead sheet in bars of the
+    // meter at the item (takeLeadSheet). Beats here are project beats on the
+    // strip; a point goes at the context beat of the place (model::placeAt),
+    // so a looped context's repeats edit its one period. The chord field for
+    // the take's chord there; its key field; the strip's right-click menu
+    // (`chord`: a take chord's project beat under the pointer); a point
+    // moved, as a strip drag does; the context replaced.
+    void editTakeChord(double projectBeat, ui::Point at);
+    void editTakeKey(double projectBeat, ui::Point at);
+    void openTakeContextMenu(double projectBeat, std::optional<double> chord, ui::Point at);
+    void moveTakePoint(model::ContextType type, double fromProject, double toProject,
+                       bool copy = false);
+    Status setTakeContext(const std::vector<model::ContextPoint>& points);
+    // The context beat of a project beat in the open item's heard take, on
+    // the 1/960 grid and inside its period; nothing without a MIDI take.
+    std::optional<double> takeBeatAt(double projectBeat) const;
     // The clip beat of a roll beat on the clip's strip, or nothing (with the
     // reason in the status line) when a looped clip's point would fall
     // outside the first pass the strip shows.
     std::optional<double> clipBeatAt(double rollBeat);
+    // An audio clip's key button: its menu (Key…, Remove key, Take from the
+    // project at the playhead).
+    void openAudioKeyMenu();
+    // A clip-time lane's menu at window point `at` (`pos`, `value`: the
+    // lane's position and value there): Insert point, Select all points,
+    // Delete points, Point shape…, Hide.
+    void openEnvLaneMenu(model::Id env, ui::Point at, double pos, double value);
+    // The selected points of state_.envSelLane removed, or given `shape`.
+    void deleteEnvSelection();
+    // The selected points of state_.envSelLane copied (positions and values,
+    // as the timeline copies them); pasted into lane `env` at `pos` (its own
+    // clip time: beats, or an audio clip's seconds), replacing the points over
+    // the pasted span, or at the place they were copied from. False when
+    // there is nothing to paste or no such lane.
+    void copyEnvSelection();
+    bool pasteEnvPoints(model::Id env, std::optional<double> pos = {});
+    bool canPasteEnv() const { return !envClip_.empty(); }
+    void repaintLanes();  // the clip-time lanes, after their selection changed
+    void shapeEnvSelection(model::PointShape shape);
     Status setClipContext(const std::vector<model::ContextPoint>& points);
     void nudge(int steps);  // the selected notes, by grid steps
     // The selected notes; with the event list shown, its selected rows.
@@ -293,10 +464,22 @@ class MidiEditor {
     UiState& ui_;
     RollState state_;
     std::string lastItem_;             // the item opened last (ui.midi.toggle reopens it)
+    views::EnvClip envClip_;           // the clip-time lanes' copied points
+    double envClipAt_ = 0;             // where the first of them was
     std::vector<RollNote> clipboard_;  // starts from the earliest copied note
     float height_ = kDefaultHeight;
     const views::MouseMap* mouse_ = nullptr;
+    peaks::PeakService* peaks_ = nullptr;
     ui::Node* panel_ = nullptr;
+    // The header's MIDI controls (grid, Snap, Quantize, Notation, List),
+    // hidden for an audio clip; applyMode() shows the parts of the pane the
+    // open take has.
+    std::vector<ui::Node*> midiOnly_;
+    bool audioShown_ = false;       // the pane is in its audio form
+    bool notationWasShown_ = true;  // the notation pane, before an audio clip hid it
+    void applyMode();
+    Status reloadAudio();                          // reload() for an audio clip
+    void collectEnvLanes(const MidiOwner& owner);  // state_.envLanes from the clip's take
     std::unique_ptr<MidiEventList> eventList_;
     ui::Node* listPane_ = nullptr;
     ui::Node* rollPane_ = nullptr;
@@ -318,13 +501,18 @@ class MidiEditor {
                    std::optional<std::uint64_t> expectedVersion = {},
                    std::string_view what = "Lanes");
     std::unique_ptr<PluginScales> scales_;
-    ui::Node* envColumn_ = nullptr;    // the clip-time lanes, under the CC lane
-    std::vector<model::Id> envNodes_;  // the envelopes envColumn_ has lanes for
+    ui::Node* envColumn_ = nullptr;        // the clip-time lanes, under the CC lane
+    std::vector<model::Id> envNodes_;      // the envelopes envColumn_ has lanes for
+    ui::Toggle* writtenButton_ = nullptr;  // a following take's Written cell
+    ui::Button* passButton_ = nullptr;     // its Pass cell, while passes differ
+    std::vector<double> passStarts_;       // each pass's first heard song beat
+    void openPassMenu();
     ui::Toggle* keyButton_ = nullptr;
     std::string keyText_ = "No key";  // the key button's words (its width follows them)
     void refreshKeyButton();
     ui::Node* notationPane_ = nullptr;
     ui::Label* title_ = nullptr;
+    ui::Label* notationTitle_ = nullptr;  // "Notation", "· written" while the take follows
     ui::TextArea* text_ = nullptr;
     ui::TextBlock* diagnostics_ = nullptr;
     ui::Root::OverlayHandle playheadHandle_;

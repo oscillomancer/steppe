@@ -124,6 +124,13 @@ class RackSpace : public ui::Node {
     ui::Point pastePoint() const;
     // `ids` in view: centred (zoomed out as far as they need) unless they are.
     void reveal(const std::set<model::Id>& ids);
+    // reveal(ids) now, or once the space has its size (a window just opened).
+    void revealWhenLaidOut(std::set<model::Id> ids) {
+        if (bounds().empty())
+            revealOnLayout_ = std::move(ids);
+        else
+            reveal(ids);
+    }
     // frameAll() once the space has its size (before its first layout).
     void frameAllWhenLaidOut() {
         if (bounds().empty())
@@ -275,6 +282,7 @@ class RackSpace : public ui::Node {
     float edgeVx_ = 0, edgeVy_ = 0;  // window units per second
     ui::PointerEvent edgeLast_;      // the drag's last event, delivered again after a step
     bool spaceHeld_ = false, spaceUsed_ = false, frameOnLayout_ = false;
+    std::set<model::Id> revealOnLayout_;  // revealWhenLaidOut's, until then
     int gesture_ = 0;
     // pointer(): the display under the pointer (it hears Leave when it goes),
     // and the wheel's burst.

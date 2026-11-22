@@ -4,6 +4,7 @@
 // What a clip knows of the harmony it was written against (ADR-0098, session-model
 // "Clip context"): its lead sheet text in clip bars, the project's context taken under
 // a span, the chord points a notation's symbols make, and the precedence between them.
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +16,15 @@
 namespace supple::engine::detail {
 
 // A warning a command gives: its code, message and path.
+// What a `context.mismatch` note says, for the answer's `followed.mismatch`: what differs, a key
+// (`clip_key`, `key`) or, in the same key, a chord (`clip_chord`, `chord`), and the first project
+// bar where it does.
+struct ContextMismatch {
+    std::string kind;  // "key" | "chord"
+    std::optional<std::string> clipKey, key, clipChord, chord;
+    std::int64_t bar = 0;
+};
+
 struct ClipNote {
     std::string code, message, path;
 };
@@ -32,6 +42,19 @@ std::string clipContextText(const model::Session& s, const model::Clip& clip);
 Result<std::vector<model::ContextPoint>> clipContextFromText(const model::Session& s,
                                                              const std::string& text,
                                                              model::ClipKind kind, double length,
+                                                             const std::string& path);
+
+// A take's lead sheet (ADR-0098, following is playback): bars of the meter in force at its
+// item's position, bar 1 at context beat 0, in context beats. `takeBarMap` is that map (the
+// project's first meter when the take has no item position, as a clip's take); the text is
+// canonical, "" for no context, and reads back to the same points. `takeContextFromText`
+// errors: `take.context_syntax` and the lead sheet's own, `take.context_range` (a point at or
+// past `period`, naming the bar), `context.limit`.
+time::TimeMap takeBarMap(const model::Session& s, std::optional<double> itemStartBeat);
+std::string takeContextText(const time::TimeMap& map, const model::Take& take);
+Result<std::vector<model::ContextPoint>> takeContextFromText(const time::TimeMap& map,
+                                                             const std::string& text,
+                                                             std::optional<double> period,
                                                              const std::string& path);
 
 // The project's context read from `fromBeat` for `lengthBeats`: the key and chord holding
@@ -66,8 +89,9 @@ SymbolChords chordsFromSymbols(const model::Session& s,
 
 // A stated context (text, or taken from a place) and the symbols of a notation, by
 // precedence: a stated context holding chords wins, and the symbols are ignored
-// (`clip.chords_ignored`); otherwise the stated points and the symbols' chords. Nothing
-// stated: the symbols' chords alone. Sorted by beat then type.
+// (`clip.chords_ignored`, only when some symbol is not the chord the stated points hold at its
+// beat: symbols that say the same are not news); otherwise the stated points and the symbols'
+// chords. Nothing stated: the symbols' chords alone. Sorted by beat then type.
 std::vector<model::ContextPoint> composeContext(
     std::optional<std::vector<model::ContextPoint>> stated, SymbolChords symbols,
     std::vector<ClipNote>& notes);
@@ -77,11 +101,15 @@ std::vector<model::ContextPoint> composeContext(
 // the clip's key (at its clip beat: the beat from the item's start through the clip's
 // period, `phase` beats into it at the start) and the project's key both hold and differ in
 // tonic pitch class or scale. It names the clip, both keys and the first project bar where
-// they differ. A clip with no note off channel 10 (drums, or empty) gives none, and neither
-// does an enharmonic spelling.
+// they differ. In the same key (or with none to compare) it is also given for the first beat
+// at which the clip's chord and the project's both hold and differ (root, quality or bass),
+// naming both chords. A clip with no note off channel 10 (drums, or empty) gives none, and
+// neither does an enharmonic spelling. For a key mismatch, `what` (when given) gets the keys
+// and the bar; a chord mismatch leaves it as it is.
 std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
                                      const model::Clip& clip, double start, double length,
-                                     double phase = 0, const std::string& path = "/clip");
+                                     double phase = 0, const std::string& path = "/clip",
+                                     ContextMismatch* what = nullptr);
 
 // The key a clip's points say at beat 0 (a readable one), for describe and the checks.
 std::optional<std::string> clipKeyWords(const model::Clip& clip);

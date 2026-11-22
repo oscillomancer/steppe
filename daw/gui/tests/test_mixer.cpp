@@ -3123,6 +3123,69 @@ TEST_CASE("mixer: Modulate… on a fader opens the sources, and one makes the ro
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("mixer: a modulated fader's menu shows its source; a plain click on its bar opens none") {
+    // gui.md §2: "Show modulation source" in the control's right-click menu,
+    // the routes listed when there are several; the bar itself stays a depth
+    // drag.
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "A");
+    std::vector<std::string> shown;
+    f.actions->addUiFor("ui.modulation.source", "Modulation: show source", "modulation",
+                        [&](const json::Value& v) -> Status {
+                            shown.push_back(v.asString());
+                            return {};
+                        });
+    const std::string route =
+        f.exec("modulate", R"({"target":{"track":")" + a +
+                               R"(","param":"volume"},"source":"lfo"})")["modulation"]
+            .asString();
+    f.refresh();
+    ui::Fader* fader = f.strip(a).fader;
+    REQUIRE(fader->modulation());
+    auto menuAt = [&](ui::Point p) -> ui::Node* {
+        f.pointer(ui::PointerEvent::Type::Down, p, 1, 0, 3);
+        f.pointer(ui::PointerEvent::Type::Up, p, 1, 0, 3);
+        return f.root->find("strip.param.menu");
+    };
+    ui::Node* menu = menuAt(f.centre(fader));
+    REQUIRE(menu);
+    std::vector<std::string> sources;
+    std::function<void()> run;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Show modulation source")) {
+            sources.push_back(item.label);
+            run = item.run;
+        }
+    CHECK(sources == std::vector<std::string>{"Show modulation source"});
+    REQUIRE(run);
+    f.root->closePopups();
+    run();
+    CHECK(shown == std::vector<std::string>{route});
+    // A plain click on the depth bar opens nothing.
+    const ui::Rect zone = fader->depthZone();
+    const ui::Point onBar{zone.x + zone.w / 2, zone.y + zone.h / 2};
+    f.pointer(ui::PointerEvent::Type::Down, onBar, 1);
+    f.pointer(ui::PointerEvent::Type::Up, onBar, 1);
+    CHECK(shown.size() == 1);
+    // Two routes: one row each, by source.
+    const std::string modOut =
+        f.app->head().modulations.find(*model::Id::parse(route))->source.module.str();
+    f.exec("modulation.add", R"({"source":{"module":")" + modOut +
+                                 R"(","input":"in_4"},"target":{"track":")" + a +
+                                 R"(","param":"volume"},"depth":2})");
+    f.refresh();
+    menu = menuAt(f.centre(f.strip(a).fader));
+    REQUIRE(menu);
+    sources.clear();
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label.starts_with("Show modulation source")) sources.push_back(item.label);
+    REQUIRE(sources.size() == 2);
+    CHECK(sources[0].starts_with("Show modulation source: LFO ("));
+    CHECK(sources[1].starts_with("Show modulation source: Mod 4 ("));
+    f.root->closePopups();
+}
+
 TEST_CASE("mixer: a modulated fader and pan bar show their routes; a bar drag sets the depth") {
     Fixture f;
     if (!f.ok) return;
@@ -3365,6 +3428,60 @@ TEST_CASE("mixer: a channel fed by a rack shows a rack slot above its plug-ins")
     REQUIRE(f.strip(track).racks.size() == 1);
     CHECK(f.strip(track).racks.front()->id() == "mixer.rack." + track + "." + second);
     CHECK(f.strip(track).racks.front()->valueText() == "Pad");
+}
+
+// The first parameter of `fx` that fx.describe marks modulatable, or "".
+static std::string modulatableParam(Fixture& f, const std::string& fx) {
+    const json::Value d = f.exec("fx.describe", R"({"fx":")" + fx + R"(","full":true})");
+    if (const json::Value* ps = d.find("params"); ps && ps->isObject())
+        for (const auto& m : ps->asObject())
+            if (const json::Value* mod = m.value.find("modulatable"); mod && mod->asBool())
+                return m.key;
+    return {};
+}
+
+TEST_CASE("mixer: a modulated plug-in's slot and its strip's fx carry the modulation mark") {
+    // gui.md §4.4: views::kModMark in signal-cv; the same "fx" as the TCP's.
+    Fixture f;
+    if (!f.ok) return;
+    const auto keys = f.addTrack("channel", "Keys");
+    const auto plain = f.addFx(keys, "Hickory");
+    const auto moved = f.addFx(keys, "Hickory");
+    const std::string param = modulatableParam(f, moved);
+    if (param.empty()) {
+        MESSAGE("skipped: Hickory has no modulatable parameter in this build");
+        return;
+    }
+    f.refresh();
+    CHECK(f.strip(keys).fx->mark().empty());
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory");
+    const std::string route = f.exec("modulate", R"({"target":{"fx":")" + moved + R"(","param":")" +
+                                                     param + R"("},"source":"lfo"})")["modulation"]
+                                  .asString();
+    f.refresh();
+    CHECK(f.strip(keys).fx->mark() == views::kModMark);
+    CHECK(f.strip(keys).fx->valueText() == "fx");
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory (modulated)");
+    CHECK(f.node("mixer.fx." + plain)->valueText() == "Hickory");
+    f.snapshot("mixer-modulated-slot.png");
+    CHECK(f.strip(keys).fx->markColor() == "signal-cv");
+    // Every route off: still marked (its lane stays), the mark dimmed.
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":false})");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory (modulation off)");
+    CHECK(f.strip(keys).fx->mark() == views::kModMark);
+    CHECK(f.strip(keys).fx->markColor() == "ink-faint");
+    f.snapshot("mixer-modulation-off.png");
+    // On again: normal.
+    f.exec("modulation.set", R"({"modulation":")" + route + R"(","enabled":true})");
+    f.refresh();
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory (modulated)");
+    CHECK(f.strip(keys).fx->markColor() == "signal-cv");
+    // Without its route, no mark.
+    f.exec("modulation.remove", R"({"modulation":")" + route + R"("})");
+    f.refresh();
+    CHECK(f.strip(keys).fx->mark().empty());
+    CHECK(f.node("mixer.fx." + moved)->valueText() == "Hickory");
 }
 
 TEST_CASE("mixer: a strip's modulator racks show as mod slots") {

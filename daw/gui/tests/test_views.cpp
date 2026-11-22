@@ -24,6 +24,7 @@
 #include <vector>
 #include "supple/base/files.h"
 #include "supple/views/item_body.h"
+#include "supple/views/launcher.h"
 #include "test_support.h"
 #include "ui_persistence.h"
 
@@ -1314,6 +1315,70 @@ TEST_CASE("golden: items with fades, muted items and multi-take items") {
     arrange->setViewport(v);
     settle(root, arrange->lanes());
     golden(root, "arrange-items.png");
+}
+
+TEST_CASE("a following take's body draws each heard note where it sounds, in the window") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    // Two notes written, heard in two passes (four occurrences) at song beats
+    // 8, 9, 10 and 11 of an item starting at beat 8; the window shows its
+    // beats 1 to 4.
+    const ui::Rect cell{10, 0, 100, 40};
+    model::MidiSource source;
+    source.sequence.ppq = 960;
+    source.sequence.length = 1920;
+    source.sequence.notes.push_back({0, 480, 0, 60, 96, 0});
+    source.sequence.notes.push_back({960, 480, 0, 64, 96, 0});
+    model::Take take;
+    std::vector<model::SoundingNote> heard;
+    for (int pass = 0; pass < 2; ++pass)
+        for (std::uint32_t i = 0; i < 2; ++i) {
+            model::SoundingNote o{};
+            o.note = i;
+            o.pass = pass;
+            o.songBeat = 8.0 + 2.0 * pass + i;
+            o.written = i == 0 ? 60 : 64;
+            o.sounds.pitch = o.written + 2;  // a tone up
+            heard.push_back(o);
+        }
+    views::MidiWindow window;
+    window.xAt = [&](double beat) { return cell.x + static_cast<float>(beat * 25); };
+    window.length = 4;
+    window.from = 0;
+    window.to = 4;
+    window.end = cell.right();
+    auto notes = ui::RectRenderer::create();
+    REQUIRE(notes);
+    CHECK(views::drawSoundingBody(*notes, cell, heard, take, source, window, 8.0, 0xffffffffu, 0) ==
+          4);
+    window.from = 1.5;  // the occurrences ending by then are out of view
+    CHECK(views::drawSoundingBody(*notes, cell, heard, take, source, window, 8.0, 0xffffffffu, 0) ==
+          2);
+    CHECK(views::drawSoundingBody(*notes, cell, {}, take, source, window, 8.0, 0xffffffffu, 0) ==
+          0);
+    CHECK(notes->count() == 6);
+}
+
+TEST_CASE("a following take's mark: the Follow arrow and its own key where it starts") {
+    model::Take take;
+    CHECK(views::takeFollowMark(take).empty());  // it does not follow
+    model::ContextPoint key;
+    key.beat = 0;
+    key.type = model::ContextType::Key;
+    key.tonic = "D";
+    key.scale = "minor";
+    take.context = {key};
+    CHECK(views::takeFollowMark(take).empty());  // a context alone is not following
+    take.follow = model::ClipFollow::Key;
+    CHECK(views::takeFollowMark(take) == std::string(views::kFollowMark) + "Dm");
+    // Its key where the content starts: a slip past a change reads the later key.
+    model::ContextPoint later = key;
+    later.beat = 4;
+    later.tonic = "G";
+    later.scale = "major";
+    take.context.push_back(later);
+    take.startOffset = 5;
+    CHECK(views::takeFollowMark(take) == std::string(views::kFollowMark) + "G");
 }
 
 TEST_CASE("item bodies draw from a take and a content window, without an item") {

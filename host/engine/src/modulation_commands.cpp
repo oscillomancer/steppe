@@ -488,7 +488,10 @@ void registerModulationCommands(cmd::Registry& registry) {
             "its normalized range; "
             "for a track's or send's volume in dB (-48..48); for a track's pan or width in "
             "percent (-200..200). The offset adds to the value automation or the fader gives, "
-            "and the sum stays in the target's range.";
+            "and the sum stays in the target's range. Another enabled route onto the same target "
+            "from the same kind of source (the module cabled into the Mod Out input) is allowed "
+            "with the warning modulation.stacked, which names the routes already there: their "
+            "offsets add.";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModAddArgs>("modulation_add_args")
                      .field("source", &ModAddArgs::source, sourceSchema())
@@ -540,9 +543,38 @@ void registerModulationCommands(cmd::Registry& registry) {
                 out.param = m.target.param;
                 out.param_name = name;
             }
+            const model::EnvTarget target = m.target;
+            const bool enabled = m.enabled;
+            const model::ModSource source = m.source;
             const Id id = app.txn().create(std::move(m));
             SUPPLE_TRY(checkCycle(app));
             out.modulation = id.str();
+            // A second enabled route onto one target from the same kind of source is allowed,
+            // and their offsets add: say which routes are already there.
+            if (enabled) {
+                const model::Session now = app.view();
+                std::vector<std::string> kinds;
+                for (const FedBy& f : fedBy(now, source)) kinds.push_back(f.type);
+                std::string existing, kind;
+                for (const auto& e : now.modulations) {
+                    if (e.id == id || !e.value->enabled || !(e.value->target == target)) continue;
+                    for (const FedBy& f : fedBy(now, e.value->source))
+                        if (std::find(kinds.begin(), kinds.end(), f.type) != kinds.end()) {
+                            existing += (existing.empty() ? "" : ", ") + e.id.str();
+                            kind = f.type.substr(f.type.rfind('.') + 1);
+                            break;
+                        }
+                }
+                if (!existing.empty())
+                    ctx.warn("modulation.stacked",
+                             out.modulation + " is a second " + kind + " route onto " +
+                                 target.object.str() + " " +
+                                 (out.param_name ? "\"" + *out.param_name + "\"" : target.param) +
+                                 ": " + existing +
+                                 " already modulates it, and their offsets add (keep one, "
+                                 "modulation.remove the other, or set each depth for the sum)",
+                             "/target");
+            }
             return out;
         };
         addChecked(registry, std::move(c));
@@ -780,7 +812,9 @@ void registerModulationCommands(cmd::Registry& registry) {
             "module.set {module, params} on the module this returns (an LFO's rate, shape or "
             "sync; a follower's gain and threshold; a macro's macro_1, which sits at 0 until "
             "moved, so a macro does nothing at first; module.describe {type} lists the knobs) "
-            "and the route's depth with modulation.set.";
+            "and the route's depth with modulation.set. A second route from the same kind of "
+            "source onto "
+            "a target that already has one warns modulation.stacked (their offsets add).";
         c.tags = {"modulation", "rack"};
         c.args = schema::object<ModulateArgs>("modulate_args")
                      .field("target", &ModulateArgs::target, targetSchema())

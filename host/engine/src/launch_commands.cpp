@@ -42,6 +42,8 @@ struct LaunchTrackState {
     std::optional<std::string> clip;
     std::optional<double> position;
     std::optional<LaunchQueued> queued;
+    std::optional<Engine::TrackLaunch::Followed> followed;
+    std::optional<bool> followBudget;
 };
 struct LaunchStateResult {
     bool playing = false, capturing = false;
@@ -75,6 +77,21 @@ Result<Engine*> runningEngine(EngineApp& app) {
 model::LaunchQuantize quantizeOf(const model::Session& s, const model::Clip* clip) {
     if (clip && clip->quantize) return *clip->quantize;
     return s.project->launchQuantize;
+}
+
+// launch.follow_budget for a clip just launched whose follow the budget
+// forced (ADR-0098 X4c): the running plan's outcome for it.
+void warnFollowBudget(EngineApp& app, model::Id track, model::Id clip, Context& ctx,
+                      const std::string& path) {
+    const Engine* engine = app.engine();
+    const auto followed = engine ? engine->clipFollowed(track, clip) : std::nullopt;
+    if (!followed || !followed->budget) return;
+    ctx.warn("launch.follow_budget",
+             clip.str() + "'s context and the project's make too many pairs of places to follow " +
+                 (followed->followed == Engine::TrackLaunch::Followed::Key
+                      ? "the chords; it follows the key"
+                      : "live; it plays as written"),
+             path);
 }
 
 // Places the requests on one target and, for a clip launched while
@@ -247,8 +264,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
             std::string(kWhen) +
             " Launching while stopped starts the transport. The track leaves the "
             "arrangement (or the clip it played) there: its sounding notes end and "
-            "audio crossfades over 5 ms. A clip whose follow is not none warns launch.unfollowed: "
-            "a launched clip plays as written until ADR-0098's X4.";
+            "audio crossfades over 5 ms. A clip whose follow is not none follows the project's "
+            "key or chords live, as it would laid there (launch.state says how); "
+            "launch.follow_budget warns when its context and the project's are too varied to "
+            "follow fully (a chords clip then follows its key, else it plays as written).";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<ClipArg>("launch_clip_args")
                      .field("clip", &ClipArg::clip, idArg("cl", "Clip"))
@@ -271,13 +290,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
             SUPPLE_TRY(refuseFrozen(s, clip.track, "/clip"));
             auto done = launchNow(app, Action::Clip, {{clip.track, Action::Clip, *id, {}}},
                                   quantizeOf(s, &clip), "/clip");
-            if (done && clip.follow != model::ClipFollow::None)
-                ctx.warn("launch.unfollowed",
-                         id->str() + " follows the " +
-                             (clip.follow == model::ClipFollow::Key ? "key" : "chords") +
-                             " when it is laid on the timeline, but a launched clip plays as "
-                             "it was written until ADR-0098's X4",
-                         "/clip");
+            if (done) warnFollowBudget(app, clip.track, *id, ctx, "/clip");
             return done;
         };
         addChecked(registry, std::move(c));
@@ -292,9 +305,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
             std::string(kWhen) +
             " All the scene's tracks switch at the same boundary, the project's launch_quantize. "
             "Tracks with no clip in the scene keep playing what they play. A frozen track is "
-            "skipped with a track.frozen warning, a clip past the memory budget with a "
-            "launch.memory warning, and clips whose follow is not none with one "
-            "launch.unfollowed warning (launched clips play as written until ADR-0098's X4).";
+            "skipped with a track.frozen warning and a clip past the memory budget with a "
+            "launch.memory warning. Clips whose follow is not none follow live, with "
+            "launch.follow_budget for each one the follow budget holds back.";
         c.tags = {"clip launcher", "transport", "scene"};
         c.args = schema::object<SceneArg>("launch_scene_args")
                      .field("scene", &SceneArg::scene, idArg("sc", "Scene"))
@@ -336,20 +349,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
                 return Error("launch.scene", a.scene + " has no clip that can play", "/scene",
                              "add clips to the scene with clip.add, or unfreeze their tracks");
             auto done = launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
-            std::string following;
-            int followers = 0;
-            for (const auto& r : requests)
-                if (s.clips.find(r.clip)->follow != model::ClipFollow::None) {
-                    following += (following.empty() ? "" : ", ") + r.clip.str();
-                    ++followers;
-                }
-            if (done && !following.empty())
-                ctx.warn("launch.unfollowed",
-                         (followers == 1 ? "the clip " : "the clips ") + following +
-                             (followers == 1 ? " follows" : " follow") +
-                             " the context when laid on the timeline, but launched clips play "
-                             "as they were written until ADR-0098's X4",
-                         "/scene");
+            if (done)
+                for (const auto& r : requests)
+                    warnFollowBudget(app, r.track, r.clip, ctx, "/scene");
             return done;
         };
         addChecked(registry, std::move(c));
@@ -409,8 +411,11 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "plays is arrangement, clip, held (a once clip past its length, silent) or stopped, "
             "as heard. position is the playing clip's place in its period, in beats for a MIDI "
             "clip and seconds for an audio clip. queued is a launch not heard yet, with the "
-            "song position it applies at. Tracks without clips always follow the arrangement "
-            "and are not listed. capturing: launch.capture is on.";
+            "song position it applies at. followed (none, key or chords) is what the clip it "
+            "plays, else the one it has queued, follows by in the running plan (ADR-0098); "
+            "follow_budget: true when the follow budget forced that (a chords clip by its key, "
+            "or any as written). Tracks without clips always follow the arrangement and are not "
+            "listed. capturing: launch.capture is on.";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto queued = schema::object<LaunchQueued>("launch_queued")
@@ -425,6 +430,12 @@ void registerLaunchCommands(cmd::Registry& registry) {
                          .field("clip", &LaunchTrackState::clip, schema::string())
                          .field("position", &LaunchTrackState::position, schema::number())
                          .field("queued", &LaunchTrackState::queued, queued)
+                         .field("followed", &LaunchTrackState::followed,
+                                schema::enumeration<Engine::TrackLaunch::Followed>(
+                                    {{Engine::TrackLaunch::Followed::None, "none"},
+                                     {Engine::TrackLaunch::Followed::Key, "key"},
+                                     {Engine::TrackLaunch::Followed::Chords, "chords"}}))
+                         .field("follow_budget", &LaunchTrackState::followBudget, schema::boolean())
                          .build();
         c.result = schema::object<LaunchStateResult>("launch_state")
                        .field("playing", &LaunchStateResult::playing, schema::boolean())
@@ -459,6 +470,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
                     q.seconds = double(t.queued->placed.anchorSample) / rate;
                     e.queued = q;
                 }
+                e.followed = t.followed;
+                if (t.followBudget) e.followBudget = true;
                 out.tracks.push_back(std::move(e));
             }
             return out;
@@ -522,10 +535,13 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "and so is the arrangement a loop repeated. A scene launched whole (launch.scene: "
             "every clip that could play started on one boundary) also writes a section named "
             "after it, from that boundary until one of its tracks is launched again or the "
-            "capture ends, as scene.insert does; clips launched singly write none. A launched "
-            "clip is not followed (until ADR-0098's X4): its items copy what was heard, and "
-            "context.mismatch warns once for each launched clip whose key is not the project's "
-            "under it, however many periods it is laid as. "
+            "capture ends, as scene.insert does; clips launched singly write none. The notes are "
+            "laid as written; each laid MIDI take carries its clip's context and the follow the "
+            "plan used for that clip (none, key or chords, after the per-clip budget), so the "
+            "committed timeline sounds as the performance did and moves with the context track "
+            "as a launched clip does (take.bake writes the sounding pitches). A clip played as "
+            "written warns context.mismatch once, when its key (or, in the same "
+            "key, chord) is not the project's under it, however many periods it is laid as. "
             "A running "
             "capture ends first; the "
             "capture stays, so committing again writes it again over itself. performance is "
@@ -538,10 +554,32 @@ void registerLaunchCommands(cmd::Registry& registry) {
                            .field("start", &CommittedSection::start, schema::number())
                            .field("end", &CommittedSection::end, schema::number())
                            .build();
+        auto mismatch =
+            schema::object<CommittedMismatch>("committed_mismatch")
+                .field("clip", &CommittedMismatch::clip, schema::string())
+                .field("kind", &CommittedMismatch::kind,
+                       schema::enumeration<std::string>({{"key", "key"}, {"chord", "chord"}})
+                           .doc("What differs: the key, or (in the same key) the chord."))
+                .field("clip_key", &CommittedMismatch::clipKey,
+                       schema::string().doc("kind key: the clip's key."))
+                .field("key", &CommittedMismatch::key,
+                       schema::string().doc("kind key: the project's key there, which differs."))
+                .field("clip_chord", &CommittedMismatch::clipChord,
+                       schema::string().doc("kind chord: the chord the clip was written over."))
+                .field(
+                    "chord", &CommittedMismatch::chord,
+                    schema::string().doc("kind chord: the project's chord there, which differs."))
+                .field("bar", &CommittedMismatch::bar,
+                       schema::integer().doc("The first project bar where they differ."))
+                .build();
         c.result = schema::object<CommitDone>("launch_commit")
                        .field("tracks", &CommitDone::tracks, schema::arrayOf(schema::string()))
                        .field("items", &CommitDone::items, schema::arrayOf(schema::string()))
                        .field("sections", &CommitDone::sections, schema::arrayOf(section))
+                       .field("mismatches", &CommitDone::mismatches,
+                              schema::arrayOf(mismatch).doc(
+                                  "Each launched stretch of a MIDI clip copied under a key that "
+                                  "is not the clip's, as its context.mismatch warning says it."))
                        .field("from", &CommitDone::from, schema::number())
                        .field("to", &CommitDone::to, schema::number())
                        .build();

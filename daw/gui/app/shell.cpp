@@ -4,6 +4,7 @@
 #include <supple/model/groups.h>
 
 #include "crash_banner.h"
+#include "mod_source.h"
 #include "pan_menu.h"
 #include "param_menu.h"
 #include "plugin_scales.h"
@@ -274,6 +275,11 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
             (void)actions.run("ui.routing");
     };
     tcp.lanesRect = [this] { return arrange_->lanesRect(); };
+    tcp.modulationSource = [this, &root, &actions](const model::EnvTarget& target,
+                                                   const ui::Rect& anchor) {
+        const auto catalog = racks::catalog(app_);
+        openModSource(root, actions, app_.head(), catalog.get(), target, anchor);
+    };
 
     arrange_->setTcpCallbacks(std::move(tcp));
     // Plugin parameter lanes take their scale from the effect's description.

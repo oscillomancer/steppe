@@ -3198,10 +3198,13 @@ std::optional<std::vector<RecordingWarning>> recordingWarnings(const RecordedTak
 
 // midi_overdub (ADR-0016): the recording merges into the MIDI item under its
 // first heard position, as a new take (the old one stays for undo and take
-// switching). False when there is no such item (a new item is made then).
+// switching). False when there is no such item (a new item is made then), or when its active
+// take follows the project's context (ADR-0098, following is playback): a pass never changes
+// what a following take sounds and never loses what was played, so the notes are committed as new
+// items and `*kept` names the item that was left alone.
 Result<bool> overdubMidi(model::EditTxn& t, const model::Session& s, const RecordedTake& r,
-                         const std::vector<Run>& runs, double rate,
-                         std::vector<RecordedInfo>& out) {
+                         const std::vector<Run>& runs, double rate, std::vector<RecordedInfo>& out,
+                         std::optional<Id>* kept) {
     if (runs.empty()) return false;
     const double atBeat = s.timeMap->beatAt(static_cast<double>(runs.front().t0) / rate);
     for (const auto& e : s.items) {
@@ -3212,6 +3215,10 @@ Result<bool> overdubMidi(model::EditTxn& t, const model::Session& s, const Recor
         const model::ItemSpan span = model::itemSpan(s, it);
         const double itemEndBeat = s.timeMap->beatAt(span.endSec);
         if (atBeat < span.startBeat || atBeat >= itemEndBeat) continue;
+        if (old->follow != model::ClipFollow::None) {
+            *kept = e.id;
+            return false;
+        }
         midi::Sequence seq = s.midi.find(*old->source)->sequence;
         const double ppq = seq.ppq;
         auto tick = [&](std::int64_t sample) {
@@ -3256,8 +3263,9 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
                       const std::vector<Run>& runs, const std::vector<ItemPlan>& items, double rate,
                       std::vector<RecordedInfo>& out) {
     const model::Track* tr = s.tracks.find(r.track);
+    std::optional<Id> kept;  // a following item the overdub left alone
     if (tr && tr->record.mode == model::RecordMode::MidiOverdub) {
-        auto overdub = overdubMidi(t, s, r, runs, rate, out);
+        auto overdub = overdubMidi(t, s, r, runs, rate, out, &kept);
         if (!overdub) return overdub.error();
         if (*overdub) return {};
     }
@@ -3275,6 +3283,17 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
         };
         RecordedInfo info;
         info.warnings = recordingWarnings(r);
+        if (kept) {
+            if (!info.warnings) info.warnings.emplace();
+            info.warnings->push_back(
+                {"record.follow_kept",
+                 "the item " + kept->str() +
+                     " follows the project's context, so the played notes are a new item "
+                     "beside it, not merged into it: it sounds as before",
+                 "/item",
+                 "take.bake it first to overdub into what it sounds as, or keep both layered",
+                 r.track.str(), r.file.string()});
+        }
         std::optional<Id> active;
         for (std::size_t k = 0; k < ip.takes.size(); ++k) {
             const Run& run = runs[ip.takes[k].run];
@@ -5422,6 +5441,11 @@ struct Gain : Effect {
         run("chord.set", R"({"at":0,"symbol":"Ebmaj7"})");
         run("chord.set", R"({"at":4,"symbol":"Cm7"})");
         run("region.add", R"({"start":0,"end":8,"name":"Verse"})");
+        return;
+    }
+    if (fixture == "song_following") {  // it_1's take follows its C major by key; the project is Eb
+        run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+        run("take.set", R"({"take":"tk_1","context":"1: key C major ~:w","follow":"key"})");
         return;
     }
     run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");

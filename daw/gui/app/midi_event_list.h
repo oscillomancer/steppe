@@ -56,6 +56,7 @@ class MidiEventList {
     MidiEditor& editor_;
     engine::EngineApp& app_;
     ui::List* list_ = nullptr;
+    ui::Node* columns_ = nullptr;  // the column header
     ui::TextField* field_ = nullptr;
     ui::Label* status_ = nullptr;
     std::vector<Row> rows_;
@@ -66,5 +67,6 @@ class MidiEventList {
     std::uint64_t version_ = 0;
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     double tickBeat_ = 1.0 / 960;
+    double frameShift_ = 0;  // the roll's frame shift (rollFrameShift) for item_
 };
 }  // namespace supple::gui

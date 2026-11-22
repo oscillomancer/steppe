@@ -77,7 +77,13 @@ instances (ADR-0092, §1.6).
 - **ItemPlayer** (inside a TrackNode): per active item on the track's lanes,
   per take: source reader (audio: disk-streamed decoded+resampled blocks
   from the media cache; MIDI: event generator from the source with playrate
-  and loop), take FX chain, take envelopes, item gain/fades/crossfades.
+  and loop), take FX chain, take envelopes, item gain/fades/crossfades. As
+  built, a take's envelopes are `volume`, `pan` and `mute`. An envelope with
+  `param: "pitch"` can only come from a file (`env.add` refuses it with
+  `env.param`): the plan has no slot for it, so it is never played, on an item
+  or a clip, and nothing warns. The take's own `pitch` (a constant, in
+  semitones) plays. Playing the envelope needs the stretch path to take a
+  varying ratio (the lead's decision, with clips; ADR-0097).
 - **FxInstance** wrappers around `host::Instance` (in-process) or a bridge
   proxy (§5), with wet/dry, bypass, pins, oversampling, parallel groups and
   containers compiled into a small per-chain program. As built: containers
@@ -399,14 +405,27 @@ until it is released.
   editor moved is that edit repeated and is not passed on (review round
   81b, E5). A barrier that drops queued edits, a deactivation or a full
   queue ends every editor gesture still open, so a lost `endEdit` leaves
-  no gesture open in the stage. Within a grab the plug-in's state is
-  captured at `endEdit`, not at each `performEdit`: a capture mid-drag was
-  a step of its own, and its plan swap dropped the drag's gesture. In the
-  anticipative executor the edit's state flag captures the plug-in state
-  while the rendered gesture waits to be heard, and that step's plan swap
-  usually drops the gesture: the edit is recorded as the plug-in's state
-  and writes no point, or now and then as the state and then the
-  parameter edit (STATUS). Without the filter an echoing plug-in under
+  no gesture open in the stage. The ends go out in queue order: after
+  every edit queued before them, and before any queued after, each request
+  in its own place (review rounds 97 and 98). A block takes the editor's
+  queued edits only as far as its 64 editor events can hold them with the
+  ends that may follow; the rest waits for the next block, which it asks
+  for, so a drag made while the plug-in was not processing comes out whole
+  (round 98, U1). Closing the editor with a grab open (no
+  `endEdit`, review round 81c, E6) queues each grab's end behind the
+  editor's moves, so a move made just before the close stays inside its
+  gesture: one step, its points once (round 92b; ending it ahead of the
+  queue made the move a second, gestureless edit). A processing VST3's
+  editor edit does not flag the plug-in's state as changed: the gesture's
+  commit saves the state, and a capture of its own was a step that swapped
+  the plan, which dropped the rendered gesture before it was heard (the
+  anticipative executor; review round 81, E2). It asks the stage to process
+  instead, so a bypassed stage still reports it. Only an instance that is
+  not processing flags its state,
+  and so does one that stops processing with edits still queued. Outputs a
+  plan swap drops (pending, or drained under an older plan) that carry an
+  edit capture their plug-in's state, so the edit still reaches the
+  history, as a state step. Without the filter an echoing plug-in under
   modulation added a history step per echo, stopped or playing, and wrote
   points in a writing mode (the gui-lead's second walk, defect 1).
 - **Inert routes.** A route is inert, with a plan warning, when binding finds
@@ -921,7 +940,7 @@ specified here as it lands); so far:
   and checks that both leave the plan.
 - **Note sources are built by sorting, once per node** (step 2). A note's
   ordinal counts the earlier note-ons with the same origin, port, channel
-  and key: `prepare` sorts a stage's note-ons by that address and arrival
+  and key (a keyless note's written key, below): `prepare` sorts a stage's note-ons by that address and arrival
   and numbers each run, where it kept a map of counts per stage, and the
   chain's note target copies the MIDI stage's sources (the same events). A
   test compares every stage's sources and index with the map-based build.
@@ -1095,6 +1114,9 @@ handles changed, so an edit that changes nothing they handle falls through
 them to a compile. A context edit that comes with any other change compiles
 as that change does. When something in the plan reads the context (a note
 source, a rack module), an edit compiles only if the plan reads it.
+*(Amended 2026-11-21, ADR-0098 "Amendment: following is playback": while a take
+or a clip in the session follows, the plan reads the context, and a context-only
+edit compiles; see "Following at playback".)*
 
 What the tests pin, and what they do not (the reader of `loadContextOnly`'s guards
 should know which is which). `a context-only edit compiles nothing and the same
@@ -1145,6 +1167,83 @@ before the patches are applied and by one after; every executor reads it
 before processing a block and stamps that block's plug-in outputs with it,
 and the app drops outputs stamped with any value other than the current
 one (see plug-in outputs below). `Engine::patchEdits()` counts these edits.
+
+### Following at playback (ADR-0098 amended; the contract for X4a and X4c)
+
+*X4a is built: the live tables, the budget, the note identity rules below for
+clip notes, `launch.state`'s `followed` and `follow_budget`, and the
+context-edit compile while a launched clip follows. X4c (the timeline mapping,
+the plan-wide pool, the tables read as the model reads a context, the budget
+warning in the launch answer, `followed` note origins and the context-edit
+compile while a take follows) is built too.* What a note sounds as is `model::soundingKey`
+(`session-model.md`, "Take context and follow"); the engine only places its
+results.
+
+- **Timeline items: at compile.** Item notes are compiled into each stage's
+  timed events at plan time, as now. A following take's note-ons take their
+  keys as `model::soundingNotes` (`session-model.md`) gives them: the compile
+  walks the same passes, chased notes and crossing notes, takes each note's
+  place from `model::notePlace` (its unwrapped source beat, the start rule)
+  and its key from `model::soundingKey`. Each note-off takes its note-on's
+  key. Nothing is added to the audio path, and there is no budget.
+- **Launched clips: the live tables.** X4's tables keep their rows (128 keys,
+  one per pair of places) in one pool per plan, deduplicated by content across
+  all clip players; each clip's tables hold a reference to the pool and are
+  read only with their own plan's project regions (another plan's would index
+  other rows, out of bounds; no MIDI player retires into a later plan).
+  A clip's places are read as `model::soundingKey` reads a context (its first
+  key and chord hold before their first points; the project's nothing before
+  its first). The budget stays per clip: its own pairs, counted before
+  deduplication, at most `kFollowPairs` (1024); past it a `chords` clip
+  follows its key, and past that it plays as written. A clip's outcome so
+  depends only on the clip and the project, never on what else is launched.
+  `launch.follow_budget` stays in the engine status's warnings while it
+  applies (a status, not an event); `launch.clip` and `launch.scene` return
+  it as a warning for the clips they launch, and `launch.state` marks the
+  clip's entry `follow_budget: true`.
+- **`launch.state`** (X4a): each listed track gains `followed: "none" | "key" |
+  "chords"`, the outcome the plan uses for the clip it plays or has queued,
+  omitted when it plays the arrangement or nothing. `launch.unfollowed` goes.
+- **Note identity.** A note origin gains `followed` and `written` (its source
+  note's written key); the rules key on `followed` or on `kClipOrigin`
+  (`NoteOrigin::keyless`). For such a note:
+  - its address (the one note sources are sorted, numbered and carried by)
+    holds its written key in place of the key it sounds at, so a plan swap
+    carries each held voice to its own source, a chord's notes included,
+    which share the rest of their address (review round 86 H1);
+  - `prepareNoteIds` pairs its note-off by source id, port and channel, taking
+    the held voice's key. It pairs a note-off the same way when the held voice
+    sounded keyless, whatever its new source is: a carried voice keeps the
+    origin it started with, so a take that stops following while its note is
+    held still ends the key the note sounds at (review round 87 J1).
+  So a context edit while a note sounds lets it play on to its note-off at the
+  pitch it started with, and so does a change of following (on to off, off to
+  on, key to chords, take.set or an undo): no note sticks, and none is cut
+  early unless the note itself is gone. A MIDI send's voice already ends at
+  the key it delivered.
+- **Context edits.** A context-only edit takes the compile path whenever an
+  item's active take has `follow` other than `none` or the plan follows a
+  clip; otherwise the shortcut above stays. Following costs the compile about
+  2.5 µs a note-on (a skipped test in test_clip_player_follow.cpp prints it):
+  compile and prepare of 400 one-bar items of 16 notes took 37 ms following
+  nothing, 39 ms following key and 53 ms following chords (dev, Debug, median
+  of 7), so no per-place cache is kept.
+- **Everything downstream reads compiled events:** offline renders, freeze,
+  stems, rack Notes feeds, MIDI sends and plug-in MIDI inputs take the sounding
+  pitches with no change of their own.
+- **Invariants.** Real-time output stays bit-identical to the offline render in
+  both executors and bridged. Tests (X4c): a render of a following item equals
+  `take.bake` and then a render as written; live equals offline across a
+  context edit, in both executors; a note held across a context edit ends at
+  its note-off, at its start's pitch; a looped item whose passes sound
+  differently; a pooled source read by a following and a written take; a clip
+  over its budget beside one within it, each with its own outcome; the
+  compiled keys equal `soundingNotes`'s, a chased note's included; before a
+  clip's first chord point it follows by the first chord, launched as laid;
+  timeline
+  equals launcher for the same clip (a clip of length 8 over 4 beats of looping
+  content, C at clip beat 0 and Eb at 4, laid and launched, also at a take
+  playrate of 2); a chased note maps by its own start.
 
 ## 2. Real-time execution
 
@@ -1632,10 +1731,20 @@ first use, and no plug-in code runs early to warm it.
   - `analysis` and `warnings`.
 
   `skipped: [{track?, region?, reason}]` lists files left out by
-  `skip_silent` or `if_exists: skip`. `render.dry-run` lists each file with
+  `skip_silent`, `if_exists: skip` or, for stems with no `tracks` named, a
+  channel that can produce no audio (`reason: "no_audio"`, with a `detail`; a
+  track named in `tracks`, or in `stems.tracks`, is always rendered). That
+  is a channel that has a rack, none of whose Out modules (the only way audio
+  leaves a rack; Mod Out carries control and Notes Out plays an instrument
+  elsewhere) has an audio output cabled into it, and that nothing else feeds: no
+  items, FX, print, children, MIDI input, hardware input or send into it, and
+  no rack Out with audio patched to it (`modulate`'s Modulators channel, whose
+  Out `rack.add` made and nothing is patched to). A cable from a source this
+  build does not know counts as audio. It leaves the file counter alone. `render.dry-run` lists each file with
   `path` (where `if_exists` sends it), `exists` (its destination is already
   there), `skip: true` when `if_exists: skip` leaves it out, `seconds` and
-  `outputs: [{path, format}]`. With no `operation` it plans the settings'
+  `outputs: [{path, format}]`; a skipped no-audio channel is `{track, reason,
+  skip: true}`. With no `operation` it plans the settings'
   `source`. `render.mix` answers with its file's entry at the top level
   (plus `peak_dbfs`, `render`, `output_latency` and `skipped`), as before.
   The mix renders the `masters` setting, a file each in that order
@@ -2559,7 +2668,21 @@ harness. See the tooling README for schemas, limits and invocation details.
   ADR-0028: stopped block deadlines and event-driven buffer-space wakes
   from the callback, with a safety bound of half the playback buffer span
   (1 s while stopped, held or all live). Misses (no chunk while playing, after
-  the pre-roll) are counted (`engine.status.anticipation_misses`). `stop()`
+  the pre-roll) are counted (`engine.status.anticipation_misses`). The
+  pre-roll of a start or a seek lasts until the renderer has rendered a whole
+  render block of the epoch and the callback's whole cycle (that at most the
+  render-ahead span), in the output ring or the frontier rings: never a first
+  chunk cut short, such as a launch from stop whose compensated tracks switch
+  a few frames in, or a loop wrap. It also ends when a ring the
+  renderer writes is full, so it can render no more until the callback
+  plays: a loop shorter than the rings' chunks fills them first (see "Rings
+  are recycled"). Until then the
+  callback plays silence and time holds still. The pre-roll ends with the
+  first frame played: the rest of that cycle, past a loop wrap too, plays on.
+  A cycle that has played audio and then runs short counts a miss, the cycle
+  that ends the pre-roll included. *(Amended 2026-11-21,
+  ADR-0012 note: priming took any chunk, so a launch from stop played its
+  first frames and then a gap, counted or not.)* `stop()`
   joins the renderer first; it stops every plugin as it ends. With
   `anticipative = false` the old in-callback renderer runs (the reference,
   and the base for live nodes).

@@ -615,10 +615,17 @@ one again to hide it.
 On a launcher clip, the Lanes menu also offers the clip's take envelopes
 (Take volume, pan and mute, once the take FX hold an instrument) and the
 parameters of each effect in its take FX (**parameters…**). Their lanes
-appear under the controller lane in clip beats, from the clip's start:
-click to add a point, drag one to move it, right-click one to remove it,
-and **hide** at the lane's left hides it. The envelope keeps playing while
-hidden.
+appear under the controller lane in clip beats, from the clip's start,
+and work like the timeline's envelope lanes: click to add a point, click a
+point to select it (Ctrl+click for more), drag to move the selected points
+together (Shift to leave the grid), Alt+click to remove one, and Delete to
+remove the selected. Right-drag (or Ctrl-drag from empty space) to draw a
+box around points and select them. Ctrl+C, Ctrl+X and Ctrl+V copy, cut and
+paste the points of the lane you clicked last. Right-click a lane for its
+menu: insert a point, select all, copy, cut, paste at the pointer, delete,
+give the selected points a shape (linear, square, slow, fast start, fast
+end, bezier) or hide the lane. **hide** at the lane's left
+hides it too; the envelope keeps playing while hidden.
 
 ### Moving around
 
@@ -1151,6 +1158,19 @@ change how deep the modulation goes. A plug-in without its own parameter
 descriptions lists its parameters in the FX window; those it lets you
 modulate have a slider there.
 
+A violet "~" says that something is modulated. It appears at the right of
+a plug-in in the mixer when one of its parameters is, and after "fx" on
+the track (in the track list and the mixer) when any plug-in in its chain
+is. Selecting the track shows a **Modulation** row in the inspector: each
+modulated parameter with its source ("Marram · Filter 1 Cutoff ~ LFO"), or
+"5 routes" when there are more than four. Click a line to open the rack
+window with that source picked. A modulated parameter's lane has a
+**mod** button that does the same (with a short list when several sources
+move it), and its title names the parameter first ("Filter 1 Cutoff ·
+Marram"). On a fader, pan or FX parameter, the right-click menu's **Show
+modulation source** takes you there too; clicking the violet bar only
+changes the depth.
+
 ## Timing audio with hits and stretch markers
 
 Items have two menus. Right-click an item for the everyday edits: cut, copy,
@@ -1663,7 +1683,8 @@ no clips, a section has two items on one track) the status line says why.
 
 In a cell, no click does two things:
 - a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds
-  more) and a double-click opens it, a MIDI clip in the piano roll;
+  more) and a double-click opens it: a MIDI clip in the piano roll, an
+  audio clip in the same pane as its waveform with its envelope lanes;
 - on a track with clips, an empty cell's small square stops the track; a
   click elsewhere in the cell selects it, and a double-click makes an empty
   one-bar MIDI clip there and opens it.
@@ -1687,14 +1708,23 @@ cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
 marks clips to move, and the next paste moves them. Copied clips stay in
 their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
 colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
-chords) says how the clip's notes are to be mapped onto the song's key when
-it is laid; it needs a key at the clip's start, and until following is built
-a laid clip is copied as it is. Clips launch under a master playrate, but
+chords) maps the clip's notes onto the song's key or chords, when it is laid
+and when it is launched; it needs a key at the clip's start. When you lay a clip or a
+scene on the timeline, its notes are laid as written and the status line at
+the bottom says how they sound: "Bass follows: sounds in D minor, +2" for a
+clip that follows the song's key, or "Keys is laid as written: its key C
+minor differs from D minor at bar 21" for one that doesn't, under a
+different key ("its chord Am differs from F at bar 5" in the same key over
+another chord). A Capture take laid under a different key or chord says so
+the same way. A clip with its own key
+shows it in the corner of its cell ("Dm", "G dor"), with "→" before it
+when the clip follows. Clips launch under a master playrate, but
 while it keeps the pitch an audio clip can't be launched: the pane draws
 those clips (and the scenes holding one) dimmed, and a click says why in
 the status line.
 
-In the piano roll a clip starts at its own bar 1. It has no place in the
+In the piano roll a clip starts at its own bar 1, and its end is marked
+"end", with the time after it shaded. It has no place in the
 song, so it keeps the key and chords it was written against, and the roll
 shows those: the key button names its key, its chords are in the strip over
 the roll (keys in a row under the chords), and the rows and note names
@@ -1705,9 +1735,37 @@ chords at the playhead, or clear them; double-click a chord to change it.
 Without a key the key button is off. While the clip plays, the playhead
 shows where.
 
+An item laid from a clip that follows keeps the clip's key and chords, and
+its notes stay as written: they sound in the song's key (or chords) under
+the item, so they move when you change the song's chords later. The item
+shows "→D" (the key it was written in) in its name bar. To make a part you
+wrote on the timeline follow the song from now on, select its item and set
+**Follow** to Key or Chords in the inspector (or **Follow the song's key**
+in the Item menu): it takes the song's key and chords under it as its own,
+so nothing changes until the song does. **Bake** (or **Bake into notes**)
+writes the notes as they sound and stops following. A key or chord change
+on the ruler says in the status line which items followed it ("Bass and
+Keys follow the new key at bar 9: G major"). In the piano roll such an item
+is drawn where its notes sound, with the written pitches outlined;
+**Written** shows the notes as written instead. The strip shows the song's
+chords and, under them, the item's own ("take"), which you edit as a
+clip's. With the key button lit, dragging a note steps it by the scale's
+degrees, as it sounds. (Playback doesn't follow yet: for now an item plays
+its notes as written, though the roll and the item's thumbnail show where
+they will sound.)
+
 Notes outside the key at their place are outlined in amber, and the roll's
 title counts them ("3 outside A minor"). That is how you see a clip laid into a song in another
-key: its notes are copied as they are, and the ones that clash stand out.
+key without following: its notes play as written, and the ones that clash stand out.
+
+An audio clip opens in the same pane, as its waveform: time in seconds
+from the clip's start, its end marked, and under it the same **Lanes**
+menu and envelope lanes as a MIDI clip's (the take's volume, pan and mute,
+and its effects' parameters), placed in seconds. Points snap to a grid of
+seconds that gets finer as you zoom in; **Snap** turns it off. The key
+button there is
+the clip's key: click it to set one, remove it, or take the song's at the
+playhead. The pane doesn't edit the audio itself.
 
 ### Playing clips
 
@@ -1741,7 +1799,8 @@ launch, and their tail is cut when the track switches away.
 `launch.state` tells what each track with clips plays as you hear it:
 `arrangement`, `clip` (with its position in the clip), `held` (a `once`
 clip that has finished, silent until the next launch) or `stopped`. It
-also shows what each track has queued.
+also shows what each track has queued, and for a clip that plays or is
+queued, `followed`: what it follows by (`none`, `key` or `chords`).
 
 ### Capturing a performance
 
