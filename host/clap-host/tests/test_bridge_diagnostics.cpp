@@ -62,12 +62,13 @@ struct Sink {
     }
 };
 // A guard against a lost event, not a timing assertion: the bridge is gone well before this.
-void awaitEnded(const BridgeProcess& process) {
+void awaitEnded(const BridgeProcess& process, const char* why = "the bridge is still alive") {
     const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     while (process.alive() && std::chrono::steady_clock::now() < limit)
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    REQUIRE_FALSE(process.alive());
+    REQUIRE_MESSAGE(!process.alive(), why);
 }
+
 }  // namespace
 
 TEST_CASE("a bridge's ordinals count from one and are never reused") {
@@ -262,7 +263,9 @@ static diagctx::Event endBridgeWith(double mode) {
     block.inputChannels = block.outputChannels = 1;
     block.frames = 64;
     (void)instance.process(block);
-    awaitEnded(**process);
+    awaitEnded(**process,
+               "the bridge did not end by itself in a minute: a hang, for example abort()'s "
+               "dialog on Windows, which the host would have killed and read as its own");
     (*process)->reap();
     diagctx::Event end;
     for (const auto& event : Sink::of(diagctx::EventKind::Bridge))
@@ -284,7 +287,8 @@ static diagctx::Event endBridgeWith(double mode) {
 // bridge sets its runtime at start (no dialog, no report to wait on, a SIGABRT handler) so that
 // abort() ends it at once with a fast-fail's status, an exception. The first native run
 // (CI 44242073297) had the debug runtime's abort wait until the host's deadline killed the bridge,
-// which reads as the host's end with status 1; this case fails naming that if it happens again.
+// which reads as the host's end with status 1; this case fails naming a hang if it happens again
+// (the bridge is given the time to end itself, so a hang shows as one that never ended).
 TEST_CASE("a bridge ended by abort() is told as the system ended it, and the result is recorded") {
     const auto end = endBridgeWith(6.0);  // abort() in the next process()
 #if defined(_WIN32)
