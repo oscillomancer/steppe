@@ -69,6 +69,13 @@ void awaitEnded(const BridgeProcess& process, const char* why = "the bridge is s
     REQUIRE_MESSAGE(!process.alive(), why);
 }
 
+// The process-wide deadline for a bridged call, raised for a case that decides by what a bridge
+// did, not by how fast a loaded machine answered; restored when the case ends.
+struct LongDeadline {
+    int previous = bridgeDeadlineMs();
+    LongDeadline() { setBridgeDeadlineMs(120000); }
+    ~LongDeadline() { setBridgeDeadlineMs(previous); }
+};
 }  // namespace
 
 TEST_CASE("a bridge's ordinals count from one and are never reused") {
@@ -371,6 +378,9 @@ TEST_CASE("a bridge that faults as the host lets go is its own end, not the host
     struct Restore {
         ~Restore() { setBridgeExitWaitForTests(-1); }
     } restore;
+    // Nor does a clock decide the process() that starts it: a bridge starved past its deadline
+    // would answer late and the call would fail.
+    const LongDeadline deadline;
     Sink sink;
     auto process = createBridgeProcess();
     REQUIRE(process);
@@ -442,6 +452,7 @@ TEST_CASE("a bridge still there after the wait is ended by the host, and its sta
 // what faults), and the liveness answers are set by the seam.
 TEST_CASE("a bridge killed by the host while it died of its own fault is still its own end") {
     setBridgeExecutable(BRIDGE_PATH);
+    const LongDeadline deadline;  // process() is answered however late a loaded machine is
     Sink sink;
     auto process = createBridgeProcess();
     REQUIRE(process);
