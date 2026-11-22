@@ -5426,6 +5426,85 @@ TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, i
             }
 }
 
+TEST_CASE("a VST3 editor closed right after a move ends its drag after that move") {
+    // Round 92b: closing the editor mid-drag ended its grab with a flag the
+    // next block handles before the editor's queue, so a move still queued
+    // then was reported after the end: a second step and a doubled point.
+    // The anticipative executor met it when its renderer had not yet run the
+    // block after the move (release timing); the renderer's hold forces that
+    // here, and the in-callback executor meets it with no cycle between.
+    for (const char* mode : {"touch", "latch"})
+        for (const bool anticipative : {false, true}) {
+            CAPTURE(std::string(mode));
+            CAPTURE(anticipative);
+            Root root;
+            AppOptions options;
+            options.workdir = root.path;
+            options.pluginPath = {FIXTURE_VST3_PATH};
+            auto made = EngineApp::create(options, {.console9 = false});
+            REQUIRE(made);
+            EngineApp& app = **made;
+            cmd::Registry registry;
+            registerEngineCommands(registry);
+            cmd::Dispatcher bus(registry, app);
+            const auto call = [&](const char* command, json::Value args) {
+                auto result = bus.execute({command, std::move(args), kTest});
+                REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+                return *result;
+            };
+            call("track.add", j("{}"));
+            call("fx.add", j(R"({"track":"tr_1","plugin":"Test VST3 Stepped Echo"})"));
+            const json::Value added = call(
+                "env.add", j(R"({"fx":"fx_1","param":"Level","points":[{"beat":0,"value":0.5}]})"));
+            const auto env = *model::Id::parse(added.find("env")->asString());
+            json::Value set = json::Value::object();
+            set["env"] = env.str();
+            set["mode"] = mode;
+            call("env.set", set);
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+            REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
+                                    {.anticipative = anticipative}));
+            const auto cycles = [&](int n) {
+                for (int i = 0; i < n; ++i) {
+                    if (anticipative) (void)app.engine()->awaitRendered(4096);
+                    backend.run(1);
+                    app.tick();
+                }
+            };
+            REQUIRE(app.transport("play"));
+            cycles(50);
+            const auto version = app.head().version;
+            const auto points = app.head().envelopes.find(env)->points.size();
+            auto* instance = app.instanceOf(*model::Id::parse("fx_1"));
+            REQUIRE(instance);
+            REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
+            REQUIRE(instance->setParam(2, 0.05));  // grabs Level
+            cycles(10);
+            REQUIRE(instance->setParam(2, 0.3));
+            cycles(10);
+            // The last move and the close reach the processor in one block.
+            if (anticipative) {
+                app.engine()->holdRenderer(true);
+                REQUIRE(app.engine()->awaitRendererHeld());
+            }
+            REQUIRE(instance->setParam(2, 0.5));
+            instance->closeEditor();
+            if (anticipative) app.engine()->holdRenderer(false);
+            cycles(50);
+            CHECK(app.head().version == version + 1);
+            CHECK(app.versions().history(1).front()->txn.label == "Plug-in parameter edit");
+            const auto& now = app.head().envelopes.find(env)->points;
+            CHECK(now.size() == points + 3);
+            if (now.size() == points + 3) {
+                CHECK(now[points].value == doctest::Approx(0.5));
+                CHECK(now[points + 1].value == doctest::Approx(0.3));
+                CHECK(now[points + 2].value == doctest::Approx(0.5));
+            }
+            REQUIRE(app.transport("stop"));
+            app.stopEngine();
+        }
+}
+
 TEST_CASE("a bypassed VST3's editor edit is the plug-in's, recorded once") {
     // A bypassed stage does not process unless asked: an editor edit asks, so
     // the edit is reported as the plug-in's gesture there too, in both
