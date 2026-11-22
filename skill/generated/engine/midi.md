@@ -116,7 +116,7 @@ Result:
 
 Read an item's or clip's MIDI as notation, with its key and chords.
 
-Pitch names follow the key that holds at the item's start (none: the default spelling). context lists the key and the chords over the item's span, each from the bar of the item (item_bar, the notation's) and of the project (project_bar) where it starts; the first of each is the one already holding at the item's start. Omitted when the project has no key or chords there. A clip has no place in time: its pitch names follow its own key at its start, and its context is the key and chords it was written against: runs by clip bar (item_bar, no project_bar) and beat from its start, and text, its lead sheet in clip bars (clip.set {context} takes it back). follow (none, key, chords) is a clip's.
+Pitch names follow the key and chord that hold at each note's start (a chord tone by its degree: G# over E, never Ab; none: the default spelling). context lists the key and the chords over the item's span, each from the bar of the item (item_bar, the notation's) and of the project (project_bar) where it starts; the first of each is the one already holding at the item's start. Omitted when the project has no key or chords there. A clip has no place in time: its pitch names follow its own key and chords, and its context is the key and chords it was written against: runs by clip bar (item_bar, no project_bar) and beat from its start, and text, its lead sheet in clip bars (clip.set {context} takes it back). follow (none, key, chords) is a clip's.
 
 Kind: `query`. Exposure: `mcp-tool`.
 

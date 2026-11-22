@@ -697,6 +697,7 @@ Result<json::Value> Registry::listResult(std::string_view tag, std::string_view 
     json::Value result = json::Value::object();
     result["commands"] = json::Value::array();
     const std::string needle = asciiLower(text);
+    bool anyPublic = false;
     for (auto* info : all()) {
         if (!group.empty() && groupOf(info->name) != group) continue;
         if (!tag.empty() &&
@@ -706,6 +707,7 @@ Result<json::Value> Registry::listResult(std::string_view tag, std::string_view 
         if (!needle.empty() && asciiLower(info->name).find(needle) == std::string::npos &&
             asciiLower(info->summary).find(needle) == std::string::npos)
             continue;
+        if (info->exposure != Exposure::Internal) anyPublic = true;
         json::Value item = json::Value::object();
         item["name"] = info->name;
         item["version"] = info->version;
@@ -714,7 +716,9 @@ Result<json::Value> Registry::listResult(std::string_view tag, std::string_view 
         item["exposure"] = exposureName(info->exposure);
         result["commands"].push_back(std::move(item));
     }
-    if (result.find("commands")->asArray().empty()) {
+    // The list holds internal commands too, which the index drops: a search that found only those
+    // is as empty to the agent as one that found nothing.
+    if (!anyPublic) {
         // Say which filters found nothing, so the hint can fit them.
         result["filters"] = json::Value::object();
         for (const auto& [key, value] : {std::pair<const char*, std::string_view>{"group", group},

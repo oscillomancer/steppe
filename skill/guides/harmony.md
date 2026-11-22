@@ -136,7 +136,10 @@ without writing it twice.
 
 - Set the key once at beat 0, and again only where it changes; set chords at
   every change, and `""` where the harmony stops.
-- After a key change, read a part back with `midi.get` before writing more:
-  the spelling follows the key, and what you read is what compiles back.
+- After a key or chord change, read a part back with `midi.get` before writing more:
+  the spelling follows the key and the chord at each note, and what you read is what
+  compiles back. A chord tone reads by its degree (`G#` over E, `Bb` over C7, `Bbb` in
+  a diminished seventh on C; the sharp nine is the minor third's letter), so the same
+  pitch can read `G#` under one chord and `Ab` under another.
 - Chords and keys are information. Changing them moves no note and costs no
   recompile of the audio.
