@@ -2458,7 +2458,7 @@ unknown-field warnings, and the take then sounds as written there.
 |---|---|
 | `context` | Key and chord points, the clip `context` shapes, with `beat` in **context beats** (below), rounded to 1/960, sorted by beat and then type (key first). Written only when not empty. |
 | `context_period` | Context beats after which the context repeats; absent for a context that does not repeat. Laid from a clip, the clip's length in context beats. Written only when present. |
-| `context_phase` | Added to a note's unwrapped source beat to give its place in the context (below; default 0, not written). Only placement, `launch.commit`, `take.extract` from a clip, `item.consolidate` and `take.set {context}` set it. |
+| `context_phase` | Added to a note's unwrapped source beat to give its place in the context (below; default 0, not written). Only placement, `launch.commit`, `take.extract` from a clip, `item.consolidate`, `take.set {context}` and `take.bake` set it. |
 | `follow` | `none` (default, not written), `key` or `chords`: what the take's notes sound as (below). |
 
 Only a timeline item's take whose source is MIDI holds any of them; a clip's
@@ -2611,6 +2611,7 @@ missing from this table is a defect of this contract.
 | `take.add {from}` | On an item, the copy takes the source take's four members; on a clip, neither holds any. |
 | `launch.commit` | Lays notes as written, each take with its clip's context converted as above and `follow` the outcome the plan used for that clip (`none`, `key` or `chords`, after the budget: `engine.md`). `pooled` allowed. |
 | `take.set {take, context?, follow?}` | Below. |
+| `take.bake {take}` | Below: the notes are written as they sound and the take's context becomes the song's under the item (follow `none`, no period). |
 | `take.bake {take}` | Below. |
 | `item.split`, `item.set` (position, length, loop), `take.set {start_offset, rebase_seconds, playrate}`, `item.move`, `item.duplicate`, `item.paste`, `track.duplicate` | The four members go with each take unchanged ("Invariance"; a wrapped offset adds to the phase). |
 | `item.explode-takes`, `take.extract` (from an item) | The four members go with the take unchanged. |
@@ -2634,7 +2635,26 @@ the lead sheet's errors as `take.context_syntax`. Turning `follow` off returns
 the notes as written. History records the text.
 
 **`take.bake {take}`** writes the sounding pitches into the take's notes and sets
-its `follow` to `none`; its context stays, for display.
+its `follow` to `none`, and **replaces the take's context with the song's under the item**,
+so the take says truthfully what its notes are now written in, and `take.set {follow}` on it
+later starts from there.
+- The new context is `contextUnder` the project's context over the span the heard notes
+  cover: from the earlier of the item's start and the first heard note (a note held in
+  from before the start is heard there), to the item's end. The key and the chord holding at
+  the span's start are points at 0 (a project with no chord there writes none, as `clip.add
+  {item}` does), the points inside the span follow, each at its song distance from the
+  span's start times the take's `playrate` after the bake (1 once unrolled), and
+  `context_period` is dropped. `context_phase` is `(item start − span start) × playrate −
+  start_offset` (with the offset and rate after the bake), so a note's place reads its song
+  beat's distance from the span's start and the place formula holds.
+- Where the song has no readable key anywhere under the span, the take's context is dropped
+  (no points, no period, phase 0). A point this build cannot read is left out with
+  `clip.context_dropped`, as when a clip takes the song's.
+- So, while the song is unchanged, bake then `take.set {follow: "key"}` sounds exactly
+  as before the bake (every note maps from the song's key to the song's key); and when
+  the song later changes, the take follows that change from the written notes.
+- A take that does not follow is not baked (`take.not_following`); the other takes of the
+  item keep their own contexts (rescaled when the item is unrolled).
 - A pooled source is first made the take's own copy.
 - Every heard note, chased and crossing fragments included, is counted. When
   every pass of a looped item sounds alike, and every fragment held into the item's

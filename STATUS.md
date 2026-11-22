@@ -250,8 +250,8 @@ instructions are in `docs/guides/installing.md`.
   {context, follow}` (the lead sheet in bars of the meter at the item, errors
   `take.no_key`, `take.follow_audio`, `take.in_clip`, `take.context_syntax`,
   `take.context_range`), `take.bake` (writes what sounds, unrolls a looped item
-  whose passes differ, `take.not_following`, `take.not_active`, records the pitches
-  it wrote), `midi.get {sounding, from, to}` with `sounding_differs` and
+  whose passes differ, and takes the song's context under the item as its own,
+  `take.not_following`, `take.not_active`, records the notes it wrote over), `midi.get {sounding, from, to}` with `sounding_differs` and
   `differs_by_pass` (`midi.sounding_clip` on a clip), `midi.edit` reading a following
   take's own context (`acts_on: "written"`), `midi.write` keeping context and follow
   (`follows`), `item.consolidate` (MIDI; what sounds is preserved and checked,

@@ -635,8 +635,11 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.description =
             "A take that follows the project's key or chords stores its notes as written and maps "
             "them as they sound. take.bake writes what sounds into the notes and sets follow to "
-            "none; the take's context stays, for display, and a render after equals the render "
-            "before. A pooled source is first made the take's own copy. When every pass of a "
+            "none and replaces the take's context with the song's under the item (what the notes "
+            "are written in now; none when the song has no key there), so turning follow on "
+            "again sounds as before and moves with a later song edit; a render after equals the "
+            "render before. A pooled source is first made the take's own copy. When every pass of "
+            "a "
             "looped item sounds alike the loop stays; otherwise the item is unrolled (loop off, "
             "its passes written out, each note at its place, its other takes repeated alike) and "
             "the answer says unrolled: true. followed is what was baked, as item.add's. Errors: "
@@ -794,6 +797,35 @@ void registerTakeCommands(cmd::Registry& registry) {
                 }
                 txn.modify<model::Item>(*owner, [](model::Item& it) { it.loop = false; });
                 result.unrolled = true;
+            }
+            // The take now says what its notes are written in: the song's context under the
+            // item, from where the earliest heard note sounds, on the take's axis after the bake
+            // (a note's place is its song distance from there times the rate), period dropped.
+            {
+                const double rateAfter =
+                    result.unrolled ? 1.0 : (tk->playrate > 0 ? tk->playrate : 1.0);
+                const double offsetAfter = result.unrolled ? 0.0 : tk->startOffset;
+                double from = itemStart;
+                if (!result.unrolled)
+                    for (const auto& h : heard) from = std::min(from, h.songBeat);
+                const detail::ContextTaken taken =
+                    detail::contextUnder(s, from, itemStart + itemBeats - from, false);
+                bool key = false;
+                for (const model::ContextPoint& p : taken.points)
+                    key |= p.type == model::ContextType::Key;
+                for (const detail::ClipNote& n : detail::unreadableNotes(taken, "/take"))
+                    ctx.warn(n.code, n.message, n.path);
+                txn.modify<model::Take>(*id, [&](model::Take& k) {
+                    k.context.clear();
+                    k.contextPeriod.reset();
+                    k.contextPhase = 0;
+                    if (!key) return;
+                    k.context = taken.points;
+                    for (model::ContextPoint& p : k.context) p.beat *= rateAfter;
+                    k.contextPhase = (itemStart - from) * rateAfter - offsetAfter;
+                    for (auto& n : model::fitTakeContext(k, model::TakeHome::Item))
+                        fitNotes.push_back(std::move(n));
+                });
             }
             // A pooled original that no take reads now goes.
             const model::Session after = txn.preview();

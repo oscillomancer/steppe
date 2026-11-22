@@ -112,7 +112,9 @@ on the timeline (`item.add {clip}`, `scene.insert`) gives every MIDI take the cl
 - `midi.get {item, sounding: true}` answers what sounds (`from`, `to` in song beats for a range);
   without it, the written notes, with `sounding_differs` counting those that sound otherwise.
 - `take.bake {take}` writes the sounding pitches into the notes and sets `follow` to `none`; a looped item
-  whose passes sound differently is unrolled first (`unrolled: true`). Undo takes it back.
+  whose passes sound differently is unrolled first (`unrolled: true`). The take's context becomes the song's
+  under the item (it says what the notes are written in now; none when the song has no key there), so
+  `take.set {follow: "key"}` afterwards sounds as before and moves with a later song edit. Undo takes it back.
 - `midi.edit`'s `snap_to_scale`, `fit_to_chord` and `transpose_degrees` read the take's own context and act on the
   written notes (`acts_on: "written"` says some heard note sounds otherwise); `midi.write` keeps the context.
 - `item.consolidate` of following items keeps what sounds, or refuses with `item.follow_merge`

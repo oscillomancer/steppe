@@ -2134,7 +2134,21 @@ TEST_CASE("take.bake unrolls a looped item whose passes sound differently") {
     CHECK(pitchesOf(l, item) == "31@0 31@4 36@8 36@12");
     CHECK(soundsOf(l, item) == before);
     CHECK(l.head().takes.find(take)->follow == model::ClipFollow::None);
-    // One undo step puts the looped item and its written note back.
+    // The take now holds the song's under the item: C minor from its start, F minor at beat 8
+    // (song beat 24), nothing repeating; following again sounds as before.
+    {
+        const model::Take& t = *l.head().takes.find(take);
+        REQUIRE(t.context.size() == 2);
+        CHECK(t.context[0].tonic == "C");
+        CHECK(t.context[1].tonic == "F");
+        CHECK(t.context[1].beat == 8);
+        CHECK_FALSE(t.contextPeriod);
+    }
+    l.run("take.set", R"({"take": ")" + take.str() + R"(", "follow": "key"})");
+    CHECK(soundsOf(l, item) == before);
+    // Undo the follow edit above, then the bake: one step puts the looped item and its written
+    // note back.
+    l.run("history.undo", "{}");
     l.run("history.undo", "{}");
     CHECK(l.head().items.find(id(item.c_str()))->loop);
     CHECK(pitchesOf(l, item) == "33@0");
@@ -2193,6 +2207,57 @@ TEST_CASE("take.bake refuses a replay over other notes than it was recorded over
             {"was": 48, "at": 2880, "pitch": 51}]})";
     l.run("take.bake", right);
     CHECK(pitchesOf(l, "it_1") == "39@0 43@1 46@2 51@3");
+}
+
+TEST_CASE("take.bake leaves the song's context under the item as the take's own") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    const std::string before = soundsOf(l, "it_1");
+    CHECK(before == "39@0 43@1 46@2 51@3");
+    l.run("take.bake", R"({"take": "tk_1"})");
+    // What the notes are written in now: Eb major, from the item's start, not repeating.
+    const model::Take& take = *l.head().takes.find(id("tk_1"));
+    REQUIRE(take.context.size() == 1);
+    CHECK(take.context[0].type == model::ContextType::Key);
+    CHECK(take.context[0].tonic == "Eb");
+    CHECK(take.context[0].beat == 0);
+    CHECK_FALSE(take.contextPeriod);
+    CHECK(take.contextPhase == 0);
+    CHECK(take.follow == model::ClipFollow::None);
+    // Following again sounds as before while the song is unchanged...
+    l.run("take.set", R"({"take": "tk_1", "follow": "key"})");
+    CHECK(soundsOf(l, "it_1") == before);
+    // ...and moves with a later edit of the song, from the written notes.
+    l.run("key.set", R"({"at": 0, "tonic": "F", "scale": "major"})");
+    CHECK(pitchesOf(l, "it_1") == "39@0 43@1 46@2 51@3");
+    CHECK(soundsOf(l, "it_1") == "41@0 45@1 48@2 53@3");
+}
+
+TEST_CASE("take.bake of a song with a key change and one with none") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("key.set", R"({"at": 2, "tonic": "F", "scale": "minor"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key D minor ~:w", "follow": "key"})");
+    const std::string before = soundsOf(l, "it_1");
+    l.run("take.bake", R"({"take": "tk_1"})");
+    {
+        const model::Take& take = *l.head().takes.find(id("tk_1"));
+        REQUIRE(take.context.size() == 2);
+        CHECK(take.context[0].tonic == "C");
+        CHECK(take.context[1].tonic == "F");
+        CHECK(take.context[1].beat == 2);
+    }
+    l.run("take.set", R"({"take": "tk_1", "follow": "key"})");
+    CHECK(soundsOf(l, "it_1") == before);
+    // No key under the item: the context is dropped.
+    l.run("take.set", R"({"take": "tk_1", "follow": "none"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key D minor ~:w", "follow": "key"})");
+    l.run("key.remove", R"({"at": 0})");
+    l.run("key.remove", R"({"at": 2})");
+    l.run("take.bake", R"({"take": "tk_1"})");
+    CHECK(l.head().takes.find(id("tk_1"))->context.empty());
+    CHECK_FALSE(l.head().takes.find(id("tk_1"))->contextPeriod);
 }
 
 TEST_CASE("take.bake makes a pooled source the take's own copy") {
