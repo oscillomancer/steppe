@@ -14,12 +14,16 @@ history; queries and rendering alone do not.
 ## Tools: core set + describe/exec/query
 
 The engine lists 38 common command tools plus `describe`, `exec` and `query` by
-default. A proxy to the GUI also lists its existing `gui_selection` tool. `describe {}` lists every command as compact rows grouped by namespace;
-`describe {"command": "fx.patch.list"}` gives arguments, result schema, errors
-and examples. Call the rest with
+default. A proxy to the GUI also lists its existing `gui_selection` tool. Dedicated
+tools need no lookup. To find any other command, walk `describe` in three steps:
+`describe {}` lists the command groups, one line each (`fx`, `track`, `render`, ...);
+`describe {"group": "fx"}` lists that group's commands (name, kind, summary);
+`describe {"command": "fx.patch.list"}` gives its arguments, result schema, errors
+and examples. `describe {"text": "patch"}` searches names and summaries across groups
+(a long answer says `truncated`: add `group` or a longer text). Call the command with
 `exec {"command": "fx.patch.list", "args": {"fx": "fx_2"}}`, or use `query`
 with the same arguments for read-only commands. Dedicated tools omit result
-schemas; use `describe` when you need one. Clients that defer tool loading can
+schemas; use `describe {"command": ...}` when you need one. Clients that defer tool loading can
 start `steppe-mcp --tools all` or `steppe-engine --mcp --tools all` to list every
 non-Internal command as a dedicated tool. The sandbox's dedicated set is unchanged.
 

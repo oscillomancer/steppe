@@ -65,6 +65,19 @@ TEST_CASE("every sandbox command group has its line, and every line a group") {
     }
     CHECK(registry.groups().size() == prefixes.size());
 }
+TEST_CASE("the sandbox's describe levels stay inside their budgets") {
+    cmd::Registry registry;
+    registerCommands(registry);
+    // The canonical writer pads, so these bytes are an upper bound of the compact JSON an agent
+    // reads.
+    const auto groups = cmd::groupIndex(registry.groupsResult());
+    CHECK(json::writeCanonical(groups).size() < 3000);
+    for (const auto& group : registry.groupInfos()) {
+        INFO("group " << group.name << " is over its budget: split it or shorten summaries");
+        CHECK(json::writeCanonical(cmd::rowIndex(registry.listResult("", "", "", group.name)))
+                  .size() < 2500);
+    }
+}
 TEST_CASE("registered sandbox argument mutations return structured errors") {
     constexpr std::uint64_t seed = 0xc017a01;
     Root root;

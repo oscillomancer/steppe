@@ -95,6 +95,7 @@ struct RecordingHost : Host {
 };
 cmd::Registry registry() {
     cmd::Registry r;
+    r.describeGroup("counter", "A counter the tests add to and read.");
     cmd::Command<Args, Count> command;
     command.name = "counter.add";
     command.kind = cmd::Kind::Edit;
@@ -301,6 +302,42 @@ TEST_CASE("in-process MCP negotiates, lists and executes with structured errors"
         R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"describe","arguments":{"command":"counter.add"}}})");
     CHECK(described.find("result")->find("structuredContent")->find("name")->asString() ==
           "counter.add");
+    // describe walks in three steps: the groups, one group's commands, one command.
+    auto groups = request(
+        server,
+        R"({"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"describe","arguments":{}}})");
+    const auto* index = groups.find("result")->find("structuredContent");
+    REQUIRE(index);
+    CHECK(index->find("columns")->size() == 3);
+    CHECK(index->find("namespaces") == nullptr);
+    bool sawCounter = false;
+    for (const auto& row : index->find("groups")->asArray())
+        if (row.asArray().at(0).asString() == "counter") {
+            sawCounter = true;
+            CHECK(row.asArray().at(2).asString() == "A counter the tests add to and read.");
+            CHECK(row.asArray().at(1).asInt() >= 3);
+        }
+    CHECK(sawCounter);
+    auto rows = request(
+        server,
+        R"({"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"describe","arguments":{"group":"counter"}}})");
+    const auto* oneGroup = rows.find("result")->find("structuredContent");
+    REQUIRE(oneGroup);
+    CHECK(oneGroup->find("truncated") == nullptr);
+    REQUIRE(oneGroup->find("namespaces")->find("counter"));
+    CHECK(oneGroup->find("namespaces")->size() == 1);
+    CHECK(oneGroup->find("namespaces")->find("counter")->asArray().at(0).asArray().size() == 3);
+    auto nowhere = request(
+        server,
+        R"({"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"describe","arguments":{"group":"nonesuch"}}})");
+    const auto* refused = nowhere.find("result")->find("structuredContent");
+    CHECK(nowhere.find("result")->find("isError")->asBool());
+    CHECK(refused->find("code")->asString() == "command.unknown_group");
+    CHECK(refused->find("hint")->asString().find("counter") != std::string::npos);
+    auto searched = request(
+        server,
+        R"({"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"describe","arguments":{"text":"counter.add"}}})");
+    CHECK(searched.find("result")->find("structuredContent")->find("namespaces")->size() == 1);
     auto executed = request(
         server,
         R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.add","args":{"value":2}}}})");
@@ -859,6 +896,26 @@ TEST_CASE("proxy startup fetches only selected tools and resolves other commands
         REQUIRE(calls.size() == 1);
         CHECK(calls.front().command == "registry.describe");
         CHECK(calls.front().args.find("command")->asString() == "counter.adjust");
+        // The groups and a group's rows come over the same connection: one request for the
+        // groups; a group is checked to exist, then listed.
+        auto proxied = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"describe","arguments":{}}})");
+        REQUIRE(proxied.find("result")->find("structuredContent")->find("groups"));
+        calls = host.takeLog();
+        REQUIRE(calls.size() == 1);
+        CHECK(calls.front().command == "registry.groups");
+        auto proxiedGroup = request(
+            **proxy,
+            R"({"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"describe","arguments":{"group":"counter"}}})");
+        REQUIRE(proxiedGroup.find("result")
+                    ->find("structuredContent")
+                    ->find("namespaces")
+                    ->find("counter"));
+        calls = host.takeLog();
+        REQUIRE(calls.size() == 2);
+        CHECK(calls.at(0).command == "registry.groups");
+        CHECK(calls.at(1).command == "registry.list");
         auto restored = request(
             **proxy,
             R"({"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.adjust","args":{"value":-4}}}})");

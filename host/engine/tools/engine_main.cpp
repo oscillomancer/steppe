@@ -6,9 +6,10 @@
 //       One invocation {"command": ..., "args": {...}} or {"batch": {...}}
 //       against the project (a new one when --project is absent or missing);
 //       --save writes the project back afterwards. Prints the result JSON.
-//   <slug>-engine registry [--markdown | --mcp-tools | --lua]
+//   <slug>-engine registry [--markdown | --mcp-tools | --lua | --groups | --group NAME]
 //       The engine's command registry, Markdown reference, MCP tool list or
-//       the LuaLS annotations of the scripting bindings.
+//       the LuaLS annotations of the scripting bindings; --groups the command groups
+//       with one line each, --group NAME one group's commands (what MCP describe shows).
 //   <slug>-engine modules --markdown
 //       The built-in rack module types as a Markdown reference.
 //   <slug>-engine --mcp [--tools core|all] [--project FILE] [--workdir DIR] [--plugin-path P]...
@@ -74,7 +75,7 @@ int usage() {
         stderr,
         "usage: %s-engine exec '<json>' [--project FILE] [--save] [--workdir DIR] "
         "[--plugin-path P]...\n"
-        "       %s-engine registry [--markdown | --mcp-tools | --lua]\n"
+        "       %s-engine registry [--markdown | --mcp-tools | --lua | --groups | --group NAME]\n"
         "       %s-engine modules --markdown\n"
         "       %s-engine --mcp [--tools core|all] [--project FILE] [--workdir DIR] [--plugin-path "
         "P]...\n"
@@ -408,7 +409,15 @@ int frontendMain(int argc, char** argv) {
             std::fwrite(md.data(), 1, md.size(), stdout);
         } else if (args[1] == "--mcp-tools")
             print(cmd::mcpToolList(registry));
-        else if (args[1] == "--lua") {
+        else if (args[1] == "--groups" && args.size() == 2)
+            print(cmd::groupIndex(registry.groupsResult()));
+        else if (args[1] == "--group" && args.size() == 3) {
+            if (registry.groupsResult(args[2]).find("groups")->asArray().empty()) {
+                print(errorJson(cmd::unknownGroup(args[2], registry.groupsResult())));
+                return 1;
+            }
+            print(cmd::rowIndex(registry.listResult("", "", "", args[2])));
+        } else if (args[1] == "--lua") {
             const std::string stubs = cmd::luaStubs(registry);
             std::fwrite(stubs.data(), 1, stubs.size(), stdout);
         } else

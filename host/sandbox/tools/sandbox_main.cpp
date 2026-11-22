@@ -6,7 +6,7 @@
 //       One invocation {"command": "...", "args": {...}} or a batch
 //       {"batch": {"label": ..., "steps": [...]}} against a fresh session;
 //       prints the result (or the error) as JSON. Exit 0 = ok, 1 = error.
-//   <slug>-sandbox registry [--markdown | --mcp-tools | --lua]
+//   <slug>-sandbox registry [--markdown | --mcp-tools | --lua | --groups | --group NAME]
 //       The command registry document, the Markdown reference, or the MCP
 //       tool list (generator output; drift-tested against skill/generated/).
 //   <slug>-sandbox --mcp [--workdir DIR] [--plugin-path P]...
@@ -62,7 +62,8 @@ int usage() {
     std::fprintf(
         stderr,
         "usage: %.*s-sandbox exec '<json>' [--workdir DIR] [--record-midi] [--plugin-path P]...\n"
-        "       %.*s-sandbox registry [--markdown | --mcp-tools | --lua]\n"
+        "       %.*s-sandbox registry [--markdown | --mcp-tools | --lua | --groups | --group "
+        "NAME]\n"
         "       %.*s-sandbox --mcp [--workdir DIR] [--record-midi] [--plugin-path P]...\n"
         "       %.*s-sandbox serve [--workdir DIR] [--plugin-path P]... "
         "[--instance NAME] [--socket PATH]\n"
@@ -269,6 +270,14 @@ int main(int argc, char** argv) {
             std::fwrite(md.data(), 1, md.size(), stdout);
         } else if (args[1] == "--mcp-tools") {
             print(cmd::mcpToolList(registry));
+        } else if (args[1] == "--groups" && args.size() == 2) {
+            print(cmd::groupIndex(registry.groupsResult()));
+        } else if (args[1] == "--group" && args.size() == 3) {
+            if (registry.groupsResult(args[2]).find("groups")->asArray().empty()) {
+                print(errorJson(cmd::unknownGroup(args[2], registry.groupsResult())));
+                return 1;
+            }
+            print(cmd::rowIndex(registry.listResult("", "", "", args[2])));
         } else if (args[1] == "--lua") {
             const std::string stubs = cmd::luaStubs(registry);
             std::fwrite(stubs.data(), 1, stubs.size(), stdout);

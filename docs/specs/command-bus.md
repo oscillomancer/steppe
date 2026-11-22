@@ -381,7 +381,7 @@ adapters refresh peer metadata before relying on cached admission decisions.
 
 Tool name = command name with `.` replaced by `_` (`patch.merge` →
 `patch_merge`); `@version` is not exposed (tools always call the latest
-version). Generic tools: `describe` (→ `registry.describe`/`registry.list`),
+version). Generic tools: `describe` (→ `registry.groups`/`registry.list`/`registry.describe`),
 `exec` (→ one invocation or a batch: `{"command", "args"}` or
 `{"batch": {...}}`), and in the engine, `query`.
 
@@ -401,8 +401,8 @@ selected by the chosen mode. Its startup command-request count is therefore
 hydrated at startup. Kind metadata from the full index supports `query` for
 commands outside the dedicated set. A named `describe` fetches its full contract
 on demand; `exec` forwards directly to the dispatcher for validation and
-execution without a schema-prefetch request. The compact MCP describe index
-continues to contain only name, kind and summary.
+execution without a schema-prefetch request. The describe index (below) carries only names,
+kinds, summaries and group lines; the full index is fetched only as the proxy's startup list.
 
 The proxy requires a valid exposure on each latest index row. Missing or
 unknown values fail startup with `mcp.registry` at `/commands` and a hint to
@@ -439,16 +439,30 @@ structured content. MCP 2025-06-18 Tools / Output Schema makes the schema
 optional and Structured Content permits JSON-object results independently:
 <https://modelcontextprotocol.io/specification/2025-06-18/server/tools>.
 
-`describe {}` returns `{columns: ["name", "kind", "summary"], namespaces:
-{<namespace>: [[<name>, <kind>, <summary>], ...]}}`. Namespace is the first
-name segment; standalone `batch` has its own group. Rows retain the registry's
-name/version order and include every registered command; summaries are at most
-80 characters. The full engine index targets less than 25,000 UTF-8 bytes.
-Existing `tag`, `kind`, and `text` filters apply before grouping (`text`
-searches names and summaries). `describe {command: <name>}` is unchanged:
-full args/result schemas, errors, examples and command metadata. The underlying
-`registry.list` contract is unchanged. Initialize instructions explain the
-common tools, describe/exec/query workflow and argument-free index.
+*Describe, in three steps.* An agent reads what it needs and no more:
+
+1. `describe {}` returns the groups (§1.3), one line each:
+   `{columns: ["group", "count", "summary"], groups: [[<group>, <count>, <summary>], ...],
+   hint}`, by group name; `count` is the group's public commands and `summary` its line (at
+   most 70 characters). Budget: under 5,000 UTF-8 bytes (compact JSON) and at most 60 groups.
+2. `describe {group: <name>}` returns that group's commands:
+   `{columns: ["name", "kind", "summary"], namespaces: {<group>: [[<name>, <kind>,
+   <summary>], ...]}}`, in the registry's name order; the public commands only (not
+   `internal` ones); summaries at most 80 characters. Budget: under 4,000 bytes for any group.
+   An unknown group is `command.unknown_group` at `/group`, its hint listing the groups.
+3. `describe {command: <name>}` is unchanged: full args/result schemas, errors, examples and
+   command metadata. Budget: under 16,000 bytes for any command.
+
+`tag`, `kind` and `text` (names and summaries) search across all groups, alone or with `group`,
+and answer in the step-2 shape. At most 60 rows come back; a longer answer is never cut
+silently: it carries `truncated: true` and a `hint` to narrow the filter with `group`, `kind`,
+`tag` or a longer `text`, and no count. Search budget: under 6,000 bytes. Tests with the real
+registries (`engine.cli-numbers`) fail with the name of the group or command that breaks a
+budget; split the group or shorten its summaries rather than raising a budget. The command line
+shows the same answers: `<slug>-engine registry --groups` and `registry --group NAME` (and the
+sandbox's). The old whole-registry `describe {}` (`namespaces` for every command, about 25 KB)
+is gone; `<slug>-engine registry` is the complete document. Initialize instructions explain
+the common tools and this walk.
 
 ### 4.3 Calls and results
 

@@ -446,29 +446,9 @@ Registry::Registry() {
             return {};
         },
         [](const json::Value& args, Context& ctx) -> Result<json::Value> {
-            json::Value result = json::Value::object();
-            result["commands"] = json::Value::array();
-            auto tag = stringField(args, "tag"), kind = stringField(args, "kind");
-            auto text = stringField(args, "text");
-            auto group = stringField(args, "group");
-            for (auto* info : ctx.service<const Registry>().all()) {
-                if (!group.empty() && Registry::groupOf(info->name) != group) continue;
-                if (!tag.empty() &&
-                    std::find(info->tags.begin(), info->tags.end(), tag) == info->tags.end())
-                    continue;
-                if (!kind.empty() && kindName(info->kind) != kind) continue;
-                if (!text.empty() && info->name.find(text) == std::string::npos &&
-                    info->summary.find(text) == std::string::npos)
-                    continue;
-                json::Value item = json::Value::object();
-                item["name"] = info->name;
-                item["version"] = info->version;
-                item["kind"] = kindName(info->kind);
-                item["summary"] = info->summary;
-                item["exposure"] = exposureName(info->exposure);
-                result["commands"].push_back(std::move(item));
-            }
-            return result;
+            return ctx.service<const Registry>().listResult(
+                stringField(args, "tag"), stringField(args, "kind"), stringField(args, "text"),
+                stringField(args, "group"));
         },
         {"List commands", json::Value::object(), json::Value::object(), "empty"});
     addMeta(
@@ -500,18 +480,7 @@ Registry::Registry() {
             return {};
         },
         [](const json::Value& args, Context& ctx) -> Result<json::Value> {
-            const auto group = stringField(args, "group");
-            json::Value result = json::Value::object();
-            result["groups"] = json::Value::array();
-            for (const auto& info : ctx.service<const Registry>().groupInfos()) {
-                if (!group.empty() && info.name != group) continue;
-                json::Value item = json::Value::object();
-                item["name"] = info.name;
-                item["count"] = static_cast<long long>(info.commands);
-                item["summary"] = info.summary;
-                result["groups"].push_back(std::move(item));
-            }
-            return result;
+            return ctx.service<const Registry>().groupsResult(stringField(args, "group"));
         },
         {"List one group", json::Value::object(), json::Value::object(), "empty"});
     describeGroup("registry", "The command registry: list, describe and group the commands.");
@@ -677,6 +646,42 @@ std::vector<const CommandInfo*> Registry::all() const {
         out.push_back(&value);
     }
     return out;
+}
+json::Value Registry::groupsResult(std::string_view group) const {
+    json::Value result = json::Value::object();
+    result["groups"] = json::Value::array();
+    for (const auto& info : groupInfos()) {
+        if (!group.empty() && info.name != group) continue;
+        json::Value item = json::Value::object();
+        item["name"] = info.name;
+        item["count"] = static_cast<long long>(info.commands);
+        item["summary"] = info.summary;
+        result["groups"].push_back(std::move(item));
+    }
+    return result;
+}
+json::Value Registry::listResult(std::string_view tag, std::string_view kind, std::string_view text,
+                                 std::string_view group) const {
+    json::Value result = json::Value::object();
+    result["commands"] = json::Value::array();
+    for (auto* info : all()) {
+        if (!group.empty() && groupOf(info->name) != group) continue;
+        if (!tag.empty() &&
+            std::find(info->tags.begin(), info->tags.end(), tag) == info->tags.end())
+            continue;
+        if (!kind.empty() && kindName(info->kind) != kind) continue;
+        if (!text.empty() && info->name.find(text) == std::string::npos &&
+            info->summary.find(text) == std::string::npos)
+            continue;
+        json::Value item = json::Value::object();
+        item["name"] = info->name;
+        item["version"] = info->version;
+        item["kind"] = kindName(info->kind);
+        item["summary"] = info->summary;
+        item["exposure"] = exposureName(info->exposure);
+        result["commands"].push_back(std::move(item));
+    }
+    return result;
 }
 std::string Registry::groupOf(std::string_view commandName) {
     return std::string(commandName.substr(0, commandName.find('.')));
@@ -1072,6 +1077,67 @@ Status runExamples(const Registry& registry, const FixtureFactory& factory,
         }
     }
     return {};
+}
+json::Value groupIndex(const json::Value& groupsResult) {
+    json::Value out = json::Value::object();
+    out["columns"] = json::Value::array();
+    for (auto column : {"group", "count", "summary"}) out["columns"].push_back(column);
+    out["groups"] = json::Value::array();
+    if (const auto* groups = groupsResult.find("groups"); groups && groups->isArray())
+        for (const auto& item : groups->asArray()) {
+            json::Value row = json::Value::array();
+            row.push_back(stringField(item, "name"));
+            const auto* count = item.find("count");
+            row.push_back(count && count->isNumber() ? count->asInt() : 0LL);
+            row.push_back(stringField(item, "summary"));
+            out["groups"].push_back(std::move(row));
+        }
+    out["hint"] =
+        "describe {group: <name>} lists a group's commands; describe {text: <words>} searches "
+        "names and summaries; describe {command: <name>} gives one command's arguments.";
+    return out;
+}
+json::Value rowIndex(const json::Value& listResult) {
+    json::Value out = json::Value::object();
+    out["columns"] = json::Value::array();
+    for (auto column : {"name", "kind", "summary"}) out["columns"].push_back(column);
+    out["namespaces"] = json::Value::object();
+    bool truncated = false;
+    std::size_t rows = 0;
+    if (const auto* commands = listResult.find("commands"); commands && commands->isArray())
+        for (const auto& item : commands->asArray()) {
+            if (stringField(item, "exposure") == "internal") continue;
+            if (rows == kIndexRowCap) {
+                truncated = true;
+                break;
+            }
+            ++rows;
+            const auto name = stringField(item, "name");
+            auto& group = out["namespaces"][Registry::groupOf(name)];
+            if (!group.isArray()) group = json::Value::array();
+            json::Value row = json::Value::array();
+            row.push_back(name);
+            row.push_back(stringField(item, "kind"));
+            row.push_back(stringField(item, "summary"));
+            group.push_back(std::move(row));
+        }
+    if (truncated) {
+        out["truncated"] = true;
+        out["hint"] =
+            "More commands match than are shown: narrow the filter with group, kind, tag or a "
+            "longer text.";
+    }
+    return out;
+}
+Error unknownGroup(std::string_view group, const json::Value& groupsResult) {
+    std::string names;
+    if (const auto* groups = groupsResult.find("groups"); groups && groups->isArray())
+        for (const auto& item : groups->asArray()) {
+            if (!names.empty()) names += ", ";
+            names += stringField(item, "name");
+        }
+    return Error("command.unknown_group", "unknown command group \"" + std::string(group) + "\"",
+                 "/group", "groups: " + names);
 }
 json::Value mcpToolList(const Registry& registry, bool allTools) {
     json::Value tools = json::Value::array();

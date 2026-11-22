@@ -340,6 +340,45 @@ TEST_CASE("commands are grouped by name prefix, each group with its one line") {
     CHECK(bare.groups().count("registry") == 1);
     CHECK(registry.exportJson().find("groups")->find("toy") != nullptr);
 }
+TEST_CASE("the group index and the row index shape the registry's answers") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to and read.");
+    const auto groups = groupIndex(registry.groupsResult());
+    CHECK(groups.find("columns")->size() == 3);
+    CHECK(groups.find("namespaces") == nullptr);
+    CHECK(groups.find("hint")->asString().find("describe {group") != std::string::npos);
+    for (const auto& row : groups.find("groups")->asArray()) CHECK(row.asArray().size() == 3);
+    // Rows: the public commands of the group only (an Internal command is not an agent's).
+    const auto rows = rowIndex(registry.listResult("", "", "", "toy"));
+    REQUIRE(rows.find("namespaces")->find("toy"));
+    for (const auto& row : rows.find("namespaces")->find("toy")->asArray())
+        CHECK(row.asArray().at(0).asString() != "toy.safe");
+    CHECK(rows.find("truncated") == nullptr);
+    // Past the cap the answer says so and says how to narrow it; the count is not given.
+    json::Value many = json::Value::object();
+    many["commands"] = json::Value::array();
+    for (std::size_t i = 0; i < kIndexRowCap + 5; ++i) {
+        json::Value item = json::Value::object();
+        item["name"] = "g" + std::to_string(i % 3) + ".c" + std::to_string(i);
+        item["kind"] = "query";
+        item["summary"] = "s";
+        item["exposure"] = "mcp-exec";
+        many["commands"].push_back(std::move(item));
+    }
+    const auto capped = rowIndex(many);
+    std::size_t shown = 0;
+    for (const auto& member : capped.find("namespaces")->asObject()) shown += member.value.size();
+    CHECK(shown == kIndexRowCap);
+    CHECK(capped.find("truncated")->asBool());
+    CHECK(capped.find("hint")->asString().find("narrow") != std::string::npos);
+    CHECK(capped.find("count") == nullptr);
+    // Exactly the cap is not truncated.
+    many["commands"].asArray().resize(kIndexRowCap);
+    CHECK(rowIndex(many).find("truncated") == nullptr);
+    const auto error = unknownGroup("zz", registry.groupsResult());
+    CHECK(error.code == "command.unknown_group");
+    CHECK(error.hint.find("toy") != std::string::npos);
+}
 TEST_CASE("meta commands, generators and examples") {
     auto registry = makeRegistry();
     FakeHost host;

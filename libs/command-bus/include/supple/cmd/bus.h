@@ -219,6 +219,11 @@ class Registry {
     };
     std::vector<GroupInfo> groupInfos() const;
     static constexpr std::size_t kMaxGroupSummary = 70;
+    // The results of registry.groups and registry.list, computed here so that the commands and
+    // the command line's `registry --groups` / `--group` give the same answer.
+    json::Value groupsResult(std::string_view group = {}) const;
+    json::Value listResult(std::string_view tag, std::string_view kind, std::string_view text,
+                           std::string_view group) const;
     static std::string groupOf(std::string_view commandName);
     // The name of each command by id (a name once per version: the same name twice).
     std::vector<std::string_view> namesById() const;
@@ -413,6 +418,19 @@ using FixtureFactory = std::function<std::unique_ptr<Host>(std::string_view)>;
 using FixtureAvailable = std::function<bool(std::string_view)>;
 Status runExamples(const Registry&, const FixtureFactory&, const FixtureAvailable& = {});
 // allTools includes every non-Internal command, regardless of MCP exposure.
+// The agent's way into the registry, in three steps (spec command-bus.md, "Describe"): the
+// groups with one line each, one group's (or a search's) rows, then one command by
+// registry.describe. Both builders take a command's result, so the MCP server (which may only hold
+// an RPC connection) and the command line shape them alike.
+inline constexpr std::size_t kIndexRowCap = 60;
+// registry.groups' result as {columns: [group, count, summary], groups: [[...]], hint}.
+json::Value groupIndex(const json::Value& groupsResult);
+// registry.list's result as {columns: [name, kind, summary], namespaces: {group: [[...]]}}:
+// the public commands only, at most kIndexRowCap rows; a longer answer says so (truncated: true,
+// with a hint to narrow the filter) and is never cut silently.
+json::Value rowIndex(const json::Value& listResult);
+// The error for a group that does not exist, its hint listing the groups.
+Error unknownGroup(std::string_view group, const json::Value& groupsResult);
 json::Value mcpToolList(const Registry&, bool allTools = false);
 std::string markdownReference(const Registry&);
 // LuaLS annotations of the generated bindings (ADR-0006): the `q` table a

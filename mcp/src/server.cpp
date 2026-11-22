@@ -68,7 +68,11 @@ json::Value genericInput(std::string_view name) {
     if (name == "exec")
         return objectSchema({{"command", string}, {"args", object}, {"batch", object}});
     if (name == "query") return objectSchema({{"command", string}, {"args", object}}, {"command"});
-    return objectSchema({{"command", string}, {"tag", string}, {"kind", string}, {"text", string}});
+    return objectSchema({{"command", string},
+                         {"group", string},
+                         {"tag", string},
+                         {"kind", string},
+                         {"text", string}});
 }
 Status validateGenericInput(std::string_view name, const json::Value& args) {
     if (!args.isObject())
@@ -254,10 +258,12 @@ json::Value Server::takeNotifications() {
 }
 json::Value Server::tools() const {
     auto out = dedicated_;
-    out.push_back(tool(
-        "describe", "Describe commands",
-        "List all commands grouped by namespace, filter by tag/kind/text, or describe one command.",
-        genericInput("describe")));
+    out.push_back(
+        tool("describe", "Describe commands",
+             "No arguments: the command groups, one line each. group: that group's commands. "
+             "text, kind or tag: search across groups. command: one command's arguments, results, "
+             "errors and examples.",
+             genericInput("describe")));
     out.push_back(tool("exec", "Execute a command", "Run one command or an atomic batch.",
                        genericInput("exec")));
     if (queryTool_)
@@ -288,25 +294,33 @@ Result<json::Value> Server::callTool(std::string_view name, const json::Value& a
             params["command"] = command;
             return invoke_("registry.describe", params, origin_);
         }
-        auto listed = invoke_("registry.list", args, origin_);
-        if (!listed) return listed.error();
-        json::Value index = json::Value::object();
-        index["namespaces"] = json::Value::object();
-        if (auto* commands = listed->find("commands"); commands && commands->isArray())
-            for (const auto& item : commands->asArray()) {
-                auto commandName = stringField(item, "name");
-                auto ns = commandName.substr(0, commandName.find('.'));
-                auto& group = index["namespaces"][ns];
-                if (!group.isArray()) group = json::Value::array();
-                // Rows: name, kind, summary. Keep the complete index inexpensive to read.
-                json::Value row = json::Value::array();
-                row.push_back(commandName);
-                row.push_back(stringField(item, "kind"));
-                row.push_back(stringField(item, "summary"));
-                group.push_back(std::move(row));
+        const auto group = stringField(args, "group");
+        const bool filtered = !group.empty() || !stringField(args, "tag").empty() ||
+                              !stringField(args, "kind").empty() ||
+                              !stringField(args, "text").empty();
+        if (!filtered) {
+            auto groups = invoke_("registry.groups", json::Value::object(), origin_);
+            if (!groups) return groups.error();
+            return cmd::groupIndex(*groups);
+        }
+        if (!group.empty()) {
+            json::Value probe = json::Value::object();
+            probe["group"] = group;
+            auto known = invoke_("registry.groups", probe, origin_);
+            if (!known) return known.error();
+            auto* found = known->find("groups");
+            if (!found || !found->isArray() || found->asArray().empty()) {
+                auto all = invoke_("registry.groups", json::Value::object(), origin_);
+                if (!all) return all.error();
+                return cmd::unknownGroup(group, *all);
             }
-        index["columns"] = json::parse(R"(["name","kind","summary"])").value();
-        return index;
+        }
+        json::Value filters = json::Value::object();
+        for (auto key : {"group", "tag", "kind", "text"})
+            if (auto value = stringField(args, key); !value.empty()) filters[key] = value;
+        auto listed = invoke_("registry.list", filters, origin_);
+        if (!listed) return listed.error();
+        return cmd::rowIndex(*listed);
     }
     if (name == "exec") {
         if (auto* batch = args.find("batch")) return invoke_("batch", *batch, origin_);
@@ -394,7 +408,9 @@ std::optional<json::Value> Server::handle(json::Value request) {
         result["instructions"] =
             "Dedicated tools cover common commands (or all public commands with --tools all). "
             "Use describe to discover other commands, then exec or query to call them. "
-            "Calling describe with no arguments lists all commands. "
+            "Calling describe with no arguments lists the command groups, one line each; "
+            "describe {group} lists a group's commands and describe {command} gives one "
+            "command's arguments. "
             "Successful command results may include warnings: command warnings followed by "
             "bus diagnostics {code: string, message: string, path: string}. Paths are retained "
             "as emitted. Non-object results with bus warnings become {result: value, warnings: "
