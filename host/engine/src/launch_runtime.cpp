@@ -742,6 +742,7 @@ void Engine::serviceLaunches() {
             }
         }
     }
+    captureEnding();
     if (capture_.on && !capture_.pending && rateActive()) {
         (void)captureLaunches(false);
         warnings_.push_back("launch: the capture ended: a master playrate became active");
@@ -928,6 +929,7 @@ void Engine::placeCapture() {
 void Engine::captureRelocating() {
     if (!capture_.on || capture_.pending) return;
     const std::int64_t heard = captureHeard();
+    capture_.ending = false;            // a quantized end not reached: it ends here instead
     if (heard > capture_.startFrame) {  // it ran: running time ends here
         capture_.endFrame = heard;
         capture_.on = false;
@@ -936,8 +938,32 @@ void Engine::captureRelocating() {
     }
 }
 
-Status Engine::captureLaunches(bool on) {
+Status Engine::captureLaunches(bool on, std::optional<model::LaunchQuantize> quantize) {
+    if (on && capture_.on && capture_.ending) {  // on again before its end: it runs on
+        capture_.ending = false;
+        return {};
+    }
     if (on == capture_.on) return {};
+    if (!on && quantize && *quantize != model::LaunchQuantize::None && !capture_.pending &&
+        wantPlaying_.load(std::memory_order_acquire)) {
+        // The next boundary, where a launch of every track with clips made
+        // now would land: the same floor, so the two agree.
+        const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+        std::vector<LaunchRequest> every;
+        if (plan)
+            for (const detail::Node& n : plan->nodes)
+                if (!n.players.empty())
+                    every.push_back({n.id, LaunchLogEntry::Action::Arrangement, {}, {}});
+        auto placed = placeLaunch(every, *quantize);
+        if (!placed) return std::move(placed).error();
+        if (placed->epoch == capture_.epoch && placed->stream > capture_.startFrame) {
+            capture_.ending = true;
+            capture_.endFrame = placed->stream;
+            capture_.endBeat = placed->anchorBeat;
+            return {};
+        }
+        // A boundary in another epoch (a relocation is coming): it ends now.
+    }
     if (on) {
         if (rateActive())
             return Error("launch.playrate", "a master playrate is active", "",
@@ -956,8 +982,15 @@ Status Engine::captureLaunches(bool on) {
     }
     capture_.endFrame = capture_.pending ? capture_.startFrame : captureHeard();
     capture_.pending = false;
+    capture_.ending = false;
     capture_.on = false;
     return {};
+}
+
+void Engine::captureEnding() {
+    if (!capture_.on || !capture_.ending || captureHeard() < capture_.endFrame) return;
+    capture_.ending = false;  // heard its boundary: it ends there
+    capture_.on = false;
 }
 
 std::optional<Engine::LaunchCapture> Engine::launchCapture() {
@@ -970,8 +1003,14 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
     out.loop = capture_.loop;
     if (capture_.pending) return out;
     const std::int64_t start = capture_.startFrame;
-    const std::int64_t end = capture_.on ? captureHeard() : capture_.endFrame;
+    const std::int64_t end = !capture_.on      ? capture_.endFrame
+                             : capture_.ending ? std::min(captureHeard(), capture_.endFrame)
+                                               : captureHeard();
     out.frames = end - start;
+    if (capture_.on && capture_.ending) {
+        out.endsFrame = capture_.endFrame - start;
+        out.endsBeat = capture_.endBeat;
+    }
     // What each track played as the capture began: its newest entry by
     // then, unless a plan has since returned it to the arrangement.
     std::map<model::Id, std::size_t> before;

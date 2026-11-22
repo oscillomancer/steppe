@@ -828,6 +828,37 @@ revision records step 1 as built.
     one at once, where timeline clips crossfade between the two;
   - a looped transport under a playrate has no replay to compare with.
 
+## Revision (2026-11-22, S3 design A): a capture can end on a quantize boundary
+
+**Context.** `launch.capture {on: false}` ended a capture at the position
+heard when it arrived, so a performance ended wherever the caller happened
+to be: a script polling every 20 ms ended it one to three blocks past the
+bar it meant, and the commit's last item was cut there.
+
+**Decision.**
+- `launch.capture {on: false, quantize}` with a quantize other than `none`,
+  while playing, ends the capture on that quantize's next boundary. The
+  boundary is placed as a launch of every track with clips made at that
+  moment would be (the same floors, the loop fold and, on a playrate plan,
+  the rate placement), so a launch made with it lands on the same boundary.
+- The end is main-thread state: the capture runs until the heard position
+  reaches the boundary's stream frame, then service closes it there. Its
+  running time ends exactly on the boundary, and a launch applied on or
+  after it is not in the performance. Nothing changes on the audio path.
+- Before the boundary, `on: true` cancels the end, another `on: false`
+  replaces it, and a relocation (a seek, a stop, a loop change) ends the
+  capture at once, as before. Stopped, or without `quantize` (or with
+  `none`), it ends at once, as before.
+- `launch.commit` while an end is pending is refused with
+  `launch.capture.ending`; the capture is kept.
+- The GUI's Capture toggle, turned off while playing, ends the capture on
+  the project's launch quantize and commits it once the end is heard.
+
+**Consequences.** A performance can end on the grid it was launched on, and
+its commit ends on that bar's beat exactly, in both executors at any block
+size. The tests end a capture on bar 3 with a launch placed on the same
+boundary (left out), and cover cancelling, replacing and a seek first.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

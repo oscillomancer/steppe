@@ -584,10 +584,18 @@ the same.*
   arrangement played then (its launch, anchor kept), and every launch
   applied after it, by running frame from the start
   (`Engine::launchCapture`). It begins at the heard position (stopped:
-  where playing starts). A relocation (a seek, a stop, a loop change) ends
-  a capture that has run any frames, where it was heard; one that has not
-  begins again where the transport goes. A capture lives in one transport
-  epoch.
+  where playing starts) and ends at the heard position, or, ended with a
+  quantize while playing (`launch.capture {on: false, quantize}`), on that
+  quantize's next boundary: placed as a launch of every track with clips
+  made then would be, so a launch made with it lands there too. The
+  capture runs until that boundary is heard (`endsFrame`, `endsBeat`) and
+  then ends on it exactly; a launch applied from the boundary on is not in
+  it. On again before it cancels the end, another end replaces it, and
+  `launch.commit` is refused meanwhile (`launch.capture.ending`). A
+  relocation (a seek, a stop, a loop change) ends a capture that has run
+  any frames, where it was heard, ending or not; one that has not begins
+  again where the transport goes. A capture lives in one transport epoch
+  (ADR-0097, revision 2026-11-22).
 - **Committing it.** `launch.commit` lays the capture out linearly: a
   launch at running frame f lands at the capture's start plus f, whatever
   the loop did. On each track that left the arrangement, the stretches

@@ -316,7 +316,8 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
-    - a capture ends at a seek, a loop change or a stop, by design
+    - a capture ends at a seek, a loop change or a stop, by design (one
+      ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
       wraps at the loop as live does, but not under a master playrate;
     - right after a pause, in the anticipative executor, the reported

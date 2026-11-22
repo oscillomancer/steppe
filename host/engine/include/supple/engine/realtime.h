@@ -874,16 +874,25 @@ class Engine {
         std::int64_t startSample = 0, frames = 0;
         LoopRange loop;
         std::vector<LaunchLogEntry> launches;
+        // A quantized end not reached yet: its running frame, and the
+        // boundary's beat.
+        std::optional<std::int64_t> endsFrame;
+        std::optional<double> endsBeat;
     };
     // Main thread: starts a capture at the heard position (stopped: the
-    // play position, where playing starts), or ends the running one at the
-    // heard position. A relocation (a seek, a stop, a loop change) ends a
-    // capture that has run any frames; one that has not starts again where
-    // the transport goes. Starting is refused while a master playrate is
-    // active (`launch.playrate`; ADR-0097, dated revision 2026-11-21): its
-    // running time is not song time. One that becomes active ends a running
-    // capture (service).
-    Status captureLaunches(bool on);
+    // play position, where playing starts), or ends the running one. With
+    // no quantize, or None, or stopped, it ends at the heard position;
+    // with another, at that quantize's next boundary, placed as a launch
+    // of every track with clips made now would be (so a launch made with
+    // it lands on the same boundary), and launches applied from there on
+    // are not in it. On again before that boundary cancels the end; a
+    // second end replaces it. A relocation (a seek, a stop, a loop change)
+    // ends a capture that has run any frames, ending or not; one that has
+    // not starts again where the transport goes. Starting is refused while
+    // a master playrate is active (`launch.playrate`; ADR-0097, dated
+    // revision 2026-11-21): its running time is not song time. One that
+    // becomes active ends a running capture (service).
+    Status captureLaunches(bool on, std::optional<model::LaunchQuantize> quantize = std::nullopt);
     // Main thread: the running capture, else the last one; none before the
     // first. Collects the executors' acknowledgements first.
     std::optional<LaunchCapture> launchCapture();
@@ -1317,6 +1326,10 @@ class Engine {
     // not placed yet (relocating, or a relocation before it ran).
     struct CaptureState {
         bool on = false, any = false, pending = false;
+        // A quantized end (captureLaunches): it ends at endFrame, a stream
+        // frame of its epoch, once heard there (service).
+        bool ending = false;
+        double endBeat = 0;
         std::uint64_t epoch = 0;
         std::int64_t startFrame = 0, endFrame = 0, startSample = 0;
         LoopRange loop;
@@ -1324,6 +1337,7 @@ class Engine {
     CaptureState capture_;
     void placeCapture();                // a pending start, once the clock reads
     void captureRelocating();           // writeTransport: a relocation is coming
+    void captureEnding();               // service: a quantized end heard
     std::int64_t captureHeard() const;  // the capture epoch's heard stream
     Result<LaunchPlaced> placeLaunch(std::span<const LaunchRequest> requests,
                                      model::LaunchQuantize quantize) const;
