@@ -1213,8 +1213,11 @@ results.
   the key it delivered.
 - **Context edits.** A context-only edit takes the compile path whenever an
   item's active take has `follow` other than `none` or the plan follows a
-  clip; otherwise the shortcut above stays. The compile time on the song journey is measured in the
-  X4 hand-back.
+  clip; otherwise the shortcut above stays. Following costs the compile about
+  2.5 µs a note-on (a skipped test in test_clip_player_follow.cpp prints it):
+  compile and prepare of 400 one-bar items of 16 notes took 37 ms following
+  nothing, 39 ms following key and 53 ms following chords (dev, Debug, median
+  of 7), so no per-place cache is kept.
 - **Everything downstream reads compiled events:** offline renders, freeze,
   stems, rack Notes feeds, MIDI sends and plug-in MIDI inputs take the sounding
   pitches with no change of their own.
