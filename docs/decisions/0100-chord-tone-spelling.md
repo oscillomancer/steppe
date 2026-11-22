@@ -3,7 +3,8 @@
 **Status:** Accepted, 2026-11-22. Amends ADR-0095.
 
 Contracts: `specs/harmony.md` §1, §2, §3 (rule 4) and §3.1; `specs/notation.md` ("Decompile");
-`specs/session-model.md` (`midi.get`); `specs/gui.md` (the roll's note names).
+`specs/session-model.md` (`midi.get`). The roll's note names (`specs/gui.md`) follow in a later
+step, which updates that spec.
 
 ## Context
 
@@ -49,8 +50,10 @@ continuation keeps its first piece's names.
 - Nothing stored changes: notes are MIDI numbers, context points hold symbols, and every produced name
   compiles back to the same pitch (the notation reads `##` and `bb`; a test compiles every name for every
   root, quality, five keys and pitch 0..127).
-- `midi.get` text over a chord changes (chord tones read by degree); an item with no chord point reads
-  as before, byte for byte. `midi.get {format: events}` carries numbers and does not change.
+- `midi.get` text over a chord changes (chord tones read by degree). An item with no chord and one
+  key reads as before, byte for byte; an item that crosses a key change now names each note by the key
+  holding at its start, and pitch 0 under a key that spelled it `B#-2` now reads `C-1`.
+  `midi.get {format: events}` carries numbers and does not change.
 - The roll's note labels follow in a later step. The keyboard's C labels, the MIDI event list, MIDI-control names, the
   rack probe, and (unless it is the same decompile call) the notation pane stay on the default table:
   a known limit in `STATUS.md`.
