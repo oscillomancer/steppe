@@ -2673,9 +2673,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   render block of the epoch and the callback's whole cycle (that at most the
   render-ahead span), in the output ring or the frontier rings: never a first
   chunk cut short, such as a launch from stop whose compensated tracks switch
-  a few frames in, or a loop wrap. It also ends when the renderer has
-  rendered all its rings hold and waits for room: a loop shorter than the
-  rings' chunks fills them first (see "Rings are recycled"). Until then the
+  a few frames in, or a loop wrap. It also ends when a ring the
+  renderer writes is full, so it can render no more until the callback
+  plays: a loop shorter than the rings' chunks fills them first (see "Rings
+  are recycled"). Until then the
   callback plays silence and time holds still. The pre-roll ends with the
   first frame played: the rest of that cycle, past a loop wrap too, plays on.
   A cycle that has played audio and then runs short counts a miss, the cycle

@@ -2422,10 +2422,27 @@ bool Engine::primeReady(std::uint64_t epoch, std::uint32_t frames) const SUPPLE_
         std::min<std::int64_t>(std::max<std::int64_t>(options_.renderBlock, frames),
                                primeAhead_.load(std::memory_order_acquire));
     if (renderedStream_.load(std::memory_order_acquire) - playedStream(epoch) >= need) return true;
-    // Or the renderer waits for room: a loop shorter than the rings' chunks
-    // fills them before a whole block is rendered (engine.md, rings), and
-    // what they hold is all there is until this callback plays it.
-    return rendererWakeAt_.load() != INT64_MAX;
+    // Or a ring the renderer writes is full: a loop shorter than the rings'
+    // chunks fills them before a whole block is rendered (engine.md, rings),
+    // and what they hold is all there is until this callback plays it. The
+    // rings' state, not the renderer's wake flag, which each of its passes
+    // clears before it looks again: read then, it held a start one more
+    // cycle. This callback is their only consumer, so full stays full.
+    const auto full = [](const detail::ChunkRing& ring) {
+        return ring.write.load(std::memory_order_acquire) -
+                   ring.read.load(std::memory_order_relaxed) >
+               ring.mask;
+    };
+    const detail::Plan* p = livePlan_;
+    if (p)
+        for (const auto& ring : p->recordRings)
+            if (full(*ring)) return true;
+    if (p && p->split) {
+        for (const auto& ring : p->frontierRings)
+            if (full(*ring)) return true;
+        return false;
+    }
+    return full(p && p->rateOutput ? *p->rateOutput : *ring_);
 }
 
 // --- recording (ADR-0014) --------------------------------------------------------------------
