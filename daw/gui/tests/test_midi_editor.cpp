@@ -5043,6 +5043,71 @@ TEST_CASE("a following take's strip: its take row names each change of the take'
     CHECK(f.editor->otherChordLabels().front() == "C");
 }
 
+TEST_CASE("a following take's roll: a looped pass's unheard notes read its place") {
+    // gui.md §4.7: a note not heard in the pass shown is drawn where it would
+    // sound in that pass, at its unwrapped source beat at the take's playrate,
+    // so lengthening the item over it sounds it as drawn. The source is one
+    // bar (C4 E4 G4 C5 on its beats), slipped 2 beats and played at twice the
+    // speed: each pass lasts 2 beats, the first only 1. In a 4-beat item the
+    // third pass (item beats 3-5) is cut short after C4 and E4, which lie
+    // before the take's offset; G4 and C5 would sound at song beats 8 and
+    // 8.5, where the song turns to G major.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    f.exec("key.set", R"({"at":6,"tonic":"A","scale":"minor"})");
+    f.exec("key.set", R"({"at":8,"tonic":"G","scale":"major"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"}])", "key");
+    const auto id = *model::Id::parse(f.item);
+    const std::string take = f.app->head().items.find(id)->activeTake->str();
+    f.exec("take.set", R"({"take":")" + take + R"(","start_offset":2,"playrate":2})");
+    auto length = [&](double beats) {
+        f.exec("item.set", R"({"item":")" + f.item + R"(","position":4,"length":)" +
+                               json::formatDouble(beats) + R"(,"loop":true})");
+        f.frame();
+    };
+    auto pickPass = [&](std::size_t k) {
+        REQUIRE(f.root->click("midi.pass"));
+        f.frame();
+        ui::Node* menu = f.root->find("midi.pass.menu");
+        REQUIRE(menu);
+        const auto items = ui::menuItems(*menu);
+        REQUIRE(items.size() > k);
+        const auto run = items[k].run;
+        f.root->closePopup();
+        run();
+        f.frame();
+    };
+    length(4);
+    auto& s = f.editor->state();
+    REQUIRE(s.following);
+    REQUIRE(s.notes.size() == 4);
+    REQUIRE(s.passes == 3);
+    // The first pass: G4 heard at song beat 4, in E minor.
+    CHECK_FALSE(s.outsideItem(2, s.notes[2]));
+    const int firstPass = s.drawnPitch(2, s.notes[2]);
+    pickPass(2);
+    REQUIRE(s.pass == 2);
+    CHECK_FALSE(s.outsideItem(0, s.notes[0]));
+    CHECK_FALSE(s.outsideItem(1, s.notes[1]));
+    REQUIRE(s.outsideItem(2, s.notes[2]));
+    REQUIRE(s.outsideItem(3, s.notes[3]));
+    const int g4 = s.drawnPitch(2, s.notes[2]), c5 = s.drawnPitch(3, s.notes[3]);
+    CHECK(g4 != firstPass);  // not the first pass's place
+    // Lengthened over them: heard in that pass where they were drawn.
+    length(6);
+    REQUIRE(s.pass == 2);
+    CHECK_FALSE(s.outsideItem(2, s.notes[2]));
+    CHECK_FALSE(s.outsideItem(3, s.notes[3]));
+    CHECK(s.drawnPitch(2, s.notes[2]) == g4);
+    CHECK(s.drawnPitch(3, s.notes[3]) == c5);
+    // The second pass's G4 sounds at song beat 6, in A minor: another pitch,
+    // so each pass's place is told apart.
+    pickPass(1);
+    CHECK(s.drawnPitch(2, s.notes[2]) != g4);
+    CHECK(s.drawnPitch(2, s.notes[2]) != firstPass);
+}
+
 TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or says it cannot") {
     Fixture f;
     if (!f.ok) return;

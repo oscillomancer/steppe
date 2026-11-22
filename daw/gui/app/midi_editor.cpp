@@ -2768,12 +2768,16 @@ Status MidiEditor::reload() {
         state_.passes = last + 1;
         state_.pass = std::clamp(state_.pass, 0, state_.passes - 1);
         state_.sounds.assign(state_.notes.size(), {});
+        // Every occurrence in a pass has the same shift (the pass's whole
+        // loop lengths over the playrate), a chased note's too: its song beat
+        // is where its start would have sounded. So a pass whose heard notes
+        // all lie before the take's offset still gives the pass's shift.
         bool shiftSet = false;
         for (const model::SoundingNote& o : heard) {
             if (o.pass != state_.pass || o.note >= state_.sounds.size()) continue;
             const double shift = o.songBeat - (state_.itemPosition + state_.notes[o.note].start);
             state_.sounds[o.note] = {o.sounds.pitch, shift};
-            if (!shiftSet && state_.notes[o.note].start >= 0) {  // not a chased note
+            if (!shiftSet) {
                 state_.passShift = shift;
                 shiftSet = true;
             }
