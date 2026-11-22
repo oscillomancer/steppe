@@ -372,6 +372,31 @@ TEST_CASE("consolidating MIDI items refuses when only some follow, or a chased n
     CHECK(f.app->head().items.size() == 3);  // nothing changed
 }
 
+TEST_CASE("consolidating a lone following item keeps a note held into its start (round 85 G11)") {
+    Fixture f;
+    f.run("track.add", R"({"name":"Keys"})");  // tr_2
+    f.run("key.set", R"({"at":0,"tonic":"Eb","scale":"major"})");
+    f.run("key.set", R"({"at":7,"tonic":"F","scale":"major"})");
+    f.run("item.add", R"({"track":"tr_2","bar":3,"notation":"voice keys; 1: C2:w"})");
+    const model::Id item{model::Kind::Item, 2};
+    f.run("take.add", R"({"item":"it_2","from":"tk_2"})");
+    REQUIRE(f.app->head().items.find(item)->takes.size() == 2);
+    // Both takes follow alike, and start two beats into their note: it began two beats before
+    // the item does, under Eb major, and the item starts under F.
+    for (const model::Id take : f.app->head().items.find(item)->takes)
+        f.run("take.set", (R"({"take":")" + take.str() +
+                           R"(","context":"1: key C major ~:w","follow":"key","start_offset":2})")
+                              .c_str());
+    f.run("take.activate", R"({"item":"it_2","index":0})");
+    f.run("item.set", R"({"item":"it_2","length":2})");
+    const auto before = heardBy(f.app->head(), item);
+    REQUIRE(before.size() == 1);
+    f.finish(f.run("item.consolidate", R"({"items":["it_2"]})"));
+    CHECK(f.app->head().items.find(item)->takes.size() == 1);
+    const auto after = heardBy(f.app->head(), item);
+    CHECK(std::count(after.begin(), after.end(), before[0]) == 1);
+}
+
 TEST_CASE("healing restores pre-split and pre-slice audio bit for bit without take FX") {
     Fixture f;
     bool slice = false, warp = false;

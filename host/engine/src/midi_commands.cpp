@@ -667,11 +667,11 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
     std::vector<model::SoundingNote> baseHeard;
     if (following != 0) {
         constexpr double kEdge = 1e-9;
-        if (!lone) {
-            baseHeard = model::soundingNotes(s, base, -1e18, 1e18);
-            for (const auto& h : baseHeard) leadIn = std::max(leadIn, start - h.songBeat);
-            leadIn = std::ceil(std::max(0.0, leadIn - kEdge) * 960.0) / 960.0;
-        }
+        // The first item's heard notes (a lone item's: its active take's), the chased ones
+        // included, keep their true starts in the result's source.
+        baseHeard = model::soundingNotes(s, base, -1e18, 1e18);
+        for (const auto& h : baseHeard) leadIn = std::max(leadIn, start - h.songBeat);
+        leadIn = std::ceil(std::max(0.0, leadIn - kEdge) * 960.0) / 960.0;
         // Each part's context over its span (the first from its lead-in), onto the result axis.
         std::vector<std::pair<double, std::pair<Id, Id>>> order;
         for (const auto& part : parts)
@@ -684,13 +684,14 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
             const model::Item& it = *s.items.find(part.first);
             const model::Take& tk = *s.takes.find(part.second);
             const double rate = tk.playrate > 0 ? tk.playrate : 1.0;
-            const bool lead = !lone && part.first == base;
+            // A lone item's takes are layered on one axis, so each reads from the lead-in.
+            const bool lead = lone || part.first == base;
             const double u0 = tk.contextPhase + tk.startOffset - (lead ? leadIn * rate : 0.0);
             const double u1 =
                 tk.contextPhase + tk.startOffset + model::itemLengthBeats(s, it) * rate;
             // Result source beat of the re-based beat 0: the lead-in for the first source (it
             // starts there), else the lead-in plus the source's distance from the result start.
-            const double origin = lead ? 0.0 : (lone ? 0.0 : leadIn + (itemStart - start));
+            const double origin = lead ? 0.0 : leadIn + (itemStart - start);
             std::vector<model::ContextPoint> points = model::contextOver(tk, u0, u1);
             for (model::ContextPoint& p : points)
                 p.beat = std::round((origin + p.beat / rate) * 960.0) / 960.0;
@@ -728,11 +729,13 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
 
     midi::Sequence merged;
     merged.ppq = 960;
+    const Id baseActive = s.items.find(base)->activeTake ? *s.items.find(base)->activeTake
+                                                         : s.items.find(base)->takes.front();
     for (const auto& [id, take] : parts) {
         const model::Item& it = *s.items.find(id);
         const model::Take& tk = *s.takes.find(take);
         const double shift = model::itemSpan(s, it).startBeat - start + leadIn;
-        if (following != 0 && !lone && id == base) {
+        if (following != 0 && id == base && take == baseActive) {
             // The first source's notes at their true starts (before the result's start when
             // chased); its controls and sysex as heardMidi places them.
             midi::Sequence scratch;
