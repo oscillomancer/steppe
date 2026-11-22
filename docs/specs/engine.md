@@ -405,7 +405,9 @@ until it is released.
   editor moved is that edit repeated and is not passed on (review round
   81b, E5). A barrier that drops queued edits, a deactivation or a full
   queue ends every editor gesture still open, so a lost `endEdit` leaves
-  no gesture open in the stage. Closing the editor with a grab open (no
+  no gesture open in the stage. The ends go out in queue order: after
+  every edit queued before them, and before any queued after (review round
+  97, T1). Closing the editor with a grab open (no
   `endEdit`, review round 81c, E6) queues each grab's end behind the
   editor's moves, so a move made just before the close stays inside its
   gesture: one step, its points once (round 92b; ending it ahead of the
