@@ -568,9 +568,13 @@ the same.*
   source like an item's fade, in both executors and offline.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
-  the epoch's terms), its song position, and the scene when `launch.scene`
-  launched it (carried through the slot and the executor's ack; the replay
-  ignores it). A transport wrap is not
+  the epoch's terms), its song position, the scene when `launch.scene`
+  launched it, and its song frame: the boundary's sample on the song's
+  unwrapped running count (`LaunchLogEntry::songFrame`; at unity the
+  epoch's start plus the running frame, under a master playrate the rate
+  timeline's unwrapped phase, computed at placement). The scene and the
+  song frame are carried through the slot and the executor's ack; the
+  replay ignores both. A transport wrap is not
   logged: it follows from the loop, which a replay is given. A seek, a
   loop change or a stop ends a capture, so a replay never crosses one
   (ADR-0097, revision 2026-11-20, batch 3).
@@ -583,7 +587,10 @@ the same.*
   loop it runs under, what each track that was not following the
   arrangement played then (its launch, anchor kept), and every launch
   applied after it, by running frame from the start
-  (`Engine::launchCapture`). It begins at the heard position (stopped:
+  (`Engine::launchCapture`). Its running time is song time: song frames
+  from the start (stream frames at unity, the song samples played under a
+  master playrate), heard through the executors' published rate clock
+  (ADR-0097, revision "S3 step B"). It begins at the heard position (stopped:
   where playing starts) and ends at the heard position, or, ended with a
   quantize while playing (`launch.capture {on: false, quantize}`), on that
   quantize's next boundary: placed as a launch of every track with clips
@@ -600,7 +607,11 @@ the same.*
   relocation (a seek, a stop, a loop change) ends a capture that has run
   any frames, where it was heard, ending or not; one that has not begins
   again where the transport goes. A capture lives in one transport epoch
-  (ADR-0097, revision 2026-11-22).
+  (ADR-0097, revision 2026-11-22). It runs through master playrate edits;
+  arming is refused with `launch.playrate` while a launched audio clip
+  plays and the newest plan keeps the pitch, and such a plan arriving ends
+  a running capture with a warning naming the clip (the stretch converter
+  reading it has no committed equivalent).
 - **Committing it.** `launch.commit` lays the capture out linearly: a
   launch at running frame f lands at the capture's start plus f, whatever
   the loop did. On each track that left the arrangement, the stretches
@@ -669,6 +680,10 @@ the same.*
     nothing. Under a playrate that keeps the pitch an audio clip has no
     player yet (step 1b): compile warns and its launch is refused with
     `launch.playrate`.
+  - *Capture* runs in song time (above): placement gives each launch its
+    song frame, the boundary's unwrapped song sample, and the capture
+    counts song samples from the published rate clock, so a commit lays
+    each launch on its song position whatever the rate did.
   - *MIDI* (`rateLaunchMidi`, a clip chain's input, a rack's Notes feed):
     each event at the first frame whose song position reaches it; what is
     held ends where the song enters a new loop pass; a switch's first frame

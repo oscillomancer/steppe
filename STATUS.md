@@ -305,8 +305,9 @@ instructions are in `docs/guides/installing.md`.
     - under a master playrate clips play on the playrate path, live as
       the replay (ADR-0097, revision 2026-11-21), but while it keeps the
       pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
-      clips can); `launch.capture` is refused while one is active, and
-      one becoming active ends a capture; there a frozen track's print
+      clips can); a capture runs in song time under one, refused (or
+      ended, with a warning) only while a launched audio clip plays and
+      the playrate keeps the pitch; there a frozen track's print
       cuts in without the crossfade, and launched audio does not crossfade
       between trajectories when a plan swap changes the rate;
     - freezing, or removing the playing clip, crossfades an audio clip

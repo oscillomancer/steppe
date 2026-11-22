@@ -492,8 +492,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Start or end capturing launches for the timeline.";
         c.description =
-            "While on, every applied launch is kept with the running time it applied at, and "
-            "what each track played when the capture began. on: true begins at the position "
+            "While on, every applied launch is kept with the running time it applied at (song "
+            "time: under a master playrate, the song samples played), and what each track "
+            "played when the capture began. on: true begins at the position "
             "heard now (stopped: where playing starts); on: false ends it there, or with "
             "quantize (other than none, while playing) at that quantize's next boundary, where "
             "a launch of every track with clips (a scene launch) made now would land; one "
@@ -507,10 +508,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "seek or a loop change ends a capture that has run, ending or not; one that has "
             "not run begins again at the new position. launch.commit writes the capture onto "
             "the timeline. from and to: its span on the timeline in beats so far, laid out by "
-            "running time. Refused while a "
-            "master playrate is active, where running time is not song time, and while the rate "
-            "heard is still gliding to 1 after one was set (effective_rate in "
-            "transport.playrate.get); one that becomes active ends a running capture.";
+            "running time. It runs through master playrate edits: the committed arrangement plays "
+            "the same song positions, not the same durations, at another rate. Refused while a "
+            "launched audio clip plays and the master playrate keeps the pitch; a playrate that "
+            "starts keeping it then ends a running capture, with a warning naming the clip.";
         c.tags = {"clip launcher", "transport", "recording"};
         c.args = schema::object<CaptureArg>("launch_capture_args")
                      .field("on", &CaptureArg::on, schema::boolean())
@@ -526,9 +527,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("ends_at", &CaptureDone::endsAt, schema::number())
                        .build();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
-                    {"launch.playrate", "a master playrate is active, or still gliding to 1",
-                     "set the master playrate to 1 and turn off its envelope, then capture once "
-                     "effective_rate is 1"},
+                    {"launch.playrate",
+                     "a launched audio clip plays while the master playrate keeps the pitch",
+                     "stop it (launch.stop or launch.arrangement), or turn off the master "
+                     "playrate's preserve pitch, then capture"},
                     {"launch.later", "the transport is relocating, or the playrate is changing",
                      "end the capture again in a moment"}};
         c.examples = {{"While stopped", j(R"({"on": true})"),
@@ -551,7 +553,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.description =
             "One undo step. The capture (launch.capture) is laid out linearly from where it "
             "began, by running time, whatever the transport loop did: a launch heard s seconds "
-            "into the capture lands s seconds after its start. On each track that left the "
+            "into the capture lands s seconds after its start (under a master playrate, s "
+            "seconds of song: the same song positions, not the same durations). On each track that "
+            "left the "
             "arrangement, its clip, stopped and held stretches replace the arrangement there "
             "(its items are split, trimmed or removed); each clip becomes copies of its takes "
             "at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch "

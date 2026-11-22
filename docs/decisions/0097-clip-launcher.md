@@ -808,7 +808,8 @@ revision records step 1 as built.
   playrate to 1 and turn off its envelope, then capture". A playrate that
   becomes active ends a running capture, with a warning. Committing a
   capture by the song positions heard (S3, Q2) needs the scalar history
-  logged with it, and is left for later.
+  logged with it, and is left for later. *(2026-11-22: a capture runs in
+  song time under a master playrate; see the revision "S3 step B" below.)*
 - **Still refused:** a looped replay under a master playrate
   (`render.loop`). The replay does not wrap on the playrate path.
 
@@ -868,6 +869,47 @@ bar it meant, and the commit's last item was cut there.
 its commit ends on the sample a launch on that bar switches on, with `to`
 equal to the `ends_at` it was given, in both executors at any block size. The tests end a capture on bar 3 with a launch placed on the same
 boundary (left out), and cover cancelling, replacing and a seek first.
+
+## Revision (2026-11-22, S3 step B): a capture under a master playrate runs in song time
+
+**Context.** Step 1 refused a capture under a master playrate: the capture
+counted stream frames, which at another rate are not song time, so a commit
+would lay launches at the wrong song positions. The rate timeline already
+gives every frame's unwrapped song position, and placement integrates it to
+the boundary.
+
+**Decision.**
+- **Each launch carries its song frame.** Placement computes the
+  boundary's sample on the song's unwrapped running count
+  (`LaunchLogEntry::songFrame`): on a unity plan the epoch's start plus the
+  target's stream frame, on a playrate plan the rate timeline's unwrapped
+  phase at the boundary. It travels through the slot and the executor's
+  acknowledgement into the log. Nothing on the audio path changes, and the
+  replay ignores it.
+- **A capture counts song samples.** Its start, its heard position and a
+  quantized end are read on that count, from the rate clock the executors
+  publish (its timeline word; at unity the epoch's start plus the stream).
+  A launch's running frame in the capture is its song frame less the
+  start. At unity this is the stream count it was.
+- **It runs through rate edits** (S3, Q1): a scalar edit, an envelope or a
+  rate still gliding to 1 no longer refuses or ends it. The committed
+  arrangement plays the same song positions, not the same durations, at
+  another rate.
+- **Pitch kept** (S3, Q2 b): a capture is allowed and stays exact for MIDI,
+  also under a sync chase, which forces the pitch kept. Arming is refused
+  with `launch.playrate` while a launched audio clip plays and the newest
+  plan keeps the pitch (no committed item reads a stretch converter's
+  history), naming the clip, with the hint to stop it or turn off preserve
+  pitch. Such a plan arriving while one plays ends a running capture where
+  it was heard, with a warning naming the clip. (An audio launch under a
+  pitch-keeping rate is refused until step D; then the launch goes ahead
+  and the capture ends at its switch.)
+
+**Consequences.** A capture under a constant rate, an envelope, a rate edit
+over a loop wrap, a glide back to 1 and a clock chase commits every launch
+on its song sample, in both executors. MIDI under a pitch-keeping rate
+commits equal to what played. The tests cover each, and the refusal and the
+end for audio.
 
 ## Consequences
 

@@ -1825,9 +1825,11 @@ clip is playing. Not yet:
 - launching an audio clip while the master playrate keeps the pitch
   (`launch.playrate`); MIDI clips, and audio clips without it, follow
   the playrate;
-- capturing a performance while a master playrate is active, or while
-  the rate you hear is still gliding back to 1 after you set it there
-  (`transport.playrate.get` shows `effective_rate`).
+- capturing while a launched audio clip plays and the master playrate
+  keeps the pitch (`launch.playrate`): stop the clip or turn off preserve
+  pitch first. Otherwise a capture runs under any playrate and through
+  changes to it, and the commit plays the same song positions, not the
+  same durations, at another rate.
 
 A rack's Notes module that plays a track's notes follows that track's
 launches: it plays the clip, falls silent when the track stops, and

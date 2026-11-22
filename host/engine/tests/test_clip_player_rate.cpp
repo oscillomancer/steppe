@@ -175,8 +175,8 @@ TEST_CASE("a launch made while stopped under a new playrate starts at the play s
 }
 
 TEST_CASE(
-    "a playrate set while stopped is the rate the play starts at, and capture judges the "
-    "audible rate" *
+    "a playrate set while stopped is the rate the play starts at, and a capture may start while "
+    "the rate glides" *
     doctest::description("rt")) {
     // The builder's second song journey, D2 (and F8): played at 1.25,
     // stopped, set to 1.0 and played again, the effective rate stayed 1.25
@@ -186,7 +186,8 @@ TEST_CASE(
     // at, and the effective rate says so; the edit keeps the plan, as any
     // scalar edit. Stopped means the transport was asked to stop, also
     // before a callback has heard it (review round 81 E4). Playing, a
-    // capture is refused while the audible rate is not 1.
+    // capture was refused while the audible rate was not 1; it runs in song
+    // time now, so arming while the rate glides is allowed (S3 B).
     for (const bool atOnce : {false, true})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("edit at once " << atOnce << ", anticipative " << options.anticipative);
@@ -230,20 +231,19 @@ TEST_CASE(
             CHECK(engine.effectivePlayrate() == 1.0);
             CHECK(engine.captureLaunches(true));
             CHECK(engine.captureLaunches(false));
-            // Playing: a change of rate glides, and while it is audible a
-            // capture is refused.
+            // Playing: a change of rate glides, and a capture may start
+            // while it does.
             REQUIRE(engine.load(fast, p.app->projectDir()));
             for (int i = 0; i < 2000 && engine.effectivePlayrate() != 1.25; ++i) run(1);
             REQUIRE(engine.effectivePlayrate() == 1.25);
             REQUIRE(engine.load(unity, p.app->projectDir()));
             run(2);
             REQUIRE(engine.effectivePlayrate() != 1.0);
-            const Status gliding = engine.captureLaunches(true);
-            REQUIRE_FALSE(gliding);
-            CHECK(gliding.error().code == "launch.playrate");
+            CHECK(engine.captureLaunches(true));
+            CHECK(engine.launchCapturing());
             for (int i = 0; i < 2000 && engine.effectivePlayrate() != 1.0; ++i) run(1);
             CHECK(engine.effectivePlayrate() == 1.0);
-            CHECK(engine.captureLaunches(true));
+            CHECK(engine.launchCapturing());
             engine.stop();
         }
 }
@@ -289,29 +289,54 @@ TEST_CASE("a launch while a playrate change is in flight says so, and lands once
     engine.stop();
 }
 
-TEST_CASE("launch.capture is refused under a master playrate, and one becoming active ends it") {
-    Project p;
-    twoTracks(p);
-    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
-    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
-    // Armed at unity, running: a playrate turned on ends it.
-    p.run("launch.capture", R"({"on": true})");
-    p.run("transport.play", "{}");
-    backend.run(40);
-    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
-    REQUIRE(p.app->engine()->awaitPlan());
-    backend.run(40);
-    p.app->engine()->service();
-    auto capture = p.app->engine()->launchCapture();
-    REQUIRE(capture);
-    CHECK_FALSE(capture->on);
-    CHECK(capture->frames > 0);
-    // Now refused at arming.
-    auto r = p.bus->execute({"launch.capture", j(R"({"on": true})"), kOrigin});
-    REQUIRE_FALSE(r);
-    CHECK(r.error().code == "launch.playrate");
-    CHECK(r.error().hint.find("then capture") != std::string::npos);
-    p.app->stopEngine();
+TEST_CASE("a capture under a master playrate commits by the song positions heard" *
+          doctest::description("rt")) {
+    // S3 B: the capture's running time is the song's, in samples. twoTracks'
+    // scene on bar 2, tr_1 back to the arrangement and tr_2 stopped on bar 3,
+    // cl_2 again on bar 4, under a constant 0.75 and under the envelope
+    // (tape): the performance holds the launches at song samples 96000,
+    // 192000 and 288000.
+    for (const bool envelope : {false, true})
+        for (const std::uint32_t block : {128u, 512u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                INFO("envelope " << envelope << ", block " << block << ", anticipative "
+                                 << options.anticipative);
+                Project p;
+                twoTracks(p);
+                underRate(p, envelope);
+                AppLive live(p, options, block, 48000 * 12 + 16384);
+                const auto logged = [&](std::size_t n) {
+                    while (p.app->engine()->launchLog().size() < n &&
+                           live.cycles * block < 48000 * 10)
+                        live.until((live.cycles + 16) * block);
+                    REQUIRE(p.app->engine()->launchLog().size() == n);
+                };
+                CHECK(p.run("launch.capture", R"({"on": true})")["from"].asDouble() == 0);
+                REQUIRE(p.app->transport("play"));
+                live.until(20 * block);
+                p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2
+                logged(2);
+                p.run("launch.arrangement", R"({"track": "tr_1"})");  // bar 3
+                p.run("launch.stop", R"({"track": "tr_2"})");
+                logged(4);
+                p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 4
+                logged(5);
+                live.until((live.cycles + 200) * block);
+                json::Value done = p.run("launch.commit", "{}");
+                CHECK(done["from"].asDouble() == 0);
+                json::Value history = p.run("log.list", R"({"limit": 1})");
+                const json::Value& last = history["entries"].at(history["entries"].size() - 1);
+                REQUIRE(last.find("command")->asString() == "launch.commit");
+                const json::Value& launches =
+                    *last.find("args")->find("performance")->find("launches");
+                REQUIRE(launches.size() == 5);
+                for (std::size_t k = 0; k < 5; ++k) {
+                    const std::int64_t want = k < 2 ? 96000 : k < 4 ? 192000 : 288000;
+                    CHECK(launches.at(k).find("frame")->asInt() == want);
+                    CHECK(launches.at(k).find("anchor")->asInt() == want);
+                }
+                live.stop();
+            }
 }
 
 TEST_CASE("under a master playrate a switch crossfades over 5 ms as heard, in device frames") {
@@ -393,4 +418,176 @@ TEST_CASE("under a master playrate a clip take's FX envelope plays in clip time 
     CHECK(ratio(16000 + 800) > 0.7);    // clip position 600: about -1 dB
     CHECK(ratio(16000 + 15333) < 0.1);  // 11500: about -23 dB
     CHECK(ratio(16000 + 15333) > 0.05);
+}
+
+TEST_CASE("a capture under a master playrate runs through a rate edit and over a loop wrap" *
+          doctest::description("rt")) {
+    // S3 B, Q1: a scalar edit mid-capture keeps it running; the performance
+    // holds each launch at its song position (song samples from the start),
+    // laid out past the wrap by running song time. Under a loop over bars
+    // 1-2 at 0.75: the scene on bar 2 (song 96000), then after the wrap and
+    // a change to 1.2, tr_1 back to the arrangement on the loop's next bar.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+        p.run("transport.loop", R"({"start_seconds": 0, "end_seconds": 4, "enabled": true})");
+        AppLive live(p, options, 128, 48000 * 9 + 16384);
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2
+        live.until(256000 + 20000);                     // the wrap: song 192000 at 256000
+        p.run("transport.playrate.set", R"({"rate": 1.2, "preserve_pitch": false})");
+        live.until(live.cycles * 128 + 4800);
+        CHECK(p.run("launch.state", "{}")["capturing"].asBool());
+        json::Value back = p.run("launch.arrangement", R"({"track": "tr_1"})");
+        live.until(live.cycles * 128 + 96000);
+        CHECK(p.run("launch.state", "{}")["capturing"].asBool());
+        p.run("launch.commit", "{}");
+        json::Value history = p.run("log.list", R"({"limit": 1})");
+        const json::Value& last = history["entries"].at(history["entries"].size() - 1);
+        REQUIRE(last.find("command")->asString() == "launch.commit");
+        const json::Value& perf = *last.find("args")->find("performance");
+        CHECK(perf.find("start")->asInt() == 0);
+        const json::Value& launches = *perf.find("launches");
+        REQUIRE(launches.size() == 3);
+        CHECK(launches.at(0).find("frame")->asInt() == 96000);
+        CHECK(launches.at(1).find("frame")->asInt() == 96000);
+        // Past the wrap: the loop's length, then the anchor's place in it.
+        const std::int64_t anchor = launches.at(2).find("anchor")->asInt();
+        CHECK(anchor == std::int64_t(back["beat"].asDouble() * 24000));  // 120 BPM
+        CHECK(launches.at(2).find("frame")->asInt() == 192000 + anchor);
+        live.stop();
+    }
+}
+
+TEST_CASE("a capture armed while the rate glides to 1 commits each launch on its song position" *
+          doctest::description("rt")) {
+    // S3 B, the builder's song journey 2 (D2): set back to 1 from 0.75, the
+    // rate heard glides there. Arming during the glide is allowed now, and
+    // the launches land on their bars: each one's frame is its anchor's
+    // distance from the start, so the commit lays them on the bar lines (at
+    // the device frames the journey found, 7.669 and 15.669 beats, before).
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+        AppLive live(p, options, 128, 48000 * 9 + 16384);
+        REQUIRE(p.app->transport("play"));
+        live.until(20000);
+        p.run("transport.playrate.set", R"({"rate": 1, "preserve_pitch": false})");
+        live.until(20000 + 1280);
+        REQUIRE(p.app->engine()->effectivePlayrate() != 1);  // gliding
+        p.run("launch.capture", R"({"on": true})");
+        const double scene = p.run("launch.scene", R"({"scene": "sc_1"})")["beat"].asDouble();
+        live.until(live.cycles * 128 + 96000 + 4000);
+        const double back = p.run("launch.arrangement", R"({"track": "tr_1"})")["beat"].asDouble();
+        live.until(live.cycles * 128 + 96000 + 4000);
+        json::Value done = p.run("launch.commit", "{}");
+        json::Value history = p.run("log.list", R"({"limit": 1})");
+        const json::Value& last = history["entries"].at(history["entries"].size() - 1);
+        const json::Value& perf = *last.find("args")->find("performance");
+        const std::int64_t start = perf.find("start")->asInt();
+        const json::Value& launches = *perf.find("launches");
+        REQUIRE(launches.size() == 3);
+        for (std::size_t k = 0; k < 3; ++k) {
+            const std::int64_t anchor = launches.at(k).find("anchor")->asInt();
+            CHECK(launches.at(k).find("frame")->asInt() == anchor - start);
+            CHECK(launches.at(k).find("anchor_beat")->asDouble() == (k < 2 ? scene : back));
+        }
+        CHECK(std::fmod(scene, 4.0) == 0.0);
+        CHECK(std::fmod(back, 4.0) == 0.0);
+        live.stop();
+    }
+}
+
+TEST_CASE("under a pitch-keeping master playrate a MIDI capture commits as heard" *
+          doctest::description("rt")) {
+    // S3 B, Q2 (b): with the pitch kept, launched MIDI is captured as at
+    // any rate; the audio arrangement item, which no launch touches, is read
+    // by the same stretch converter live and in the commit's render.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        AppLive live(p, options, 128, 48000 * 7 + 16384);
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: device 128000
+        live.until(128000 + 8000);
+        p.run("launch.arrangement", R"({"track": "tr_1"})");  // bar 3: device 256000
+        live.until(256000 + 40000);
+        REQUIRE(p.app->engine()->launchLog().size() == 2);
+        const std::vector<float> plain = arrangement(p, 7.0, 128);  // before the commit
+        p.run("launch.commit", "{}");
+        const std::int64_t ended = live.cycles * 128;
+        const std::vector<float> heard = live.stop();
+        const std::vector<float> committed = arrangement(p, 7.0, 128);
+        const std::int64_t end = std::min<std::int64_t>(ended - std::int64_t(live.latency) - 128,
+                                                        std::int64_t(committed.size()));
+        REQUIRE(end > 256000 + 20000);
+        const auto [worst, first] = compare(heard, live.latency, committed, 0, end);
+        CHECK(worst == 0.0);
+        CHECK(first == -1);
+        // The launches changed what played: the uncommitted arrangement differs.
+        CHECK(compare(heard, live.latency, plain, 0, end).first >= 0);
+    }
+}
+
+TEST_CASE("a launched audio clip under a pitch-keeping rate: a capture ends, arming is refused" *
+          doctest::description("rt")) {
+    // S3 B, Q2 (b): a capture cannot write launched audio as heard while the
+    // pitch is kept. A plan that keeps it arriving while cl_2 plays ends a
+    // running capture there, with a warning naming the clip, and what was
+    // performed stays committable; arming while it still plays is refused.
+    Project p;
+    twoTracks(p);
+    const model::Session unity = p.app->head();
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session kept = p.app->head();
+    for (const bool running : {true, false}) {
+        INFO("capturing " << running);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(unity, p.app->projectDir()));
+        engine.play();
+        backend.run(10);
+        engine.service();
+        if (running) REQUIRE(engine.captureLaunches(true));
+        const Engine::LaunchRequest r = request("tr_2", "cl_2");
+        REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));  // bar 2
+        backend.run(96000 / 128 + 40);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        REQUIRE(engine.load(kept, p.app->projectDir()));
+        REQUIRE(engine.awaitPlan());
+        if (running) {
+            engine.service();
+            const auto capture = engine.launchCapture();
+            REQUIRE(capture);
+            CHECK_FALSE(capture->on);
+            CHECK(capture->frames > 96000);
+            REQUIRE(capture->launches.size() == 1);
+            const auto& w = engine.warnings();
+            CHECK(std::any_of(w.begin(), w.end(), [](const std::string& s) {
+                return s.find("capture ended") != std::string::npos &&
+                       s.find("cl_2") != std::string::npos;
+            }));
+        } else {
+            // Before the service returns tr_2 to the arrangement: refused.
+            auto refused = engine.captureLaunches(true);
+            REQUIRE_FALSE(refused);
+            CHECK(refused.error().code == "launch.playrate");
+            CHECK(refused.error().message.find("cl_2") != std::string::npos);
+        }
+        engine.stop();
+    }
 }
