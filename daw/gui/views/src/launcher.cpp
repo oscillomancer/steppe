@@ -120,10 +120,19 @@ std::pair<Laid, std::string> laidPhrase(const std::string& name, const json::Val
                 name + (mode == "chords" ? " follows the chords: " : " follows: ") + where};
     }
     const std::string asWritten = name + " is laid as written: ";
-    if (const json::Value* m = followed->find("mismatch"); m && m->isObject())
-        return {Laid::Copied, asWritten + "its key " + jsonText(m->find("clip_key")) +
-                                  " differs from " + jsonText(m->find("key")) + " at bar " +
-                                  std::to_string(m->find("bar") ? m->find("bar")->asInt() : 1)};
+    if (const json::Value* m = followed->find("mismatch"); m && m->isObject()) {
+        // What differs (followed.mismatch {kind}): the key, or in the same key the chord.
+        const std::string at =
+            " at bar " + std::to_string(m->find("bar") ? m->find("bar")->asInt() : 1);
+        const std::string kind = jsonText(m->find("kind"));
+        if (kind == "chord")
+            return {Laid::Copied, asWritten + "its chord " + jsonText(m->find("clip_chord")) +
+                                      " differs from " + jsonText(m->find("chord")) + at};
+        if (kind == "key" || m->find("clip_key"))
+            return {Laid::Copied, asWritten + "its key " + jsonText(m->find("clip_key")) +
+                                      " differs from " + jsonText(m->find("key")) + at};
+        return {Laid::Copied, asWritten + "its context differs from the song's" + at};
+    }
     const std::string copied = jsonText(followed->find("copied"));
     if (copied == "drums") return {Laid::Copied, asWritten + "drums don't follow"};
     if (copied == "audio") return {Laid::Copied, asWritten + "audio doesn't follow"};

@@ -1240,6 +1240,42 @@ TEST_CASE("launcher: laying clips on the timeline says in the status line what t
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: a clip laid as written over another chord says the chords, not empty keys") {
+    // Review round 88 K3: followed.mismatch {kind: chord} (the same key, another chord) has no
+    // keys to name; the line names the chords, as the engine's answer gives them.
+    LauncherFixture f;
+    f.song();
+    f.exec("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    f.exec("chord.set", R"({"at": 0, "symbol": "C"})");
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key C major {Am}:w"})");
+    const std::string add = R"({"clip":"cl_3","track":"tr_2","bar":1,"follow":"none"})";
+    const json::Value args = *json::parse(add);
+    const json::Value answer = f.exec("item.add", add);
+    const json::Value* followed = answer.find("followed");
+    const json::Value* m = followed ? followed->find("mismatch") : nullptr;
+    REQUIRE(m);
+    REQUIRE(m->find("kind"));
+    CHECK(m->find("kind")->asString() == "chord");
+    CHECK(views::followNotice(f.app->head(), "item.add", args, answer) ==
+          "Root is laid as written: its chord Am differs from C at bar 1");
+    // A key mismatch still names the keys, with or without its kind; a commit's list the same.
+    auto laid = [&](const std::string& mismatch) {
+        return views::followNotice(
+            f.app->head(), "item.add", args,
+            *json::parse(R"({"item":"it_1","followed":{"mode":"none","mismatch":)" + mismatch +
+                         "}}"));
+    };
+    CHECK(laid(R"({"kind":"key","clip_key":"D minor","key":"C major","bar":3})") ==
+          "Root is laid as written: its key D minor differs from C major at bar 3");
+    CHECK(laid(R"({"clip_key":"D minor","key":"C major","bar":3})") ==
+          "Root is laid as written: its key D minor differs from C major at bar 3");
+    CHECK(views::followNotice(
+              f.app->head(), "launch.commit", json::Value::object(),
+              *json::parse(R"({"items":["it_2"],"mismatches":[{"clip":"cl_3","kind":"chord",)"
+                           R"("clip_chord":"Am","chord":"F","bar":5}]})")) ==
+          "Committed: Root is laid as written: its chord Am differs from F at bar 5");
+}
+
 TEST_CASE("launcher: followNotice words key changes, chords, folding, and sums up a long scene") {
     LauncherFixture f;
     f.song();
