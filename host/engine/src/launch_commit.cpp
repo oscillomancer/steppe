@@ -426,7 +426,11 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 const double span = midi ? beat1 - beat0 : double(end - (perf.start + f0)) / rate;
                 // So do its take's own envelopes over a looped item of more
                 // than one period: on an item they would run once.
-                const bool passes = item.loop && span > period + 1e-9 * std::max(1.0, period);
+                // From the phase heard (review round 86 H5): a shorter span that
+                // crosses the period's end restarts them too.
+                const double inPeriod = midi ? phase : phase / rate;
+                const bool passes =
+                    item.loop && inPeriod + span > period + 1e-9 * std::max(1.0, period);
                 auto copied = copyTakesFor(
                     t, now, clip.takes, pooled, envelopePos, path,
                     fxEnvelopesFromClip(now, clip.kind, pos, midi ? phase : phase / rate, period,

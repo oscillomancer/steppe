@@ -1771,3 +1771,45 @@ TEST_CASE("a followed performance commits as it was heard" * doctest::descriptio
             CHECK(heard[std::size_t(6 * kBeat + 1000 + live.latency)] != 0.0f);
         }
 }
+
+TEST_CASE("a clip take's own envelope commits as heard over a short span across the period" *
+          doctest::description("rt")) {
+    // Round 86 H5: a capture begun at 0.75 of a pass for half a period lays
+    // one looped item from that phase that crosses the period's end in less
+    // than a period. The take's volume, a ramp over the 1 s pass, restarts
+    // at the pass boundary as heard; laid once it would hold its end.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        latentClip(p);
+        p.run("clip.set", R"({"clip": "cl_1", "length": 1})");  // the ramp's 48000 frames
+        auto env = j(R"({"param": "volume", "points": [{"seconds": 0, "value": "-24 dB"},
+                                                       {"seconds": 1, "value": 0}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: frame 96000
+        live.until(96000 + 36000);                    // 0.75 into the first pass
+        p.run("launch.capture", R"({"on": true})");
+        live.until(96000 + 60000);  // 0.25 into the second
+        p.run("launch.capture", R"({"on": false})");
+        live.until(96000 + 72000);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const auto from = std::int64_t(done["from"].asDouble() * double(kBeat));
+        const auto to = std::int64_t(done["to"].asDouble() * double(kBeat));
+        REQUIRE(from < 96000 + 48000);  // the span crosses the pass boundary
+        REQUIRE(to > 96000 + 48000);
+        REQUIRE(to - from < 48000);  // in less than a period
+        const std::vector<float> committed = arrangement(p, 5.0);
+        // Past the item's 5 ms fades at either end.
+        const auto [worst, first] =
+            compare(heard, live.latency, committed, from + 480, to - 480, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+        // The second pass starts near -24 dB again.
+        CHECK(double(committed[std::size_t(96000 + 48000 + 600)]) < 0.2 * chained(600));
+    }
+}
