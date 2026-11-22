@@ -587,7 +587,9 @@ the same.*
   where playing starts) and ends at the heard position, or, ended with a
   quantize while playing (`launch.capture {on: false, quantize}`), on that
   quantize's next boundary: placed as a launch of every track with clips
-  made then would be, so a launch made with it lands there too. The
+  made then would be, so a scene launch made with it lands there too. One
+  track's launch, with a nearer floor (a live track in the anticipative
+  engine), can land a boundary earlier, and is then in the capture. The
   capture runs until that boundary is heard (`endsFrame`) and then ends on
   it, on the sample a launch there switches on; a launch applied from the
   boundary on is not in it. `endsBeat` (`ends_at`) is that sample's beat,

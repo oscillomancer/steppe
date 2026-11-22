@@ -58,7 +58,7 @@ Status CaptureControl::set(bool on) {
         return {};
     }
     // Playing, the capture ends on the project's launch quantize boundary,
-    // as a launch made now would land, and is committed once heard there
+    // as a scene launch made now would land, and is committed once heard there
     // (service). Off again while it is ending ends it now (commit).
     engine::Engine* engine = app_.engine();
     const auto transport = app_.transport("get");

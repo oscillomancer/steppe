@@ -496,7 +496,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "what each track played when the capture began. on: true begins at the position "
             "heard now (stopped: where playing starts); on: false ends it there, or with "
             "quantize (other than none, while playing) at that quantize's next boundary, where "
-            "a launch made now would land: it captures until it hears that boundary, and "
+            "a launch of every track with clips (a scene launch) made now would land; one "
+            "track's launch can land a boundary earlier, and is then in the capture. It "
+            "captures until it hears that boundary, and "
             "launches from there on are not in it. ends_at (launch.state's capture_ends): the "
             "beat of the sample it ends on, which launch.commit's to will be, unless the "
             "transport loop wrapped meanwhile (then the song's beat in the loop, while to runs "
@@ -605,16 +607,18 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("from", &CommitDone::from, schema::number())
                        .field("to", &CommitDone::to, schema::number())
                        .build();
-        c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
-                    {"launch.capture", "nothing has been captured",
-                     "launch.capture {on: true}, play and launch clips, then launch.commit"},
-                    {"launch.capture.ending", "the capture ends on a boundary not heard yet",
-                     "commit once launch.state says capturing is false"},
-                    {"launch.commit", "a captured track or clip is gone",
-                     "undo the change, or capture the performance again"},
-                    {"item.locked", "a locked item is in the way", "unlock it with item.set first"},
-                    {"clip.unsupported", "a clip's loop window has no item equivalent",
-                     "set its loop to the whole content, or off"}};
+        c.errors = {
+            {"engine.stopped", "the engine is not running", "engine.start first"},
+            {"launch.capture", "nothing has been captured",
+             "launch.capture {on: true}, play and launch clips, then launch.commit"},
+            {"launch.capture.ending", "the capture ends on a boundary not heard yet",
+             "commit once launch.state says capturing is false, or launch.capture {on: false} to "
+             "end it now"},
+            {"launch.commit", "a captured track or clip is gone",
+             "undo the change, or capture the performance again"},
+            {"item.locked", "a locked item is in the way", "unlock it with item.set first"},
+            {"clip.unsupported", "a clip's loop window has no item equivalent",
+             "set its loop to the whole content, or off"}};
         c.examples = {
             {"A captured bar of cl_1",
              j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,
@@ -633,7 +637,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
                 return Error("launch.capture.ending",
                              "the capture ends at beat " + json::formatDouble(*capture->endsBeat) +
                                  ", which has not been heard yet",
-                             "", "commit once launch.state says capturing is false");
+                             "",
+                             "commit once launch.state says capturing is false, or launch.capture "
+                             "{on: false} to "
+                             "end it now");
             if (capture && capture->on) {
                 (void)(*engine)->captureLaunches(false);
                 capture = (*engine)->launchCapture();

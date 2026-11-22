@@ -2886,7 +2886,7 @@ same heights, scroll and colours.
   undo step, as a recording is committed at stop) and, still lit, arms the
   next one; a click on the lit cell turns it off and ends the capture:
   while playing on the next boundary of the project's launch quantize
-  (`launch.capture {on: false, quantize}`, as a launch made then would
+  (`launch.capture {on: false, quantize}`, as a scene launch made then would
   land), the cell staying lit, outlined dashed as a queued cell, until the
   engine has heard it, then commits it (`CaptureControl::ending`,
   `ArrangeView::setCaptureEnding`); stopped, at once. A second click before

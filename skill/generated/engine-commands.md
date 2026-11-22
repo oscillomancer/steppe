@@ -10951,7 +10951,7 @@ Result:
 
 Start or end capturing launches for the timeline.
 
-While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there, or with quantize (other than none, while playing) at that quantize's next boundary, where a launch made now would land: it captures until it hears that boundary, and launches from there on are not in it. ends_at (launch.state's capture_ends): the beat of the sample it ends on, which launch.commit's to will be, unless the transport loop wrapped meanwhile (then the song's beat in the loop, while to runs on by running time). on: true before then cancels the end; another on: false replaces it. A stop, a seek or a loop change ends a capture that has run, ending or not; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats so far, laid out by running time. Refused while a master playrate is active, where running time is not song time, and while the rate heard is still gliding to 1 after one was set (effective_rate in transport.playrate.get); one that becomes active ends a running capture.
+While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there, or with quantize (other than none, while playing) at that quantize's next boundary, where a launch of every track with clips (a scene launch) made now would land; one track's launch can land a boundary earlier, and is then in the capture. It captures until it hears that boundary, and launches from there on are not in it. ends_at (launch.state's capture_ends): the beat of the sample it ends on, which launch.commit's to will be, unless the transport loop wrapped meanwhile (then the song's beat in the loop, while to runs on by running time). on: true before then cancels the end; another on: false replaces it. A stop, a seek or a loop change ends a capture that has run, ending or not; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats so far, laid out by running time. Refused while a master playrate is active, where running time is not song time, and while the rate heard is still gliding to 1 after one was set (effective_rate in transport.playrate.get); one that becomes active ends a running capture.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -11249,7 +11249,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
 - `launch.capture`: nothing has been captured Hint: launch.capture {on: true}, play and launch clips, then launch.commit
-- `launch.capture.ending`: the capture ends on a boundary not heard yet Hint: commit once launch.state says capturing is false
+- `launch.capture.ending`: the capture ends on a boundary not heard yet Hint: commit once launch.state says capturing is false, or launch.capture {on: false} to end it now
 - `launch.commit`: a captured track or clip is gone Hint: undo the change, or capture the performance again
 - `item.locked`: a locked item is in the way Hint: unlock it with item.set first
 - `clip.unsupported`: a clip's loop window has no item equivalent Hint: set its loop to the whole content, or off

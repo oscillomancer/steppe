@@ -7,7 +7,8 @@
 // timeline in one undo step (launch.commit), as a recording is committed at
 // stop. Turned off while playing, the capture ends on the next boundary of
 // the project's launch quantize (launch.capture {on: false, quantize}), as a
-// launch made then would land, and is committed once the engine has heard it.
+// scene launch made then would land, and is committed once the engine has
+// heard it.
 // A refusal goes to onError (the status line).
 //
 // A refused commit (a locked item, a clip loop with no item equivalent, a

@@ -884,9 +884,10 @@ class Engine {
     // play position, where playing starts), or ends the running one. With
     // no quantize, or None, or stopped, it ends at the heard position;
     // with another, at that quantize's next boundary, placed as a launch
-    // of every track with clips made now would be (so a launch made with
-    // it lands on the same boundary), and launches applied from there on
-    // are not in it. On again before that boundary cancels the end; a
+    // of every track with clips made now would be (so a scene launch made
+    // with it lands on the same boundary; one track's launch, with a nearer
+    // floor, can land a boundary earlier), and launches applied from there
+    // on are not in it. On again before that boundary cancels the end; a
     // second end replaces it. A relocation (a seek, a stop, a loop change)
     // ends a capture that has run any frames, ending or not; one that has
     // not starts again where the transport goes. Starting is refused while

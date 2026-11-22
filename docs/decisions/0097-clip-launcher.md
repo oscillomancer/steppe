@@ -840,7 +840,11 @@ bar it meant, and the commit's last item was cut there.
   while playing, ends the capture on that quantize's next boundary. The
   boundary is placed as a launch of every track with clips made at that
   moment would be (the same floors, the loop fold and, on a playrate plan,
-  the rate placement), so a launch made with it lands on the same boundary.
+  the rate placement), so a scene launch made with it lands on the same
+  boundary. One track's launch can land a boundary earlier when its floor
+  is nearer than the latest of them (a live track in the anticipative
+  engine, or one whose clip chains take less lead); it is then in the
+  capture.
 - The end is main-thread state: the capture runs until the heard position
   reaches the boundary's stream frame, then service closes it there. Its
   running time ends exactly on the boundary, and a launch applied on or
