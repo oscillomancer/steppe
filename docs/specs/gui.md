@@ -1769,7 +1769,12 @@ compiles) and, for a place no note has yet, `model::placeAt` and
   its name spelled in the song's key; its written pitch a 1-unit outline in
   the notes' colour at 60%, under the notes, with no name, only where the
   two differ. A note not heard (outside the loop window, past the end), and
-  channel 10, have no outline. Clicks and the marquee hit a note where it is
+  channel 10, have no outline. A note outside the item is drawn dim, as in
+  any roll, at the pitch it would sound as by the same place rule past the
+  item's edges (`model::notePlace` at its unwrapped source beat, then
+  `model::soundingKey`; before the song's start, where nothing sounds, the
+  song's context at beat 0), so trimming the edge out over it shows it heard
+  where it was drawn. Clicks and the marquee hit a note where it is
   drawn, never its outline.
 - **Written** (`midi.written`), a cell in the header shown only while the
   take follows, turns the **written view** on: the written pitches drawn,

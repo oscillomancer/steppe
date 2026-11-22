@@ -4959,6 +4959,64 @@ TEST_CASE(
     CHECK(s.soundingView());
 }
 
+TEST_CASE("a following take's roll: a note outside the item is dim, where it would sound") {
+    // gui.md §4.7: past the item's edges the same place rule gives the pitch,
+    // so trimming the edge out over a note shows it heard where it was drawn.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f,
+               R"([{"beat":0,"type":"key","tonic":"C","scale":"major"},
+                   {"beat":0,"type":"chord","symbol":"C"}])",
+               "key");
+    auto& s = f.editor->state();
+    REQUIRE(s.following);
+    REQUIRE(s.notes.size() == 4);
+    const auto id = *model::Id::parse(f.item);
+    const model::Item& item = *f.app->head().items.find(id);
+    const std::string take = item.activeTake->str();
+    const double start = model::itemSpan(f.app->head(), item).startBeat;
+    const double length = model::itemLengthBeats(f.app->head(), item);
+    auto trim = [&](double by) {  // as the left-edge drag sends it
+        f.exec("item.set", R"({"item":")" + f.item + R"(","position":)" +
+                               json::formatDouble(start + by) + R"(,"length":)" +
+                               json::formatDouble(length - by) + "}");
+        f.exec("take.set",
+               R"({"take":")" + take + R"(","start_offset":)" + json::formatDouble(by) + "}");
+        f.frame();
+    };
+    // A beat trimmed away: C4 lies before the start, not heard; drawn dim at
+    // E4, what it would sound as there, with no outline; the rest heard.
+    trim(1);
+    REQUIRE(s.notes.size() == 4);
+    CHECK(s.notes[0].start < 0);
+    CHECK(s.outsideItem(0, s.notes[0]));
+    CHECK(s.drawnPitch(0, s.notes[0]) == 64);
+    CHECK_FALSE(s.outlinePitch(0, s.notes[0]));
+    CHECK_FALSE(s.outsideItem(1, s.notes[1]));
+    CHECK(s.drawnPitch(1, s.notes[1]) == 67);
+    // Written: the written pitch, still dim.
+    REQUIRE(f.root->click("midi.written"));
+    f.frame();
+    CHECK(s.drawnPitch(0, s.notes[0]) == 60);
+    CHECK(s.outsideItem(0, s.notes[0]));
+    REQUIRE(f.root->click("midi.written"));
+    f.frame();
+    // The edge trimmed back out: heard where it was drawn, at E4.
+    trim(0);
+    CHECK_FALSE(s.outsideItem(0, s.notes[0]));
+    CHECK(s.drawnPitch(0, s.notes[0]) == 64);
+    CHECK(s.outlinePitch(0, s.notes[0]) == 60);
+    // At the song's start, a note trimmed away lies before beat 0, where the
+    // song has no key: its context at beat 0 is read, not the written pitch.
+    f.exec("item.set", R"({"item":")" + f.item + R"(","position":0,"length":)" +
+                           json::formatDouble(length - 1) + "}");
+    f.exec("take.set", R"({"take":")" + take + R"(","start_offset":1})");
+    f.frame();
+    CHECK(s.outsideItem(0, s.notes[0]));
+    CHECK(s.drawnPitch(0, s.notes[0]) == 64);
+}
+
 TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or says it cannot") {
     Fixture f;
     if (!f.ok) return;

@@ -191,6 +191,10 @@ struct RollState {
     bool following = false;
     bool written = false;
     bool soundingView() const { return following && !written; }
+    // Whether note `i`, as `n`, lies outside the item or clip (drawn dim, as
+    // nothing there is heard): a following take's note not heard in the pass
+    // shown, else one wholly before the start or from the end on.
+    bool outsideItem(std::size_t i, const RollNote& n) const;
     // What each note sounds as in the pass shown, index for index with
     // `notes` (model::soundingNotes): its pitch (-1: not heard in that pass,
     // drawn as written) and that occurrence's song beat less the roll's
@@ -199,6 +203,10 @@ struct RollState {
     struct Sounds {
         int pitch = -1;
         double shift = 0;
+        // Not heard in the pass shown (outside the item): `pitch` is what it
+        // would sound as by the same place rule past the item's edges, so
+        // trimming the edge out over it shows it where it was drawn.
+        bool heard = true;
     };
     std::vector<Sounds> sounds;
     int pass = 0, passes = 1;   // the pass shown, of the passes the item plays

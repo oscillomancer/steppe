@@ -180,7 +180,15 @@ int RollState::drawnPitch(std::size_t i, const RollNote& n) const {
     return soundingPitch(i, n).value_or(n.pitch);
 }
 
+bool RollState::outsideItem(std::size_t i, const RollNote& n) const {
+    if (following && i < sounds.size() && sounds[i].pitch >= 0) return !sounds[i].heard;
+    constexpr double kSlack = 1e-9;
+    return n.start + n.length <= kSlack || n.start >= itemLength - kSlack;
+}
+
 std::optional<int> RollState::outlinePitch(std::size_t i, const RollNote& n) const {
+    // A note not heard has no outline (gui.md §4.7): it is drawn dim instead.
+    if (i < sounds.size() && !sounds[i].heard) return std::nullopt;
     const auto heard = soundingPitch(i, n);
     if (!heard || *heard == n.pitch) return std::nullopt;
     return soundingView() ? n.pitch : *heard;
@@ -345,7 +353,7 @@ class Roll : public ui::Node {
             c.fillRect({x, b.y, 1, b.h}, t.color("ink-faint"));
         }
         // Outside the item or clip: shaded over the grid, its end marked as an
-        // audio clip's is; notes stay bright over it.
+        // audio clip's is; notes there are drawn dim (outsideItem).
         paintBounds(c, g);
         // Notes (selected on top), names when there is room.
         std::vector<std::size_t> order(s_.notes.size());
@@ -375,11 +383,18 @@ class Roll : public ui::Node {
             if (r.right() < b.x || r.x > b.right() || r.bottom() < b.y || r.y > b.bottom())
                 continue;
             const bool sel = s_.selected.contains(i);
-            c.fillRound(r, 2, velocityColor(t, s_, n.velocity, sel));
+            // Outside the item nothing is heard: the note is drawn dim, over
+            // the shading, still where it can be grabbed.
+            const bool outside = s_.outsideItem(i, s_.notes[i]);
+            auto dim = [outside](ui::Color col) {
+                if (outside) col.a *= 0.45f;
+                return col;
+            };
+            c.fillRound(r, 2, dim(velocityColor(t, s_, n.velocity, sel)));
             c.strokeRound(r, 2,
-                          sel                ? t.color("ink")
-                          : s_.outsideKey(n) ? t.color("meter-hot")
-                                             : t.color("ground").withAlpha(0.7f));
+                          dim(sel                ? t.color("ink")
+                              : s_.outsideKey(n) ? t.color("meter-hot")
+                                                 : t.color("ground").withAlpha(0.7f)));
             if (r.w > 34 && s_.rowHeight >= 11)
                 c.text({r.x + 3, r.y, r.w - 4, r.h},
                        harmony::spell(n.pitch, s_.keyAt(s_.itemPosition + n.start)), ui::Font::Ui,
@@ -2736,6 +2751,24 @@ Status MidiEditor::reload() {
                 state_.passShift = shift;
                 shiftSet = true;
             }
+        }
+        // A note not heard in this pass (before the item's start, past its
+        // end): what it would sound as there, by the place rule past the
+        // edges (model::notePlace at its unwrapped source beat, then
+        // soundingKey), not its written pitch.
+        for (std::size_t i = 0; i < state_.notes.size(); ++i) {
+            if (state_.sounds[i].pitch >= 0) continue;
+            const RollNote& n = state_.notes[i];
+            const model::NotePlace place =
+                model::notePlace(*take, state_.itemPosition,
+                                 take->startOffset + (n.start + state_.passShift) * rate);
+            // Before the song's start no item can sound, and the song has no
+            // key there: its context at beat 0 is read, as its first point
+            // holds before itself.
+            const harmony::Followed f = model::soundingKey(
+                take->context, take->follow, *head.contextView, place.contextBeat,
+                std::max(0.0, place.songBeat), n.channel - 1, n.pitch);
+            state_.sounds[i] = {f.pitch, state_.passShift, false};
         }
         state_.soundsAt = [this, id = *itemId](int pitch, int channel, double beat) {
             const auto place = model::placeAt(app_.head(), id, beat);
