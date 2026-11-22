@@ -41,7 +41,8 @@ class CaptureControl {
     // pending end, it cancels it); off ends the capture and commits what it
     // holds, also one another caller armed: while playing at the next
     // boundary of the project's launch quantize (ending() until then, still
-    // lit), stopped at once.
+    // lit), stopped at once. Off again while ending (the cell's click, lit)
+    // ends it at once.
     Status set(bool on);
     // Turned off while playing: the capture runs to its boundary, then
     // service() commits it.

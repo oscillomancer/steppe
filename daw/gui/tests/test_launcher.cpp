@@ -793,6 +793,75 @@ TEST_CASE("launcher: Capture turned off while playing ends on the next bar, then
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: the ending Capture cell is dashed; a second click ends it at once") {
+    // Review round 104 Y3 (gui.md §4.15): turned off while playing, the cell
+    // stays lit and is outlined dashed, as a queued cell, until the boundary
+    // is heard. A second click before then ends the capture at once and
+    // commits it, short of the boundary: an impatient click means stop.
+    LauncherFixture f;
+    f.song();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    views::LauncherCallbacks callbacks = f.view->launcherCallbacks();
+    callbacks.capture = [&](bool on) { REQUIRE(capture.set(on)); };
+    f.view->setLauncherCallbacks(callbacks);
+    auto show = [&] {  // as the shell does once a pass
+        capture.service();
+        f.view->setCaptureArmed(capture.lit());
+        f.view->setCaptureEnding(capture.ending());
+        f.sync();
+    };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    f.click(centre(header.captureRect()));  // armed
+    show();
+    CHECK(capture.armed());
+    CHECK(header.stats.captureLit);
+    CHECK_FALSE(header.stats.captureEnding);
+    const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    REQUIRE(f.runUntil(playing, at, "Kit A heard", show));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Kit A", show));
+    const std::uint64_t before = f.app->head().version;
+    f.click(centre(header.captureRect()));  // off: ending on the next bar
+    show();
+    const auto pending = f.app->engine()->launchCapture();
+    REQUIRE(pending);
+    REQUIRE(pending->endsBeat);
+    const double ends = *pending->endsBeat;
+    CHECK(capture.ending());
+    CHECK(header.stats.captureLit);
+    CHECK(header.stats.captureEnding);
+    CHECK(f.app->head().version == before);
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
+        REQUIRE(gui::writePng(std::filesystem::path(out) / "launcher-capture-ending.png",
+                              f.root->readBack()));
+    f.click(centre(header.captureRect()));  // again: ends now
+    show();
+    CHECK(refused.empty());
+    CHECK_FALSE(capture.ending());
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(f.app->launchCapturing());
+    CHECK_FALSE(header.stats.captureLit);
+    CHECK_FALSE(header.stats.captureEnding);
+    CHECK(f.app->head().version == before + 1);  // committed, one undo step
+    const auto done = f.app->engine()->launchCapture();
+    REQUIRE(done);
+    CHECK_FALSE(done->endsBeat);
+    const model::Session s = f.app->head();
+    const double rate = f.app->engine()->config().sampleRate;
+    CHECK(done->startSample + done->frames < time::samplesAt(s.timeMap->secondsAt(ends), rate));
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: a Capture commit says which clips it copied under another key") {
     // gui.md §4.15: the commit's mismatches in the status line, as a lay's.
     LauncherFixture f;

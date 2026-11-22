@@ -59,10 +59,10 @@ Status CaptureControl::set(bool on) {
     }
     // Playing, the capture ends on the project's launch quantize boundary,
     // as a launch made now would land, and is committed once heard there
-    // (service).
+    // (service). Off again while it is ending ends it now (commit).
     engine::Engine* engine = app_.engine();
     const auto transport = app_.transport("get");
-    if (engine && engine->launchCapturing() && transport && transport->playing) {
+    if (!ending_ && engine && engine->launchCapturing() && transport && transport->playing) {
         json::Value args = json::Value::object();
         args["on"] = false;
         args["quantize"] =

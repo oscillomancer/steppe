@@ -273,7 +273,8 @@ class LauncherHeader : public ui::Node {
     // What the last paint drew (tests).
     struct Stats {
         bool captureLit = false;
-        int refused = 0;  // scenes whose ▶ is dimmed (sceneLaunchRefused)
+        bool captureEnding = false;  // lit, outlined dashed (ArrangeView::captureEnding)
+        int refused = 0;             // scenes whose ▶ is dimmed (sceneLaunchRefused)
     } stats;
     // The scene column under x in the headers' row, and its ▶.
     std::optional<std::size_t> sceneAt(ui::Point p) const;

@@ -2887,9 +2887,12 @@ same heights, scroll and colours.
   next one; a click on the lit cell turns it off and ends the capture:
   while playing on the next boundary of the project's launch quantize
   (`launch.capture {on: false, quantize}`, as a launch made then would
-  land), the cell staying lit until the engine has heard it, then commits
-  it (`CaptureControl::ending`); stopped, at once. A click before that
-  boundary arms it again and cancels the end. A capture in which every track followed the arrangement writes
+  land), the cell staying lit, outlined dashed as a queued cell, until the
+  engine has heard it, then commits it (`CaptureControl::ending`,
+  `ArrangeView::setCaptureEnding`); stopped, at once. A second click before
+  that boundary ends the capture at once (`launch.capture {on: false}`)
+  and commits it: an impatient click means stop. (An agent cancels the end
+  with `launch.capture {on: true}`.) A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
   item in the way) shows its message in the status line. A commit that
   laid clips as written under another key (the answer's `mismatches`, with
@@ -3122,7 +3125,8 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   commit at stop the tracks are back on the arrangement, or queued to it.
   An agent's capture lights the cell, and a click on it while playing ends
   it on the next launch quantize boundary, the cell lit until then, and
-  commits it. Off while playing ends on the next bar, then commits.
+  commits it. Off while playing ends on the next bar, then commits; the
+  cell is dashed meanwhile, and a second click ends it at once and commits.
 - A master playrate: at a rate that moves the pitch nothing dims; keeping
   the pitch, the audio clip and its scene's ▶ dim and nothing else (golden
   `launcher-refused-dark.png`), its ▶ click is refused with
