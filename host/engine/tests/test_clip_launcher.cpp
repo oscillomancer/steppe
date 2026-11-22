@@ -2663,6 +2663,23 @@ TEST_CASE("edits that touch no phase keep each note's context beat, and sound as
     }
 }
 
+TEST_CASE("a clip made from an item whose context is longer than a clip holds says so (K4)") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    // A one-bar clip with sixteen chord changes in it, laid over 260 bars: its take repeats them
+    // 4160 times, past the 4096 chord points a clip holds.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w",
+          "context": "1: key C major {C}:s {D}:s {E}:s {F}:s {G}:s {A}:s {B}:s {C}:s {D}:s {E}:s {F}:s {G}:s {A}:s {B}:s {C}:s {D}:s",
+          "follow": "key"})");
+    const auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 260})");
+    const std::string item = laid.find("items")->at(0).find("item")->asString();
+    const auto made =
+        l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2", "item": ")" + item + R"("})");
+    CHECK(warningCodes(made).find("clip.context_dropped") != std::string::npos);
+    const model::Clip& clip = *l.head().clips.find(id(made.find("clip")->asString().c_str()));
+    CHECK(clip.context.size() <= model::kMaxContextPoints * 2);
+}
+
 TEST_CASE("a split of a looped item laid from a clip, past its first pass, keeps what sounds") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");

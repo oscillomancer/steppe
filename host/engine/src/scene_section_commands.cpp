@@ -610,8 +610,15 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             r.scene = sceneId.str();
             bool audio = false;
             for (const Pick& pick : picks) {
-                auto made = clipFromItem(t, s, pick.item, a.pooled, "/region");
+                bool cut = false;
+                auto made = clipFromItem(t, s, pick.item, a.pooled, "/region", &cut);
                 if (!made) return std::move(made).error();
+                if (cut)
+                    ctx.warn("clip.context_dropped",
+                             "the context of " + pick.item.str() +
+                                 " is longer than a clip holds: its clip has the first points "
+                                 "of it",
+                             "/region");
                 made->track = pick.track;
                 made->scene = sceneId;
                 const double length = model::itemLengthBeats(s, *s.items.find(pick.item));

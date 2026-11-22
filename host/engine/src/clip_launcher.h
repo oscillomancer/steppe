@@ -168,8 +168,12 @@ Status checkClipTakeUnwarped(const model::Session& s, model::Id take, const std:
 // colour and name (an item's name is its active take's). The track, scene and
 // mode are the caller's, and so is the name when one is given. A warped take is
 // clip.unsupported and takes of both kinds clip.mixed; errors point at `path`.
+//
+// `truncated`, when given, is set if the active take's context was longer than a clip holds
+// (more points than the limit, or too many repeats to walk): the clip's context is then a
+// shortened one, and the caller says so (`clip.context_dropped`).
 Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, model::Id item,
-                                 bool pooled, const std::string& path);
+                                 bool pooled, const std::string& path, bool* truncated = nullptr);
 
 // An item made from `clip` (its takes already copied and set on `item`) is
 // named as the clip is: an item's name is its active take's, so the clip's

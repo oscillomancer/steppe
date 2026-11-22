@@ -692,7 +692,12 @@ Status detail::mergeMidi(const model::Session& s, model::EditTxn& txn, const std
             // Result source beat of the re-based beat 0: the lead-in for the first source (it
             // starts there), else the lead-in plus the source's distance from the result start.
             const double origin = lead ? 0.0 : leadIn + (itemStart - start);
-            std::vector<model::ContextPoint> points = model::contextOver(tk, u0, u1);
+            bool cut = false;
+            std::vector<model::ContextPoint> points = model::contextOver(tk, u0, u1, &cut);
+            if (cut)
+                return followRefusal(part.second.str() +
+                                     " has a context too long to carry into the result "
+                                     "(more points than a take holds)");
             for (model::ContextPoint& p : points)
                 p.beat = std::round((origin + p.beat / rate) * 960.0) / 960.0;
             if (lone) {

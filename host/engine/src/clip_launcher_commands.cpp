@@ -394,7 +394,7 @@ Status checkClipMemory(EngineApp& app, const model::Session& after, const std::s
 }
 
 Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id itemId, bool pooled,
-                                 const std::string& path) {
+                                 const std::string& path, bool* truncated) {
     const model::Item& it = *s.items.find(itemId);
     model::Clip clip;
     std::optional<model::ClipKind> kind;
@@ -437,7 +437,9 @@ Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id 
             active && active->follow != model::ClipFollow::None) {
             const double rate = active->playrate > 0 ? active->playrate : 1.0;
             const double u0 = active->contextPhase + active->startOffset;
-            clip.context = model::contextOver(*active, u0, u0 + clip.length * rate);
+            bool cut = false;
+            clip.context = model::contextOver(*active, u0, u0 + clip.length * rate, &cut);
+            if (truncated) *truncated = cut;
             for (model::ContextPoint& p : clip.context) p.beat /= rate;
             clip.follow = active->follow;
         }
@@ -1136,8 +1138,14 @@ void registerClipCommands(cmd::Registry& registry) {
             if (a.item) {
                 auto item = existing<model::Item>(s, *a.item, "/item");
                 if (!item) return std::move(item).error();
-                auto made = clipFromItem(t, s, *item, a.pooled, "/item");
+                bool cut = false;
+                auto made = clipFromItem(t, s, *item, a.pooled, "/item", &cut);
                 if (!made) return std::move(made).error();
+                if (cut)
+                    ctx.warn("clip.context_dropped",
+                             "the item's context is longer than a clip holds: the clip has the "
+                             "first points of it",
+                             "/item");
                 made->track = clip.track;
                 made->scene = clip.scene;
                 if (a.name) made->name = *a.name;  // else the item's
