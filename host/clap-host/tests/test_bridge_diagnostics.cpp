@@ -235,6 +235,13 @@ TEST_CASE("only a death that may be reported names a report") {
 // hold for every way a plug-in can end its bridge are made here: the end is not the host's, and a
 // signal or an exception names a report while an exit does not.
 static diagctx::Event endBridgeWith(double mode) {
+    // The bridge ends in its own time: a loaded machine can be slow to take its core or finish its
+    // handler, long enough for the process() call to give up on it as hung. The host would then
+    // kill it after the grace and the end would be its own, not the one under test.
+    struct Grace {
+        Grace() { setBridgeKillGraceForTests(3600LL * 1'000'000'000); }
+        ~Grace() { setBridgeKillGraceForTests(-1); }
+    } grace;
     setBridgeExecutable(BRIDGE_PATH);
     Sink sink;
     auto process = createBridgeProcess();
