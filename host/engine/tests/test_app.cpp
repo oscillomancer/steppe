@@ -2041,9 +2041,9 @@ TEST_CASE("true peak limiting keeps distant audio at the normalization gain") {
     auto unlimited = original, limited = original;
     REQUIRE(normalizeRenderAudio(unlimited, "lufs_i", -20));
     REQUIRE(normalizeRenderAudio(limited, "lufs_i", -20, -1));
-    const std::size_t far = 10000;
-    CHECK(std::fabs(static_cast<double>(limited.channels[0][far])) >=
-          0.8 * std::fabs(static_cast<double>(unlimited.channels[0][far])));
+    const std::size_t late = 10000;
+    CHECK(std::fabs(static_cast<double>(limited.channels[0][late])) >=
+          0.8 * std::fabs(static_cast<double>(unlimited.channels[0][late])));
     const float* channels[] = {limited.channels[0].data()};
     auto report = analysis::analyze({channels, static_cast<std::int64_t>(limited.frames()),
                                      limited.sampleRate, analysis::Layout::Mono});

@@ -448,9 +448,9 @@ TEST_CASE("a master with one output plays mono; outputs past the device are skip
     backend.run(48000 / 128);
     // The same master on outputs 5/6 of a two-output device: nothing plays
     // there, and the engine says why.
-    model::EditTxn far(s, 3);
-    far.modify<model::Track>(kMaster, [](auto& m) { m.hwOutput = std::vector<int>{5, 6}; });
-    REQUIRE(engine.load(far.commit().value()));
+    model::EditTxn outOfRange(s, 3);  // not `far`: a Windows header macro
+    outOfRange.modify<model::Track>(kMaster, [](auto& m) { m.hwOutput = std::vector<int>{5, 6}; });
+    REQUIRE(engine.load(outOfRange.commit().value()));
     const auto warnings = engine.warnings();
     CHECK(std::any_of(warnings.begin(), warnings.end(), [](const std::string& w) {
         return w.find("output 6") != std::string::npos;

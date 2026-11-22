@@ -4,8 +4,9 @@
 
 Every source in `_engine_test_sources` (host/engine/CMakeLists.txt) builds on
 Linux, macOS and Windows. Only Linux is built locally, so this check catches
-the commonest slip before native CI does: a POSIX-only header or call, or the
-JACK test fixtures, outside a preprocessor conditional. A case that needs one
+the commonest slips before native CI does: a POSIX-only header or call, or the
+JACK test fixtures, outside a preprocessor conditional, and a variable named
+after a Windows header macro. A case that needs one
 is fenced (`#if defined(__linux__)`, `#if !defined(_WIN32)`, or
 `#if defined(SUPPLE_TEST_JACK)`) with a one-line reason above it.
 
@@ -31,6 +32,9 @@ CALLS = re.compile(
     r"(?<![\w.>])(::)?(getpid|setenv|unsetenv|poll|pipe|mmap|munmap|ftruncate|"
     r"sched_\w+|getrlimit|setrlimit|prctl|dup2)\s*\("
 )
+# Names <windows.h> defines as macros (windef.h: far, near), declared as
+# variables: clang-cl then sees an expression where a name should be.
+WINDOWS_MACROS = re.compile(r"[\w:>]\s+(far|near)\s*[({=;,]")
 OPEN = re.compile(r"#\s*(if|ifdef|ifndef)\b")
 CLOSE = re.compile(r"#\s*endif\b")
 
@@ -57,7 +61,7 @@ def problems(path: pathlib.Path) -> list[str]:
         if depth or stripped.startswith("//"):
             continue
         code = stripped.split("//", 1)[0]
-        if HEADERS.search(code) or CALLS.search(code):
+        if HEADERS.search(code) or CALLS.search(code) or WINDOWS_MACROS.search(code):
             found.append(f"{path.name}:{number}: {stripped}")
     return found
 
