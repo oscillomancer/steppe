@@ -2062,27 +2062,38 @@ Status prepare(Plan& p, const Session& s) {
                              "cannot be launched; use shorter audio or fewer distinct files");
     }
     std::vector<TimedEvent> withClips;
+    // A clip's notes continue the timeline's ids (compileClipPlayers). They
+    // have no place in the song, so their sources span all of it:
+    // releaseVoices never ends one as outside its span.
+    auto addClip = [&](const ClipPlayer& pl) {
+        for (const ClipEvent& e : pl.events)
+            if (e.event.noteId >= 0)
+                withClips.push_back({e.event.kind == host::Event::Kind::NoteOn
+                                         ? std::numeric_limits<std::int64_t>::min()
+                                         : std::numeric_limits<std::int64_t>::max(),
+                                     e.event, e.origin});
+    };
     for (Node& node : p.nodes) {
-        // A clip's notes continue the timeline's ids (compileClipPlayers).
-        // They have no place in the song, so their sources span all of it:
-        // releaseVoices never ends one as outside its span.
         withClips = node.events;
-        for (const ClipPlayer& pl : node.players)
-            for (const ClipEvent& e : pl.events)
-                if (e.event.noteId >= 0)
-                    withClips.push_back({e.event.kind == host::Event::Kind::NoteOn
-                                             ? std::numeric_limits<std::int64_t>::min()
-                                             : std::numeric_limits<std::int64_t>::max(),
-                                         e.event, e.origin});
+        for (const ClipPlayer& pl : node.players) addClip(pl);
         sources(node.midiStage, withClips);
         if (node.noteTarget >= 0) {  // the same events: the same sources
             Stage& target = node.chain[static_cast<std::size_t>(node.noteTarget)];
             target.noteSources = node.midiStage.noteSources;
             target.noteSourceIndex = node.midiStage.noteSourceIndex;
         }
-        for (TakeChain& tc : node.takeChains)
-            if (tc.noteTarget >= 0)
-                sources(tc.chain[static_cast<std::size_t>(tc.noteTarget)], tc.events);
+        for (TakeChain& tc : node.takeChains) {
+            if (tc.noteTarget < 0) continue;
+            Stage& target = tc.chain[static_cast<std::size_t>(tc.noteTarget)];
+            if (tc.clipChain && tc.player >= 0) {
+                // A clip's chain plays its player's notes: their sources too,
+                // so a plan swap carries them (review round 86 H4).
+                withClips = tc.events;
+                addClip(node.players[static_cast<std::size_t>(tc.player)]);
+                sources(target, withClips);
+            } else
+                sources(target, tc.events);
+        }
     }
     SUPPLE_TRY(prepareRackMidi(p));
     for (Node& node : p.nodes)

@@ -702,3 +702,35 @@ TEST_CASE("one written pitch on two channels, or overlapping, is carried note by
             }
         }
 }
+
+TEST_CASE("a clip played by its take's own instrument holds its chord across a plan swap" *
+          doctest::description("rt")) {
+    // Round 86 H4: cl_1's instrument is in its take's chain (ADR-0097's clip
+    // chain), not on the track. Its chord, carried by its notes' sources,
+    // plays on past a context edit to its note-offs (beat 6), then is silent.
+    for (const char* follow : {"none", "key"})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            CAPTURE(follow);
+            CAPTURE(options.anticipative);
+            Project p;
+            p.runArgs("context.write", contextText(kCMinor));
+            json::Value clip = j(R"({"track": "tr_1", "scene": "sc_1",
+                                     "notation": "voice keys; 1: [D3 F3 A3]:h r:h",
+                                     "context": "1: key D minor {Dm}:w"})");
+            clip["follow"] = follow;
+            p.runArgs("clip.add", clip);
+            json::Value fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");
+            fx["take"] = p.app->head().clips.find(id("cl_1"))->activeTake->str();
+            p.runArgs("fx.add", fx);
+            const model::Session before = p.app->head();
+            swapEdit(p, SwapBy::ContextEdit);
+            p.run("track.set", R"({"track": "tr_1", "name": "Moved"})");  // a compile either way
+            const model::Session after = p.app->head();
+            constexpr std::uint32_t block = 128;
+            const Live live =
+                playLive(before, p.app->projectDir(), options, block, 10 * kBeat + 8192,
+                         {{20, {request("tr_1", "cl_1")}}, {(5 * kBeat) / block, {}, {}, &after}});
+            REQUIRE(live.log.size() == 1);
+            endsAt(live, 5.0, 6.0);
+        }
+}
