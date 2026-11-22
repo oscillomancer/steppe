@@ -4,7 +4,9 @@
 // whatever the thread count.
 #include <doctest/doctest.h>
 
+#if defined(__linux__)
 #include <sched.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -255,6 +257,9 @@ TEST_CASE("a fan-out after a serial prefix wakes every parked participant") {
     CHECK(fanout.calls == 10);
 }
 
+// Linux only: it restricts a thread with sched_setaffinity. macOS has no CPU
+// affinity; Windows counts the process mask (core-base allowedCpuCount).
+#if defined(__linux__)
 TEST_CASE("the default helper count follows the calling thread's allowed CPUs") {
     cpu_set_t all;
     CPU_ZERO(&all);
@@ -282,6 +287,7 @@ TEST_CASE("the default helper count follows the calling thread's allowed CPUs") 
     if (cpus.size() >= 5) CHECK(helpersOn(5) == 2);
     CHECK(helpersOn(cpus.size()) == (cpus.size() > 3 ? cpus.size() - 3 : 0));
 }
+#endif
 
 TEST_CASE(
     "background pool: each helper registers as a numbered audio thread and releases its slot") {

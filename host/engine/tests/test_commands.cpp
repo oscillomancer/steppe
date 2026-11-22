@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <supple/product.h>
+#include "../../../tests/file_platform.h"
 
-#include <unistd.h>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
@@ -28,8 +28,8 @@ namespace fs = std::filesystem;
 
 namespace {
 struct Workdir {
-    fs::path path =
-        fs::temp_directory_path() / ("supple-engine-commands-" + std::to_string(::getpid()));
+    fs::path path = fs::temp_directory_path() /
+                    ("supple-engine-commands-" + std::to_string(supple::test::processId()));
     Workdir() {
         fs::remove_all(path);
         fs::create_directories(path);
@@ -982,7 +982,8 @@ TEST_CASE("project.open returns migration warnings in its load report") {
 
 namespace {
 struct ChainFixture {
-    fs::path dir = fs::temp_directory_path() / ("supple-chain-tests-" + std::to_string(::getpid()));
+    fs::path dir = fs::temp_directory_path() /
+                   ("supple-chain-tests-" + std::to_string(supple::test::processId()));
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;
@@ -2423,17 +2424,23 @@ TEST_CASE(
     "engine catalogue commands retain failed-module cache reports with no available plugins") {
     Workdir dir;
     const auto cache = dir.path / "cache";
+    // The scan cache lives in the platform's cache folder (paths::cache):
+    // point the variable that names it at the test's own folder.
+#if defined(_WIN32)
+    static constexpr const char* kCacheRoot = "LOCALAPPDATA";
+#elif defined(__APPLE__)
+    static constexpr const char* kCacheRoot = "HOME";  // $HOME/Library/Caches
+#else
+    static constexpr const char* kCacheRoot = "XDG_CACHE_HOME";
+#endif
     struct Environment {
         std::optional<std::string> previous;
         ~Environment() {
-            if (previous)
-                ::setenv("XDG_CACHE_HOME", previous->c_str(), 1);
-            else
-                ::unsetenv("XDG_CACHE_HOME");
+            supple::test::environment(kCacheRoot, previous ? previous->c_str() : nullptr);
         }
     } env;
-    if (const char* previous = std::getenv("XDG_CACHE_HOME")) env.previous = previous;
-    REQUIRE(::setenv("XDG_CACHE_HOME", cache.c_str(), 1) == 0);
+    if (const char* previous = std::getenv(kCacheRoot)) env.previous = previous;
+    REQUIRE(supple::test::environment(kCacheRoot, cache.string().c_str()) == 0);
     struct Bridge {
         fs::path previous =
             fs::path(FIXTURE_CLAP_PATH).parent_path() / (std::string(product::kSlug) + "-bridge");

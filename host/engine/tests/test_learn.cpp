@@ -3,7 +3,7 @@
 // MIDI learn (ADR-0027): reading controller messages, and plug-in parameters
 // moved by them through EngineApp::pollControl.
 #include <doctest/doctest.h>
-#include <unistd.h>
+#include "../../../tests/file_platform.h"
 
 #include <cmath>
 #include <deque>
@@ -39,8 +39,8 @@ ControlMidiEvent msg(std::uint8_t status, std::uint8_t a, std::uint8_t b = 0,
 }
 
 struct Root {
-    fs::path path =
-        fs::temp_directory_path() / ("supple-engine-learn-" + std::to_string(::getpid()));
+    fs::path path = fs::temp_directory_path() /
+                    ("supple-engine-learn-" + std::to_string(supple::test::processId()));
     Root() { fs::remove_all(path); }
     ~Root() { fs::remove_all(path); }
 };

@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 // The context track's commands and what agents read of it (ADR-0095).
 #include <doctest/doctest.h>
+#include "../../../tests/file_platform.h"
 
-#include <unistd.h>
 #include <filesystem>
 
 #include <supple/engine/app.h>
@@ -17,8 +17,8 @@ namespace fs = std::filesystem;
 namespace {
 
 struct Workdir {
-    fs::path path =
-        fs::temp_directory_path() / ("supple-engine-context-" + std::to_string(::getpid()));
+    fs::path path = fs::temp_directory_path() /
+                    ("supple-engine-context-" + std::to_string(supple::test::processId()));
     Workdir() {
         fs::remove_all(path);
         fs::create_directories(path);

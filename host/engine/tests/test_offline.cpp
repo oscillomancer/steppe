@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include "../../../tests/file_platform.h"
+#if defined(__linux__)
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <unistd.h>
+#endif
 #include <fstream>
 
 #include <algorithm>
@@ -477,7 +479,7 @@ TEST_CASE("solo: soloed tracks and their signal path stay audible") {
 
 TEST_CASE("a master's own items play after its plain stage (ADR-0057)") {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-print-" + std::to_string(::getpid()));
+                     ("supple-engine-print-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData ramp;
     ramp.sampleRate = 48000;
@@ -552,7 +554,7 @@ TEST_CASE("a master's own items play after its plain stage (ADR-0057)") {
 
 TEST_CASE("audio items: position, take offset, fade, channel mode, offline media") {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-media-" + std::to_string(::getpid()));
+                     ("supple-engine-media-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData ramp;
     ramp.sampleRate = 48000;
@@ -647,7 +649,7 @@ TEST_CASE("audio items: position, take offset, fade, channel mode, offline media
 
 TEST_CASE("take playrate: varispeed resamples, the stretch keeps the pitch") {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-media-stretch-" + std::to_string(::getpid()));
+                     ("supple-engine-media-stretch-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData tone;
     tone.sampleRate = 48000;
@@ -1288,7 +1290,7 @@ TEST_CASE(
     // 2. Audio through a take chain with latency lines up with the plain take;
     //    a take volume envelope halves its second half; take FX need no track FX.
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-takefx-" + std::to_string(::getpid()));
+                     ("supple-engine-takefx-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData tone;
     tone.sampleRate = 48000;
@@ -1988,7 +1990,7 @@ TEST_CASE("through-master stems of nested channels use the solo signal path") {
 TEST_CASE(
     "media identities invalidate decoded and stretched audio while old leases stay immutable") {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-media-identity-" + std::to_string(::getpid()));
+                     ("supple-engine-media-identity-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     const auto file = dir / "source.wav";
     audio::AudioData tone;
@@ -2025,9 +2027,13 @@ TEST_CASE(
     std::filesystem::remove_all(dir);
 }
 
+// Linux only for now: it sets and reads st_mtim and inodes through ::stat and
+// utimensat; macOS (st_mtimespec) and Windows (file index, FILETIME) need their own.
+#if defined(__linux__)
 TEST_CASE("media identities share hashed content and detect inode and nanosecond changes") {
-    const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-content-identity-" + std::to_string(::getpid()));
+    const auto dir =
+        std::filesystem::temp_directory_path() /
+        ("supple-engine-content-identity-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     const auto file = dir / "source.wav", alias = dir / "copy.wav";
     audio::AudioData tone;
@@ -2119,6 +2125,7 @@ TEST_CASE("media identities share hashed content and detect inode and nanosecond
     CHECK(bool(fromHash->audio.channels == fromCopy->audio.channels));
     std::filesystem::remove_all(dir);
 }
+#endif
 
 TEST_CASE("through-master stems retain the solo playback sidechain taps") {
     for (bool console : {false, true}) {
@@ -2148,8 +2155,9 @@ TEST_CASE("through-master stems retain the solo playback sidechain taps") {
 }
 
 TEST_CASE("media cache releases originals used only to build playback variants") {
-    const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-decoded-lifetime-" + std::to_string(::getpid()));
+    const auto dir =
+        std::filesystem::temp_directory_path() /
+        ("supple-engine-decoded-lifetime-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     const auto file = dir / "source.wav", other = dir / "other.wav";
     audio::AudioData tone;

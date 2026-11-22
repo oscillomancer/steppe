@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <clap/plugin.h>
 #include <doctest/doctest.h>
+#include "../../../tests/file_platform.h"
 #include "supple/engine/bench_probe.h"
 
 #include <algorithm>
@@ -21,18 +22,25 @@
 #include <xmmintrin.h>
 #endif
 
+#if !defined(_WIN32)
 #include <fcntl.h>
-#include <poll.h>
-#include <sched.h>
 #include <sys/mman.h>
-#include <sys/resource.h>
 #include <unistd.h>
+#endif
+#if defined(__linux__)
+#include <sched.h>
+#include <sys/resource.h>
+#endif
 #include <cerrno>
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
+#include <supple/base/thread.h>
+#include <supple/base/waitable.h>
 #include <supple/clap/semantic_params.h>
+#if defined(SUPPLE_TEST_JACK)
 #include <supple/engine/jack.h>
+#endif
 #include <supple/engine/realtime.h>
 #include <supple/host/clap_host.h>
 
@@ -40,7 +48,9 @@
 #include "../../clap-host/tests/scope_probe.h"
 #include "bridge_patience.h"
 #include "engine_test_access.h"
+#if defined(SUPPLE_TEST_JACK)
 #include "fake_jack.h"
+#endif
 #include "live_workers.h"
 #include "meters.h"
 #include "plan.h"
@@ -68,6 +78,7 @@ struct RecorderTestAccess {
     static void stall(Recorder& recorder) { recorder.writerStalled_.store(true); }
     static bool stalled(const Recorder& recorder) { return recorder.writerStallAck_.load(); }
     static void resume(Recorder& recorder) { recorder.writerStalled_.store(false); }
+#if defined(__linux__)
     static bool failHeader(Recorder& recorder, std::size_t index) {
         const auto& file = recorder.tracks_[index]->target.file;
         std::error_code ec;
@@ -85,6 +96,7 @@ struct RecorderTestAccess {
         }
         return false;
     }
+#endif
     static void updateHeaders(Recorder& recorder) { recorder.updateHeaders(); }
     static void failTarget(Recorder& recorder, std::size_t index) {
         recorder.tracks_[index]->writer.abandon();
@@ -104,8 +116,8 @@ bool waitForRecorder(Predicate predicate) {
 
 TEST_CASE("a stalled recording writer preserves overflow gaps and loop file positions") {
     using Access = detail::RecorderTestAccess;
-    const auto dir =
-        std::filesystem::temp_directory_path() / ("supple-rec-stall-" + std::to_string(::getpid()));
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-rec-stall-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     detail::Recorder recorder({{Id{model::Kind::Track, 1}, {0}, dir / "take.wav", {}}}, 16, 0);
     Access::stall(recorder);
@@ -144,7 +156,7 @@ TEST_CASE("a master's take starts with the device input's takes, padded by the r
     // the master's output at P belongs to P - 40 (its own shift). Its frames
     // go 60 frames later in its file, so both files start at P - 100.
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-rec-master-" + std::to_string(::getpid()));
+                     ("supple-rec-master-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     RecordTarget input{Id{model::Kind::Track, 1}, {0}, dir / "input.wav", {}};
     RecordTarget master{model::kMaster, {}, dir / "master.wav", {}, true, 40};
@@ -171,8 +183,8 @@ TEST_CASE("a master's take starts with the device input's takes, padded by the r
 
 TEST_CASE("a failed recording target leaves other targets writing") {
     using Access = detail::RecorderTestAccess;
-    const auto dir =
-        std::filesystem::temp_directory_path() / ("supple-rec-error-" + std::to_string(::getpid()));
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-rec-error-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     detail::Recorder recorder({{Id{model::Kind::Track, 1}, {0}, dir / "bad.wav", {}},
                                {Id{model::Kind::Track, 2}, {0}, dir / "good.wav", {}}},
@@ -497,8 +509,8 @@ TEST_CASE("take FX: real-time output equals the offline render" * doctest::descr
 TEST_CASE("a master's own items: real-time output equals the offline render (ADR-0057)" *
           doctest::description("rt")) {
     // A print on the master, after its latent insert and its fader, beside the live synth.
-    const auto dir =
-        std::filesystem::temp_directory_path() / ("supple-rt-print-" + std::to_string(::getpid()));
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-rt-print-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData tone;
     tone.sampleRate = 48000;
@@ -566,7 +578,7 @@ TEST_CASE("a master's own items: real-time output equals the offline render (ADR
 TEST_CASE("a stretched take: real-time output equals the offline render" *
           doctest::description("rt")) {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-rt-stretch-" + std::to_string(::getpid()));
+                     ("supple-engine-rt-stretch-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData tone;
     tone.sampleRate = 48000;
@@ -1001,6 +1013,8 @@ TEST_CASE("a manual backend's stop is the audio thread's stop") {
     CHECK(engine.lastStopOnAudioThread());
 }
 
+// JACK only: it drives the JACK backend through the stand-in libjack (Linux).
+#if defined(SUPPLE_TEST_JACK)
 TEST_CASE("the engine plays through the JACK backend (a stand-in libjack)" *
           doctest::description("rt")) {
     FakeJack& fake = fakeJack();
@@ -1023,7 +1037,10 @@ TEST_CASE("the engine plays through the JACK backend (a stand-in libjack)" *
     CHECK(engine.processErrors() == 0);
     fake.reset();
 }
+#endif
 
+// JACK only: it drives the JACK backend through the stand-in libjack (Linux).
+#if defined(SUPPLE_TEST_JACK)
 TEST_CASE("the engine survives the JACK server going away") {
     FakeJack& fake = fakeJack();
     fake.reset(256);
@@ -1045,6 +1062,7 @@ TEST_CASE("the engine survives the JACK server going away") {
     CHECK_FALSE(engine.running());
     fake.reset();
 }
+#endif
 
 TEST_CASE("the engine runs a session at the device's rate, not the project's") {
     // A 48 kHz project on a 44.1 kHz device: notes land at the same seconds
@@ -1333,6 +1351,8 @@ TEST_CASE("anticipative on a paced device: edits and transport from the main thr
     CHECK(engine.lastStopOnAudioThread());
 }
 
+// JACK only: it drives the JACK backend through the stand-in libjack (Linux).
+#if defined(SUPPLE_TEST_JACK)
 TEST_CASE("anticipative: the renderer stops the plugins when the JACK server goes away") {
     FakeJack& fake = fakeJack();
     fake.reset(256);
@@ -1353,6 +1373,7 @@ TEST_CASE("anticipative: the renderer stops the plugins when the JACK server goe
     CHECK_FALSE(engine.running());
     fake.reset();
 }
+#endif
 
 // Phase 4 acceptance (engine.md §5): a crashing plugin in dedicated isolation
 // does not take down the engine; only its node goes silent.
@@ -1555,8 +1576,8 @@ TEST_CASE("recording: every input frame lands in the take, placed where it was h
         Id track;
         for (const auto& e : s.tracks)
             if (e.value->type == model::StripType::Channel) track = e.id;
-        const auto dir =
-            std::filesystem::temp_directory_path() / ("supple-rec-" + std::to_string(::getpid()));
+        const auto dir = std::filesystem::temp_directory_path() /
+                         ("supple-rec-" + std::to_string(supple::test::processId()));
         std::filesystem::remove_all(dir);
         REQUIRE(engine.startRecording({{track, {0, 1}, dir / "take.wav", {}}}));
         CHECK(engine.recording());
@@ -1611,8 +1632,8 @@ TEST_CASE("recording through a playback dropout keeps the take on the timeline" 
     Id track;
     for (const auto& e : s.tracks)
         if (e.value->type == model::StripType::Channel) track = e.id;
-    const auto dir =
-        std::filesystem::temp_directory_path() / ("supple-rec-gap-" + std::to_string(::getpid()));
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-rec-gap-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     REQUIRE(engine.startRecording({{track, {0}, dir / "take.wav", {}}}));
     engine.play();
@@ -1729,7 +1750,7 @@ TEST_CASE("recording a master: its take is render.mix of that master, in every e
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
         REQUIRE(engine.load(s));
         const auto dir = std::filesystem::temp_directory_path() /
-                         ("supple-master-rec-" + std::to_string(::getpid()));
+                         ("supple-master-rec-" + std::to_string(supple::test::processId()));
         std::filesystem::remove_all(dir);
         RecordTarget main{kMaster, {}, dir / "main.wav", {}, true};
         RecordTarget cue{mix.cue, {}, dir / "cue.wav", {}, true};
@@ -1788,7 +1809,7 @@ TEST_CASE("an armed master that is not recording keeps its record ring drained" 
 TEST_CASE("a recording master: its prints are silent in the punch range and never recorded" *
           doctest::description("rt")) {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-master-punch-" + std::to_string(::getpid()));
+                     ("supple-master-punch-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData tone;
     tone.sampleRate = 48000;
@@ -2350,7 +2371,7 @@ TEST_CASE("loop recording: one contiguous file, a run per pass, placed on the ti
         for (const auto& e : s.tracks)
             if (e.value->type == model::StripType::Channel) track = e.id;
         const auto dir = std::filesystem::temp_directory_path() /
-                         ("supple-rec-loop-" + std::to_string(::getpid()));
+                         ("supple-rec-loop-" + std::to_string(supple::test::processId()));
         std::filesystem::remove_all(dir);
         engine.setLoop(0.5, 1.0, true);
         engine.seek(0.25);
@@ -3385,7 +3406,7 @@ TEST_CASE("a master key is legal and its downstream node follows the live execut
 TEST_CASE("meters report what has been heard, not what has been rendered" *
           doctest::description("rt")) {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-meters-" + std::to_string(::getpid()));
+                     ("supple-engine-meters-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     // A -6 dBFS sine item (amplitude 0.5) on one track, a silent track beside it.
     audio::AudioData tone;
@@ -3599,7 +3620,7 @@ TEST_CASE("a count-in clicks a bar while the position holds, then plays and reco
             REQUIRE(engine.load(s));
             engine.setMetronome(false, 0.0);  // the count clicks regardless
             const auto dir = std::filesystem::temp_directory_path() /
-                             ("supple-count-" + std::to_string(::getpid()));
+                             ("supple-count-" + std::to_string(supple::test::processId()));
             std::filesystem::remove_all(dir);
             if (recorded) {
                 Id track;
@@ -4058,10 +4079,13 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
               kCycles * kBlock - from) == 0);
 }
 
+// Linux only for now: it fails the header write by dup2-ing over the recorder's
+// descriptor, found through /proc/self/fd; a portable fault seam is to come.
+#if defined(__linux__)
 TEST_CASE("recording header errors retain the first error and spare other targets") {
     using Access = detail::RecorderTestAccess;
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-rec-header-" + std::to_string(::getpid()));
+                     ("supple-rec-header-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     detail::Recorder recorder({{Id{model::Kind::Track, 1}, {0}, dir / "bad.wav", {}},
                                {Id{model::Kind::Track, 2}, {0}, dir / "good.wav", {}}},
@@ -4082,11 +4106,12 @@ TEST_CASE("recording header errors retain the first error and spare other target
     CHECK(takes[1].frames == 32);
     std::filesystem::remove_all(dir);
 }
+#endif
 
 TEST_CASE("a full recording loop table keeps its runs and stops adding input") {
     using Access = detail::RecorderTestAccess;
-    const auto dir =
-        std::filesystem::temp_directory_path() / ("supple-rec-runs-" + std::to_string(::getpid()));
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-rec-runs-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     detail::Recorder recorder({{Id{model::Kind::Track, 1}, {0}, dir / "take.wav", {}}}, 1, 0);
     Access::stall(recorder);
@@ -4111,7 +4136,7 @@ TEST_CASE("a full recording loop table keeps its runs and stops adding input") {
 
 TEST_CASE("recording recovery requires a complete valid sidecar") {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-rec-sidecar-" + std::to_string(::getpid()));
+                     ("supple-rec-sidecar-" + std::to_string(supple::test::processId()));
     std::filesystem::create_directories(dir);
     const auto wav = dir / "take.wav";
     auto original = json::parse(R"({"schema":"supple.recording/1.0","track":"tr_000001",
@@ -5150,8 +5175,9 @@ TEST_CASE("anticipative Auto monitoring keeps callback state off renderer nodes"
 
 TEST_CASE("replaced media plans null against fresh offline in both executors" *
           doctest::description("rt")) {
-    const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-rt-media-identity-" + std::to_string(::getpid()));
+    const auto dir =
+        std::filesystem::temp_directory_path() /
+        ("supple-engine-rt-media-identity-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData tone;
     tone.sampleRate = 48000;
@@ -5319,7 +5345,7 @@ TEST_CASE("input FX process the armed input: monitored and recorded, aligned wit
             REQUIRE(engine.load(s));
             CHECK(engine.processErrors() == 0);
             const auto dir = std::filesystem::temp_directory_path() /
-                             ("supple-inputfx-" + std::to_string(::getpid()));
+                             ("supple-inputfx-" + std::to_string(supple::test::processId()));
             std::filesystem::remove_all(dir);
             REQUIRE(engine
                         .startRecording({{plain, {0, 1}, dir / "plain.wav", {}},
@@ -5395,8 +5421,8 @@ TEST_CASE("a monitored input is heard through its input FX" * doctest::descripti
 }
 
 TEST_CASE("a recording split by a seek, not a loop, has a sidecar its reader accepts") {
-    const auto dir =
-        std::filesystem::temp_directory_path() / ("supple-rec-seek-" + std::to_string(::getpid()));
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("supple-rec-seek-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     detail::Recorder recorder({{Id{model::Kind::Track, 1}, {0}, dir / "take.wav", {}}}, 48000, 0);
     REQUIRE(recorder.open());
@@ -5620,8 +5646,9 @@ std::vector<float> tinySignal() {
 }
 
 std::filesystem::path tinyMedia(const char* name) {
-    const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-fp-" + std::string(name) + "-" + std::to_string(::getpid()));
+    const auto dir =
+        std::filesystem::temp_directory_path() /
+        ("supple-engine-fp-" + std::string(name) + "-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData data;
     data.sampleRate = 48000;
@@ -5851,6 +5878,8 @@ TEST_CASE("the device thread's MXCSR is restored after every node" * doctest::de
     std::filesystem::remove_all(dir);
 }
 #endif
+// Linux only for now: it reads the OS thread names from /proc/self/task/*/comm.
+#if defined(__linux__)
 namespace {
 std::set<std::string> threadNames() {
     std::set<std::string> names;
@@ -5883,6 +5912,7 @@ TEST_CASE("the engine's threads carry their role names") {
     CHECK(named());
     engine.stop();
 }
+#endif
 
 // --- background scheduling (ADR-0026) -----------------------------------------------------
 
@@ -5899,6 +5929,7 @@ struct ReportingBackend : DummyBackend {
     ThreadPolicy reported;
 };
 
+#if defined(__linux__)
 rlim_t softLimit(int resource) {
     rlimit limit{};
     REQUIRE(::getrlimit(resource, &limit) == 0);
@@ -5928,6 +5959,8 @@ bool mayElevate(int threads, int priority) {
            softLimit(RLIMIT_RTPRIO) >= static_cast<rlim_t>(priority) &&
            threads + 2 <= allowedCpus();
 }
+// The policy the background pool and renderer ask for at `priority`.
+ThreadPolicy elevated(int priority) { return {Kind::Fifo, priority}; }
 bool warnsNormal(const Engine& engine, std::string_view because) {
     for (const auto& w : engine.warnings())
         if (w.find("background audio threads run at normal priority") != std::string::npos &&
@@ -5935,6 +5968,12 @@ bool warnsNormal(const Engine& engine, std::string_view because) {
             return true;
     return false;
 }
+#else
+// Off Linux the pool asks for the platform's high policy, with no priority
+// levels or rlimits (Engine::start): only the two-free-CPUs rule refuses it.
+bool mayElevate(int threads, int) { return threads + 2 <= static_cast<int>(allowedCpuCount()); }
+ThreadPolicy elevated(int) { return {Kind::High, 0}; }
+#endif
 }  // namespace
 
 TEST_CASE("background threads run real-time below a real-time callback (ADR-0026)") {
@@ -5956,7 +5995,7 @@ TEST_CASE("background threads run real-time below a real-time callback (ADR-0026
         CHECK(s.callback == c.callback);
         if (engine.liveHelpers() > 0) CHECK(s.live == kNormal);  // a dummy's stay normal
         if (mayElevate(3, c.expected)) {
-            const ThreadPolicy fifo{Kind::Fifo, c.expected};
+            const ThreadPolicy fifo = elevated(c.expected);
             CHECK(s.renderer == fifo);
             CHECK(s.background == fifo);
             CHECK(host::bridgeAudioPolicy() == fifo);
@@ -6019,8 +6058,8 @@ TEST_CASE("forced background policies apply for benchmarks, within the same chec
         {.workers = 2, .background = EngineOptions::Background::Fifo, .backgroundPriority = 3});
     REQUIRE(engine.start(backend, {.blockSize = 128}));
     if (mayElevate(3, 3)) {  // forced even under a normal callback
-        CHECK(engine.scheduling().renderer == ThreadPolicy{Kind::Fifo, 3});
-        CHECK(engine.scheduling().background == ThreadPolicy{Kind::Fifo, 3});
+        CHECK(engine.scheduling().renderer == elevated(3));
+        CHECK(engine.scheduling().background == elevated(3));
     } else {
         CHECK(engine.scheduling().renderer == kNormal);
         CHECK(engine.warnings().size() == 1);
@@ -6028,6 +6067,9 @@ TEST_CASE("forced background policies apply for benchmarks, within the same chec
     engine.stop();
 }
 
+// Linux only: CPU affinity through sched_setaffinity (none on macOS; Windows
+// counts the process mask).
+#if defined(__linux__)
 TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-time") {
     cpu_set_t all;
     CPU_ZERO(&all);
@@ -6072,7 +6114,10 @@ TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-ti
         CHECK(background == renderer);
     }
 }
+#endif
 
+// Linux only: real-time elevation limits are RLIMIT_RTPRIO/RLIMIT_RTTIME.
+#if defined(__linux__)
 TEST_CASE("background elevation refusals keep every background thread normal and warn") {
     auto pool = makePool();
     MediaCache media;
@@ -6110,6 +6155,7 @@ TEST_CASE("background elevation refusals keep every background thread normal and
         engine.stop();
     }
 }
+#endif
 
 TEST_CASE("output consumption targets are one-shot and tagged with the playback epoch") {
     InstancePool pool([](const model::PluginRef&) -> Result<host::PluginInfo> {
@@ -6139,10 +6185,10 @@ TEST_CASE("output consumption targets are one-shot and tagged with the playback 
     EngineTestAccess::outputConsume(engine, 3, 1024);
     CHECK(EngineTestAccess::outputSeen(engine) == EngineTestAccess::outputSerial(engine));
     auto drain = [&] {
-        pollfd fd{wake.fd(), POLLIN, 0};
+        WaitItem item{wake.waitable()};
         int ready;
         do {
-            ready = ::poll(&fd, 1, -1);
+            ready = waitFor(std::span(&item, 1), -1);
         } while (ready < 0 && errno == EINTR);
         REQUIRE(ready == 1);
         REQUIRE(wake.drain());
@@ -6152,8 +6198,8 @@ TEST_CASE("output consumption targets are one-shot and tagged with the playback 
     drain();                       // main's arm/recheck signals without another callback
     engine.armOutputWake(3, INT64_MAX);
     EngineTestAccess::outputConsume(engine, 3, 2048);
-    pollfd fd{wake.fd(), POLLIN, 0};
-    CHECK(::poll(&fd, 1, 0) == 0);  // disarmed/unchanged work does not notify
+    WaitItem item{wake.waitable()};
+    CHECK(waitFor(std::span(&item, 1), 0) == 0);  // disarmed/unchanged work does not notify
 }
 
 TEST_CASE("MIDI sends: timeline chains null offline in both executors and all isolations" *
@@ -6455,7 +6501,8 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
 #else
     host::setBridgeExecutable(BRIDGE_PATH);
     const std::filesystem::path file =
-        std::filesystem::temp_directory_path() / ("supple-echo-gate-" + std::to_string(::getpid()));
+        std::filesystem::temp_directory_path() /
+        ("supple-echo-gate-" + std::to_string(supple::test::processId()));
     const int fd = ::open(file.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
     REQUIRE(fd >= 0);
     REQUIRE(::ftruncate(fd, 4096) == 0);

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
+#include "../../../tests/file_platform.h"
+#if !defined(_WIN32)
 #include <poll.h>
 #include <unistd.h>
+#endif
 
 #include <chrono>
 #include <cmath>
@@ -16,7 +19,9 @@
 #include <supple/base/sha256.h>
 #include <supple/diagctx/inventory.h>
 #include <supple/engine/app.h>
+#if defined(SUPPLE_TEST_JACK)
 #include <supple/engine/jack.h>
+#endif
 #include <supple/host/clap_host.h>
 #include <supple/model/project_file.h>
 #include <supple/model/schemas.h>
@@ -24,7 +29,9 @@
 
 #include <supple/analysis/analysis.h>
 #include <atomic>
+#if defined(SUPPLE_TEST_JACK)
 #include "fake_jack.h"
+#endif
 #include "history_sequence.h"
 #include "recording.h"
 #include "render_commands.h"
@@ -38,7 +45,8 @@ namespace {
 const fs::path kFixture = FIXTURE_CLAP_PATH;
 
 struct Root {
-    fs::path path = fs::temp_directory_path() / ("supple-engine-app-" + std::to_string(::getpid()));
+    fs::path path = fs::temp_directory_path() /
+                    ("supple-engine-app-" + std::to_string(supple::test::processId()));
     Root() { fs::remove_all(path); }
     ~Root() { fs::remove_all(path); }
 };
@@ -342,6 +350,8 @@ TEST_CASE("a plug-in state captured on a branch reaches main through a replayed 
     app->stopEngine();
 }
 
+// JACK only: it drives the JACK backend through the stand-in libjack (Linux).
+#if defined(SUPPLE_TEST_JACK)
 TEST_CASE("an LLM plays the song in real time over the bus (a stand-in libjack)") {
     FakeJack& fake = fakeJack();
     fake.reset(1024);
@@ -406,6 +416,7 @@ TEST_CASE("an LLM plays the song in real time over the bus (a stand-in libjack)"
     call("engine.stop", "{}");
     fake.reset();
 }
+#endif
 
 TEST_CASE("the plug-in isolation preference places inherit plug-ins as they load") {
     // ADR-0081 commit 7: a third-party plug-in left on inherit runs where
@@ -2103,6 +2114,8 @@ TEST_CASE("the tick autosaves the project, rotates five, and open reports a newe
     CHECK(other->head().project->name == "Autosaved");
 }
 
+// JACK only: it drives the JACK backend through the stand-in libjack (Linux).
+#if defined(SUPPLE_TEST_JACK)
 TEST_CASE("the tick restarts the engine after a device change, then gives up and reports") {
     FakeJack& fake = fakeJack();
     fake.reset(1024);
@@ -2183,6 +2196,7 @@ TEST_CASE("the tick restarts the engine after a device change, then gives up and
     CHECK_FALSE(call("engine.status", "{}")["running"].asBool());
     fake.reset();
 }
+#endif
 
 TEST_CASE("a UI gesture is one undo step: edits with the same gesture coalesce") {
     Root root;
@@ -4110,6 +4124,8 @@ TEST_CASE("audio thread preference applies at next start and explicit options wi
     REQUIRE(bus.execute({"engine.stop", j("{}"), kTest}));
 }
 
+// JACK only: it drives the JACK backend through the stand-in libjack (Linux).
+#if defined(SUPPLE_TEST_JACK)
 TEST_CASE("device recovery preserves an Automatic thread preference on a supplied backend") {
     FakeJack& fake = fakeJack();
     fake.reset(1024);
@@ -4130,6 +4146,7 @@ TEST_CASE("device recovery preserves an Automatic thread preference on a supplie
     app->stopEngine();
     fake.reset();
 }
+#endif
 
 TEST_CASE("failed initial load rolls back a supplied backend and permits another start") {
     Root root;
@@ -4205,6 +4222,9 @@ TEST_CASE("app service subscriptions keep local instance callbacks alive after e
     REQUIRE(app->nextServiceDelayMs());
     REQUIRE(timers->unregister_timer(host, timer));
     CHECK_FALSE(app->nextServiceDelayMs());
+#if defined(_WIN32)
+    CHECK_FALSE(descriptors);  // CLAP's posix-fd extension: not offered on Windows
+#else
     int fds[2];
     REQUIRE(::pipe(fds) == 0);
     REQUIRE(descriptors->register_fd(host, fds[0], CLAP_POSIX_FD_READ));
@@ -4215,12 +4235,15 @@ TEST_CASE("app service subscriptions keep local instance callbacks alive after e
     REQUIRE(descriptors->unregister_fd(host, fds[0]));
     CHECK(app->serviceFds().empty());
     app->serviceFdReady(watches[0], POLLIN);  // stale snapshots are harmless
+#endif
     // Main-thread callback request is delivered by explicit service, with no device/editor.
     host->request_callback(host);
     app->tick();
     CHECK_FALSE(instance->serviceMainThread());
+#if !defined(_WIN32)
     ::close(fds[0]);
     ::close(fds[1]);
+#endif
 }
 
 // Round 23 reproductions (review-builds/round23/sweep_probe.cpp).
