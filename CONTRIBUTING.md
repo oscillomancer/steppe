@@ -126,8 +126,12 @@ core-base native waits/wakes/thread setup, command bus, control-protocol/MCP,
 Lua, DSP/Console 9/analysis, MIDI/notation/timeline/optimizer,
 session model, plugin support, all stock SDK-free DSP engines, and the
 script compiler/runtime and suite semantic layer. Audio-file I/O, engine/CLI,
-dummy/offline rendering, sandbox and their portable tests run on all three
-platforms. Native core-base sources/tests, JSON-RPC control transport/model loop
+dummy/offline rendering and sandbox build and run on all three platforms, but
+`engine.tests` is still two source lists (`host/engine/CMakeLists.txt`): 17 of
+its files run on Linux only, among them the real-time = offline null tests
+(`test_realtime*.cpp`), `test_app.cpp` (with the command-example test),
+`test_commands.cpp` and `test_offline.cpp`, 513 of its 1238 cases. They are
+being ported; the table below lists them until then. Native core-base sources/tests, JSON-RPC control transport/model loop
 and standalone MCP/proxy no longer share the hosting gate (ADR-0035).
 Linux-specific descriptor/permission/signal probes and memory-residency/rlimit
 tests remain guarded with portable boundary coverage alongside them.
@@ -136,6 +140,7 @@ These gates are explicit, with no no-op RT implementations:
 | Gate | Off on | Reason / follow-up |
 |---|---|---|
 | JACK/fake JACK and hardware capacity benchmark | macOS, Windows | Linux graph/hardware tooling; native device audio uses PortAudio (ADR-0038) |
+| 16 more `engine.tests` files (`test_realtime*`, `test_app`, `test_commands`, `test_offline`, `test_context_commands`, `test_dsp`, `test_learn`, `test_scripts`, `test_strips`, `test_meters`, `test_workers`, `test_live_workers`, `test_runtime_protection`) | macOS, Windows | not a platform need for most: never moved to the portable list; being ported |
 
 Research GUI spikes and host fuzzers reject configuration on non-Linux
 platforms rather than silently building incomplete targets. Renders must

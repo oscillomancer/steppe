@@ -25,7 +25,11 @@ protocol and standalone MCP/proxy have native coverage on both platforms
 Both native platforms enable and test audio-file I/O, recording recovery,
 engine/CLI, dummy/offline rendering and sandbox. PortAudio builds CoreAudio on
 macOS and WASAPI/ASIO on Windows; fake-device tests verify RT/offline equivalence
-in both executors. Actual hardware trials remain opt-in and unmeasured. The
+in both executors. Actual hardware trials remain opt-in and unmeasured. Most of
+`engine.tests` has not run there yet: 17 of its files (513 of 1238 cases),
+including the dummy-backend real-time = offline null tests, `test_app.cpp` with
+the command-example test, and `test_commands.cpp`, build on Linux only
+(CONTRIBUTING.md, "Temporary port gates"); the port is in progress. The
 GUI gate is lifted (ADR-0039), with native editor embedding (ADR-0040);
 the combined native DAW builds and hermetic tests pass CI on both platforms.
 Portable libraries, the session model, stock DSP cores
