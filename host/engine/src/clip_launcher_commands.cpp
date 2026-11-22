@@ -1052,9 +1052,10 @@ void registerClipCommands(cmd::Registry& registry) {
             "holding chords wins over them; clip.chords_ignored warns when they differ from it). "
             "follow (none, key or chords) "
             "needs a MIDI clip with a key at its start (clip.no_key, clip.follow_audio); laying "
-            "the clip (item.add {clip}, scene.insert, arrangement.build) maps its notes to the "
-            "key or chords under it (their follow argument), and a launched clip follows them "
-            "live (ADR-0098).";
+            "the clip (item.add {clip}, scene.insert, arrangement.build) lays its notes as "
+            "written, the take carrying the clip's context and the follow (their follow "
+            "argument), so they sound as the key or chords under them say; a launched clip "
+            "follows them live (ADR-0098).";
         c.tags = {"clip launcher", "clip"};
         c.args = clipAddArgsSchema();
         c.result =

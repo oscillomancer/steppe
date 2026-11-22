@@ -2458,6 +2458,182 @@ TEST_CASE("take.set {context: \"\"} clears the period and the phase with the poi
     CHECK(t.follow == model::ClipFollow::None);
 }
 
+namespace {
+using Heard = std::vector<std::pair<long long, int>>;
+// Every heard note of every item, by where it is heard (a chased note at its item's start, in
+// 1/960 beats) and the pitch it sounds as: what an edit must leave as it was where the spec says.
+Heard heardAll(Launcher& l) {
+    Heard out;
+    const model::Session& s = l.head();
+    for (const auto& e : s.items) {
+        const double start = model::itemSpan(s, *e.value).startBeat;
+        for (const auto& n : model::soundingNotes(s, e.id, -1e9, 1e9))
+            out.emplace_back(std::llround(std::max(n.songBeat, start) * 960.0), n.sounds.pitch);
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+// The (note, context beat in 1/960) of every heard note of every item: no edit that moves, cuts
+// or copies a take touches its phase, so the pairs after an edit are among those before.
+std::set<std::pair<std::uint32_t, long long>> contextPlaces(Launcher& l) {
+    std::set<std::pair<std::uint32_t, long long>> out;
+    const model::Session& s = l.head();
+    for (const auto& e : s.items)
+        for (const auto& n : model::soundingNotes(s, e.id, -1e9, 1e9))
+            out.emplace(n.note, std::llround(n.contextBeat * 960.0));
+    return out;
+}
+void addAll(Heard& to, const Heard& more) {
+    to.insert(to.end(), more.begin(), more.end());
+    std::sort(to.begin(), to.end());
+}
+}  // namespace
+
+TEST_CASE("edits that touch no phase keep each note's context beat, and sound as the spec says") {
+    Launcher l;
+    // The song changes key at beat 1.25: the notes at 0 and 1 sound under Eb, the rest under F.
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("key.set", R"({"at": 1.25, "tonic": "F", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    const Heard before = heardAll(l);
+    const auto placesBefore = contextPlaces(l);
+    REQUIRE(before.size() == 4);
+    CHECK(before[0].first == 0);
+    CHECK(before[1].first == 960);
+    const auto sameContext = [&] {
+        for (const auto& p : contextPlaces(l)) CHECK(placesBefore.count(p) == 1);
+    };
+    // A copy of the four notes at beat 16 sounds under F whole: C E G C as F's I III V I.
+    const Heard underF = {{16 * 960, 41}, {17 * 960, 45}, {18 * 960, 48}, {19 * 960, 53}};
+
+    SUBCASE("split, with a note held across the cut") {
+        l.run("item.split", R"({"item": "it_1", "at": 1.5})");
+        // The held E2 is heard again from the cut, as it sounded before the cut (under Eb).
+        Heard want = before;
+        want.emplace_back(1440, before[1].second);
+        std::sort(want.begin(), want.end());
+        CHECK(heardAll(l) == want);
+        sameContext();
+    }
+    SUBCASE("split between notes") {
+        l.run("item.split", R"({"item": "it_1", "at": 2})");
+        CHECK(heardAll(l) == before);
+        sameContext();
+    }
+    SUBCASE("trims from the left, as two calls (position, then offset)") {
+        l.run("item.set", R"({"item": "it_1", "position": 2, "length": 2})");
+        l.run("take.set", R"({"take": "tk_1", "start_offset": 2})");
+        CHECK(heardAll(l) == Heard(before.begin() + 2, before.end()));
+        sameContext();
+    }
+    SUBCASE("trims from the left, as two calls (offset, then position)") {
+        l.run("take.set", R"({"take": "tk_1", "start_offset": 2})");
+        l.run("item.set", R"({"item": "it_1", "position": 2, "length": 2})");
+        CHECK(heardAll(l) == Heard(before.begin() + 2, before.end()));
+        sameContext();
+    }
+    SUBCASE("a trim from the right") {
+        l.run("item.set", R"({"item": "it_1", "length": 2})");
+        CHECK(heardAll(l) == Heard(before.begin(), before.begin() + 2));
+        sameContext();
+    }
+    SUBCASE("loop on, then off") {
+        l.run("item.set", R"({"item": "it_1", "loop": true, "length": 12})");
+        const Heard looped = heardAll(l);
+        CHECK(looped.size() == 12);
+        CHECK(std::includes(looped.begin(), looped.end(), before.begin(), before.end()));
+        l.run("item.set", R"({"item": "it_1", "loop": false})");
+        CHECK(heardAll(l) == before);
+    }
+    SUBCASE("a slip and a playrate change keep the context beats") {
+        l.run("take.set", R"({"take": "tk_1", "start_offset": 1})");
+        sameContext();
+        l.run("take.set", R"({"take": "tk_1", "playrate": 2})");
+        sameContext();
+    }
+    SUBCASE("a move sounds as the new place says") {
+        l.run("item.move", R"({"item": "it_1", "position": 16})");
+        CHECK(heardAll(l) == underF);
+        sameContext();
+    }
+    SUBCASE("a duplicate sounds as the new place says") {
+        l.run("item.duplicate", R"({"item": "it_1", "to": 16})");
+        Heard want = before;
+        addAll(want, underF);
+        CHECK(heardAll(l) == want);
+        sameContext();
+    }
+    SUBCASE("a paste sounds as the new place says") {
+        l.run("item.paste", R"({"items": [{"item": "it_1", "track": "tr_1", "position": 16}]})");
+        Heard want = before;
+        addAll(want, underF);
+        CHECK(heardAll(l) == want);
+        sameContext();
+    }
+    SUBCASE("a duplicated track sounds as the original") {
+        l.run("track.duplicate", R"({"tracks": ["tr_1"]})");
+        Heard want = before;
+        addAll(want, before);
+        CHECK(heardAll(l) == want);
+        sameContext();
+    }
+    SUBCASE("exploding takes onto tracks, and extracting one") {
+        l.run("take.add", R"({"item": "it_1", "from": "tk_1"})");
+        const model::Id second = l.head().items.find(id("it_1"))->takes.at(1);
+        SUBCASE("explode") {
+            l.run("item.explode-takes", R"({"item": "it_1"})");
+            Heard want = before;
+            addAll(want, before);
+            CHECK(heardAll(l) == want);
+            sameContext();
+        }
+        SUBCASE("extract") {
+            l.run("take.extract",
+                  R"({"take": ")" + second.str() + R"(", "track": "tr_1", "position": 16})");
+            Heard want = before;
+            addAll(want, underF);
+            CHECK(heardAll(l) == want);
+            sameContext();
+        }
+    }
+}
+
+TEST_CASE("a split of a looped item laid from a clip, past its first pass, keeps what sounds") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("key.set", R"({"at": 1.25, "tonic": "F", "scale": "major"})");
+    // Two bars, two keys: its second bar reads A minor, so a part cut at its second pass sounds
+    // wrong the moment its context beat is off by the cycle it skipped.
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "name": "Two bars",
+                          "notation": "voice bass; 1: C2:q E2:q G2:q C3:q; 2: C2:q E2:q G2:q C3:q",
+                          "context": "1: key C major ~:w\n2: key A minor ~:w", "follow": "key"})");
+    l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const std::string laid = [&] {
+        for (const auto& e : l.head().items)
+            if (model::itemSpan(l.head(), *e.value).startBeat == 16.0) return e.id.str();
+        return std::string();
+    }();
+    REQUIRE_FALSE(laid.empty());
+    const Heard before = heardAll(l);
+    const auto placesBefore = contextPlaces(l);
+    REQUIRE(before.size() >= 16);
+    // The two bars' notes differ in pitch where the take's key differs, so the cycle matters.
+    SUBCASE("between notes, in the second pass") {
+        l.run("item.split", R"({"item": ")" + laid + R"(", "at": 26})");
+        CHECK(heardAll(l) == before);
+    }
+    SUBCASE("through a held note, in the second pass") {
+        l.run("item.split", R"({"item": ")" + laid + R"(", "at": 26.5})");
+        Heard want = before;
+        // The note struck at 26 is heard again from the cut, as it sounded at 26.
+        for (const auto& h : before)
+            if (h.first == 26 * 960) want.emplace_back(26.5 * 960, h.second);
+        std::sort(want.begin(), want.end());
+        CHECK(heardAll(l) == want);
+    }
+    for (const auto& p : contextPlaces(l)) CHECK(placesBefore.count(p) == 1);
+}
+
 TEST_CASE("take.bake replays on another branch with the pitches the user heard") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
