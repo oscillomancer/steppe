@@ -61,6 +61,13 @@ test → Run workflow, or
 Choices are `linux`, `macos`, `windows`, and `all` (the default).
 Ordinary branch pushes never start a build.
 
+An iteration run may narrow itself with `-f targets='engine.tests'` (build
+only these) and `-f tests='^engine\.tests\.test_app$'` (a CTest regex). To chase an
+intermittent failure, `-f repeat=<n>` reruns each selected test until it
+fails, at most n times, and `-f scribble=true` junk-fills fresh and freed
+heap memory (`MallocPreScribble`/`MallocScribble` on macOS, `MALLOC_PERTURB_`
+on Linux; nothing on Windows). A run that gates a merge uses none of them.
+
 A deliberate CI tag also starts a run:
 
 ```sh
