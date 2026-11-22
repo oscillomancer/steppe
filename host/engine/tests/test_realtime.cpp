@@ -4460,6 +4460,49 @@ TEST_CASE("a loop shorter than a render block still lets the renderer get its le
     engine.stop();
 }
 
+TEST_CASE("a loop too short for a render block in the rings still starts, as with room to spare" *
+          doctest::description("rt")) {
+    // With a 10 ms render-ahead time the rings hold 4 chunks; a 200-frame
+    // loop makes every chunk 200 frames, so they fill at 800 frames, short
+    // of the whole render block (1024) a start's pre-roll waits for. The
+    // renderer then waits for room, and the start must not wait for it.
+    for (bool split : {false, true}) {
+        CAPTURE(split);
+        const auto session = split ? frontierSession() : synthSession(-12.0, nullptr, 2);
+        const auto play = [&](double aheadMs, DummyBackend& backend) {
+            auto pool = makePool();
+            MediaCache media;
+            Engine engine(pool, media, {.renderAheadMs = aheadMs, .workers = 1});
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 64, .inputs = 2}));
+            REQUIRE(engine.load(session));
+            REQUIRE(EngineTestAccess::latestPlan(engine).split == split);
+            engine.setLoop(0.0, 200.0 / 48000.0, true);
+            engine.play();
+            // Each cycle waits on the renderer's state: its whole lead, or no
+            // room left. The deadline only reports a hang.
+            const auto hang = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            for (int cycle = 0; cycle < 64; ++cycle) {
+                while (EngineTestAccess::lead(engine) < EngineTestAccess::aheadFrames(engine) &&
+                       !EngineTestAccess::rendererWaitsForRoom(engine)) {
+                    REQUIRE_MESSAGE(std::chrono::steady_clock::now() < hang, "renderer hung");
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+                backend.run(1);
+            }
+            CHECK(engine.anticipationMisses() == 0);
+            engine.stop();
+        };
+        DummyBackend roomy({.mode = DummyBackend::Mode::Manual, .captureFrames = 4096});
+        play(200.0, roomy);
+        DummyBackend tight({.mode = DummyBackend::Mode::Manual, .captureFrames = 4096});
+        play(10.0, tight);
+        const auto& reference = roomy.capture().channels[0];
+        REQUIRE(std::any_of(reference.begin(), reference.end(), [](float v) { return v != 0; }));
+        for (std::size_t c = 0; c < 2; ++c)
+            CHECK((tight.capture().channels[c] == roomy.capture().channels[c]));
+    }
+}
+
 TEST_CASE("renderer waits for full master and frontier rings to release a chunk") {
     auto pool = makePool();
     MediaCache media;

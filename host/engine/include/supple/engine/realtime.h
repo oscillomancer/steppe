@@ -699,7 +699,9 @@ class Engine {
     void awaitTransport(double timeoutSeconds = 1.0);
     // Anticipative, main thread: waits until `frames` of the current
     // transport epoch are rendered ahead of the playhead (at most the
-    // render-ahead amount), or the transport is paused. False on timeout.
+    // render-ahead amount; before the epoch is heard, at least the whole
+    // render block its pre-roll waits for), until the renderer can hold no
+    // more, or the transport is paused. False on timeout.
     bool awaitRendered(std::int64_t frames, double timeoutSeconds = 10.0);
     // Main thread (tests, tools): waits until the renderer has adopted the
     // newest plan and queued it for the callback, whose next cycle adopts it
@@ -1406,6 +1408,8 @@ class Engine {
     std::atomic<bool> rendererQuit_{false}, hold_{false}, holdSeen_{false};
     // Tests: holdRendererFrom().
     std::atomic<std::int64_t> holdFrom_{INT64_MAX};
+    // aheadFrames_ for the callback's pre-roll: set after the device starts.
+    std::atomic<std::int64_t> primeAhead_{INT64_MAX};
     std::int64_t aheadFrames_ = 0;                 // render-ahead target
     std::atomic<std::uint64_t> epoch_{0};          // main thread: seek, pause, setLoop
     std::atomic<std::uint64_t> epochDone_{0};      // renderer: the epoch it has relocated for

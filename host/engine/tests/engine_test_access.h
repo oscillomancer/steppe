@@ -86,6 +86,10 @@ struct EngineTestAccess {
         return e.renderedStream_.load() - e.playedStream(e.epochDone_.load());
     }
     static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
+    // The renderer waits for the callback to free room (a ring or its lead).
+    static bool rendererWaitsForRoom(const Engine& e) {
+        return e.rendererWakeAt_.load() != INT64_MAX;
+    }
     static std::size_t pooledRings(const Engine& e) { return e.ringPool_.size(); }
     static std::uint64_t callbackGeneration(const Engine& e) { return e.callbackGen_.load(); }
     // Whether the plan the callback plays is still held (manual backends).

@@ -123,3 +123,8 @@ processing"), and a cycle that plays audio and then runs short counts a miss,
 the cycle that starts the play included. A launch from stop starts about one
 render block's time later; a plain start, a locate and a loop wrap do not
 change.
+
+The pre-roll also ends when the renderer waits for room: a loop shorter than
+the rings' chunks fills them before a whole block is rendered, and the start
+must not wait for more than they hold. (Added 2026-11-22: the first form waited
+for the block there and never started.)
