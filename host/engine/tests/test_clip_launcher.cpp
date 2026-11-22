@@ -2663,6 +2663,61 @@ TEST_CASE("edits that touch no phase keep each note's context beat, and sound as
     }
 }
 
+TEST_CASE("edits keep a take's non-zero phase, and its second key (round 88 K6)") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("key.set", R"({"at": 20.25, "tonic": "F", "scale": "major"})");
+    // Two bars of quarter notes from beat 16, cut at 17: the right part starts a beat into its
+    // source, and its own context (bar 1 C major, bar 2 A minor) gives it a phase of -1.
+    const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "notation":
+        "voice bass; 1: C2:q E2:q G2:q C3:q; 2: C2:q E2:q G2:q C3:q"})");
+    const std::string whole = laid.find("item")->asString();
+    l.run("item.split", R"({"item": ")" + whole + R"(", "at": 17})");
+    model::Id right;
+    for (const auto& e : l.head().items)
+        if (e.id != id("it_1") && e.id != id(whole.c_str())) right = e.id;
+    REQUIRE(right.n != 0);
+    const model::Id take = *l.head().items.find(right)->activeTake;
+    l.run("take.set",
+          R"({"take": ")" + take.str() +
+              R"(", "context": "1: key C major ~:w\n2: key A minor ~:w", "follow": "key"})");
+    REQUIRE(l.head().takes.find(take)->contextPhase == -1.0);  // not 0: a reset would show
+    const Heard before = heardAll(l);
+    const auto placesBefore = contextPlaces(l);
+    const auto sameContext = [&] {
+        for (const auto& p : contextPlaces(l)) CHECK(placesBefore.count(p) == 1);
+    };
+    SUBCASE("a split between notes") {
+        l.run("item.split", R"({"item": ")" + right.str() + R"(", "at": 19})");
+        CHECK(heardAll(l) == before);
+        sameContext();
+    }
+    SUBCASE("a split through a held note") {
+        l.run("item.split", R"({"item": ")" + right.str() + R"(", "at": 18.5})");
+        Heard want = before;
+        for (const auto& h : before)
+            if (h.first == 18 * 960) want.emplace_back(18.5 * 960, h.second);
+        std::sort(want.begin(), want.end());
+        CHECK(heardAll(l) == want);
+        sameContext();
+    }
+    SUBCASE("a trim from the left, as two calls") {
+        l.run("item.set", R"({"item": ")" + right.str() + R"(", "position": 19, "length": 5})");
+        l.run("take.set", R"({"take": ")" + take.str() + R"(", "start_offset": 3})");
+        Heard want;
+        for (const auto& h : before)
+            if (h.first < 17 * 960 || h.first >= 19 * 960) want.push_back(h);
+        CHECK(heardAll(l) == want);
+        sameContext();
+    }
+    SUBCASE("a duplicate and a move keep the context beats, and follow the new place") {
+        l.run("item.duplicate", R"({"item": ")" + right.str() + R"(", "to": 40})");
+        sameContext();
+        l.run("item.move", R"({"item": ")" + right.str() + R"(", "position": 56})");
+        sameContext();
+    }
+}
+
 TEST_CASE("a clip made from an item whose context is longer than a clip holds says so (K4)") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
