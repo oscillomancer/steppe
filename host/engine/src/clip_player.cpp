@@ -83,8 +83,13 @@ void midiEvents(ClipPlayer& pl, const model::Clip& clip, Id clipId, const model:
             if (!(off - at > 1e-9)) continue;
             ClipEvent a;
             a.beat = a.start = at;
-            a.origin = {
-                kClipOrigin | clipId.n, clip.activeTake->n, take.source->n, n.start, r, false};
+            a.origin = {kClipOrigin | clipId.n,
+                        clip.activeTake->n,
+                        take.source->n,
+                        n.start,
+                        r,
+                        false,
+                        static_cast<std::int16_t>(n.pitch)};
             a.event.kind = host::Event::Kind::NoteOn;
             a.event.channel = n.channel;
             a.event.key = n.pitch;

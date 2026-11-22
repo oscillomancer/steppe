@@ -930,7 +930,7 @@ specified here as it lands); so far:
   and checks that both leave the plan.
 - **Note sources are built by sorting, once per node** (step 2). A note's
   ordinal counts the earlier note-ons with the same origin, port, channel
-  and key: `prepare` sorts a stage's note-ons by that address and arrival
+  and key (a keyless note's written key, below): `prepare` sorts a stage's note-ons by that address and arrival
   and numbers each run, where it kept a map of counts per stage, and the
   chain's note target copies the MIDI stage's sources (the same events). A
   test compares every stage's sources and index with the map-based build.
@@ -1193,9 +1193,13 @@ results.
 - **`launch.state`** (X4a): each listed track gains `followed: "none" | "key" |
   "chords"`, the outcome the plan uses for the clip it plays or has queued,
   omitted when it plays the arrangement or nothing. `launch.unfollowed` goes.
-- **Note identity.** A note origin gains `followed`; the rules key on it or on
-  `kClipOrigin` (`NoteOrigin::keyless`). For such a note:
-  - a plan swap carries a held voice by its address without the key;
+- **Note identity.** A note origin gains `followed` and `written` (its source
+  note's written key); the rules key on `followed` or on `kClipOrigin`
+  (`NoteOrigin::keyless`). For such a note:
+  - its address (the one note sources are sorted, numbered and carried by)
+    holds its written key in place of the key it sounds at, so a plan swap
+    carries each held voice to its own source, a chord's notes included,
+    which share the rest of their address (review round 86 H1);
   - `prepareNoteIds` pairs its note-off by source id, port and channel, taking
     the held voice's key.
   So a context edit while a note sounds lets it play on to its note-off at the
