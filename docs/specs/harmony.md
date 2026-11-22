@@ -229,9 +229,32 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
      - Otherwise the target class is `(pc(pitch) + iv(from.root, to.root))
        mod 12`.
    - **Octave.** The result is the pitch of the target class nearest to the
-     reference: `follow(pitch, from, to, Key)` computed without step 7, or
-     `pitch + iv(from.root, to.root)` when that gives `Copy`. A tie goes
-     down. By `Chords`.
+     reference `pitch + iv(from.root, to.root)`. A tie goes down. By `Chords`.
+     *(Amended 2026-11-21, ADR-0098 note E1: the reference was the Key-mode
+     result, which could split one figure across octaves.)*
+     - The reference is the block shift: the written pitch moved by the
+       roots' nearest interval. Each note takes its target class nearest its
+       own reference.
+     - Chord tones give one voicing for one pair of chords whatever the keys:
+       their targets depend on the chords only. A note kept by degree depends
+       on the keys as well: A4 over Bm in D major sounds A4 under B7 in E
+       minor and A#4 under B7 in B major.
+     - Neighbouring notes can cross where their targets cross, so a figure
+       need not keep its contour: A4 B4 over Cmaj7 in C major sounds Ab4 Gb4
+       under Cdim in C minor (A kept by degree, B the major seventh going to
+       the diminished fifth).
+     - A chord tone lands at most 5 semitones from the block (a sus4's fourth
+       on a chord with no third, a major seventh on a diminished fifth). A note
+       kept by degree lands at most 2 from it in the diatonic and pentatonic
+       scales, and 4 in blues.
+     - Known limit: a slash bass that is not a tone lies a tritone from the
+       block when the two basses sit a tritone apart above their roots (C/F#
+       → G, C/D → G/Eb). It goes down, and so does every note of its class, a
+       melody note included: `follow` maps each note on its own and does not
+       know which note is lowest.
+     - So a Bm figure B4 A4 F#4 D4 written in D major sounds B4 A4 F#4 D#4
+       under B7, in A minor as in E minor. A cell A4 C5 E5 G5 over Am7 sounds
+       as written over Am7, in any key.
    - **Duplicates.** `follow` maps each note on its own, so two notes may map
      to one pitch at one start: Cmaj7 voiced C4 E4 G4 B4 → C5 gives C4 C4 G4
      G4. A caller that writes the notes keeps one of identical notes, as every
@@ -273,5 +296,11 @@ X4 builds the engine's pitch tables from it.
   - C/E → G/D (E → B);
   - C over Dm (C major) → Em (D major) gives D;
   - A over G7 (C major) → A7 (D minor) gives Bb;
-  - the octave tie (keys C major → F# major, chord C held: C4 → C3);
+  - the octave by the roots (keys C major → F# major, chord C held: C4 stays
+    C4; chord C → F#: C4 → F#3, the tie down);
+  - a Bm figure B4 A4 F#4 D4 in D major → B7 in A minor, in E minor and with
+    no key: B4 A4 F#4 D#4;
+  - A4 C5 E5 G5 over Am7, written in any of 24 keys, → Am7 in E minor and in A
+    minor: unchanged;
+  - a chord tone's result is the same for any keys on either side;
   - a missing chord falls back to Key mode.
