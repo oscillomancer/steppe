@@ -2383,6 +2383,28 @@ TEST_CASE("item.split, trims and duplicate carry a take's context with each note
     CHECK(l.head().items.size() == 3);
 }
 
+TEST_CASE("take.set context on a part cut from a take reads bar 1 at the item's start") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    l.run("item.split", R"({"item": "it_1", "at": 2})");
+    // The right part's take begins two beats into its source: its phase is not 0 now.
+    model::Id right;
+    for (const auto& e : l.head().items)
+        if (e.id != id("it_1")) right = e.id;
+    REQUIRE(right.n != 0);
+    const model::Id take = *l.head().items.find(right)->activeTake;
+    REQUIRE(l.head().takes.find(take)->startOffset == 2.0);
+    l.run("take.set", R"({"take": ")" + take.str() + R"(", "context": "1: key D minor ~:w"})");
+    CHECK(l.head().takes.find(take)->contextPhase == -2.0);
+    const double start = model::itemSpan(l.head(), *l.head().items.find(right)).startBeat;
+    const auto place = model::placeAt(l.head(), right, start);
+    REQUIRE(place.has_value());
+    CHECK(place->contextBeat == doctest::Approx(0.0));
+    // The text's key holds at the part's first beat: the same text on a fresh item says the same.
+    CHECK(place->take.key.has_value());
+}
+
 TEST_CASE("take.bake replays on another branch with the pitches the user heard") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");

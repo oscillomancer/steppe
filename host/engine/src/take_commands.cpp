@@ -585,6 +585,10 @@ void registerTakeCommands(cmd::Registry& registry) {
                                                               original->contextPeriod, "/context");
                     if (!points) return std::move(points).error();
                     shaped->context = std::move(*points);
+                    // The text's bar 1 is the item's start: the context beat there is 0, so the
+                    // phase cancels the offset (a part cut from a longer take starts inside it).
+                    shaped->contextPhase =
+                        -(a.startOffset ? *a.startOffset : original->startOffset);
                 }
                 if (a.follow) {
                     shaped->follow = *a.follow;
