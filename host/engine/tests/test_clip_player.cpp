@@ -1814,6 +1814,102 @@ TEST_CASE("a clip take's own envelope commits as heard over a short span across 
     }
 }
 
+TEST_CASE("a clip take's own envelope commits as heard from within a pass" *
+          doctest::description("rt")) {
+    // Found with round 87's H5 MIDI test: a capture from 0.25 to 0.625 of a
+    // pass lays one item from that phase that never reaches the period's end.
+    // Its take's volume ramp is laid from the value heard at 0.25; shifted
+    // alone, its first point fell before the item and the commit was refused
+    // (time.range).
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        latentClip(p);
+        p.run("clip.set", R"({"clip": "cl_1", "length": 1})");  // the ramp's 48000 frames
+        auto env = j(R"({"param": "volume", "points": [{"seconds": 0, "value": "-24 dB"},
+                                                       {"seconds": 1, "value": 0}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: frame 96000
+        live.until(96000 + 12000);                    // 0.25 into the first pass
+        p.run("launch.capture", R"({"on": true})");
+        live.until(96000 + 30000);  // 0.625 into it
+        p.run("launch.capture", R"({"on": false})");
+        live.until(96000 + 48000);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const auto from = std::int64_t(done["from"].asDouble() * double(kBeat));
+        const auto to = std::int64_t(done["to"].asDouble() * double(kBeat));
+        REQUIRE(from > 96000);  // within the pass
+        REQUIRE(to < 96000 + 48000);
+        const std::vector<float> committed = arrangement(p, 5.0);
+        const auto [worst, first] =
+            compare(heard, live.latency, committed, from + 480, to - 480, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+    }
+}
+
+TEST_CASE("a MIDI clip take's envelope commits as heard over a short span across the period" *
+          doctest::description("rt")) {
+    // H5's MIDI branch (review round 87): the same capture of a MIDI clip,
+    // C3s on its take's sine through its 2-beat (1 s) pass, under the same
+    // volume ramp. The clip is shorter than its source, so the commit lays
+    // an item per period, the first from 1.5 beats in.
+    // The committed envelope restarts at the pass boundary as heard.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        // Eighths, so the capture (1.5 beats in) starts on a note-on: a
+        // committed item that starts mid-note retriggers it, unlike the clip.
+        p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1",
+                              "notation": "voice a; 1: C3:e C3:e C3:e C3:e r:h"})");
+        p.run("clip.set", R"({"clip": "cl_1", "length": 2})");
+        auto fx = j(R"({"plugin": "com.suppleaudio.test.sine"})");  // a MIDI take's envelope
+        fx["take"] = takeOf(p, "cl_1");                             // needs its own instrument
+        p.runArgs("fx.add", fx);
+        auto env = j(R"({"param": "volume", "points": [{"beat": 0, "value": "-24 dB"},
+                                                       {"beat": 2, "value": 0}]})");
+        env["take"] = takeOf(p, "cl_1");
+        p.runArgs("env.add", env);
+        const std::int64_t frames = 48000 * 5 + 16384;
+        AppLive live(p, options, 128, frames);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: frame 96000
+        live.until(96000 + 36000);                    // 0.75 into the first pass
+        p.run("launch.capture", R"({"on": true})");
+        live.until(96000 + 60000);  // 0.25 into the second
+        p.run("launch.capture", R"({"on": false})");
+        live.until(96000 + 72000);
+        json::Value done = p.run("launch.commit", "{}");
+        const std::vector<float> heard = live.stop();
+        const auto from = std::int64_t(done["from"].asDouble() * double(kBeat));
+        const auto to = std::int64_t(done["to"].asDouble() * double(kBeat));
+        REQUIRE(from < 96000 + 48000);  // the span crosses the pass boundary
+        REQUIRE(to > 96000 + 48000);
+        REQUIRE(to - from < 48000);  // in less than a period
+        const std::vector<float> committed = arrangement(p, 5.0);
+        const auto [worst, first] =
+            compare(heard, live.latency, committed, from + 480, to - 480, 1e-6);
+        CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+        // The second pass starts near -24 dB again, against 0 dB at the
+        // first's end.
+        const auto peak = [&](std::int64_t a, std::int64_t b) {
+            float most = 0;
+            for (std::int64_t t = a; t < b; ++t)
+                most = std::max(most, std::fabs(committed[std::size_t(t)]));
+            return most;
+        };
+        const float ending = peak(96000 + 48000 - 1200, 96000 + 48000 - 600);
+        REQUIRE(ending > 0.0f);
+        CHECK(peak(96000 + 48000 + 600, 96000 + 48000 + 1200) < 0.2f * ending);
+    }
+}
+
 TEST_CASE("launch.commit lays a clip whose loop plays only drums as following nothing") {
     // Round 86 H8: cl_1 (D minor, follow key) is two beats long; they hold
     // only channel-10 notes, and its source's pitched D3 lies past the clip's
