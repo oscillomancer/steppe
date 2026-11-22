@@ -917,11 +917,22 @@ the boundary.
   ran it over 240 device frames; at 0.75 a commit then differed from what
   played by up to 0.023 through each switch.) D's and C's clip fades
   follow the same rule.
+- **A clip laid one item per period reads each period alone** on the
+  playrate path, always: its tape converter's source is silent outside the
+  output frame's period, as that period's committed item is outside its
+  span, so after a wrap it no longer reads the previous pass's end (which
+  rang for about 160 frames, up to 0.0034, at 0.75). The converter keeps no
+  state, so a quantum crossing a period is read twice, into a second buffer
+  held with the reader; nothing is allocated or primed at a wrap. A clip
+  laid as one looped item reads across its wraps, as that item does.
 
 **Consequences.** A capture under a constant rate, an envelope, a rate edit
 over a loop wrap, a glide back to 1 and a clock chase commits every launch
-on its song sample, in both executors. MIDI under a pitch-keeping rate
-commits equal to what played. The tests cover each, and the refusal and the
+on its song sample, in both executors. Its commit, rendered offline, equals
+what played exactly (worst difference 0) away from the switches'
+crossfades, audio and MIDI, under a constant 0.75 and under an envelope, at
+blocks 128 and 512, in both executors, through a clip's period wraps. MIDI
+under a pitch-keeping rate commits equal to what played. The tests cover each, and the refusal and the
 end for audio.
 
 ## Consequences

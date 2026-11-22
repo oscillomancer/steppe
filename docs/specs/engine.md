@@ -678,7 +678,12 @@ the same.*
     (`PlayerReader`): positions are the frames' unwrapped song positions,
     and its source folds them over the loop and maps them by the player's
     phase rule. It keeps no state between quanta, so a launch primes
-    nothing. Under a playrate that keeps the pitch an audio clip has no
+    nothing. A clip that a commit lays one item per period
+    (`clipLaysAsOneItem` false: its period is not its content's whole pass
+    from the start) reads each period alone, silent outside it, as that
+    item does, so the converter does not read across a period's wrap; a
+    quantum that crosses one is read again for its later frames
+    (`PlayerReader::later`). Under a playrate that keeps the pitch an audio clip has no
     player yet (step 1b): compile warns and its launch is refused with
     `launch.playrate`.
   - *Capture* runs in song time (above): placement gives each launch its

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "clip_launcher.h"
 #include "pan.h"
 #include "plan.h"
 #include "rack_runtime.h"
@@ -249,6 +250,7 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
         } else {
             pl.periodFrames = time::samplesAt(clip.length, p.rate);
             pl.loopOn = clip.loop.on && clip.loop.length > 0;
+            pl.periodItems = take && !clipLaysAsOneItem(s, clip, *take);
             pl.loopStartFrames = time::samplesAt(clip.loop.start, p.rate);
             pl.loopFrames = time::samplesAt(clip.loop.length, p.rate);
             if (pl.loopOn && pl.loopFrames <= 0) pl.loopOn = false;
@@ -508,6 +510,9 @@ struct PlayerSource {
     const PlayrateTimeline& timeline;
     std::int64_t anchor, pass;
     bool unanchored;
+    // A periodItems clip's period read alone (others outside it are silent,
+    // as outside its committed item); INT64_MIN: every period.
+    std::int64_t period = INT64_MIN;
     float sample(std::size_t channel, std::int64_t f) const SUPPLE_RT {
         const double song = double(f);
         const std::int64_t s =
@@ -515,6 +520,7 @@ struct PlayerSource {
         const bool anywhere = unanchored || timeline.cycle(song) > pass;
         const std::int64_t q = s - anchor;
         if ((q < 0 && (pl.once || !anywhere)) || (pl.once && q >= pl.periodFrames)) return 0;
+        if (period != INT64_MIN && periodOf(q) != period) return 0;
         const std::int64_t phase = (q % pl.periodFrames + pl.periodFrames) % pl.periodFrames;
         const std::int64_t content = pl.loopOn ? pl.loopStartFrames + phase % pl.loopFrames : phase;
         const auto& ch = pl.audio.data->channels;
@@ -522,6 +528,10 @@ struct PlayerSource {
         const std::int64_t frame = pl.audio.offset + content;
         if (frame < 0 || frame >= static_cast<std::int64_t>(data.size())) return 0;
         return data[static_cast<std::size_t>(frame)];
+    }
+    // Which period song frame `q` from the anchor falls in.
+    std::int64_t periodOf(std::int64_t q) const SUPPLE_RT {
+        return q >= 0 ? q / pl.periodFrames : -((-q - 1) / pl.periodFrames) - 1;
     }
     static const float* read(const void* context, std::size_t channel, std::int64_t first,
                              std::span<float> scratch) noexcept {
@@ -545,11 +555,34 @@ const RateClipState& playerQuantum(PlayerReader& r, const ClipPlayer& pl, std::i
     r.anchor = anchor;
     r.unanchored = unanchored;
     r.pass = pass;
-    const PlayerSource source{pl, timeline, anchor, pass, unanchored};
+    PlayerSource source{pl, timeline, anchor, pass, unanchored};
     std::array<double, kRateQuantum + 1> positions;
     for (std::size_t j = 0; j < positions.size(); ++j)
         positions[j] = timeline.phase(q + static_cast<std::int64_t>(j));
-    if (!st.tape.process({&source, PlayerSource::read, 2}, positions, st.pointers)) {
+    // A periodItems clip: each output frame reads its own period alone, as
+    // the committed item there would (S3 B). The tape reader keeps no state
+    // between calls, so a quantum crossing a period reads it again for the
+    // later frames.
+    const auto periodAt = [&](std::size_t j) SUPPLE_RT {
+        const double song = timeline.wrapped(positions[j]);
+        return source.periodOf(static_cast<std::int64_t>(std::floor(song)) - anchor);
+    };
+    if (pl.periodItems) source.period = periodAt(0);
+    bool ok = st.tape.process({&source, PlayerSource::read, 2}, positions, st.pointers);
+    if (ok && pl.periodItems) {
+        const std::int64_t first = source.period;
+        std::array<float*, 2> later{r.later[0].data(), r.later[1].data()};
+        for (std::size_t j = 1; j < kRateQuantum; ++j) {
+            const std::int64_t here = periodAt(j);
+            if (here == first) continue;
+            if (here != source.period) {
+                source.period = here;
+                ok = ok && st.tape.process({&source, PlayerSource::read, 2}, positions, later);
+            }
+            for (std::size_t c = 0; c < 2; ++c) st.output[c][j] = r.later[c][j];
+        }
+    }
+    if (!ok) {
         st.failed = true;
         for (auto& channel : st.output) channel.fill(0);
     }

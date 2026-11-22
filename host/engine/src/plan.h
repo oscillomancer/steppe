@@ -831,6 +831,9 @@ struct ClipPlayer;
 // reader keeps no state between quanta).
 struct PlayerReader {
     std::unique_ptr<RateClipState> state;
+    // A quantum crossing a period of a ClipPlayer::periodItems clip: the
+    // later period's reading, for its frames (playerQuantum).
+    std::array<std::array<float, kRateQuantum>, 2> later{};
     const ClipPlayer* player = nullptr;
     std::int64_t anchor = 0, pass = 0;
     bool unanchored = false;
@@ -880,6 +883,9 @@ struct ClipPlayer {
     Clip audio;
     std::int64_t periodFrames = 0, loopStartFrames = 0, loopFrames = 0;
     bool loopOn = false;
+    // launch.commit lays it one item per period (clipLaysAsOneItem false):
+    // on a playrate plan each period is read alone, as its item is (S3 B).
+    bool periodItems = false;
     // MIDI: the period in beats and its events, sorted by beat (offs first at
     // a beat), every pass of the loop window already laid out.
     double periodBeats = 0;

@@ -295,7 +295,10 @@ TEST_CASE("a capture under a master playrate commits by the song positions heard
     // scene on bar 2, tr_1 back to the arrangement and tr_2 stopped on bar 3,
     // cl_2 again on bar 4, under a constant 0.75 and under the envelope
     // (tape): the performance holds the launches at song samples 96000,
-    // 192000 and 288000.
+    // 192000 and 288000, and the committed arrangement, rendered offline at
+    // the same rate, is exactly what played live away from the switches'
+    // crossfades, through cl_2's period wraps (0.75 s of a 1 s ramp, one item
+    // per period, at song 132000 and 168000).
     for (const bool envelope : {false, true})
         for (const std::uint32_t block : {128u, 512u})
             for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
@@ -322,7 +325,10 @@ TEST_CASE("a capture under a master playrate commits by the song positions heard
                 p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 4
                 logged(5);
                 live.until((live.cycles + 200) * block);
+                const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
+                const std::vector<float> plain = arrangement(p, 12.0, block);
                 json::Value done = p.run("launch.commit", "{}");
+                const std::int64_t ended = live.cycles * block;  // the heard stream, at most
                 CHECK(done["from"].asDouble() == 0);
                 json::Value history = p.run("log.list", R"({"limit": 1})");
                 const json::Value& last = history["entries"].at(history["entries"].size() - 1);
@@ -335,7 +341,31 @@ TEST_CASE("a capture under a master playrate commits by the song positions heard
                     CHECK(launches.at(k).find("frame")->asInt() == want);
                     CHECK(launches.at(k).find("anchor")->asInt() == want);
                 }
-                live.stop();
+                const std::vector<float> heard = live.stop();
+                const std::vector<float> committed = arrangement(p, 12.0, block);
+                const std::int64_t end = std::min<std::int64_t>(
+                    {ended - std::int64_t(live.latency) - block, std::int64_t(committed.size()),
+                     std::int64_t(heard.size()) - std::int64_t(live.latency)});
+                // Past cl_2's second wrap (song 168000: device 224000 at
+                // 0.75, about 206800 under the envelope).
+                REQUIRE(end > 230000);
+                // Within a crossfade (240 song samples: at most 400 device
+                // frames at 0.6, and the latent gain's shift), or as near the
+                // capture's end as the tape kernel reads (128 song samples:
+                // the committed items end there, live read on), and away.
+                double fading = 0, away = 0;
+                for (std::int64_t k = 0; k < end; ++k) {
+                    const double d = std::fabs(double(heard[std::size_t(k + live.latency)]) -
+                                               double(committed[std::size_t(k)]));
+                    bool near = k >= end - 640;
+                    for (const LaunchLogEntry& e : log)
+                        near = near || (k >= e.runningFrame - 256 && k < e.runningFrame + 768);
+                    double& worst = near ? fading : away;
+                    worst = std::max(worst, d);
+                }
+                MESSAGE("worst within the crossfades and the end " << fading);
+                CHECK(away == 0.0);
+                CHECK(compare(heard, live.latency, plain, 0, end).first >= 0);
             }
 }
 
