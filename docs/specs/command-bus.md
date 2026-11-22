@@ -249,6 +249,7 @@ Registered by the library, `Kind::Edit`, `McpTool`.
 {
   "schema": "supple.command-registry/1.0",
   "product": "<name from product.h>", "version": "<version>",
+  "groups": { "<group>": "<its one line>", … },
   "commands": {
     "patch.merge@1": { "name": "patch.merge", "version": 1, "kind": "edit", "exposure": "mcp-tool",
                         "summary": "…", "description": "…", "tags": [...],
@@ -263,9 +264,15 @@ results checked by a drift test):
 
 - `mcpToolList(registry, bool allTools = false)` — dedicated MCP definitions (§4.2);
   false selects McpTool, true selects every non-Internal command.
-- `markdownReference(registry)` → `skill/generated/*-commands.md`: per command,
-  heading, summary, description, an args table (field, type, unit, range,
-  default, description), result shape, errors with hints, examples as JSON.
+- `markdownReference(registry)`: the whole reference as one text (`registry --markdown`): per
+  command, heading, summary, description, an args table (field, type, unit, range, default,
+  description), result shape, errors with hints, examples as JSON.
+- `markdownIndex(registry)` and `markdownGroup(registry, group)` split it by group, and
+  `writeMarkdownDirectory(registry, dir)` writes `index.md` and `<group>.md` for each group
+  with a public command → `skill/generated/{engine,sandbox}/` (`registry --markdown-dir`); the
+  drift tests compare the whole tree, its file list included.
+- `groupIndex`, `rowIndex` and `unknownGroup`: the answers `describe` and `registry --groups` /
+  `--group` give (§1.3, §4.2); not generated files.
 - `luaStubs(registry)` → LuaLS annotations (`skill/generated/*.lua`).
 
 ### 1.7 Command log
@@ -291,8 +298,9 @@ native offscreen renderer to succeed. The binary `dsp_player_export` fixture run
 
 ### 1.9 Error codes owned by the bus
 
-`command.unknown`, `command.version`, `command.invalid_args`,
-`command.bad_result`, `batch.step_failed`, `batch.bad_reference`,
+`command.unknown`, `command.version`, `command.invalid_args` (also an unknown
+`registry.list` `kind` or `tag`), `command.unknown_group` (a `group` that no public command
+has: `registry.list`, `registry.groups`, MCP `describe`), `command.bad_result`, `batch.step_failed`, `batch.bad_reference`,
 `batch.too_many_steps`, `batch.not_transactional` (an Action that is not
 transaction-safe inside a batch), `rpc.*` (§3), `mcp.*` (§4).
 

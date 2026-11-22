@@ -81,7 +81,8 @@ Result<std::pair<model::MidiSource, double>> notationSource(const model::Session
 }
 
 // One line per command group (the name before the first '.'), as the agent index shows it. A
-// group without a line, or a line without commands, fails engine.registry-groups.
+// group without a line, or a line without commands, fails the engine.tests case "every engine
+// command group has its line, and every line a group".
 void registerEngineGroups(cmd::Registry& registry) {
     registry.describeGroup("analyze",
                            "Analyze renders and tracks: compare, masking, loudness, spectra.");

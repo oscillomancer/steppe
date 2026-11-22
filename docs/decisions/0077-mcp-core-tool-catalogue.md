@@ -48,3 +48,10 @@ also gain shorter descriptions and omit output schemas, but retain their tools.
 [ADR-0079](0079-registry-index-exposure.md) adds exposure metadata to registry.list
 so the proxy fetches only selected dedicated-tool descriptions at startup and
 resolves other contracts on demand.
+
+### Describe index, two-level (2026-11-22)
+
+[ADR-0099](0099-three-step-describe-index.md) replaces the argument-free describe above:
+`describe {}` now lists the command groups, one line each, then a group's commands, then one
+command. The 25 KB single index and its budget are superseded; the core catalogue, `--tools`
+modes and the 60,000-byte frame are unchanged.
