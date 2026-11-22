@@ -6070,7 +6070,7 @@ TEST_CASE("forced background policies apply for benchmarks, within the same chec
 // The cases above size their pools to need five CPUs; native CI's runners have
 // three (macOS) and four (Windows). Default pools leave exactly two CPUs free, so
 // this one takes the elevated path on any machine with three, macOS's
-// self-applied one included.
+// self-applied one included (the renderer's alone on three, with no helpers).
 TEST_CASE("default pools run real-time below a real-time callback with three CPUs or more") {
     const int cpus = static_cast<int>(allowedCpuCount());
     const int threads = (cpus > 3 ? cpus - 3 : 0) + 1;  // the helpers and the renderer
@@ -6084,7 +6084,9 @@ TEST_CASE("default pools run real-time below a real-time callback with three CPU
     Engine engine(pool, media);  // default (Automatic) pools
     REQUIRE(engine.start(backend, {.blockSize = 128}));
     CHECK(engine.scheduling().renderer == elevated(Engine::kBackgroundPriority));
-    CHECK(engine.scheduling().background == elevated(Engine::kBackgroundPriority));
+    // `background` is the helpers' policy: on three CPUs the pool has none.
+    CHECK(engine.scheduling().background ==
+          (threads > 1 ? elevated(Engine::kBackgroundPriority) : ThreadPolicy{}));
     CHECK(engine.warnings().empty());
     REQUIRE(engine.load(parallelLive(2)));
     CHECK(engine.warnings().empty());
