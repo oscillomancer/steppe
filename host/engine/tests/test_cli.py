@@ -62,7 +62,16 @@ class McpTools(unittest.TestCase):
         branch.create branch.switch branch.diff branch.merge history.undo batch engine.start
     """.split())
 
-    def exchange(self, *options):
+    # What each level of describe may cost an agent, in compact JSON bytes (the real registry; a
+    # command or group that breaks one fails with its name). If a budget is reached, split the group
+    # or shorten summaries rather than raising it.
+    GROUPS_BUDGET = 5000       # describe {}: every group, one line each
+    GROUP_BUDGET = 4000        # describe {group}: one group's commands
+    COMMAND_BUDGET = 16000     # describe {command}: one command's whole contract
+    SEARCH_BUDGET = 6000       # describe {text|kind|tag}: at most 60 rows
+    MAX_GROUPS = 60
+
+    def exchange(self, extra, *options):
         requests = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                 "protocolVersion": "2025-06-18", "clientInfo": {"name": "cli-test"}}},
@@ -76,7 +85,7 @@ class McpTools(unittest.TestCase):
             ("describe", {"text": "fx.patch"}),
             ("exec", {"command": "engine.status"}),
             ("query", {"command": "engine.status"}),
-        ]:
+        ] + extra:
             requests.append({"jsonrpc": "2.0", "id": len(requests) + 1, "method": "tools/call",
                              "params": {"name": name, "arguments": arguments}})
         with tempfile.TemporaryDirectory(prefix="supple-mcp-tools-") as root:
@@ -85,15 +94,35 @@ class McpTools(unittest.TestCase):
                                     capture_output=True, text=True, check=True)
         return result.stdout.splitlines()
 
+    @staticmethod
+    def compact(value):
+        return len(json.dumps(value, separators=(",", ":")).encode())
+
     def test_core_and_all(self):
-        registry = json.loads(subprocess.run([BINARY, "registry"], capture_output=True,
-                                             text=True, check=True).stdout)["commands"]
+        document = json.loads(subprocess.run([BINARY, "registry"], capture_output=True,
+                                             text=True, check=True).stdout)
+        registry = document["commands"]
         public = {c["name"].replace(".", "_") for c in registry.values()
                   if c["exposure"] != "internal"}
+        public_names = sorted({c["name"] for c in registry.values()
+                               if c["exposure"] != "internal"})
+        by_group = {}
+        for name in public_names:
+            by_group.setdefault(name.split(".")[0], []).append(name)
+        groups = sorted(by_group)
         expected = {name.replace(".", "_") for name in self.CORE} | {"describe", "exec", "query"}
+        extra = [("describe", {"group": g}) for g in groups]
+        extra += [("describe", {"command": n}) for n in public_names]
+        extra += [("describe", {"group": "nonesuch"}), ("describe", {"text": "e"}),
+                  ("describe", {"text": "automate"}), ("describe", {"text": "AUTOMATE"}),
+                  ("describe", {"kind": "Query"}), ("describe", {"tag": "nonesuch"}),
+                  ("describe", {"text": "zzzzq"}), ("describe", {"group": "fxx"}),
+                  ("describe", {"text": "sidechain"}),
+                  ("describe", {"group": "fx", "text": "sidechain"}),
+                  ("describe", {"group": "tempo", "kind": "query"})]
         for options in [(), ("--tools", "core"), ("--tools", "all")]:
             with self.subTest(options=options):
-                lines = self.exchange(*options)
+                lines = self.exchange(extra, *options)
                 replies = [json.loads(line)["result"] for line in lines]
                 tools = replies[1]["tools"]
                 names = {t["name"] for t in tools}
@@ -105,18 +134,20 @@ class McpTools(unittest.TestCase):
                 for tool in tools:
                     if tool["name"] not in {"describe", "exec", "query"}:
                         self.assertNotIn("outputSchema", tool)
+                # Level 0: the groups, one line each.
                 index = replies[2]["structuredContent"]
-                self.assertEqual(index["columns"], ["name", "kind", "summary"])
-                rows = [row for group in index["namespaces"].values() for row in group]
-                self.assertEqual({r[0] for r in rows}, {c["name"] for c in registry.values()})
-                # What every agent pays, in context, on its first describe. If this is
-                # reached again, make the index two-level (namespaces first, rows on
-                # demand) rather than raising it once more.
-                self.assertLess(len(json.dumps(index, separators=(",", ":")).encode()), 27000)
-                for name, kind, summary in rows:
-                    self.assertIn(kind, {"query", "edit", "action"})
-                    self.assertLessEqual(len(summary), 80)
-                self.assertIn("fx.patch.list", {r[0] for r in rows})
+                self.assertEqual(index["columns"], ["group", "count", "summary"])
+                self.assertNotIn("namespaces", index)
+                self.assertLessEqual(len(index["groups"]), self.MAX_GROUPS)
+                self.assertLess(self.compact(index), self.GROUPS_BUDGET,
+                                "describe {} is over its budget: shorten group lines or merge groups")
+                self.assertEqual([row[0] for row in index["groups"]], groups)
+                self.assertEqual(index["groups"] and {row[0]: row[2] for row in index["groups"]},
+                                 {g: document["groups"][g] for g in groups})
+                for group, count, summary in index["groups"]:
+                    self.assertEqual(count, len(by_group[group]), group)
+                    self.assertTrue(summary, group)
+                    self.assertLessEqual(len(summary), 70, group)
                 detail = replies[3]["structuredContent"]
                 for field in ("args", "result", "errors", "examples"):
                     self.assertIn(field, detail)
@@ -124,12 +155,88 @@ class McpTools(unittest.TestCase):
                 for response in replies[4:6]:
                     self.assertTrue(response["isError"])
                     self.assertEqual(response["structuredContent"]["code"], "fx.unknown")
-                filtered = replies[6]["structuredContent"]["namespaces"]
-                self.assertEqual(set(filtered), {"fx"})
-                self.assertTrue(all("fx.patch" in r[0] for r in filtered["fx"]))
+                filtered = replies[6]["structuredContent"]
+                self.assertEqual(filtered["columns"], ["name", "kind", "summary"])
+                self.assertNotIn("truncated", filtered)
+                self.assertEqual(set(filtered["namespaces"]), {"fx"})
+                self.assertTrue(all("fx.patch" in r[0] for r in filtered["namespaces"]["fx"]))
+                self.assertLess(self.compact(filtered), self.SEARCH_BUDGET)
                 for response in replies[7:9]:
                     self.assertFalse(response.get("isError"))
                     self.assertFalse(response["structuredContent"]["running"])
+                # Level 1: each group's commands, every public command reachable.
+                rows = []
+                for offset, group in enumerate(groups):
+                    answer = replies[9 + offset]["structuredContent"]
+                    self.assertEqual(answer["columns"], ["name", "kind", "summary"], group)
+                    self.assertEqual(set(answer["namespaces"]), {group})
+                    self.assertNotIn("truncated", answer, group)
+                    self.assertLess(self.compact(answer), self.GROUP_BUDGET,
+                                    f"group {group} is over its budget: split it or shorten summaries")
+                    self.assertEqual([r[0] for r in answer["namespaces"][group]], by_group[group])
+                    for name, kind, summary in answer["namespaces"][group]:
+                        self.assertIn(kind, {"query", "edit", "action"})
+                        self.assertLessEqual(len(summary), 80, name)
+                    rows += answer["namespaces"][group]
+                self.assertEqual({r[0] for r in rows}, set(public_names))
+                self.assertIn("fx.patch.list", {r[0] for r in rows})
+                # Level 2: one command's whole contract, under its budget.
+                base = 9 + len(groups)
+                for offset, name in enumerate(public_names):
+                    answer = replies[base + offset]["structuredContent"]
+                    self.assertEqual(answer["name"], name)
+                    self.assertLess(self.compact(answer), self.COMMAND_BUDGET,
+                                    f"describe {name} is over its budget: shorten its schemas or docs")
+                base += len(public_names)
+                unknown = replies[base]
+                self.assertTrue(unknown["isError"])
+                self.assertEqual(unknown["structuredContent"]["code"], "command.unknown_group")
+                self.assertIn("fx", unknown["structuredContent"]["hint"])
+                # A search that matches more than the cap says so and names the way out.
+                capped = replies[base + 1]["structuredContent"]
+                self.assertTrue(capped["truncated"])
+                self.assertIn("narrow", capped["hint"])
+                self.assertEqual(sum(len(g) for g in capped["namespaces"].values()), 60)
+                self.assertLess(self.compact(capped), self.SEARCH_BUDGET)
+                # Search ignores the case of ASCII letters: summaries start with a capital.
+                for reply in (replies[base + 2], replies[base + 3]):
+                    found = reply["structuredContent"]["namespaces"]
+                    self.assertIn("env.add", {r[0] for rows in found.values() for r in rows})
+                # An invalid filter value is an error naming the valid ones; an empty answer
+                # says why and where to look.
+                kind, tag, empty, wrong = (replies[base + n] for n in (4, 5, 6, 7))
+                self.assertTrue(kind["isError"])
+                self.assertEqual(kind["structuredContent"]["code"], "command.invalid_args")
+                self.assertIn("query, edit, action", kind["structuredContent"]["hint"])
+                self.assertTrue(tag["isError"])
+                self.assertIn("modular", tag["structuredContent"]["hint"])
+                self.assertEqual(empty["structuredContent"]["namespaces"], {})
+                self.assertIn("describe {}", empty["structuredContent"]["hint"])
+                self.assertEqual(wrong["structuredContent"]["code"], "command.unknown_group")
+                self.assertIn("describe {}", wrong["structuredContent"]["hint"])
+                # A word only a group's line says leads there: sidechain is route's.
+                self.assertIn("route", replies[base + 8]["structuredContent"]["hint"])
+                # Inside the wrong group the pointer is to the right one; a filter without text
+                # gets a hint that fits it.
+                wrong_group = replies[base + 9]["structuredContent"]["hint"]
+                self.assertIn("in other groups", wrong_group)
+                self.assertIn("route", wrong_group)
+                no_text = replies[base + 10]["structuredContent"]["hint"]
+                self.assertNotIn("text searches", no_text)
+                self.assertIn("tempo", no_text)
+                self.assertIn("query", no_text)
+
+    def test_registry_groups_on_the_command_line(self):
+        groups = json.loads(subprocess.run([BINARY, "registry", "--groups"], capture_output=True,
+                                           text=True, check=True).stdout)
+        self.assertEqual(groups["columns"], ["group", "count", "summary"])
+        group = json.loads(subprocess.run([BINARY, "registry", "--group", "fx"],
+                                          capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(set(group["namespaces"]), {"fx"})
+        wrong = subprocess.run([BINARY, "registry", "--group", "nonesuch"],
+                               capture_output=True, text=True, check=False)
+        self.assertNotEqual(wrong.returncode, 0)
+        self.assertEqual(json.loads(wrong.stdout)["code"], "command.unknown_group")
 
     def test_invalid_tools_option(self):
         for options in [("--tools",), ("--tools", "other")]:

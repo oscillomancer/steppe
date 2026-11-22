@@ -376,7 +376,7 @@ TEST_CASE("unknown commands and wrong argument types are the bus's own errors") 
     REQUIRE(!unknown);
     CHECK(unknown.error().code == "command.unknown");
     CHECK(unknown.error().message == "unknown command \"toy.nope\"");
-    CHECK(!unknown.error().hint.empty());  // "use registry.list" or a suggestion
+    CHECK(!unknown.error().hint.empty());  // a suggestion, or the describe walk
 
     auto typed = scene.run(R"(q.toy.add{value = "three"})");
     REQUIRE(!typed);

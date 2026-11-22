@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <set>
 #include <thread>
 using namespace supple;
 using namespace supple::cmd;
@@ -292,6 +294,241 @@ TEST_CASE("batch atomicity and references") {
     many["steps"] = json::Value::array();
     for (int i = 0; i < 257; ++i) many["steps"].push_back(obj("{\"command\":\"toy.get\"}"));
     CHECK(call(dispatcher, "batch", many).error().code == "batch.too_many_steps");
+}
+TEST_CASE("commands are grouped by name prefix, each group with its one line") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to and read.");
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    auto groups = call(dispatcher, "registry.groups");
+    REQUIRE(groups);
+    std::map<std::string, std::pair<long long, std::string>> byName;
+    for (const auto& entry : groups->find("groups")->asArray())
+        byName[entry.find("name")->asString()] = {entry.find("count")->asInt(),
+                                                  entry.find("summary")->asString()};
+    // The library's own groups and the declared one; an Internal command is not counted.
+    CHECK(byName.count("registry") == 1);
+    CHECK(byName.at("registry").first == 3);
+    CHECK(byName.at("batch").first == 1);
+    CHECK(byName.at("toy").second == "A counter that tests add to and read.");
+    for (const auto& [name, line] : byName) {
+        INFO(name);
+        CHECK_FALSE(line.second.empty());
+        CHECK(line.second.size() <= Registry::kMaxGroupSummary);
+    }
+    auto one = call(dispatcher, "registry.groups", obj(R"({"group":"toy"})"));
+    REQUIRE(one);
+    CHECK(one->find("groups")->size() == 1);
+    CHECK_FALSE(call(dispatcher, "registry.groups", obj(R"({"group":"nope"})")));
+    CHECK_FALSE(call(dispatcher, "registry.groups", obj(R"({"group":3})")));
+    // registry.list narrows to one group, by the name's first segment.
+    auto listed = call(dispatcher, "registry.list", obj(R"({"group":"toy"})"));
+    REQUIRE(listed);
+    CHECK(listed->find("commands")->size() > 1);
+    long long publicToys = 0;
+    for (const auto& entry : listed->find("commands")->asArray()) {
+        CHECK(Registry::groupOf(entry.find("name")->asString()) == "toy");
+        if (entry.find("exposure")->asString() != "internal") ++publicToys;
+    }
+    CHECK(publicToys > 0);
+    CHECK(byName.at("toy").first == publicToys);
+    auto batch = call(dispatcher, "registry.list", obj(R"({"group":"batch"})"));
+    REQUIRE(batch);
+    CHECK(batch->find("commands")->size() == 1);
+    // A prefix with no declared line reads empty, so a test can say which group lacks one.
+    Registry bare;
+    CHECK(bare.groups().count("registry") == 1);
+    CHECK(registry.exportJson().find("groups")->find("toy") != nullptr);
+}
+TEST_CASE("the group index and the row index shape the registry's answers") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to and read.");
+    const auto groups = groupIndex(*registry.groupsResult());
+    CHECK(groups.find("columns")->size() == 3);
+    CHECK(groups.find("namespaces") == nullptr);
+    CHECK(groups.find("hint")->asString().find("describe {group") != std::string::npos);
+    for (const auto& row : groups.find("groups")->asArray()) CHECK(row.asArray().size() == 3);
+    // Rows: the public commands of the group only (an Internal command is not an agent's).
+    const auto rows = rowIndex(*registry.listResult("", "", "", "toy"));
+    REQUIRE(rows.find("namespaces")->find("toy"));
+    for (const auto& row : rows.find("namespaces")->find("toy")->asArray())
+        CHECK(row.asArray().at(0).asString() != "toy.safe");
+    CHECK(rows.find("truncated") == nullptr);
+    // Past the cap the answer says so and says how to narrow it; the count is not given.
+    json::Value many = json::Value::object();
+    many["commands"] = json::Value::array();
+    for (std::size_t i = 0; i < kIndexRowCap + 5; ++i) {
+        json::Value item = json::Value::object();
+        item["name"] = "g" + std::to_string(i % 3) + ".c" + std::to_string(i);
+        item["kind"] = "query";
+        item["summary"] = "s";
+        item["exposure"] = "mcp-exec";
+        many["commands"].push_back(std::move(item));
+    }
+    const auto capped = rowIndex(many);
+    std::size_t shown = 0;
+    for (const auto& member : capped.find("namespaces")->asObject()) shown += member.value.size();
+    CHECK(shown == kIndexRowCap);
+    CHECK(capped.find("truncated")->asBool());
+    CHECK(capped.find("hint")->asString().find("narrow") != std::string::npos);
+    CHECK(capped.find("count") == nullptr);
+    // Exactly the cap is not truncated.
+    many["commands"].asArray().resize(kIndexRowCap);
+    CHECK(rowIndex(many).find("truncated") == nullptr);
+    const auto error = unknownGroup("zz", *registry.groupsResult());
+    CHECK(error.code == "command.unknown_group");
+    CHECK(error.hint.find("toy") != std::string::npos);
+}
+TEST_CASE("the reference splits by group: an index, then one file per group") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to and read.");
+    const auto index = markdownIndex(registry);
+    CHECK(index.find("[`toy`](toy.md)") != std::string::npos);
+    CHECK(index.find("A counter that tests add to and read.") != std::string::npos);
+    CHECK(index.find("toy.add") == std::string::npos);  // the index lists groups, not commands
+    const auto toy = markdownGroup(registry, "toy");
+    CHECK(toy.find("## `toy.add@1`") != std::string::npos);
+    CHECK(toy.find("A counter that tests add to and read.") != std::string::npos);
+    CHECK(toy.find("## `batch@1`") == std::string::npos);
+    CHECK(markdownGroup(registry, "batch").find("## `batch@1`") != std::string::npos);
+    // Every command is in exactly one group's file, the whole reference being their union.
+    std::size_t headings = 0;
+    for (const auto& group : registry.groupInfos()) {
+        const auto text = markdownGroup(registry, group.name);
+        for (auto at = text.find("\n## `"); at != std::string::npos;
+             at = text.find("\n## `", at + 1))
+            ++headings;
+    }
+    std::size_t expected = 0;
+    const auto whole = markdownReference(registry);
+    for (auto at = whole.find("\n## `"); at != std::string::npos; at = whole.find("\n## `", at + 1))
+        ++expected;
+    CHECK(headings == expected);
+    const auto directory = std::filesystem::temp_directory_path() / "supple-bus-md-test";
+    std::filesystem::remove_all(directory);
+    REQUIRE(writeMarkdownDirectory(registry, directory));
+    CHECK(std::filesystem::exists(directory / "index.md"));
+    for (const auto& group : registry.groupInfos())
+        CHECK(std::filesystem::exists(directory / (group.name + ".md")));
+    std::filesystem::remove_all(directory);
+}
+TEST_CASE("registry.list text matches names and summaries in any ASCII case") {
+    auto registry = makeRegistry();
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    const auto named = [&](const char* text) {
+        json::Value args = json::Value::object();
+        args["text"] = text;
+        auto listed = call(dispatcher, "registry.list", args);
+        REQUIRE(listed);
+        std::set<std::string> names;
+        for (const auto& entry : listed->find("commands")->asArray())
+            names.insert(entry.find("name")->asString());
+        return names;
+    };
+    // toy.add's summary is "Add to the toy counter."
+    CHECK(named("add to the").count("toy.add") == 1);
+    CHECK(named("ADD TO THE").count("toy.add") == 1);
+    CHECK(named("Add To The").count("toy.add") == 1);
+    CHECK(named("TOY.ADD").count("toy.add") == 1);  // names too
+    CHECK(named("nothing like this").empty());
+    // Only ASCII is folded: a non-ASCII letter matches itself and nothing else.
+    CHECK(named("\xC3\x89").empty());
+}
+TEST_CASE("an empty or invalid search says why and what to try") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to; sidechain-free.");
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    const auto ask = [&](const char* json) { return call(dispatcher, "registry.list", obj(json)); };
+    // A kind or tag that does not exist is an error naming the valid values.
+    auto kind = ask(R"({"kind":"Query"})");
+    REQUIRE_FALSE(kind);
+    CHECK(kind.error().code == "command.invalid_args");
+    CHECK(kind.error().path == "/args/kind");
+    CHECK(kind.error().hint.find("query, edit, action") != std::string::npos);
+    CHECK(ask(R"({"kind":"query"})"));
+    auto tag = ask(R"({"tag":"nonesuch"})");
+    REQUIRE_FALSE(tag);
+    CHECK(tag.error().code == "command.invalid_args");
+    CHECK(tag.error().path == "/args/tag");
+    // An unknown group is refused the way describe refuses it.
+    auto group = ask(R"({"group":"fxx"})");
+    REQUIRE_FALSE(group);
+    CHECK(group.error().code == "command.unknown_group");
+    CHECK(group.error().hint.find("toy") != std::string::npos);
+    CHECK(group.error().hint.find("describe") != std::string::npos);
+    auto groupsOnly = call(dispatcher, "registry.groups", obj(R"({"group":"fxx"})"));
+    REQUIRE_FALSE(groupsOnly);
+    CHECK(groupsOnly.error().code == "command.unknown_group");
+    // No match: the answer is empty; the groups whose line mentions the word are named.
+    auto none = ask(R"({"text":"sidechain"})");
+    REQUIRE(none);
+    CHECK(none->find("commands")->size() == 0);
+    REQUIRE(none->find("groups"));
+    CHECK(none->find("groups")->asArray().at(0).asString() == "toy");
+    auto nothing = ask(R"({"text":"zzzz"})");
+    REQUIRE(nothing);
+    CHECK(nothing->find("groups")->size() == 0);
+    // The index turns an empty answer into a hint that says why and where to look.
+    const auto shaped = rowIndex(*none);
+    CHECK(shaped.find("namespaces")->size() == 0);
+    const auto hint = shaped.find("hint")->asString();
+    CHECK(hint.find("No command") != std::string::npos);
+    CHECK(hint.find("toy") != std::string::npos);
+    CHECK(hint.find("describe {}") != std::string::npos);
+    CHECK(rowIndex(*nothing).find("hint")->asString().find("describe {}") != std::string::npos);
+}
+TEST_CASE("an empty answer inside a group points at other groups, and fits the filters given") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to; sidechain-free.");
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    const auto ask = [&](const char* json) {
+        auto listed = call(dispatcher, "registry.list", obj(json));
+        REQUIRE(listed);
+        return rowIndex(*listed);
+    };
+    // The word is in toy's line; searched inside batch it finds nothing there, and the pointer is
+    // to the other group (the wrong-group case is what the pointer is for).
+    auto wrongGroup = ask(R"({"group":"batch","text":"sidechain"})");
+    CHECK(wrongGroup.find("namespaces")->size() == 0);
+    auto hint = wrongGroup.find("hint")->asString();
+    CHECK(hint.find("in other groups") != std::string::npos);
+    CHECK(hint.find("toy") != std::string::npos);
+    // Inside the group whose own line says it there is nothing else to point at.
+    hint = ask(R"({"group":"toy","text":"sidechain"})").find("hint")->asString();
+    CHECK(hint.find("in other groups") == std::string::npos);
+    // The hint fits the filters given: no text, no talk of text search.
+    hint = ask(R"({"group":"registry","kind":"edit"})").find("hint")->asString();
+    CHECK(hint.find("text searches") == std::string::npos);
+    CHECK(hint.find("registry") != std::string::npos);
+    CHECK(hint.find("edit") != std::string::npos);
+    CHECK(hint.find("describe {group: registry}") != std::string::npos);
+    hint = ask(R"({"text":"zzzz"})").find("hint")->asString();
+    CHECK(hint.find("text searches") != std::string::npos);
+    CHECK(hint.find("zzzz") != std::string::npos);
+}
+TEST_CASE("an unknown command or group points at the walk through the groups") {
+    auto registry = makeRegistry();
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    // Nothing close in name: the hint says how to look, not "use registry.list".
+    auto far = call(dispatcher, "registry.describe", obj(R"({"command":"qqqqqqqqqqqqqqqq"})"));
+    REQUIRE_FALSE(far);
+    CHECK(far.error().code == "command.unknown");
+    CHECK(far.error().hint.find("describe {}") != std::string::npos);
+    CHECK(far.error().hint.find("describe {text}") != std::string::npos);
+    CHECK(far.error().hint.find("use registry.list") == std::string::npos);
+    // A near miss still says what it probably meant.
+    auto near = call(dispatcher, "registry.describe", obj(R"({"command":"toy.ad"})"));
+    REQUIRE_FALSE(near);
+    CHECK(near.error().hint.find("did you mean") != std::string::npos);
+    // An unknown group says what a group is, and where the groups are listed.
+    auto group = call(dispatcher, "registry.list", obj(R"({"group":"toy.add"})"));
+    REQUIRE_FALSE(group);
+    CHECK(group.error().hint.find("before its first '.'") != std::string::npos);
+    CHECK(group.error().hint.find("describe {}") != std::string::npos);
 }
 TEST_CASE("meta commands, generators and examples") {
     auto registry = makeRegistry();

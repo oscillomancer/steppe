@@ -68,7 +68,7 @@ one line per bar. The same goes for a clip's `context`.
 
 ## Edits that read the key and chord
 
-`midi.edit` ops (see `generated/engine-commands.md`), applied in order:
+`midi.edit` ops (see `generated/engine/midi.md`), applied in order:
 
 - `{"op": "transpose_degrees", "notes": [0, 1], "degrees": 2}` moves notes by
   scale degrees in the key at each note's beat (a note outside the scale first

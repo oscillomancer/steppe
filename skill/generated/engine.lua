@@ -1721,10 +1721,14 @@ q = nil
 ---@class Steppe.registry_describe_args
 ---@field command string
 
+---@class Steppe.registry_groups_args
+---@field group? string
+
 ---@class Steppe.registry_list_args
 ---@field tag? string
 ---@field kind? string
 ---@field text? string
+---@field group? string
 
 ---@class Steppe.render_dry_run_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
@@ -2915,6 +2919,7 @@ q = nil
 
 ---@class Steppe.registry
 ---@field describe fun(args: Steppe.registry_describe_args): table Describe a command.
+---@field groups fun(args?: Steppe.registry_groups_args): table List the command groups, with one line each.
 ---@field list fun(args?: Steppe.registry_list_args): table List available commands.
 
 ---@class Steppe.render

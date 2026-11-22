@@ -1963,8 +1963,9 @@ does lands in the same undo history as your own edits. The bundled skill
 teaches the agent Steppe's commands, units and notation.
 
 By default, the engine exposes 38 common command tools plus `describe`, `exec`
-and `query`; the running GUI also exposes `gui_selection` for its selection. `describe` with no arguments lists every command, grouped by
-namespace; pass `command` for its full schemas, errors and examples. Call
+and `query`; the running GUI also exposes `gui_selection` for its selection. `describe` with no arguments lists the command groups, one line each;
+pass `group` for a group's commands and `command` for one command's full schemas,
+errors and examples, or `text` to search names and summaries in any case. Call
 other commands with `exec {"command": "fx.patch.list", "args": {"fx": "fx_2"}}`,
 or `query` for read-only commands. Dedicated tool definitions leave out result
 schemas; `describe` provides them when needed. For clients that defer tool
