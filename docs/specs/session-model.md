@@ -2658,9 +2658,11 @@ later starts from there.
   is rounded **up** to the grid, less the slack a place is read with. Rounding up is exact
   for a note on the grid (it is before the point exactly when it is before the song's
   change); rounding to the nearest is not (a note a hair before a change could land in the new
-  key). It is exact for any source whose `ppq` divides 960, which is every source a writer
-  here makes; a source with another `ppq` has notes off the grid, and a point within 1/960
-  of such a note may fall either side.
+  key). Points of one type that round onto one beat (a playrate below 1 puts song beats
+  1/960 apart less than a grid step apart) keep the last: every note at or after that beat is
+  past all of them in the song. This is exact for any source whose `ppq` divides 960, which
+  is every source a writer here makes; a source with another `ppq` has notes off the grid,
+  and a point within 1/960 of such a note may fall either side.
 - Where the song has no readable key anywhere under the span, the take's context is dropped
   (no points, no period, phase 0). A point this build cannot read is left out with
   `clip.context_dropped`, as when a clip takes the song's.

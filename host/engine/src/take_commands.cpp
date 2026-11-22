@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <set>
 
 #include "clip_context.h"
@@ -845,6 +846,21 @@ void registerTakeCommands(cmd::Registry& registry) {
                         p.beat = std::max(
                             0.0, std::ceil((u - model::kPlaceSlack * rateAfter) * 960.0) / 960.0);
                     }
+                    // Points of a type that round onto one beat (a rate below 1 spreads song
+                    // beats 1/960 apart over less than a grid step): every note at or after
+                    // that beat is past all of them in the song, so the last one is the one
+                    // it reads. The fit keeps the first of two, so drop the earlier ones here.
+                    std::map<std::pair<int, double>, std::size_t> last;
+                    for (std::size_t i = 0; i < k.context.size(); ++i)
+                        last[{static_cast<int>(k.context[i].type), k.context[i].beat}] = i;
+                    std::size_t at = 0;
+                    k.context.erase(
+                        std::remove_if(k.context.begin(), k.context.end(),
+                                       [&](const model::ContextPoint& p) {
+                                           const std::size_t i = at++;
+                                           return last[{static_cast<int>(p.type), p.beat}] != i;
+                                       }),
+                        k.context.end());
                     for (auto& n : model::fitTakeContext(k, model::TakeHome::Item))
                         fitNotes.push_back(std::move(n));
                 });

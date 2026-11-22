@@ -2325,6 +2325,31 @@ TEST_CASE("bake then follow sounds as before, with a key change a hair either si
     CHECK(tried >= 20);
 }
 
+TEST_CASE("take.bake keeps the last of two song keys that round onto one source beat (M1)") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    // Notes on every beat of two bars, laid at beat 16 and played at half rate: a song beat is
+    // two source beats' worth, so two song keys 1/960 apart round up to one source beat.
+    const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "notation":
+        "voice bass; 1: C2:q D2:q E2:q F2:q; 2: G2:q A2:q B2:q C3:q"})");
+    const std::string item = laid.find("item")->asString();
+    const model::Id take = *l.head().items.find(id(item.c_str()))->activeTake;
+    l.run("take.set",
+          R"({"take": ")" + take.str() +
+              R"(", "context": "1: key C major ~:w", "follow": "key", "playrate": 0.5})");
+    // G major, then F major a grid step later, both inside the item (song beat 20 is source 2).
+    l.run("key.set", R"({"at": 20.001041666666667, "tonic": "G", "scale": "major"})");
+    l.run("key.set", R"({"at": 20.002083333333333, "tonic": "F", "scale": "major"})");
+    const std::string before = soundsOf(l, item);
+    l.run("take.bake", R"({"take": ")" + take.str() + R"("})");
+    l.run("take.set", R"({"take": ")" + take.str() + R"(", "follow": "key"})");
+    CHECK(soundsOf(l, item) == before);
+    // The context holds C at the start and the later of the two, F.
+    const model::Take& baked = *l.head().takes.find(take);
+    REQUIRE(baked.context.size() == 2);
+    CHECK(baked.context[1].tonic == "F");
+}
+
 TEST_CASE("take.bake of a song with a key change and one with none") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
