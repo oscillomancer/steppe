@@ -43,7 +43,7 @@ Generated from the command registry. Read this index, then the file of the group
 | [`script`](script.md) | 1 | Run a Lua script on the command bus. |
 | [`session`](session.md) | 1 | Describe the whole session as compact text. |
 | [`sync`](sync.md) | 2 | External sync settings (clock, MTC, LTC) and their status. |
-| [`take`](take.md) | 12 | Takes of an item: add, activate, bake, extract, hits, stretch. |
+| [`take`](take.md) | 14 | Takes of an item: add, activate, bake, extract, hits, stretch. |
 | [`tempo`](tempo.md) | 1 | The tempo map: replace its points. |
 | [`time`](time.md) | 1 | Convert seconds, beats and bars to one another. |
 | [`timesig`](timesig.md) | 2 | Meter changes by bar: set or remove. |

@@ -951,13 +951,13 @@ class EngineApp : public cmd::Host {
     void invoked(std::string_view command, int version, const json::Value& args,
                  cmd::Kind kind) override;
     // Example fixtures: empty, saved, song (tr_1 "Bass"), song_with_item
-    // (+ it_1: a MIDI bar), song_with_fx (+ fx_1 sine, fx_2 gain), song_with_env (+ en_1
-    // on fx_2 gain), song_with_learn (song_with_fx + fx_2 gain on CC 21), song_with_mix_learn
-    // (song_with_route + tr_1 volume on CC 7, sd_1 volume on CC 12, gr_1 "Drums" with tr_1
-    // and a VCA, its volume on CC 9), song_undone,
-    // engine_running (the dummy backend), engine_armed (+ tr_1 armed),
-    // recording_interrupted (tr_1 + rec/Vocal-1.wav left by a crash), meter_change
-    // (3/4 from bar 9), song_with_audio (tr_1 + it_1/tk_1 audio), song_with_autoitem (song_with_env
+    // (+ it_1: a MIDI bar), song_with_fx (+ fx_1 sine,
+    // fx_2 gain), song_with_env (+ en_1 on fx_2 gain), song_with_learn (song_with_fx + fx_2 gain on
+    // CC 21), song_with_mix_learn (song_with_route + tr_1 volume on CC 7, sd_1 volume on CC 12,
+    // gr_1 "Drums" with tr_1 and a VCA, its volume on CC 9), song_undone, engine_running (the dummy
+    // backend), engine_armed (+ tr_1 armed), recording_interrupted (tr_1 + rec/Vocal-1.wav left by
+    // a crash), meter_change (3/4 from bar 9), song_with_audio (tr_1 + it_1/tk_1 audio),
+    // song_with_autoitem (song_with_env
     // + ai_1), render_queued (song_with_fx + q1, a queued mix), and the bus's job_running. Built by
     // running commands.
     void setupFixture(cmd::Dispatcher& dispatcher, std::string_view fixture) override;

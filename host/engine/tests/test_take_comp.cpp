@@ -1,0 +1,601 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+// take.comp and take.comp.get (session-model §1.5.1): a take stack comped into pieces with
+// seam crossfades, from a loop-recorded item.
+#include <doctest/doctest.h>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <numbers>
+#include "realtime_common.h"
+#include "supple/audio/audio_file.h"
+#include "supple/engine/app.h"
+#include "supple/engine/offline.h"
+#include "supple/model/fade_shape.h"
+#include "supple/model/schemas.h"
+#include "supple/time/timeline.h"
+
+using namespace supple;
+using namespace supple::engine;
+
+namespace {
+const cmd::Origin origin{cmd::Origin::Type::Test, "take-comp", {}};
+constexpr std::int64_t kPass = 96000;  // frames of one pass: 2 s, 4 beats at 120 bpm
+
+// One piece of the comp as stored: its samples at the project rate and its active take.
+struct Piece {
+    model::Id item;
+    std::int64_t start = 0, end = 0;
+    std::size_t index = 0;
+    double fadeIn = 0, fadeOut = 0;
+    model::FadeShape inShape = model::FadeShape::Linear, outShape = model::FadeShape::Linear;
+};
+
+struct CompFixture {
+    std::filesystem::path dir =
+        std::filesystem::temp_directory_path() /
+        ("take-comp-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    cmd::Registry registry;
+    std::unique_ptr<EngineApp> app;
+    std::unique_ptr<cmd::Dispatcher> bus;
+
+    // `passes` loop passes of 2 s on tr_1, each a different sine: one item, one take per pass.
+    explicit CompFixture(std::size_t passes = 3) {
+        AppOptions options;
+        options.workdir = dir;
+        options.pluginPath = {FIXTURE_CLAP_PATH};
+        auto created = EngineApp::create(options, {.console9 = false});
+        REQUIRE(created);
+        app = std::move(*created);
+        registerEngineCommands(registry);
+        bus = std::make_unique<cmd::Dispatcher>(registry, *app);
+        run("track.add", R"({"name":"Audio"})");
+        const double rate = app->head().project->sampleRate;
+        audio::AudioData data;
+        data.sampleRate = rate;
+        data.channels.assign(2, std::vector<float>(passes * kPass));
+        for (std::size_t p = 0; p < passes; ++p)
+            for (std::int64_t n = 0; n < kPass; ++n) {
+                const double hz = 300.0 + 150.0 * static_cast<double>(p);
+                const auto at = static_cast<std::size_t>(p * kPass + n);
+                data.channels[0][at] = data.channels[1][at] = static_cast<float>(
+                    0.5 * std::sin(2 * std::numbers::pi * hz * static_cast<double>(n) / rate));
+            }
+        const auto file = app->mediaDir() / "passes.wav";
+        REQUIRE(audio::writeWav(file, data));
+        auto args = *json::parse(R"({"takes":[{"track":"tr_1","hash":"","start_sample":0,
+            "loop_start":0,"overflow_frames":0,"midi":false,"events":[]}],
+            "punch":{"enabled":false,"start":0,"end":0}})");
+        auto& take = args["takes"].asArray()[0];
+        take["file"] = file.string();
+        take["frames"] = static_cast<std::int64_t>(passes) * kPass;
+        take["loop_end"] = kPass;
+        take["sample_rate"] = rate;
+        auto segments = json::Value::array();
+        for (std::size_t p = 0; p < passes; ++p) {
+            auto segment = json::Value::object();
+            segment["file_frame"] = static_cast<std::int64_t>(p) * kPass;
+            segment["timeline"] = 0;
+            segments.push_back(std::move(segment));
+        }
+        take["segments"] = std::move(segments);
+        auto done = bus->execute({"record.commit", args, origin});
+        REQUIRE_MESSAGE(done, (done ? "" : done.error().toString()));
+    }
+    ~CompFixture() {
+        bus.reset();
+        app.reset();
+        std::filesystem::remove_all(dir);
+    }
+    Result<json::Value> call(const char* command, std::string_view args = "{}") {
+        return bus->execute({command, *json::parse(args), origin});
+    }
+    json::Value run(const char* command, std::string_view args = "{}") {
+        auto result = call(command, args);
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    }
+    // The error of a refused call, checked for code, path and a hint.
+    void refused(const char* command, std::string_view args, std::string_view code,
+                 std::string_view path) {
+        auto result = call(command, args);
+        REQUIRE_MESSAGE(!result, command << " " << args << " should be refused");
+        CHECK(result.error().code == code);
+        CHECK(result.error().path == "/args" + std::string(path));
+        CHECK_FALSE(result.error().message.empty());
+        CHECK_FALSE(result.error().hint.empty());
+    }
+    double rate() const { return app->head().project->sampleRate; }
+    // Items of tr_1 in time order.
+    std::vector<Piece> pieces() const {
+        const model::Session& s = app->head();
+        std::vector<Piece> out;
+        for (const auto& e : s.items) {
+            const auto& it = *e.value;
+            const auto span = model::itemSpan(s, it);
+            Piece p;
+            p.item = e.id;
+            p.start = time::samplesAt(span.startSec, rate());
+            p.end = time::samplesAt(span.endSec, rate());
+            const auto at = std::find(it.takes.begin(), it.takes.end(), *it.activeTake);
+            p.index = static_cast<std::size_t>(at - it.takes.begin());
+            p.fadeIn = it.fadeIn.length;
+            p.fadeOut = it.fadeOut.length;
+            p.inShape = it.fadeIn.shape;
+            p.outShape = it.fadeOut.shape;
+            out.push_back(p);
+        }
+        std::sort(out.begin(), out.end(), [](const Piece& a, const Piece& b) {
+            return a.start == b.start ? a.item < b.item : a.start < b.start;
+        });
+        return out;
+    }
+    // The offline render of the master, left channel, over the first two seconds.
+    std::vector<float> render() const {
+        auto pool = makePool();
+        auto out = renderOffline(app->head(), pool,
+                                 {.startSeconds = 0, .endSeconds = 2.0, .projectDir = dir});
+        REQUIRE(out);
+        return out->audio.channels[0];
+    }
+    // What each take sounds on its own over the whole item, by index.
+    std::vector<std::vector<float>> references() {
+        const model::Session s = app->head();
+        const auto& it = *s.items.begin()->value;
+        const std::string item = s.items.begin()->id.str();
+        std::vector<std::vector<float>> out;
+        for (std::size_t k = 0; k < it.takes.size(); ++k) {
+            run("take.activate", R"({"item":")" + item + R"(","index":)" + std::to_string(k) + "}");
+            out.push_back(render());
+        }
+        return out;
+    }
+};
+
+// The comp's core seams (samples) and the take index each stretch plays, from the arguments.
+struct Seam {
+    std::int64_t at;
+    std::size_t left, right;
+};
+
+// What the master should be: each stretch's take, crossfaded over `half` samples either side of
+// every seam with the shape's gains, from the takes' own renders.
+std::vector<double> expected(const std::vector<std::vector<float>>& refs,
+                             const std::vector<Seam>& seams, std::size_t first, std::int64_t half,
+                             model::FadeShape shape) {
+    std::vector<double> out(refs[0].size());
+    for (std::size_t n = 0; n < out.size(); ++n) {
+        std::size_t index = first;
+        for (const Seam& s : seams)
+            if (static_cast<std::int64_t>(n) >= s.at) index = s.right;
+        out[n] = static_cast<double>(refs[index][n]);
+        for (const Seam& s : seams) {
+            const std::int64_t j = static_cast<std::int64_t>(n) - (s.at - half);
+            if (half > 0 && j >= 0 && j < 2 * half) {
+                const double f = static_cast<double>(2 * half);
+                out[n] = static_cast<double>(refs[s.left][n]) *
+                             model::fadeGain(shape, 0, (f - static_cast<double>(j)) / f) +
+                         static_cast<double>(refs[s.right][n]) *
+                             model::fadeGain(shape, 0, static_cast<double>(j) / f);
+            }
+        }
+    }
+    return out;
+}
+
+double worst(const std::vector<float>& got, const std::vector<double>& want) {
+    double w = 0;
+    for (std::size_t n = 0; n < want.size(); ++n)
+        w = std::max(w, std::fabs(static_cast<double>(got[n]) - want[n]));
+    return w;
+}
+
+const char* const kSpans = R"({"item":"it_1","spans":[
+    {"from":0.5,"to":1.5,"index":0},{"from":1.5,"to":2.5,"index":1}]})";
+}  // namespace
+
+TEST_CASE("take.comp splits a take stack at the spans, crossfades the seams, and plays each take") {
+    CompFixture f;
+    REQUIRE(f.app->head().items.size() == 1);
+    REQUIRE(f.app->head().items.find({model::Kind::Item, 1})->takes.size() == 3);
+    const auto refs = f.references();
+    f.run("take.activate", R"({"item":"it_1","index":2})");
+    const auto result = f.run("take.comp", kSpans);
+    const auto& list = result.find("pieces")->asArray();
+    REQUIRE(list.size() == 4);
+    // The first stretch keeps the current take (2); the spans take 0 and 1; the rest stays 2.
+    const std::size_t take[] = {2, 0, 1, 2};
+    const double from[] = {0, 0.5, 1.5, 2.5}, to[] = {0.5, 1.5, 2.5, 4};
+    for (std::size_t i = 0; i < 4; ++i) {
+        CHECK(list[i].find("index")->asInt() == static_cast<std::int64_t>(take[i]));
+        CHECK(list[i].find("from")->asDouble() == doctest::Approx(from[i]));
+        CHECK(list[i].find("to")->asDouble() == doctest::Approx(to[i]));
+    }
+    // 120 bpm, 48 kHz: a beat is 24000 samples, so the seams are at 12000, 36000 and 60000, and
+    // the default crossfade of 10 ms is 480 samples, 240 each side.
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 4);
+    const std::int64_t seam[] = {12000, 36000, 60000};
+    CHECK(pieces[0].start == 0);
+    CHECK(pieces[3].end == 96000);
+    for (std::size_t i = 0; i < 3; ++i) {
+        CHECK(pieces[i].end == seam[i] + 240);
+        CHECK(pieces[i + 1].start == seam[i] - 240);
+        CHECK(pieces[i].fadeOut == doctest::Approx(480.0 / 48000.0));
+        CHECK(pieces[i + 1].fadeIn == doctest::Approx(480.0 / 48000.0));
+        CHECK(pieces[i].outShape == model::FadeShape::Cos);
+        CHECK(pieces[i + 1].inShape == model::FadeShape::Cos);
+    }
+    CHECK(pieces[0].fadeIn == 0);
+    CHECK(pieces[3].fadeOut == 0);
+    for (std::size_t i = 0; i < 4; ++i) CHECK(pieces[i].index == take[i]);
+    // Every piece keeps all three takes, in order.
+    for (const auto& p : pieces) CHECK(f.app->head().items.find(p.item)->takes.size() == 3);
+    const std::vector<Seam> seams = {{12000, 2, 0}, {36000, 0, 1}, {60000, 1, 2}};
+    CHECK(worst(f.render(), expected(refs, seams, 2, 240, model::FadeShape::Cos)) < 1e-5);
+}
+
+TEST_CASE("take.comp seams are whole project samples and the pieces tile") {
+    CompFixture f;
+    // Spans off the sample grid: the seams snap to samples, extensions and fades are whole
+    // samples, and each seam's centre is the sample its beat falls on.
+    f.run("take.comp",
+          R"({"item":"it_1","crossfade":0.0123,"spans":[
+              {"from":0.3333333,"to":1.7777777,"index":1}]})");
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 3);
+    const auto at = [&](double beat) {
+        return time::samplesAt(f.app->head().timeMap->secondsAt(beat), f.rate());
+    };
+    const std::int64_t seams[] = {at(0.3333333), at(1.7777777)};
+    // 0.0123 s is 590.4 samples: half of it rounds to 295, so the overlap is 590.
+    for (std::size_t i = 0; i < 2; ++i) {
+        CHECK(pieces[i].end - pieces[i + 1].start == 590);
+        CHECK(pieces[i + 1].start + 295 == seams[i]);
+        CHECK(pieces[i].end - 295 == seams[i]);
+        CHECK(std::llround(pieces[i].fadeOut * f.rate()) == 590);
+        CHECK(std::llround(pieces[i + 1].fadeIn * f.rate()) == 590);
+    }
+    CHECK(pieces[0].start == 0);
+    CHECK(pieces[2].end == 96000);
+}
+
+TEST_CASE("take.comp twice with the same arguments gives the same model as once") {
+    CompFixture f;
+    f.run("take.comp", kSpans);
+    const std::string once = model::serializeProject(f.app->head());
+    const auto result = f.run("take.comp", kSpans);
+    CHECK(result.find("pieces")->asArray().size() == 4);
+    CHECK(model::serializeProject(f.app->head()) == once);
+    // Through any piece, and a third time.
+    f.run("take.comp", R"({"item":"it_3","spans":[
+        {"from":0.5,"to":1.5,"index":0},{"from":1.5,"to":2.5,"index":1}]})");
+    CHECK(model::serializeProject(f.app->head()) == once);
+}
+
+TEST_CASE("take.comp twice at an odd tempo, with off-grid spans, still gives the same model") {
+    CompFixture f;
+    f.run("tempo.set", R"({"points":[{"beat":0,"bpm":133.37},{"beat":2,"bpm":97.11}]})");
+    const char* spans = R"({"item":"it_1","crossfade":0.0137,"spans":[
+        {"from":0.3141,"to":1.2718,"index":0},{"from":1.4142,"to":2.7182,"index":1}]})";
+    f.run("take.comp", spans);
+    const std::string once = model::serializeProject(f.app->head());
+    f.run("take.comp", spans);
+    CHECK(model::serializeProject(f.app->head()) == once);
+    f.run("take.comp", spans);
+    CHECK(model::serializeProject(f.app->head()) == once);
+    // The seams are still whole samples after the third call.
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 5);
+    for (std::size_t i = 0; i + 1 < pieces.size(); ++i)
+        CHECK(pieces[i].end - pieces[i + 1].start == 2 * std::llround(0.0137 * f.rate() / 2));
+}
+
+TEST_CASE("take.comp whose spans all name the current takes changes nothing") {
+    CompFixture f;
+    const std::string before = model::serializeProject(f.app->head());
+    // The item plays take 2: a span of take 2 inside it splits nothing.
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":3,"index":2}]})");
+    CHECK(model::serializeProject(f.app->head()) == before);
+    // After a comp, spans that name each piece's own take change nothing either.
+    f.run("take.comp", kSpans);
+    const std::string comped = model::serializeProject(f.app->head());
+    f.run("take.comp", R"({"item":"it_1","spans":[
+        {"from":0,"to":0.5,"index":2},{"from":0.5,"to":1.5,"index":0},
+        {"from":1.5,"to":2.5,"index":1},{"from":2.5,"to":4,"index":2}]})");
+    CHECK(model::serializeProject(f.app->head()) == comped);
+}
+
+TEST_CASE("take.comp rebuilds a comp from any piece, as building it from scratch") {
+    CompFixture a, b;
+    const char* whole = R"({"item":"it_1","spans":[
+        {"from":0,"to":1,"index":1},{"from":1,"to":3,"index":0},{"from":3,"to":4,"index":2}]})";
+    a.run("take.comp", kSpans);
+    a.run("take.comp", whole);
+    b.run("take.comp", whole);
+    // The first comp's seams stay (hard cuts where both sides now play one take); what plays
+    // is what a comp built straight from these spans plays.
+    const auto got = a.render();
+    const auto want = b.render();
+    double diff = 0;
+    for (std::size_t n = 0; n < got.size(); ++n)
+        diff =
+            std::max(diff, std::fabs(static_cast<double>(got[n]) - static_cast<double>(want[n])));
+    CHECK(diff < 1e-5);
+    // A piece's take changes by take.activate and keeps its seams.
+    const auto pieces = a.pieces();
+    const auto geometry = a.pieces();
+    a.run("take.activate", R"({"item":")" + pieces[1].item.str() + R"(","index":2})");
+    const auto after = a.pieces();
+    REQUIRE(after.size() == geometry.size());
+    for (std::size_t i = 0; i < after.size(); ++i) {
+        CHECK(after[i].start == geometry[i].start);
+        CHECK(after[i].end == geometry[i].end);
+    }
+}
+
+TEST_CASE("take.comp: crossfade 0 is a hard cut, linear is linear, long ones are clamped") {
+    SUBCASE("a hard cut") {
+        CompFixture f;
+        const auto refs = f.references();
+        f.run("take.activate", R"({"item":"it_1","index":2})");
+        f.run("take.comp",
+              R"({"item":"it_1","crossfade":0,"spans":[{"from":0.5,"to":1.5,"index":0}]})");
+        const auto pieces = f.pieces();
+        REQUIRE(pieces.size() == 3);
+        CHECK(pieces[0].end == pieces[1].start);
+        CHECK(pieces[0].fadeOut == 0);
+        CHECK(pieces[1].fadeIn == 0);
+        CHECK(worst(f.render(), expected(refs, {{12000, 2, 0}, {36000, 0, 2}}, 2, 0,
+                                         model::FadeShape::Linear)) < 1e-6);
+    }
+    SUBCASE("linear") {
+        CompFixture f;
+        const auto refs = f.references();
+        f.run("take.activate", R"({"item":"it_1","index":2})");
+        f.run("take.comp",
+              R"({"item":"it_1","crossfade":0.02,"crossfade_shape":"linear",
+                  "spans":[{"from":1,"to":2,"index":0}]})");
+        const auto pieces = f.pieces();
+        REQUIRE(pieces.size() == 3);
+        CHECK(pieces[0].outShape == model::FadeShape::Linear);
+        CHECK(pieces[1].inShape == model::FadeShape::Linear);
+        CHECK(worst(f.render(), expected(refs, {{24000, 2, 0}, {48000, 0, 2}}, 2, 480,
+                                         model::FadeShape::Linear)) < 1e-5);
+    }
+    SUBCASE("a crossfade longer than the pieces beside it is shortened, with a warning") {
+        CompFixture f;
+        // A piece of 50 samples between two seams: each crossfade is at most half of it (25
+        // samples either side), however long the one asked for.
+        const auto result = f.run("take.comp",
+                                  R"({"item":"it_1","crossfade":0.5,"spans":[
+                                      {"from":1,"to":1.00208333333,"index":0}]})");
+        bool clamped = false;
+        for (const auto& w : result.find("warnings")->asArray())
+            clamped = clamped || w.find("code")->asString() == "comp.crossfade_clamped";
+        CHECK(clamped);
+        const auto pieces = f.pieces();
+        REQUIRE(pieces.size() == 3);
+        CHECK(pieces[0].end - pieces[1].start == 2 * 25);
+        CHECK(pieces[1].end - pieces[2].start == 2 * 25);
+    }
+}
+
+TEST_CASE("take.comp follows a take's playrate and a trimmed item") {
+    SUBCASE("playrate 2") {
+        CompFixture f;
+        for (const char* take : {"tk_1", "tk_2", "tk_3"})
+            f.run("take.set", std::string(R"({"take":")") + take + R"(","playrate":2})");
+        const auto refs = f.references();
+        f.run("take.activate", R"({"item":"it_1","index":2})");
+        f.run("take.comp", kSpans);
+        const std::vector<Seam> seams = {{12000, 2, 0}, {36000, 0, 1}, {60000, 1, 2}};
+        CHECK(worst(f.render(), expected(refs, seams, 2, 240, model::FadeShape::Cos)) < 1e-5);
+    }
+    SUBCASE("an item trimmed at the front") {
+        CompFixture f;
+        f.run("item.split", R"({"item":"it_1","at":1})");
+        f.run("item.remove", R"({"item":"it_1"})");
+        REQUIRE(f.app->head().items.size() == 1);
+        const std::string item = f.app->head().items.begin()->id.str();
+        const auto refs = f.references();
+        f.run("take.activate", R"({"item":")" + item + R"(","index":2})");
+        f.run("take.comp", R"({"item":")" + item + R"(","spans":[{"from":2,"to":3,"index":0}]})");
+        const std::vector<Seam> seams = {{48000, 2, 0}, {72000, 0, 2}};
+        CHECK(worst(f.render(), expected(refs, seams, 2, 240, model::FadeShape::Cos)) < 1e-5);
+    }
+}
+
+TEST_CASE("take.comp: a comp renders in real time as offline, in both executors") {
+    CompFixture f;
+    f.run("take.comp", kSpans);
+    const model::Session session = f.app->head();
+    auto pool = makePool();
+    auto offline =
+        renderOffline(session, pool, {.startSeconds = 0, .endSeconds = 2.0, .projectDir = f.dir});
+    REQUIRE(offline);
+    for (const EngineOptions& options :
+         {kInCallback, EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        auto rtPool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 96000 + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(session, f.dir));
+        engine.play();
+        const std::int64_t cycles = (96000 + 4096) / 128;
+        if (options.anticipative)
+            runAhead(engine, backend, cycles, 128);
+        else
+            backend.run(cycles);
+        engine.stop();
+        const std::uint32_t latency = engine.outputLatency();
+        CHECK(engine.processErrors() == 0);
+        CHECK(maxDiff(backend.capture().channels[0], latency, offline->audio.channels[0], 96000) ==
+              0.0);
+        CHECK(maxDiff(backend.capture().channels[1], latency, offline->audio.channels[1], 96000) ==
+              0.0);
+    }
+}
+
+TEST_CASE("take.comp skips the crossfade for a warped take and for MIDI, and says so") {
+    auto skipped = [](const json::Value& result) {
+        for (const auto& w : result.find("warnings")->asArray())
+            if (w.find("code")->asString() == "comp.crossfade_skipped") return true;
+        return false;
+    };
+    SUBCASE("a take with stretch markers") {
+        CompFixture f;
+        f.run("take.stretch.add", R"({"take":"tk_2","source_pos":2.3,"item_pos":0.25})");
+        const auto result = f.run("take.comp", kSpans);
+        CHECK(skipped(result));
+        const auto pieces = f.pieces();
+        REQUIRE(pieces.size() == 4);
+        for (std::size_t i = 0; i < 3; ++i) {
+            CHECK(pieces[i].end == pieces[i + 1].start);
+            CHECK(pieces[i].fadeOut == 0);
+            CHECK(pieces[i + 1].fadeIn == 0);
+        }
+    }
+    SUBCASE("MIDI takes") {
+        CompFixture f;
+        f.run("track.add", R"({"name":"Keys"})");
+        f.run("item.add",
+              R"({"track":"tr_2","bar":1,"notation":"voice keys; 1: C3:q D3:q E3:q F3:q"})");
+        f.run("take.add", R"({"item":"it_2","from":"tk_4"})");
+        f.run("take.activate", R"({"item":"it_2","index":1})");
+        f.run("midi.write", R"({"item":"it_2","notation":"voice keys; 1: G3:q A3:q B3:q C4:q"})");
+        const auto result =
+            f.run("take.comp", R"({"item":"it_2","spans":[{"from":1,"to":3,"index":0}]})");
+        CHECK(skipped(result));
+        const auto& list = result.find("pieces")->asArray();
+        REQUIRE(list.size() == 3);
+        const model::Session& s = f.app->head();
+        for (const auto& p : list) {
+            const auto& it = *s.items.find(*model::Id::parse(p.find("item")->asString()));
+            CHECK(it.fadeIn.length == 0);
+            CHECK(it.fadeOut.length == 0);
+        }
+        // The pieces tile exactly: no overlap, no gap.
+        const auto a = model::itemSpan(s, *s.items.find({model::Kind::Item, 2}));
+        CHECK(a.endSec == doctest::Approx(0.5));
+        // What each piece plays: take 1 (G A B C) outside, take 0 (C D E F) from beat 1 to 3.
+        auto plays = [&](const json::Value& piece) {
+            return f
+                .run("midi.get",
+                     R"({"item":")" + piece.find("item")->asString() + R"(","sounding":true})")
+                .find("text")
+                ->asString();
+        };
+        const auto first = plays(list[0]), middle = plays(list[1]), last = plays(list[2]);
+        CHECK(first.find("G3") != std::string::npos);
+        CHECK(first.find("A3") == std::string::npos);
+        CHECK(middle.find("D3") != std::string::npos);
+        CHECK(middle.find("E3") != std::string::npos);
+        CHECK(middle.find("C3") == std::string::npos);
+        CHECK(middle.find("F3") == std::string::npos);
+        CHECK(last.find("C4") != std::string::npos);
+        CHECK(last.find("B3") == std::string::npos);
+    }
+}
+
+TEST_CASE("take.comp.get reads a comp, and a saved project reads it alike") {
+    CompFixture f;
+    f.run("take.comp", kSpans);
+    const auto made = f.run("take.comp.get", R"({"item":"it_2"})");
+    const auto& list = made.find("pieces")->asArray();
+    REQUIRE(list.size() == 4);
+    const std::size_t take[] = {2, 0, 1, 2};
+    for (std::size_t i = 0; i < 4; ++i)
+        CHECK(list[i].find("index")->asInt() == static_cast<std::int64_t>(take[i]));
+    // Save, reopen, read again.
+    const auto file = f.dir / "comp.supple";
+    auto saved = f.call("project.save", R"({"path":")" + file.string() + R"("})");
+    REQUIRE_MESSAGE(saved, (saved ? "" : saved.error().toString()));
+    REQUIRE(f.call("project.open", R"({"path":")" + file.string() + R"("})"));
+    const auto again = f.run("take.comp.get", R"({"item":"it_2"})");
+    CHECK(json::writeCompact(again) == json::writeCompact(made));
+}
+
+TEST_CASE("take.comp is one undo step") {
+    CompFixture f;
+    // Undo keeps the id counters, so compare the objects, not the whole file.
+    const model::Session before = f.app->head();
+    f.run("take.comp", kSpans);
+    CHECK(f.app->head().items.size() == 4);
+    f.run("history.undo");
+    const model::Session& after = f.app->head();
+    REQUIRE(after.items.size() == 1);
+    CHECK(json::writeCompact(model::toJson(*after.items.find({model::Kind::Item, 1}))) ==
+          json::writeCompact(model::toJson(*before.items.find({model::Kind::Item, 1}))));
+    CHECK(after.takes.size() == before.takes.size());
+    for (const auto& e : before.takes)
+        CHECK(json::writeCompact(model::toJson(*after.takes.find(e.id))) ==
+              json::writeCompact(model::toJson(*e.value)));
+}
+
+TEST_CASE("take.comp refusals carry a code, message, path and hint") {
+    CompFixture f;
+    SUBCASE("which item") {
+        f.refused("take.comp", R"({"spans":[{"from":1,"to":2,"index":0}]})", "comp.item", "/item");
+        f.refused("take.comp",
+                  R"({"item":"it_1","items":["it_1"],"spans":[{"from":1,"to":2,"index":0}]})",
+                  "comp.item", "/item");
+        f.refused("take.comp", R"({"item":"it_9","spans":[{"from":1,"to":2,"index":0}]})",
+                  "it.unknown", "/item");
+        f.refused("take.comp", R"({"item":"cl_1","spans":[{"from":1,"to":2,"index":0}]})",
+                  "item.kind", "/item");
+    }
+    SUBCASE("spans") {
+        f.refused("take.comp", R"({"item":"it_1","spans":[{"from":2,"to":2,"index":0}]})",
+                  "comp.span", "/spans/0/to");
+        f.refused("take.comp", R"({"item":"it_1","spans":[{"from":3,"to":2,"index":0}]})",
+                  "comp.span", "/spans/0/to");
+        f.refused("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":5,"index":0}]})",
+                  "comp.span", "/spans/0/to");
+        f.refused("take.comp",
+                  R"({"item":"it_1","spans":[{"from":1,"to":3,"index":0},
+                                             {"from":2,"to":3.5,"index":1}]})",
+                  "comp.span", "/spans/1/from");
+    }
+    SUBCASE("takes") {
+        f.refused("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2}]})", "comp.take",
+                  "/spans/0");
+        f.refused("take.comp",
+                  R"({"item":"it_1","spans":[{"from":1,"to":2,"index":0,"take":"tk_1"}]})",
+                  "comp.take", "/spans/0");
+        f.refused("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2,"index":3}]})",
+                  "comp.take", "/spans/0/index");
+        f.refused("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2,"take":"tk_9"}]})",
+                  "comp.take", "/spans/0/take");
+    }
+    SUBCASE("a single take") {
+        f.run("take.remove", R"({"take":"tk_2"})");
+        f.run("take.remove", R"({"take":"tk_3"})");
+        f.refused("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2,"index":0}]})",
+                  "comp.takes", "/item");
+    }
+    SUBCASE("a looped item") {
+        f.run("item.set", R"({"item":"it_1","loop":true})");
+        f.refused("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2,"index":0}]})",
+                  "comp.loop", "/item");
+    }
+    SUBCASE("a locked item") {
+        f.run("item.set", R"({"item":"it_1","locked":true})");
+        auto result =
+            f.call("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2,"index":0}]})");
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "item.locked");
+    }
+    SUBCASE("items that are not one comp") {
+        f.run("take.comp", kSpans);
+        f.refused("take.comp", R"({"items":["it_1","it_3"],"spans":[{"from":1,"to":2,"index":0}]})",
+                  "comp.mismatch", "/items/1");
+        // Pieces whose takes differ are not one comp.
+        f.run("take.set", R"({"take":"tk_5","name":"renamed"})");
+        f.refused("take.comp", R"({"items":["it_1","it_2"],"spans":[{"from":1,"to":2,"index":0}]})",
+                  "comp.mismatch", "/items/1");
+    }
+}
