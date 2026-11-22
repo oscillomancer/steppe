@@ -2,6 +2,10 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 #include <algorithm>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -434,6 +438,40 @@ TEST_CASE("whether an empty marker is young depends on the two times, not on a c
     CHECK_FALSE(markerIsYoung(most, least));
     CHECK(markerIsYoung(most, most));
     CHECK(markerIsYoung(least, least));
+}
+#if !defined(_WIN32)
+TEST_CASE("an empty marker dated beyond the nanosecond range is not young, and does not wrap") {
+    // A modification time whose seconds do not fit in nanoseconds (set by hand: utimensat takes
+    // any 64-bit value a file system holds) must saturate, not overflow into a young marker.
+    Root root;
+    emptyMarker(root, 1);
+    const auto marker = file(root, 1, ".run");
+    for (const long long seconds : {1LL << 62, -(1LL << 62), 9'223'372'037LL, -9'223'372'037LL}) {
+        timespec stamp[2] = {{seconds, 0}, {seconds, 0}};
+        if (::utimensat(AT_FDCWD, marker.c_str(), stamp, 0) != 0) continue;  // not held here
+        auto listing = listReports(root.path);
+        REQUIRE(listing);
+        CHECK(listing->liveRuns == 0);
+        CHECK(listing->unreported.size() == 1);
+    }
+}
+#endif
+TEST_CASE("seconds and nanoseconds convert to Unix nanoseconds, saturating at the ends") {
+    constexpr auto least = std::numeric_limits<std::int64_t>::min();
+    constexpr auto most = std::numeric_limits<std::int64_t>::max();
+    CHECK(unixNanoseconds(0, 0) == 0);
+    CHECK(unixNanoseconds(1, 5) == 1'000'000'005);
+    CHECK(unixNanoseconds(-1, 0) == -1'000'000'000);
+    CHECK(unixNanoseconds(-1, 999'999'999) == -1);
+    // The last whole second that fits, with and without a part that would overflow it.
+    CHECK(unixNanoseconds(9'223'372'036, 0) == 9'223'372'036'000'000'000);
+    CHECK(unixNanoseconds(9'223'372'036, 854'775'807) == most);
+    CHECK(unixNanoseconds(9'223'372'036, 999'999'999) == most);
+    CHECK(unixNanoseconds(9'223'372'037, 0) == most);
+    CHECK(unixNanoseconds(-9'223'372'036, 0) == -9'223'372'036'000'000'000);
+    CHECK(unixNanoseconds(-9'223'372'037, 0) == least);
+    CHECK(unixNanoseconds(std::numeric_limits<std::int64_t>::max(), 0) == most);
+    CHECK(unixNanoseconds(std::numeric_limits<std::int64_t>::min(), 999'999'999) == least);
 }
 TEST_CASE("a file time converts to Unix nanoseconds, saturating at the ends of the range") {
     constexpr std::uint64_t epoch = 116'444'736'000'000'000ULL;  // 1970 in 1601's 100 ns ticks

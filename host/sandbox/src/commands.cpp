@@ -436,6 +436,21 @@ Result<RenderInput> renderInput(Session& s, const RenderArgs& a,
 // --- registration ----------------------------------------------------------------------
 
 void registerCommands(cmd::Registry& registry, const ExamplePlugins& ex) {
+    // One line per command group (the name before the first '.'), as the agent index shows it.
+    registry.describeGroup("analyze", "Analyze a render or audio file: loudness, spectrum, pitch.");
+    registry.describeGroup("compare", "Compare two renders or files by their descriptors.");
+    registry.describeGroup("dsp", "DSP scripts: write, check, test, preview and export.");
+    registry.describeGroup("masking", "Estimate where one sound masks another.");
+    registry.describeGroup("optimize", "Tune parameters toward a reference sound or a target.");
+    registry.describeGroup("param", "Read and set plug-in parameters in physical units.");
+    registry.describeGroup("patch", "An instance's patch document: get, set, merge.");
+    registry.describeGroup("plugin",
+                           "The plug-ins the sandbox can load: list, load, remove, describe.");
+    registry.describeGroup("preset", "User presets and factory patches: list, load, save.");
+    registry.describeGroup("profile", "Score a render against a target descriptor profile.");
+    registry.describeGroup("render", "Render notes, a MIDI file or audio through the chain.");
+    registry.describeGroup("script", "Run a Lua script on the command bus.");
+    registry.describeGroup("session", "The sandbox session: settings, chain, instances; reset.");
     const std::string I = ex.instrument, F = ex.effect;
     lua::registerScriptCommands(registry);
 
