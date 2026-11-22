@@ -932,13 +932,30 @@ void registerItemCommands(cmd::Registry& registry) {
             // first pass of a looped item, else the item. `heardSeq` carries the controls placed
             // as the item plays them and each answered note at its place.
             const model::Item* itemObj = clip ? nullptr : s.items.find(*id);
-            const auto answer = [&](const std::vector<model::SoundingNote>& notes, bool following) {
+            const auto answer = [&](const std::vector<model::SoundingNote>& notes, bool following,
+                                    bool firstPass = false) {
                 const midi::Sequence& written = *shown;
                 const double itemStart = model::itemSpan(s, *itemObj).startBeat;
                 heardSeq.ppq = written.ppq;
                 heardSeq.length = std::llround(model::itemLengthBeats(s, *itemObj) * written.ppq);
                 detail::heardMidi(s, *itemObj, *take, written, 0.0, heardSeq);
                 heardSeq.notes.clear();
+                // The first pass of a looped item: its controls and its length too, not every
+                // pass's against one pass of notes.
+                const double cycle = written.ppq > 0 ? static_cast<double>(written.length) /
+                                                           static_cast<double>(written.ppq)
+                                                     : 0.0;
+                if (firstPass && itemObj->loop && cycle > 0) {
+                    const double rate = take->playrate > 0 ? take->playrate : 1.0;
+                    const double offset = std::fmod(take->startOffset, cycle);
+                    const std::int64_t end =
+                        std::llround((cycle - offset) / rate * static_cast<double>(written.ppq));
+                    std::erase_if(heardSeq.controls,
+                                  [&](const midi::Control& c) { return c.tick >= end; });
+                    std::erase_if(heardSeq.sysex,
+                                  [&](const midi::Sysex& x) { return x.tick >= end; });
+                    heardSeq.length = std::min(heardSeq.length, end);
+                }
                 for (const auto& h : notes) {
                     midi::Note note = written.notes[h.note];
                     if (following && note.channel != 9)
@@ -989,7 +1006,7 @@ void registerItemCommands(cmd::Registry& registry) {
                             model::leadPitches(heard, sounded, itemStart, shown->notes.size());
                         const auto first = firstPass(heard);
                         extra.soundingDiffers = differing(first);
-                        answer(first, true);
+                        answer(first, true, true);
                         if (!lead.alike) extra.differsByPass = true;
                     }
                 }
@@ -999,7 +1016,7 @@ void registerItemCommands(cmd::Registry& registry) {
                 answer((a.from || a.to) ? model::soundingNotes(s, *id, a.from.value_or(-1e18),
                                                                a.to.value_or(1e18))
                                         : firstPass(model::soundingNotes(s, *id, -1e18, 1e18)),
-                       false);
+                       false, !(a.from || a.to));
             }
             auto text = notation::decompile(*shown, options);
             if (!text) return std::move(text).error();

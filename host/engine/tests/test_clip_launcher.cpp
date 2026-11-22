@@ -2680,6 +2680,21 @@ TEST_CASE("a clip made from an item whose context is longer than a clip holds sa
     CHECK(clip.context.size() <= model::kMaxContextPoints * 2);
 }
 
+TEST_CASE(
+    "midi.get {sounding} of a looped item answers the first pass's controls, not every pass's") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("midi.write", R"({"item": "it_1", "notation":
+        "voice bass; 1: C2:q E2:q G2:q C3:q\nlane cc cutoff ch 1\n1.2 50"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    l.run("item.set", R"({"item": "it_1", "loop": true, "length": 12})");
+    const auto got = l.run("midi.get", R"({"item": "it_1", "sounding": true})");
+    const std::string text = got.find("text")->asString();
+    CHECK(text.find("1.2 50") != std::string::npos);
+    CHECK(text.find("2.2 50") == std::string::npos);
+    CHECK(text.find("3.2 50") == std::string::npos);
+}
+
 TEST_CASE("a split of a looped item laid from a clip, past its first pass, keeps what sounds") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
