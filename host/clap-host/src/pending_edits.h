@@ -51,6 +51,9 @@ class PendingEdits {
         prune();
         return pending_;
     }
+    // Main thread: the sequence the next push takes (every change pushed so
+    // far has a lower one; pop() returns them in sequence order).
+    std::uint64_t nextSequence() const { return sequence_ + 1; }
     void barrier() {
         generation_.fetch_add(1, std::memory_order_acq_rel);
         pending_.clear();

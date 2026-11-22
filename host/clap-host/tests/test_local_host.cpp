@@ -242,6 +242,131 @@ TEST_CASE("a VST3 editor closed mid-drag ends the drag after the moves it made")
     instance.deactivate();
 }
 
+TEST_CASE("a VST3 editor closed mid-drag with its queue full ends the drag after its moves") {
+    // Review round 97, T1: an end the full queue refuses asks for every open
+    // gesture's end. Handled before the queue, a move still queued came out
+    // after it (a second step), and a Begin still queued (a drag while not
+    // processing) was never ended. It now goes out where the end would have
+    // been queued: after the moves, before anything queued later.
+    auto found = scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
+    REQUIRE(found);
+    const auto info = std::find_if(found->begin(), found->end(), [](const PluginInfo& p) {
+        return p.name == "Test VST3 Stepped Echo";
+    });
+    REQUIRE(info != found->end());
+    auto made = Instance::create(*info, {});
+    REQUIRE(made);
+    auto& instance = **made;
+    REQUIRE(instance.activate(48000, 1, 64));
+    REQUIRE(instance.startProcessing());
+    Buffers buffer(64);
+    std::vector<OutputEvent> storage(256);
+    OutputEvents out{storage};
+    using Kind = OutputEvent::Kind;
+    // The editor's events for Level (3) in a block.
+    const auto block = [&] {
+        out.clear();
+        REQUIRE(instance.process(buffer.block(64), &out));
+        std::vector<OutputEvent> level;
+        for (std::size_t k = 0; k < out.count; ++k)
+            if (storage[k].paramId == 3) level.push_back(storage[k]);
+        return level;
+    };
+    // Edit at 0 (the editor does nothing, the processor reports nothing)
+    // fills the queue until it refuses a change.
+    const auto fill = [&] {
+        int queued = 0;
+        while (instance.setParam(2, 0.0) && queued < 4096) ++queued;
+        REQUIRE(queued > 0);
+        REQUIRE(queued < 4096);
+    };
+    SUBCASE("the grab already taken") {
+        REQUIRE(instance.openEditor(0x5a17, 1.0));
+        REQUIRE(instance.setParam(2, 0.05));  // grab
+        auto events = block();
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].kind == Kind::GestureBegin);
+        REQUIRE(instance.setParam(2, 0.5));  // a move, then a full queue
+        fill();
+        instance.closeEditor();  // its end is refused
+        events = block();
+        REQUIRE(events.size() == 2);
+        CHECK(events[0].kind == Kind::ParamValue);
+        CHECK(events[0].value == doctest::Approx(0.5));
+        CHECK(events[1].kind == Kind::GestureEnd);
+    }
+    SUBCASE("the grab still queued, while not processing") {
+        instance.stopProcessing();
+        REQUIRE(instance.openEditor(0x5a17, 1.0));
+        REQUIRE(instance.setParam(2, 0.05));  // grab
+        REQUIRE(instance.setParam(2, 0.5));
+        fill();
+        instance.closeEditor();
+        REQUIRE(instance.startProcessing());
+        const auto events = block();
+        REQUIRE(events.size() == 3);
+        CHECK(events[0].kind == Kind::GestureBegin);
+        CHECK(events[1].kind == Kind::ParamValue);
+        CHECK(events[1].value == doctest::Approx(0.5));
+        CHECK(events[2].kind == Kind::GestureEnd);
+    }
+    // A grab made after the end request is not ended by it.
+    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.setParam(2, 0.05));
+    REQUIRE(instance.setParam(2, 0.3));
+    auto events = block();
+    REQUIRE(events.size() == 2);
+    CHECK(events[0].kind == Kind::GestureBegin);
+    CHECK(events[1].kind == Kind::ParamValue);
+    instance.closeEditor();
+    events = block();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].kind == Kind::GestureEnd);
+    instance.stopProcessing();
+    instance.deactivate();
+}
+
+TEST_CASE("a barrier's end request ends only the gestures begun before it") {
+    // A state load drops the queued edits and ends the open gesture; a grab
+    // queued after it, taken in the same block, stays open until its own end.
+    auto found = scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
+    REQUIRE(found);
+    const auto info = std::find_if(found->begin(), found->end(), [](const PluginInfo& p) {
+        return p.name == "Test VST3 Stepped Echo";
+    });
+    REQUIRE(info != found->end());
+    auto made = Instance::create(*info, {});
+    REQUIRE(made);
+    auto& instance = **made;
+    REQUIRE(instance.activate(48000, 1, 64));
+    REQUIRE(instance.startProcessing());
+    Buffers buffer(64);
+    std::vector<OutputEvent> storage(16);
+    OutputEvents out{storage};
+    using Kind = OutputEvent::Kind;
+    const auto block = [&] {
+        out.clear();
+        REQUIRE(instance.process(buffer.block(64), &out));
+        return std::vector<OutputEvent>(storage.begin(), storage.begin() + out.count);
+    };
+    REQUIRE(instance.setParam(2, 0.05));  // grab
+    REQUIRE(block().size() == 1);
+    const auto state = instance.saveState();
+    REQUIRE(state);
+    REQUIRE(instance.loadState(*state));  // ends it
+    REQUIRE(instance.setParam(2, 0.05));  // grabs again, in the same block
+    auto events = block();
+    REQUIRE(events.size() == 2);
+    CHECK(events[0].kind == Kind::GestureEnd);
+    CHECK(events[1].kind == Kind::GestureBegin);
+    REQUIRE(instance.setParam(2, 0.95));  // its own end
+    events = block();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].kind == Kind::GestureEnd);
+    instance.stopProcessing();
+    instance.deactivate();
+}
+
 TEST_CASE("VST3 plug-ins with a sidechain bus get every bus; kNotImplemented starts processing") {
     // A partial bus layout is refused by strict plug-ins, which then output
     // silence; setProcessing may answer kNotImplemented (sfizz does).

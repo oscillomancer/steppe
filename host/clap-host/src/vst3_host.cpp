@@ -497,9 +497,20 @@ struct Vst3Instance::State {
     // request to end them all (main thread: a barrier dropped queued edits,
     // the plug-in was deactivated, or an editor edit found the queue full),
     // so an end that never comes leaves no gesture open (review round 81b).
+    // The request is the queue's next sequence when it was made (0: none):
+    // the ends go out after every change queued before it and before any
+    // queued after, as a queued end would (review round 97, T1). Handled
+    // before the queue, a move still queued came out after its gesture's
+    // end (a second step), and a Begin still queued was never ended. A
+    // request made before the block took the last one keeps the later: a
+    // full queue takes nothing between them and a barrier drops it, so only
+    // edits queued between a deactivation and a later request could show it.
     std::array<vst::ParamID, 16> begun{};
     std::size_t begunCount = 0;
-    std::atomic<bool> endGestures{false};
+    std::atomic<std::uint64_t> endGesturesBefore{0};
+    void endGestures() {
+        endGesturesBefore.store(changes.nextSequence(), std::memory_order_release);
+    }
     // Set while the processor processes (audio thread), and an editor edit's
     // request to process (main thread, taken by the audio thread).
     std::atomic<bool> processingNow{false}, editorRequest{false};
@@ -574,7 +585,7 @@ Result<std::unique_ptr<Vst3Instance>> Vst3Instance::create(const PluginInfo& inf
     s.handler->edit = [state = &s](vst::ParamID param, vst::ParamValue normalized,
                                    PendingEdits::Kind kind) {
         const bool queued = state->changes.push(param, normalized, kind);
-        if (!queued && kind != PendingEdits::Value) state->endGestures = true;
+        if (!queued && kind != PendingEdits::Value) state->endGestures();
         return queued;
     };
     for (auto& channel : s.midiParams) channel.fill(vst::kNoParamId);
@@ -767,7 +778,7 @@ void Vst3Instance::deactivate() {
     state_->component->setActive(false);
     state_->active = false;
     state_->handler->open.clear();
-    state_->endGestures = true;
+    state_->endGestures();
 }
 std::uint32_t Vst3Instance::latency() const {
     return state_->active ? state_->processor->getLatencySamples() : 0;
@@ -847,7 +858,7 @@ Result<std::vector<std::uint8_t>> Vst3Instance::saveState() {
             return Error("host.state", "VST3 idle parameter flush failed");
         s.changes.barrier();
         s.handler->open.clear();
-        s.endGestures = true;
+        s.endGestures();
     }
     Steinberg::ResizableMemoryIBStream component, controller;
     if (state_->component->getState(&component) != kResultOk)
@@ -903,7 +914,7 @@ Status Vst3Instance::loadState(std::span<const std::uint8_t> bytes) {
     auto previous = saveState();
     state_->changes.barrier();
     state_->handler->open.clear();
-    state_->endGestures = true;
+    state_->endGestures();
     auto status = apply(bytes);
     if (status) return status;
     Error error = status.error();
@@ -1068,16 +1079,38 @@ bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_
     // stays outside them (an echo, dropped), and a gesture's last value is
     // the hand's.
     s.editorOutputs = 0;
-    if (s.endGestures.exchange(false, std::memory_order_acq_rel)) {
+    const auto endBegun = [&] {
         for (std::size_t k = 0; k < s.begunCount; ++k)
-            s.editorOutput[s.editorOutputs++] = {.kind = OutputEvent::Kind::GestureEnd,
-                                                 .time = 0,
-                                                 .paramId = s.begun[k],
-                                                 .noteId = -1};
+            if (s.editorOutputs < s.editorOutput.size())
+                s.editorOutput[s.editorOutputs++] = {.kind = OutputEvent::Kind::GestureEnd,
+                                                     .time = 0,
+                                                     .paramId = s.begun[k],
+                                                     .noteId = -1};
         s.begunCount = 0;
-    }
+    };
+    // An end request is read for each change: one pushed after the request
+    // is popped only once the request is visible (release, then acquire),
+    // and once it is, every change pushed before it is too. A newer request
+    // that replaced it stays for its own place.
+    const auto takeRequest = [&](std::uint64_t before) {
+        (void)s.endGesturesBefore.compare_exchange_strong(before, 0, std::memory_order_acq_rel);
+    };
     PendingEdits::Change change{};
-    while (s.changes.pop(change)) {
+    for (;;) {
+        if (!s.changes.pop(change)) {
+            const std::uint64_t before = s.endGesturesBefore.load(std::memory_order_acquire);
+            if (before == 0) break;
+            if (!s.changes.pop(change)) {  // nothing queued before the request is left
+                endBegun();
+                takeRequest(before);
+                break;
+            }
+        }
+        if (const std::uint64_t before = s.endGesturesBefore.load(std::memory_order_acquire);
+            before != 0 && change.sequence >= before) {
+            endBegun();
+            takeRequest(before);
+        }
         if (change.kind == PendingEdits::Value || change.kind == PendingEdits::Edited)
             addNormalized(change.id, change.value, 0);
         if (change.kind == PendingEdits::Value) continue;
@@ -1456,9 +1489,8 @@ void Vst3Instance::closeEditor() {
     // An editor closed mid-drag sends no endEdit (review round 81c E6): its
     // grabs end here, so the drag is recorded now, not when something else
     // ends it. Each grab's end is queued behind the editor's moves (round
-    // 92b): endGestures, which the next block handles before the queue, put
-    // a move still queued after the end, a second, gestureless edit (a second
-    // step and point). An end the full queue refuses still sets it (edit()).
+    // 92b); one the full queue refuses asks for the ends in queue order
+    // instead (edit(), endGestures()).
     if (!s.handler->open.empty()) {
         for (const auto id : s.handler->open) (void)s.handler->edit(id, 0, PendingEdits::End);
         s.handler->open.clear();
