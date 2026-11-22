@@ -543,10 +543,14 @@ void Engine::stop() {
         for (auto& take : takes) stoppedTakes_.push_back(std::move(take));
     }
     recorderOwned_.reset();
-    // A backend that broke its stop() contract has already joined its
-    // thread, so nothing else touches the plugins: recover here.
-    if (!shutDown_.load())
-        for (host::Instance* in : processing_) in->stopProcessing();
+    // Every audio thread has joined, so nothing else touches the plugins: stop
+    // any the audio thread left processing (a backend that broke its stop()
+    // contract, or that ran a cycle after the request) here.
+    for (host::Instance* in : processing_)
+        if (in->processing()) {
+            stoppedOnAudioThread_ = false;
+            in->stopProcessing();
+        }
     if (!liveProcessing_.empty()) stoppedOnAudioThread_ = false;
     for (host::Instance* in : liveProcessing_) in->stopProcessing();
     for (auto* list : {&processing_, &liveProcessing_}) {
@@ -1745,12 +1749,17 @@ void Engine::cycle(const float* const* in, float* const* out, std::uint32_t fram
             inst->setOwner(nullptr);
         }
         liveProcessing_.clear();
-        if (!shutDown_.load()) {
+        // In the callback's executor, whatever processing_ still holds, shut
+        // down or not. Anticipative, it is the renderer's, which stopped it as
+        // it ended (shutDown_), so only a renderer that never ran leaves any.
+        if (!options_.anticipative || !shutDown_.load()) {
             for (host::Instance* inst : processing_) {
                 inst->stopProcessing();
                 inst->setOwner(nullptr);
             }
             processing_.clear();
+        }
+        if (!shutDown_.load()) {
             playing_ = false;
             stoppedOnAudioThread_ = true;
             shutDown_.store(true);
@@ -1968,6 +1977,27 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
         cycles_.fetch_add(1, std::memory_order_release);
         return;
     }
+    if (shutdownRequested_.load(std::memory_order_acquire)) {
+        // Stopping: this executor starts no plug-in again, neither a refused
+        // one's retry nor a newer plan's, which the final callback and stop()
+        // would then leave processing with no owner, so that an engine
+        // restarted on this pool could never claim it.
+        if (!shutDown_.load()) {
+            detail::adoptRackModules(plan_ ? &plan_->modules : nullptr, nullptr, &processing_);
+            for (host::Instance* inst : processing_) {
+                inst->stopProcessing();
+                inst->setOwner(nullptr);
+            }
+            processing_.clear();
+            playing_ = false;
+            stoppedOnAudioThread_ = true;
+            shutDown_.store(true);
+        }
+        silence(out, 0, frames);
+        reportedPlaying_.store(false);
+        cycles_.fetch_add(1, std::memory_order_release);
+        return;
+    }
     TransportSnapshot xport;
     std::uint64_t xportSeq = 0;
     const bool xportNew = xportSeq_.load(std::memory_order_acquire) != xportSeen_ &&
@@ -2020,17 +2050,6 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             detail::locate(*plan, pos_, false);
             stoppedGen_.store(plan->generation, std::memory_order_release);
         }
-    }
-    if (shutdownRequested_.load(std::memory_order_acquire) && !shutDown_.load()) {
-        detail::adoptRackModules(plan ? &plan->modules : nullptr, nullptr, &processing_);
-        for (host::Instance* inst : processing_) {
-            inst->stopProcessing();
-            inst->setOwner(nullptr);
-        }
-        processing_.clear();
-        playing_ = false;
-        stoppedOnAudioThread_ = true;
-        shutDown_.store(true);
     }
     if (xportNew && xport.seekSeq != seekSeen_) {
         seekSeen_ = xport.seekSeq;
