@@ -1510,6 +1510,53 @@ TEST_CASE("a capture ended on a quantize boundary ends exactly there, without it
         }
 }
 
+TEST_CASE("a quantized capture end's ends_at is the commit's to; past a loop wrap the song's beat" *
+          doctest::description("rt")) {
+    // Review round 104 Y2. At 117 BPM bar 3 (beat 8) falls between samples
+    // (196923.08): the capture ends on the sample a launch there switches on
+    // (196923), and ends_at is that sample's beat, the same number as the
+    // commit's to. Under a loop over bars 1-2 an end in its second pass is
+    // on bar 2 of the song (ends_at about 4), while to runs on by running
+    // time (about 12).
+    const double bar = 4 * 60.0 / 117;             // seconds
+    const double sample = 1.0 / 48000 * 117 / 60;  // a sample, in beats
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}})
+        for (const bool wrap : {false, true}) {
+            INFO("anticipative " << options.anticipative << ", wrap " << wrap);
+            Project p;
+            twoTracks(p);
+            p.run("tempo.set", R"({"points": [{"beat": 0, "bpm": 117}]})");
+            if (wrap) {
+                auto loop = j(R"({"start_seconds": 0, "enabled": true})");
+                loop["end_seconds"] = 2 * bar;
+                p.runArgs("transport.loop", loop);
+            }
+            AppLive live(p, options, 128, 48000 * 8 + 16384);
+            p.run("launch.capture", R"({"on": true})");
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2
+            const std::int64_t loopEnd = 196923;            // bar 3's sample
+            live.until(wrap ? loopEnd + 20000 : 150000);
+            json::Value ending = p.run("launch.capture", R"({"on": false, "quantize": "bar"})");
+            REQUIRE(ending["on"].asBool());
+            const double endsAt = ending["ends_at"].asDouble();
+            const double song = wrap ? 4.0 : 8.0;
+            CHECK(endsAt != song);  // not a whole sample
+            CHECK(std::fabs(endsAt - song) < sample);
+            CHECK(p.run("launch.state", "{}")["capture_ends"].asDouble() == endsAt);
+            live.until(wrap ? loopEnd + 98462 + 8000 : loopEnd + 8000);
+            REQUIRE_FALSE(p.run("launch.state", "{}")["capturing"].asBool());
+            json::Value done = p.run("launch.commit", "{}");
+            if (wrap) {
+                CHECK(std::fabs(done["to"].asDouble() - 12.0) < sample);  // by running time
+            } else {
+                CHECK(done["to"].asDouble() == endsAt);
+            }
+            live.stop();
+        }
+}
+
 TEST_CASE(
     "a quantized capture end heard before a service ends on its boundary whatever comes next" *
     doctest::description("rt")) {

@@ -849,14 +849,20 @@ bar it meant, and the commit's last item was cut there.
   replaces it, and a relocation (a seek, a stop, a loop change) ends the
   capture at once, as before. Stopped, or without `quantize` (or with
   `none`), it ends at once, as before.
+- It ends on the sample a launch on the boundary switches on (the nearest
+  to the boundary). `ends_at` is that sample's beat, the same number as the
+  commit's `to`: the boundary's own beat when it falls on a whole sample,
+  otherwise within half a sample of it (at 117 BPM, 7.99999… for beat 8).
+  After a transport loop wrap, `ends_at` is the song's beat in the loop,
+  while the commit lays out by running time, so its `to` is further on.
 - `launch.commit` while an end is pending is refused with
   `launch.capture.ending`; the capture is kept.
 - The GUI's Capture toggle, turned off while playing, ends the capture on
   the project's launch quantize and commits it once the end is heard.
 
 **Consequences.** A performance can end on the grid it was launched on, and
-its commit ends on that bar's beat exactly, in both executors at any block
-size. The tests end a capture on bar 3 with a launch placed on the same
+its commit ends on the sample a launch on that bar switches on, with `to`
+equal to the `ends_at` it was given, in both executors at any block size. The tests end a capture on bar 3 with a launch placed on the same
 boundary (left out), and cover cancelling, replacing and a seek first.
 
 ## Consequences

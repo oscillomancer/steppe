@@ -588,9 +588,11 @@ the same.*
   quantize while playing (`launch.capture {on: false, quantize}`), on that
   quantize's next boundary: placed as a launch of every track with clips
   made then would be, so a launch made with it lands there too. The
-  capture runs until that boundary is heard (`endsFrame`, `endsBeat`) and
-  then ends on it exactly; a launch applied from the boundary on is not in
-  it. On again before it cancels the end, another end replaces it, and
+  capture runs until that boundary is heard (`endsFrame`) and then ends on
+  it, on the sample a launch there switches on; a launch applied from the
+  boundary on is not in it. `endsBeat` (`ends_at`) is that sample's beat,
+  which the commit's `to` will be; after a transport loop wrap it is the
+  song's beat in the loop, while `to` runs on by running time. On again before it cancels the end, another end replaces it, and
   `launch.commit` is refused meanwhile (`launch.capture.ending`). A
   relocation (a seek, a stop, a loop change) ends a capture that has run
   any frames, where it was heard, ending or not; one that has not begins

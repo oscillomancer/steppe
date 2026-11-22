@@ -173,8 +173,10 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   (from where playing starts, when stopped); `{on: false}` ends it and answers
   `{on, from, to}`, the span in beats. To end on the grid, send `{on: false, quantize:
   "bar"}` (or another launch quantize) while playing: it answers `{on: true, ends_at}`
-  and captures until that boundary is heard, where it ends exactly, as a launch made
-  with it would land (that launch is not in it). Wait for `launch.state`'s
+  and captures until that boundary is heard, where it ends, on the sample a launch made
+  with it would switch on (that launch is not in it). `ends_at` is that sample's beat,
+  which `launch.commit`'s `to` will be; if the loop wrapped meanwhile it is the song's
+  beat in the loop, and `to` runs on by running time. Wait for `launch.state`'s
   `capturing` to turn false (`capture_ends` says the beat meanwhile), then commit:
   `launch.commit` before then is `launch.capture.ending`. `{on: true}` before the
   boundary cancels the end. A stop, a seek or a loop change ends a capture that has

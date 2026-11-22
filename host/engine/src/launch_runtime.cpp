@@ -961,7 +961,10 @@ Status Engine::captureLaunches(bool on, std::optional<model::LaunchQuantize> qua
         if (placed->epoch == capture_.epoch && placed->stream > capture_.startFrame) {
             capture_.ending = true;
             capture_.endFrame = placed->stream;
-            capture_.endBeat = placed->anchorBeat;
+            // The beat of the sample it ends on, as the commit's `to` reads
+            // it (the boundary's own beat when that is a whole sample).
+            capture_.endBeat =
+                latest_->timeMap->beatAt(double(placed->anchorSample) / config_.sampleRate);
             return {};
         }
         // A boundary in another epoch (a relocation is coming): it ends now.

@@ -874,8 +874,9 @@ class Engine {
         std::int64_t startSample = 0, frames = 0;
         LoopRange loop;
         std::vector<LaunchLogEntry> launches;
-        // A quantized end not reached yet: its running frame, and the
-        // boundary's beat.
+        // A quantized end not reached yet: its running frame, and the beat
+        // of the sample it ends on (the commit's `to`; after a loop wrap the
+        // song's beat in the loop).
         std::optional<std::int64_t> endsFrame;
         std::optional<double> endsBeat;
     };
