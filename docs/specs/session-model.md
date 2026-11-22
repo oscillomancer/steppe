@@ -2649,10 +2649,11 @@ later starts from there.
 - The new context is `contextUnder` the project's context over the span the heard notes
   cover: from the earlier of the item's start and the first heard note (a note held in
   from before the start is heard there), to the item's end. The key and the chord holding at
-  the span's start are points at 0 (a project with no chord there writes none, as `clip.add
-  {item}` does), the points inside the span follow, each at its song distance from the
-  span's start, and `context_period` is dropped. The context is on the source axis
-  (`context_phase` 0, so a note's context beat is its source beat), where the notes' starts
+  the span's start come first, at the source beat of the earliest heard note (0 once the take
+  is unrolled; a project with no chord there writes none, as `clip.add {item}` does), the
+  points inside the span follow, each placed as below, and `context_period` is dropped. The
+  context is on the source axis (`context_phase` 0, so a note's context beat is its source
+  beat), where the notes' starts
   are on the 1/960 grid: a song beat `s` is the context beat `start_offset + (s − item start)
   × playrate`, with the offset and rate after the bake (0 and 1 once unrolled), and each point
   is rounded **up** to the grid, less the slack a place is read with. Rounding up is exact
