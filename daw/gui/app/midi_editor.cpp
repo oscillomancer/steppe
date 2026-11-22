@@ -186,6 +186,16 @@ bool RollState::outsideItem(std::size_t i, const RollNote& n) const {
     return n.start + n.length <= kSlack || n.start >= itemLength - kSlack;
 }
 
+std::string RollState::heldTakeChord(double beat) const {
+    std::string out = "r";
+    for (const ChordMark& m : rowLabel == "take" ? chords : otherChords) {
+        if (m.keyOnly || std::abs(m.beat - beat) >= 1e-6) continue;
+        std::string chord = m.text.substr(std::min(m.keyPrefix, m.text.size()));
+        if (!chord.empty()) out = std::move(chord);
+    }
+    return out;
+}
+
 std::optional<int> RollState::outlinePitch(std::size_t i, const RollNote& n) const {
     // A note not heard has no outline (gui.md §4.7): it is drawn dim instead.
     if (i < sounds.size() && !sounds[i].heard) return std::nullopt;
@@ -990,12 +1000,7 @@ class BarStrip : public ui::Node {
                 pressX_ = e.pos.x;
                 moved_ = false;
                 copy_ = (e.mods & ui::kAlt) != 0;
-                heldText_ = "r";
-                for (const auto* marks : {&s_.chords, &s_.otherChords})
-                    if ((marks == &s_.chords) == (s_.rowLabel == "take"))
-                        for (const RollState::ChordMark& m : *marks)
-                            if (std::abs(m.beat - from_) < 1e-6 && !m.text.empty())
-                                heldText_ = m.text;
+                heldText_ = s_.heldTakeChord(from_);
                 if (ui::Root* r = root()) r->capture(this);
                 return true;
             }
@@ -2674,6 +2679,7 @@ void takeContextMarks(const model::Take& take, double itemPosition, double lo, d
             return c.beat >= beat - model::kPlaceSlack;
         });
         if (at != chords.end() && at->beat <= beat + model::kPlaceSlack) {
+            at->keyPrefix = at->text.empty() ? words.size() : words.size() + 2;
             at->text = at->text.empty() ? words : words + ": " + at->text;
             continue;
         }

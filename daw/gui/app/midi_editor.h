@@ -177,6 +177,9 @@ struct RollState {
         // A take row's cell that only names where the take's key changes
         // ("A minor: Am" over the chord holding there): no point to edit.
         bool keyOnly = false;
+        // The length of a key change's name before the chord in `text`
+        // ("A minor: " in "A minor: Am"), so a drag shows the chord alone.
+        std::size_t keyPrefix = 0;
     };
     std::vector<ChordMark> chords;
     // A clip's key points (text: "D dorian"), drawn and dragged in the
@@ -198,6 +201,10 @@ struct RollState {
     // nothing there is heard): a following take's note not heard in the pass
     // shown, else one wholly before the start or from the end on.
     bool outsideItem(std::size_t i, const RollNote& n) const;
+    // What a drag of the take row's chord at project beat `beat` shows: the
+    // chord alone, without a key change named on its cell ("Am" from
+    // "A minor: Am"), as the drag moves only the chord; "r" for none.
+    std::string heldTakeChord(double beat) const;
     // What each note sounds as in the pass shown, index for index with
     // `notes` (model::soundingNotes): its pitch (-1: not heard in that pass,
     // drawn as written) and that occurrence's song beat less the roll's

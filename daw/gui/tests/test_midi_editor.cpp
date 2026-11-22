@@ -5041,6 +5041,12 @@ TEST_CASE("a following take's strip: its take row names each change of the take'
     CHECK(texts == std::vector<std::string>{"C", "A minor: Am", "G major: Am"});
     CHECK(keyOnly == std::vector<bool>{false, false, true});
     CHECK(f.editor->otherChordLabels().front() == "C");
+    // A drag of a chord whose cell names a key shows the chord alone: only
+    // the chord moves. The key's own cell holds no chord.
+    const auto& s = f.editor->state();
+    CHECK(s.heldTakeChord(s.otherChords.front().beat) == "C");  // carried in at the left
+    CHECK(s.heldTakeChord(6.0) == "Am");
+    CHECK(s.heldTakeChord(7.0) == "r");
 }
 
 TEST_CASE("a following take's roll: a looped pass's unheard notes read its place") {

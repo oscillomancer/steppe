@@ -1794,7 +1794,8 @@ compiles) and, for a place no note has yet, `model::placeAt` and
   with the lead sheet in bars of the meter at the item (`gui::takeLeadSheet`)
   and each point at the context beat of its place (`model::placeAt`, so a
   repeating context's repeats edit its one period): a drag moves a chord
-  (Alt copies it); a double-click opens the chord field on the take's chord
+  (Alt copies it), its label the chord alone ("Am", not "A minor: Am": a key
+  named on its cell stays); a double-click opens the chord field on the take's chord
   there; a right-click opens its menu (`midi.take.context.menu`): Key… or
   Key at bar N…, Chord…, Remove key, Remove chord, From the song's key and
   chords (`gui::songContextUnder`: the song's under the item, replacing the
