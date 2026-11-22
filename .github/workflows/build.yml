@@ -35,8 +35,10 @@ on:
 permissions:
   contents: read
 
+# Dispatches for different platforms on one branch run side by side; a new
+# one for the same platforms supersedes the old (the jobs' own groups too).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.platforms || 'all' }}
   cancel-in-progress: true
 
 env:
