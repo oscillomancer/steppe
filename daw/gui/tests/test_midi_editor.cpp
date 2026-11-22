@@ -5212,6 +5212,83 @@ TEST_CASE("MIDI editor: a looped item's roll wraps start_offset: a split loop an
     }
 }
 
+TEST_CASE("MIDI editor: a looped item's roll wraps start_offset at playrate 2: CC lane and paste") {
+    // gui.md §4.7, the roll's axis (review round 93, Q3): at playrate 2 the
+    // fixture's one-bar loop lasts two song beats, so a split two beats into
+    // the loop starts its take one loop (4 source beats) in, and the frame
+    // shift is that loop over the playrate: 2 beats, not 4. The CC lane's
+    // writes and a paste land where the roll draws them.
+    Fixture f;
+    if (!f.ok) return;
+    const auto take = f.app->head().items.find(*model::Id::parse(f.item))->activeTake->str();
+    f.exec("take.set", R"({"take":")" + take + R"(","playrate":2})");
+    f.exec("item.set", R"({"item":")" + f.item + R"(","length":6,"loop":true})");
+    f.item = f.exec("item.split", R"({"item":")" + f.item + R"(","at":6})")["right"].asString();
+    const model::Id rightTake = *f.app->head().items.find(*model::Id::parse(f.item))->activeTake;
+    REQUIRE(f.app->head().takes.find(rightTake)->startOffset == 4);
+    REQUIRE(f.app->head().takes.find(rightTake)->playrate == 2);
+    auto loopLength = [&] {
+        const auto owner = gui::midiOwner(f.app->head(), f.item);
+        REQUIRE(owner);
+        return owner->source->sequence.length;
+    };
+    const auto length = loopLength();
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    auto& s = f.editor->state();
+    REQUIRE(s.notes.size() == 4);
+    CHECK(s.frameShift == doctest::Approx(2));
+    for (std::size_t i = 0; i < 4; ++i)
+        CHECK(s.notes[i].start == doctest::Approx(0.5 * static_cast<double>(i)));
+    CHECK(f.notes().asArray()[0]["start"].asDouble() == doctest::Approx(-2));
+    auto ccBeats = [&] {
+        std::vector<double> out;
+        const json::Value all = f.exec("midi.notes", R"({"item":")" + f.item + R"("})")["cc"];
+        for (const auto& c : all.asArray()) out.push_back(c.find("beat")->asDouble());
+        return out;
+    };
+    // A click in the CC lane at roll beat 1 writes item beat -1 (source beat
+    // 2), which plays and draws at beat 1.
+    const ui::Rect lane = f.root->find("midi.cc")->bounds();
+    REQUIRE(lane.h > 20);
+    const auto xAt = [&](double beat) { return f.at(beat, 60).x + 1; };
+    f.pointer(ui::PointerEvent::Type::Down, {xAt(1.0), lane.y + 10});
+    f.pointer(ui::PointerEvent::Type::Up, {xAt(1.0), lane.y + 10});
+    f.frame();
+    REQUIRE(ccBeats().size() == 1);
+    CHECK(ccBeats()[0] == doctest::Approx(-1));
+    REQUIRE(s.cc.size() == 1);
+    CHECK(s.cc[0].beat == doctest::Approx(1));
+    // A right-drag over beats 0.9 to 1.2 erases it.
+    f.root->pointer({ui::PointerEvent::Type::Down, {xAt(0.9), lane.y + 10}, 3});
+    f.pointer(ui::PointerEvent::Type::Move, {xAt(1.2), lane.y + 10});
+    f.root->pointer({ui::PointerEvent::Type::Up, {xAt(1.2), lane.y + 10}, 3});
+    f.frame();
+    CHECK(ccBeats().empty());
+    CHECK(s.cc.empty());
+    // Copy C4 and paste it at roll beat 1: item beat -1, source beat 2.
+    s.selected = {0};
+    f.editor->copySelected();
+    f.editor->paste(1.0);
+    f.frame();
+    REQUIRE(s.notes.size() == 5);
+    std::vector<double> c4;
+    const json::Value pasted = f.notes();
+    for (const json::Value& n : pasted.asArray())
+        if (n.find("pitch")->asInt() == 60) c4.push_back(n.find("start")->asDouble());
+    REQUIRE(c4.size() == 2);
+    CHECK(c4[0] == doctest::Approx(-2));
+    CHECK(c4[1] == doctest::Approx(-1));
+    int drawn = 0;
+    for (std::size_t i = 0; i < s.notes.size(); ++i)
+        if (s.notes[i].pitch == 60 && s.notes[i].start == doctest::Approx(1)) {
+            ++drawn;
+            CHECK_FALSE(s.outsideItem(i, s.notes[i]));
+        }
+    CHECK(drawn == 1);
+    CHECK(loopLength() == length);  // nothing landed past the loop
+}
+
 TEST_CASE("MIDI editor: the event list of a split loop shows and edits the roll's positions") {
     // Review round 93, Q1: the List's Position column is a song position on
     // the roll's axis. The fixture's one-bar item (bar 2) looped over three
