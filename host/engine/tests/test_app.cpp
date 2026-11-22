@@ -3213,7 +3213,8 @@ TEST_CASE("app consumes editor gestures as one undo step without echoing to the 
         app->tick();
         auto* instance = app->instanceOf(fx);
         REQUIRE(instance);
-        REQUIRE(instance->openEditor(1234, 1));  // display-free fixture editor
+        REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL},
+                                     1));  // display-free fixture editor
         const auto version = app->head().version;
         const auto history = app->versions().history().size();
         const auto deliveries = *instance->paramValue(8);
@@ -3273,7 +3274,7 @@ TEST_CASE("app applies stopped editor flushes immediately and discards obsolete 
     auto* instance = app->instanceOf(fx);
     instance->deactivate();  // inactive params.flush is the main-thread idle path
     REQUIRE(instance->loadState(std::array<std::uint8_t, 4>{30, 0, 0, 0}));
-    REQUIRE(instance->openEditor(1234, 1));
+    REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
     const auto version = app->head().version;
     app->tick();
     CHECK(app->head().version != version);
@@ -3284,7 +3285,7 @@ TEST_CASE("app applies stopped editor flushes immediately and discards obsolete 
     instance->closeEditor();
     REQUIRE(app->transport("play"));
     backend.run(1);
-    REQUIRE(instance->openEditor(1234, 1));
+    REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
     backend.run(1);  // queued begin/value, then a seek abandons this epoch
     REQUIRE(app->transport("seek", 2));
     const auto afterSeek = app->head().version;
@@ -3310,7 +3311,7 @@ TEST_CASE("app keeps read-only plug-in outputs out of the model and history") {
     auto* instance = app->instanceOf(fx);
     instance->deactivate();
     REQUIRE(instance->loadState(std::array<std::uint8_t, 4>{33, 0, 0, 0}));
-    REQUIRE(instance->openEditor(1234, 1));
+    REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
     const auto version = app->head().version;
     app->tick();  // the editor's idle flush reports the read-only parameter
     CHECK(app->head().version == version);
@@ -3461,7 +3462,7 @@ TEST_CASE("app rejects plug-in outputs from a replaced plan and a removed FX") {
     REQUIRE(instance->loadState(std::array<std::uint8_t, 4>{30, 0, 0, 0}));
     REQUIRE(app->transport("play"));
     backend.run(1);
-    REQUIRE(instance->openEditor(1234, 1));
+    REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
     backend.run(1);  // an undrained begin/value belongs to the older plan
     REQUIRE(bus.execute({"track.set", j(R"({"track":"tr_1","name":"New plan"})"), kTest}));
     const auto version = app->head().version;
@@ -3747,7 +3748,7 @@ TEST_CASE("automation timebases preserve plugin output positions through branch 
     app->tick();
     auto* instance = app->instanceOf(fx);
     REQUIRE(instance);
-    REQUIRE(instance->openEditor(1234, 1));
+    REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
     backend.run(1);
     app->tick();
     backend.run(1);
@@ -3836,7 +3837,7 @@ TEST_CASE("a touch over a parameter modulated through its envelope records the h
     CHECK(app->modulationOffsets().at(route) * 1e9 == doctest::Approx(1.0));
     auto* instance = app->instanceOf(fx);
     REQUIRE(instance);
-    REQUIRE(instance->openEditor(1234, 1));
+    REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
     for (int i = 0; i < 2; ++i) {
         backend.run(1);
         app->tick();
@@ -5243,7 +5244,7 @@ TEST_CASE("a plug-in's own edit during modulation is still recorded, once") {
         const auto version = app.head().version;
         auto* instance = app.instanceOf(rig.fx);
         REQUIRE(instance);
-        REQUIRE(instance->openEditor(1234, 1));
+        REQUIRE(instance->openEditor({nativeWindowKind(), 0x123456789abULL}, 1));
         cycles(50);
         instance->closeEditor();
         cycles(50);
