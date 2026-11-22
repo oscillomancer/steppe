@@ -396,13 +396,28 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
                 "background audio threads run at normal priority: the pool "
                 "must leave two usable CPUs free; lower Audio processing threads and restart");
         }
-        workers_ =
-            std::make_unique<detail::Workers>(backgroundHelpers, detail::Workers::Hooks{}, native);
-        if (auto policy = workers_->startupStatus(); !policy)
+        // macOS takes a thread's QoS only from the thread itself, so without a
+        // device policy the pool and the renderer set the background policy on
+        // themselves as they start; elsewhere scheduleBackground() sets it.
+        std::optional<ThreadPolicy> self;
+#if defined(__APPLE__)
+        selfApplied_ = okStatus();
+        if (!backend.nativeThreadPolicy())
+            if (const auto request = backgroundRequest(backgroundHelpers);
+                request.want.kind == ThreadPolicy::Kind::High)
+                self = request.want;
+#endif
+        workers_ = std::make_unique<detail::Workers>(backgroundHelpers, detail::Workers::Hooks{},
+                                                     native, self);
+        if (auto policy = workers_->startupStatus(); !policy && native)
             startWarnings_.push_back(policy.error().toString());
         if (!workers_->startupStatus()) native = nullptr;
         std::shared_ptr<detail::ThreadStartup> rendererStartup;
         if (native) rendererStartup = std::make_shared<detail::ThreadStartup>(1, native, false);
+        // The renderer follows the pool: elevated only if every helper was.
+        std::shared_ptr<detail::ThreadStartup> rendererSelf;
+        if (self && workers_->startupStatus())
+            rendererSelf = std::make_shared<detail::ThreadStartup>(1, nullptr, false, self);
         // The renderer's starting epoch is taken here, not on its thread: a
         // seek or pause issued before the thread runs must still be seen.
         const TransportSnapshot t = transportSnapshot();
@@ -415,15 +430,21 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         epochDone_.store(first, std::memory_order_release);
         rendererQuit_ = false;
         rendererWakeAt_.store(INT64_MAX);
-        renderer_ = std::thread([this, first, rendererStartup, native] {
+        renderer_ = std::thread([this, first, rendererStartup, rendererSelf, native] {
             nameThread("audio-render");
             (void)diagctx::registerThread(diagctx::ThreadRole::AudioRender);
             rt::prefaultStack();  // ADR-0025
+            if (rendererSelf) (void)rendererSelf->enter(0);
             const bool elevated = rendererStartup && rendererStartup->enter(0);
             detail::ThreadStartup::Cleanup cleanup{elevated ? native : nullptr};
             rendererLoop(first);
         });
         auto rendererPolicy = rendererStartup ? rendererStartup->finish() : okStatus();
+#if defined(__APPLE__)
+        if (self)
+            selfApplied_ =
+                !workers_->startupStatus() ? workers_->startupStatus() : rendererSelf->finish();
+#endif
         scheduling_.renderer = {
             native && rendererPolicy ? ThreadPolicy::Kind::High : ThreadPolicy::Kind::Normal, 0};
         if (!rendererPolicy) startWarnings_.push_back(rendererPolicy.error().toString());
@@ -440,18 +461,13 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     return okStatus();
 }
 
-void Engine::scheduleBackground() {
+Engine::BackgroundRequest Engine::backgroundRequest(unsigned helpers) const {
     using Kind = ThreadPolicy::Kind;
-    if (backend_->nativeThreadPolicy()) {
-        scheduling_.background = workers_->policy();
-        host::setBridgeAudioPolicy(scheduling_.renderer);
-        return;
-    }
     using Background = EngineOptions::Background;
     const ThreadPolicy callback = scheduling_.callback;
-    const ThreadPolicy normal{Kind::Normal, 0};
-    ThreadPolicy want = normal;
-    std::string refused;  // why a real-time policy was not applied
+    BackgroundRequest request;
+    ThreadPolicy& want = request.want;
+    std::string& refused = request.refused;
     if (options_.background == Background::Auto ? callback.realtime()
                                                 : options_.background != Background::Normal) {
         int priority = options_.background != Background::Auto && options_.backgroundPriority > 0
@@ -460,7 +476,7 @@ void Engine::scheduleBackground() {
         if (callback.realtime()) priority = std::min(priority, callback.priority - 1);
         priority = realtimePriorityLimit(priority);
         const int cpus = static_cast<int>(allowedCpuCount());
-        const int threads = static_cast<int>(workers_->helpers()) + 1;
+        const int threads = static_cast<int>(helpers) + 1;
         if (priority < 1)
             refused =
                 "no real-time priority is available below the callback's and within "
@@ -478,7 +494,25 @@ void Engine::scheduleBackground() {
             want = {Kind::High, 0};
 #endif
     }
+    return request;
+}
+
+void Engine::scheduleBackground() {
+    using Kind = ThreadPolicy::Kind;
+    if (backend_->nativeThreadPolicy()) {
+        scheduling_.background = workers_->policy();
+        host::setBridgeAudioPolicy(scheduling_.renderer);
+        return;
+    }
+    const ThreadPolicy normal{Kind::Normal, 0};
+    auto [want, refused] = backgroundRequest(workers_->helpers());  // why none, if so
     if (want != normal) {
+#if defined(__APPLE__)
+        // Set by each thread on itself as it started (start()), all or none
+        // across the pool, the renderer only after it.
+        const Status applied = selfApplied_;
+        if (!applied) refused = applied.error().message + "; " + applied.error().hint;
+#else
         Status applied = workers_->setPolicy(want);
         if (applied) applied = setThreadPolicy(renderer_.native_handle(), want);
         if (!applied) {  // all or nothing: a slower straggler would delay every job
@@ -486,6 +520,7 @@ void Engine::scheduleBackground() {
             (void)setThreadPolicy(renderer_.native_handle(), normal);
             refused = applied.error().message + "; " + applied.error().hint;
         }
+#endif
     }
     if (!refused.empty())
         startWarnings_.push_back("background audio threads run at normal priority: " + refused);

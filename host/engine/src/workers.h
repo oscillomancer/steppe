@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -74,7 +75,10 @@ class Workers {
         void* context = nullptr;
     };
     explicit Workers(unsigned helpers);
-    Workers(unsigned helpers, Hooks hooks, Backend* backend = nullptr);
+    // `self`: without a device `backend`, a policy each helper sets on itself as
+    // it starts, all or none (ThreadStartup); startupStatus() says which.
+    Workers(unsigned helpers, Hooks hooks, Backend* backend = nullptr,
+            std::optional<ThreadPolicy> self = std::nullopt);
     Status startupStatus() const { return startupStatus_; }
     ~Workers();
     Workers(const Workers&) = delete;

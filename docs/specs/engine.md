@@ -1352,6 +1352,13 @@ classes from it, all process-local:
   - the renderer plus its helpers would leave fewer than two of the process's
     allowed CPUs to the rest of the system;
   - or any thread refuses.
+
+  Off Linux the policy asked for is the platform's High (no priority levels
+  or rlimits; the CPU rule still applies). On Windows the main thread sets it
+  as above. macOS takes a thread's QoS only from the thread itself, so there
+  the pool's helpers set it on themselves as they start, all or none (a
+  startup barrier, as with a device's own policy), and the renderer after
+  them only if every helper took it; the start reads back what each took.
 - **Lifetime.** Threads end at `stop()`, so nothing is restored. CPU affinity
   is never changed: threads keep the inherited mask.
 - **Bridges.** `host::setBridgeAudioPolicy` carries the applied background

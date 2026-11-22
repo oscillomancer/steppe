@@ -1057,6 +1057,13 @@ class Engine {
     static constexpr int kRendererTransportTries = 64;
     void rendererLoop(std::uint64_t firstEpoch);
     void scheduleBackground();  // main thread, start(): renderer and pool policy
+    // The background policy start() asks for under the callback's (ADR-0026),
+    // or why none: for the renderer and `helpers` pool threads.
+    struct BackgroundRequest {
+        ThreadPolicy want{ThreadPolicy::Kind::Normal, 0};
+        std::string refused;
+    };
+    BackgroundRequest backgroundRequest(unsigned helpers) const;
     std::uint64_t relocate(std::uint64_t previous);  // returns the epoch it relocated for
     std::int64_t playedPosition(std::uint64_t epoch, std::int64_t epochStart) const;
     // The anticipative executors' position in `epoch`, also before the
@@ -1386,6 +1393,11 @@ class Engine {
     // before publication; the renderer preserves these scheduled trajectories.
     SpscRing<detail::Plan*, 1024> ratePlanRequests_;
     std::unique_ptr<detail::Workers> workers_;
+#if defined(__APPLE__)
+    // macOS without a device policy: whether the pool and the renderer set the
+    // background policy on themselves as they started (start(), ADR-0026).
+    Status selfApplied_;
+#endif
     std::unique_ptr<detail::LiveWorkers> liveWorkers_;
     std::atomic<detail::LiveWorkers*> liveWorkersReady_{nullptr};
     std::vector<std::string> startWarnings_;  // scheduling fallbacks, kept with plan warnings

@@ -96,8 +96,8 @@ void TaskGraph::build(const std::vector<std::vector<std::uint32_t>>& deps) {
 
 Workers::Workers(unsigned helpers) : Workers(helpers, Hooks{}) {}
 
-Workers::Workers(unsigned helpers, Hooks hooks, Backend* backend)
-    : startup_(helpers, backend, false),
+Workers::Workers(unsigned helpers, Hooks hooks, Backend* backend, std::optional<ThreadPolicy> self)
+    : startup_(helpers, backend, false, self),
       nativeBackend_(backend),
       slots_(std::make_unique<Slot[]>(helpers)),
       hooks_(hooks) {
