@@ -1510,6 +1510,62 @@ TEST_CASE("a capture ended on a quantize boundary ends exactly there, without it
         }
 }
 
+TEST_CASE(
+    "a quantized capture end heard before a service ends on its boundary whatever comes next" *
+    doctest::description("rt")) {
+    // Review round 104 Y1: the boundary is heard, and before the next
+    // service a seek, an end now or another quantized end arrives. Each
+    // finds the capture over, on the boundary: a launch landing there is not
+    // in it, and no second boundary is waited for.
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}})
+        for (const int next : {0, 1, 2}) {  // a seek, an end now, another quantized end
+            INFO("anticipative " << options.anticipative << ", next " << next);
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+            REQUIRE(engine.load(s, p.app->projectDir()));
+            std::int64_t played = 0;
+            const auto until = [&](std::int64_t frame, bool service) {
+                const std::int64_t n = frame / 128 - played;
+                if (options.anticipative)
+                    runAheadOnState(engine, backend, n, 128);
+                else
+                    backend.run(n);
+                played += n;
+                if (service) engine.service();
+            };
+            engine.play();
+            until(1280, true);
+            REQUIRE(engine.captureLaunches(true));
+            until(110000, true);
+            REQUIRE(engine.captureLaunches(false, model::LaunchQuantize::Bar));  // bar 3
+            const Engine::LaunchRequest r = request("tr_1", "cl_1");
+            auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+            REQUIRE(placed);
+            CHECK(placed->anchorSample == 192000);
+            until(200000, false);  // heard, not serviced
+            if (next == 0)
+                engine.seek(1.0);
+            else if (next == 1)
+                REQUIRE(engine.captureLaunches(false));
+            else
+                REQUIRE(engine.captureLaunches(false, model::LaunchQuantize::Bar));
+            const auto capture = engine.launchCapture();
+            REQUIRE(capture);
+            CHECK_FALSE(capture->on);
+            CHECK_FALSE(capture->endsFrame);
+            CHECK(capture->frames == 192000 - capture->startSample);
+            CHECK(capture->launches.empty());  // cl_1 switched on the boundary
+            CHECK(engine.launchLog().size() == 1);
+            engine.stop();
+        }
+}
+
 TEST_CASE("a quantized capture end: on again cancels it, another replaces it, a seek comes first" *
           doctest::description("rt")) {
     Project p;

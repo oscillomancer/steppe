@@ -927,6 +927,7 @@ void Engine::placeCapture() {
 }
 
 void Engine::captureRelocating() {
+    captureEnding();  // a quantized end heard before the service: it ended there
     if (!capture_.on || capture_.pending) return;
     const std::int64_t heard = captureHeard();
     capture_.ending = false;            // a quantized end not reached: it ends here instead
@@ -939,6 +940,7 @@ void Engine::captureRelocating() {
 }
 
 Status Engine::captureLaunches(bool on, std::optional<model::LaunchQuantize> quantize) {
+    captureEnding();  // a quantized end heard before the service: it ended there
     if (on && capture_.on && capture_.ending) {  // on again before its end: it runs on
         capture_.ending = false;
         return {};

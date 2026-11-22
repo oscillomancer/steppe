@@ -1335,9 +1335,11 @@ class Engine {
         LoopRange loop;
     };
     CaptureState capture_;
-    void placeCapture();                // a pending start, once the clock reads
-    void captureRelocating();           // writeTransport: a relocation is coming
-    void captureEnding();               // service: a quantized end heard
+    void placeCapture();       // a pending start, once the clock reads
+    void captureRelocating();  // writeTransport: a relocation is coming
+    // A quantized end heard: it ends there. Service runs it, and so do
+    // captureRelocating and captureLaunches first.
+    void captureEnding();
     std::int64_t captureHeard() const;  // the capture epoch's heard stream
     Result<LaunchPlaced> placeLaunch(std::span<const LaunchRequest> requests,
                                      model::LaunchQuantize quantize) const;
