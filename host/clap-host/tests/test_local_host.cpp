@@ -213,7 +213,7 @@ TEST_CASE("a VST3 editor closed mid-drag ends the drag after the moves it made")
         REQUIRE(instance.process(buffer.block(64), &out));
         return std::vector<OutputEvent>(storage.begin(), storage.begin() + out.count);
     };
-    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.openEditor({nativeWindowKind(), 0x5a17}, 1.0));
     REQUIRE(instance.setParam(2, 0.05));  // grab
     auto events = block();
     REQUIRE(events.size() == 1);
@@ -229,7 +229,7 @@ TEST_CASE("a VST3 editor closed mid-drag ends the drag after the moves it made")
     CHECK(block().empty());
     // A grab while not processing, closed before processing resumes.
     instance.stopProcessing();
-    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.openEditor({nativeWindowKind(), 0x5a17}, 1.0));
     REQUIRE(instance.setParam(2, 0.05));
     instance.closeEditor();
     REQUIRE(instance.startProcessing());
@@ -281,7 +281,7 @@ TEST_CASE("a VST3 editor closed mid-drag with its queue full ends the drag after
         REQUIRE(queued < 4096);
     };
     SUBCASE("the grab already taken") {
-        REQUIRE(instance.openEditor(0x5a17, 1.0));
+        REQUIRE(instance.openEditor({nativeWindowKind(), 0x5a17}, 1.0));
         REQUIRE(instance.setParam(2, 0.05));  // grab
         auto events = block();
         REQUIRE(events.size() == 1);
@@ -297,7 +297,7 @@ TEST_CASE("a VST3 editor closed mid-drag with its queue full ends the drag after
     }
     SUBCASE("the grab still queued, while not processing") {
         instance.stopProcessing();
-        REQUIRE(instance.openEditor(0x5a17, 1.0));
+        REQUIRE(instance.openEditor({nativeWindowKind(), 0x5a17}, 1.0));
         REQUIRE(instance.setParam(2, 0.05));  // grab
         REQUIRE(instance.setParam(2, 0.5));
         fill();
@@ -311,7 +311,7 @@ TEST_CASE("a VST3 editor closed mid-drag with its queue full ends the drag after
         CHECK(events[2].kind == Kind::GestureEnd);
     }
     // A grab made after the end request is not ended by it.
-    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.openEditor({nativeWindowKind(), 0x5a17}, 1.0));
     REQUIRE(instance.setParam(2, 0.05));
     REQUIRE(instance.setParam(2, 0.3));
     auto events = block();
@@ -347,7 +347,7 @@ TEST_CASE("a VST3 editor drag queued while not processing comes out whole, its e
     OutputEvents out{storage};
     using Kind = OutputEvent::Kind;
     instance.stopProcessing();
-    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.openEditor({nativeWindowKind(), 0x5a17}, 1.0));
     REQUIRE(instance.setParam(2, 0.05));  // grab
     int moves = 0;
     SUBCASE("a hundred moves") {
@@ -415,7 +415,7 @@ TEST_CASE("two end requests with edits between them each end the gestures before
         REQUIRE(instance.process(buffer.block(64), &out));
         return std::vector<OutputEvent>(storage.begin(), storage.begin() + out.count);
     };
-    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.openEditor({nativeWindowKind(), 0x5a17}, 1.0));
     REQUIRE(instance.setParam(2, 0.05));  // grab
     REQUIRE(block().size() == 1);
     instance.stopProcessing();
