@@ -466,6 +466,76 @@ TEST_CASE("a launch while stopped applies at the play start" * doctest::descript
     }
 }
 
+TEST_CASE("a launch from stop is heard from a whole render block, not from a shorter first chunk" *
+          doctest::description("rt")) {
+    // tr_1 is shifted by 64 frames of compensation (the latent gain on another
+    // track), so a launch from stop switches it at stream 64, and the
+    // renderer's first chunk is those 64 frames. Held there, the callback's
+    // cycles are pre-roll (silent, time holding still, no miss) and never
+    // that chunk followed by a gap. Released, the output is the offline
+    // replay of the log from its first frame. With the live rack the plan is
+    // split, and the callback pulls frontier rings instead of the output ring.
+    for (const bool split : {false, true}) {
+        INFO("split " << split);
+        Project p;
+        std::vector<Engine::LaunchRequest> requests;
+        if (split) {
+            rackFollows(p, true);
+            p.run("track.add", R"({"name": "Latent"})");  // tr_3
+            auto fx =
+                p.run("fx.add", R"({"track": "tr_3", "plugin": "com.suppleaudio.test.gain"})");
+            auto merge = j(R"({"patch": {"params": {"latency": "short"}}})");
+            merge["fx"] = fx["fx"];
+            p.runArgs("fx.patch.merge", merge);
+            requests = {request("tr_1", "cl_1")};
+        } else {
+            twoTracks(p);  // tr_2's latent gain shifts tr_1
+            requests = {request("tr_1", "cl_1"), request("tr_2", "cl_2")};
+        }
+        const model::Session s = p.app->head();
+        const std::uint32_t block = 128;
+        const std::int64_t held = 3;
+        const std::int64_t frames = 48000 + 8192;
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames});
+        Engine engine(pool, media, EngineOptions{.workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = block}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        REQUIRE(engine.outputLatency() == 64);
+        auto placed = engine.launch(requests, model::LaunchQuantize::Bar);
+        REQUIRE(placed);
+        CHECK(placed->anchorSample == 0);
+        engine.holdRendererFrom(64);
+        engine.play();
+        REQUIRE(engine.awaitRendered(64));
+        backend.run(held);
+        CHECK(engine.anticipationMisses() == 0);
+        CHECK(engine.transport().sample == 0);
+        engine.holdRendererFrom(INT64_MAX);
+        runAheadOnState(engine, backend, frames / block - held, block);
+        engine.service();
+        REQUIRE(engine.launchLog().size() == requests.size());
+        CHECK(engine.launchLog()[0].runningFrame == 0);
+        CHECK(engine.anticipationMisses() == 0);
+        const std::uint32_t latency = engine.outputLatency();
+        engine.stop();
+        std::vector<float> live = backend.capture().channels[0];
+        live.erase(live.begin(), live.begin() + held * block);  // the pre-roll
+        OfflineSettings settings;
+        settings.endSeconds = 1.0;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = engine.launchLog();
+        auto offline = renderOffline(s, pool, settings);
+        REQUIRE(offline);
+        CHECK(maxDiff(live, latency, offline->audio.channels[0], 40000) == 0.0);
+        settings.launches.clear();  // the launches changed the output
+        auto plain = renderOffline(s, pool, settings);
+        REQUIRE(plain);
+        CHECK(maxDiff(live, latency, plain->audio.channels[0], 40000) > 0.0);
+    }
+}
+
 TEST_CASE("a queued launch whose clip an edit removes is dropped, not played later") {
     Project p;
     twoTracks(p);

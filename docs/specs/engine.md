@@ -2658,7 +2658,16 @@ harness. See the tooling README for schemas, limits and invocation details.
   ADR-0028: stopped block deadlines and event-driven buffer-space wakes
   from the callback, with a safety bound of half the playback buffer span
   (1 s while stopped, held or all live). Misses (no chunk while playing, after
-  the pre-roll) are counted (`engine.status.anticipation_misses`). `stop()`
+  the pre-roll) are counted (`engine.status.anticipation_misses`). The
+  pre-roll of a start or a seek lasts until the renderer has rendered a whole
+  render block of the epoch and the callback's whole cycle (that at most the
+  render-ahead span), in the output ring or the frontier rings: never a first
+  chunk cut short, such as a launch from stop whose compensated tracks switch
+  a few frames in, or a loop wrap. Until then the callback plays silence and
+  time holds still. A cycle that has played audio and then runs short counts
+  a miss, the cycle that ends the pre-roll included. *(Amended 2026-11-21,
+  ADR-0012 note: priming took any chunk, so a launch from stop played its
+  first frames and then a gap, counted or not.)* `stop()`
   joins the renderer first; it stops every plugin as it ends. With
   `anticipative = false` the old in-callback renderer runs (the reference,
   and the base for live nodes).

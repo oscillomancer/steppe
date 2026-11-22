@@ -2339,6 +2339,10 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
     }
     if (livePlan_)  // a recorded master's ring flushes with it (ADR-0057)
         for (const auto& record : livePlan_->recordRings) record->dropBefore(e);
+    if (!rtPrimed_ && !primeReady(e, frames)) {  // pre-roll: time holds still
+        silence(out, 0, frames);
+        return {kNothingPlayed, 0, 0, false};
+    }
     std::uint32_t done = 0;
     while (done < frames) {
         const detail::Chunk* c = ring.front();
@@ -2387,13 +2391,22 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
         rtStream_.store(stream);
         rtPosEpoch_.store(e);
     }
+    // Primed first: a cycle that played audio and then ran short is a gap,
+    // also the cycle that started the epoch.
+    if (done > 0) rtPrimed_ = true;
     if (done < frames) {
         silence(out, done, frames - done);
         if (rtPrimed_ && wantPlaying_.load(std::memory_order_relaxed))
             misses_.fetch_add(1, std::memory_order_relaxed);
     }
-    if (done > 0) rtPrimed_ = true;
     return {first, done, firstStream, false};
+}
+
+bool Engine::primeReady(std::uint64_t epoch, std::uint32_t frames) const SUPPLE_RT {
+    if (epochDone_.load(std::memory_order_acquire) != epoch) return false;
+    const std::int64_t need =
+        std::min<std::int64_t>(std::max<std::int64_t>(options_.renderBlock, frames), aheadFrames_);
+    return renderedStream_.load(std::memory_order_acquire) - playedStream(epoch) >= need;
 }
 
 // --- recording (ADR-0014) --------------------------------------------------------------------
@@ -2625,6 +2638,7 @@ std::chrono::steady_clock::duration Engine::rendererSafetyTimeout() const {
 
 std::int64_t Engine::rendererSpaceTarget(std::uint64_t epoch) const {
     if (!playing_ || !plan_ || hold_.load(std::memory_order_acquire) ||
+        streamLocal_ >= holdFrom_.load(std::memory_order_acquire) ||
         (plan_->split && !plan_->feedsCallback()))
         return INT64_MAX;
     // The horizon allows another whole render block once ahead < aheadFrames_.
@@ -2650,6 +2664,7 @@ bool Engine::rendererHasRoom(std::uint64_t epoch) const {
     // Read consumption first, including after arming a callback wake.
     const auto played = playedStream(epoch);
     if (!playing_ || !plan_ || hold_.load(std::memory_order_acquire) ||
+        streamLocal_ >= holdFrom_.load(std::memory_order_acquire) ||
         streamLocal_ - played >= aheadFrames_)
         return false;
     for (const auto& ring : plan_->recordRings)  // recorded masters (ADR-0057)
@@ -3152,6 +3167,8 @@ std::uint32_t Engine::liveRender(const float* const* in, float* const* out, std:
                                           liveStream_);
     if (playing) k = detail::rateUntil(p, livePos_, k, loopC_, 1);       // stop at a loop wrap
     if (playing) k = launchesAt(p, 1, rtEpoch_, liveStream_, k, false);  // or a launch
+    // Pre-roll until a whole render block of the epoch is rendered (ADR-0012).
+    if (playing && p.feedsCallback() && !rtPrimed_ && !primeReady(rtEpoch_, k)) playing = false;
     std::uint32_t found = k;
     for (std::size_t j = 0; j < p.frontier.size(); ++j) {
         detail::Edge& e = p.edges[p.frontier[j]];

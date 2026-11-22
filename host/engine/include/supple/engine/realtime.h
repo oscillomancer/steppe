@@ -744,6 +744,13 @@ class Engine {
         wakeRenderer();
     }
     bool awaitRendererHeld(double timeoutSeconds = 10.0);
+    // Tests: the renderer renders each epoch until its stream reaches `stream`
+    // and holds there (INT64_MAX: no hold). awaitRendered(stream) then says
+    // it has got there, so a manual backend can play into what it left.
+    void holdRendererFrom(std::int64_t stream) {
+        holdFrom_.store(stream, std::memory_order_release);
+        wakeRenderer();
+    }
     const EngineOptions& options() const { return options_; }
     unsigned liveHelpers() const;  // main thread: enabled capacity, 0 when serial
     // Main thread: the threads that work to the device's deadline, the
@@ -1034,6 +1041,12 @@ class Engine {
     };
     Pulled pullAhead(float* const* out, std::uint32_t frames) SUPPLE_RT;
     static constexpr std::int64_t kNothingPlayed = INT64_MIN;
+    // Pre-roll (ADR-0012): whether the callback may start hearing `epoch`, a
+    // cycle of `frames` at its start. The renderer must have rendered a whole
+    // render block of it and the whole cycle (the cycle at most the
+    // render-ahead span): a first chunk cut short (a launch's switch frame on
+    // a compensated track, a loop wrap) is not enough.
+    bool primeReady(std::uint64_t epoch, std::uint32_t frames) const SUPPLE_RT;
     // Bounded transport reads. The audio thread gives up quickly (the writer's
     // window is a handful of atomic stores) and keeps what it has; the
     // renderer — its plugins' audio thread — uses the same bound rather than
@@ -1391,6 +1404,8 @@ class Engine {
     // One-shot stream threshold, or INT64_MAX while not waiting for space.
     std::atomic<std::int64_t> rendererWakeAt_{INT64_MAX};
     std::atomic<bool> rendererQuit_{false}, hold_{false}, holdSeen_{false};
+    // Tests: holdRendererFrom().
+    std::atomic<std::int64_t> holdFrom_{INT64_MAX};
     std::int64_t aheadFrames_ = 0;                 // render-ahead target
     std::atomic<std::uint64_t> epoch_{0};          // main thread: seek, pause, setLoop
     std::atomic<std::uint64_t> epochDone_{0};      // renderer: the epoch it has relocated for

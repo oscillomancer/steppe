@@ -108,3 +108,18 @@ position and stream position; the main consumer can reject obsolete epochs and
 align anticipative recording to what has played. Overflow is counted; idle flush
 outputs join the main take API. A requested stopped render does not advance the
 transport or publish audio chunks. See engine.md for the app consumer contract.
+
+## Note (2026-11-21): pre-roll is a whole render block
+
+"Starts after one render block is rendered" (Decision 2, Consequences) means a
+whole render block of the epoch, and the callback's whole first cycle (at most
+the render-ahead span). The callback had started on any chunk: a launch from
+stop whose compensated tracks switch a few frames in cuts the renderer's first
+chunks to those frames, so the first cycle played them and then silence, which
+no counter showed, and the next cycles counted misses while the first whole
+block rendered. The GUI lead's walk heard it as render gaps on a scene launch.
+Now the pre-roll waits for the whole block (engine.md, "Anticipative
+processing"), and a cycle that plays audio and then runs short counts a miss,
+the cycle that starts the play included. A launch from stop starts about one
+render block's time later; a plain start, a locate and a loop wrap do not
+change.
