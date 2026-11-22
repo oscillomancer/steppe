@@ -377,11 +377,8 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             // take follows. A drum-only clip, one with no readable key, and audio follow nothing.
             model::ClipFollow outcome = model::ClipFollow::None;
             if (midi) {
-                bool pitched = false;
-                if (take.source && take.source->kind == model::Kind::Midi)
-                    if (const model::MidiSource* source = s.midi.find(*take.source))
-                        for (const midi::Note& n : source->sequence.notes)
-                            pitched |= n.channel != 9;
+                // Pitched as the player compiles it: the notes it plays, not its source.
+                const bool pitched = detail::clipPlaysPitched(s, clipId);
                 // Its outcome is the plan's: a clip's pairs are counted before
                 // the pool's deduplication, so this pool's contents do not matter.
                 detail::ProjectFollow projectTables = detail::projectFollow(s);

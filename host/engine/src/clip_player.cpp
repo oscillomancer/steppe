@@ -174,6 +174,22 @@ void givePlayer(ClipPlayer& pl, ClipFollowBuild built) {
 }
 }  // namespace
 
+bool clipPlaysPitched(const Session& s, Id clipId) {
+    const model::Clip* clip = s.clips.find(clipId);
+    if (!clip || clip->kind != model::ClipKind::Midi || !clip->activeTake) return false;
+    const model::Take* take = s.takes.find(*clip->activeTake);
+    const model::MidiSource* src = take && take->source && take->source->kind == model::Kind::Midi
+                                       ? s.midi.find(*take->source)
+                                       : nullptr;
+    if (!src) return false;
+    ClipPlayer pl;
+    std::int32_t nextId = 0;
+    midiEvents(pl, *clip, clipId, *take, *src, nextId);
+    return std::any_of(pl.events.begin(), pl.events.end(), [](const ClipEvent& e) {
+        return e.event.kind == host::Event::Kind::NoteOn && e.event.channel != 9;
+    });
+}
+
 void compileClipPlayers(Plan& p, Node& n, const Session& s) {
     n.players.clear();
     n.clipVoices = n.clipWindow = 0;

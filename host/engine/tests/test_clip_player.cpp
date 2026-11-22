@@ -1813,3 +1813,38 @@ TEST_CASE("a clip take's own envelope commits as heard over a short span across 
         CHECK(double(committed[std::size_t(96000 + 48000 + 600)]) < 0.2 * chained(600));
     }
 }
+
+TEST_CASE("launch.commit lays a clip whose loop plays only drums as following nothing") {
+    // Round 86 H8: cl_1 (D minor, follow key) is two beats long; they hold
+    // only channel-10 notes, and its source's pitched D3 lies past the clip's
+    // end. (A looped clip cannot show this: a commit needs its loop over the
+    // whole source.) Live it follows
+    // nothing (no pitched note plays), so the commit lays its takes with
+    // follow none, as heard, not follow key.
+    Project p;
+    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.sine"})");
+    p.run("context.write", R"({"text": "1: key C minor ~:w\n2: ~:w\n3: ~:w"})");
+    p.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "context": "1: key D minor ~:w",
+                          "follow": "key",
+                          "notation": "voice kick ch 10; 1: C2:q C2:q r:h; voice bass; 1: r:h D3:h"})");
+    p.run("clip.set", R"({"clip": "cl_1", "length": 2})");
+    AppLive live(p, kInCallback, 128, 48000 * 5 + 16384);
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * 128);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+    live.until(48000 * 4);
+    const json::Value done = p.run("launch.commit", "{}");
+    live.stop();
+    const model::Session s = p.app->head();
+    std::size_t laid = 0;
+    for (const json::Value& row : done.find("items")->asArray()) {
+        const json::Value* item = row.find("item");
+        const model::Item* it =
+            s.items.find(*model::Id::parse(item ? item->asString() : row.asString()));
+        REQUIRE(it);
+        CHECK(s.takes.find(*it->activeTake)->follow == model::ClipFollow::None);
+        ++laid;
+    }
+    CHECK(laid > 0);
+}

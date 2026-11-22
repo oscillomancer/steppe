@@ -71,6 +71,10 @@ struct ClipFollowBuild {
 // off channel 10): none when its follow is none, it has no readable key at 0, or
 // no pitched note, as placement copies those.
 ClipFollowBuild buildClipFollow(const model::Clip& clip, bool pitched, ProjectFollow& project);
+// Whether launched MIDI clip `clip` plays a note off channel 10 among the notes its
+// player compiles (within its length and loop, not its whole source): the `pitched` both the
+// compile and launch.commit give buildClipFollow (review round 86 H8).
+bool clipPlaysPitched(const model::Session& s, model::Id clip);
 
 // The key a note of a following clip plays: written `key` at clip beat `clipBeat`,
 // starting at song beat `songBeat`. Channel 10 (stored 9) is never mapped.
