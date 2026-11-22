@@ -1180,6 +1180,43 @@ TEST_CASE("anticipative: a start plays its first cycle whole or not at all" *
     CHECK(maxDiff(backend.capture().channels[0], 2 * 512, offline.audio.channels[0], 40000) == 0.0);
 }
 
+TEST_CASE("anticipative: a start's first cycle plays on past a loop wrap" *
+          doctest::description("rt")) {
+    // Review round 96, S1: a 200-frame loop makes 200-frame chunks. With
+    // 1200 frames rendered the pre-roll passes, the cycle plays 200 frames to
+    // the wrap, and the rest of it is played by a second pull. That pull
+    // asked the pre-roll again (1000 frames ahead now, under the block) and
+    // left 56 frames silent, time held and no miss counted. The held run must
+    // play as one whose renderer is well ahead.
+    const model::Session s = synthSession(0.0);
+    const auto play = [&](bool hold, DummyBackend& backend) {
+        auto pool = makePool();
+        MediaCache media;
+        Engine engine(pool, media, EngineOptions{.workers = 0});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
+        REQUIRE(engine.load(s));
+        engine.setLoop(0.0, 200.0 / 48000.0, true);
+        if (hold) engine.holdRendererFrom(1200);
+        engine.play();
+        REQUIRE(engine.awaitRendered(hold ? 1200 : 4096));
+        backend.run(1);
+        const auto sample = engine.transport().sample;
+        CHECK(engine.anticipationMisses() == 0);
+        engine.holdRendererFrom(INT64_MAX);
+        engine.stop();
+        return sample;
+    };
+    DummyBackend ahead({.mode = DummyBackend::Mode::Manual, .captureFrames = 256});
+    const auto reference = play(false, ahead);
+    DummyBackend held({.mode = DummyBackend::Mode::Manual, .captureFrames = 256});
+    CHECK(play(true, held) == reference);
+    const auto& out = held.capture().channels[0];
+    REQUIRE(out.size() >= 256);
+    CHECK(std::any_of(out.begin() + 200, out.begin() + 256, [](float v) { return v != 0; }));
+    for (std::size_t c = 0; c < 2; ++c)
+        CHECK((held.capture().channels[c] == ahead.capture().channels[c]));
+}
+
 TEST_CASE("anticipative: a start and a locate are heard as soon as their first render block is" *
           doctest::description("rt")) {
     // Pre-roll waits for a whole render block, which a plain start or a

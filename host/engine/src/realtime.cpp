@@ -2362,7 +2362,12 @@ Engine::Pulled Engine::pullAhead(float* const* out, std::uint32_t frames) SUPPLE
             wrapped |=
                 clock.cycle(clock.phase(c->start + rtOffset_)) != clock.cycle(clock.phase(first));
         }
-        if (done > 0 && wrapped) return {first, done, firstStream, true};
+        if (done > 0 && wrapped) {
+            // Primed: the cycle's rest after the wrap is not pre-roll again
+            // (review round 96, S1).
+            rtPrimed_ = true;
+            return {first, done, firstStream, true};
+        }
         const std::uint32_t take = std::min(frames - done, c->frames - rtOffset_);
         if (first == kNothingPlayed) {
             first = c->start + rtOffset_;

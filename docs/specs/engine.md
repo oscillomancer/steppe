@@ -2670,8 +2670,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   a few frames in, or a loop wrap. It also ends when the renderer has
   rendered all its rings hold and waits for room: a loop shorter than the
   rings' chunks fills them first (see "Rings are recycled"). Until then the
-  callback plays silence and time holds still. A cycle that has played audio and then runs short counts
-  a miss, the cycle that ends the pre-roll included. *(Amended 2026-11-21,
+  callback plays silence and time holds still. The pre-roll ends with the
+  first frame played: the rest of that cycle, past a loop wrap too, plays on.
+  A cycle that has played audio and then runs short counts a miss, the cycle
+  that ends the pre-roll included. *(Amended 2026-11-21,
   ADR-0012 note: priming took any chunk, so a launch from stop played its
   first frames and then a gap, counted or not.)* `stop()`
   joins the renderer first; it stops every plugin as it ends. With
