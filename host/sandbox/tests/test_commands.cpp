@@ -70,11 +70,11 @@ TEST_CASE("the sandbox's describe levels stay inside their budgets") {
     registerCommands(registry);
     // The canonical writer pads, so these bytes are an upper bound of the compact JSON an agent
     // reads.
-    const auto groups = cmd::groupIndex(registry.groupsResult());
+    const auto groups = cmd::groupIndex(*registry.groupsResult());
     CHECK(json::writeCanonical(groups).size() < 3000);
     for (const auto& group : registry.groupInfos()) {
         INFO("group " << group.name << " is over its budget: split it or shorten summaries");
-        CHECK(json::writeCanonical(cmd::rowIndex(registry.listResult("", "", "", group.name)))
+        CHECK(json::writeCanonical(cmd::rowIndex(*registry.listResult("", "", "", group.name)))
                   .size() < 2500);
     }
 }

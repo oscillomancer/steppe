@@ -222,9 +222,11 @@ class Registry {
     static constexpr std::size_t kMaxGroupSummary = 70;
     // The results of registry.groups and registry.list, computed here so that the commands and
     // the command line's `registry --groups` / `--group` give the same answer.
-    json::Value groupsResult(std::string_view group = {}) const;
-    json::Value listResult(std::string_view tag, std::string_view kind, std::string_view text,
-                           std::string_view group) const;
+    // A group, kind or tag that does not exist is an error naming the valid ones; a search that
+    // finds nothing is an empty list, with `groups` naming the groups whose line has the text.
+    Result<json::Value> groupsResult(std::string_view group = {}) const;
+    Result<json::Value> listResult(std::string_view tag, std::string_view kind,
+                                   std::string_view text, std::string_view group) const;
     static std::string groupOf(std::string_view commandName);
     // The name of each command by id (a name once per version: the same name twice).
     std::vector<std::string_view> namesById() const;

@@ -896,8 +896,8 @@ TEST_CASE("proxy startup fetches only selected tools and resolves other commands
         REQUIRE(calls.size() == 1);
         CHECK(calls.front().command == "registry.describe");
         CHECK(calls.front().args.find("command")->asString() == "counter.adjust");
-        // The groups and a group's rows come over the same connection: one request for the
-        // groups; a group is checked to exist, then listed.
+        // The groups and a group's rows come over the same connection: one request each (the bus
+        // refuses an unknown group itself).
         auto proxied = request(
             **proxy,
             R"({"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"describe","arguments":{}}})");
@@ -913,9 +913,8 @@ TEST_CASE("proxy startup fetches only selected tools and resolves other commands
                     ->find("namespaces")
                     ->find("counter"));
         calls = host.takeLog();
-        REQUIRE(calls.size() == 2);
-        CHECK(calls.at(0).command == "registry.groups");
-        CHECK(calls.at(1).command == "registry.list");
+        REQUIRE(calls.size() == 1);
+        CHECK(calls.front().command == "registry.list");
         auto restored = request(
             **proxy,
             R"({"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"exec","arguments":{"command":"counter.adjust","args":{"value":-4}}}})");

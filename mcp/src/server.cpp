@@ -303,18 +303,6 @@ Result<json::Value> Server::callTool(std::string_view name, const json::Value& a
             if (!groups) return groups.error();
             return cmd::groupIndex(*groups);
         }
-        if (!group.empty()) {
-            json::Value probe = json::Value::object();
-            probe["group"] = group;
-            auto known = invoke_("registry.groups", probe, origin_);
-            if (!known) return known.error();
-            auto* found = known->find("groups");
-            if (!found || !found->isArray() || found->asArray().empty()) {
-                auto all = invoke_("registry.groups", json::Value::object(), origin_);
-                if (!all) return all.error();
-                return cmd::unknownGroup(group, *all);
-            }
-        }
         json::Value filters = json::Value::object();
         for (auto key : {"group", "tag", "kind", "text"})
             if (auto value = stringField(args, key); !value.empty()) filters[key] = value;

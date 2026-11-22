@@ -112,7 +112,11 @@ declares `registry`, `batch` and `job` itself). `registry.groups {group?}` retur
 `{groups: [{name, count, summary}]}` for the groups that have a public (not `internal`)
 command, by name, `count` being those commands (a command with several versions counts once);
 `group` narrows it to one. `registry.list {group}` lists one group's commands, every version
-and every exposure as before. `Registry::groupInfos()` and `Registry::groups()` let a test
+and every exposure as before. A `group`, `kind` (`query`, `edit` or `action`) or `tag` that does
+not exist is an error, never an empty list: `command.unknown_group` at `/args/group` (also from
+`registry.groups`) or `command.invalid_args` at `/args/kind` or `/args/tag`, the hint naming the
+valid values. A `text` that matches nothing is an empty list; when it also appears in a group's
+line, `groups` names those groups. `Registry::groupInfos()` and `Registry::groups()` let a test
 say which prefix has no line and which line has no commands (each binary's tests fail on both).
 `exportJson` carries the lines as `groups: {prefix: summary}`. The Markdown reference for the
 skill is split by group: `registry --markdown-dir DIR` writes `index.md` (the groups, one line
@@ -462,7 +466,9 @@ optional and Structured Content permits JSON-object results independently:
 "Automate a parameter") search across all groups, alone or with `group`,
 and answer in the step-2 shape. At most 60 rows come back; a longer answer is never cut
 silently: it carries `truncated: true` and a `hint` to narrow the filter with `group`, `kind`,
-`tag` or a longer `text`, and no count. Search budget: under 6,000 bytes. Tests with the real
+`tag` or a longer `text`, and no count. An answer with no rows carries a `hint` too (no command
+matches; `text` searches names and summaries; `describe {}` lists the groups), naming the groups
+whose line has the word. An unknown `group`, `kind` or `tag` is the error above. Search budget: under 6,000 bytes. Tests with the real
 registries (`engine.cli-numbers`) fail with the name of the group or command that breaks a
 budget; split the group or shorten its summaries rather than raising a budget. The command line
 shows the same answers: `<slug>-engine registry --groups` and `registry --group NAME` (and the

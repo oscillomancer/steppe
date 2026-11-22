@@ -278,13 +278,15 @@ int main(int argc, char** argv) {
                 return 1;
             }
         } else if (args[1] == "--groups" && args.size() == 2) {
-            print(cmd::groupIndex(registry.groupsResult()));
+            auto groups = registry.groupsResult();
+            print(cmd::groupIndex(*groups));
         } else if (args[1] == "--group" && args.size() == 3) {
-            if (registry.groupsResult(args[2]).find("groups")->asArray().empty()) {
-                print(errorJson(cmd::unknownGroup(args[2], registry.groupsResult())));
+            auto listed = registry.listResult("", "", "", args[2]);
+            if (!listed) {
+                print(errorJson(listed.error()));
                 return 1;
             }
-            print(cmd::rowIndex(registry.listResult("", "", "", args[2])));
+            print(cmd::rowIndex(*listed));
         } else if (args[1] == "--lua") {
             const std::string stubs = cmd::luaStubs(registry);
             std::fwrite(stubs.data(), 1, stubs.size(), stdout);

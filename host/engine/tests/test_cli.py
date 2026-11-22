@@ -114,7 +114,9 @@ class McpTools(unittest.TestCase):
         extra = [("describe", {"group": g}) for g in groups]
         extra += [("describe", {"command": n}) for n in public_names]
         extra += [("describe", {"group": "nonesuch"}), ("describe", {"text": "e"}),
-                  ("describe", {"text": "automate"}), ("describe", {"text": "AUTOMATE"})]
+                  ("describe", {"text": "automate"}), ("describe", {"text": "AUTOMATE"}),
+                  ("describe", {"kind": "Query"}), ("describe", {"tag": "nonesuch"}),
+                  ("describe", {"text": "zzzzq"}), ("describe", {"group": "fxx"})]
         for options in [(), ("--tools", "core"), ("--tools", "all")]:
             with self.subTest(options=options):
                 lines = self.exchange(extra, *options)
@@ -197,6 +199,18 @@ class McpTools(unittest.TestCase):
                 for reply in (replies[base + 2], replies[base + 3]):
                     found = reply["structuredContent"]["namespaces"]
                     self.assertIn("env.add", {r[0] for rows in found.values() for r in rows})
+                # An invalid filter value is an error naming the valid ones; an empty answer
+                # says why and where to look.
+                kind, tag, empty, wrong = (replies[base + n] for n in (4, 5, 6, 7))
+                self.assertTrue(kind["isError"])
+                self.assertEqual(kind["structuredContent"]["code"], "command.invalid_args")
+                self.assertIn("query, edit, action", kind["structuredContent"]["hint"])
+                self.assertTrue(tag["isError"])
+                self.assertIn("modular", tag["structuredContent"]["hint"])
+                self.assertEqual(empty["structuredContent"]["namespaces"], {})
+                self.assertIn("describe {}", empty["structuredContent"]["hint"])
+                self.assertEqual(wrong["structuredContent"]["code"], "command.unknown_group")
+                self.assertIn("describe {}", wrong["structuredContent"]["hint"])
 
     def test_registry_groups_on_the_command_line(self):
         groups = json.loads(subprocess.run([BINARY, "registry", "--groups"], capture_output=True,

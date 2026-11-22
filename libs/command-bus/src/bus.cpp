@@ -656,11 +656,10 @@ std::string asciiLower(std::string_view text) {
         if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
     return out;
 }
-}  // namespace
-json::Value Registry::groupsResult(std::string_view group) const {
+json::Value groupsJson(const Registry& registry, std::string_view group) {
     json::Value result = json::Value::object();
     result["groups"] = json::Value::array();
-    for (const auto& info : groupInfos()) {
+    for (const auto& info : registry.groupInfos()) {
         if (!group.empty() && info.name != group) continue;
         json::Value item = json::Value::object();
         item["name"] = info.name;
@@ -670,8 +669,31 @@ json::Value Registry::groupsResult(std::string_view group) const {
     }
     return result;
 }
-json::Value Registry::listResult(std::string_view tag, std::string_view kind, std::string_view text,
-                                 std::string_view group) const {
+}  // namespace
+Result<json::Value> Registry::groupsResult(std::string_view group) const {
+    auto result = groupsJson(*this, group);
+    if (!group.empty() && result.find("groups")->asArray().empty())
+        return unknownGroup(group, groupsJson(*this, {}));
+    return result;
+}
+Result<json::Value> Registry::listResult(std::string_view tag, std::string_view kind,
+                                         std::string_view text, std::string_view group) const {
+    if (!kind.empty() && kind != "query" && kind != "edit" && kind != "action")
+        return Error("command.invalid_args", "unknown kind \"" + std::string(kind) + "\"", "/kind",
+                     "kind is one of query, edit, action (lowercase)");
+    if (!group.empty() && groupsJson(*this, group).find("groups")->asArray().empty())
+        return unknownGroup(group, groupsJson(*this, {}));
+    if (!tag.empty()) {
+        std::set<std::string> tags;
+        for (auto* info : all()) tags.insert(info->tags.begin(), info->tags.end());
+        if (!tags.count(std::string(tag))) {
+            std::string names;
+            for (const auto& known : tags) names += (names.empty() ? "" : ", ") + known;
+            return Error("command.invalid_args", "unknown tag \"" + std::string(tag) + "\"", "/tag",
+                         names.empty() ? "no command carries a tag; search with text instead"
+                                       : "tag is one of " + names);
+        }
+    }
     json::Value result = json::Value::object();
     result["commands"] = json::Value::array();
     const std::string needle = asciiLower(text);
@@ -691,6 +713,15 @@ json::Value Registry::listResult(std::string_view tag, std::string_view kind, st
         item["summary"] = info->summary;
         item["exposure"] = exposureName(info->exposure);
         result["commands"].push_back(std::move(item));
+    }
+    // Nothing matched a word: the group lines are searched too, so that "sidechain", said by a
+    // group's line and not by any command's summary, still points somewhere.
+    if (result.find("commands")->asArray().empty() && !needle.empty()) {
+        result["groups"] = json::Value::array();
+        for (const auto& info : groupInfos())
+            if (asciiLower(info.summary).find(needle) != std::string::npos &&
+                (group.empty() || info.name == group))
+                result["groups"].push_back(info.name);
     }
     return result;
 }
@@ -1132,6 +1163,16 @@ json::Value rowIndex(const json::Value& listResult) {
             row.push_back(stringField(item, "summary"));
             group.push_back(std::move(row));
         }
+    if (rows == 0) {
+        std::string groups;
+        if (const auto* named = listResult.find("groups"); named && named->isArray())
+            for (const auto& name : named->asArray())
+                groups += (groups.empty() ? "" : ", ") + name.asString();
+        out["hint"] =
+            "No command matches: text searches command names and one-line summaries (any case); "
+            "describe {} lists the groups, describe {group} a group's commands." +
+            (groups.empty() ? std::string() : " Groups whose line mentions it: " + groups + ".");
+    }
     if (truncated) {
         out["truncated"] = true;
         out["hint"] =
@@ -1148,7 +1189,9 @@ Error unknownGroup(std::string_view group, const json::Value& groupsResult) {
             names += stringField(item, "name");
         }
     return Error("command.unknown_group", "unknown command group \"" + std::string(group) + "\"",
-                 "/group", "groups: " + names);
+                 "/group",
+                 "a group is the part of a command name before its first '.'; one of: " + names +
+                     ". describe {} lists them with one line each.");
 }
 json::Value mcpToolList(const Registry& registry, bool allTools) {
     json::Value tools = json::Value::array();

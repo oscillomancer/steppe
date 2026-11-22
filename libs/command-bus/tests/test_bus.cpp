@@ -319,8 +319,7 @@ TEST_CASE("commands are grouped by name prefix, each group with its one line") {
     auto one = call(dispatcher, "registry.groups", obj(R"({"group":"toy"})"));
     REQUIRE(one);
     CHECK(one->find("groups")->size() == 1);
-    CHECK(call(dispatcher, "registry.groups", obj(R"({"group":"nope"})"))->find("groups")->size() ==
-          0);
+    CHECK_FALSE(call(dispatcher, "registry.groups", obj(R"({"group":"nope"})")));
     CHECK_FALSE(call(dispatcher, "registry.groups", obj(R"({"group":3})")));
     // registry.list narrows to one group, by the name's first segment.
     auto listed = call(dispatcher, "registry.list", obj(R"({"group":"toy"})"));
@@ -344,13 +343,13 @@ TEST_CASE("commands are grouped by name prefix, each group with its one line") {
 TEST_CASE("the group index and the row index shape the registry's answers") {
     auto registry = makeRegistry();
     registry.describeGroup("toy", "A counter that tests add to and read.");
-    const auto groups = groupIndex(registry.groupsResult());
+    const auto groups = groupIndex(*registry.groupsResult());
     CHECK(groups.find("columns")->size() == 3);
     CHECK(groups.find("namespaces") == nullptr);
     CHECK(groups.find("hint")->asString().find("describe {group") != std::string::npos);
     for (const auto& row : groups.find("groups")->asArray()) CHECK(row.asArray().size() == 3);
     // Rows: the public commands of the group only (an Internal command is not an agent's).
-    const auto rows = rowIndex(registry.listResult("", "", "", "toy"));
+    const auto rows = rowIndex(*registry.listResult("", "", "", "toy"));
     REQUIRE(rows.find("namespaces")->find("toy"));
     for (const auto& row : rows.find("namespaces")->find("toy")->asArray())
         CHECK(row.asArray().at(0).asString() != "toy.safe");
@@ -376,7 +375,7 @@ TEST_CASE("the group index and the row index shape the registry's answers") {
     // Exactly the cap is not truncated.
     many["commands"].asArray().resize(kIndexRowCap);
     CHECK(rowIndex(many).find("truncated") == nullptr);
-    const auto error = unknownGroup("zz", registry.groupsResult());
+    const auto error = unknownGroup("zz", *registry.groupsResult());
     CHECK(error.code == "command.unknown_group");
     CHECK(error.hint.find("toy") != std::string::npos);
 }
@@ -435,6 +434,50 @@ TEST_CASE("registry.list text matches names and summaries in any ASCII case") {
     CHECK(named("nothing like this").empty());
     // Only ASCII is folded: a non-ASCII letter matches itself and nothing else.
     CHECK(named("\xC3\x89").empty());
+}
+TEST_CASE("an empty or invalid search says why and what to try") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to; sidechain-free.");
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    const auto ask = [&](const char* json) { return call(dispatcher, "registry.list", obj(json)); };
+    // A kind or tag that does not exist is an error naming the valid values.
+    auto kind = ask(R"({"kind":"Query"})");
+    REQUIRE_FALSE(kind);
+    CHECK(kind.error().code == "command.invalid_args");
+    CHECK(kind.error().path == "/args/kind");
+    CHECK(kind.error().hint.find("query, edit, action") != std::string::npos);
+    CHECK(ask(R"({"kind":"query"})"));
+    auto tag = ask(R"({"tag":"nonesuch"})");
+    REQUIRE_FALSE(tag);
+    CHECK(tag.error().code == "command.invalid_args");
+    CHECK(tag.error().path == "/args/tag");
+    // An unknown group is refused the way describe refuses it.
+    auto group = ask(R"({"group":"fxx"})");
+    REQUIRE_FALSE(group);
+    CHECK(group.error().code == "command.unknown_group");
+    CHECK(group.error().hint.find("toy") != std::string::npos);
+    CHECK(group.error().hint.find("describe") != std::string::npos);
+    auto groupsOnly = call(dispatcher, "registry.groups", obj(R"({"group":"fxx"})"));
+    REQUIRE_FALSE(groupsOnly);
+    CHECK(groupsOnly.error().code == "command.unknown_group");
+    // No match: the answer is empty; the groups whose line mentions the word are named.
+    auto none = ask(R"({"text":"sidechain"})");
+    REQUIRE(none);
+    CHECK(none->find("commands")->size() == 0);
+    REQUIRE(none->find("groups"));
+    CHECK(none->find("groups")->asArray().at(0).asString() == "toy");
+    auto nothing = ask(R"({"text":"zzzz"})");
+    REQUIRE(nothing);
+    CHECK(nothing->find("groups")->size() == 0);
+    // The index turns an empty answer into a hint that says why and where to look.
+    const auto shaped = rowIndex(*none);
+    CHECK(shaped.find("namespaces")->size() == 0);
+    const auto hint = shaped.find("hint")->asString();
+    CHECK(hint.find("No command") != std::string::npos);
+    CHECK(hint.find("toy") != std::string::npos);
+    CHECK(hint.find("describe {}") != std::string::npos);
+    CHECK(rowIndex(*nothing).find("hint")->asString().find("describe {}") != std::string::npos);
 }
 TEST_CASE("meta commands, generators and examples") {
     auto registry = makeRegistry();
