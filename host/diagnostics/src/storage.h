@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include "supple/base/result.h"
@@ -76,6 +77,15 @@ Status checkDirectoryForReading(const std::filesystem::path& root);
 // it, so the run is over. Gone and Unreadable: no marker, or not a file this user owns.
 enum class MarkerState { Gone, Free, Held, Unreadable };
 MarkerState probeMarker(const std::filesystem::path& path);
+// Whether an empty marker last written at `mtimeNs` is one being created at `nowNs` (nanoseconds
+// on one clock's axis; only their difference counts). Young is under a minute old, or up to a
+// second ahead: the file system stamps a file with a finer clock than the one read for "now"
+// (multigrain timestamps, a coarse tick), so a marker made this instant may carry a time a
+// little in the future. Further ahead the clock was set back, which is not young.
+bool markerIsYoung(std::int64_t mtimeNs, std::int64_t nowNs);
+// A Windows FILETIME (100 ns units since 1601) as nanoseconds since 1970, saturating at the ends
+// of the range (a time of 0, or one past the year 2262) instead of overflowing.
+std::int64_t unixNanosecondsOfFileTime(std::uint64_t ticks);
 // The state of an incident's run: its marker and the supervisor's hold together. Held while either
 // is held, unless the marker is already gone (the report is then complete). The hold is probed
 // first: if it is free the supervisor is finished (or dead), and by then it has removed the marker
