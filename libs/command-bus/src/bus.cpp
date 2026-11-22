@@ -714,14 +714,24 @@ Result<json::Value> Registry::listResult(std::string_view tag, std::string_view 
         item["exposure"] = exposureName(info->exposure);
         result["commands"].push_back(std::move(item));
     }
-    // Nothing matched a word: the group lines are searched too, so that "sidechain", said by a
-    // group's line and not by any command's summary, still points somewhere.
-    if (result.find("commands")->asArray().empty() && !needle.empty()) {
-        result["groups"] = json::Value::array();
-        for (const auto& info : groupInfos())
-            if (asciiLower(info.summary).find(needle) != std::string::npos &&
-                (group.empty() || info.name == group))
-                result["groups"].push_back(info.name);
+    if (result.find("commands")->asArray().empty()) {
+        // Say which filters found nothing, so the hint can fit them.
+        result["filters"] = json::Value::object();
+        for (const auto& [key, value] : {std::pair<const char*, std::string_view>{"group", group},
+                                         {"kind", kind},
+                                         {"tag", tag},
+                                         {"text", text}})
+            if (!value.empty()) result["filters"][key] = std::string(value);
+        // A word nothing's summary has may still be said by a group's line ("sidechain" is
+        // route's): name those groups, those other than the one searched, for it is the wrong
+        // group that the pointer is for.
+        if (!needle.empty()) {
+            result["groups"] = json::Value::array();
+            for (const auto& info : groupInfos())
+                if (info.name != group &&
+                    asciiLower(info.summary).find(needle) != std::string::npos)
+                    result["groups"].push_back(info.name);
+        }
     }
     return result;
 }
@@ -1167,14 +1177,36 @@ json::Value rowIndex(const json::Value& listResult) {
             group.push_back(std::move(row));
         }
     if (rows == 0) {
-        std::string groups;
+        std::string given, others;
+        const auto* filters = listResult.find("filters");
+        std::string group, text;
+        if (filters && filters->isObject())
+            for (const auto& member : filters->asObject()) {
+                if (member.value.isString()) {
+                    given +=
+                        (given.empty() ? "" : ", ") + member.key + " " + member.value.asString();
+                    if (member.key == "group") group = member.value.asString();
+                    if (member.key == "text") text = member.value.asString();
+                }
+            }
         if (const auto* named = listResult.find("groups"); named && named->isArray())
             for (const auto& name : named->asArray())
-                groups += (groups.empty() ? "" : ", ") + name.asString();
-        out["hint"] =
-            "No command matches: text searches command names and one-line summaries (any case); "
-            "describe {} lists the groups, describe {group} a group's commands." +
-            (groups.empty() ? std::string() : " Groups whose line mentions it: " + groups + ".");
+                others += (others.empty() ? "" : ", ") + name.asString();
+        std::string hint =
+            "No command matches" + (given.empty() ? std::string() : " " + given) + ".";
+        if (!text.empty())
+            hint += " text searches command names and one-line summaries, in any case.";
+        if (!others.empty())
+            hint +=
+                group.empty()
+                    ? " Groups whose line mentions it: " + others + "."
+                    : " Not in this group; in other groups whose line mentions it: " + others + ".";
+        hint += group.empty() ? " describe {} lists the groups, describe {group: <name>} a group's "
+                                "commands."
+                              : " describe {group: " + group +
+                                    "} alone lists the whole group; "
+                                    "describe {} lists the groups.";
+        out["hint"] = std::move(hint);
     }
     if (truncated) {
         out["truncated"] = true;

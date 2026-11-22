@@ -479,6 +479,36 @@ TEST_CASE("an empty or invalid search says why and what to try") {
     CHECK(hint.find("describe {}") != std::string::npos);
     CHECK(rowIndex(*nothing).find("hint")->asString().find("describe {}") != std::string::npos);
 }
+TEST_CASE("an empty answer inside a group points at other groups, and fits the filters given") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to; sidechain-free.");
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    const auto ask = [&](const char* json) {
+        auto listed = call(dispatcher, "registry.list", obj(json));
+        REQUIRE(listed);
+        return rowIndex(*listed);
+    };
+    // The word is in toy's line; searched inside batch it finds nothing there, and the pointer is
+    // to the other group (the wrong-group case is what the pointer is for).
+    auto wrongGroup = ask(R"({"group":"batch","text":"sidechain"})");
+    CHECK(wrongGroup.find("namespaces")->size() == 0);
+    auto hint = wrongGroup.find("hint")->asString();
+    CHECK(hint.find("in other groups") != std::string::npos);
+    CHECK(hint.find("toy") != std::string::npos);
+    // Inside the group whose own line says it there is nothing else to point at.
+    hint = ask(R"({"group":"toy","text":"sidechain"})").find("hint")->asString();
+    CHECK(hint.find("in other groups") == std::string::npos);
+    // The hint fits the filters given: no text, no talk of text search.
+    hint = ask(R"({"group":"registry","kind":"edit"})").find("hint")->asString();
+    CHECK(hint.find("text searches") == std::string::npos);
+    CHECK(hint.find("registry") != std::string::npos);
+    CHECK(hint.find("edit") != std::string::npos);
+    CHECK(hint.find("describe {group: registry}") != std::string::npos);
+    hint = ask(R"({"text":"zzzz"})").find("hint")->asString();
+    CHECK(hint.find("text searches") != std::string::npos);
+    CHECK(hint.find("zzzz") != std::string::npos);
+}
 TEST_CASE("an unknown command or group points at the walk through the groups") {
     auto registry = makeRegistry();
     FakeHost host;

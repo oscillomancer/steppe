@@ -117,7 +117,9 @@ class McpTools(unittest.TestCase):
                   ("describe", {"text": "automate"}), ("describe", {"text": "AUTOMATE"}),
                   ("describe", {"kind": "Query"}), ("describe", {"tag": "nonesuch"}),
                   ("describe", {"text": "zzzzq"}), ("describe", {"group": "fxx"}),
-                  ("describe", {"text": "sidechain"})]
+                  ("describe", {"text": "sidechain"}),
+                  ("describe", {"group": "fx", "text": "sidechain"}),
+                  ("describe", {"group": "tempo", "kind": "query"})]
         for options in [(), ("--tools", "core"), ("--tools", "all")]:
             with self.subTest(options=options):
                 lines = self.exchange(extra, *options)
@@ -214,6 +216,15 @@ class McpTools(unittest.TestCase):
                 self.assertIn("describe {}", wrong["structuredContent"]["hint"])
                 # A word only a group's line says leads there: sidechain is route's.
                 self.assertIn("route", replies[base + 8]["structuredContent"]["hint"])
+                # Inside the wrong group the pointer is to the right one; a filter without text
+                # gets a hint that fits it.
+                wrong_group = replies[base + 9]["structuredContent"]["hint"]
+                self.assertIn("in other groups", wrong_group)
+                self.assertIn("route", wrong_group)
+                no_text = replies[base + 10]["structuredContent"]["hint"]
+                self.assertNotIn("text searches", no_text)
+                self.assertIn("tempo", no_text)
+                self.assertIn("query", no_text)
 
     def test_registry_groups_on_the_command_line(self):
         groups = json.loads(subprocess.run([BINARY, "registry", "--groups"], capture_output=True,
