@@ -8,6 +8,7 @@
 #include <ctime>
 #include <functional>
 #include <initializer_list>
+#include <limits>
 #include <set>
 #include <vector>
 #include "diagnostics_build.h"
@@ -391,8 +392,28 @@ constexpr std::int64_t kEmptyMarkerGraceNs = 60'000'000'000;
 constexpr std::int64_t kClockSlackNs = 1'000'000'000;
 }  // namespace
 bool markerIsYoung(std::int64_t mtimeNs, std::int64_t nowNs) {
-    const std::int64_t age = nowNs - mtimeNs;
+    // now - mtime, saturated: a time at the end of the range must not wrap into "young".
+    std::int64_t age;
+    if (mtimeNs < 0 && nowNs > std::numeric_limits<std::int64_t>::max() + mtimeNs)
+        age = std::numeric_limits<std::int64_t>::max();
+    else if (mtimeNs > 0 && nowNs < std::numeric_limits<std::int64_t>::min() + mtimeNs)
+        age = std::numeric_limits<std::int64_t>::min();
+    else
+        age = nowNs - mtimeNs;
     return age >= -kClockSlackNs && age < kEmptyMarkerGraceNs;
+}
+std::int64_t unixNanosecondsOfFileTime(std::uint64_t ticks) {
+    constexpr std::uint64_t kUnixEpoch = 116'444'736'000'000'000ULL;  // 1970 in 1601's ticks
+    constexpr std::uint64_t kMostTicks =
+        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() / 100);
+    if (ticks < kUnixEpoch) {
+        const std::uint64_t before = kUnixEpoch - ticks;
+        return before > kMostTicks ? std::numeric_limits<std::int64_t>::min()
+                                   : -static_cast<std::int64_t>(before * 100);
+    }
+    const std::uint64_t after = ticks - kUnixEpoch;
+    return after > kMostTicks ? std::numeric_limits<std::int64_t>::max()
+                              : static_cast<std::int64_t>(after * 100);
 }
 MarkerState probeMarker(const fs::path& path) {
 #if defined(_WIN32)
@@ -410,13 +431,13 @@ MarkerState probeMarker(const fs::path& path) {
     BY_HANDLE_FILE_INFORMATION info{};
     if (GetFileInformationByHandle(file, &info) &&
         !(info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
+        // The precise clock, at the resolution the file system stamps with: the plain one lags
+        // by up to a tick, which would leave a file just made dated beyond the second's slack.
         FILETIME nowTime{};
-        GetSystemTimeAsFileTime(&nowTime);
-        // 100 ns units since 1601, taken to nanoseconds since 1970 so that they fit.
+        GetSystemTimePreciseAsFileTime(&nowTime);
         const auto nanoseconds = [](const FILETIME& t) {
-            const auto ticks =
-                (static_cast<std::uint64_t>(t.dwHighDateTime) << 32) | t.dwLowDateTime;
-            return (static_cast<std::int64_t>(ticks) - 116'444'736'000'000'000LL) * 100;
+            return unixNanosecondsOfFileTime((static_cast<std::uint64_t>(t.dwHighDateTime) << 32) |
+                                             t.dwLowDateTime);
         };
         const bool young = markerIsYoung(nanoseconds(info.ftLastWriteTime), nanoseconds(nowTime));
         if (info.nFileSizeHigh == 0 && info.nFileSizeLow == 0 && young) {

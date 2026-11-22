@@ -199,10 +199,13 @@ when it is empty and under a minute old, because the creator locks before it wri
 marker is one being created. An older empty one (a creator that failed between creating the file
 and its first write, which now removes the file itself on a failure it sees) is judged by its lock
 like any other, so it cannot read as held for ever; so is an empty one dated more than a second in
-the future (the clock was set back), which is not young. "Now" is read at the file system's own
-resolution, and a time up to a second ahead of it counts as young: a file system may stamp a
-file with a finer clock than the one read for "now" (multigrain timestamps, a coarse tick), so a
-marker made this instant can carry the next second's time, and no clock granularity decides. A marker nobody holds is *free*: the run is over. A report whose marker is held is
+the future (the clock was set back), which is not young. "Now" is read at full resolution:
+`clock_gettime(CLOCK_REALTIME)` against the marker's `st_mtim` (`st_mtimespec` on macOS) on
+POSIX, and `GetSystemTimePreciseAsFileTime` against its last-write `FILETIME` on Windows (the
+plain clock lags by up to a tick). A time up to a second ahead of it still counts as young: a
+file system may stamp a file with a finer clock than the one read for "now" (multigrain
+timestamps), so a marker made this instant can carry the next second's time, and no clock
+granularity decides. A `FILETIME` of 0 or one past the year 2262 saturates instead of wrapping. A marker nobody holds is *free*: the run is over. A report whose marker is held is
 still being published and counts in `pending`, not in `reports`; `readReport` and `acknowledge`
 refuse it (`diagnostics.no_report`). A report with no marker, or a free one, counts. A free marker
 with no report is an `unreported` run: the supervisor died or could not write, and the list says

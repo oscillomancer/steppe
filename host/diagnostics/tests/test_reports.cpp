@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include "../src/inventory.h"
 #include "../src/private_files.h"
 #include "../src/storage.h"
@@ -424,6 +425,29 @@ TEST_CASE("whether an empty marker is young depends on the two times, not on a c
     // Further ahead: the clock was set back, which is not young.
     CHECK_FALSE(markerIsYoung(now + second + 1, now));
     CHECK_FALSE(markerIsYoung(now + 2 * 3600 * second, now));
+    // The ends of the range saturate: they are neither young nor wrapped into young.
+    constexpr auto least = std::numeric_limits<std::int64_t>::min();
+    constexpr auto most = std::numeric_limits<std::int64_t>::max();
+    CHECK_FALSE(markerIsYoung(least, now));
+    CHECK_FALSE(markerIsYoung(most, now));
+    CHECK_FALSE(markerIsYoung(least, most));
+    CHECK_FALSE(markerIsYoung(most, least));
+    CHECK(markerIsYoung(most, most));
+    CHECK(markerIsYoung(least, least));
+}
+TEST_CASE("a file time converts to Unix nanoseconds, saturating at the ends of the range") {
+    constexpr std::uint64_t epoch = 116'444'736'000'000'000ULL;  // 1970 in 1601's 100 ns ticks
+    CHECK(unixNanosecondsOfFileTime(epoch) == 0);
+    CHECK(unixNanosecondsOfFileTime(epoch + 10'000'000) == 1'000'000'000);
+    CHECK(unixNanosecondsOfFileTime(epoch - 10'000'000) == -1'000'000'000);
+    CHECK(unixNanosecondsOfFileTime(0) == std::numeric_limits<std::int64_t>::min());
+    CHECK(unixNanosecondsOfFileTime(~std::uint64_t{0}) == std::numeric_limits<std::int64_t>::max());
+    // The last tick that fits, and the first that does not.
+    constexpr std::uint64_t fits = std::numeric_limits<std::int64_t>::max() / 100;
+    CHECK(unixNanosecondsOfFileTime(epoch + fits) == static_cast<std::int64_t>(fits * 100));
+    CHECK(unixNanosecondsOfFileTime(epoch + fits + 1) == std::numeric_limits<std::int64_t>::max());
+    CHECK(unixNanosecondsOfFileTime(epoch - fits) == -static_cast<std::int64_t>(fits * 100));
+    CHECK(unixNanosecondsOfFileTime(epoch - fits - 1) == std::numeric_limits<std::int64_t>::min());
 }
 TEST_CASE("an empty marker that stays empty is a run that ended, not one being created") {
     // A marker is empty for the instant between its creation and its first write. One left empty
