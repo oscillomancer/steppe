@@ -2612,7 +2612,7 @@ missing from this table is a defect of this contract.
 | Command | Rule |
 |---|---|
 | `item.add {clip}`, `scene.insert`, `arrangement.build` | Copy notes as written; each laid take gets the clip's context converted as above and `follow`: the argument, else the clip's own. `pooled: true` is allowed with any `follow`. Nothing is unrolled (`unrolled` leaves the answer; `clip.follow_pooled` is no longer given). `followed: {mode, regions?, folded?, copied?}` stays, from `soundingNotes`. |
-| `item.add` (notation, file, empty), `take.add` (new) | A take with no context, `follow: none`. |
+| `item.add` (notation, file, empty), `take.add` (new), `rack.capture`, `rack.capture.commit` | A take with no context, `follow: none` (the rack's captured MIDI is a new item with a default take, as `item.add` makes). |
 | `take.add {from}` | On an item, the copy takes the source take's four members; on a clip, neither holds any. |
 | `launch.commit` | Lays notes as written, each take with its clip's context converted as above and `follow` the outcome the plan used for that clip (`none`, `key` or `chords`, after the budget: `engine.md`). `pooled` allowed. |
 | `take.set {take, context?, follow?}` | Below. |
