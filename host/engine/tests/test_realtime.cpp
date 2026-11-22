@@ -4540,6 +4540,44 @@ TEST_CASE("a loop too short for a render block in the rings still starts, as wit
     }
 }
 
+TEST_CASE("a start with the renderer's rings full plays while the renderer looks again" *
+          doctest::description("rt")) {
+    // The pre-roll's way out with full rings read the renderer's wake flag,
+    // which each renderer pass clears before it looks at the rings again:
+    // a cycle then took one more pre-roll cycle (the test above, 17 of 40
+    // runs). A held renderer clears it the same way and stays there. The
+    // rings stay full, so the start plays.
+    for (bool split : {false, true}) {
+        CAPTURE(split);
+        const auto session = split ? frontierSession() : synthSession(-12.0, nullptr, 2);
+        auto pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 64});
+        Engine engine(pool, media, {.renderAheadMs = 10.0, .workers = 1});
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 64, .inputs = 2}));
+        REQUIRE(engine.load(session));
+        REQUIRE(EngineTestAccess::latestPlan(engine).split == split);
+        engine.setLoop(0.0, 200.0 / 48000.0, true);
+        engine.play();
+        // The deadline only reports a hang.
+        const auto hang = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (!EngineTestAccess::rendererWaitsForRoom(engine)) {
+            REQUIRE_MESSAGE(std::chrono::steady_clock::now() < hang, "renderer hung");
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        engine.holdRenderer(true);
+        REQUIRE(engine.awaitRendererHeld());
+        CHECK_FALSE(EngineTestAccess::rendererWaitsForRoom(engine));
+        backend.run(1);
+        CHECK(engine.transport().sample == 64);
+        const auto& out = backend.capture().channels[0];
+        CHECK(std::any_of(out.begin(), out.end(), [](float v) { return v != 0; }));
+        CHECK(engine.anticipationMisses() == 0);
+        engine.holdRenderer(false);
+        engine.stop();
+    }
+}
+
 TEST_CASE("renderer waits for full master and frontier rings to release a chunk") {
     auto pool = makePool();
     MediaCache media;

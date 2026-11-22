@@ -491,25 +491,36 @@ struct Vst3Instance::State {
     OutputEventList outputEvents{static_cast<Steinberg::int32>(kMaxEvents)};
     PendingEdits changes;
     // This block's editor gestures and values (audio thread; review round 81 E2).
+    // The editor's events in a block. A block takes from the queue only
+    // while they can hold the next change's event and the ends that may
+    // follow; the rest waits for the next block, which it asks for (review
+    // round 98, U1: a drag queued while not processing, drained whole, lost
+    // its moves past this and its end, and the stage forgot the gesture).
     std::array<OutputEvent, 64> editorOutput{};
     std::size_t editorOutputs = 0;
-    // The editor gestures begun and not yet ended (audio thread), and a
-    // request to end them all (main thread: a barrier dropped queued edits,
+    // The editor gestures begun and not yet ended (audio thread), and the
+    // requests to end them all (main thread: a barrier dropped queued edits,
     // the plug-in was deactivated, or an editor edit found the queue full),
     // so an end that never comes leaves no gesture open (review round 81b).
-    // The request is the queue's next sequence when it was made (0: none):
-    // the ends go out after every change queued before it and before any
-    // queued after, as a queued end would (review round 97, T1). Handled
-    // before the queue, a move still queued came out after its gesture's
-    // end (a second step), and a Begin still queued was never ended. A
-    // request made before the block took the last one keeps the later: a
-    // full queue takes nothing between them and a barrier drops it, so only
-    // edits queued between a deactivation and a later request could show it.
+    // A request is the queue's next sequence when it was made: the ends go
+    // out after every change queued before it and before any queued after,
+    // as a queued end would (review round 97, T1; handled before the queue,
+    // a move still queued came out after its gesture's end, and a Begin
+    // still queued was never ended). Each request keeps its own place
+    // (round 98, U2: one slot made two requests with edits between them end
+    // the earlier gestures at the later). One with nothing queued since the
+    // last ends at the same place and is not repeated, so every pending
+    // request but the last has a queued change after it: at most the
+    // queue's capacity plus one are pending, and the ring cannot fill.
     std::array<vst::ParamID, 16> begun{};
     std::size_t begunCount = 0;
-    std::atomic<std::uint64_t> endGesturesBefore{0};
+    SpscRing<std::uint64_t, 2048> endRequests;
+    static_assert(decltype(endRequests)::kCapacity > PendingEdits::kCapacity + 1);
+    std::uint64_t lastEndRequest = 0;  // main thread
     void endGestures() {
-        endGesturesBefore.store(changes.nextSequence(), std::memory_order_release);
+        if (lastEndRequest != 0 && changes.lastQueued() < lastEndRequest) return;
+        lastEndRequest = changes.nextSequence();
+        (void)endRequests.push(lastEndRequest);  // never full: see above
     }
     // Set while the processor processes (audio thread), and an editor edit's
     // request to process (main thread, taken by the audio thread).
@@ -1088,28 +1099,29 @@ bool Vst3Instance::process(const ProcessBlock& block, OutputEvents* out) SUPPLE_
                                                      .noteId = -1};
         s.begunCount = 0;
     };
-    // An end request is read for each change: one pushed after the request
-    // is popped only once the request is visible (release, then acquire),
-    // and once it is, every change pushed before it is too. A newer request
-    // that replaced it stays for its own place.
-    const auto takeRequest = [&](std::uint64_t before) {
-        (void)s.endGesturesBefore.compare_exchange_strong(before, 0, std::memory_order_acq_rel);
-    };
+    // End requests are read for each change: one pushed after a request is
+    // popped only once the request is visible (release, then acquire), and
+    // once it is, every change pushed before it is too.
     PendingEdits::Change change{};
+    std::uint64_t request = 0;
     for (;;) {
+        if (s.editorOutputs + s.begunCount + 1 >= s.editorOutput.size()) {
+            // Full for this block: the rest waits, and asks for the next.
+            if (s.changes.queued() || s.endRequests.peek(request))
+                s.editorRequest.store(true, std::memory_order_release);
+            break;
+        }
         if (!s.changes.pop(change)) {
-            const std::uint64_t before = s.endGesturesBefore.load(std::memory_order_acquire);
-            if (before == 0) break;
-            if (!s.changes.pop(change)) {  // nothing queued before the request is left
+            if (!s.endRequests.peek(request)) break;
+            if (!s.changes.pop(change)) {  // nothing queued before it is left
                 endBegun();
-                takeRequest(before);
-                break;
+                s.endRequests.consume();
+                continue;
             }
         }
-        if (const std::uint64_t before = s.endGesturesBefore.load(std::memory_order_acquire);
-            before != 0 && change.sequence >= before) {
+        while (s.endRequests.peek(request) && change.sequence >= request) {
             endBegun();
-            takeRequest(before);
+            s.endRequests.consume();
         }
         if (change.kind == PendingEdits::Value || change.kind == PendingEdits::Edited)
             addNormalized(change.id, change.value, 0);
