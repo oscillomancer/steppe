@@ -1714,8 +1714,9 @@ scene on the timeline, its notes are laid as written and the status line at
 the bottom says how they sound: "Bass follows: sounds in D minor, +2" for a
 clip that follows the song's key, or "Keys is laid as written: its key C
 minor differs from D minor at bar 21" for one that doesn't, under a
-different key. A Capture take laid under a different key says so the same
-way. A clip with its own key
+different key ("its chord Am differs from F at bar 5" in the same key over
+another chord). A Capture take laid under a different key or chord says so
+the same way. A clip with its own key
 shows it in the corner of its cell ("Dm", "G dor"), with "→" before it
 when the clip follows. Clips launch under a master playrate, but
 while it keeps the pitch an audio clip can't be launched: the pane draws

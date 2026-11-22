@@ -3004,9 +3004,11 @@ same heights, scroll and colours.
     "+2", or "by degree"); "Riff follows: sounds in E minor, then G major
     from bar 9" for several runs (more counted); "Stabs follows the chords:
     sounds in E minor"; notes folded into range counted;
-  - a clip laid as written under another key (`followed.mismatch`, with
-    the `context.mismatch` warning): "Keys is laid as written: its key C
-    minor differs from D minor at bar 21";
+  - a clip laid as written under another key or, in the same key, over
+    another chord (`followed.mismatch {kind}`, with the `context.mismatch`
+    warning): "Keys is laid as written: its key C minor differs from D minor
+    at bar 21", "Pad is laid as written: its chord Am differs from F at bar
+    5";
   - a clip that could not follow (`copied`): "Beat is laid as written:
     drums don't follow", "… audio doesn't follow", "… it has no key to
     follow from", "… it has no notes to follow";
