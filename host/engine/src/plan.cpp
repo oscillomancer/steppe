@@ -2739,13 +2739,19 @@ void prepareNoteIds(Stage& st) SUPPLE_RT {
             if (event.noteId >= 0 && i >= st.releases) {
                 // A launched clip's note, or a following take's, ends the key
                 // its note-on sounded, whatever the context now says (ADR-0098
-                // X4, X4c).
+                // X4, X4c). So does a voice that sounded keyless and was carried
+                // to a source that is not (its take stopped following, review
+                // round 87 J1): a carried voice keeps the origin it started
+                // with. Its source id names the note either way; a voice the
+                // carry releases is not paired.
                 const bool clip = static_cast<std::size_t>(source) < st.noteSources.size() &&
                                   st.noteSources[static_cast<std::size_t>(source)].origin.keyless();
                 const auto voice = std::find_if(
                     st.pendingVoices.begin(), st.pendingVoices.end(), [&](const HeldVoice& v) {
-                        return v.sourceId == source && matchesVoice(v, event.port, event.channel,
-                                                                    clip ? -1 : event.key, -1);
+                        const bool keyless = clip || v.origin.keyless();
+                        return v.sourceId == source && !v.release &&
+                               matchesVoice(v, event.port, event.channel, keyless ? -1 : event.key,
+                                            -1);
                     });
                 // Its onset was dropped or NoteEnd already finished it.
                 if (voice == st.pendingVoices.end()) continue;

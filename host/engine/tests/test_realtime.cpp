@@ -1944,6 +1944,67 @@ TEST_CASE("anticipative monitoring: heard while stopped; arming mid-play hands t
     CHECK(engine.lastStopOnAudioThread());
 }
 
+namespace {
+// A device whose callback runs once more while it stops, after the engine
+// has asked to shut down: a real device's thread racing Engine::stop.
+class CycleInStop : public DummyBackend {
+  public:
+    explicit CycleInStop(Options options) : DummyBackend(std::move(options)) {}
+    void stop() override {
+        run(1);
+        DummyBackend::stop();
+    }
+};
+}  // namespace
+
+TEST_CASE("a cycle that runs while the engine stops starts no plug-in again; a restart plays them" *
+          doctest::description("rt")) {
+    // Both executors, with a monitored track: the in-callback executor holds
+    // every plug-in; the anticipative one shares them with the renderer (the
+    // synth) and the callback's live region (the vocal's gain).
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        CAPTURE(options.anticipative);
+        auto pool = makePool();
+        MediaCache media;
+        const model::Session s = withVocal(true);
+        const BackendConfig config{.sampleRate = 48000, .blockSize = 256, .inputs = 2};
+        {
+            CycleInStop backend(rampInput(4096));
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, config));
+            REQUIRE(engine.load(s));
+            engine.play();
+            runAheadOnState(engine, backend, 8, 256);
+            engine.stop();  // its last cycle sees the request, then the final callback
+            CHECK(engine.processErrors() == 0);
+        }
+        // Nothing is left processing without an owner, which a new engine
+        // on this pool could never claim (its stage would pass through).
+        for (const auto& e : s.fx) {
+            const host::Instance* in = pool.find(e.id);
+            REQUIRE(in);
+            CAPTURE(e.value->plugin.id);
+            CHECK_FALSE(in->processing());
+            CHECK(in->owner() == nullptr);
+        }
+        // An engine restarted on the same pool (a device restart) runs them all.
+        DummyBackend backend(rampInput(4096));
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, config));
+        REQUIRE(engine.load(s));
+        engine.play();
+        runAheadOnState(engine, backend, 8, 256);
+        for (const auto& e : s.fx) {
+            const host::Instance* in = pool.find(e.id);
+            CAPTURE(e.value->plugin.id);
+            CHECK(in->processing());
+            CHECK(in->owner() != nullptr);
+        }
+        CHECK(engine.processErrors() == 0);
+        engine.stop();
+    }
+}
+
 // A plug-in's latency mode (Ferric's and Plateau's "Low Latency"): changing
 // it while the engine runs makes the plug-in request a restart, which waits
 // for processing to stop. The engine takes it off its executors, restarts the

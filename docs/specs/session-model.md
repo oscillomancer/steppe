@@ -1244,8 +1244,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   stopped and held stretches replace the arrangement, each clip as
   copies of its takes at the phase heard, MIDI copied unless `pooled`,
   the envelopes on their FX repeated pass after pass over each copy, and
-  the takes' own envelopes too over a looped copy of more than one period
-  (on an item they would run once from its start); a
+  the takes' own envelopes too over a looped copy that crosses its period's
+  end, and from the value heard at its start over a copy laid from within a
+  pass (on an item they would run once from its start); a
   scene launched whole (every clip of it that could play, on a track not
   frozen, started on one frame) writes a section (a region with `section`
   true) named after the scene and in its colour, from that boundary until

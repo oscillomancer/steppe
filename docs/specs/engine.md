@@ -1202,13 +1202,22 @@ results.
     carries each held voice to its own source, a chord's notes included,
     which share the rest of their address (review round 86 H1);
   - `prepareNoteIds` pairs its note-off by source id, port and channel, taking
-    the held voice's key.
+    the held voice's key. It pairs a note-off the same way when the held voice
+    sounded keyless, whatever its new source is: a carried voice keeps the
+    origin it started with, so a take that stops following while its note is
+    held still ends the key the note sounds at (review round 87 J1).
   So a context edit while a note sounds lets it play on to its note-off at the
-  pitch it started with, and no note sticks.
+  pitch it started with, and so does a change of following (on to off, off to
+  on, key to chords, take.set or an undo): no note sticks, and none is cut
+  early unless the note itself is gone. A MIDI send's voice already ends at
+  the key it delivered.
 - **Context edits.** A context-only edit takes the compile path whenever an
   item's active take has `follow` other than `none` or the plan follows a
-  clip; otherwise the shortcut above stays. The compile time on the song journey is measured in the
-  X4 hand-back.
+  clip; otherwise the shortcut above stays. Following costs the compile about
+  2.5 µs a note-on (a skipped test in test_clip_player_follow.cpp prints it):
+  compile and prepare of 400 one-bar items of 16 notes took 37 ms following
+  nothing, 39 ms following key and 53 ms following chords (dev, Debug, median
+  of 7), so no per-place cache is kept.
 - **Everything downstream reads compiled events:** offline renders, freeze,
   stems, rack Notes feeds, MIDI sends and plug-in MIDI inputs take the sounding
   pitches with no change of their own.
@@ -2560,7 +2569,18 @@ harness. See the tooling README for schemas, limits and invocation details.
   Shutdown: `Backend::stop()` promises one final zero-frame callback on the
   audio thread (a manual driver makes it on its caller, which is its audio
   thread), and the engine stops every plugin there — no timeout, no stop from
-  the main thread however long the device's period. Pause and
+  the main thread however long the device's period. In the in-callback
+  executor, a device cycle that runs after the request and before that
+  callback stops the callback's plug-ins and then plays silence: it adopts
+  no plan and starts no plug-in, not even a refused one's retry. In the
+  anticipative executor the renderer stops its share as it ends, and the
+  callback's live region may still adopt a plan and start its plug-ins in
+  such a cycle: the final callback stops every live instance whatever it
+  holds. The final callback also stops whatever the in-callback executor
+  still holds, and `Engine::stop()` stops any instance still processing
+  once every audio thread has joined. So a stop never leaves an instance
+  processing without an owner, which an engine restarted on the same pool
+  could never claim. Pause and
   seek `reset()` the plugins (no hanging notes); seek re-locates event and
   automation cursors and clears delay lines, a rack's plug-in stages' dry
   delays and oversampling filters as a chain's (`locateRackStages`). A
