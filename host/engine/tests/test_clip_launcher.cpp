@@ -892,6 +892,29 @@ TEST_CASE("item.export writes a clip's MIDI") {
     CHECK(r["notes"].asInt() == 3);
 }
 
+TEST_CASE("item.export of a following item writes what sounds, as after a bake (round 85 G4)") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    l.run("take.set", R"({"take": "tk_1", "context": "1: key C major ~:w", "follow": "key"})");
+    const auto exported = [&](const char* name) {
+        auto args = j(R"({"item": "it_1"})");
+        args["path"] = (l.root / name).string();
+        l.runArgs("item.export", args);
+        auto seq = midi::readSmf(readFile(l.root / name).value());
+        REQUIRE(seq);
+        std::string out;
+        for (const auto& n : seq->notes)
+            out += (out.empty() ? "" : " ") + std::to_string(n.pitch) + "@" +
+                   std::to_string(n.start * 960 / seq->ppq);
+        return out;
+    };
+    const std::string following = exported("following.mid");
+    // The stored notes are C major's (36 40 43 48); the file has the pitches that sound.
+    CHECK(following == "39@0 43@960 46@1920 51@2880");
+    l.run("take.bake", R"({"take": "tk_1"})");
+    CHECK(exported("baked.mid") == following);
+}
+
 TEST_CASE("timeline commands refuse a clip with item.kind") {
     Launcher l;
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1"})");

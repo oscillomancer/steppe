@@ -16,6 +16,7 @@
 #include "supple/engine/offline.h"
 #include "supple/midi/midi.h"
 #include "supple/model/audio_warp.h"
+#include "supple/model/follow.h"
 
 namespace supple::engine {
 namespace {
@@ -168,7 +169,8 @@ Result<ExportResult> exportAudio(const EngineApp& app, const model::Session& s,
 
 Result<ExportResult> exportMidi(const EngineApp& app, const model::Session& s,
                                 const model::Item& it, const model::Take& take,
-                                const std::string& file) {
+                                const std::string& file,
+                                std::optional<model::Id> itemId = std::nullopt) {
     const model::MidiSource* src = s.midi.find(*take.source);
     if (!src)
         return Error("item.export_source", "the take's MIDI is missing from the project", "/item",
@@ -179,6 +181,10 @@ Result<ExportResult> exportMidi(const EngineApp& app, const model::Session& s,
     midi::Sequence out;
     out.ppq = seq.ppq > 0 ? seq.ppq : 960;
     detail::heardMidi(s, it, take, seq, 0, out);
+    // What a following take sounds as, not the pitches it stores (ADR-0098): the heard notes of
+    // `soundingNotes`, each at its place, so the file plays as the item does.
+    if (itemId && take.follow != model::ClipFollow::None)
+        out.notes = model::soundingNoteList(s, *itemId, out.ppq);
     const model::ItemSpan span = model::itemSpan(s, it);
     const double beats = s.timeMap->beatAt(span.endSec) - span.startBeat;
     out.length = std::max<std::int64_t>(0, std::llround(beats * out.ppq));
@@ -284,7 +290,8 @@ void registerExportCommands(cmd::Registry& registry) {
         if (!take || !take->source)
             return Error("item.export_empty", a.item + " has no material to export", "/item",
                          "pick a take with material (take.activate) or record into the item");
-        if (take->source->kind == model::Kind::Midi) return exportMidi(app, s, *it, *take, a.path);
+        if (take->source->kind == model::Kind::Midi)
+            return exportMidi(app, s, *it, *take, a.path, *id);
         return exportAudio(app, s, *it, *take, a.path);
     };
     registry.add(std::move(c));
