@@ -16,6 +16,7 @@
 
 #include "supple/model/context.h"
 #include "supple/model/follow.h"
+#include "supple/model/source_mapping.h"
 #include "supple/notation/notation.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
@@ -660,7 +661,7 @@ class Roll : public ui::Node {
                     json::Value op = json::Value::object();
                     op["op"] = "add";
                     op["pitch"] = pitch;
-                    op["start"] = at;
+                    op["start"] = at - s_.frameShift;
                     op["length"] = s_.lastLength;
                     op["velocity"] = s_.lastVelocity;
                     json::Value ops = json::Value::array();
@@ -1485,8 +1486,8 @@ class CcLane : public ui::Node {
             clear["op"] = "cc.clear";
             clear["number"] = s_.ccNumber;
             clear["channel"] = 1;
-            clear["from"] = s_.ccFrom;
-            clear["to"] = s_.ccTo;
+            clear["from"] = s_.ccFrom - s_.frameShift;
+            clear["to"] = s_.ccTo - s_.frameShift;
             ops.push_back(std::move(clear));
             if (!s_.ccErasing) {
                 json::Value set = json::Value::object(), pts = json::Value::array();
@@ -1494,7 +1495,7 @@ class CcLane : public ui::Node {
                 set["number"] = s_.ccNumber;
                 for (const CcPoint& p : s_.ccDraft) {
                     json::Value v = json::Value::object();
-                    v["beat"] = p.beat;
+                    v["beat"] = p.beat - s_.frameShift;
                     v["value"] = p.value;
                     pts.push_back(std::move(v));
                 }
@@ -1895,6 +1896,16 @@ class Panel : public ui::Node {
 }  // namespace
 
 // ----------------------------------------------------------------- MidiEditor
+
+double rollFrameShift(const MidiOwner& owner) {
+    if (!owner.item || !owner.item->loop || !owner.take || !owner.source) return 0;
+    const auto& seq = owner.source->sequence;
+    if (seq.ppq <= 0 || seq.length <= 0) return 0;
+    const double rate = owner.take->playrate > 0 ? owner.take->playrate : 1.0;
+    const double cycle = static_cast<double>(seq.length) / seq.ppq;
+    const model::SourceBeatMapping mapping{owner.take->startOffset, rate, cycle};
+    return (owner.take->startOffset - mapping.sourceOffset(true)) / rate;
+}
 
 std::optional<MidiOwner> midiOwner(const model::Session& s, const std::string& text) {
     const auto id = model::Id::parse(text);
@@ -2700,6 +2711,7 @@ void takeContextMarks(const model::Take& take, double itemPosition, double lo, d
 Status MidiEditor::reload() {
     const auto owner = midiOwner(app_.head(), state_.item);
     if (!owner) return Error("gui.midi", "no MIDI source", "/item");
+    state_.frameShift = rollFrameShift(*owner);
     if (owner->audio) {
         // An audio clip neither follows nor has a written view.
         state_.following = false;
@@ -2736,7 +2748,8 @@ Status MidiEditor::reload() {
         RollNote note;
         note.pitch = n.pitch;
         note.start =
-            (static_cast<double>(n.start) / source->sequence.ppq - take->startOffset) / rate;
+            (static_cast<double>(n.start) / source->sequence.ppq - take->startOffset) / rate +
+            state_.frameShift;
         note.length = static_cast<double>(n.length) / (source->sequence.ppq * rate);
         note.velocity = n.velocity;
         note.channel = n.channel + 1;
@@ -2857,8 +2870,8 @@ Status MidiEditor::reload() {
     for (const json::Value& c : (*r)["cc"].asArray()) {
         if (c.find("number")->asInt() != state_.ccNumber || c.find("channel"))
             continue;  // channel 1
-        state_.cc.push_back(
-            {c.find("beat")->asDouble(), static_cast<int>(c.find("value")->asInt())});
+        state_.cc.push_back({c.find("beat")->asDouble() + state_.frameShift,
+                             static_cast<int>(c.find("value")->asInt())});
     }
     collectEnvLanes(*owner);
     refreshEnvLanes();
@@ -3960,7 +3973,7 @@ void MidiEditor::duplicate() {
         json::Value op = json::Value::object();
         op["op"] = "add";
         op["pitch"] = n.pitch;
-        op["start"] = n.start + span;
+        op["start"] = n.start + span - state_.frameShift;
         op["length"] = n.length;
         op["velocity"] = n.velocity;
         if (n.channel != 1) op["channel"] = n.channel;
@@ -4005,7 +4018,7 @@ void MidiEditor::paste(std::optional<double> itemBeat) {
         json::Value op = json::Value::object();
         op["op"] = "add";
         op["pitch"] = n.pitch;
-        op["start"] = at + n.start;
+        op["start"] = at + n.start - state_.frameShift;
         op["length"] = n.length;
         op["velocity"] = n.velocity;
         if (n.channel != 1) op["channel"] = n.channel;
