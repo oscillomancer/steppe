@@ -32,6 +32,7 @@
 #if defined(SUPPLE_TEST_JACK)
 #include "fake_jack.h"
 #endif
+#include "bridge_patience.h"
 #include "history_sequence.h"
 #include "recording.h"
 #include "render_commands.h"
@@ -86,7 +87,7 @@ TEST_CASE("seeded command histories preserve invariants, undo and saved projects
         // Ensure every command family is exercised even when a seeded stream
         // happens to miss it. Vary the high bits to select existing or bad IDs.
         for (int op = 0; op < 19; ++op) stream.push_back(static_cast<std::uint8_t>(op));
-        auto result = test::historySequence(*app, bus, stream);
+        auto result = supple::test::historySequence(*app, bus, stream);
         INFO("seed: " << seed);
         INFO((result ? std::string() : result.error().toString()));
         CHECK(result);
@@ -5402,7 +5403,7 @@ TEST_CASE("a VST3 editor's edit of a parameter no lane is sending is one step, i
                 }
                 DummyBackend backend({.mode = DummyBackend::Mode::Manual});
                 REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
-                                        {.anticipative = anticipative}));
+                                        engine::test::patient({.anticipative = anticipative})));
                 const auto cycles = [&](int n) {
                     for (int i = 0; i < n; ++i) {
                         if (anticipative) (void)app.engine()->awaitRendered(4096);
@@ -5562,7 +5563,7 @@ TEST_CASE("a bypassed VST3's editor edit is the plug-in's, recorded once") {
         call(set, "fx.set");
         DummyBackend backend({.mode = DummyBackend::Mode::Manual});
         REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
-                                {.anticipative = anticipative}));
+                                engine::test::patient({.anticipative = anticipative})));
         const auto cycles = [&](int n) {
             for (int i = 0; i < n; ++i) {
                 if (anticipative) (void)app.engine()->awaitRendered(4096);
@@ -5655,7 +5656,7 @@ TEST_CASE("a VST3 editor's edit during modulation is the plug-in's, recorded onc
             EngineApp& app = *rig.app;
             DummyBackend backend({.mode = DummyBackend::Mode::Manual});
             REQUIRE(app.startEngine(backend, {.sampleRate = 48000, .blockSize = 512},
-                                    {.anticipative = anticipative}));
+                                    engine::test::patient({.anticipative = anticipative})));
             const auto cycles = [&](int n) {
                 for (int i = 0; i < n; ++i) {
                     if (anticipative) (void)app.engine()->awaitRendered(4096);
