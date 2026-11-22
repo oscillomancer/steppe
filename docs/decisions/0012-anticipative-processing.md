@@ -121,8 +121,11 @@ block rendered. The GUI lead's walk heard it as render gaps on a scene launch.
 Now the pre-roll waits for the whole block (engine.md, "Anticipative
 processing"), and a cycle that plays audio and then runs short counts a miss,
 the cycle that starts the play included. A launch from stop starts about one
-render block's time later; a plain start, a locate and a loop wrap do not
-change.
+render block's time later. A plain start and a locate do not change when the
+device cycle is no longer than a render block; a longer cycle waits for its
+whole first cycle (a 2048-frame cycle against 1024-frame blocks: one block, about
+21 ms at 48 kHz, more). A loop wrap does not change. (Narrowed 2026-11-22,
+review round 96: the first form said a plain start never changes.)
 
 The pre-roll also ends when the renderer waits for room: a loop shorter than
 the rings' chunks fills them before a whole block is rendered, and the start
