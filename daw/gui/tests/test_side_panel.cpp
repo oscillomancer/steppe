@@ -309,6 +309,7 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     gui::InspectorSubject subject = gui::inspectorSubject(s, sel, theme);
     CHECK(subject.kind == Kind::Nothing);
     CHECK(subject.title == "Nothing selected");
+    CHECK(subject.detail.empty());  // no hint text in an empty panel
     CHECK_FALSE(subject.color);
 
     sel.selectedItems = {empty};
@@ -351,6 +352,7 @@ TEST_CASE("inspector: it says what is selected, and follows the selection and th
     f.side->show("inspector");
     f.pass();
     CHECK(f.text("inspector.title") == "Nothing selected");
+    CHECK_FALSE(f.inView("inspector.detail"));
     f.ui.selectedTracks = {bass};
     f.ui.tracksFocused = true;
     f.pass();

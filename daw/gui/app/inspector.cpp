@@ -323,8 +323,7 @@ InspectorSubject inspectorSubject(const model::Session& s, const UiState& select
         out.detail = on.size() == 1 ? "On " + model::trackLabel(s, *on.begin())
                                     : "On " + std::to_string(on.size()) + " tracks";
     } else {
-        out.title = "Nothing selected";
-        out.detail = "Click an item or a track to see it here.";
+        out.title = "Nothing selected";  // no hint line: the empty panel says only that
     }
     return out;
 }
@@ -1140,6 +1139,7 @@ void Inspector::sync() {
     clipsFocused_ = selection_.clipsFocused;
     if (title_->text() != subject.title) title_->setText(subject.title);
     if (detail_->text() != subject.detail) detail_->setText(subject.detail);
+    detail_->visible = !subject.detail.empty();
     static_cast<Swatch*>(swatch_)->color = subject.color;
     swatch_->visible = subject.color.has_value();
     kind_ = subject.kind;

@@ -2747,7 +2747,7 @@ a track's own; none without one), its name in the title size
 | Several items | "*N* items" | "On *track*", or "On *M* tracks" |
 | One track | Its label | "Channel", "Buss" or "Master" |
 | Several tracks | "*N* tracks" | "Selected together" |
-| Nothing | "Nothing selected" | "Click an item or a track to see it here." |
+| Nothing | "Nothing selected" | none: no hint text in an empty panel |
 
 Tracks are shown when they were selected last or no item is selected, else
 items. Ids the session no longer holds are left out.
