@@ -2,6 +2,11 @@
   "schema": "supple.command-registry/1.0",
   "product": "Steppe",
   "version": "0.6.0",
+  "groups": {
+    "batch": "Run several commands as one step of history.",
+    "job": "Background jobs: status, wait and cancel.",
+    "registry": "The command registry: list, describe and group the commands."
+  },
   "commands": {
     "batch@1": {
       "name": "batch",
@@ -357,6 +362,9 @@
                 },
                 "text": {
                   "type": "string"
+                },
+                "group": {
+                  "type": "string"
                 }
               },
               "required": [],
@@ -399,6 +407,55 @@
         }
       ]
     },
+    "registry.groups@1": {
+      "name": "registry.groups",
+      "version": 1,
+      "kind": "query",
+      "exposure": "mcp-exec",
+      "summary": "List the command groups, with one line each.",
+      "description": "List the command groups, with one line each.",
+      "tags": [],
+      "args": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "errors": [],
+      "examples": [
+        {
+          "title": "List one group",
+          "args": {
+            "group": "registry"
+          },
+          "result": {
+            "groups": [
+              {
+                "name": "registry",
+                "count": 3,
+                "summary": "The command registry: list, describe and group the commands."
+              }
+            ]
+          },
+          "fixture": "empty"
+        }
+      ]
+    },
     "registry.list@1": {
       "name": "registry.list",
       "version": 1,
@@ -417,6 +474,9 @@
             "type": "string"
           },
           "text": {
+            "type": "string"
+          },
+          "group": {
             "type": "string"
           }
         },

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <thread>
 using namespace supple;
 using namespace supple::cmd;
@@ -292,6 +293,52 @@ TEST_CASE("batch atomicity and references") {
     many["steps"] = json::Value::array();
     for (int i = 0; i < 257; ++i) many["steps"].push_back(obj("{\"command\":\"toy.get\"}"));
     CHECK(call(dispatcher, "batch", many).error().code == "batch.too_many_steps");
+}
+TEST_CASE("commands are grouped by name prefix, each group with its one line") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to and read.");
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    auto groups = call(dispatcher, "registry.groups");
+    REQUIRE(groups);
+    std::map<std::string, std::pair<long long, std::string>> byName;
+    for (const auto& entry : groups->find("groups")->asArray())
+        byName[entry.find("name")->asString()] = {entry.find("count")->asInt(),
+                                                  entry.find("summary")->asString()};
+    // The library's own groups and the declared one; an Internal command is not counted.
+    CHECK(byName.count("registry") == 1);
+    CHECK(byName.at("registry").first == 3);
+    CHECK(byName.at("batch").first == 1);
+    CHECK(byName.at("toy").second == "A counter that tests add to and read.");
+    for (const auto& [name, line] : byName) {
+        INFO(name);
+        CHECK_FALSE(line.second.empty());
+        CHECK(line.second.size() <= Registry::kMaxGroupSummary);
+    }
+    auto one = call(dispatcher, "registry.groups", obj(R"({"group":"toy"})"));
+    REQUIRE(one);
+    CHECK(one->find("groups")->size() == 1);
+    CHECK(call(dispatcher, "registry.groups", obj(R"({"group":"nope"})"))->find("groups")->size() ==
+          0);
+    CHECK_FALSE(call(dispatcher, "registry.groups", obj(R"({"group":3})")));
+    // registry.list narrows to one group, by the name's first segment.
+    auto listed = call(dispatcher, "registry.list", obj(R"({"group":"toy"})"));
+    REQUIRE(listed);
+    CHECK(listed->find("commands")->size() > 1);
+    long long publicToys = 0;
+    for (const auto& entry : listed->find("commands")->asArray()) {
+        CHECK(Registry::groupOf(entry.find("name")->asString()) == "toy");
+        if (entry.find("exposure")->asString() != "internal") ++publicToys;
+    }
+    CHECK(publicToys > 0);
+    CHECK(byName.at("toy").first == publicToys);
+    auto batch = call(dispatcher, "registry.list", obj(R"({"group":"batch"})"));
+    REQUIRE(batch);
+    CHECK(batch->find("commands")->size() == 1);
+    // A prefix with no declared line reads empty, so a test can say which group lacks one.
+    Registry bare;
+    CHECK(bare.groups().count("registry") == 1);
+    CHECK(registry.exportJson().find("groups")->find("toy") != nullptr);
 }
 TEST_CASE("meta commands, generators and examples") {
     auto registry = makeRegistry();

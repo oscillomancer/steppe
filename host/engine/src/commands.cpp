@@ -80,7 +80,69 @@ Result<std::pair<model::MidiSource, double>> notationSource(const model::Session
     return compileNotation(s, text, atBeat);
 }
 
+// One line per command group (the name before the first '.'), as the agent index shows it. A
+// group without a line, or a line without commands, fails engine.registry-groups.
+void registerEngineGroups(cmd::Registry& registry) {
+    registry.describeGroup("analyze",
+                           "Analyze renders and tracks: compare, masking, loudness, spectra.");
+    registry.describeGroup("arrangement", "Lay a song out from scenes, each for some bars.");
+    registry.describeGroup("audio", "Audio items: quantize hits, detach or reset warping.");
+    registry.describeGroup("audition",
+                           "Audition a file or item: play it, stop it, see what is playing.");
+    registry.describeGroup("autoitem",
+                           "Automation items on envelopes: add, duplicate, set, pool, remove.");
+    registry.describeGroup("branch", "Project branches: create, switch, diff, merge, render A/B.");
+    registry.describeGroup("cable", "Cables inside a rack: connect outputs to inputs or knobs.");
+    registry.describeGroup("chord",
+                           "Chord points of the song context: set or remove one at a beat.");
+    registry.describeGroup("clip", "Launcher clips in a scene's cells: add, set, move, duplicate.");
+    registry.describeGroup("context",
+                           "The song context (key, chord, section) at a beat: read and write.");
+    registry.describeGroup("crash", "Crash reports and runs that ended unseen: list, read, clear.");
+    registry.describeGroup("dsp",
+                           "DSP scripts: write, check, test, preview and export as plug-ins.");
+    registry.describeGroup("engine", "The audio engine: devices, inputs, start, stop and status.");
+    registry.describeGroup("env", "Envelopes: automate a mixer or plug-in parameter with points.");
+    registry.describeGroup("fx", "Plug-ins on tracks and takes: add, parameters, patches, chains.");
+    registry.describeGroup("group", "Track groups: members, links and targets.");
+    registry.describeGroup("history", "Undo, redo and the list of recent versions.");
+    registry.describeGroup("item",
+                           "Items on tracks: add, move, edit, consolidate, heal and export.");
+    registry.describeGroup("key", "Key points of the song context: set or remove one at a beat.");
+    registry.describeGroup("launch",
+                           "Launcher playback: launch scenes and clips, stop, capture, commit.");
+    registry.describeGroup("log", "The recent command log: origin, arguments and outcome.");
+    registry.describeGroup("marker", "Named markers in beats: add, list, set, remove.");
+    registry.describeGroup("midi", "MIDI items and ports: edit notes and CCs, inputs and outputs.");
+    registry.describeGroup("modulate",
+                           "Modulate one parameter or mixer level with an LFO or follower.");
+    registry.describeGroup("modulation", "Rack modulation routes: Mod Out to plug-in parameters.");
+    registry.describeGroup("module", "Rack modules: add, edit, copy, fork, and their knobs.");
+    registry.describeGroup("plugin", "Scanned plug-ins: list, scan and override their metadata.");
+    registry.describeGroup("project", "The project: new, open, save, recover and its settings.");
+    registry.describeGroup("rack",
+                           "Modular racks on channels: add, arrange, patch, levels, presets.");
+    registry.describeGroup("region", "Named regions in beats: add, list, set, remove.");
+    registry.describeGroup("render", "Render the mix or stems: presets, queue, dry run, regions.");
+    registry.describeGroup("route", "Sends and MIDI routes between tracks and channels.");
+    registry.describeGroup("scene", "Launcher scenes (columns): add, insert, move, capture, set.");
+    registry.describeGroup("script", "Run a Lua script on the command bus.");
+    registry.describeGroup("session", "Describe the whole session as compact text.");
+    registry.describeGroup("sync", "External sync settings (clock, MTC, LTC) and their status.");
+    registry.describeGroup("take",
+                           "Takes of an item: add, activate, bake, extract, hits, context.");
+    registry.describeGroup("tempo", "The tempo map: replace its points.");
+    registry.describeGroup("time", "Convert seconds, beats and bars to one another.");
+    registry.describeGroup("timesig", "Meter changes by bar: set or remove.");
+    registry.describeGroup("track",
+                           "Tracks, channels and busses: add, move, describe, freeze, learn.");
+    registry.describeGroup("transport",
+                           "Transport: play, pause, loop, punch, metronome, play rate.");
+    registry.describeGroup("vca", "VCA faders: add, members, learn.");
+}
+
 void registerEngineCommands(cmd::Registry& registry) {
+    registerEngineGroups(registry);
     // Each command is built in its own immediately-invoked lambda, so an
     // unoptimized build reuses one frame instead of stacking every command's
     // locals (Windows' 1 MB main stack overflowed).

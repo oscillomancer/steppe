@@ -101,8 +101,20 @@ struct CommandInfo {
 ```
 
 The library registers its own meta commands: `registry.list` (filter by
-tag/kind/text; returns name, version, kind, summary, exposure) and `registry.describe`
-(one command: full schemas, errors, examples). Both `Query`, `McpExec`.
+tag/kind/text/group; returns name, version, kind, summary, exposure), `registry.describe`
+(one command: full schemas, errors, examples) and `registry.groups` (the command groups, one
+line each). All `Query`, `McpExec`.
+
+*Groups.* A command's group is the part of its name before the first `.` (the whole name for
+one without a dot: `batch`). Each binary declares one line per group beside its commands
+(`Registry::describeGroup(prefix, summary)`, at most 70 characters, once per group; the library
+declares `registry`, `batch` and `job` itself). `registry.groups {group?}` returns
+`{groups: [{name, count, summary}]}` for the groups that have a public (not `internal`)
+command, by name, `count` being those commands (a command with several versions counts once);
+`group` narrows it to one. `registry.list {group}` lists one group's commands, every version
+and every exposure as before. `Registry::groupInfos()` and `Registry::groups()` let a test
+say which prefix has no line and which line has no commands (each binary's tests fail on both).
+`exportJson` carries the lines as `groups: {prefix: summary}`.
 
 Each `registry.list` row identifies one registered command version. `exposure`
 is `mcp-tool`, `mcp-exec` or `internal`, matching that version's declaration.

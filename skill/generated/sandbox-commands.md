@@ -3216,6 +3216,9 @@ Result:
       },
       "text": {
         "type": "string"
+      },
+      "group": {
+        "type": "string"
       }
     },
     "required": [],
@@ -3257,6 +3260,63 @@ Result:
 
 ```
 
+## `registry.groups@1`
+
+List the command groups, with one line each.
+
+List the command groups, with one line each.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `group` | string |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}
+
+```
+
+### Examples
+
+**List one group** (`empty`)
+
+```json
+{
+  "group": "registry"
+}
+
+```
+
+Result:
+
+```json
+{
+  "groups": [
+    {
+      "name": "registry",
+      "count": 3,
+      "summary": "The command registry: list, describe and group the commands."
+    }
+  ]
+}
+
+```
+
 ## `registry.list@1`
 
 List available commands.
@@ -3272,6 +3332,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 | `tag` | string |  |  |  |  |
 | `kind` | string |  |  |  |  |
 | `text` | string |  |  |  |  |
+| `group` | string |  |  |  |  |
 
 ### Result
 

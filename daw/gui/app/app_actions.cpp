@@ -231,6 +231,7 @@ std::optional<double> stepped(const actions::ControlValue& v, double current, do
 }  // namespace
 
 void registerGuiCommands(cmd::Registry& registry, const UiState& ui) {
+    registry.describeGroup("gui", "The running app's own state, such as the selection.");
     cmd::Command<cmd::NoArgs, Selection> c;
     c.name = "gui.selection";
     c.kind = cmd::Kind::Query;

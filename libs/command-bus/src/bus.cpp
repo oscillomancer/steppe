@@ -436,10 +436,11 @@ Registry::Registry() {
         "timeout_clamped_s.";
     addMeta(
         "registry.list", Kind::Query, Exposure::McpExec, "List available commands.",
-        objectSchema({{"tag", string}, {"kind", string}, {"text", string}}), anyObject,
+        objectSchema({{"tag", string}, {"kind", string}, {"text", string}, {"group", string}}),
+        anyObject,
         [](const json::Value& args) -> Status {
-            SUPPLE_TRY(validateFields(args, {}, {"tag", "kind", "text"}));
-            for (auto key : {"tag", "kind", "text"})
+            SUPPLE_TRY(validateFields(args, {}, {"tag", "kind", "text", "group"}));
+            for (auto key : {"tag", "kind", "text", "group"})
                 if (auto* value = args.find(key); value && !value->isString())
                     return Error("schema.type", "expected string", json::pointerJoin("", key));
             return {};
@@ -449,7 +450,9 @@ Registry::Registry() {
             result["commands"] = json::Value::array();
             auto tag = stringField(args, "tag"), kind = stringField(args, "kind");
             auto text = stringField(args, "text");
+            auto group = stringField(args, "group");
             for (auto* info : ctx.service<const Registry>().all()) {
+                if (!group.empty() && Registry::groupOf(info->name) != group) continue;
                 if (!tag.empty() &&
                     std::find(info->tags.begin(), info->tags.end(), tag) == info->tags.end())
                     continue;
@@ -486,6 +489,34 @@ Registry::Registry() {
             return commandJson(*info);
         },
         {"Describe registry.list", json::Value::object(), json::Value::object(), "empty"});
+    addMeta(
+        "registry.groups", Kind::Query, Exposure::McpExec,
+        "List the command groups, with one line each.", objectSchema({{"group", string}}),
+        anyObject,
+        [](const json::Value& args) -> Status {
+            SUPPLE_TRY(validateFields(args, {}, {"group"}));
+            if (auto* value = args.find("group"); value && !value->isString())
+                return Error("schema.type", "expected string", "/group");
+            return {};
+        },
+        [](const json::Value& args, Context& ctx) -> Result<json::Value> {
+            const auto group = stringField(args, "group");
+            json::Value result = json::Value::object();
+            result["groups"] = json::Value::array();
+            for (const auto& info : ctx.service<const Registry>().groupInfos()) {
+                if (!group.empty() && info.name != group) continue;
+                json::Value item = json::Value::object();
+                item["name"] = info.name;
+                item["count"] = static_cast<long long>(info.commands);
+                item["summary"] = info.summary;
+                result["groups"].push_back(std::move(item));
+            }
+            return result;
+        },
+        {"List one group", json::Value::object(), json::Value::object(), "empty"});
+    describeGroup("registry", "The command registry: list, describe and group the commands.");
+    describeGroup("batch", "Run several commands as one step of history.");
+    describeGroup("job", "Background jobs: status, wait and cancel.");
     auto stepSchema =
         objectSchema({{"command", string}, {"args", anyObject}, {"as", string}}, {"command"});
     auto stepsSchema = typeSchema("array");
@@ -583,6 +614,14 @@ Registry::Registry() {
     auto& describe = commands_.at({"registry.describe", 1}).examples.front();
     describe.args["command"] = "registry.list";
     describe.result = commandJson(commands_.at({"registry.list", 1}));
+    auto& groupsExample = commands_.at({"registry.groups", 1}).examples.front();
+    groupsExample.args["group"] = "registry";
+    groupsExample.result["groups"] = json::Value::array();
+    json::Value oneGroup = json::Value::object();
+    oneGroup["name"] = "registry";
+    oneGroup["count"] = 3;
+    oneGroup["summary"] = groups_.at("registry");
+    groupsExample.result["groups"].push_back(std::move(oneGroup));
     auto& batchExample = commands_.at({"batch", 1}).examples.front();
     batchExample.args["steps"] = json::Value::array();
     batchExample.result["label"] = "";
@@ -639,6 +678,31 @@ std::vector<const CommandInfo*> Registry::all() const {
     }
     return out;
 }
+std::string Registry::groupOf(std::string_view commandName) {
+    return std::string(commandName.substr(0, commandName.find('.')));
+}
+void Registry::describeGroup(std::string prefix, std::string summary) {
+    assert(!prefix.empty() && prefix.find('.') == std::string::npos);
+    assert(!summary.empty() && summary.size() <= kMaxGroupSummary);
+    [[maybe_unused]] const bool added =
+        groups_.emplace(std::move(prefix), std::move(summary)).second;
+    assert(added);
+}
+std::vector<Registry::GroupInfo> Registry::groupInfos() const {
+    std::map<std::string, std::size_t> counts;
+    std::string last;
+    for (const auto& [key, info] : commands_) {
+        if (info.exposure == Exposure::Internal || key.first == last) continue;
+        last = key.first;  // a command with several versions counts once
+        ++counts[groupOf(key.first)];
+    }
+    std::vector<GroupInfo> out;
+    for (const auto& [name, count] : counts) {
+        const auto line = groups_.find(name);
+        out.push_back({name, line == groups_.end() ? std::string() : line->second, count});
+    }
+    return out;
+}
 Error Registry::unknown(std::string_view name) const {
     std::vector<std::string_view> names;
     std::string last;
@@ -663,6 +727,8 @@ json::Value Registry::exportJson() const {
     out["schema"] = "supple.command-registry/1.0";
     out["product"] = std::string(product::kName);
     out["version"] = std::string(product::kVersion);
+    out["groups"] = json::Value::object();
+    for (const auto& [name, summary] : groups_) out["groups"][name] = summary;
     out["commands"] = json::Value::object();
     for (auto* info : all())
         out["commands"][info->name + "@" + std::to_string(info->version)] = commandJson(*info);

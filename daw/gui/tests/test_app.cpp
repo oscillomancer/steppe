@@ -70,6 +70,23 @@
 
 using namespace supple;
 
+TEST_CASE("the app's command groups, the engine's and its own, each have a line") {
+    cmd::Registry registry;
+    engine::registerEngineCommands(registry);
+    gui::UiState ui;
+    gui::registerGuiCommands(registry, ui);
+    std::set<std::string> prefixes;
+    for (const auto& group : registry.groupInfos()) {
+        INFO("group " << group.name << " has no line");
+        CHECK_FALSE(group.summary.empty());
+        prefixes.insert(group.name);
+    }
+    for (const auto& [name, line] : registry.groups()) {
+        INFO("group line " << name << " has no commands");
+        CHECK(prefixes.count(name) == 1);
+    }
+    CHECK(prefixes.count("gui") == 1);
+}
 TEST_CASE("GUI app test runtime prerequisites are staged") {
     const auto skill = host::skillDir();
     REQUIRE(skill);

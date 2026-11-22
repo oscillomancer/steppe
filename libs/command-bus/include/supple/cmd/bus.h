@@ -206,6 +206,20 @@ class Registry {
     }
     const CommandInfo* find(std::string_view name, int version = 0) const;
     std::vector<const CommandInfo*> all() const;
+    // The group of a command is the part of its name before the first '.' (the whole name for one
+    // without a dot). describeGroup gives a group the one line the agent index shows for it, in
+    // at most kMaxGroupSummary characters; a second line for a group replaces nothing and asserts.
+    void describeGroup(std::string prefix, std::string summary);
+    const std::map<std::string, std::string>& groups() const { return groups_; }
+    // Every group that has a public (not Internal) command, by name: how many commands, and its
+    // line (empty when none was declared; a test fails on that).
+    struct GroupInfo {
+        std::string name, summary;
+        std::size_t commands = 0;
+    };
+    std::vector<GroupInfo> groupInfos() const;
+    static constexpr std::size_t kMaxGroupSummary = 70;
+    static std::string groupOf(std::string_view commandName);
     // The name of each command by id (a name once per version: the same name twice).
     std::vector<std::string_view> namesById() const;
     Error unknown(std::string_view name) const;
@@ -214,6 +228,7 @@ class Registry {
   private:
     void addInfo(CommandInfo info);
     std::map<std::pair<std::string, int>, CommandInfo> commands_;
+    std::map<std::string, std::string> groups_;
     std::uint32_t nextId_ = 0;
 };
 
