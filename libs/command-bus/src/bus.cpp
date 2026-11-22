@@ -767,7 +767,10 @@ Error Registry::unknown(std::string_view name) const {
         names.erase(std::remove(names.begin(), names.end(), choice), names.end());
     }
     return Error("command.unknown", "unknown command \"" + std::string(name) + "\"", "/command",
-                 hint.empty() ? "use registry.list" : "did you mean " + hint + "?");
+                 hint.empty() ? "describe {} lists the command groups, describe {group} a group's "
+                                "commands, describe {text} searches (over a control socket: "
+                                "registry.groups, registry.list)"
+                              : "did you mean " + hint + "?");
 }
 json::Value Registry::exportJson() const {
     json::Value out = json::Value::object();

@@ -479,6 +479,27 @@ TEST_CASE("an empty or invalid search says why and what to try") {
     CHECK(hint.find("describe {}") != std::string::npos);
     CHECK(rowIndex(*nothing).find("hint")->asString().find("describe {}") != std::string::npos);
 }
+TEST_CASE("an unknown command or group points at the walk through the groups") {
+    auto registry = makeRegistry();
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    // Nothing close in name: the hint says how to look, not "use registry.list".
+    auto far = call(dispatcher, "registry.describe", obj(R"({"command":"qqqqqqqqqqqqqqqq"})"));
+    REQUIRE_FALSE(far);
+    CHECK(far.error().code == "command.unknown");
+    CHECK(far.error().hint.find("describe {}") != std::string::npos);
+    CHECK(far.error().hint.find("describe {text}") != std::string::npos);
+    CHECK(far.error().hint.find("use registry.list") == std::string::npos);
+    // A near miss still says what it probably meant.
+    auto near = call(dispatcher, "registry.describe", obj(R"({"command":"toy.ad"})"));
+    REQUIRE_FALSE(near);
+    CHECK(near.error().hint.find("did you mean") != std::string::npos);
+    // An unknown group says what a group is, and where the groups are listed.
+    auto group = call(dispatcher, "registry.list", obj(R"({"group":"toy.add"})"));
+    REQUIRE_FALSE(group);
+    CHECK(group.error().hint.find("before its first '.'") != std::string::npos);
+    CHECK(group.error().hint.find("describe {}") != std::string::npos);
+}
 TEST_CASE("meta commands, generators and examples") {
     auto registry = makeRegistry();
     FakeHost host;
