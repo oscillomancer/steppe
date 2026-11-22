@@ -405,13 +405,17 @@ until it is released.
   editor moved is that edit repeated and is not passed on (review round
   81b, E5). A barrier that drops queued edits, a deactivation or a full
   queue ends every editor gesture still open, so a lost `endEdit` leaves
-  no gesture open in the stage, and so does closing the editor with a grab
-  open (review round 81c, E6). A processing VST3's editor edit does not flag
-  the plug-in's state as changed: the gesture's commit saves the state, and
-  a capture of its own was a step that swapped the plan, which dropped the
-  rendered gesture before it was heard (the anticipative executor; review
-  round 81, E2). It asks the stage to process instead, so a bypassed stage
-  still reports it. Only an instance that is not processing flags its state,
+  no gesture open in the stage. Closing the editor with a grab open (no
+  `endEdit`, review round 81c, E6) queues each grab's end behind the
+  editor's moves, so a move made just before the close stays inside its
+  gesture: one step, its points once (round 92b; ending it ahead of the
+  queue made the move a second, gestureless edit). A processing VST3's
+  editor edit does not flag the plug-in's state as changed: the gesture's
+  commit saves the state, and a capture of its own was a step that swapped
+  the plan, which dropped the rendered gesture before it was heard (the
+  anticipative executor; review round 81, E2). It asks the stage to process
+  instead, so a bypassed stage still reports it. Only an instance that is
+  not processing flags its state,
   and so does one that stops processing with edits still queued. Outputs a
   plan swap drops (pending, or drained under an older plan) that carry an
   edit capture their plug-in's state, so the edit still reaches the
@@ -2658,7 +2662,20 @@ harness. See the tooling README for schemas, limits and invocation details.
   ADR-0028: stopped block deadlines and event-driven buffer-space wakes
   from the callback, with a safety bound of half the playback buffer span
   (1 s while stopped, held or all live). Misses (no chunk while playing, after
-  the pre-roll) are counted (`engine.status.anticipation_misses`). `stop()`
+  the pre-roll) are counted (`engine.status.anticipation_misses`). The
+  pre-roll of a start or a seek lasts until the renderer has rendered a whole
+  render block of the epoch and the callback's whole cycle (that at most the
+  render-ahead span), in the output ring or the frontier rings: never a first
+  chunk cut short, such as a launch from stop whose compensated tracks switch
+  a few frames in, or a loop wrap. It also ends when the renderer has
+  rendered all its rings hold and waits for room: a loop shorter than the
+  rings' chunks fills them first (see "Rings are recycled"). Until then the
+  callback plays silence and time holds still. The pre-roll ends with the
+  first frame played: the rest of that cycle, past a loop wrap too, plays on.
+  A cycle that has played audio and then runs short counts a miss, the cycle
+  that ends the pre-roll included. *(Amended 2026-11-21,
+  ADR-0012 note: priming took any chunk, so a launch from stop played its
+  first frames and then a gap, counted or not.)* `stop()`
   joins the renderer first; it stops every plugin as it ends. With
   `anticipative = false` the old in-callback renderer runs (the reference,
   and the base for live nodes).

@@ -188,6 +188,60 @@ TEST_CASE("a VST3 editor's gesture goes out with its block, and a barrier ends o
     instance.deactivate();
 }
 
+TEST_CASE("a VST3 editor closed mid-drag ends the drag after the moves it made") {
+    // Round 92b: the close ended the grab before the queue, so a move made
+    // just before it came out after the end, a gestureless edit (a second
+    // undo step and point), and a grab made while not processing was begun
+    // when processing resumed and never ended. The ends now queue behind.
+    auto found = scan(std::span<const std::filesystem::path>(&kVst3Fixture, 1));
+    REQUIRE(found);
+    const auto info = std::find_if(found->begin(), found->end(), [](const PluginInfo& p) {
+        return p.name == "Test VST3 Stepped Echo";
+    });
+    REQUIRE(info != found->end());
+    auto made = Instance::create(*info, {});
+    REQUIRE(made);
+    auto& instance = **made;
+    REQUIRE(instance.activate(48000, 1, 64));
+    REQUIRE(instance.startProcessing());
+    Buffers buffer(64);
+    std::vector<OutputEvent> storage(16);
+    OutputEvents out{storage};
+    using Kind = OutputEvent::Kind;
+    const auto block = [&] {
+        out.clear();
+        REQUIRE(instance.process(buffer.block(64), &out));
+        return std::vector<OutputEvent>(storage.begin(), storage.begin() + out.count);
+    };
+    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.setParam(2, 0.05));  // grab
+    auto events = block();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].kind == Kind::GestureBegin);
+    REQUIRE(instance.setParam(2, 0.5));  // a move, then the close, in one block
+    instance.closeEditor();
+    events = block();
+    REQUIRE(events.size() == 2);
+    CHECK(events[0].kind == Kind::ParamValue);
+    CHECK(events[0].value == doctest::Approx(0.5));
+    CHECK(events[1].kind == Kind::GestureEnd);
+    for (const auto& e : events) CHECK(e.paramId == 3);
+    CHECK(block().empty());
+    // A grab while not processing, closed before processing resumes.
+    instance.stopProcessing();
+    REQUIRE(instance.openEditor(0x5a17, 1.0));
+    REQUIRE(instance.setParam(2, 0.05));
+    instance.closeEditor();
+    REQUIRE(instance.startProcessing());
+    events = block();
+    REQUIRE(events.size() == 2);
+    CHECK(events[0].kind == Kind::GestureBegin);
+    CHECK(events[1].kind == Kind::GestureEnd);
+    for (const auto& e : events) CHECK(e.paramId == 3);
+    instance.stopProcessing();
+    instance.deactivate();
+}
+
 TEST_CASE("VST3 plug-ins with a sidechain bus get every bus; kNotImplemented starts processing") {
     // A partial bus layout is refused by strict plug-ins, which then output
     // silence; setProcessing may answer kNotImplemented (sfizz does).

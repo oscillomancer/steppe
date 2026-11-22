@@ -1455,10 +1455,13 @@ void Vst3Instance::closeEditor() {
     auto& s = *state_;
     // An editor closed mid-drag sends no endEdit (review round 81c E6): its
     // grabs end here, so the drag is recorded now, not when something else
-    // ends it.
+    // ends it. Each grab's end is queued behind the editor's moves (round
+    // 92b): endGestures, which the next block handles before the queue, put
+    // a move still queued after the end, a second, gestureless edit (a second
+    // step and point). An end the full queue refuses still sets it (edit()).
     if (!s.handler->open.empty()) {
+        for (const auto id : s.handler->open) (void)s.handler->edit(id, 0, PendingEdits::End);
         s.handler->open.clear();
-        s.endGestures = true;
         s.handler->editorEdit();
     }
     if (!s.view) return;

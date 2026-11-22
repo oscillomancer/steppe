@@ -700,8 +700,7 @@ instructions are in `docs/guides/installing.md`.
   `stopProcessing` (its fences keep such an edit from being lost, not from
   being reported twice), stays queued for the processor. A state capture then
   (`saveState`) holds a component state without it, and processing resuming
-  reports it again as a second "Plug-in parameter edit" step; an editor
-  closed mid-drag in that state leaves a Begin that nothing ends. Flushing in
+  reports it again as a second "Plug-in parameter edit" step. Flushing in
   `saveState` while active would call the processor outside an executor's
   start, which may race it; a handshake with the executors is the fix.
 - **MIDI sends** (ADR-0067): channel/Note Out to channel/Notes routing, channel
