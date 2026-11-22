@@ -2651,10 +2651,16 @@ later starts from there.
   from before the start is heard there), to the item's end. The key and the chord holding at
   the span's start are points at 0 (a project with no chord there writes none, as `clip.add
   {item}` does), the points inside the span follow, each at its song distance from the
-  span's start times the take's `playrate` after the bake (1 once unrolled), and
-  `context_period` is dropped. `context_phase` is `(item start − span start) × playrate −
-  start_offset` (with the offset and rate after the bake), so a note's place reads its song
-  beat's distance from the span's start and the place formula holds.
+  span's start, and `context_period` is dropped. The context is on the source axis
+  (`context_phase` 0, so a note's context beat is its source beat), where the notes' starts
+  are on the 1/960 grid: a song beat `s` is the context beat `start_offset + (s − item start)
+  × playrate`, with the offset and rate after the bake (0 and 1 once unrolled), and each point
+  is rounded **up** to the grid, less the slack a place is read with. Rounding up is exact
+  for a note on the grid (it is before the point exactly when it is before the song's
+  change); rounding to the nearest is not (a note a hair before a change could land in the new
+  key). It is exact for any source whose `ppq` divides 960, which is every source a writer
+  here makes; a source with another `ppq` has notes off the grid, and a point within 1/960
+  of such a note may fall either side.
 - Where the song has no readable key anywhere under the span, the take's context is dropped
   (no points, no period, phase 0). A point this build cannot read is left out with
   `clip.context_dropped`, as when a clip takes the song's.

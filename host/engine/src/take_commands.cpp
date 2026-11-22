@@ -833,9 +833,18 @@ void registerTakeCommands(cmd::Registry& registry) {
                     k.contextPeriod.reset();
                     k.contextPhase = 0;
                     if (!key) return;
+                    // On the source axis (phase 0), where the notes' starts are on the grid:
+                    // a song beat s is the context beat offset + (s - item start) x rate. Each
+                    // point is rounded UP to the 1/960 grid (less the slack a place is read
+                    // with), so a note on the grid is before it exactly when it is before the
+                    // song's change; rounding to the nearest could put a note a hair before a
+                    // change into the new key.
                     k.context = taken.points;
-                    for (model::ContextPoint& p : k.context) p.beat *= rateAfter;
-                    k.contextPhase = (itemStart - from) * rateAfter - offsetAfter;
+                    for (model::ContextPoint& p : k.context) {
+                        const double u = offsetAfter + (from + p.beat - itemStart) * rateAfter;
+                        p.beat = std::max(
+                            0.0, std::ceil((u - model::kPlaceSlack * rateAfter) * 960.0) / 960.0);
+                    }
                     for (auto& n : model::fitTakeContext(k, model::TakeHome::Item))
                         fitNotes.push_back(std::move(n));
                 });

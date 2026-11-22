@@ -2260,6 +2260,71 @@ TEST_CASE("take.bake leaves the song's context under the item as the take's own"
     CHECK(soundsOf(l, "it_1") == "41@0 45@1 48@2 53@3");
 }
 
+TEST_CASE("bake then follow sounds as before, with a key change a hair either side of a note") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "Eb", "scale": "major"})");
+    // Two bars of short notes on every beat, from beat 16 (none is held across the cut at 19),
+    // written in C major and following the key.
+    const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "notation":
+        "voice bass; 1: C2:e r:e E2:e r:e G2:e r:e C3:e r:e; 2: C2:e r:e E2:e r:e G2:e r:e C3:e r:e"})");
+    const std::string whole = laid.find("item")->asString();
+    const model::Id wholeTake = *l.head().items.find(id(whole.c_str()))->activeTake;
+    l.run("take.set", R"({"take": ")" + wholeTake.str() +
+                          R"(", "context": "1: key C major ~:w", "follow": "key"})");
+    // A playrate that is not a power of two and a cut that leaves an offset off the 1/960 grid:
+    // the notes' places in the source are on the grid, the song beats they sound at are not.
+    l.run("take.set", R"({"take": ")" + wholeTake.str() + R"(", "playrate": 0.9090909090909091})");
+    l.run("item.split", R"({"item": ")" + whole + R"(", "at": 19})");
+    model::Id right;
+    for (const auto& e : l.head().items)
+        if (e.id != id("it_1") && e.id != id(whole.c_str())) right = e.id;
+    REQUIRE(right.n != 0);
+    const std::string item = right.str();
+    const model::Id take = *l.head().items.find(right)->activeTake;
+    REQUIRE(l.head().takes.find(take)->startOffset > 2.7);
+    // The part's own context (the take.set of a cut part reads bar 1 at the part's start).
+    l.run("take.set",
+          R"({"take": ")" + take.str() + R"(", "context": "1: key C major ~:w", "follow": "key"})");
+    const double start = model::itemSpan(l.head(), *l.head().items.find(right)).startBeat;
+    // Where each note of the right part sounds (song beats, off the grid).
+    std::vector<double> at;
+    for (const auto& n : model::soundingNotes(l.head(), right, -1e9, 1e9))
+        if (n.songBeat > start + 1e-6) at.push_back(n.songBeat);
+    REQUIRE(at.size() >= 2);
+    int tried = 0;
+    for (const double note : at) {
+        // Key changes on the project's grid, from a few grid steps below the note to a few above,
+        // and the note's own beat and a hair either side of it.
+        std::vector<double> changes;
+        for (int j = -4; j <= 4; ++j) changes.push_back((std::floor(note * 960.0) + j) / 960.0);
+        for (const double hair : {-1e-4, 0.0, 1e-4}) changes.push_back(note + hair);
+        for (const double change : changes) {
+            if (change <= start + 1e-3) continue;
+            json::Value args = j(R"({"tonic": "F", "scale": "major"})");
+            args["at"] = change;
+            l.run("key.set", json::writeCompact(args));
+            // What the part sounds as: each note's heard beat (a held-in one at the item's start,
+            // where the bake writes it) and pitch.
+            const auto heard = [&] {
+                std::vector<std::pair<long long, int>> out;
+                for (const auto& n : model::soundingNotes(l.head(), right, -1e9, 1e9))
+                    out.emplace_back(std::llround(std::max(n.songBeat, start) * 960.0),
+                                     n.sounds.pitch);
+                std::sort(out.begin(), out.end());
+                return out;
+            };
+            const auto before = heard();
+            l.run("take.bake", R"({"take": ")" + take.str() + R"("})");
+            l.run("take.set", R"({"take": ")" + take.str() + R"(", "follow": "key"})");
+            CHECK_MESSAGE(heard() == before, "a key change at ", change, " by ", note, ": ",
+                          soundsOf(l, item));
+            for (int undo = 0; undo < 3; ++undo) l.run("history.undo", "{}");
+            ++tried;
+        }
+    }
+    CHECK(tried >= 20);
+}
+
 TEST_CASE("take.bake of a song with a key change and one with none") {
     Launcher l;
     l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
