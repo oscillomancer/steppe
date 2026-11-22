@@ -67,5 +67,6 @@ class MidiEventList {
     std::uint64_t version_ = 0;
     std::uint64_t projectGeneration_ = ~std::uint64_t{0};
     double tickBeat_ = 1.0 / 960;
+    double frameShift_ = 0;  // the roll's frame shift (rollFrameShift) for item_
 };
 }  // namespace supple::gui

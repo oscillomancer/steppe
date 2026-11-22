@@ -61,6 +61,11 @@ struct MidiOwner {
     const model::MediaSource* audio = nullptr;
 };
 std::optional<MidiOwner> midiOwner(const model::Session& session, const std::string& id);
+// The roll's frame shift for an owner (RollState::frameShift): the whole
+// loop lengths in a looped item's start_offset, over the playrate; 0 for an
+// unlooped item, a clip or audio. The event list shares it, so both show an
+// event where it plays.
+double rollFrameShift(const MidiOwner& owner);
 
 struct RollNote {
     int pitch = 60;

@@ -5212,6 +5212,76 @@ TEST_CASE("MIDI editor: a looped item's roll wraps start_offset: a split loop an
     }
 }
 
+TEST_CASE("MIDI editor: the event list of a split loop shows and edits the roll's positions") {
+    // Review round 93, Q1: the List's Position column is a song position on
+    // the roll's axis. The fixture's one-bar item (bar 2) looped over three
+    // bars and split at bar 3: the right part plays C4 E4 G4 C5 on the beats
+    // of bar 3, and a position typed there moves the note within the loop.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("item.set", R"({"item":")" + f.item + R"(","length":12,"loop":true})");
+    f.item = f.exec("item.split", R"({"item":")" + f.item + R"(","at":8})")["right"].asString();
+    // A CC point on beat 2 of bar 3: item beat -3, source beat 1.
+    f.exec("midi.edit",
+           R"({"item":")" + f.item +
+               R"(","ops":[{"op":"cc.set","number":1,"points":[{"beat":-3,"value":90}]}]})");
+    auto loopLength = [&] {
+        const auto owner = gui::midiOwner(f.app->head(), f.item);
+        REQUIRE(owner);
+        return owner->source->sequence.length;
+    };
+    const auto length = loopLength();
+    showEventList(f);
+    auto* events = f.editor->eventList();
+    using Col = gui::MidiEventList::Column;
+    // Rows: C4, E4, the CC, G4, C5.
+    CHECK(events->rowText(0)[0] == "3.1.0");
+    CHECK(events->rowText(1)[0] == "3.2.0");
+    CHECK(events->rowText(2)[1] == "CC 1");
+    CHECK(events->rowText(2)[0] == "3.2.0");
+    CHECK(events->rowText(4)[0] == "3.4.0");
+    auto engineStarts = [&](int pitch) {
+        std::vector<double> out;
+        const json::Value notes = f.notes();
+        for (const json::Value& n : notes.asArray())
+            if (n.find("pitch")->asInt() == pitch) out.push_back(n.find("start")->asDouble());
+        return out;
+    };
+    // C4 typed one beat later moves one beat: source beat 1, drawn at 1.
+    editEventCell(f, 0, Col::Position, "3.2.0");
+    CHECK(engineStarts(60) == std::vector<double>{-3});
+    const auto& s = f.editor->state();
+    for (std::size_t i = 0; i < s.notes.size(); ++i)
+        if (s.notes[i].pitch == 60) CHECK(s.notes[i].start == doctest::Approx(1));
+    CHECK(events->rowText(0)[0] == "3.2.0");
+    CHECK(loopLength() == length);
+    // Rows: C4, E4, the CC (all on beat 2), G4, C5. The CC moves a beat.
+    REQUIRE(events->rowText(2)[1] == "CC 1");
+    editEventCell(f, 2, Col::Position, "3.3.0");
+    REQUIRE(eventCcs(f).size() == 1);
+    CHECK(eventCcs(f).asArray()[0]["beat"].asDouble() == doctest::Approx(-2));
+    CHECK(eventCcs(f).asArray()[0]["value"].asInt() == 90);
+    // Rows: C4, E4, G4 and the CC (beat 3), C5. Delete removes the CC.
+    REQUIRE(events->rowText(3)[1] == "CC 1");
+    auto p = eventCell(f, 3, Col::Position);
+    f.pointer(ui::PointerEvent::Type::Down, p);
+    f.pointer(ui::PointerEvent::Type::Up, p);
+    f.root->key(SDLK_DELETE);
+    f.frame();
+    CHECK(eventCcs(f).size() == 0);
+    CHECK(f.notes().size() == 4);
+    // + Note at the selected C5 row (beat 4 of bar 3) adds C4 there: item
+    // beat -1, source beat 3.
+    p = eventCell(f, 3, Col::Position);
+    f.pointer(ui::PointerEvent::Type::Down, p);
+    f.pointer(ui::PointerEvent::Type::Up, p);
+    REQUIRE(events->rowText(3)[3] == "C5");
+    REQUIRE(f.root->click("midi.list.add"));
+    f.frame();
+    CHECK(engineStarts(60) == std::vector<double>{-3, -1});
+    CHECK(loopLength() == length);
+}
+
 TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or says it cannot") {
     Fixture f;
     if (!f.ok) return;

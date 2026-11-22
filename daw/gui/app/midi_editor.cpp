@@ -1897,6 +1897,16 @@ class Panel : public ui::Node {
 
 // ----------------------------------------------------------------- MidiEditor
 
+double rollFrameShift(const MidiOwner& owner) {
+    if (!owner.item || !owner.item->loop || !owner.take || !owner.source) return 0;
+    const auto& seq = owner.source->sequence;
+    if (seq.ppq <= 0 || seq.length <= 0) return 0;
+    const double rate = owner.take->playrate > 0 ? owner.take->playrate : 1.0;
+    const double cycle = static_cast<double>(seq.length) / seq.ppq;
+    const model::SourceBeatMapping mapping{owner.take->startOffset, rate, cycle};
+    return (owner.take->startOffset - mapping.sourceOffset(true)) / rate;
+}
+
 std::optional<MidiOwner> midiOwner(const model::Session& s, const std::string& text) {
     const auto id = model::Id::parse(text);
     if (!id) return std::nullopt;
@@ -2701,6 +2711,7 @@ void takeContextMarks(const model::Take& take, double itemPosition, double lo, d
 Status MidiEditor::reload() {
     const auto owner = midiOwner(app_.head(), state_.item);
     if (!owner) return Error("gui.midi", "no MIDI source", "/item");
+    state_.frameShift = rollFrameShift(*owner);
     if (owner->audio) {
         // An audio clip neither follows nor has a written view.
         state_.following = false;
@@ -2732,14 +2743,6 @@ Status MidiEditor::reload() {
     state_.itemLength =
         owner->item ? model::itemLengthBeats(app_.head(), *owner->item) : owner->clip->length;
     const double rate = take->playrate > 0 ? take->playrate : 1.0;
-    state_.frameShift = 0;
-    if (owner->item && owner->item->loop && source->sequence.ppq > 0) {
-        const double cycle = static_cast<double>(source->sequence.length) / source->sequence.ppq;
-        if (cycle > 0) {
-            const model::SourceBeatMapping mapping{take->startOffset, rate, cycle};
-            state_.frameShift = (take->startOffset - mapping.sourceOffset(true)) / rate;
-        }
-    }
     state_.notes.clear();
     for (const auto& n : source->sequence.notes) {
         RollNote note;

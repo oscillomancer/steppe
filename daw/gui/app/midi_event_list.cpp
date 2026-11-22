@@ -205,6 +205,7 @@ void MidiEventList::sync() {
     projectGeneration_ = app_.projectGeneration();
     version_ = s.version;
     rows_.clear();
+    frameShift_ = 0;
     selectedCc_.clear();
     anchor_.reset();
     const auto owner = midiOwner(s, item_);
@@ -214,8 +215,11 @@ void MidiEventList::sync() {
         const auto& seq = source->sequence;
         const double rate = take->playrate > 0 ? take->playrate : 1;
         tickBeat_ = 1.0 / (seq.ppq * rate);
+        // Rows sit on the roll's axis, so a looped item's events show where
+        // they play; writes take frameShift_ off for midi.edit's item beats.
+        frameShift_ = rollFrameShift(*owner);
         auto beatOf = [&](std::int64_t tick) {
-            return (static_cast<double>(tick) / seq.ppq - take->startOffset) / rate;
+            return (static_cast<double>(tick) / seq.ppq - take->startOffset) / rate + frameShift_;
         };
         for (std::size_t i = 0; i < seq.notes.size(); ++i) {
             const auto& n = seq.notes[i];
@@ -376,15 +380,15 @@ void MidiEventList::submit(const std::string& text) {
         clear["op"] = "cc.clear";
         clear["number"] = r.pitch;
         clear["channel"] = r.channel;
-        clear["from"] = r.beat;
-        clear["to"] = r.beat + tickBeat_ * 0.75;
+        clear["from"] = r.beat - frameShift_;
+        clear["to"] = r.beat - frameShift_ + tickBeat_ * 0.75;
         ops.push_back(std::move(clear));
         op = json::Value::object();
         op["op"] = "cc.set";
         op["number"] = pitch;
         op["channel"] = r.channel;
         auto point = json::Value::object();
-        point["beat"] = beat;
+        point["beat"] = beat - frameShift_;
         point["value"] = value;
         auto points = json::Value::array();
         points.push_back(std::move(point));
@@ -421,8 +425,8 @@ void MidiEventList::removeSelected() {
                 op["op"] = "cc.clear";
                 op["number"] = row.pitch;
                 op["channel"] = row.channel;
-                op["from"] = row.beat;
-                op["to"] = row.beat + tickBeat_ * 0.75;
+                op["from"] = row.beat - frameShift_;
+                op["to"] = row.beat - frameShift_ + tickBeat_ * 0.75;
                 ops.push_back(std::move(op));
             }
         }
@@ -450,7 +454,7 @@ void MidiEventList::add() {
     op["op"] = "add";
     op["pitch"] = 60;
     op["velocity"] = 96;
-    op["start"] = beat;
+    op["start"] = beat - frameShift_;
     op["length"] = 1.0;
     auto ops = json::Value::array();
     ops.push_back(std::move(op));

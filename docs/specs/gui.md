@@ -1714,8 +1714,11 @@ dim notes outside the item, the take row and the CC lane all share that axis. `m
 `midi.edit` count item beats without the wrap, so the roll adds the whole
 loop lengths over the playrate (`RollState::frameShift`) to what it reads
 and subtracts them from the starts and CC beats it writes. The event list
-keeps `midi.get`'s numbers. Test: test_midi_editor "a looped item's roll
-wraps start_offset: a split loop and a slipped loop".
+shows the roll's positions (`gui::rollFrameShift`), so its Position column
+names the bar an event plays in, and a position typed there lands where the
+roll draws it. Tests: test_midi_editor "a looped item's roll wraps
+start_offset: a split loop and a slipped loop" and "the event list of a
+split loop shows and edits the roll's positions".
 
 **A clip's own key and chords** (ADR-0098 X3). The roll is the one place a
 clip is edited, its context included:
