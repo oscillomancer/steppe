@@ -552,9 +552,13 @@ its contracts.
     it sounded B4 A4 F#4 D#4. A looped cell over Am played an octave apart
     when only the song's key differed (A4 to G5 in E minor, A3 to G4 in A
     minor).
-  - Now one pair of chords gives one voicing whatever the keys, and no chord
-    tone or kept degree lands a tritone from the block (`harmony.md` §5 step
-    6, "Octave").
+  - Now the reference is the block shift by the roots' interval. The chord
+    tones of one pair of chords give one voicing whatever the keys; a kept
+    degree still depends on the keys (A4 over Bm in D major sounds A4 under B7
+    in E minor, A#4 in B major). No chord tone or kept degree lands a tritone
+    from the block (`harmony.md` §5 step 6, "Octave").
+  - Neighbouring notes can still cross where their targets cross: A4 B4 over
+    Cmaj7 in C major sounds Ab4 Gb4 under Cdim in C minor.
   - A known limit, kept: a slash bass that is not a tone lands a tritone from
     the block when the two basses sit a tritone apart above their roots
     (C/F# → G, C/D → G/Eb), and goes down with every note of its class.

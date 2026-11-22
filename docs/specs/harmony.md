@@ -232,9 +232,17 @@ Followed follow(int pitch, const Place& from, const Place& to, FollowMode mode);
      reference `pitch + iv(from.root, to.root)`. A tie goes down. By `Chords`.
      *(Amended 2026-11-21, ADR-0098 note E1: the reference was the Key-mode
      result, which could split one figure across octaves.)*
-     - A figure moves as a block by the roots' nearest interval, and each note
-       takes its target class nearest to that. So one pair of chords gives one
-       voicing whatever the keys, and a figure keeps its contour.
+     - The reference is the block shift: the written pitch moved by the
+       roots' nearest interval. Each note takes its target class nearest its
+       own reference.
+     - Chord tones give one voicing for one pair of chords whatever the keys:
+       their targets depend on the chords only. A note kept by degree depends
+       on the keys as well: A4 over Bm in D major sounds A4 under B7 in E
+       minor and A#4 under B7 in B major.
+     - Neighbouring notes can cross where their targets cross, so a figure
+       need not keep its contour: A4 B4 over Cmaj7 in C major sounds Ab4 Gb4
+       under Cdim in C minor (A kept by degree, B the major seventh going to
+       the diminished fifth).
      - A chord tone lands at most 5 semitones from the block (a sus4's fourth
        on a chord with no third, a major seventh on a diminished fifth). A note
        kept by degree lands at most 2 from it in the diatonic and pentatonic
