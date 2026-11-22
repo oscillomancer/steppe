@@ -1182,7 +1182,12 @@ TEST_CASE("an unsaved project records into its scratch folder; the first save mo
         CHECK(media.begin()->value->path == "rec/Vocal-1.wav");  // relative to the media folder
         REQUIRE(app->save(root.path / "song" / "song.json"));
         CHECK(fs::exists(root.path / "song" / "media" / "rec" / "Vocal-1.wav"));
-        CHECK_FALSE(fs::exists(scratch));
+        std::string left;  // what kept the scratch folder, if anything did
+        std::error_code ec;
+        for (auto it = fs::recursive_directory_iterator(scratch, ec); !ec && it != fs::end(it);
+             it.increment(ec))
+            left += it->path().lexically_relative(scratch).generic_string() + " ";
+        CHECK_MESSAGE(!fs::exists(scratch), left);
         auto mix = d.execute({"render.mix", j(R"({"name": "after-save", "end_beat": 5})"), kTest});
         REQUIRE(mix);
         CHECK((*mix)["peak_dbfs"].asDouble() > -20.0);  // the moved file still plays
