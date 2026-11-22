@@ -94,6 +94,12 @@ if(SUPPLE_BUILD_TESTS)
                              SUPPLE_SCRIPT_EXAMPLES="${PROJECT_SOURCE_DIR}/plugins/suite/examples"
                              SUPPLE_RACK_GUIDE="${PROJECT_SOURCE_DIR}/skill/guides/rack.md"
                              SUPPLE_EDITORS=$<BOOL:${SUPPLE_BUILD_GUI}>)
+  # Only Linux builds locally: this catches a POSIX-only header or call, or the
+  # JACK fixtures, outside a conditional in the portable list before native CI.
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME engine.portable-sources
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/portable_sources.py ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(engine.portable-sources PROPERTIES LABELS engine)
 endif()
 
 if(SUPPLE_BUILD_TESTS AND _engine_linux_tests)
