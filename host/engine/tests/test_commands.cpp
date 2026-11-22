@@ -2442,8 +2442,7 @@ TEST_CASE(
     if (const char* previous = std::getenv(kCacheRoot)) env.previous = previous;
     REQUIRE(supple::test::environment(kCacheRoot, cache.string().c_str()) == 0);
     struct Bridge {
-        fs::path previous =
-            fs::path(FIXTURE_CLAP_PATH).parent_path() / (std::string(product::kSlug) + "-bridge");
+        fs::path previous = BRIDGE_PATH;
         ~Bridge() { host::setBridgeExecutable(previous); }
     } bridge;
     const auto bad = dir.path / "bad.clap";
@@ -2927,8 +2926,7 @@ TEST_CASE("MIDI query values read back land on the same ticks at a fast playrate
 TEST_CASE("plugin.scan in the background returns at once and installs the catalogue when done") {
     namespace fs = std::filesystem;
     Workdir dir;
-    host::setBridgeExecutable(fs::path(FIXTURE_CLAP_PATH).parent_path() /
-                              (std::string(product::kSlug) + "-bridge"));
+    host::setBridgeExecutable(BRIDGE_PATH);
     AppOptions options;
     options.workdir = dir.path;
     options.pluginPath = {FIXTURE_CLAP_PATH};
@@ -2949,12 +2947,14 @@ TEST_CASE("plugin.scan in the background returns at once and installs the catalo
     // the second request legitimately creates a new job; settle both jobs.
     for (const auto& id : {job, again["job"].asString()}) {
         std::string status;
+        json::Value last;
         for (int i = 0; i < 2000 && status != "done" && status != "failed"; ++i) {
             bus.flushJobEvents();  // the worker posts the catalogue to this thread
-            status = run(bus, "job.status", R"({"job": ")" + id + R"("})")["status"].asString();
+            last = run(bus, "job.status", R"({"job": ")" + id + R"("})");
+            status = last["status"].asString();
             if (status == "running") std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
-        REQUIRE(status == "done");
+        REQUIRE_MESSAGE(status == "done", json::writeCompact(last));
     }
     CHECK(run(bus, "plugin.list", "{}")["plugins"].size() == before);
 }
