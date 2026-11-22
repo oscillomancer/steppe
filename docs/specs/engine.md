@@ -406,8 +406,12 @@ until it is released.
   81b, E5). A barrier that drops queued edits, a deactivation or a full
   queue ends every editor gesture still open, so a lost `endEdit` leaves
   no gesture open in the stage. The ends go out in queue order: after
-  every edit queued before them, and before any queued after (review round
-  97, T1). Closing the editor with a grab open (no
+  every edit queued before them, and before any queued after, each request
+  in its own place (review rounds 97 and 98). A block takes the editor's
+  queued edits only as far as its 64 editor events can hold them with the
+  ends that may follow; the rest waits for the next block, which it asks
+  for, so a drag made while the plug-in was not processing comes out whole
+  (round 98, U1). Closing the editor with a grab open (no
   `endEdit`, review round 81c, E6) queues each grab's end behind the
   editor's moves, so a move made just before the close stays inside its
   gesture: one step, its points once (round 92b; ending it ahead of the
@@ -2669,9 +2673,10 @@ harness. See the tooling README for schemas, limits and invocation details.
   render block of the epoch and the callback's whole cycle (that at most the
   render-ahead span), in the output ring or the frontier rings: never a first
   chunk cut short, such as a launch from stop whose compensated tracks switch
-  a few frames in, or a loop wrap. It also ends when the renderer has
-  rendered all its rings hold and waits for room: a loop shorter than the
-  rings' chunks fills them first (see "Rings are recycled"). Until then the
+  a few frames in, or a loop wrap. It also ends when a ring the
+  renderer writes is full, so it can render no more until the callback
+  plays: a loop shorter than the rings' chunks fills them first (see "Rings
+  are recycled"). Until then the
   callback plays silence and time holds still. The pre-roll ends with the
   first frame played: the rest of that cycle, past a loop wrap too, plays on.
   A cycle that has played audio and then runs short counts a miss, the cycle
