@@ -2365,7 +2365,7 @@ whose start rule is the only rule.)*
     are copied, and do not count toward "every pass maps alike".
 - **Copied as they are:** notes on channel 10 (stored 9), controllers, bend
   and pressure.
-- **`none`.** Copied. A `context.mismatch` warning is given once per item
+- **`none`.** Laid as written: nothing is mapped. A `context.mismatch` warning is given once per item
   when the clip has a key and, at some beat b of the item's span, the clip's
   key at b's clip beat and the project's key at b both hold and differ in
   tonic pitch class or scale. It names the clip, both keys and the first
@@ -2729,7 +2729,7 @@ commands) answers `context.no_key` naming each following item that now has a
 heard note with no readable key at its place (the first project bar), since such
 notes sound as written without another trace.
 
-**History.** Placement records nothing resolved: notes are copied as written,
+**History.** Placement records nothing resolved: notes are laid as written,
 and the take's context comes from the clip as it is on the branch the step
 replays on. `take.set {context}` records its text; `take.bake` its notes.
 

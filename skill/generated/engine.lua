@@ -2971,7 +2971,7 @@ q = nil
 ---@field extract fun(args: Steppe.take_extract_args): Steppe.take_extract_result Take a take out of its item or clip into an item of its own on any channel.
 ---@field list fun(args: Steppe.take_list_args): Steppe.take_list_result List the takes of an item or clip and identify its active take.
 ---@field remove fun(args: Steppe.take_remove_args): Steppe.take_remove_result Delete a take from its item or clip (which goes with its last take).
----@field set fun(args: Steppe.take_set_args): Steppe.take_set_result Set a take's gain, pan, offset, rate or pitch, or its MIDI context or follow.
+---@field set fun(args: Steppe.take_set_args): Steppe.take_set_result Set a take's gain, pan, name, rate, pitch, context, follow and more.
 
 ---@class Steppe.take.hits
 ---@field detect fun(args: Steppe.take_hits_detect_args): Steppe.take_hits_detect_result Detect transient candidates in audio takes, then commit one undoable edit.

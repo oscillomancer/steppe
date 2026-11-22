@@ -61,7 +61,7 @@ schema::Schema<FollowedInfo> followedSchema() {
                                                  {"no_notes", "no_notes"}}))
         .field("mismatch", &FollowedInfo::mismatch,
                contextMismatchSchema().doc(
-                   "Set with the context.mismatch warning: the notes were copied as they are "
+                   "Set with the context.mismatch warning: the notes play as written "
                    "under a key, or in the same key over a chord, that is not the clip's."))
         .build();
 }

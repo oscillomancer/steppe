@@ -338,7 +338,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
                       },
                       "required": ["kind", "bar"],
                       "additionalProperties": false,
-                      "description": "Set with the context.mismatch warning: the notes were copied as they are under a key, or in the same key over a chord, that is not the clip's."
+                      "description": "Set with the context.mismatch warning: the notes play as written under a key, or in the same key over a chord, that is not the clip's."
                     }
                   },
                   "required": ["mode"],
@@ -9521,7 +9521,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
           },
           "required": ["kind", "bar"],
           "additionalProperties": false,
-          "description": "Set with the context.mismatch warning: the notes were copied as they are under a key, or in the same key over a chord, that is not the clip's."
+          "description": "Set with the context.mismatch warning: the notes play as written under a key, or in the same key over a chord, that is not the clip's."
         }
       },
       "required": ["mode"],
@@ -19078,7 +19078,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
                 },
                 "required": ["kind", "bar"],
                 "additionalProperties": false,
-                "description": "Set with the context.mismatch warning: the notes were copied as they are under a key, or in the same key over a chord, that is not the clip's."
+                "description": "Set with the context.mismatch warning: the notes play as written under a key, or in the same key over a chord, that is not the clip's."
               }
             },
             "required": ["mode"],
@@ -20078,7 +20078,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
           },
           "required": ["kind", "bar"],
           "additionalProperties": false,
-          "description": "Set with the context.mismatch warning: the notes were copied as they are under a key, or in the same key over a chord, that is not the clip's."
+          "description": "Set with the context.mismatch warning: the notes play as written under a key, or in the same key over a chord, that is not the clip's."
         }
       },
       "required": ["mode"],
@@ -20510,7 +20510,7 @@ Result:
 
 ## `take.set@1`
 
-Set a take's gain, pan, offset, rate or pitch, or its MIDI context or follow.
+Set a take's gain, pan, name, rate, pitch, context, follow and more.
 
 
 

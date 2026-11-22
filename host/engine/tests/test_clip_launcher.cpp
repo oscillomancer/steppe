@@ -1569,7 +1569,7 @@ TEST_CASE("laying a clip copies its notes and warns when its key is not the proj
     l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
                           "context": "1: key D minor ~:w", "name": "Break bass"})");
-    // item.add {clip, follow: "none"}: the notes are copied as they are, with a warning that
+    // item.add {clip, follow: "none"}: the notes play as written, with a warning that
     // names the clip, both keys and the first project bar where they differ.
     const auto laid = l.run("item.add", R"({"track": "tr_1", "bar": 5, "clip": "cl_1"})");
     const auto codes = warningCodes(laid);

@@ -395,7 +395,7 @@ std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
             return ClipNote{"context.mismatch",
                             name + " was written in " + model::keyWords(*cp) + " and sits under " +
                                 model::keyWords(*pp) + " from " + barWords(s, b) +
-                                ": its notes are copied as they are",
+                                ": its notes play as written",
                             path};
         }
         // The same key (or none to compare) but other chords: the clip's chord at its beat
@@ -413,7 +413,7 @@ std::optional<ClipNote> mismatchNote(const model::Session& s, model::Id clipId,
             return ClipNote{"context.mismatch",
                             name + " was written over " + harmony::printChord(*cc) +
                                 " and sits under " + harmony::printChord(*pc) + " from " +
-                                barWords(s, b) + ": its notes are copied as they are",
+                                barWords(s, b) + ": its notes play as written",
                             path};
         }
     }
