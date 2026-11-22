@@ -16,6 +16,7 @@
 
 #include "supple/model/context.h"
 #include "supple/model/follow.h"
+#include "supple/model/source_mapping.h"
 #include "supple/notation/notation.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/controls.h"
@@ -660,7 +661,7 @@ class Roll : public ui::Node {
                     json::Value op = json::Value::object();
                     op["op"] = "add";
                     op["pitch"] = pitch;
-                    op["start"] = at;
+                    op["start"] = at - s_.frameShift;
                     op["length"] = s_.lastLength;
                     op["velocity"] = s_.lastVelocity;
                     json::Value ops = json::Value::array();
@@ -1485,8 +1486,8 @@ class CcLane : public ui::Node {
             clear["op"] = "cc.clear";
             clear["number"] = s_.ccNumber;
             clear["channel"] = 1;
-            clear["from"] = s_.ccFrom;
-            clear["to"] = s_.ccTo;
+            clear["from"] = s_.ccFrom - s_.frameShift;
+            clear["to"] = s_.ccTo - s_.frameShift;
             ops.push_back(std::move(clear));
             if (!s_.ccErasing) {
                 json::Value set = json::Value::object(), pts = json::Value::array();
@@ -1494,7 +1495,7 @@ class CcLane : public ui::Node {
                 set["number"] = s_.ccNumber;
                 for (const CcPoint& p : s_.ccDraft) {
                     json::Value v = json::Value::object();
-                    v["beat"] = p.beat;
+                    v["beat"] = p.beat - s_.frameShift;
                     v["value"] = p.value;
                     pts.push_back(std::move(v));
                 }
@@ -2731,12 +2732,21 @@ Status MidiEditor::reload() {
     state_.itemLength =
         owner->item ? model::itemLengthBeats(app_.head(), *owner->item) : owner->clip->length;
     const double rate = take->playrate > 0 ? take->playrate : 1.0;
+    state_.frameShift = 0;
+    if (owner->item && owner->item->loop && source->sequence.ppq > 0) {
+        const double cycle = static_cast<double>(source->sequence.length) / source->sequence.ppq;
+        if (cycle > 0) {
+            const model::SourceBeatMapping mapping{take->startOffset, rate, cycle};
+            state_.frameShift = (take->startOffset - mapping.sourceOffset(true)) / rate;
+        }
+    }
     state_.notes.clear();
     for (const auto& n : source->sequence.notes) {
         RollNote note;
         note.pitch = n.pitch;
         note.start =
-            (static_cast<double>(n.start) / source->sequence.ppq - take->startOffset) / rate;
+            (static_cast<double>(n.start) / source->sequence.ppq - take->startOffset) / rate +
+            state_.frameShift;
         note.length = static_cast<double>(n.length) / (source->sequence.ppq * rate);
         note.velocity = n.velocity;
         note.channel = n.channel + 1;
@@ -2857,8 +2867,8 @@ Status MidiEditor::reload() {
     for (const json::Value& c : (*r)["cc"].asArray()) {
         if (c.find("number")->asInt() != state_.ccNumber || c.find("channel"))
             continue;  // channel 1
-        state_.cc.push_back(
-            {c.find("beat")->asDouble(), static_cast<int>(c.find("value")->asInt())});
+        state_.cc.push_back({c.find("beat")->asDouble() + state_.frameShift,
+                             static_cast<int>(c.find("value")->asInt())});
     }
     collectEnvLanes(*owner);
     refreshEnvLanes();
@@ -3960,7 +3970,7 @@ void MidiEditor::duplicate() {
         json::Value op = json::Value::object();
         op["op"] = "add";
         op["pitch"] = n.pitch;
-        op["start"] = n.start + span;
+        op["start"] = n.start + span - state_.frameShift;
         op["length"] = n.length;
         op["velocity"] = n.velocity;
         if (n.channel != 1) op["channel"] = n.channel;
@@ -4005,7 +4015,7 @@ void MidiEditor::paste(std::optional<double> itemBeat) {
         json::Value op = json::Value::object();
         op["op"] = "add";
         op["pitch"] = n.pitch;
-        op["start"] = at + n.start;
+        op["start"] = at + n.start - state_.frameShift;
         op["length"] = n.length;
         op["velocity"] = n.velocity;
         if (n.channel != 1) op["channel"] = n.channel;

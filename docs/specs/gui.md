@@ -1703,6 +1703,20 @@ editable by the human. The event list edits notes and CC events;
 double-click editing requires a row hit and edits that row. Roll gesture
 anchors use exact model timing rather than the rounded `midi.notes` query.
 
+**The roll's axis** is item beats from the item's start: a note at source
+beat *s* sits at (*s* − start_offset) / playrate. A looped item plays its
+content from start_offset wrapped into one loop length
+(`model::SourceBeatMapping::sourceOffset`, as its timeline thumbnail
+draws it), and its roll wraps the same way, so a split loop's right part,
+whose start_offset is whole loop lengths in, draws its notes in the bars
+they play rather than before the item. The sounding and written views, the
+dim notes outside the item, the take row and the CC lane all share that axis. `midi.get` and
+`midi.edit` count item beats without the wrap, so the roll adds the whole
+loop lengths over the playrate (`RollState::frameShift`) to what it reads
+and subtracts them from the starts and CC beats it writes. The event list
+keeps `midi.get`'s numbers. Test: test_midi_editor "a looped item's roll
+wraps start_offset: a split loop and a slipped loop".
+
 **A clip's own key and chords** (ADR-0098 X3). The roll is the one place a
 clip is edited, its context included:
 - The roll shades before the clip's or item's start and past its end, over

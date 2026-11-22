@@ -91,6 +91,13 @@ struct RollState {
     bool clip = false;        // the owner is a clip: it sits at beat 0, in its own context
     double itemPosition = 0;  // project beats
     double itemLength = 4;    // beats
+    // A looped item plays its content from start_offset wrapped into one loop
+    // length (model::SourceBeatMapping::sourceOffset), and the roll's axis
+    // wraps the same way, so a split loop's right part draws its notes where
+    // they play. The engine's item beats (midi.get, midi.edit) don't wrap:
+    // roll beat = engine beat + frameShift (the whole loop lengths in
+    // start_offset, over the playrate; 0 without a loop or for a clip).
+    double frameShift = 0;
     std::vector<RollNote> notes;
     std::set<std::size_t> selected;
     // The colour the notes are drawn in: the item's in the arrangement (its

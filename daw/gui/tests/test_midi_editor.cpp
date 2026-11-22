@@ -5114,6 +5114,104 @@ TEST_CASE("a following take's roll: a looped pass's unheard notes read its place
     CHECK(s.drawnPitch(2, s.notes[2]) != firstPass);
 }
 
+TEST_CASE("MIDI editor: a looped item's roll wraps start_offset: a split loop and a slipped loop") {
+    // gui.md §4.7, the roll's axis (review G5): a looped item plays its
+    // content from start_offset wrapped into one loop length, and the roll
+    // draws it so. The fixture's one-bar item (C4 E4 G4 C5 on the beats of
+    // bar 2) looped over three bars and split after its first: the right
+    // part's take starts one loop (4 beats) in, and its notes play in its
+    // first bar. midi.notes and midi.edit count item beats without the wrap.
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("item.set", R"({"item":")" + f.item + R"(","length":12,"loop":true})");
+    f.item = f.exec("item.split", R"({"item":")" + f.item + R"(","at":8})")["right"].asString();
+    const auto id = *model::Id::parse(f.item);
+    const std::string take = f.app->head().items.find(id)->activeTake->str();
+    REQUIRE(f.app->head().takes.find(*model::Id::parse(take))->startOffset == 4);
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    auto& s = f.editor->state();
+    REQUIRE(s.notes.size() == 4);
+    CHECK(s.frameShift == doctest::Approx(4));
+    for (std::size_t i = 0; i < 4; ++i) {
+        CHECK(s.notes[i].start == doctest::Approx(static_cast<double>(i)));
+        CHECK_FALSE(s.outsideItem(i, s.notes[i]));
+    }
+    CHECK(f.notes().asArray()[0]["start"].asDouble() == doctest::Approx(-4));
+    // A double-click at beat 0.5 writes D5 where it plays: source beat 0.5.
+    f.pointer(ui::PointerEvent::Type::Down, f.at(0.5, 74), 2);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(0.5, 74), 2);
+    auto engineStart = [&](int pitch) -> std::optional<double> {
+        const json::Value notes = f.notes();
+        for (const json::Value& n : notes.asArray())
+            if (n.find("pitch")->asInt() == pitch) return n.find("start")->asDouble();
+        return std::nullopt;
+    };
+    REQUIRE(engineStart(74));
+    CHECK(*engineStart(74) == doctest::Approx(-3.5));
+    REQUIRE(s.notes.size() == 5);
+    // Duplicate C4 (beat 0, a beat long): after it, at beat 1, in the bar.
+    s.selected.clear();
+    for (std::size_t i = 0; i < s.notes.size(); ++i)
+        if (s.notes[i].pitch == 60) s.selected.insert(i);
+    f.editor->duplicate();
+    f.frame();
+    int c4 = 0;
+    for (std::size_t i = 0; i < s.notes.size(); ++i)
+        if (s.notes[i].pitch == 60) {
+            ++c4;
+            CHECK_FALSE(s.outsideItem(i, s.notes[i]));
+        }
+    CHECK(c4 == 2);
+    // A controller point midi.edit sets at item beat -3 (source beat 1) is
+    // drawn at beat 1.
+    f.exec("midi.edit",
+           R"({"item":")" + f.item +
+               R"(","ops":[{"op":"cc.set","number":1,"points":[{"beat":-3,"value":90}]}]})");
+    f.frame();
+    REQUIRE(s.cc.size() == 1);
+    CHECK(s.cc[0].beat == doctest::Approx(1));
+    f.exec("midi.write",
+           R"({"item":")" + f.item + R"(","notation":"voice v; 1: C4:q E4:q G4:q C5:q"})");
+    f.frame();
+    // A slipped loop: one beat in, and one loop and a beat in, draw alike.
+    for (const double offset : {1.0, 5.0}) {
+        f.exec("take.set",
+               R"({"take":")" + take + R"(","start_offset":)" + json::formatDouble(offset) + "}");
+        f.frame();
+        INFO("start_offset " << offset);
+        REQUIRE(s.notes.size() == 4);
+        CHECK(s.frameShift == doctest::Approx(offset - 1));
+        for (std::size_t i = 0; i < 4; ++i)
+            CHECK(s.notes[i].start == doctest::Approx(static_cast<double>(i) - 1));
+        CHECK(s.outsideItem(0, s.notes[0]));  // before the start, as heard
+        CHECK_FALSE(s.outsideItem(1, s.notes[1]));
+    }
+    // Not looped, nothing wraps: one loop and a beat in is past every note.
+    f.exec("item.set", R"({"item":")" + f.item + R"(","loop":false})");
+    f.frame();
+    CHECK(s.frameShift == 0);
+    CHECK(s.notes[3].start == doctest::Approx(-2));
+    CHECK(s.outsideItem(3, s.notes[3]));
+    // Following the key, the split part's sounding view: its notes sound
+    // where they are drawn, each as midi.get sounding has it.
+    f.exec("item.set", R"({"item":")" + f.item + R"(","loop":true})");
+    f.exec("take.set", R"({"take":")" + take + R"(","start_offset":4})");
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"}])", "key");
+    REQUIRE(f.editor->open(f.item));
+    f.frame();
+    auto& t = f.editor->state();
+    REQUIRE(t.following);
+    REQUIRE(t.notes.size() == 4);
+    const int heard[] = {64, 67, 71, 76};  // C major's degrees onto E minor
+    for (std::size_t i = 0; i < 4; ++i) {
+        CHECK(t.notes[i].start == doctest::Approx(static_cast<double>(i)));
+        CHECK_FALSE(t.outsideItem(i, t.notes[i]));
+        CHECK(t.drawnPitch(i, t.notes[i]) == heard[i]);
+    }
+}
+
 TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or says it cannot") {
     Fixture f;
     if (!f.ok) return;
