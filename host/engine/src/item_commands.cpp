@@ -951,7 +951,7 @@ void registerItemCommands(cmd::Registry& registry) {
                     const std::int64_t end =
                         std::llround((cycle - offset) / rate * static_cast<double>(written.ppq));
                     std::erase_if(heardSeq.controls,
-                                  [&](const midi::Control& c) { return c.tick >= end; });
+                                  [&](const midi::Control& ctl) { return ctl.tick >= end; });
                     std::erase_if(heardSeq.sysex,
                                   [&](const midi::Sysex& x) { return x.tick >= end; });
                     heardSeq.length = std::min(heardSeq.length, end);
