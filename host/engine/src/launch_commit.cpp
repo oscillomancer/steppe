@@ -13,6 +13,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 
 #include "clip_context.h"
 #include "clip_launcher.h"
@@ -353,6 +354,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const Id clipId = *Id::parse(*x.e->clip);
             const model::Clip& clip = *s.clips.find(clipId);
             bool mismatchGiven = false;  // one context.mismatch per launched stretch of the clip
+            std::set<std::string> fitGiven;  // one note per kind of change the take's grid made
             const model::Take& take = *s.takes.find(*clip.activeTake);
             const bool midi = clip.kind == model::ClipKind::Midi;
             const bool once = clip.mode == model::ClipMode::Once;
@@ -444,7 +446,11 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                             // and the follow the plan used for the clip, so the committed timeline
                             // sounds as the performance did (ADR-0098, following is playback).
                             // `phase` is the clip beat at the item's start.
-                            if (midi) model::takeContextFromClip(k, clip, phase, outcome);
+                            if (midi)
+                                for (const auto& n :
+                                     model::takeContextFromClip(k, clip, phase, outcome))
+                                    if (fitGiven.insert(n.message).second)
+                                        ctx.warn(n.code, n.message, "/items");
                         });
                 item.takes = *copied;
                 for (std::size_t k = 0; k < clip.takes.size(); ++k)

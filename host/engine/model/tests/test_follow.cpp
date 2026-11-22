@@ -399,6 +399,7 @@ TEST_CASE("take context: points are sorted, unique and inside the period") {
     CHECK(says(set({chordPt(0, "Dm"), chordPt(0, "Am")}), "two points of one type"));
     CHECK(says(set({keyPt(8, "D", "minor")}), "at or past the context's period"));
     CHECK(says(set({keyPt(-1, "D", "minor")}), "beat 0 or later"));
+    CHECK(says(set({keyPt(1.0 / 960.0 * 1.5, "D", "minor")}), "1/960 grid"));
     // Without a period the points may lie anywhere from 0.
     CHECK(set({keyPt(0, "C", "major"), keyPt(100, "D", "minor")}, std::nullopt));
     CHECK(says(set({}, 0.0), "period"));
@@ -1176,6 +1177,18 @@ TEST_CASE(
     CHECK(fast.context[1].beat == 4);  // the chord at clip beat 2
     CHECK(fast.context[2].beat == 8);  // Eb at clip beat 4
     CHECK(fast.follow == ClipFollow::Chords);
+    // At a playrate of 0.25 a point in the clip's last 1/960 rounds onto the period and is
+    // dropped; the notes say so (placement and launch.commit give them as warnings).
+    Clip near;
+    near.length = 4;
+    near.context = {keyPt(0, "C", "major"), keyPt(3.998, "Eb", "major")};
+    Take slow;
+    slow.source = Id{Kind::Midi, 1};
+    slow.playrate = 0.25;
+    const auto fitted = takeContextFromClip(slow, near, 0, ClipFollow::Key);
+    CHECK(slow.context.size() == 1);
+    REQUIRE(fitted.size() == 1);
+    CHECK(fitted[0].code == "take.context_dropped");
     // A clip with no context leaves the take as it was; an audio or empty take holds none.
     Take plain;
     plain.source = Id{Kind::Midi, 1};

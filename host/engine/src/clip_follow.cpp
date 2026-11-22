@@ -255,8 +255,16 @@ Result<FollowedInfo> followPlacedItem(const model::Session& s, model::EditTxn& t
     for (const model::Id takeId : item.takes) {
         const model::Take* take = now.takes.find(takeId);
         if (!take || !model::takeIsMidi(*take)) continue;
-        t.modify<model::Take>(
-            takeId, [&](model::Take& k) { model::takeContextFromClip(k, clip, 0.0, outcome); });
+        std::vector<model::ClipContextNote> fitted;
+        t.modify<model::Take>(takeId, [&](model::Take& k) {
+            fitted = model::takeContextFromClip(k, clip, 0.0, outcome);
+        });
+        // What the take's grid did to the clip's points (one rounded onto the period is dropped)
+        // is said, once, with the item.
+        for (auto& n : fitted)
+            if (std::none_of(notes.begin(), notes.end(),
+                             [&](const ClipNote& have) { return have.message == n.message; }))
+                notes.push_back({n.code, n.message, path});
     }
 
     // Placed as it is: the mismatch warning says when the clip's key is not the project's.

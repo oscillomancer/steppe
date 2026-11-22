@@ -2539,7 +2539,8 @@ std::vector<ContextPoint> contextOver(const Take& take, double u0, double u1,
 
 **Invariants (checked at commit).**
 - **Points.** At most one point of a type at a beat, and at most 4096 of a
-  type. With `context_period`, each lies in `[0, context_period)`.
+  type. Each lies on the 1/960 grid (the fit rounds it; a file's off-grid point is
+  rounded at the open), and with `context_period` in `[0, context_period)`.
 - **`context_period`** is finite, on the 1/960 grid and at least 1/960 of a beat; `context_phase`
   is finite and within a billion beats. (`contextOver` walks at most a million repeats and sets
   `truncated` past them, so no value in a file can send a reader round a loop without end.)
@@ -2594,6 +2595,10 @@ phase.
   playback"). So a clip of length 8 over 4 beats of looping content, with C at
   clip beat 0 and Eb at 4, reads Eb in its second pass on the timeline exactly
   as in the launcher, at any playrate.
+- A point the take's 1/960 grid rounds onto the period (a clip point in its last
+  1/960 beat at a playrate under 0.5, say) is dropped with `take.context_dropped`, which
+  placement, `launch.commit` and `take.extract` give among their warnings (once per
+  message).
 - **Take to clip** (`clip.add {item}`, `scene.capture`): the clip's context is
   `contextOver(take, u0, u1)` over the span copied, beats divided by `r`, and
   its `follow` the take's. The key in force at the span's start is carried in

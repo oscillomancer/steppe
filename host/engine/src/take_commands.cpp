@@ -282,7 +282,8 @@ schema::Schema<RecordCommitArgs> recordCommitSchema() {
 // `position` (required), shaped by the conversion rule, its own envelopes
 // converted in place; the clip goes with its last take.
 Result<ItemResult> extractFromClip(EngineApp& app, const model::Session& s,
-                                   const TakeExtractArgs& a, Id take, Id clipId) {
+                                   const TakeExtractArgs& a, Id take, Id clipId,
+                                   std::vector<model::ClipContextNote>& fitNotes) {
     if (!a.position)
         return Error("take.position", "a clip's take needs a position on the timeline", "/position",
                      "give position in beats, e.g. {\"position\": 16}");
@@ -301,8 +302,7 @@ Result<ItemResult> extractFromClip(EngineApp& app, const model::Session& s,
     // the clip's follow (ADR-0098, following is playback); a clip with none leaves it as it is.
     if (clip.kind == model::ClipKind::Midi && !clip.context.empty())
         t.modify<model::Take>(take, [&](model::Take& k) {
-            model::takeContextFromClip(k, clip, 0.0, clip.follow);
-            model::fitTakeContext(k, model::TakeHome::Item);
+            fitNotes = model::takeContextFromClip(k, clip, 0.0, clip.follow);
         });
     if (clip.takes.size() == 1) {
         t.remove<model::Clip>(clipId);
@@ -1004,8 +1004,12 @@ void registerTakeCommands(cmd::Registry& registry) {
             auto item = ownerOfTake(s, *take, "/take");
             if (!item) return std::move(item).error();
             SUPPLE_TRY(checkUnlocked(s, *item, "/take"));
-            if (item->kind == model::Kind::Clip)
-                return extractFromClip(app(ctx), s, a, *take, *item);
+            if (item->kind == model::Kind::Clip) {
+                std::vector<model::ClipContextNote> fitNotes;
+                auto done = extractFromClip(app(ctx), s, a, *take, *item, fitNotes);
+                for (const auto& n : fitNotes) ctx.warn(n.code, n.message, "/take");
+                return done;
+            }
             auto track =
                 itemTrack(s, a.track.value_or(s.items.find(*item)->track.str()), "/track", {*take});
             if (!track) return std::move(track).error();

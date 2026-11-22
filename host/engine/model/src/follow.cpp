@@ -206,6 +206,8 @@ void checkTakeContext(const Session& s, std::vector<Error>& errors) {
             (p.type == ContextType::Key ? keys : chords)++;
             if (!std::isfinite(p.beat) || p.beat < 0)
                 fail(pt + "/beat", "a take's context point lies at beat 0 or later");
+            else if (std::abs(p.beat * 960.0 - std::round(p.beat * 960.0)) > 1e-6)
+                fail(pt + "/beat", "a take's context point lies on the 1/960 grid");
             else if (t.contextPeriod && validPeriod(t.contextPeriod) && p.beat >= *t.contextPeriod)
                 fail(pt + "/beat", "the point lies at or past the context's period");
             if (i > 0) {
