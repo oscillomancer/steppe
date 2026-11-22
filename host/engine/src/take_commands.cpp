@@ -589,6 +589,11 @@ void registerTakeCommands(cmd::Registry& registry) {
                     // phase cancels the offset (a part cut from a longer take starts inside it).
                     shaped->contextPhase =
                         -(a.startOffset ? *a.startOffset : original->startOffset);
+                    // `""` clears the context whole: no points, no period, no phase.
+                    if (shaped->context.empty()) {
+                        shaped->contextPeriod.reset();
+                        shaped->contextPhase = 0;
+                    }
                 }
                 if (a.follow) {
                     shaped->follow = *a.follow;

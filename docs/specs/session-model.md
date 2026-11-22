@@ -2627,7 +2627,7 @@ missing from this table is a defect of this contract.
 
 **`take.set {take, context?, follow?}`.** `context` is lead-sheet text in bars of
 the meter in force at the item's position, bar 1 at context beat 0, in context
-beats (not scaled again by the playrate); `""` clears it. Bar 1 is the item's start, so
+beats (not scaled again by the playrate); `""` clears it whole (no points, and no `context_period` or `context_phase` either). Bar 1 is the item's start, so
 `context_phase` is set to `−start_offset` (the offset after the same call's `start_offset`,
 if any): a part cut from a longer take, with its offset inside the source, reads the text from
 its first heard beat. With

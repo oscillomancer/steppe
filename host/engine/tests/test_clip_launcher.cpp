@@ -2043,6 +2043,9 @@ TEST_CASE("take.set gives a take a context and a follow: the notes stay as writt
     auto cleared = l.run("take.set", R"({"take": "tk_1", "context": ""})");
     CHECK(warningCodes(cleared) == "take.follow_reset ");
     CHECK(l.head().takes.find(id("tk_1"))->follow == model::ClipFollow::None);
+    CHECK(l.head().takes.find(id("tk_1"))->context.empty());
+    CHECK_FALSE(l.head().takes.find(id("tk_1"))->contextPeriod);
+    CHECK(l.head().takes.find(id("tk_1"))->contextPhase == 0.0);
     // A clip's take holds none of the four.
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");
     const model::Id clipTake = l.head().clips.find(id("cl_1"))->takes[0];
@@ -2403,6 +2406,23 @@ TEST_CASE("take.set context on a part cut from a take reads bar 1 at the item's 
     CHECK(place->contextBeat == doctest::Approx(0.0));
     // The text's key holds at the part's first beat: the same text on a fresh item says the same.
     CHECK(place->take.key.has_value());
+}
+
+TEST_CASE("take.set {context: \"\"} clears the period and the phase with the points") {
+    Launcher l;
+    l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "minor"})");
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: A1:w",
+                          "context": "1: key D minor ~:w", "follow": "key"})");
+    auto laid = l.run("scene.insert", R"({"scene": "sc_1", "bar": 5, "bars": 4})");
+    const std::string item = laid.find("items")->at(0).find("item")->asString();
+    const model::Id take = *l.head().items.find(id(item.c_str()))->activeTake;
+    REQUIRE(l.head().takes.find(take)->contextPeriod.has_value());
+    l.run("take.set", R"({"take": ")" + take.str() + R"(", "context": ""})");
+    const model::Take& t = *l.head().takes.find(take);
+    CHECK(t.context.empty());
+    CHECK_FALSE(t.contextPeriod.has_value());
+    CHECK(t.contextPhase == 0.0);
+    CHECK(t.follow == model::ClipFollow::None);
 }
 
 TEST_CASE("take.bake replays on another branch with the pitches the user heard") {
