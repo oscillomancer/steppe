@@ -12,13 +12,17 @@ audio path.
 ## 1. Types
 
 ```cpp
-struct PitchClass { char letter; int accidental; };      // 'A'..'G', -1 | 0 | +1
+struct PitchClass { char letter; int accidental; };      // 'A'..'G', -2..+2
 struct Key        { PitchClass tonic; Scale scale; };
 enum class Scale  { Major, Minor, HarmonicMinor, MelodicMinor, Dorian, Phrygian,
                     Lydian, Mixolydian, Locrian, MajorPentatonic, MinorPentatonic,
                     Blues, Chromatic };
 struct Chord      { PitchClass root; std::string quality; std::optional<PitchClass> bass; };
 ```
+
+`accidental` is -2..+2 (ADR-0100). A parsed name (a key's tonic, a chord's root or bass, a
+command's argument) has -1, 0 or +1; only a spelling, a chord tone named by its degree, produces `##` and
+`bb`. `printPitchClass` writes one mark per step.
 
 Scale names (file and command spelling): `major`, `minor`, `harmonic_minor`,
 `melodic_minor`, `dorian`, `phrygian`, `lydian`, `mixolydian`, `locrian`,
@@ -63,7 +67,19 @@ Melodic minor is the ascending form in both directions.
 - `spellPitchClass(pc, key?)` and `spell(pitch, key?)`: the name of a pitch
   class, or of a MIDI pitch with its octave (`Bb3`; scientific, C4 = 60; the
   octave follows the letter, so `B#3` is the pitch of C4), as in the rule
-  below. With no key, the default table.
+  below. With no key, the default table. The same two functions take a `Place`
+  (key and chord, §5's struct, declared with the spelling) instead of a key: a
+  chord tone is named by its degree and a note of the chord's step by the chord
+  (§3.1); a place with no chord is the key's rule. A name whose octave would fall
+  outside -1..9 (`B#` at pitch 0 is `B#-2`, which the notation refuses) is replaced by
+  the key's table, or the default table (`C-1`); this holds for a key alone as well.
+- `chordTones(chord)`: the tones of a chord with their degrees, root first, then the quality's tones in
+  table order, then a slash bass last: `ChordTone{interval, degree, name, byDegree}`. `degree` is
+  `1`, `b3`, `5`, `b7`, `9`, `#5`, `bb7`, `#9` and so on (`bass` for the slash bass,
+  whose interval is its distance above the root, 0..11, and whose name is as written);
+  `name` is the tone as §3.1 spells it; `byDegree` is false for the three tones that
+  would need three accidentals, whose `name` is then the default table's. Empty for a
+  quality this build does not know.
 - `transposeDegrees(pitch, key, degrees)`: a MIDI pitch moved by scale
   degrees. An in-scale pitch moves to the degree `degrees` away (octaves
   carry, negative degrees go down); an out-of-scale pitch first goes to the
@@ -111,9 +127,69 @@ Melodic minor is the ascending form in both directions.
 3. **No key:** the default table `C C# D Eb E F F# G Ab A Bb B`, which is the
    notation's printer today.
 
+4. **A chord** (ADR-0100). With a chord that this build can read at the place, the
+   rule is, in order:
+   1. a **slash bass** whose class is the pitch's: the bass as written (`E/Ab` names the
+      class `Ab` although the chord's own third is `G#`);
+   2. a **chord tone**: its degree's name (§3.1), whatever the key (the third of E major is
+      `G#`, never `Ab`; the seventh of C7 is `Bb`). A tone whose degree needs three accidentals
+      goes on to steps 3 and 5, never to 4;
+   3. a note of the **key's scale**: the key's spelling, as rule 1 or 2 gives it (a scale note
+      keeps its spelling over any chord: `F` over F#7 in C major, not `E#`);
+   4. any other note, by its **step above the chord's root**, `i` semitones: 1 is the flat
+      second (`Db` over C), 3 the flat third (`Eb`), 6 the sharp fourth over a major or absent third
+      and the flat fifth over a minor one (`F#` over C7, `Gb` over Cm), 8 the flat sixth (`Ab`), 10 the flat seventh (`Bb`),
+      11 the major seventh (`D#` over E, `G#` over Am); 0, 2, 4, 5, 7 and 9 are the major scale on the
+      root. The letter is the step's, the accidental whatever gives the pitch class; a name with
+      more than two accidentals goes to step 5;
+   5. the key's direction table, or the default table with no key, as rule 1 gives it.
+
+   A place with no chord, and a chord whose quality this build does not know (callers pass none),
+   follow rule 1, 2 or 3 as before; every output with no chord is what it was.
+
 Examples: E-flat major `Eb F G Ab Bb C D`; C-sharp minor `C# D# E F# G# A B`;
 A blues `A C D Eb E G`; F-sharp major needs `E#`, a letter with one sharp, and
 is supported; G-sharp major needs `F##` and is not.
+
+### 3.1 Degrees
+
+A chord tone is named by its degree: the letter is the root's letter moved by the degree's number
+(a third is two letters on, a fifth four, a seventh six, a ninth one, an eleventh three, a thirteenth five),
+and the accidental is whatever gives the pitch class, root plus interval. The degree is a column of
+the quality table beside the intervals (`kQualityRows`), so no quality exists without it:
+
+| interval | degree | qualities |
+|---|---|---|
+| 0 | 1 | all |
+| 2 | 2 | sus2 |
+| 3 | b3 | m, dim, m6, m7, mMaj7, dim7, m7b5, m9 |
+| 4 | 3 | major, aug, 6, 7, maj7, add9, 9, maj9, 7b9, 7#9, 13 |
+| 5 | 4 | sus4, 7sus4 |
+| 6 | b5 | dim, dim7, m7b5 |
+| 7 | 5 | all but aug, dim, dim7, m7b5, 13 |
+| 8 | #5 | aug |
+| 9 | 6, or bb7 | 6 and m6 take the sixth; dim7, the only quality with 3, 6 and 9, the double-flat seventh |
+| 10 | b7 | 7, m7, m7b5, 9, m9, 11, 13, 7sus4, 7b9, 7#9 |
+| 11 | 7 | maj7, mMaj7, maj9 |
+| 13 | b9 | 7b9 |
+| 14 | 9 | add9, 9, maj9, m9, 11, 13 |
+| 15 | #9, **lettered as the b3** | 7#9 |
+| 17 | 11 | 11 |
+| 21 | 13 | 13 |
+
+The sharp nine takes the third's letter, as printed music writes it: `G` over E7#9, `Eb` over C7#9,
+never `F##` or `D#`. Added tones (add9, 6, m6) and sus tones are named by their own degree, and the
+tones the table lacks (the third of 11, the fifth of 13) are simply absent.
+
+Where the degrees need a double accidental (every chord, every one of the 21 root spellings): the tones
+of `Cdim7` are `C Eb Gb Bbb`, `Bdim7` `B D F Ab`, `C#aug` `C# E# G##`, `Ebdim` `Eb Gb Bbb`; with the twelve
+usual roots (`C C# D Eb E F F# G Ab A Bb B`) the doubles are `Ebdim:Bbb`, `Abdim:Ebb`, `C#aug:G##`,
+`F#aug:C##`, `Baug:F##`, `Cdim7:Bbb`, `Ebdim7:Bbb,Dbb`, `Fdim7:Ebb`, `Abdim7:Ebb,Gbb`, `Bbdim7:Abb`,
+`Ebm7b5:Bbb`, `Abm7b5:Ebb` and `Ab7b9:Bbb`. Three tones over all roots would need three: the fifth of
+`B#aug` (`F###`) and the sevenths of `Cbdim7` (`Bbbb`) and `Fbdim7` (`Ebbb`). They are named by
+the key's rule, the default table when no key holds (`byDegree` false); a chord is never refused for
+its spelling. Input is unchanged: the notation reads `##` and `bb` in a pitch, a chord root or
+bass takes one accidental (`chord.bad_root`, `chord.bad_bass`).
 
 ## 4. Tests required
 
@@ -129,6 +205,17 @@ edges and out of scale; the pitch classes of keys and chords (a slash bass count
 snapping in each mode, ties, the range edges and a one-class set, and every pitch of
 every scale in every key landing in the scale within six semitones; the index
 against a brute-force scan.
+
+Chord-tone spelling: the tones of every quality by hand (the examples above and one line per double);
+for each of the 21 roots and every quality name, each tone's letter, class and accidental agree with its
+degree, no two tones share a class, and the degree's alteration against the major scale gives the
+interval; a tone's name is the same in every key and with no key; a slash bass as written; each note
+of the step table; a scale note keeping its spelling; the three triples falling back and the unknown
+quality holding no chord; `B#` at pitch 0 replaced, with a chord and with a key alone; every name
+`spell` gives for every root, quality, five keys and pitch 0..127 has a letter, at most two
+accidentals and an octave in -1..9 and equals the pitch, and the notation compiles each
+back to the same pitch (`test_notation.cpp`); `printPitchClass` for -2..+2 and `parsePitchClass`
+refusing doubles.
 
 ## 5. Following (ADR-0098; the contract for step X2, built)
 

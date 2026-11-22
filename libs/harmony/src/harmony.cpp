@@ -44,8 +44,8 @@ std::optional<PitchClass> parsePitchClass(std::string_view text) {
 
 std::string printPitchClass(PitchClass pc) {
     std::string out(1, pc.letter);
-    if (pc.accidental > 0) out += '#';
-    if (pc.accidental < 0) out += 'b';
+    if (pc.accidental > 0) out.append(static_cast<std::size_t>(pc.accidental), '#');
+    if (pc.accidental < 0) out.append(static_cast<std::size_t>(-pc.accidental), 'b');
     return out;
 }
 
@@ -145,24 +145,52 @@ struct QualityRow {
     std::string_view name;
     int count;
     std::array<int, 6> intervals;
+    // The degree of each tone (specs/harmony.md §3.1): its number gives the letter, its
+    // alterations against the major scale give the interval (a test checks both).
+    std::array<std::string_view, 6> degrees;
 };
+using D = std::array<std::string_view, 6>;
+constexpr D kTriadMajor = {"1", "3", "5"};
+constexpr D kTriadMinor = {"1", "b3", "5"};
+constexpr D kSus4 = {"1", "4", "5"};
+constexpr D kAug = {"1", "3", "#5"};
+constexpr D kSix = {"1", "3", "5", "6"};
+constexpr D kDom7 = {"1", "3", "5", "b7"};
+constexpr D kMaj7 = {"1", "3", "5", "7"};
+constexpr D kMin7 = {"1", "b3", "5", "b7"};
+constexpr D kHalfDim = {"1", "b3", "b5", "b7"};
 constexpr std::array<QualityRow, 31> kQualityRows = {{
-    {"", 3, {0, 4, 7, 0, 0, 0}},       {"maj", 3, {0, 4, 7, 0, 0, 0}},
-    {"m", 3, {0, 3, 7, 0, 0, 0}},      {"min", 3, {0, 3, 7, 0, 0, 0}},
-    {"dim", 3, {0, 3, 6, 0, 0, 0}},    {"aug", 3, {0, 4, 8, 0, 0, 0}},
-    {"+", 3, {0, 4, 8, 0, 0, 0}},      {"sus2", 3, {0, 2, 7, 0, 0, 0}},
-    {"sus4", 3, {0, 5, 7, 0, 0, 0}},   {"sus", 3, {0, 5, 7, 0, 0, 0}},
-    {"6", 4, {0, 4, 7, 9, 0, 0}},      {"m6", 4, {0, 3, 7, 9, 0, 0}},
-    {"7", 4, {0, 4, 7, 10, 0, 0}},     {"maj7", 4, {0, 4, 7, 11, 0, 0}},
-    {"M7", 4, {0, 4, 7, 11, 0, 0}},    {"m7", 4, {0, 3, 7, 10, 0, 0}},
-    {"min7", 4, {0, 3, 7, 10, 0, 0}},  {"mMaj7", 4, {0, 3, 7, 11, 0, 0}},
-    {"dim7", 4, {0, 3, 6, 9, 0, 0}},   {"m7b5", 4, {0, 3, 6, 10, 0, 0}},
-    {"ø", 4, {0, 3, 6, 10, 0, 0}},     {"7sus4", 4, {0, 5, 7, 10, 0, 0}},
-    {"add9", 4, {0, 4, 7, 14, 0, 0}},  {"9", 5, {0, 4, 7, 10, 14, 0}},
-    {"maj9", 5, {0, 4, 7, 11, 14, 0}}, {"m9", 5, {0, 3, 7, 10, 14, 0}},
-    {"7b9", 5, {0, 4, 7, 10, 13, 0}},  {"7#9", 5, {0, 4, 7, 10, 15, 0}},
-    {"11", 5, {0, 7, 10, 14, 17, 0}},  {"13", 5, {0, 4, 10, 14, 21, 0}},
-    {"5", 2, {0, 7, 0, 0, 0, 0}},
+    {"", 3, {0, 4, 7, 0, 0, 0}, kTriadMajor},
+    {"maj", 3, {0, 4, 7, 0, 0, 0}, kTriadMajor},
+    {"m", 3, {0, 3, 7, 0, 0, 0}, kTriadMinor},
+    {"min", 3, {0, 3, 7, 0, 0, 0}, kTriadMinor},
+    {"dim", 3, {0, 3, 6, 0, 0, 0}, {"1", "b3", "b5"}},
+    {"aug", 3, {0, 4, 8, 0, 0, 0}, kAug},
+    {"+", 3, {0, 4, 8, 0, 0, 0}, kAug},
+    {"sus2", 3, {0, 2, 7, 0, 0, 0}, {"1", "2", "5"}},
+    {"sus4", 3, {0, 5, 7, 0, 0, 0}, kSus4},
+    {"sus", 3, {0, 5, 7, 0, 0, 0}, kSus4},
+    {"6", 4, {0, 4, 7, 9, 0, 0}, kSix},
+    {"m6", 4, {0, 3, 7, 9, 0, 0}, {"1", "b3", "5", "6"}},
+    {"7", 4, {0, 4, 7, 10, 0, 0}, kDom7},
+    {"maj7", 4, {0, 4, 7, 11, 0, 0}, kMaj7},
+    {"M7", 4, {0, 4, 7, 11, 0, 0}, kMaj7},
+    {"m7", 4, {0, 3, 7, 10, 0, 0}, kMin7},
+    {"min7", 4, {0, 3, 7, 10, 0, 0}, kMin7},
+    {"mMaj7", 4, {0, 3, 7, 11, 0, 0}, {"1", "b3", "5", "7"}},
+    {"dim7", 4, {0, 3, 6, 9, 0, 0}, {"1", "b3", "b5", "bb7"}},
+    {"m7b5", 4, {0, 3, 6, 10, 0, 0}, kHalfDim},
+    {"ø", 4, {0, 3, 6, 10, 0, 0}, kHalfDim},
+    {"7sus4", 4, {0, 5, 7, 10, 0, 0}, {"1", "4", "5", "b7"}},
+    {"add9", 4, {0, 4, 7, 14, 0, 0}, {"1", "3", "5", "9"}},
+    {"9", 5, {0, 4, 7, 10, 14, 0}, {"1", "3", "5", "b7", "9"}},
+    {"maj9", 5, {0, 4, 7, 11, 14, 0}, {"1", "3", "5", "7", "9"}},
+    {"m9", 5, {0, 3, 7, 10, 14, 0}, {"1", "b3", "5", "b7", "9"}},
+    {"7b9", 5, {0, 4, 7, 10, 13, 0}, {"1", "3", "5", "b7", "b9"}},
+    {"7#9", 5, {0, 4, 7, 10, 15, 0}, {"1", "3", "5", "b7", "#9"}},
+    {"11", 5, {0, 7, 10, 14, 17, 0}, {"1", "5", "b7", "9", "11"}},
+    {"13", 5, {0, 4, 10, 14, 21, 0}, {"1", "3", "b7", "9", "13"}},
+    {"5", 2, {0, 7, 0, 0, 0, 0}, {"1", "5"}},
 }};
 
 }  // namespace
@@ -312,27 +340,200 @@ std::optional<Spelled> scaleSpelling(int pitchClass, const Key& key) {
     return std::nullopt;
 }
 
+// The key's direction table, or the default table with no key: always one accidental at most
+// and a letter whose own octave is the pitch's.
+Spelled tableSpelling(int pitchClass, const std::optional<Key>& key) {
+    const int d = key ? direction(*key) : 0;
+    const auto& names = d < 0 ? kFlatNames : (d > 0 ? kSharpNames : kDefaultNames);
+    const std::string_view text = names[static_cast<std::size_t>(pitchClass)];
+    return Spelled{text[0], text.size() > 1 ? (text[1] == '#' ? 1 : -1) : 0};
+}
+
+// The key's rule alone: a scale degree by the scale, else the table.
+Spelled keySpelling(int pitchClass, const std::optional<Key>& key) {
+    if (key)
+        if (const auto s = scaleSpelling(pitchClass, *key)) return *s;
+    return tableSpelling(pitchClass, key);
+}
+
+// The letter a degree takes, as an offset from the root's letter: its number minus one,
+// modulo seven (a ninth is a second's letter). The sharp nine takes the third's letter.
+int letterOffsetOf(std::string_view degree) {
+    if (degree == "#9") return 2;
+    int number = 0;
+    for (const char c : degree)
+        if (c >= '0' && c <= '9') number = number * 10 + (c - '0');
+    return (number - 1) % 7;
+}
+
+// A letter `offset` letters above the root's, with the accidental that gives `semitone`
+// (reduced), against the letter's own pitch.
+Spelled byLetter(PitchClass root, int offset, int semitone) {
+    const char letter = static_cast<char>('A' + (letterIndex(root.letter) + offset) % 7);
+    const int natural = kLetterSemitone[static_cast<std::size_t>(letterIndex(letter))];
+    return Spelled{letter, floorMod(semitone - natural + 6, 12) - 6};
+}
+
+bool plausible(Spelled s) { return s.accidental >= -2 && s.accidental <= 2; }
+
+// A chord's tones as spelled things: the quality's row, or none for a quality this build does
+// not know.
+const QualityRow* rowOf(const Chord& chord) {
+    for (const QualityRow& row : kQualityRows)
+        if (row.name == chord.quality) return &row;
+    return nullptr;
+}
+
+// Step four: a note that is neither a chord tone nor in the key's scale is named by its step
+// above the chord's root (specs/harmony.md §3).
+std::optional<Spelled> stepSpelling(int pitchClass, const Chord& chord, const QualityRow& row) {
+    const int i = floorMod(pitchClass - pitchClassSemitone(chord.root), 12);
+    int offset = 0;
+    switch (i) {
+        case 0:
+            offset = 0;
+            break;
+        case 1:
+            offset = 1;
+            break;  // b2
+        case 2:
+            offset = 1;
+            break;
+        case 3:
+            offset = 2;
+            break;  // b3
+        case 4:
+            offset = 2;
+            break;
+        case 5:
+            offset = 3;
+            break;
+        case 6: {  // #4 over a major or absent third, b5 over a minor one
+            bool minorThird = false;
+            for (int k = 0; k < row.count; ++k)
+                if (row.intervals[static_cast<std::size_t>(k)] == 3) minorThird = true;
+            offset = minorThird ? 4 : 3;
+            break;
+        }
+        case 7:
+            offset = 4;
+            break;
+        case 8:
+            offset = 5;
+            break;  // b6
+        case 9:
+            offset = 5;
+            break;
+        case 10:
+            offset = 6;
+            break;  // b7
+        default:
+            offset = 6;
+            break;  // 11: the major seventh
+    }
+    const Spelled s = byLetter(chord.root, offset, pitchClassSemitone(chord.root) + i);
+    if (!plausible(s)) return std::nullopt;
+    return s;
+}
+
+// The spelling at a place, before the octave is looked at.
+Spelled spelledAt(int pitchClass, const Place& place) {
+    const Chord* chord = place.chord ? &*place.chord : nullptr;
+    const QualityRow* row = chord ? rowOf(*chord) : nullptr;
+    if (row) {
+        // 1. A slash bass as written.
+        if (chord->bass && pitchClassNumber(*chord->bass) == pitchClass)
+            return Spelled{chord->bass->letter, chord->bass->accidental};
+        // 2. A chord tone, by its degree. A tone that would need three accidentals goes on
+        // to the key's rule (steps 3 and 5), not to step 4.
+        bool tone = false;
+        for (int k = 0; k < row->count; ++k) {
+            const int interval = row->intervals[static_cast<std::size_t>(k)];
+            if (floorMod(pitchClassSemitone(chord->root) + interval, 12) != pitchClass) continue;
+            tone = true;
+            const Spelled s =
+                byLetter(chord->root, letterOffsetOf(row->degrees[static_cast<std::size_t>(k)]),
+                         pitchClassSemitone(chord->root) + interval);
+            if (plausible(s)) return s;
+            break;
+        }
+        // 3. A note of the key's scale, by the key.
+        if (place.key)
+            if (const auto s = scaleSpelling(pitchClass, *place.key)) return *s;
+        // 4. A note a step above the chord's root.
+        if (!tone)
+            if (const auto s = stepSpelling(pitchClass, *chord, *row)) return *s;
+        // 5. The key's direction table, or the default table.
+        return tableSpelling(pitchClass, place.key);
+    }
+    return keySpelling(pitchClass, place.key);
+}
+
 std::string name(Spelled s) { return printPitchClass({s.letter, s.accidental}); }
+
+// The scientific octave of a pitch spelled `s`: the octave follows the letter.
+int octaveOf(int pitch, Spelled s) {
+    const int semitone =
+        kLetterSemitone[static_cast<std::size_t>(letterIndex(s.letter))] + s.accidental;
+    return floorDiv(pitch - semitone, 12) - 1;
+}
 
 }  // namespace
 
+std::vector<ChordTone> chordTones(const Chord& chord) {
+    std::vector<ChordTone> out;
+    const QualityRow* row = rowOf(chord);
+    if (!row) return out;
+    const int root = pitchClassSemitone(chord.root);
+    for (int k = 0; k < row->count; ++k) {
+        const int interval = row->intervals[static_cast<std::size_t>(k)];
+        const std::string_view degree = row->degrees[static_cast<std::size_t>(k)];
+        const Spelled s = byLetter(chord.root, letterOffsetOf(degree), root + interval);
+        ChordTone tone;
+        tone.interval = interval;
+        tone.degree = degree;
+        if (plausible(s)) {
+            tone.name = {s.letter, s.accidental};
+        } else {
+            const Spelled plain = tableSpelling(floorMod(root + interval, 12), std::nullopt);
+            tone.name = {plain.letter, plain.accidental};
+            tone.byDegree = false;
+        }
+        out.push_back(tone);
+    }
+    if (chord.bass) {
+        ChordTone bass;
+        bass.interval = floorMod(pitchClassSemitone(*chord.bass) - root, 12);
+        bass.degree = "bass";
+        bass.name = *chord.bass;
+        out.push_back(bass);
+    }
+    return out;
+}
+
+std::string spellPitchClass(int pitchClass, const Place& place) {
+    return name(spelledAt(floorMod(pitchClass, 12), place));
+}
+
 std::string spellPitchClass(int pitchClass, const std::optional<Key>& key) {
-    pitchClass = floorMod(pitchClass, 12);
-    if (!key) return std::string(kDefaultNames[static_cast<std::size_t>(pitchClass)]);
-    if (const auto s = scaleSpelling(pitchClass, *key)) return name(*s);
-    const int d = direction(*key);
-    const auto& names = d < 0 ? kFlatNames : (d > 0 ? kSharpNames : kDefaultNames);
-    return std::string(names[static_cast<std::size_t>(pitchClass)]);
+    return spellPitchClass(pitchClass, Place{key, std::nullopt});
+}
+
+std::string spell(int pitch, const Place& place) {
+    const int pc = floorMod(pitch, 12);
+    Spelled s = spelledAt(pc, place);
+    int octave = octaveOf(pitch, s);
+    // A name whose octave the notation would refuse (B# at pitch 0 is B#-2) is replaced by the
+    // key's or the default table's.
+    if (pitch >= 0 && pitch <= 127 && (octave < -1 || octave > 9)) {
+        s = tableSpelling(pc, place.key);
+        octave = octaveOf(pitch, s);
+    }
+    return name(s) + std::to_string(octave);
 }
 
 std::string spell(int pitch, const std::optional<Key>& key) {
-    const int pc = floorMod(pitch, 12);
-    const std::string text = spellPitchClass(pc, key);
-    // The octave follows the letter, so B#3 is the pitch of C4.
-    const auto parsed = parsePitchClass(text);
-    const int octave =
-        (pitch - pitchClassSemitone(*parsed) + 12 * 100) / 12 - 100 - 1;  // exact division
-    return text + std::to_string(octave);
+    return spell(pitch, Place{key, std::nullopt});
 }
 
 std::optional<int> transposeDegrees(int pitch, const Key& key, int degrees) {

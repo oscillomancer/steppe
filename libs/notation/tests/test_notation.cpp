@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
+#include <supple/harmony/harmony.h>
 #include <supple/notation/notation.h>
 
 #include <doctest/doctest.h>
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <limits>
 #include <random>
+#include <set>
 #include <sstream>
 
 using namespace supple::notation;
@@ -509,5 +511,34 @@ TEST_CASE("notation hands over the chord symbols as compiled (ADR-0098)") {
         REQUIRE(plain);
         CHECK(dump(withSymbol->sequence) == dump(plain->sequence));
         CHECK(plain->chords.empty());
+    }
+}
+
+TEST_CASE("every name harmony::spell produces for a chord place compiles back to its pitch") {
+    // For every root spelling, every quality, a few keys and every pitch 0..127: the name is
+    // one note of a bar and compiles to that pitch (doubles, `B#` and the octave edges included).
+    const std::vector<std::optional<supple::harmony::Key>> keys = {
+        std::nullopt, supple::harmony::Key{{'C', 0}, supple::harmony::Scale::Major},
+        supple::harmony::Key{{'G', 1}, supple::harmony::Scale::Minor},
+        supple::harmony::Key{{'G', -1}, supple::harmony::Scale::Major},
+        supple::harmony::Key{{'C', 1}, supple::harmony::Scale::Chromatic}};
+    std::set<std::pair<int, std::string>> seen;
+    for (const char letter : {'A', 'B', 'C', 'D', 'E', 'F', 'G'})
+        for (const int accidental : {-1, 0, 1})
+            for (const auto& [quality, intervals] : supple::harmony::chordQualities()) {
+                (void)intervals;
+                const supple::harmony::Chord chord{{letter, accidental}, quality, std::nullopt};
+                for (const auto& key : keys)
+                    for (int pitch = 0; pitch < 128; ++pitch)
+                        seen.insert({pitch, supple::harmony::spell(
+                                                pitch, supple::harmony::Place{key, chord})});
+            }
+    CHECK(seen.size() > 128);
+    for (const auto& [pitch, name] : seen) {
+        CAPTURE(name);
+        const auto compiled = compile("voice a\n1: " + name + ":q r:*\n");
+        REQUIRE(compiled);
+        REQUIRE(compiled->sequence.notes.size() == 1);
+        CHECK(compiled->sequence.notes[0].pitch == pitch);
     }
 }
