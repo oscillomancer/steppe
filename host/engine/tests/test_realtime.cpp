@@ -4016,7 +4016,12 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
                 backend.run(1);
                 ++started;
             }
-            REQUIRE_MESSAGE(pool.find(crash)->processing(), "its start was never answered");
+            REQUIRE_MESSAGE(pool.find(crash)->processing(),
+                            "its start was never answered: "
+                                << started << " cycles, " << engine.bridgeLateCycles()
+                                << " late, failed: "
+                                << (pool.find(crash)->failed() ? pool.find(crash)->failure()
+                                                               : std::string("no")));
             lateBeforeHang = engine.bridgeLateCycles();
             REQUIRE(pool.find(crash)->setParam(1, 2));
             backend.run(kCycles - started);
