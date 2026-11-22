@@ -6067,6 +6067,31 @@ TEST_CASE("forced background policies apply for benchmarks, within the same chec
     engine.stop();
 }
 
+// The cases above size their pools to need five CPUs; native CI's runners have
+// three (macOS) and four (Windows). Default pools leave exactly two CPUs free, so
+// this one takes the elevated path on any machine with three, macOS's
+// self-applied one included.
+TEST_CASE("default pools run real-time below a real-time callback with three CPUs or more") {
+    const int cpus = static_cast<int>(allowedCpuCount());
+    const int threads = (cpus > 3 ? cpus - 3 : 0) + 1;  // the helpers and the renderer
+    if (cpus < 3 || !mayElevate(threads, Engine::kBackgroundPriority)) {
+        MESSAGE("no real-time scheduling permission or fewer than three CPUs");
+        return;
+    }
+    auto pool = makePool();
+    MediaCache media;
+    ReportingBackend backend({Kind::Fifo, 83});
+    Engine engine(pool, media);  // default (Automatic) pools
+    REQUIRE(engine.start(backend, {.blockSize = 128}));
+    CHECK(engine.scheduling().renderer == elevated(Engine::kBackgroundPriority));
+    CHECK(engine.scheduling().background == elevated(Engine::kBackgroundPriority));
+    CHECK(engine.warnings().empty());
+    REQUIRE(engine.load(parallelLive(2)));
+    CHECK(engine.warnings().empty());
+    engine.stop();
+    CHECK(engine.scheduling().renderer == ThreadPolicy{});
+}
+
 // Linux only: CPU affinity through sched_setaffinity (none on macOS; Windows
 // counts the process mask).
 #if defined(__linux__)
