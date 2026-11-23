@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "supple/model/audio_warp.h"
+#include "supple/model/schemas.h"
 #include "supple/time/timeline.h"
 
 namespace supple::model {
@@ -164,6 +165,46 @@ Result<std::vector<CompPiece>> compRun(const Session& s, std::optional<Id> item,
     return out;
 }
 
+bool joinablePieces(const Session& s, Id left, Id right) {
+    const Item* l = s.items.find(left);
+    const Item* r = s.items.find(right);
+    if (!l || !r || l->takes.size() != r->takes.size()) return false;
+    auto plain = [&](const Item& it) {
+        auto j = toJson(it);
+        for (const char* key :
+             {"position", "length", "fade_in", "fade_out", "takes", "active_take"})
+            j.asObject().erase(key);
+        return j;
+    };
+    if (plain(*l) != plain(*r)) return false;
+    for (std::size_t i = 0; i < l->takes.size(); ++i) {
+        const Take* x = s.takes.find(l->takes[i]);
+        const Take* y = s.takes.find(r->takes[i]);
+        if (!x || !y || !x->source || x->source->kind != Kind::Media) return false;
+        if (!x->stretchMarkers.empty() || !y->stretchMarkers.empty() || !x->warpPeers.empty() ||
+            !y->warpPeers.empty() || x->chain.size() != y->chain.size())
+            return false;
+        auto a = toJson(*x), b = toJson(*y);
+        for (const char* key : {"start_offset", "chain"}) {
+            a.asObject().erase(key);
+            b.asObject().erase(key);
+        }
+        if (a != b) return false;
+        for (std::size_t f = 0; f < x->chain.size(); ++f) {
+            const auto* p = s.fx.find(x->chain[f]);
+            const auto* q = s.fx.find(y->chain[f]);
+            if (!p || !q || toJson(*p) != toJson(*q)) return false;
+        }
+        for (const auto& e : s.envelopes) {
+            const Id object = e.value->target.object;
+            if (object == l->takes[i] || object == r->takes[i]) return false;
+            for (std::size_t f = 0; f < x->chain.size(); ++f)
+                if (object == x->chain[f] || object == y->chain[f]) return false;
+        }
+    }
+    return true;
+}
+
 void setItemStartSeconds(const Session& s, Item& it, double startSec) {
     const time::TimeMap& tm = *s.timeMap;
     const ItemSpan span = itemSpan(s, it);
@@ -197,6 +238,18 @@ void setItemEndSeconds(const Session& s, Item& it, double endSec) {
             break;
         case Timebase::BeatsPosition:
             it.length = endSec - span.startSec;
+            break;
+    }
+}
+
+void setItemEndToItemEnd(const Session& s, Item& it, const Item& other) {
+    switch (itemTimebase(s, it)) {
+        case Timebase::Time:
+        case Timebase::Beats:
+            it.length = other.position + other.length - it.position;
+            break;
+        case Timebase::BeatsPosition:
+            it.length = itemSpan(s, other).endSec - itemSpan(s, it).startSec;
             break;
     }
 }

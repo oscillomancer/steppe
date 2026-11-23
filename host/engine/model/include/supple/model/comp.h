@@ -32,8 +32,16 @@ struct CompPiece {
 Result<std::vector<CompPiece>> compRun(const Session&, std::optional<Id> item,
                                        std::span<const Id> items);
 
+// Whether two continuing pieces (left, right: audio, from compRun) are one piece cut in two: the
+// items agree in everything but where they lie, their fades and their takes, and the takes agree
+// in everything but the source offset (which compRun already found continuous), with the same
+// FX and no envelopes or stretch markers. Joining them loses nothing.
+bool joinablePieces(const Session&, Id left, Id right);
+
 // Moves an item's start (end) to a time, keeping its end (start), in the item's own domain.
 void setItemStartSeconds(const Session&, Item&, double startSec);
 void setItemEndSeconds(const Session&, Item&, double endSec);
+// Moves an item's end to another item's end, exactly as stored (no round trip through seconds).
+void setItemEndToItemEnd(const Session&, Item&, const Item& other);
 
 }  // namespace supple::model

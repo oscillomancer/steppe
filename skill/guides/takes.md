@@ -31,8 +31,10 @@ copies made with `take.add`, or renders. One take is *active*, the one you hear.
 Call `take.comp` again on any piece (or give `items`, the pieces in any order) to move
 seams or change spans. The crossfades are rebuilt for the whole comp, and the same
 call twice changes nothing. `take.comp.get {item}` reads a comp you did not make.
-A seam where both sides play the same take stays a seam and is a hard cut: the
-source is continuous there. A copy made with `item.duplicate` and placed right after
+Pieces of the same take beside each other (after a move, say) are joined into one
+piece again, so moving a seam by a few samples gives exactly what the same spans give
+from scratch; a boundary where the pieces differ (a gain, FX) stays, and so do MIDI
+seams. A copy made with `item.duplicate` and placed right after
 the item is not part of its comp (its source does not continue), so comping one leaves
 the other alone.
 

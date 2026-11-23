@@ -281,12 +281,20 @@ nothing:
    time removed, and the seam-side fades are cleared. Outer ends are never
    touched.
 2. **Takes.** Each core piece plays the take index it plays now; each span
-   paints its index over `[from, to]`. A piece is split where the painted index
-   changes inside it (a split as `item.split` makes, at the sample-snapped
-   point, keeping every take in order). A span edge where the index does not
-   change makes no split, so a comp whose spans all name the current takes
-   changes nothing. Seams that already exist stay, also where both sides now
-   play the same take (the source is continuous there).
+   paints its index over `[from, to]`. Neighbouring core pieces that will
+   play the same take across their seam are joined first when they are one piece cut
+   in two (audio takes; the items agree in everything but their place, fades and
+   takes, the takes in everything but the source offset, with the same FX and no
+   envelopes or stretch markers): the left piece takes the right one's end and
+   outer fade-out, and the right piece, its takes and their FX are removed. So a seam
+   moved by a few samples leaves no sliver between the old and the new seam to clamp
+   the crossfade, and any re-comp equals the same spans applied from scratch. A seam
+   between pieces that differ (a gain, a colour, FX) stays, and so do MIDI seams
+   (their pieces are not joined: a moved MIDI seam leaves an extra piece). Then a piece is
+   split where the painted index changes inside it (a split as `item.split` makes,
+   at the sample-snapped point, keeping every take in order). A span edge where the
+   index does not change makes no split, so a comp whose spans all name the current
+   takes changes nothing.
 3. **Seams.** At a seam whose sides play different takes and whose pieces
    are all audio without warp markers or take envelopes, the crossfade is
    `2·h` samples with `h = min(round(crossfade·rate/2), ⌊ℓL/2⌋, ⌊ℓR/2⌋)`
@@ -342,7 +350,9 @@ tempo with off-grid spans) gives the same project bytes; spans that all name the
 takes change nothing; a comp rebuilt over an earlier one renders as one built from
 scratch, and `take.activate {index}` keeps the seams; real time equals offline in both
 executors; a copy placed after the original is not pulled into the comp and the original
-stays byte for byte; MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
+stays byte for byte; a seam moved by 1, 24 or 600 samples either way gives exactly what the
+same spans give from scratch, with the full crossfade; pieces that differ keep their boundary;
+MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
 `take.comp.get` after a save and reopen; one undo step; and every refusal.
 
 ### 1.6 Sources

@@ -628,3 +628,94 @@ TEST_CASE("take.comp does not pull in a copy of the item placed right after it")
     f.refused("take.comp", R"({"items":["it_1","it_2"],"spans":[{"from":1,"to":2,"index":0}]})",
               "comp.mismatch", "/items/1");
 }
+
+namespace {
+// The comp as a person reads it, up to ids: each piece's place, fades, take index and the
+// source offsets of its takes, in time order.
+struct Shape {
+    double position, length, fadeIn, fadeOut;
+    std::size_t index;
+    std::vector<double> offsets;
+};
+std::vector<Shape> shapeOf(const model::Session& s) {
+    std::vector<std::pair<std::int64_t, Shape>> out;
+    for (const auto& e : s.items) {
+        const auto& it = *e.value;
+        Shape p{it.position, it.length, it.fadeIn.length, it.fadeOut.length, 0, {}};
+        for (std::size_t k = 0; k < it.takes.size(); ++k) {
+            if (it.takes[k] == *it.activeTake) p.index = k;
+            p.offsets.push_back(s.takes.find(it.takes[k])->startOffset);
+        }
+        out.emplace_back(time::samplesAt(model::itemSpan(s, it).startSec, s.project->sampleRate),
+                         std::move(p));
+    }
+    std::sort(out.begin(), out.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<Shape> shapes;
+    for (auto& [at, p] : out) shapes.push_back(std::move(p));
+    return shapes;
+}
+std::string beats(std::int64_t sample) {
+    char text[40];
+    std::snprintf(text, sizeof text, "%.17g", static_cast<double>(sample) / 24000.0);
+    return text;
+}
+}  // namespace
+
+TEST_CASE("take.comp moving a seam gives what the same spans give from scratch") {
+    // 120 bpm, 48 kHz: a beat is 24000 samples. A seam at beat 1, moved by a few samples either
+    // way: the old boundary goes, so the new crossfade is not clamped to the sliver between.
+    const std::int64_t base = 24000;
+    for (const std::int64_t move : {24, 1, -1, -24, 600}) {
+        CAPTURE(move);
+        CompFixture a, b;
+        a.run("take.activate", R"({"item":"it_1","index":0})");
+        b.run("take.activate", R"({"item":"it_1","index":0})");
+        a.run("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2,"index":1}]})");
+        const std::string seam = beats(base + move);
+        const std::string moved = R"({"item":"it_1","spans":[{"from":0,"to":)" + seam +
+                                  R"(,"index":0},{"from":)" + seam + R"(,"to":2,"index":1}]})";
+        const std::string scratch =
+            R"({"item":"it_1","spans":[{"from":)" + seam + R"(,"to":2,"index":1}]})";
+        a.run("take.comp", moved);
+        b.run("take.comp", scratch);
+        const auto got = shapeOf(a.app->head()), want = shapeOf(b.app->head());
+        REQUIRE(got.size() == want.size());
+        CHECK(got.size() == 3);
+        CHECK(a.app->head().items.size() == b.app->head().items.size());
+        CHECK(a.app->head().takes.size() == b.app->head().takes.size());
+        for (std::size_t i = 0; i < got.size(); ++i) {
+            CHECK(got[i].position == want[i].position);
+            CHECK(got[i].length == want[i].length);
+            CHECK(got[i].fadeIn == want[i].fadeIn);
+            CHECK(got[i].fadeOut == want[i].fadeOut);
+            CHECK(got[i].index == want[i].index);
+            REQUIRE(got[i].offsets.size() == want[i].offsets.size());
+            for (std::size_t k = 0; k < got[i].offsets.size(); ++k)
+                CHECK(got[i].offsets[k] == want[i].offsets[k]);
+        }
+        // The crossfade is the whole 480 samples, however small the move.
+        CHECK(got[0].fadeOut * 48000.0 == doctest::Approx(480.0));
+        CHECK(got[1].fadeIn * 48000.0 == doctest::Approx(480.0));
+        CHECK(a.render() == b.render());
+    }
+}
+
+TEST_CASE("take.comp keeps a boundary where the pieces differ, and a seam between other takes") {
+    CompFixture f;
+    f.run("take.activate", R"({"item":"it_1","index":0})");
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2,"index":1}]})");
+    // A piece with its own gain is not the same piece cut in two: painting the neighbours the
+    // same take leaves the boundary.
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 3);
+    f.run("item.set", R"({"item":")" + pieces[2].item.str() + R"(","gain_db":-6})");
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":4,"index":1}]})");
+    CHECK(f.pieces().size() == 3);
+    // Painting both the same take, with nothing different between them, joins them.
+    f.run("item.set", R"({"item":")" + pieces[2].item.str() + R"(","gain_db":0})");
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":0,"to":4,"index":1}]})");
+    CHECK(f.pieces().size() == 1);
+    CHECK(f.app->head().items.size() == 1);
+    CHECK(f.app->head().takes.size() == 3);
+}

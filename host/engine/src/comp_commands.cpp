@@ -312,13 +312,34 @@ void registerCompCommands(cmd::Registry& registry) {
                 cores.push_back(
                     {p.item, p.coreStart, p.coreEnd,
                      takeIndex(*s.items.find(p.item), s.items.find(p.item)->activeTake)});
+            // Over the pieces as they are now, whatever is joined or split below.
+            const std::vector<Core> unjoined = cores;
             auto indexAt = [&](std::int64_t n) {
                 for (const Painted& p : spans)
                     if (p.lo <= n && n < p.hi) return p.index;
-                for (const Core& k : cores)
+                for (const Core& k : unjoined)
                     if (k.lo <= n && n < k.hi) return k.index;
                 return std::size_t{0};
             };
+            // Pieces that are one piece cut in two and will play the same take are joined first,
+            // so that a moved seam leaves no leftover boundary to clamp its crossfade: the result
+            // is what the same spans give from scratch.
+            std::vector<std::vector<Id>> joins;
+            {
+                std::vector<Core> joined;
+                for (const Core& k : cores) {
+                    const bool join = !joined.empty() && indexAt(k.lo - 1) == indexAt(k.lo) &&
+                                      model::joinablePieces(s, joins.back().back(), k.item);
+                    if (join) {
+                        joined.back().hi = k.hi;
+                        joins.back().push_back(k.item);
+                    } else {
+                        joined.push_back(k);
+                        joins.push_back({k.item});
+                    }
+                }
+                cores = std::move(joined);
+            }
             std::set<std::int64_t> breaks;
             auto isSeam = [&](std::int64_t n) {
                 return std::any_of(cores.begin(), cores.end(),
@@ -357,6 +378,19 @@ void registerCompCommands(cmd::Registry& registry) {
                 txn.put(left.item, std::move(l));
                 txn.put(right.item, std::move(r));
             }
+
+            std::set<Id> removed;
+            for (const auto& group : joins)
+                for (std::size_t m = 1; m < group.size(); ++m) {
+                    model::Item l = *txn.get<model::Item>(group[0]);
+                    const model::Item r = *txn.get<model::Item>(group[m]);
+                    model::setItemEndToItemEnd(s, l, r);
+                    l.fadeOut = r.fadeOut;
+                    txn.put(group[0], std::move(l));
+                    for (Id t : r.takes) SUPPLE_TRY(removeTakeObjects(txn, engine.view(), t));
+                    txn.remove<model::Item>(group[m]);
+                    removed.insert(group[m]);
+                }
 
             // The splits, left to right, each through item.split (it copies every take).
             for (const std::int64_t at : breaks) {
@@ -444,6 +478,7 @@ void registerCompCommands(cmd::Registry& registry) {
             // A value that is where it was, to a nanosecond, stays as stored: a second call with
             // the same arguments gives the same bytes.
             for (const auto& [id, was] : originalItems) {
+                if (removed.contains(id)) continue;
                 model::Item now = *txn.get<model::Item>(id);
                 auto keep = [](double& value, double old) {
                     if (near(value, old)) value = old;
