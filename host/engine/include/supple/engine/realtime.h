@@ -1337,10 +1337,23 @@ class Engine {
     // not placed yet (relocating, or a relocation before it ran).
     struct CaptureState {
         bool on = false, any = false, pending = false;
-        // A quantized end (captureLaunches): it ends at endSong once heard
-        // there (service).
+        // An end it ends at once heard there (service): the earlier of its
+        // own quantized end (captureLaunches) and a switch's that cuts
+        // stretched arrangement audio (captureBeforeStretchCut); kept apart
+        // so a switch replaced or voided before its boundary drops only its
+        // own (round 117 W2). settleCaptureEnd() sets these three.
         bool ending = false;
         double endBeat = 0;
+        bool userEnding = false;
+        std::int64_t userEndSong = 0;
+        double userEndBeat = 0;
+        // The switch's: its slot (SIZE_MAX: none) and generation, track and
+        // boundary.
+        std::size_t cutSlot = SIZE_MAX;
+        std::uint64_t cutGeneration = 0;
+        model::Id cutTrack;
+        std::int64_t cutSong = 0;
+        double cutBeat = 0;
         std::uint64_t epoch = 0;
         // Its start and end on the song's running count (heardSong), and the
         // song sample it began at.
@@ -1349,6 +1362,8 @@ class Engine {
     };
     CaptureState capture_;
     void placeCapture();       // a pending start, once the clock reads
+    void settleCaptureEnd();   // ending/endSong/endBeat from the two ends
+    void dropStaleCut();       // a switch's end whose launch no longer stands
     void captureRelocating();  // writeTransport: a relocation is coming
     // A quantized end heard: it ends there. Service runs it, and so do
     // captureRelocating and captureLaunches first.
@@ -1384,9 +1399,12 @@ class Engine {
     // Main thread: a launched audio clip that plays (by the log) while the
     // newest plan keeps the pitch under a master playrate (S3 B, Q2).
     std::optional<model::Id> audioUnderStretch() const;
-    // Main thread: whether `r` leaves or returns to an arrangement that holds
-    // audio (round 113 T2), by the log.
-    bool cutsArrangementAudio(const LaunchRequest& r) const;
+    // Main thread: whether `r`, switching on timeline sample `anchor` (its
+    // boundary, not the unwrapped song frame), leaves or returns to an
+    // arrangement with audio within the stretch converter's reach of it,
+    // across a transport loop's wrap too (round 113 T2, rounds 117 and 128
+    // W1), by the log.
+    bool cutsArrangementAudio(const LaunchRequest& r, std::int64_t anchor) const;
     // Main thread: under a pitch-keeping plan, ends a running capture on the
     // boundary of a queued switch that cuts arrangement audio (that launch
     // not in it), with a warning naming the track.

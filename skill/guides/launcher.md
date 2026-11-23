@@ -193,7 +193,7 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   `launch.commit` before then is `launch.capture.ending`. `{on: true}` before the
   boundary cancels the end. A stop, a seek or a loop change ends a capture that has
   run, ending or not. Arm it between notes: armed while a launched clip's note sounds,
-  the commit leaves out the rest of that note.
+  the commit strikes that note again at the capture's start.
 - `launch.commit {pooled?}` lays the capture on the timeline as items, in one undo
   step, by running time from `from`: a launch heard s seconds in lands s seconds after
   it, however the transport loop jumped meanwhile. On each track that left the

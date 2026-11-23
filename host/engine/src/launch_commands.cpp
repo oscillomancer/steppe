@@ -512,8 +512,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "the same song positions, not the same durations, at another rate. Refused while a "
             "launched audio clip plays and the master playrate keeps the pitch; a playrate that "
             "starts keeping it then ends a running capture, with a warning naming the clip. "
-            "While the pitch is kept, a launch that takes a track whose arrangement holds audio "
-            "off it, or back to it, ends the capture on that launch's boundary, with a warning.";
+            "While the pitch is kept, a launch that takes a track off its arrangement, or back to "
+            "it, where an audio item plays within 0.25 s of the launch (times the master rate "
+            "above 1, across a loop's wrap), ends the capture on that launch's boundary, with a "
+            "warning.";
         c.tags = {"clip launcher", "transport", "recording"};
         c.args = schema::object<CaptureArg>("launch_capture_args")
                      .field("on", &CaptureArg::on, schema::boolean())

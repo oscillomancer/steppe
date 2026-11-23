@@ -611,21 +611,35 @@ the same.*
   relocation (a seek, a stop, a loop change) ends a capture that has run
   any frames, where it was heard, ending or not; one that has not begins
   again where the transport goes. A capture armed while a launched clip's
-  MIDI note sounds commits without the rest of that note, at any rate:
-  the committed piece starts at the capture's start and does not chase
-  it (a stated limit, test_clip_player_rate_armed.cpp); armed in a rest it is
-  exact. A capture lives in one transport epoch
+  MIDI note sounds commits that note struck again, at any rate: the
+  committed piece starts at the capture's start, inside the note, and the
+  arrangement strikes a note held into an item's start at that start, so
+  the rest sounds from a new attack (a stated limit,
+  test_clip_player_rate_armed.cpp); armed in a rest it is exact. A capture lives in one transport epoch
   (ADR-0097, revision 2026-11-22). It runs through master playrate edits;
   arming is refused with `launch.playrate` while a launched audio clip
-  plays (one played once, until its pass ends) and the newest plan keeps
+  plays (one played once counts until the song heard is past its pass from
+  its anchor, which a seek keeps, and no transport loop brings it back;
+  round 117 W3) and the newest plan keeps
   the pitch, and such a plan arriving ends
   a running capture with a warning naming the clip (the stretch converter
   reading it has no committed equivalent). For the same reason a switch
-  that leaves or returns to an arrangement holding audio, queued while the
-  newest plan keeps the pitch (`captureBeforeStretchCut`, at placement and
-  at each service), ends the capture on that switch's boundary, the
-  launch not in it, with a warning naming the track; MIDI launches on
-  other tracks are captured.
+  that leaves or returns to an arrangement with an audio item within
+  reach of its boundary on the timeline (the converter's reach either
+  side: 0.25 s of song, times the fastest master rate the plan plays
+  where that is above 1, a sync chase's scale read from the compiled plan
+  rather than the live chase, which can drift a few percent from it, well
+  inside the reach's margin; under a transport loop the reach runs across
+  the wrap, as the converter does; round 128 W1), queued
+  while the newest plan keeps the pitch (`captureBeforeStretchCut`, at
+  placement and at each service), ends the capture on that switch's
+  boundary, the launch not in it, with a warning naming the track; MIDI
+  launches on other tracks, and switches clear of a track's audio, are
+  captured (round 117 W1). That end goes with its switch: replaced before
+  its boundary (another launch on the track) or voided (an edit that leaves
+  it nothing to play), it is dropped and the capture runs on; it is kept
+  apart from a quantized end, the earlier of the two ending the capture,
+  and on again cancels only the quantized one (round 117 W2).
 - **Committing it.** `launch.commit` lays the capture out linearly: a
   launch at running frame f lands at the capture's start plus f, whatever
   the loop did. On each track that left the arrangement, the stretches
