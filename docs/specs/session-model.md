@@ -307,13 +307,15 @@ nothing:
    fade is rewritten: `0` for any other seam. Seam points, extensions and fade
    lengths are whole project samples, so the pieces tile on project sample
    boundaries (`time::samplesAt` of one piece's end is the next one's start,
-   before extension). Values that differ from the stored ones by under 1 ns are
-   kept as stored, so the same call twice gives the same bytes.
+   before extension). A value that differs from the stored one by no more than 1e-9
+   (in its own unit: seconds, or beats for a Beats-timebase position or length) is
+   kept as stored, so the same call twice gives the same bytes; one sample is
+   thousands of times that at any rate and tempo, so only float noise is absorbed.
    The overlap of a Beats-timebase piece is stored in beats and a fade in seconds:
    after a tempo change they disagree (a bump or a dip across the seam) until
    `take.comp` is called again with the spans `take.comp.get` gives, which rebuilds
    both. `take.comp.get` does not warn of it (a limit, as for any crossfade of a Beats
-   item); the fix would need fades in beats.
+   item).
 4. The first piece keeps its fade-in and the last its fade-out; the comp's
    outer start and end do not move.
 
@@ -332,14 +334,16 @@ returns the same list for an existing comp, with each piece's current fades,
 and the run's take names.
 
 Refusals, each with a code, a message, a path (`/args/item`, `/args/spans/1/from`) and a hint: `comp.item` (neither or both of `item`
-and `items`, or an item not in the run), `comp.takes` (fewer than two takes),
-`comp.mismatch` (the run cannot be followed, or two items could continue it),
+and `items`, or an empty `items`), `comp.takes` (fewer than two takes),
+`comp.mismatch` (`items` that do not continue one another, or two items could continue
+the run),
 `comp.span` (a span empty, unordered, overlapping or outside the run),
 `comp.take` (a span without exactly one of `take` and `index`, or one not in
 the item), `comp.loop` (a looped item: comp an item that does not loop, or
 `item.set {loop: false}` first), `comp.linked` (the item has linked
 peers: `bypass_groups` comps it alone), `item.locked` (any piece locked),
-`item.kind` (a clip).
+`item.kind` (a clip). Per-item refusals with `items` name the piece in the path
+(`/args/items/2`); with `item`, `/args/item`.
 
 Playback and offline render read the stored items, so real time equals
 offline in both executors; there is no audio-path code. Old files load

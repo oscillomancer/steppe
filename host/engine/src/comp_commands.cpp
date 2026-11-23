@@ -63,8 +63,8 @@ schema::Schema<PieceOut> pieceSchema() {
         .field("take", &PieceOut::take, schema::string())
         .field("index", &PieceOut::index, schema::integer())
         .field("name", &PieceOut::name, schema::string())
-        .field("fade_in", &PieceOut::fadeIn, schema::number())
-        .field("fade_out", &PieceOut::fadeOut, schema::number())
+        .field("fade_in", &PieceOut::fadeIn, schema::number().doc("Seconds."))
+        .field("fade_out", &PieceOut::fadeOut, schema::number().doc("Seconds."))
         .build();
 }
 schema::Schema<CompResult> resultSchema() {
@@ -187,12 +187,13 @@ void registerCompCommands(cmd::Registry& registry) {
             "envelopes. take.activate {index} on a piece changes its take and keeps the seams. "
             "One undo step. Returns the pieces in time order.";
         c.tags = {"take"};
-        auto spanSchema = schema::object<SpanArg>("take_comp_span")
-                              .field("from", &SpanArg::from, schema::number().min(0))
-                              .field("to", &SpanArg::to, schema::number().min(0))
-                              .field("take", &SpanArg::take, idArg("tk", "Take"))
-                              .field("index", &SpanArg::index, schema::integer().min(0))
-                              .build();
+        auto spanSchema =
+            schema::object<SpanArg>("take_comp_span")
+                .field("from", &SpanArg::from, schema::number().min(0).unit(units::Unit::beats))
+                .field("to", &SpanArg::to, schema::number().min(0).unit(units::Unit::beats))
+                .field("take", &SpanArg::take, idArg("tk", "Take"))
+                .field("index", &SpanArg::index, schema::integer().min(0))
+                .build();
         c.args =
             schema::object<CompArgs>("take_comp_args")
                 .field("item", &CompArgs::anyPiece, timelineItemArg())
@@ -200,7 +201,7 @@ void registerCompCommands(cmd::Registry& registry) {
                        schema::arrayOf(timelineItemArg()).maxItems(4096))
                 .field("spans", &CompArgs::spans,
                        schema::arrayOf(spanSchema).minItems(1).maxItems(4096))
-                .field("crossfade", &CompArgs::crossfade, schema::number().min(0))
+                .field("crossfade", &CompArgs::crossfade, schema::number().min(0).doc("Seconds."))
                 .defaultValue(0.01)
                 .field("crossfade_shape", &CompArgs::shape,
                        schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
@@ -235,8 +236,13 @@ void registerCompCommands(cmd::Registry& registry) {
             if (!which) return std::move(which).error();
             auto run = model::compRun(s, which->first, which->second);
             if (!run) return std::move(run).error();
-            const std::string where = a.anyPiece ? "/item" : "/items";
             for (const auto& p : *run) {
+                // The path names the piece the caller gave: /item, or /items/k.
+                std::string where = "/item";
+                if (!a.anyPiece) {
+                    const auto at = std::find(which->second.begin(), which->second.end(), p.item);
+                    where = "/items/" + std::to_string(at - which->second.begin());
+                }
                 SUPPLE_TRY(checkUnlocked(s, p.item, where));
                 if (!a.allowLinked && model::linkedItems(s, p.item).size() > 1)
                     return Error("comp.linked",

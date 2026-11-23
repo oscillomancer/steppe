@@ -291,11 +291,11 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
 | `items` | array |  |  |  |  |
 | `spans` | array |  |  |  |  |
-| `spans[].from` | number |  | 0.0.. |  |  |
-| `spans[].to` | number |  | 0.0.. |  |  |
+| `spans[].from` | number or string | beats | 0.0.. |  | Quantity strings are range-checked by the server. |
+| `spans[].to` | number or string | beats | 0.0.. |  | Quantity strings are range-checked by the server. |
 | `spans[].take` | string |  |  |  | Take id, e.g. "tk_1". |
 | `spans[].index` | integer |  | 0.0.. |  |  |
-| `crossfade` | number |  | 0.0.. | 0.01 |  |
+| `crossfade` | number |  | 0.0.. | 0.01 | Seconds. |
 | `crossfade_shape` | string |  |  | "cos" | One of: cos, linear. |
 | `bypass_groups` | boolean |  |  | false |  |
 
@@ -353,10 +353,12 @@ Kind: `edit`. Exposure: `mcp-exec`.
             "type": "string"
           },
           "fade_in": {
-            "type": "number"
+            "type": "number",
+            "description": "Seconds."
           },
           "fade_out": {
-            "type": "number"
+            "type": "number",
+            "description": "Seconds."
           }
         },
         "required": ["item", "from", "to", "take", "index", "name", "fade_in", "fade_out"],
@@ -485,10 +487,12 @@ Kind: `query`. Exposure: `mcp-exec`.
             "type": "string"
           },
           "fade_in": {
-            "type": "number"
+            "type": "number",
+            "description": "Seconds."
           },
           "fade_out": {
-            "type": "number"
+            "type": "number",
+            "description": "Seconds."
           }
         },
         "required": ["item", "from", "to", "take", "index", "name", "fade_in", "fade_out"],

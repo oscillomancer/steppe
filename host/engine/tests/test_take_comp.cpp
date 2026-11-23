@@ -719,3 +719,33 @@ TEST_CASE("take.comp keeps a boundary where the pieces differ, and a seam betwee
     CHECK(f.app->head().items.size() == 1);
     CHECK(f.app->head().takes.size() == 3);
 }
+
+namespace {
+std::string beatsText(double beat) {
+    char text[40];
+    std::snprintf(text, sizeof text, "%.17g", beat);
+    return text;
+}
+}  // namespace
+
+TEST_CASE("take.comp refusals name the piece they mean in /items/k") {
+    CompFixture f;
+    f.run("take.comp", kSpans);
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 4);
+    const std::string all = R"({"items":[")" + pieces[0].item.str() + R"(",")" +
+                            pieces[1].item.str() + R"(",")" + pieces[2].item.str() + R"(",")" +
+                            pieces[3].item.str() + R"("],"spans":[{"from":1,"to":2,"index":0}]})";
+    f.run("item.set", R"({"item":")" + pieces[2].item.str() + R"(","locked":true})");
+    f.refused("take.comp", all, "item.locked", "/items/2");
+    f.run("item.set", R"({"item":")" + pieces[2].item.str() + R"(","locked":false})");
+    // An edit-linked peer: a copy on another track with the same span as a piece.
+    f.run("track.add", R"({"name":"Other"})");
+    f.run("group.add", R"({"name":"Edit","members":["tr_1","tr_2"],"links":["edit"]})");
+    const std::string at = beatsText(f.app->head().items.find(pieces[1].item)->position);
+    f.run("item.duplicate", R"({"item":")" + pieces[1].item.str() + R"(","to":)" + at + "}");
+    const std::string copy = "it_" + std::to_string(f.app->head().items.size());
+    f.run("item.move", R"({"item":")" + copy + R"(","track":"tr_2","position":)" + at +
+                           R"(,"bypass_groups":true})");
+    f.refused("take.comp", all, "comp.linked", "/items/1");
+}

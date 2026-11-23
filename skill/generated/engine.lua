@@ -2148,7 +2148,7 @@ q = nil
 ---@field item? string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field items? string[]
 ---@field spans table[]
----@field crossfade? number (default: 0.01)
+---@field crossfade? number Seconds. (default: 0.01)
 ---@field crossfade_shape? "cos"|"linear" (default: "cos")
 ---@field bypass_groups? boolean (default: false)
 
