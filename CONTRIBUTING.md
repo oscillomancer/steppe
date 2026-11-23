@@ -154,6 +154,8 @@ These gates are explicit, with no no-op RT implementations:
 | `engine.tests`: `test_jack`, `test_bench` and six JACK cases in `test_app`/`test_realtime` (`SUPPLE_TEST_JACK`) | macOS, Windows | the JACK backend through the stand-in libjack (above) |
 | `engine.tests`: `test_runtime_protection` | macOS, Windows | Linux THP, mlock and `/dev/cpu_dma_latency`; the other platforms' unsupported paths have no test yet |
 | `engine.tests` cases: media identity (`test_offline`), recording header errors, thread role names (`test_realtime`) | macOS, Windows | Linux mechanisms for now (`st_mtim`/`utimensat`, a `/proc/self/fd` fault, `/proc/self/task` names); native variants to follow |
+| `engine.tests` checks inside the first-save and audition cases (`test_app`): no open descriptor on a scratch file (`openFilesNamed`, `/proc/self/fd`) | macOS, Windows | a removed file that is still open is listed only on Linux; the same cases check on every platform that the scratch folder is gone and no warning came, which an open handle fails on Windows |
+| `engine.tests` cases: the first save that cannot remove a scratch file (`test_app`) | none (two mechanisms) | `HoldFile`: Windows opens the file with no delete sharing; elsewhere the folder is made read-only (not as root, where the case returns) |
 | `engine.tests` cases: the restricted CPU mask (`test_realtime`, `test_workers`) and elevation refusals (`test_realtime`) | macOS, Windows | Linux CPU affinity and `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` |
 | `engine.tests` cases: a bridged note plug-in's lost block (`test_realtime`); CLAP posix-fd service (`test_app`) | Windows | a POSIX shared-memory gate (a Windows one to follow); CLAP's posix-fd extension is not offered on Windows, which the test checks |
 

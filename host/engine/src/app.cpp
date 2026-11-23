@@ -22,10 +22,12 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <numbers>
 #include <set>
 #include <string_view>
@@ -991,7 +993,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
                      "or save in place");
     std::vector<fs::path> createdMedia;  // what this save created in the new media folder
     if (fromScratch) {
-        SUPPLE_TRY(moveScratchMedia(media, publish));
+        SUPPLE_TRY(moveScratchMedia(media, publish, warnings));
     } else {
         // Saved as into another folder: that folder gets its own copy of the
         // media (the old project keeps its files).
@@ -1049,7 +1051,13 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
     recordingJournalsPending_ = std::move(retire);
     dropSavedRecordingJournals();
     if (fromScratch) releaseScratch();  // its media moved; its autosaves are older than the file
-    autosaveMarked_ = true;             // the file itself is the newest copy
+    if (fromScratch && sourcePreparation_) {
+        // The source worker was stopped for the move and its request dropped: ask for the media
+        // where they are now.
+        pendingSourceKey_.clear();
+        headChanged();
+    }
+    autosaveMarked_ = true;  // the file itself is the newest copy
     autosaveMs_ = serviceClockMs();
     autosaveHeads_ = versions_->heads();
     return okStatus();
@@ -1643,6 +1651,23 @@ Result<fs::path> EngineApp::renderPath(std::string_view reference) const {
     }
     return resolve(fs::path(reference));
 }
+
+namespace detail {
+// One recording's hash worker and the file it reads. The worker opens the file and reads it a
+// chunk at a time under `mutex`; a first save that is about to remove the scratch file takes the
+// mutex between two chunks, closes the stream, and sets `held` until the file is where it will
+// be. Then the worker opens it again there and starts over (`generation`). So no handle of ours
+// is open on the file when it is removed, which Windows needs, and the hash is still the file's.
+struct HashRead {
+    explicit HashRead(fs::path file) : path(std::move(file)) {}
+    std::mutex mutex;
+    std::condition_variable wake;
+    fs::path path;                 // where the file is now
+    std::ifstream in;              // open only while the worker reads
+    bool held = false;             // closed for a move that has not finished
+    std::uint64_t generation = 1;  // changes when the file moves
+};
+}  // namespace detail
 
 void EngineApp::startJob(std::function<void(supple::StopToken)> work) {
     for (auto it = jobs_.begin(); it != jobs_.end();) {
@@ -3393,33 +3418,57 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
         else if (!r.isMidi && !r.journal.empty())
             recordingJournalsPending_.push_back(r.journal);
     for (auto& [source, pendingTake] : pendingHashes) {
-        // Open only; all reads happen on the worker. The handle survives a
-        // first save moving the scratch file before the job gets to run.
-        auto input = std::make_shared<std::ifstream>(pendingTake.file, std::ios::binary);
+        // The worker opens the file and reads it; a first save closes the stream while it
+        // moves the file, and the worker goes on from the new place (detail::HashRead).
+        auto reader = std::make_shared<detail::HashRead>(pendingTake.file);
+        std::erase_if(hashReads_, [](const auto& weak) { return weak.expired(); });
+        hashReads_.push_back(reader);
         const model::MediaSource expected = *head().media.find(source);
         pendingTake.sampleRate = expected.sampleRate;
         const auto generation = projectGeneration();
         const auto branch = versions_->branch();
         auto* dispatcher = commands_;
-        startJob([this, dispatcher, source, expected, take = std::move(pendingTake), input,
-                  generation, branch](supple::StopToken stop) mutable {
+        const std::size_t chunk = options_.hashChunkBytes ? options_.hashChunkBytes : 65536;
+        startJob([this, dispatcher, source, expected, take = std::move(pendingTake), reader,
+                  generation, branch, chunk,
+                  chunkHook = options_.hashChunkHook](supple::StopToken stop) mutable {
             Result<std::string> result =
                 Error("file.open", "cannot open recording for hashing", take.file.string(),
                       "restore a readable file and reimport it to retry hashing");
-            if (*input) {
-                Sha256 digest;
-                std::array<std::uint8_t, 65536> buffer{};
-                while (!stop.stop_requested() && *input) {
-                    input->read(reinterpret_cast<char*>(buffer.data()), buffer.size());
-                    digest.update(
-                        std::span(buffer.data(), static_cast<std::size_t>(input->gcount())));
+            Sha256 digest;
+            std::vector<std::uint8_t> buffer(chunk);
+            std::uint64_t seen = 0, chunks = 0;
+            for (;;) {
+                if (chunks++ > 0 && chunkHook) chunkHook();
+                std::unique_lock lock(reader->mutex);
+                reader->wake.wait(lock, [&] { return !reader->held; });
+                if (stop.stop_requested()) {
+                    reader->in.close();
+                    return;
                 }
-                if (!input->eof())
+                if (seen != reader->generation) {  // first time, or the file moved
+                    seen = reader->generation;
+                    digest = Sha256();
+                    reader->in.close();
+                    reader->in.clear();
+                    reader->in.open(reader->path, std::ios::binary);
+                    if (!reader->in) break;  // result stays the open error
+                }
+                reader->in.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
+                digest.update(
+                    std::span(buffer.data(), static_cast<std::size_t>(reader->in.gcount())));
+                if (reader->in.eof()) {
+                    result = "sha256:" + sha256Hex(digest.finish());
+                    reader->in.close();
+                    break;
+                }
+                if (!reader->in) {
                     result =
                         Error("file.read", "cannot read recording for hashing", take.file.string(),
                               "restore a readable file and reimport it to retry hashing");
-                else
-                    result = "sha256:" + sha256Hex(digest.finish());
+                    reader->in.close();
+                    break;
+                }
             }
             if (stop.stop_requested()) return;
             dispatcher->post("record.hash",
@@ -4543,7 +4592,13 @@ Status EngineApp::deleteSession(const std::string& session) {
 
 // First save: stage and verify copies while the scratch originals remain.
 // Failed relocation/publication removes only files this operation created.
-Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Status()>& publish) {
+void EngineApp::addScratchReader(ScratchReader reader) {
+    std::lock_guard guard(scratchReadersMutex_);
+    scratchReaders_.push_back(std::move(reader));
+}
+
+Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Status()>& publish,
+                                   std::vector<schema::Warning>* warnings) {
     std::lock_guard lock(recordingFinalizeMutex_);
     const fs::path from = options_.scratchDir / head().project->mediaDir;
     std::error_code ec;
@@ -4554,6 +4609,29 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
                   : publish();
     if (fs::equivalent(from, dest, ec)) return publish();
     ec.clear();
+    // What an earlier project's first save could not remove is not this project's, unless a
+    // version of this project names it (media imported in place, say): that is copied.
+    std::set<std::string> referenced;
+    versions_->forEachVersion([&](const model::Version& v) {
+        for (const auto& e : v.session->media) {
+            const fs::path named = e.value->path;
+            referenced.insert(named.is_absolute() ? named.lexically_normal().generic_string()
+                                                  : named.generic_string());
+        }
+    });
+    auto leftover = [&](const fs::path& file) {
+        if (referenced.count(file.lexically_relative(from).generic_string()) ||
+            referenced.count(file.lexically_normal().generic_string()))
+            return false;
+        std::error_code error;
+        const auto size = fs::file_size(file, error);
+        const auto time = fs::last_write_time(file, error);
+        return !error && std::any_of(scratchLeftovers_.begin(), scratchLeftovers_.end(),
+                                     [&](const ScratchLeftover& old) {
+                                         return old.file == file && old.size == size &&
+                                                old.time == time;
+                                     });
+    };
     std::vector<fs::path> files;
     for (auto it = fs::recursive_directory_iterator(from, ec); !ec && it != fs::end(it);
          it.increment(ec)) {
@@ -4564,7 +4642,8 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
                          it->path().string(),
                          "replace the scratch-media symlink with its actual media file, or save "
                          "into another project directory");
-        if (fs::is_regular_file(status)) files.push_back(it->path().lexically_relative(from));
+        if (fs::is_regular_file(status) && !leftover(it->path()))
+            files.push_back(it->path().lexically_relative(from));
     }
     if (ec)
         return Error("project.media_move", ec.message(), from.string(),
@@ -4649,19 +4728,100 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
         return saved;
     }
     published = true;
+    // The hash workers that read these files let go of them now (a file that is open cannot be
+    // removed on Windows) and read the copies instead, once this function is done.
+    struct Readers {
+        std::vector<std::pair<std::shared_ptr<detail::HashRead>, fs::path>> held;
+        SourcePreparation* preparation = nullptr;
+        std::vector<std::function<void()>> outside;  // what the outside readers gave back
+        ~Readers() {
+            for (auto& resume : outside)
+                if (resume) resume();
+            if (preparation) preparation->resume();
+            for (auto& [reader, now] : held) {
+                std::lock_guard guard(reader->mutex);
+                reader->path = now;
+                reader->held = false;
+                ++reader->generation;
+                reader->wake.notify_all();
+            }
+        }
+    } readers;
+    // So does the worker that decodes the media for the plan: it stops reading the old files and
+    // is asked again, for the new place, when the save has changed the head.
+    if (sourcePreparation_) {
+        sourcePreparation_->pause();
+        readers.preparation = sourcePreparation_.get();
+    }
+    // And the file audition's decoder, if it is reading a file now (a decoded voice is in memory).
+    if (auditionLoader_ && auditionDecoding_) {
+        stopAudition();
+        auditionLoader_->waitIdle();
+    }
+    // And the readers outside the engine (the GUI's waveform worker), each of which returns when it
+    // has let go of the files under the folder.
+    {
+        std::lock_guard guard(scratchReadersMutex_);
+        for (const auto& reader : scratchReaders_) readers.outside.push_back(reader(from));
+    }
+    for (const auto& weak : hashReads_)
+        if (auto reader = weak.lock()) {
+            std::lock_guard guard(reader->mutex);
+            if (!within(reader->path, from)) continue;
+            reader->in.close();
+            reader->held = true;
+            readers.held.emplace_back(reader, dest / reader->path.lexically_relative(from));
+        }
+    // What stays is said, not ignored: the project already points at the copies.
+    std::vector<ScratchLeftover> fresh;
     std::vector<fs::path> emptyDirs;
     for (const auto& rel : files) {
         ec.clear();
         fs::remove(from / rel, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory) {
+            std::error_code stat;
+            fresh.push_back({from / rel, fs::file_size(from / rel, stat),
+                             fs::last_write_time(from / rel, stat)});
+            if (warnings)
+                warnings->push_back(
+                    {"project.media_leftover",
+                     "the recording was copied to " + (dest / rel).string() +
+                         ", which the project uses, but its scratch copy could not be removed: " +
+                         ec.message() + "; delete it by hand",
+                     (from / rel).string()});
+        }
         for (auto parent = (from / rel).parent_path(); parent != from && within(parent, from);
              parent = parent.parent_path())
             emptyDirs.push_back(parent);
     }
+    // Files an earlier first save could not remove: tried again, silently (they were reported).
+    for (auto old = scratchLeftovers_.begin(); old != scratchLeftovers_.end();) {
+        ec.clear();
+        fs::remove(old->file, ec);
+        if (!ec || ec == std::errc::no_such_file_or_directory) {
+            for (auto parent = old->file.parent_path(); parent != from && within(parent, from);
+                 parent = parent.parent_path())
+                emptyDirs.push_back(parent);
+            old = scratchLeftovers_.erase(old);
+        } else {
+            ++old;
+        }
+    }
+    scratchLeftovers_.insert(scratchLeftovers_.end(), fresh.begin(), fresh.end());
     std::sort(emptyDirs.begin(), emptyDirs.end(),
               [](const auto& a, const auto& b) { return a.native().size() > b.native().size(); });
+    emptyDirs.erase(std::unique(emptyDirs.begin(), emptyDirs.end()), emptyDirs.end());
+    auto holdsLeftover = [&](const fs::path& dir) {
+        return std::any_of(scratchLeftovers_.begin(), scratchLeftovers_.end(),
+                           [&](const ScratchLeftover& old) { return within(old.file, dir); });
+    };
     for (const auto& dir : emptyDirs) {
         ec.clear();
         fs::remove(dir, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory && !holdsLeftover(dir) && warnings)
+            warnings->push_back({"project.media_leftover",
+                                 "the scratch folder could not be removed: " + ec.message(),
+                                 dir.string()});
     }
     ec.clear();
     fs::remove(from, ec);

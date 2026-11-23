@@ -5,6 +5,11 @@
 #if !defined(_WIN32)
 #include <poll.h>
 #include <unistd.h>
+#else
+#include <fcntl.h>
+#include <io.h>
+#include <share.h>
+#include <sys/stat.h>
 #endif
 
 #include <chrono>
@@ -32,10 +37,12 @@
 #if defined(SUPPLE_TEST_JACK)
 #include "fake_jack.h"
 #endif
+#include "audition_loader.h"
 #include "bridge_patience.h"
 #include "history_sequence.h"
 #include "recording.h"
 #include "render_commands.h"
+#include "source_preparation.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -1210,6 +1217,437 @@ TEST_CASE("an unsaved project records into its scratch folder; the first save mo
         CHECK_FALSE(fs::exists(scratch));
         CHECK(fs::exists(root.path / "work"));
     }
+}
+
+namespace {
+// The files this process holds open whose name ends with `name`: Linux only (/proc), where a
+// removed file that is still open is listed too.
+std::vector<std::string> openFilesNamed([[maybe_unused]] const std::string& name) {
+    std::vector<std::string> out;
+#if defined(__linux__)
+    std::error_code ec;
+    for (fs::directory_iterator it("/proc/self/fd", ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code link;
+        const fs::path target = fs::read_symlink(it->path(), link);
+        std::string text = target.string();
+        constexpr std::string_view gone = " (deleted)";
+        if (text.ends_with(gone)) text.resize(text.size() - gone.size());
+        if (!link && text.ends_with(name)) out.push_back(target.string());
+    }
+#endif
+    return out;
+}
+}  // namespace
+
+namespace {
+// Where the hash worker is when the save comes: held at its entry, before it opens the file;
+// or held between two chunks, part-way through it (the save closes the stream, the worker opens
+// the copy and hashes it again from the start).
+void firstSaveWithHeldHashWorker(bool midRead) {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    std::atomic<bool> armed{false}, entered{false}, release{false};
+    std::atomic<int> completed{0}, chunkCalls{0};
+    AppOptions o;
+    o.workdir = root.path / "work";
+    o.scratchDir = root.path / "unsaved-hash";
+    o.chainDir = root.path / "chains";
+    o.templateDir = root.path / "templates";
+    o.projectTemplateDir = root.path / "project-templates";
+    o.pluginPath = {kFixture};
+    // The first job after `armed` (the recovered recording's hash worker) waits at its entry:
+    // the first save then comes while that worker has the file, and before it reads a byte.
+    o.jobStartedHook = [&] {
+        if (!midRead && armed.load() && !entered.exchange(true)) {
+            entered.notify_all();
+            release.wait(false);
+        }
+    };
+    // Or, in 4 KiB chunks, after the first one: the save comes with the file half read.
+    if (midRead) {
+        o.hashChunkBytes = 4096;
+        o.hashChunkHook = [&] {
+            if (armed.load() && chunkCalls.fetch_add(1) == 0 && !entered.exchange(true)) {
+                entered.notify_all();
+                release.wait(false);
+            }
+        };
+    }
+    o.jobFinishedHook = [&] {
+        completed.fetch_add(1);
+        completed.notify_all();
+    };
+    auto created = EngineApp::create(o, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Dispatcher d(registry, *app);
+    struct Release {
+        std::atomic<bool>& flag;
+        ~Release() {
+            flag.store(true);
+            flag.notify_all();
+        }
+    } unblock{release};
+    auto waitCompleted = [&](int count) {
+        for (int value = completed.load(); value < count; value = completed.load())
+            completed.wait(value);
+    };
+    app->setupFixture(d, "recording_interrupted");  // rec/Vocal-1.wav in the scratch media
+    const fs::path scratchFile = o.scratchDir / "media" / "rec" / "Vocal-1.wav";
+    const int base = completed.load();
+    armed.store(true);
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    entered.wait(false);
+    REQUIRE(fs::exists(scratchFile));
+    std::vector<schema::Warning> warnings;
+    REQUIRE(app->save(root.path / "song" / "song.json", &warnings));
+    const fs::path moved = root.path / "song" / "media" / "rec" / "Vocal-1.wav";
+    CHECK(fs::exists(moved));
+    // A reader still open on the file would keep it on Windows; on Linux it is the open
+    // descriptor that shows it.
+    CHECK(openFilesNamed("unsaved-hash/media/rec/Vocal-1.wav").empty());
+    CHECK_FALSE(fs::exists(o.scratchDir));
+    CHECK(warnings.empty());
+    // The hash is still computed, from the file where it is now.
+    release.store(true);
+    release.notify_all();
+    waitCompleted(base + 1);
+    d.flushJobEvents();
+    waitCompleted(base + 2);
+    d.flushJobEvents();
+    REQUIRE(app->head().media.size() == 1);
+    const auto digest = sha256File(moved);
+    REQUIRE(digest);
+    CHECK(app->head().media.begin()->value->hash == *digest);
+    CHECK(openFilesNamed("Vocal-1.wav").empty());
+    // Part-way through, the worker read the whole copy again: one chunk of the scratch file,
+    // then every chunk of the moved one.
+    if (midRead) CHECK(chunkCalls.load() >= static_cast<int>(fs::file_size(moved) / 4096));
+}
+}  // namespace
+
+TEST_CASE("the first save closes the recording's hash reader before it removes the scratch file") {
+    SUBCASE("the worker has not read yet") { firstSaveWithHeldHashWorker(false); }
+    SUBCASE("the worker is part-way through the file") { firstSaveWithHeldHashWorker(true); }
+}
+
+TEST_CASE("AuditionLoader: waitIdle returns when a cancelled read has let go of its file") {
+    Root root;
+    fs::create_directories(root.path);
+    audio::AudioData tone;
+    tone.sampleRate = 48000;
+    tone.channels.assign(2, std::vector<float>(48000, 0.25f));
+    const fs::path file = root.path / "audition-held.wav";
+    REQUIRE(audio::writeWav(file, tone));
+    std::atomic<bool> inRead{false}, release{false}, idle{false};
+    // The read asks whether to stop between chunks, with the file open: hold it there.
+    AuditionLoader loader([] {},
+                          [&](std::uint64_t) {
+                              if (!inRead.exchange(true)) {
+                                  inRead.notify_all();
+                                  release.wait(false);
+                              }
+                          });
+    struct Release {
+        std::atomic<bool>& flag;
+        ~Release() {
+            flag.store(true);
+            flag.notify_all();
+        }
+    } unblock{release};
+    loader.request({file, 48000, 48000});
+    inRead.wait(false);
+#if defined(__linux__)
+    // The read has the file open (openFilesNamed lists descriptors on Linux only).
+    CHECK_FALSE(openFilesNamed("audition-held.wav").empty());
+#endif
+    loader.cancel();
+    std::atomic<bool> letGo{false};
+    std::thread waiter([&] {
+        loader.waitIdle();
+        // Not before the read was let go: waitIdle waited for it, on every platform.
+        CHECK(letGo.load());
+        idle.store(true);
+        idle.notify_all();
+    });
+    letGo.store(true);
+    release.store(true);
+    release.notify_all();
+    idle.wait(false);
+    waiter.join();
+    CHECK(openFilesNamed("audition-held.wav").empty());
+    CHECK(loader.discarded() == 1);
+}
+
+TEST_CASE("SourcePreparation: pause cancels the running request and drops the pending one") {
+    // The decode is a stand-in that records which request (by its rate) it served.
+    std::mutex mutex;
+    std::vector<double> served;
+    std::atomic<int> entered{0}, woken{0};
+    const auto session = model::Session::create(model::Project{});
+    auto prepare = [&](const model::Session&, const fs::path&, double rate,
+                       const std::function<bool()>& cancelled) {
+        {
+            std::lock_guard lock(mutex);
+            served.push_back(rate);
+        }
+        entered.fetch_add(1);
+        entered.notify_all();
+        if (rate == 1 || rate == 2)  // runs until pause() cancels it
+            while (!cancelled()) std::this_thread::yield();
+        return Result<std::shared_ptr<const PreparedSources>>(
+            std::make_shared<const PreparedSources>());
+    };
+    auto make = [&] {
+        return std::make_unique<SourcePreparation>(
+            [&] {
+                woken.fetch_add(1);
+                woken.notify_all();
+            },
+            prepare);
+    };
+    auto waitEntered = [&](int count) {
+        for (int value = entered.load(); value < count; value = entered.load()) entered.wait(value);
+    };
+    SUBCASE("pause returns once the running request is cancelled, and drops its result") {
+        auto sp = make();
+        sp->request(session, {}, 1);
+        waitEntered(1);
+        sp->pause();  // returns only when the worker is out of the decode
+        CHECK_FALSE(sp->take().has_value());
+        sp->resume();
+        sp->request(session, {}, 3);  // served after resume
+        waitEntered(2);
+        for (int value = woken.load(); value < 1; value = woken.load()) woken.wait(value);
+        CHECK(sp->take().has_value());
+        CHECK(served == std::vector<double>{1, 3});
+    }
+    SUBCASE("a request pending at pause is not run, and one after resume is served") {
+        auto sp = make();
+        sp->request(session, {}, 2);  // running, until the pause cancels it
+        waitEntered(1);
+        sp->request(session, {}, 4);  // pending behind it
+        // pause() drops 4 and cancels 2 under one lock, so when 2 sees the cancel 4 is gone and
+        // the worker cannot start it: it returns when the worker has left the decode.
+        sp->pause();
+        sp->resume();
+        sp->request(session, {}, 3);
+        waitEntered(2);
+        for (int value = woken.load(); value < 1; value = woken.load()) woken.wait(value);
+        CHECK(sp->take().has_value());
+        CHECK(served == std::vector<double>{2, 3});  // 4 never ran
+    }
+    SUBCASE("the destructor while paused returns") {
+        auto sp = make();
+        sp->pause();
+        sp.reset();
+    }
+}
+
+namespace {
+// Something that makes `file` impossible to remove while it lives, as a first save meets it: on
+// Windows the file is open with no delete sharing (what a reader's stream has, and the one way
+// to keep a file there); elsewhere a removal cannot be held off by a handle, so the file's folder
+// is made read-only (a user who is not root; `usable()` says whether it can be done).
+class HoldFile {
+  public:
+    explicit HoldFile(const fs::path& file) {
+#if defined(_WIN32)
+        _wsopen_s(&fd_, file.c_str(), _O_RDONLY | _O_BINARY, _SH_DENYNO, _S_IREAD);
+        usable_ = fd_ >= 0;
+#else
+        folder_ = file.parent_path();
+        usable_ = ::geteuid() != 0;  // root removes a file whatever its folder allows
+        if (usable_)
+            fs::permissions(folder_, fs::perms::owner_read | fs::perms::owner_exec,
+                            fs::perm_options::replace);
+#endif
+    }
+    ~HoldFile() { release(); }
+    HoldFile(const HoldFile&) = delete;
+    HoldFile& operator=(const HoldFile&) = delete;
+    bool usable() const { return usable_; }
+    void release() {
+#if defined(_WIN32)
+        if (fd_ >= 0) _close(fd_);
+        fd_ = -1;
+#else
+        std::error_code ec;
+        fs::permissions(folder_, fs::perms::owner_all, fs::perm_options::replace, ec);
+#endif
+    }
+
+  private:
+    bool usable_ = false;
+#if defined(_WIN32)
+    int fd_ = -1;
+#else
+    fs::path folder_;
+#endif
+};
+}  // namespace
+
+TEST_CASE("a first save that cannot remove a scratch file says so and points at the moved copy") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    AppOptions o;
+    o.workdir = root.path / "work";
+    o.scratchDir = root.path / "unsaved-left";
+    o.chainDir = root.path / "chains";
+    o.templateDir = root.path / "templates";
+    o.projectTemplateDir = root.path / "project-templates";
+    o.pluginPath = {kFixture};
+    auto created = EngineApp::create(o, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "recording_interrupted");
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    const fs::path rec = o.scratchDir / "media" / "rec";
+    const fs::path scratchFile = rec / "Vocal-1.wav";
+    // The recording cannot be removed (held open on Windows, its folder read-only elsewhere).
+    HoldFile hold(scratchFile);
+    if (!hold.usable()) return;
+    std::vector<schema::Warning> warnings;
+    const auto saved = app->save(root.path / "song" / "song.json", &warnings);
+    REQUIRE_MESSAGE(saved, (saved ? "" : saved.error().toString()));
+    const fs::path moved = root.path / "song" / "media" / "rec" / "Vocal-1.wav";
+    CHECK(fs::exists(moved));
+    CHECK(fs::exists(scratchFile));  // the leftover
+    // Every file that stays is named: the recording and the sidecar beside it.
+    std::set<std::string> named;
+    for (const auto& w : warnings)
+        if (w.code == "project.media_leftover") {
+            named.insert(w.path);
+            CHECK_FALSE(w.message.empty());
+            CHECK(fs::exists(w.path));
+        }
+    CHECK(named.contains(scratchFile.string()));
+    std::size_t left = 0;
+    for (const auto& entry : fs::directory_iterator(rec)) left += entry.is_regular_file() ? 1 : 0;
+    CHECK(named.size() == left);
+    // The project points at the moved copy: it plays from there.
+    REQUIRE(app->head().media.size() == 1);
+    CHECK(app->head().media.begin()->value->path == "rec/Vocal-1.wav");
+    CHECK(app->mediaDir() == root.path / "song" / "media");
+}
+
+// A reader outside the engine (the GUI's waveform worker) that has a scratch file open is asked
+// to let go of the folder's files after they are copied and before they are removed, and is told
+// when the save is done with them.
+TEST_CASE("a first save asks the readers outside the engine to let go of the scratch files") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    AppOptions o;
+    o.workdir = root.path / "work";
+    o.scratchDir = root.path / "unsaved-outside";
+    o.chainDir = root.path / "chains";
+    o.templateDir = root.path / "templates";
+    o.projectTemplateDir = root.path / "project-templates";
+    o.pluginPath = {kFixture};
+    auto created = EngineApp::create(o, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "recording_interrupted");
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    const fs::path scratchFile = o.scratchDir / "media" / "rec" / "Vocal-1.wav";
+    const fs::path moved = root.path / "song" / "media" / "rec" / "Vocal-1.wav";
+    // The outside reader keeps the recording from being removed (open on Windows, its folder
+    // read-only elsewhere) until it is asked to let go.
+    HoldFile hold(scratchFile);
+    if (!hold.usable()) return;
+    fs::path asked;
+    bool copiedFirst = false, resumed = false, goneAtResume = false;
+    app->addScratchReader([&](const fs::path& folder) -> std::function<void()> {
+        asked = folder;
+        copiedFirst = fs::exists(moved) && fs::exists(scratchFile);
+        hold.release();
+        return [&] {
+            resumed = true;
+            goneAtResume = !fs::exists(scratchFile);
+        };
+    });
+    std::vector<schema::Warning> warnings;
+    const auto saved = app->save(root.path / "song" / "song.json", &warnings);
+    REQUIRE_MESSAGE(saved, (saved ? "" : saved.error().toString()));
+    CHECK(asked.lexically_normal() == (o.scratchDir / "media").lexically_normal());
+    CHECK(copiedFirst);
+    CHECK(resumed);
+    CHECK(goneAtResume);
+    for (const auto& w : warnings) CHECK_MESSAGE(w.code != "project.media_leftover", w.message);
+    CHECK(fs::exists(moved));
+    CHECK_FALSE(fs::exists(o.scratchDir));
+}
+
+namespace {
+// A first save that left a file behind (the folder cannot be written), then another unsaved
+// project in the same scratch folder: its first save does not carry the file into its media.
+void nextProjectAfterLeftover(bool namesStray) {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    AppOptions o;
+    o.workdir = root.path / "work";
+    o.scratchDir = root.path / "unsaved-next";
+    o.chainDir = root.path / "chains";
+    o.templateDir = root.path / "templates";
+    o.projectTemplateDir = root.path / "project-templates";
+    o.pluginPath = {kFixture};
+    auto created = EngineApp::create(o, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Dispatcher d(registry, *app);
+    const fs::path rec = o.scratchDir / "media" / "rec";
+    // Project A: a recording and a file of its own that the save cannot remove.
+    app->setupFixture(d, "recording_interrupted");
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    const fs::path stray = rec / "Stray.wav";
+    {
+        audio::AudioData wav;
+        wav.sampleRate = 48000;
+        wav.channels.assign(2, std::vector<float>(480, 0.25f));
+        REQUIRE(audio::writeWav(stray, wav));
+    }
+    // The stray file cannot be removed by project A's first save (a folder that cannot be
+    // written takes the recording's files with it; on Windows only the file that is held).
+    HoldFile hold(stray);
+    if (!hold.usable()) return;
+    std::vector<schema::Warning> warnings;
+    REQUIRE(app->save(root.path / "a" / "a.json", &warnings));
+    REQUIRE(fs::exists(stray));  // the leftover
+    hold.release();
+    // The recording's own leftovers go (project B's fixture writes the same names anew).
+    for (const auto& entry : std::vector<fs::directory_entry>(fs::directory_iterator(rec), {}))
+        if (entry.path() != stray) fs::remove(entry.path());
+    // Project B, unsaved, in the same scratch folder.
+    REQUIRE(app->newProject(model::Project{}));
+    app->setupFixture(d, "recording_interrupted");
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    if (namesStray) {  // B uses the very file: imported in place, unchanged
+        REQUIRE(d.execute({"track.add", j(R"({"name":"Uses it"})"), kTest}));
+        auto add = *json::parse(R"({"track":"tr_2","position":0})");
+        add["audio_file"] = stray.string();
+        REQUIRE(d.execute({"item.add", add, kTest}));
+    }
+    REQUIRE(app->save(root.path / "b" / "b.json"));
+    CHECK(fs::exists(root.path / "b" / "media" / "rec" / "Vocal-1.wav"));
+    // A file B's project names goes with it; one it does not, does not.
+    CHECK(fs::exists(root.path / "b" / "media" / "rec" / "Stray.wav") == namesStray);
+    if (!namesStray) {
+        // The leftover could be removed this time, so it was, and the scratch folder is gone.
+        CHECK_FALSE(fs::exists(stray));
+        CHECK_FALSE(fs::exists(o.scratchDir));
+    }
+}
+}  // namespace
+
+TEST_CASE("a scratch file the first save could not remove does not go with the next project") {
+    SUBCASE("B does not use it") { nextProjectAfterLeftover(false); }
+    SUBCASE("B names that very file: it is copied") { nextProjectAfterLeftover(true); }
 }
 
 TEST_CASE("two armed tracks with one name record to two files (review round 8)") {
