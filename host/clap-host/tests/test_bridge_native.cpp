@@ -894,7 +894,13 @@ TEST_CASE("a bridge that faults writes its capsule into the slot the host handed
     REQUIRE(taken);
     const int pid = process->pid();
     REQUIRE(::kill(pid, SIGSEGV) == 0);  // the handler runs as for a fault, on the main thread
-    for (int i = 0; i < 2000 && process->alive(); ++i) (void)waitFor({}, 5);
+    // The outcome decides: the loop ends the moment the bridge is gone. The deadline is a safety
+    // stop against a lost fault, not a timing assertion, and is a clock rather than a count of
+    // 5 ms waits: waitFor returns early when a signal (the child's SIGCHLD) interrupts it, so a
+    // count measured less than ten seconds, and a machine under load can take longer than that
+    // to run the handler.
+    const auto stop = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    while (process->alive() && std::chrono::steady_clock::now() < stop) (void)waitFor({}, 5);
     REQUIRE_FALSE(process->alive());
     // Read through a mapping: macOS cannot read(2) or pread(2) the shared-memory object a slot is
     // made from, and a mapping reads it on every platform.
