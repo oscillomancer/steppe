@@ -596,9 +596,8 @@ std::unique_ptr<ui::Node> Inspector::build() {
             const auto at = item ? std::find(item->takes.begin(), item->takes.end(), takeIds_[i])
                                  : std::vector<model::Id>::const_iterator{};
             if (item && at != item->takes.end()) {
-                run("take.comp",
-                    views::compPieceArgs(s, *comp, ids_.front(),
-                                         static_cast<std::size_t>(at - item->takes.begin())));
+                runComp(views::compPieceArgs(s, *comp, ids_.front(),
+                                             static_cast<std::size_t>(at - item->takes.begin())));
                 return;
             }
         }
@@ -1144,7 +1143,15 @@ void Inspector::setCrossfade(std::optional<double> seconds, std::optional<bool> 
         views::compCrossfade(s, *comp).value_or(model::CompCrossfade{});
     if (seconds) crossfade.seconds = *seconds;
     if (linear) crossfade.shape = *linear ? model::FadeShape::Linear : model::FadeShape::Cos;
-    run("take.comp", views::compArgs(ids_.front(), views::compSpans(s, *comp), crossfade));
+    runComp(views::compArgs(ids_.front(), views::compSpans(s, *comp), crossfade));
+}
+
+void Inspector::runComp(json::Value args) {
+    auto r = dispatcher_.execute({"take.comp", std::move(args), kOrigin});
+    // Its warnings (a crossfade clamped or skipped) go to the status line.
+    if (r && actions_.onNotice)
+        if (const std::string w = views::resultWarnings(*r); !w.empty()) actions_.onNotice(w);
+    finish(r);
 }
 
 void Inspector::bake() {

@@ -100,6 +100,9 @@ class ItemGestures {
     std::function<void(const std::vector<model::Id>& items)> onBake;
     std::function<void(double seconds)> onSeek;  // a click on empty space
     std::function<void(const Error&)> onError;   // a refused gesture (status line)
+    // A comp's warnings (take.comp: a crossfade clamped or skipped, a held
+    // note struck again), for the status line's transient note.
+    std::function<void(const std::string&)> onNotice;
     // The keys bound to an app action ("Ctrl+C"), shown in the menus.
     std::function<std::string(std::string_view action)> keysFor;
     // REAPER's default: a move, copy or trim that makes two items overlap on a

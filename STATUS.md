@@ -1070,7 +1070,7 @@ instructions are in `docs/guides/installing.md`.
   on a track grouped for edits the swipe also keeps that path (split every member,
   switch one) until `take.comp` comps every member of an edit group with the same
   spans and take, which is asked of the builder; the GUI switches to it then;
-  the GUI does not show `take.comp`'s warnings; seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
+  seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
   empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);
   a record pass over an item still lays an overlapping item rather than a take of it;

@@ -723,6 +723,21 @@ std::optional<ItemGestures::Hit> ItemGestures::hit(ui::Point p) const {
     // trims the pieces beside it (that would break the comp).
     for (const CompSeam& seam : view_.lanes().compSeams(*row)) {
         if (std::abs(view_.xAt(seam.seconds) - p.x) > kEdge) continue;
+        // The left piece's take badge, which a long crossfade can bring
+        // within reach of the seam, keeps its press.
+        if (const model::Item* left = itemOf(s, seam.left)) {
+            const ui::Rect lr = const_cast<ArrangeView&>(view_).lanes().itemRect(*row, *left);
+            if (left->takes.size() > 1 && p.x >= lr.right() - 24 && p.x < lr.right() - kHandle &&
+                p.y >= lr.y && p.y < lr.y + 16) {
+                Hit h;
+                h.item = seam.left;
+                h.row = *row;
+                h.rect = lr;
+                h.zone = Drag::Move;
+                h.takeBadge = true;
+                return h;
+            }
+        }
         const model::Item* right = itemOf(s, seam.right);
         if (!right) continue;
         Hit h;
@@ -1701,7 +1716,15 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
         state_.anchor.kind == model::Kind::Item ? itemOf(s, state_.anchor) : nullptr;
     auto runSteps = [&](const std::string& label, const std::vector<EditStep>& steps) {
         if (steps.empty() || !run) return;
-        if (auto r = run(label, steps); !r && onError) onError(r.error());
+        auto r = run(label, steps);
+        if (!r) {
+            if (onError) onError(r.error());
+            return;
+        }
+        // take.comp's warnings say why a seam is shorter or hard, or a note
+        // is struck again: a transient note, not text on the lanes.
+        if (onNotice && steps.back().command == "take.comp")
+            if (const std::string w = resultWarnings(*r); !w.empty()) onNotice(w);
     };
     if (state_.drag == Drag::Marquee && state_.env && !moved_) {
         if (e.button == 3) openEnvMenu(*state_.env, press_);  // a right-click on a lane

@@ -1631,6 +1631,52 @@ TEST_CASE("a swipe on an edit-grouped track splits and switches, as before take.
     CHECK(sent[1][0].command == "take.activate");
 }
 
+// Round 119 G4: take.comp's warnings reach the status line's note, and the
+// left piece's take badge keeps its press when a long crossfade brings it
+// within the seam's reach.
+TEST_CASE("a comp's warnings go to the status note; the badge wins over a seam beside it") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double start = f.item(it).position, length = f.item(it).length;
+    // A comp with a 2 s crossfade: at 16 px a second, each seam's crossfade
+    // is 32 px wide, so the left piece's badge reaches the seam's zone.
+    json::Value args = json::Value::object();
+    args["item"] = it.str();
+    json::Value span = json::Value::object();
+    span["from"] = start + length / 3;
+    span["to"] = start + 2 * length / 3;
+    span["index"] = static_cast<std::int64_t>(1 - heard);
+    args["spans"] = json::Value::array();
+    args["spans"].push_back(span);
+    args["crossfade"] = 2.0;
+    REQUIRE(f.dispatcher->execute({"take.comp", args, kUi}));
+    f.sync();
+    const std::size_t row = *f.view->trackLayout().indexOf(track);
+    const auto seams = f.view->lanes().compSeams(row);
+    REQUIRE(seams.size() == 2);
+    auto& g = f.view->gestures();
+    const float x = f.view->lanes().xAt(seams[0].seconds);
+    const ui::Rect left = f.rectOf(seams[0].left);
+    REQUIRE(left.right() - x > 12);  // the crossfade's half reaches past the zone
+    const auto onBadge = g.hit({x, left.y + 8});
+    REQUIRE(onBadge);
+    CHECK(onBadge->takeBadge);
+    CHECK(onBadge->item == seams[0].left);
+    // Below the name bar the seam keeps its press.
+    CHECK(g.hit({x, left.y + left.h / 2})->zone == views::ItemGestures::Drag::Seam);
+    // A swipe of a narrow stretch keeps the 2 s crossfade, which the short
+    // piece clamps: take.comp's warning goes to the note.
+    std::vector<std::string> notices;
+    g.onNotice = [&](const std::string& n) { notices.push_back(n); };
+    const ui::Rect first = f.rectOf(seams[0].left);
+    const float mid = first.x + first.w * 0.4f;
+    f.drag(laneAt(first, 2, 1 - heard, mid), laneAt(first, 2, 1 - heard, mid + 8), ui::kShift);
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0].find("shorter") != std::string::npos);
+}
+
 namespace {
 // The generated item with two takes, given two more: four in all.
 model::Id fourTakeItem(Fixture& f) {

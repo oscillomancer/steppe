@@ -1065,7 +1065,9 @@ session version), only where the takes differ on its two sides: a one-unit line
 in the items' outline colour across the pieces at the seam's core, with a notch
 at its foot, over the two seam-side fade curves. No text. A seam takes the
 press six units either side across the pieces' height, in place of the pieces'
-trim edges there (a trim inside a comp would break it); the comp's outer ends
+trim edges there (a trim inside a comp would break it), except the left piece's
+take badge, which a long crossfade can bring within reach and which keeps its
+press; the comp's outer ends
 trim and fade as any item's. **Dragging a seam** moves it ("Move comp seam"):
 one `take.comp` with the two stretches beside it as they are, their shared edge
 moved, and the comp's crossfade; it snaps (the free modifier frees it) and stops
@@ -1088,9 +1090,10 @@ Their lane clicks, badge and Takes list switch with `take.activate`
 for one selected piece (Crossfade, below). Flatten a comp with Consolidate on
 its pieces. Refusals (`item.locked`; `comp.linked` from a seam drag on a comp an
 agent made on a grouped track) reach the
-status line; the GUI sends no `bypass_groups`, and `take.comp`'s warnings
-(`comp.crossfade_clamped`, `comp.crossfade_skipped`, `comp.midi_boundary`) are
-not shown.
+status line; the GUI sends no `bypass_groups`. `take.comp`'s warnings
+(`comp.crossfade_clamped`, `comp.crossfade_skipped`, `comp.midi_boundary`), from
+a gesture or the inspector, are the status line's transient note (their
+messages, joined), as a refusal is: never text on the lanes.
 
 **The marquee.** A drag from empty space, or a right-drag anywhere in the
 lanes (on an automation lane: a right-drag, or a Ctrl-drag from empty

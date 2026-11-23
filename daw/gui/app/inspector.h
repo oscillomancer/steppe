@@ -89,6 +89,8 @@ class Inspector {
     // A comp's crossfade, at every seam (take.comp with the comp's spans):
     // a new length, or a new shape (linear, else equal power).
     void setCrossfade(std::optional<double> seconds, std::optional<bool> linear);
+    // One take.comp, its warnings to the status line (actions' onNotice).
+    void runComp(json::Value args);
     void bake();
     void run(const char* command, json::Value args);
     void finish(const Result<json::Value>& result);

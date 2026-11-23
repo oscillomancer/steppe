@@ -820,10 +820,20 @@ TEST_CASE("inspector: a comp piece's crossfade, length and shape, for every seam
         if (id != pieces[2]) CHECK(p.fadeOut.length == doctest::Approx(0.05).epsilon(0.01));
     }
     CHECK(f.field("inspector.crossfade").text() == "0.050 s");
+    // A length the short pieces cannot hold: take.comp clamps it, and its
+    // warning goes to the status line's note.
+    std::vector<std::string> notices;
+    f.actions->onNotice = [&](const std::string& n) { notices.push_back(n); };
+    f.type("inspector.crossfade", "5");
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0].find("shorter") != std::string::npos);
+    f.actions->onNotice = nullptr;
+    f.type("inspector.crossfade", "0.05");
+    before = f.steps();
     // The shape, the same way.
     dynamic_cast<ui::Dropdown*>(f.node("inspector.crossfade_shape"))->choose("linear");
     f.pass();
-    CHECK(f.steps() == before + 2);
+    CHECK(f.steps() == before + 1);
     CHECK(f.item(pieces[0]).fadeOut.shape == model::FadeShape::Linear);
     CHECK(f.item(pieces[2]).fadeIn.shape == model::FadeShape::Linear);
     CHECK(f.item(pieces[1]).fadeIn.length == doctest::Approx(0.05).epsilon(0.01));

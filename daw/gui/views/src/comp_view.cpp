@@ -100,6 +100,19 @@ json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::
     return compArgs(item, {span}, compCrossfade(s, comp));
 }
 
+std::string resultWarnings(const json::Value& result) {
+    std::string out;
+    const json::Value* warnings = result.isObject() ? result.find("warnings") : nullptr;
+    if (!warnings || !warnings->isArray()) return out;
+    for (const json::Value& w : warnings->asArray()) {
+        const json::Value* message = w.isObject() ? w.find("message") : nullptr;
+        if (!message || !message->isString()) continue;
+        if (!out.empty()) out += "; ";
+        out += message->asString();
+    }
+    return out;
+}
+
 json::Value compArgs(model::Id item, const std::vector<CompSpan>& spans,
                      const std::optional<model::CompCrossfade>& crossfade) {
     json::Value args = json::Value::object();

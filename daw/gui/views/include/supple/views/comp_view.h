@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "supple/json/json.h"
@@ -74,6 +75,10 @@ json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::
                           std::size_t index);
 // The take index piece `item` of `comp` plays.
 std::size_t compPieceIndex(const CompView& comp, model::Id item);
+
+// The warnings of a command's result, their messages joined for the status
+// line ("" when there are none).
+std::string resultWarnings(const json::Value& result);
 
 // take.comp's arguments: `item`, the spans, and the crossfade when given.
 json::Value compArgs(model::Id item, const std::vector<CompSpan>& spans,
