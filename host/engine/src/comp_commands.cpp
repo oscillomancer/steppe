@@ -34,8 +34,10 @@ struct CompArgs {
     std::optional<std::string> anyPiece;
     std::optional<std::vector<std::string>> pieces;
     std::vector<SpanArg> spans;
-    double crossfade = model::kDefaultCompCrossfade;
-    std::string shape = "cos";
+    // Omitted (both): the seams the spans do not touch stay as they are, and the ones they make or
+    // move take the run's crossfade. Given: every seam is rebuilt from them.
+    std::optional<double> crossfade;
+    std::optional<std::string> shape;
     bool allowLinked = false;
 };
 
@@ -51,11 +53,14 @@ struct PieceOut {
     std::int64_t index = 0;
     std::string name;
     double fadeIn = 0, fadeOut = 0;
+    std::string fadeInShape = "cos", fadeOutShape = "cos";
 };
 struct SeamOut {
     std::int64_t seam = 0;
     double at = 0;
     std::string left, right;
+    double crossfade = 0;  // this seam's own, seconds: the longer of its two fades
+    std::string shape = "cos";
 };
 // Another member of the named run's edit group: its comp, read like the named one.
 struct MemberOut {
@@ -92,6 +97,10 @@ schema::Schema<PieceOut> pieceSchema() {
         .field("name", &PieceOut::name, schema::string())
         .field("fade_in", &PieceOut::fadeIn, schema::number().doc("Seconds."))
         .field("fade_out", &PieceOut::fadeOut, schema::number().doc("Seconds."))
+        .field("fade_in_shape", &PieceOut::fadeInShape,
+               schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
+        .field("fade_out_shape", &PieceOut::fadeOutShape,
+               schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
         .build();
 }
 schema::Schema<SeamOut> seamSchema() {
@@ -100,6 +109,10 @@ schema::Schema<SeamOut> seamSchema() {
         .field("at", &SeamOut::at, schema::number().unit(units::Unit::beats))
         .field("left", &SeamOut::left, schema::string())
         .field("right", &SeamOut::right, schema::string())
+        .field("crossfade", &SeamOut::crossfade,
+               schema::number().doc("This seam's own crossfade, seconds."))
+        .field("crossfade_shape", &SeamOut::shape,
+               schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
         .build();
 }
 schema::Schema<SkippedOut> skippedSchema() {
@@ -191,6 +204,8 @@ std::vector<PieceOut> describePieces(const model::Session& s,
         }
         o.fadeIn = item.fadeIn.length;
         o.fadeOut = item.fadeOut.length;
+        o.fadeInShape = item.fadeIn.shape == model::FadeShape::Linear ? "linear" : "cos";
+        o.fadeOutShape = item.fadeOut.shape == model::FadeShape::Linear ? "linear" : "cos";
         out.push_back(std::move(o));
     }
     return out;
@@ -204,10 +219,16 @@ CompResult describe(const model::Session& s, const std::vector<model::CompPiece>
     out.crossfade = crossfade.seconds;
     out.shape = crossfade.shape == model::FadeShape::Linear ? "linear" : "cos";
     const double rate = s.project->sampleRate;
-    for (const std::size_t k : model::compDifferingSeams(s, run))
+    for (const std::size_t k : model::compDifferingSeams(s, run)) {
+        const model::Item& left = *s.items.find(run[k].item);
+        const model::Item& right = *s.items.find(run[k + 1].item);
+        const model::Fade& longer =
+            right.fadeIn.length >= left.fadeOut.length ? right.fadeIn : left.fadeOut;
         out.differing.push_back({static_cast<std::int64_t>(k),
                                  s.timeMap->beatAt(static_cast<double>(run[k].coreEnd) / rate),
-                                 run[k].item.str(), run[k + 1].item.str()});
+                                 run[k].item.str(), run[k + 1].item.str(), longer.length,
+                                 longer.shape == model::FadeShape::Linear ? "linear" : "cos"});
+    }
     out.uniform = out.differing.empty();
     return out;
 }
@@ -362,6 +383,21 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
             if (n > runStart && n < runEnd && !isSeam(n) && indexAt(n - 1) != indexAt(n))
                 breaks.insert(n);
 
+    // The seams the spans leave as they are, when the call gives no crossfade: the same place and
+    // the same two takes either side. The stored pieces hold each seam's own extension and fades,
+    // so nothing is stripped or rebuilt there. Given a crossfade (or a shape), every seam is
+    // rebuilt.
+    const bool keepSeams = !a.crossfade && !a.shape;
+    const model::CompCrossfade current = model::compCrossfade(s, *run);
+    std::set<std::int64_t> keptAt;
+    if (keepSeams)
+        for (std::size_t k = 0; k + 1 < run->size(); ++k) {
+            const std::int64_t at = (*run)[k].coreEnd;
+            if (unjoined[k].index != unjoined[k + 1].index &&
+                indexAt(at - 1) == unjoined[k].index && indexAt(at) == unjoined[k + 1].index)
+                keptAt.insert(at);
+        }
+
     // The core, written: every crossfade taken out, so that a split sees plain pieces.
     auto& txn = engine.txn();
     std::map<Id, model::Item> originalItems;
@@ -374,6 +410,7 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
     for (std::size_t k = 0; k + 1 < run->size(); ++k) {
         const auto& left = (*run)[k];
         const auto& right = (*run)[k + 1];
+        if (keptAt.contains(left.coreEnd)) continue;  // its pieces stay as stored
         const double seam = static_cast<double>(left.coreEnd) / rate;
         model::Item l = *txn.get<model::Item>(left.item);
         model::Item r = *txn.get<model::Item>(right.item);
@@ -453,18 +490,64 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
                      ") between pieces of one take that could not be joined: they "
                      "differ in their notes or settings",
                  "/spans");
-    const auto wanted = static_cast<std::int64_t>(std::llround(a.crossfade * rate / 2.0));
+    // What a new or touched seam gets: the call's crossfade when it gives one (then every seam is
+    // rebuilt), else the run's own as take.comp.get reads it (10 ms, cos, for a lone item).
+    const double seconds = a.crossfade ? *a.crossfade : current.seconds;
+    const model::FadeShape shape =
+        a.shape ? (*a.shape == "linear" ? model::FadeShape::Linear : model::FadeShape::Cos)
+                : (a.crossfade ? model::FadeShape::Cos : current.shape);
+    const auto wanted = static_cast<std::int64_t>(std::llround(seconds * rate / 2.0));
+    auto isKept = [&](std::size_t k) { return keptAt.contains(cores[k].hi); };
+    std::vector<std::int64_t> wantHalf(n > 0 ? n - 1 : 0, wanted);
+    std::vector<model::FadeShape> seamShape(n > 0 ? n - 1 : 0, shape);
+    if (keepSeams) {
+        // A seam moved on its own (one old seam touched, one new one, between the same two takes)
+        // keeps its own extension and shape, as a seam drag does.
+        std::vector<std::size_t> touched, made;
+        for (std::size_t k = 0; k + 1 < run->size(); ++k)
+            if (unjoined[k].index != unjoined[k + 1].index && !keptAt.contains((*run)[k].coreEnd))
+                touched.push_back(k);
+        for (std::size_t k = 0; k + 1 < n; ++k)
+            if (cores[k].index != cores[k + 1].index && !isKept(k)) made.push_back(k);
+        if (touched.size() == 1 && made.size() == 1 &&
+            unjoined[touched[0]].index == cores[made[0]].index &&
+            unjoined[touched[0] + 1].index == cores[made[0] + 1].index) {
+            const auto& l = (*run)[touched[0]];
+            const auto& r = (*run)[touched[0] + 1];
+            wantHalf[made[0]] = std::max(l.end - l.coreEnd, r.coreStart - r.start);
+            const model::Item& ri = *s.items.find(r.item);
+            const model::Item& li = *s.items.find(l.item);
+            seamShape[made[0]] =
+                (ri.fadeIn.length >= li.fadeOut.length ? ri.fadeIn : li.fadeOut).shape ==
+                        model::FadeShape::Linear
+                    ? model::FadeShape::Linear
+                    : model::FadeShape::Cos;
+        }
+    }
+    // What a kept seam takes of a piece's core, at its start and its end: a rebuilt fade must not
+    // run into it.
+    const model::Session placed = engine.view();
+    auto occupied = [&](std::size_t i, bool atStart) -> std::int64_t {
+        if (atStart ? (i == 0 || !isKept(i - 1)) : (i + 1 >= n || !isKept(i))) return 0;
+        const model::ItemSpan span = model::itemSpan(placed, *placed.items.find(cores[i].item));
+        return std::max<std::int64_t>(0, atStart
+                                             ? cores[i].lo - time::samplesAt(span.startSec, rate)
+                                             : time::samplesAt(span.endSec, rate) - cores[i].hi);
+    };
     std::vector<std::int64_t> half(n > 0 ? n - 1 : 0, 0);
     bool skipped = false, clamped = false;
     for (std::size_t k = 0; k + 1 < n; ++k) {
-        if (cores[k].index == cores[k + 1].index || wanted == 0) continue;
+        if (cores[k].index == cores[k + 1].index || wantHalf[k] == 0 || isKept(k)) continue;
         if (!refusal.empty()) {
             skipped = true;
             continue;
         }
-        half[k] = std::min(
-            {wanted, (cores[k].hi - cores[k].lo) / 2, (cores[k + 1].hi - cores[k + 1].lo) / 2});
-        clamped = clamped || half[k] < wanted;
+        const std::int64_t left = cores[k].hi - cores[k].lo,
+                           right = cores[k + 1].hi - cores[k + 1].lo;
+        half[k] = std::min({wantHalf[k], left / 2, right / 2,
+                            std::max<std::int64_t>(0, left - occupied(k, true)),
+                            std::max<std::int64_t>(0, right - occupied(k + 1, false))});
+        clamped = clamped || half[k] < wantHalf[k];
     }
     if (skipped)
         ctx.warn(
@@ -475,23 +558,23 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
         ctx.warn("comp.crossfade_clamped",
                  who + "a crossfade is shorter than asked: the pieces beside the seam are short",
                  "/crossfade");
-    const auto shape = a.shape == "linear" ? model::FadeShape::Linear : model::FadeShape::Cos;
-    auto fade = [&](std::int64_t h) {
+    auto fade = [&](std::int64_t h, model::FadeShape of) {
         model::Fade f;
         if (h > 0) {
             f.length = static_cast<double>(2 * h) / rate;
-            f.shape = shape;
+            f.shape = of;
         }
         return f;
     };
     for (std::size_t i = 0; i < n; ++i) {
         model::Item item = *txn.get<model::Item>(cores[i].item);
         item.activeTake = item.takes[cores[i].index];
-        const std::int64_t before = i > 0 ? half[i - 1] : 0;
-        const std::int64_t after = i + 1 < n ? half[i] : 0;
+        const bool startKept = i > 0 && isKept(i - 1), endKept = i + 1 < n && isKept(i);
+        const std::int64_t before = i > 0 && !startKept ? half[i - 1] : 0;
+        const std::int64_t after = i + 1 < n && !endKept ? half[i] : 0;
         if (refusal.empty()) {
             // Whole samples at both ends, the audio taken back or forward with them.
-            if (i > 0) {
+            if (i > 0 && !startKept) {
                 const double start = static_cast<double>(cores[i].lo - before) / rate;
                 const double delta = start - model::itemSpan(s, item).startSec;
                 for (Id t : item.takes)
@@ -499,11 +582,11 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
                         t, [&](model::Take& take) { model::rebaseAudioTake(take, delta); });
                 model::setItemStartSeconds(s, item, start);
             }
-            if (i + 1 < n)
+            if (i + 1 < n && !endKept)
                 model::setItemEndSeconds(s, item, static_cast<double>(cores[i].hi + after) / rate);
         }
-        if (i > 0) item.fadeIn = fade(before);
-        if (i + 1 < n) item.fadeOut = fade(after);
+        if (i > 0 && !startKept) item.fadeIn = fade(before, seamShape[i - 1]);
+        if (i + 1 < n && !endKept) item.fadeOut = fade(after, seamShape[i]);
         txn.put(cores[i].item, std::move(item));
     }
 
@@ -754,11 +837,16 @@ void registerCompCommands(cmd::Registry& registry) {
             "item's "
             "take order) choose which take plays; what no span covers keeps its take. The item is "
             "split where the take changes into pieces that each keep all the takes, and a "
-            "crossfade (seconds, default 0.01; shape cos is equal power, linear for "
-            "phase-coherent material) is centred on every seam between different takes: the "
-            "pieces overlap and fade, so nothing new reaches the audio path. Call it again on any "
-            "piece (or items: the pieces) to move seams: the crossfades are rebuilt for the whole "
-            "run, and the same call twice changes nothing. Audio only: a seam is a hard cut, with "
+            "crossfade is centred on every seam between different takes: the pieces overlap and "
+            "fade, so nothing new reaches the audio path. crossfade (seconds) and crossfade_shape "
+            "(cos is equal power, linear for phase-coherent material): given, every seam of the "
+            "run is rebuilt from them (cos when only a length is given, the run's own length when "
+            "only a shape is), which makes them all alike; omitted, the seams the spans do not "
+            "touch stay exactly as they are, hand-set lengths and shapes included, and the "
+            "seams the call makes or moves get the run's own crossfade (crossfade and "
+            "crossfade_shape of take.comp.get), or, for a seam moved alone between the same two "
+            "takes, its own. Call it again on any piece (or items: the pieces) to move seams; "
+            "the same call twice changes nothing. Audio only: a seam is a hard cut, with "
             "the warning comp.crossfade_skipped, when a take is MIDI or empty, warped or has "
             "envelopes. Pieces of one take beside each other are joined (comp.midi_boundary warns "
             "of "
@@ -793,10 +881,8 @@ void registerCompCommands(cmd::Registry& registry) {
                 .field("spans", &CompArgs::spans,
                        schema::arrayOf(spanSchema).minItems(1).maxItems(4096))
                 .field("crossfade", &CompArgs::crossfade, schema::number().min(0).doc("Seconds."))
-                .defaultValue(model::kDefaultCompCrossfade)
                 .field("crossfade_shape", &CompArgs::shape,
                        schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
-                .defaultValue(std::string("cos"))
                 .field("bypass_groups", &CompArgs::allowLinked, schema::boolean())
                 .defaultValue(false)
                 .build();
@@ -850,12 +936,15 @@ void registerCompCommands(cmd::Registry& registry) {
             "are the seams in beats (crossfades taken out), take and index the take each plays, "
             "fade_in and fade_out the crossfades in seconds. crossfade and crossfade_shape are the "
             "run's own: its longest seam fade (seconds) and that fade's shape, which a seam "
-            "shortened by short pieces does not shrink, so take.comp with them rebuilds the same "
-            "comp (the default 0.01 and cos for one piece, 0 for hard seams), as long as uniform "
-            "is true. When a seam fade was set by hand to another length or shape, uniform is "
-            "false and differing_seams lists the seams a take.comp with those crossfade values "
-            "would rewrite (seam 0 is between the first two pieces; at in beats; left and right "
-            "the items). For an item in an edit group, members reads every other track of the "
+            "shortened by short pieces does not shrink (the default 0.01 and cos for one piece, "
+            "0 for hard seams); it is what the seams a take.comp makes or moves take when it "
+            "gives no crossfade. fade_in_shape and fade_out_shape are each fade's. When a seam "
+            "fade was set by hand to another length or shape, uniform is false and "
+            "differing_seams lists the seams that depart from crossfade (seam 0 is between the "
+            "first two pieces; at in beats; left and right the items; crossfade and "
+            "crossfade_shape the seam's own, its longer fade): informational, since a take.comp "
+            "without crossfade leaves them as they are, and one that gives the crossfade values "
+            "rewrites them. For an item in an edit group, members reads every other track of the "
             "group that has items over the same stretch like the item's own comp, "
             "differing_members lists tracks whose comp reads differently or cannot follow, and "
             "skipped_tracks the group tracks it leaves alone, each with a reason: no_item, or "

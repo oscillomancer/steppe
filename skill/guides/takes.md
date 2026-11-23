@@ -48,14 +48,19 @@ existing item. `record.set {stack_takes: false}` lays every pass as items, as ol
 the choice is stored in each recording's commit, so undo, redo and merges do not depend on it.
 
 Call `take.comp` again on any piece (or give `items`, the pieces in any order) to move
-seams or change spans. The crossfades are rebuilt for the whole comp, and the same
-call twice changes nothing. `take.comp.get {item}` reads a comp you did not make: besides the pieces it gives the
-`crossfade` (seconds) and `crossfade_shape` the comp has (its longest seam fade, so a seam
+seams or change spans. **Without `crossfade`, the seams your spans do not touch stay exactly as
+they are** (a seam fade you set by hand included), and the seams the call makes or moves get the
+comp's own crossfade (a seam you move on its own keeps its own length and shape); an omitted
+crossfade no longer resets the comp to 10 ms. **Give `crossfade` (and `crossfade_shape`) to
+rebuild every seam alike.** The same call twice changes nothing. `take.comp.get {item}` reads a
+comp you did not make: besides the pieces (with `fade_in`, `fade_out` and their shapes) it gives
+the `crossfade` (seconds) and `crossfade_shape` the comp has (its longest seam fade, so a seam
 shortened by short pieces does not shrink it), and `take.comp` with those and the spans
 rebuilds it unchanged, as long as `uniform` is true. A seam fade you set by hand (another
 length or shape, or a hard cut among crossfaded seams) makes it false and lists the seams that
-differ from the rest in `differing_seams`: `take.comp` would give every seam one length and
-shape, so such a comp is not rebuilt byte for byte, and the listed seams are the ones that change.
+differ from the rest in `differing_seams`, each with its own `crossfade` and `crossfade_shape`:
+informational, since a call without `crossfade` leaves them and one that gives the read-back
+values rewrites them.
 Pieces of the same take beside each other (after a move, say) are joined into one
 piece again, so moving a seam by a few samples gives exactly what the same spans give
 from scratch, MIDI pieces too (a held note stays one note). A boundary where the

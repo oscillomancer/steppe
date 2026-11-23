@@ -825,8 +825,11 @@ TEST_CASE("take.comp moving a MIDI seam again and again gives what the same span
     REQUIRE(heard.size() == 2);
     CHECK(heard[0].find("C4") != std::string::npos);
     CHECK(heard[1].find("G4") != std::string::npos);
-    for (const auto& w : last.find("warnings")->asArray())
-        CHECK(w.find("code")->asString() != "comp.midi_boundary");
+    // (A comp that is hard cuts already takes hard cuts for the seams it moves: no
+    // comp.crossfade_skipped, and so no warnings at all.)
+    if (const json::Value* warnings = last.find("warnings"))
+        for (const auto& w : warnings->asArray())
+            CHECK(w.find("code")->asString() != "comp.midi_boundary");
 }
 
 TEST_CASE("take.comp warns where MIDI pieces of one take cannot be joined") {
@@ -1315,4 +1318,167 @@ TEST_CASE("take.comp.get on a group lists the members, and a member that differs
     CHECK_FALSE(other.find("uniform")->asBool());
     REQUIRE(other.find("differing_members")->asArray().size() == 1);
     CHECK(other.find("differing_members")->asArray()[0].asString() == "tr_2");
+}
+
+// Keeping the seams a take.comp does not touch (section 9 of the takes design): without a
+// crossfade, a seam whose place and takes are unchanged is left exactly as stored.
+namespace {
+// An item's and its takes' canonical JSON, to compare byte for byte.
+std::string stored(const CompFixture& f, model::Id item) {
+    const model::Session head = f.app->head();
+    const auto& it = *head.items.find(item);
+    std::string out = json::writeCanonical(model::toJson(it));
+    for (const auto& take : it.takes)
+        out += json::writeCanonical(model::toJson(*head.takes.find(take)));
+    return out;
+}
+// Four pieces on it_1 (takes 0, 1, 2, 0; seams at beats 1, 2, 3), every seam 0.1 s linear.
+void fourPieces(CompFixture& f,
+                const char* crossfade = R"("crossfade":0.1,"crossfade_shape":"linear",)") {
+    f.run("take.comp", std::string(R"({"item":"it_1",)") + crossfade +
+                           R"("spans":[{"from":0,"to":1,"index":0},{"from":1,"to":2,"index":1},
+                                       {"from":2,"to":3,"index":2},{"from":3,"to":4,"index":0}]})");
+}
+const json::Value* pieceEndingAt(const json::Value& result, double beat) {
+    for (const auto& p : result.find("pieces")->asArray())
+        if (std::abs(p.find("to")->asDouble() - beat) < 1e-6) return &p;
+    return nullptr;
+}
+}  // namespace
+
+TEST_CASE("a hand-set seam survives a re-comp elsewhere, byte for byte, and undo restores it") {
+    CompFixture f;
+    fourPieces(f);
+    auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 4);
+    // The seam at beat 1 set by hand: shorter fades, the other shape.
+    for (const char* edit : {R"(,"fade_out":0.03,"fade_out_shape":"cos"})"})
+        f.run("item.set", R"({"item":")" + pieces[0].item.str() + R"(")" + edit);
+    f.run("item.set",
+          R"({"item":")" + pieces[1].item.str() + R"(","fade_in":0.03,"fade_in_shape":"cos"})");
+    REQUIRE_FALSE(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+    const std::string a = stored(f, pieces[0].item), b = stored(f, pieces[1].item);
+    // Undo keeps the id counters, so compare every item and take, not the whole file.
+    const auto everything = [&] {
+        const model::Session head = f.app->head();
+        std::string out;
+        for (const auto& e : head.items)
+            out += e.id.str() + json::writeCanonical(model::toJson(*e.value));
+        for (const auto& e : head.takes)
+            out += e.id.str() + json::writeCanonical(model::toJson(*e.value));
+        return out;
+    };
+    const std::string before = everything();
+    // Moves the seam at beat 3 to 3.5, without a crossfade: seams 1 and 2 are not touched.
+    const auto result =
+        f.run("take.comp", R"({"item":"it_1","spans":[{"from":3,"to":3.5,"index":2}]})");
+    CHECK(stored(f, pieces[0].item) == a);  // the hand-set seam's left piece
+    CHECK(stored(f, pieces[1].item) ==
+          b);  // its right piece, which is also the end of the seam at 2
+    // The new seam takes the run's own crossfade (the longest fade, 0.1 s, and its shape).
+    const json::Value* moved = pieceEndingAt(result, 3.5);
+    REQUIRE(moved != nullptr);
+    CHECK(moved->find("fade_out")->asDouble() == doctest::Approx(0.1));
+    CHECK(moved->find("fade_out_shape")->asString() == "linear");
+    // Still a comp with a hand-set seam: read back as such, with that seam's own values.
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    CHECK_FALSE(got.find("uniform")->asBool());
+    REQUIRE(got.find("differing_seams")->asArray().size() == 1);
+    const auto& seam = got.find("differing_seams")->asArray()[0];
+    CHECK(seam.find("seam")->asInt() == 0);
+    CHECK(seam.find("crossfade")->asDouble() == doctest::Approx(0.03));
+    CHECK(seam.find("crossfade_shape")->asString() == "cos");
+    // One undo step gives the project back byte for byte.
+    f.run("history.undo");
+    CHECK(everything() == before);
+}
+
+TEST_CASE("a given crossfade rebuilds every seam, hand-set ones included") {
+    CompFixture f;
+    fourPieces(f);
+    const auto pieces = f.pieces();
+    f.run("item.set", R"({"item":")" + pieces[1].item.str() + R"(","fade_in":0.03})");
+    REQUIRE_FALSE(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.1,"crossfade_shape":"linear",
+                           "spans":[{"from":3,"to":3.5,"index":2}]})");
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+}
+
+TEST_CASE("a seam dragged on its own keeps its own length and shape") {
+    CompFixture f;
+    fourPieces(f);
+    const auto pieces = f.pieces();
+    // The seam at beat 2: shape cos by hand, fades shortened (the extension stays 0.05 s a side).
+    f.run("item.set",
+          R"({"item":")" + pieces[1].item.str() + R"(","fade_out":0.06,"fade_out_shape":"cos"})");
+    f.run("item.set",
+          R"({"item":")" + pieces[2].item.str() + R"(","fade_in":0.06,"fade_in_shape":"cos"})");
+    // The drag: the seam to beat 2.5, the spans around it, no crossfade.
+    const auto result = f.run("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2.5,"index":1},
+                                                                       {"from":2.5,"to":3,"index":2}]})");
+    const json::Value* moved = pieceEndingAt(result, 2.5);
+    REQUIRE(moved != nullptr);
+    CHECK(moved->find("fade_out_shape")->asString() == "cos");  // not the run's linear
+    CHECK(moved->find("fade_out")->asDouble() == doctest::Approx(0.1));
+    // The other seams are as they were: linear, 0.1 s.
+    const json::Value* first = pieceEndingAt(result, 1);
+    REQUIRE(first != nullptr);
+    CHECK(first->find("fade_out_shape")->asString() == "linear");
+    CHECK(first->find("fade_out")->asDouble() == doctest::Approx(0.1));
+}
+
+TEST_CASE("a touched seam beside a hand-set long one is clamped to the room left") {
+    CompFixture f;
+    // Three pieces, 0.4 s seams (0.2 s a side) on pieces of 0.5 s, 0.5 s and 1 s.
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.4,"spans":[{"from":0,"to":1,"index":0},
+                           {"from":1,"to":2,"index":1},{"from":2,"to":4,"index":2}]})");
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 3);
+    const std::string first = stored(f, pieces[0].item);
+    // The seam at beat 2 moves to 1.5: the middle piece is 0.25 s now, and the seam at beat 1
+    // takes 0.2 s of it, leaving 0.05 s a side for the moved one (0.1 s of fade).
+    auto result = f.call("take.comp", R"({"item":"it_1","spans":[{"from":1.5,"to":4,"index":2}]})");
+    REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+    const json::Value* moved = pieceEndingAt(*result, 1.5);
+    REQUIRE(moved != nullptr);
+    CHECK(moved->find("fade_out")->asDouble() == doctest::Approx(0.1));
+    bool clamped = false;
+    for (const auto& w : result->find("warnings")->asArray())
+        clamped = clamped || w.find("code")->asString() == "comp.crossfade_clamped";
+    CHECK(clamped);
+    CHECK(stored(f, pieces[0].item) == first);  // the first seam's left piece, untouched
+    const json::Value* firstSeam = pieceEndingAt(*result, 1);
+    REQUIRE(firstSeam != nullptr);
+    CHECK(firstSeam->find("fade_out")->asDouble() == doctest::Approx(0.4));  // the long one stays
+}
+
+TEST_CASE("an edit group member keeps its own seams and gives new ones its own crossfade") {
+    GroupFixture f;
+    // Each track comped alone with a crossfade of its own: 0.04 s linear on tr_1, 0.08 s cos on
+    // tr_2.
+    f.run("take.comp", R"({"item":"it_1","bypass_groups":true,"crossfade":0.04,
+        "crossfade_shape":"linear","spans":[{"from":2,"to":4,"index":1}]})");
+    f.run("take.comp", R"({"item":"it_2","bypass_groups":true,"crossfade":0.08,
+        "crossfade_shape":"cos","spans":[{"from":2,"to":4,"index":1}]})");
+    const auto one = f.pieces(GroupFixture::track(1)), two = f.pieces(GroupFixture::track(2));
+    REQUIRE(one.size() == 2);
+    REQUIRE(two.size() == 2);
+    const std::string a = stored(f, one[0].item), b = stored(f, two[0].item);
+    // The group comp, no crossfade, over beat 3 to 3.5: a new seam on every member, the seam at
+    // beat 2 left alone on both.
+    const auto result =
+        f.run("take.comp", R"({"item":"it_1","spans":[{"from":3,"to":3.5,"index":2}]})");
+    CHECK(stored(f, one[0].item) == a);
+    CHECK(stored(f, two[0].item) == b);
+    const json::Value* lead = pieceEndingAt(result, 3);
+    REQUIRE(lead != nullptr);
+    CHECK(lead->find("fade_out")->asDouble() == doctest::Approx(0.04));
+    CHECK(lead->find("fade_out_shape")->asString() == "linear");
+    REQUIRE(result.find("members")->asArray().size() == 1);
+    const json::Value* member = nullptr;
+    for (const auto& p : result.find("members")->asArray()[0].find("pieces")->asArray())
+        if (std::abs(p.find("to")->asDouble() - 3) < 1e-6) member = &p;
+    REQUIRE(member != nullptr);
+    CHECK(member->find("fade_out")->asDouble() == doctest::Approx(0.08));
+    CHECK(member->find("fade_out_shape")->asString() == "cos");
 }

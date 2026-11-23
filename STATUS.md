@@ -1109,9 +1109,12 @@ instructions are in `docs/guides/installing.md`.
   after a tempo change a Beats-timebase seam's overlap and its fades (seconds) disagree
   until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
   stays, and between MIDI pieces of one take a held note sounds again there
-  (`comp.midi_boundary`); a seam fade edited by hand (another length or shape) is overwritten
-  by the next `take.comp`, which gives every seam one length and shape: `take.comp.get` says
-  `uniform: false` and lists the seams a rebuild with the read-back would rewrite. An item in an
+  (`comp.midi_boundary`); a `take.comp` without `crossfade` keeps the seams its spans do not touch
+  exactly as stored (a hand-set fade included; a seam moved on its own keeps its own length and
+  shape; new seams take the comp's crossfade), so an omitted crossfade no longer resets a comp
+  to 10 ms, and a given one rebuilds every seam alike; `take.comp.get` says `uniform: false`
+  for a hand-set seam, informationally, with that seam's own crossfade and shape in
+  `differing_seams` and the fade shapes on the pieces. An item in an
   edit group is comped with every other track of the group that has items over the same stretch
   (matched by the run's extent: however it is cut or crossfaded, a whole item beside a split lead
   is comped to the spans; same spans and take indices, one undo step, `members` in the result;
