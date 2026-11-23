@@ -43,7 +43,10 @@ TEST_CASE("a capture armed while clips play under a master playrate commits from
             CHECK(from * double(kBeat) < 168000);
             p.run("launch.arrangement", R"({"track": "tr_1"})");  // bar 3
             logged(3);
-            live.until((live.cycles + 200) * block);
+            // 200 blocks past the last launch as played: the anticipative
+            // renderer logs it ahead of the device, by however far it ran.
+            live.until(p.app->engine()->launchLog().back().runningFrame +
+                       200 * std::int64_t(block));
             const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
             json::Value done = p.run("launch.commit", "{}");
             CHECK(done["from"].asDouble() == from);
@@ -107,7 +110,10 @@ TEST_CASE("a capture armed while a launched clip's note sounds commits without t
             CHECK(from * double(kBeat) < 120000);
             p.run("launch.arrangement", R"({"track": "tr_1"})");  // bar 3
             logged(3);
-            live.until((live.cycles + 200) * block);
+            // 200 blocks past the last launch as played: the anticipative
+            // renderer logs it ahead of the device, by however far it ran.
+            live.until(p.app->engine()->launchLog().back().runningFrame +
+                       200 * std::int64_t(block));
             const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
             json::Value done = p.run("launch.commit", "{}");
             live.until((live.cycles + 20) * block);

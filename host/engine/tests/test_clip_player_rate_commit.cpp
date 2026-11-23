@@ -50,7 +50,10 @@ TEST_CASE("a capture under a master playrate commits by the song positions heard
                 logged(4);
                 p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 4
                 logged(5);
-                live.until((live.cycles + 200) * block);
+                // 200 blocks past the last launch as played: the anticipative
+                // renderer logs it ahead of the device, by however far it ran.
+                live.until(p.app->engine()->launchLog().back().runningFrame +
+                           200 * std::int64_t(block));
                 const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
                 const std::vector<float> plain = arrangement(p, 12.0, block);
                 json::Value done = p.run("launch.commit", "{}");

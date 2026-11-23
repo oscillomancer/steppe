@@ -56,7 +56,10 @@ TEST_CASE("a switch on a period wrap: the clip going out reads on in its pass, l
                 logged(2);
                 p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 4
                 logged(3);
-                live.until((live.cycles + 200) * block);
+                // 200 blocks past the last launch as played: the anticipative
+                // renderer logs it ahead of the device, by however far it ran.
+                live.until(p.app->engine()->launchLog().back().runningFrame +
+                           200 * std::int64_t(block));
                 const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
                 for (std::size_t k = 0; k < 3; ++k)
                     CHECK(log[k].songFrame == std::int64_t(96000 * (k + 1)));
