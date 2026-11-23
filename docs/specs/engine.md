@@ -611,10 +611,11 @@ the same.*
   relocation (a seek, a stop, a loop change) ends a capture that has run
   any frames, where it was heard, ending or not; one that has not begins
   again where the transport goes. A capture armed while a launched clip's
-  MIDI note sounds commits without the rest of that note, at any rate:
-  the committed piece starts at the capture's start and does not chase
-  it (a stated limit, test_clip_player_rate_armed.cpp); armed in a rest it is
-  exact. A capture lives in one transport epoch
+  MIDI note sounds commits that note struck again, at any rate: the
+  committed piece starts at the capture's start, inside the note, and the
+  arrangement strikes a note held into an item's start at that start, so
+  the rest sounds from a new attack (a stated limit,
+  test_clip_player_rate_armed.cpp); armed in a rest it is exact. A capture lives in one transport epoch
   (ADR-0097, revision 2026-11-22). It runs through master playrate edits;
   arming is refused with `launch.playrate` while a launched audio clip
   plays (one played once counts until the song heard is past its pass from

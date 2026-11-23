@@ -979,7 +979,13 @@ each), where the committed items begin or end while the performance went
 on, the commit differs from what played by up to the level of the audio
 cut there (measured up to 0.028 in the tests, in the last 120 to 180
 device frames, about 3 ms; bounded in each test at its measure); a
-commit's edge is a cut at any rate. Under a rate, a switch on a wrap of a
+commit's edge is a cut at any rate. *(Note 2026-11-23: a capture armed
+while a launched clip's note sounds commits that note struck again at the
+capture's start, since the arrangement strikes a note held into an item's
+start; through the note's rest the commit differs from what played by the
+new attack, 0.063 at rate 1 and 0.24 at 0.75 in the test, at the level
+heard. An earlier statement of this limit said the rest was left out.)*
+Under a rate, a switch on a wrap of a
 clip laid per period differs within the kernel's reach before it (0.0027
 at 0.75, 0.011 under the envelope, bounded in the test). Tests: in test_clip_player_rate_commit.cpp
 the positions and the equality under 0.75 and the envelope ("a capture
