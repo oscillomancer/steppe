@@ -60,9 +60,10 @@ What to know:
   and `pieces`.
   A track is a member when its items over the comp form a run that starts and ends where the
   comp does (however it is cut inside, whatever its crossfades, start offsets or play rates: a
-  whole item beside a split one is comped to the spans too); a group track with nothing there is
-  skipped and named in `skipped_tracks`. A track that cannot follow refuses the whole call and changes
-  nothing: `comp.group_takes` (an item with too few takes), `comp.group_mismatch` (its items do not
+  whole item beside a split one is comped to the spans too); a group track with nothing there
+  (`no_item`) or only one-take items (`one_take`: a bass beside drum takes) is left alone and named in
+  `skipped_tracks` with its reason. A track that cannot follow refuses the whole call and changes
+  nothing: `comp.group_takes` (several takes, but fewer than a span's index), `comp.group_mismatch` (its items do not
   form a matching run; the message carries the reason, such as a looped item), `item.locked`.
   (`comp.linked` is retired: it used to mean "set `bypass_groups`".) `bypass_groups: true` comps only the
   item you name. `take.comp.get` reads the members too, and `differing_members` lists a member

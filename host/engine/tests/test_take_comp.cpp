@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <numbers>
+#include <tuple>
 #include "realtime_common.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
@@ -1110,15 +1111,15 @@ TEST_CASE("take.comp on a group names a member whose items do not span the same 
 }
 
 TEST_CASE("a member's refusals carry the reason and the hint of what is wrong") {
-    SUBCASE("an item with one take") {
-        GroupFixture f(3, 1);
+    SUBCASE("an item with fewer takes than a span plays") {
+        GroupFixture f(3, 2);  // tr_2 has two takes; a span plays index 2
         const std::string before = model::serializeProject(f.app->head());
         auto result = f.call("take.comp", R"({"item":"it_1","crossfade":0.02,
-            "spans":[{"from":0,"to":1,"index":0}]})");  // index 0 only: still refused
+            "spans":[{"from":0,"to":1,"index":2}]})");
         REQUIRE_FALSE(result);
         CHECK(result.error().code == "comp.group_takes");
         CHECK(result.error().message.find("tr_2") != std::string::npos);
-        CHECK(result.error().hint.find("take") != std::string::npos);
+        CHECK(result.error().hint.find("0..1") != std::string::npos);
         CHECK(model::serializeProject(f.app->head()) == before);
     }
     SUBCASE("a looped item") {
@@ -1139,12 +1140,43 @@ TEST_CASE("a group track with nothing over the comp is skipped and named, not an
     f.run("group.add", R"({"name":"More","members":["tr_1","tr_3"],"links":["edit"]})");
     const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
     REQUIRE(got.find("skipped_tracks")->asArray().size() == 1);
-    CHECK(got.find("skipped_tracks")->asArray()[0].asString() == "tr_3");
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_3");
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "no_item");
     const auto result = f.run("take.comp", kGroupSpans);
     REQUIRE(result.find("skipped_tracks")->asArray().size() == 1);
-    CHECK(result.find("skipped_tracks")->asArray()[0].asString() == "tr_3");
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_3");
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "no_item");
     CHECK(result.find("members")->asArray().size() == 1);  // tr_2 is still comped
     sameComp(f.pieces(GroupFixture::track(1)), f.pieces(GroupFixture::track(2)));
+}
+
+TEST_CASE("a group member with one take is skipped as one_take and left untouched") {
+    // Drums with takes grouped with a one-take bass: ordinary, comps without bypass_groups.
+    GroupFixture f(3, 1);  // tr_2's item has a single take
+    const std::string bassItem = f.pieces(GroupFixture::track(2))[0].item.str();
+    auto describeItem = [&] {
+        const auto& it = *f.app->head().items.find(*model::Id::parse(bassItem));
+        return std::tuple(it.position, it.length, it.takes, it.activeTake, it.fadeIn.length,
+                          it.fadeOut.length);
+    };
+    const auto bassBefore = describeItem();
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    REQUIRE(got.find("skipped_tracks")->asArray().size() == 1);
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_2");
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "one_take");
+    CHECK(got.find("members")->asArray().empty());
+    CHECK(got.find("differing_members")->asArray().empty());
+    CHECK(got.find("uniform")->asBool());  // does not count against uniform
+    const auto steps = f.app->versions().history().size();
+    const auto result = f.run("take.comp", kGroupSpans);
+    CHECK(f.app->versions().history().size() == steps + 1);
+    CHECK(result.find("members")->asArray().empty());
+    REQUIRE(result.find("skipped_tracks")->asArray().size() == 1);
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "one_take");
+    CHECK(f.pieces(GroupFixture::track(1)).size() >= 3);  // the drums are comped
+    REQUIRE(f.pieces(GroupFixture::track(2)).size() == 1);
+    CHECK(describeItem() == bassBefore);
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
 }
 
 TEST_CASE("a locked member refuses the whole call before anything is written") {
