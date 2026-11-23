@@ -960,7 +960,14 @@ std::optional<model::Id> Engine::audioUnderStretch() const {
             (reset != launchReset_.end() && reset->second > i))
             continue;
         const model::Clip* clip = latest_->clips.find(e.clip);
-        if (clip && clip->kind != model::ClipKind::Midi) return e.clip;
+        if (!clip || clip->kind == model::ClipKind::Midi) continue;
+        // A clip played once is silent after its pass (round 113 T4).
+        if (clip->mode == model::ClipMode::Once)
+            if (const auto heard = heardSong(e.epoch))
+                if (heard->song >=
+                    double(e.songFrame + time::samplesAt(clip->length, config_.sampleRate)))
+                    continue;
+        return e.clip;
     }
     return std::nullopt;
 }

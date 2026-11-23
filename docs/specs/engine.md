@@ -614,7 +614,8 @@ the same.*
   exact. A capture lives in one transport epoch
   (ADR-0097, revision 2026-11-22). It runs through master playrate edits;
   arming is refused with `launch.playrate` while a launched audio clip
-  plays and the newest plan keeps the pitch, and such a plan arriving ends
+  plays (one played once, until its pass ends) and the newest plan keeps
+  the pitch, and such a plan arriving ends
   a running capture with a warning naming the clip (the stretch converter
   reading it has no committed equivalent). For the same reason a switch
   that leaves or returns to an arrangement holding audio, queued while the

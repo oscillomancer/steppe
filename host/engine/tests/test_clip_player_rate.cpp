@@ -561,6 +561,53 @@ TEST_CASE("a capture of a clip with a take chain under a master playrate commits
             }
 }
 
+TEST_CASE("a once audio clip that has finished does not refuse or end a pitch-keeping capture" *
+          doctest::description("rt")) {
+    // Round 113 T4: cl_2 played once (0.75 s from bar 2, song 96000 to
+    // 132000) is silent after its pass, so a plan that keeps the pitch
+    // arriving then neither ends a running capture nor refuses arming.
+    Project p;
+    twoTracks(p);
+    p.run("clip.set", R"({"clip": "cl_2", "mode": "once"})");
+    const model::Session unity = p.app->head();
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session kept = p.app->head();
+    for (const bool running : {true, false}) {
+        INFO("capturing " << running);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(unity, p.app->projectDir()));
+        engine.play();
+        backend.run(10);
+        engine.service();
+        if (running) REQUIRE(engine.captureLaunches(true));
+        const Engine::LaunchRequest r = request("tr_2", "cl_2");
+        REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));  // bar 2
+        backend.run(136000 / 128);                                             // past its one pass
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        REQUIRE(engine.load(kept, p.app->projectDir()));
+        REQUIRE(engine.awaitPlan());
+        if (running) {
+            engine.service();
+            const auto capture = engine.launchCapture();
+            REQUIRE(capture);
+            CHECK(capture->on);
+            const auto& w = engine.warnings();
+            CHECK_FALSE(std::any_of(w.begin(), w.end(), [](const std::string& s) {
+                return s.find("capture ended") != std::string::npos;
+            }));
+        } else {
+            // Before the service returns tr_2 to the arrangement: allowed.
+            CHECK(engine.captureLaunches(true));
+        }
+        engine.stop();
+    }
+}
+
 TEST_CASE("under a master playrate a switch crossfades over 240 song samples, by song position") {
     // S3 B (ADR-0097, note 2026-11-22): at 0.75 bar 2 (song 96000) is device
     // frame 128000. The crossfade runs over the next 240 song samples (320
