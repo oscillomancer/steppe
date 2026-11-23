@@ -552,9 +552,8 @@ looped item, still makes a new item, and the recording says so. If the pass runs
 end, the rest stays in the take, hidden; lengthen the item to hear it. If the item was a comp
 (several pieces of one set of takes), every piece gets the take. If you record only some of the
 tracks of an edit group, the others do not get a take, and the recording says so: arm every track
-of the group to keep their takes level. If the item was a comp whose seams you had set to different
-lengths or shapes, a pass inside it makes them all alike again (the comp's own length and shape) and
-the recording says so (`record.comp_uniform`); a comp whose seams are already alike keeps them. Agents turn this off with
+of the group to keep their takes level. A pass inside a comp leaves the comp's other seams exactly as they were, ones you set by hand
+included. Agents turn this off with
 `record.set {stack_takes: false}` (every pass is then laid as items, as in older versions);
 `record.get` reads it. In the app it is **Edit > Preferences > Recording and import > Record over
 an item**: **New take** (the default) or **Layer on top**, kept with your other preferences; an

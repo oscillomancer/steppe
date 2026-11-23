@@ -3026,11 +3026,9 @@ on the loop range with a take per pass):
   frozen-track rule of §freeze: arming is a sound edit), `track.freeze` of an armed track fails with
   `freeze.unsupported`, and arming an edit group skips frozen members with a `track.frozen`
   warning, so the leave-out is a backstop for a freeze made behind the app's back. Recovery
-  (`project.recover`, `record.commit` replays) follows the same rule. A pass inside a comp whose
-  seams differed (hand-set lengths, shapes or hard cuts among crossfades) rebuilds those the pass
-  leaves in place as the run's one crossfade, and warns `record.comp_uniform` so that does not
-  happen silently (seams the pass covers are joined away, and a pass over a whole comp warns of
-  none). A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
+  (`project.recover`, `record.commit` replays) follows the same rule. A pass inside a comp
+  leaves the seams it does not touch as they are, hand-set ones included (`take.comp` gives audio
+  no crossfade, so it keeps them; the seams it makes take the run's own crossfade). A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
   the project is as it was and still editable, and the recording is not in it; the refusal's message
   ends "(the recording is kept: project.recover places it)", the journals and files remaining for
   recovery. Not on the refusal of `project.recover`'s own commit (it points back at itself), and a
@@ -3051,10 +3049,9 @@ on the loop range with a take per pass):
   extent (its crossfades taken out), each pass covers a stretch of the timeline, and a newer pass
   hears over an older one. When one pass covers the whole of a lone item, that take is its active
   take, no comp. Otherwise the commit calls `take.comp` on the target in the same transaction
-  (`bypass_groups`; for audio the default crossfade on a lone item and, on an existing comp, the
-  run's own `crossfade` and `crossfade_shape` as `take.comp.get` reports them, so its seams are
-  rebuilt as they were and seams set by hand become uniform; `crossfade: 0` for MIDI, so no
-  `comp.crossfade_skipped`): a span for each stretch, playing the new take's index, and every
+  (`bypass_groups`; no crossfade for audio, so the seams the pass does not touch stay as they are
+  and the ones it makes take the run's own, 10 ms `cos` for a lone item; `crossfade: 0` for MIDI,
+  so no `comp.crossfade_skipped`): a span for each stretch, playing the new take's index, and every
   stretch outside the spans keeps the take its piece played (a comp keeps its pieces there). A pass
   over the whole of a comp of several pieces is one span over the run, which joins the pieces that
   now play one take (kept apart they would swell by 3 dB across each old equal-power seam). The
