@@ -30,7 +30,9 @@ struct CompView {
 };
 
 // The comp `item` belongs to (a lone item is a run of one piece); nullopt for
-// an item with fewer than two takes, a looped one, or one compRun refuses.
+// an item with fewer than two takes, one compsWithTakeComp turns away (looped,
+// or edited with a group: no seams are drawn or dragged there), or one compRun
+// refuses.
 std::optional<CompView> compOf(const model::Session& s, model::Id item);
 
 // A seam of a track, for the lanes and the hit test.

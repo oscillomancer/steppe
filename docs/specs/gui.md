@@ -1086,7 +1086,9 @@ before `take.comp`, which refuses both (`comp.loop`, `comp.linked`):
 `take.activate` of the middle, with hard cuts; a looped item until its Loop is
 turned off, a grouped one until `take.comp` comps every item of an edit group.
 Their lane clicks, badge and Takes list switch with `take.activate`
-(`views::compsWithTakeComp`). The inspector shows the same
+(`views::compsWithTakeComp`), and their pieces are no comp to the GUI: no seams
+are drawn or dragged there, the boundaries trim and fade as item edges do, and
+the inspector shows Fade in and Fade out, not Crossfade. The inspector shows the same
 for one selected piece (Crossfade, below). Flatten a comp with Consolidate on
 its pieces. Refusals (`item.locked`; `comp.linked` from a seam drag on a comp an
 agent made on a grouped track) reach the

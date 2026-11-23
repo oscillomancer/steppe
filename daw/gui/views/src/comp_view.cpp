@@ -25,7 +25,11 @@ double beatOfSample(const model::Session& s, std::int64_t sample) {
 
 std::optional<CompView> compOf(const model::Session& s, model::Id item) {
     const model::Item* it = s.items.find(item);
-    if (!it || it->takes.size() < 2 || it->loop) return std::nullopt;
+    // A looped item, or one edited with a group, is comped with hard cuts by
+    // split and take.activate (compsWithTakeComp): no comp, so no seams, seam
+    // drags or Crossfade, which take.comp would refuse; its pieces keep their
+    // trim edges and fades.
+    if (!it || it->takes.size() < 2 || !compsWithTakeComp(s, item)) return std::nullopt;
     auto run = model::compRun(s, item, {});
     if (!run) return std::nullopt;
     CompView comp;

@@ -1567,6 +1567,15 @@ TEST_CASE("a swipe on a looped item splits it and switches the middle, with hard
     CHECK(pieces[0]->fadeOut.length == 0);  // hard cuts
     CHECK(pieces[1]->fadeIn.length == 0);
     CHECK(pieces[1]->loop);
+    // No comp there either (round 122 H1): no seams, and the boundary trims.
+    CHECK(f.view->lanes().compSeams(*f.view->trackLayout().indexOf(track)).empty());
+    model::Id second{};
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == pieces[1]) second = e.id;
+    const ui::Rect b = f.rectOf(second);
+    const auto edge = f.view->gestures().hit({b.x + 2, b.y + b.h / 2});
+    REQUIRE(edge);
+    CHECK(edge->zone == views::ItemGestures::Drag::TrimLeft);
 }
 
 // Round 119 G3: take.comp refuses an item edited with a group (comp.linked),
@@ -1621,6 +1630,19 @@ TEST_CASE("a swipe on an edit-grouped track splits and switches, as before take.
     for (const auto& e : f.app->head().items)
         if (e.value->track.str() == room) ++roomItems;
     CHECK(roomItems == 3);
+    // Round 122 H1: no comp there (take.comp would refuse every seam gesture):
+    // no seams, and the boundary between two pieces trims as an item edge.
+    const std::size_t row = *f.view->trackLayout().indexOf(track);
+    CHECK(f.view->lanes().compSeams(row).empty());
+    {
+        model::Id second{};
+        for (const auto& e : f.app->head().items)
+            if (e.value.get() == pieces[1]) second = e.id;
+        const ui::Rect b = f.rectOf(second);
+        const auto edge = f.view->gestures().hit({b.x + 2, b.y + b.h / 2});
+        REQUIRE(edge);
+        CHECK(edge->zone == views::ItemGestures::Drag::TrimLeft);
+    }
     // A lane click on a piece there still switches it with take.activate.
     model::Id first{};
     for (const auto& e : f.app->head().items)
