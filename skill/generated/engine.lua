@@ -2156,6 +2156,8 @@ q = nil
 ---@field pieces table[]
 ---@field crossfade number Seconds.
 ---@field crossfade_shape "cos"|"linear"
+---@field uniform boolean
+---@field differing_seams table[]
 ---@field warnings? table[]
 
 ---@class Steppe.take_comp_get_args
@@ -2166,6 +2168,8 @@ q = nil
 ---@field pieces table[]
 ---@field crossfade number Seconds.
 ---@field crossfade_shape "cos"|"linear"
+---@field uniform boolean
+---@field differing_seams table[]
 ---@field warnings? table[]
 
 ---@class Steppe.take_extract_args

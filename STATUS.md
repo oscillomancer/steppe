@@ -1057,7 +1057,9 @@ instructions are in `docs/guides/installing.md`.
   after a tempo change a Beats-timebase seam's overlap and its fades (seconds) disagree
   until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
   stays, and between MIDI pieces of one take a held note sounds again there
-  (`comp.midi_boundary`).
+  (`comp.midi_boundary`); a seam fade edited by hand (another length or shape) is overwritten
+  by the next `take.comp`, which gives every seam one length and shape: `take.comp.get` says
+  `uniform: false` and lists the seams that differ.
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main

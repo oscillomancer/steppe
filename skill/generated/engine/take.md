@@ -373,6 +373,44 @@ Kind: `edit`. Exposure: `mcp-exec`.
       "type": "string",
       "enum": ["cos", "linear"]
     },
+    "uniform": {
+      "type": "boolean"
+    },
+    "differing_seams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "comp_seam",
+        "properties": {
+          "seam": {
+            "type": "integer",
+            "description": "0: between the first two pieces."
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+              }
+            ],
+            "x-unit": "beats",
+            "x-unit-strings": true,
+            "description": "Quantity strings are range-checked by the server."
+          },
+          "left": {
+            "type": "string"
+          },
+          "right": {
+            "type": "string"
+          }
+        },
+        "required": ["seam", "at", "left", "right"],
+        "additionalProperties": false
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -380,7 +418,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["pieces", "crossfade", "crossfade_shape"],
+  "required": ["pieces", "crossfade", "crossfade_shape", "uniform", "differing_seams"],
   "additionalProperties": false
 }
 
@@ -423,7 +461,9 @@ Result:
 {
   "pieces": "<any>",
   "crossfade": 0,
-  "crossfade_shape": "cos"
+  "crossfade_shape": "cos",
+  "uniform": true,
+  "differing_seams": []
 }
 
 ```
@@ -432,7 +472,7 @@ Result:
 
 List the pieces of a comp: spans, takes and fades.
 
-The pieces of the comp that item belongs to (or items), in time order: from and to are the seams in beats (crossfades taken out), take and index the take each plays, fade_in and fade_out the crossfades in seconds. crossfade and crossfade_shape are the run's own: its longest seam fade (seconds) and that fade's shape, which a seam shortened by short pieces does not shrink, so take.comp with them rebuilds the same comp (the default 0.01 and cos for one piece, 0 for hard seams). An item with several takes and no seams is a comp of one piece.
+The pieces of the comp that item belongs to (or items), in time order: from and to are the seams in beats (crossfades taken out), take and index the take each plays, fade_in and fade_out the crossfades in seconds. crossfade and crossfade_shape are the run's own: its longest seam fade (seconds) and that fade's shape, which a seam shortened by short pieces does not shrink, so take.comp with them rebuilds the same comp (the default 0.01 and cos for one piece, 0 for hard seams), as long as uniform is true: when a seam fade was set by hand to another length or shape, uniform is false and differing_seams lists those seams (seam 0 is between the first two pieces; at in beats; left and right the items), and a take.comp would give every seam the one length and shape. An item with several takes and no seams is a comp of one piece.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -517,6 +557,44 @@ Kind: `query`. Exposure: `mcp-exec`.
       "type": "string",
       "enum": ["cos", "linear"]
     },
+    "uniform": {
+      "type": "boolean"
+    },
+    "differing_seams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "comp_seam",
+        "properties": {
+          "seam": {
+            "type": "integer",
+            "description": "0: between the first two pieces."
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+              }
+            ],
+            "x-unit": "beats",
+            "x-unit-strings": true,
+            "description": "Quantity strings are range-checked by the server."
+          },
+          "left": {
+            "type": "string"
+          },
+          "right": {
+            "type": "string"
+          }
+        },
+        "required": ["seam", "at", "left", "right"],
+        "additionalProperties": false
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -524,7 +602,7 @@ Kind: `query`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["pieces", "crossfade", "crossfade_shape"],
+  "required": ["pieces", "crossfade", "crossfade_shape", "uniform", "differing_seams"],
   "additionalProperties": false
 }
 
@@ -547,7 +625,9 @@ Result:
 {
   "pieces": "<any>",
   "crossfade": 0.01,
-  "crossfade_shape": "cos"
+  "crossfade_shape": "cos",
+  "uniform": true,
+  "differing_seams": []
 }
 
 ```

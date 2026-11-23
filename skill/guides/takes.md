@@ -33,7 +33,10 @@ seams or change spans. The crossfades are rebuilt for the whole comp, and the sa
 call twice changes nothing. `take.comp.get {item}` reads a comp you did not make: besides the pieces it gives the
 `crossfade` (seconds) and `crossfade_shape` the comp has (its longest seam fade, so a seam
 shortened by short pieces does not shrink it), and `take.comp` with those and the spans
-rebuilds it unchanged.
+rebuilds it unchanged, as long as `uniform` is true. A seam fade you set by hand (another
+length or shape, or a hard cut among crossfaded seams) makes it false and lists the seams that
+differ from the rest in `differing_seams`: `take.comp` would give every seam one length and
+shape, so such a comp is not rebuilt byte for byte, and the listed seams are the ones that change.
 Pieces of the same take beside each other (after a move, say) are joined into one
 piece again, so moving a seam by a few samples gives exactly what the same spans give
 from scratch, MIDI pieces too (a held note stays one note). A boundary where the

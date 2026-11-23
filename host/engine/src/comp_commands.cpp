@@ -51,10 +51,17 @@ struct PieceOut {
     std::string name;
     double fadeIn = 0, fadeOut = 0;
 };
+struct SeamOut {
+    std::int64_t seam = 0;
+    double at = 0;
+    std::string left, right;
+};
 struct CompResult {
     std::vector<PieceOut> pieces;
     double crossfade = model::kDefaultCompCrossfade;
     std::string shape = "cos";
+    bool uniform = true;
+    std::vector<SeamOut> differing;
 };
 
 schema::Schema<PieceOut> pieceSchema() {
@@ -69,12 +76,22 @@ schema::Schema<PieceOut> pieceSchema() {
         .field("fade_out", &PieceOut::fadeOut, schema::number().doc("Seconds."))
         .build();
 }
+schema::Schema<SeamOut> seamSchema() {
+    return schema::object<SeamOut>("comp_seam")
+        .field("seam", &SeamOut::seam, schema::integer().doc("0: between the first two pieces."))
+        .field("at", &SeamOut::at, schema::number().unit(units::Unit::beats))
+        .field("left", &SeamOut::left, schema::string())
+        .field("right", &SeamOut::right, schema::string())
+        .build();
+}
 schema::Schema<CompResult> resultSchema() {
     return schema::object<CompResult>("comp_result")
         .field("pieces", &CompResult::pieces, schema::arrayOf(pieceSchema()))
         .field("crossfade", &CompResult::crossfade, schema::number().doc("Seconds."))
         .field("crossfade_shape", &CompResult::shape,
                schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
+        .field("uniform", &CompResult::uniform, schema::boolean())
+        .field("differing_seams", &CompResult::differing, schema::arrayOf(seamSchema()))
         .build();
 }
 
@@ -138,8 +155,17 @@ std::vector<PieceOut> describePieces(const model::Session& s,
 // The pieces and the crossfade the run reads back as (model::compCrossfade).
 CompResult describe(const model::Session& s, const std::vector<model::CompPiece>& run) {
     const model::CompCrossfade crossfade = model::compCrossfade(s, run);
-    return CompResult{describePieces(s, run), crossfade.seconds,
-                      crossfade.shape == model::FadeShape::Linear ? "linear" : "cos"};
+    CompResult out;
+    out.pieces = describePieces(s, run);
+    out.crossfade = crossfade.seconds;
+    out.shape = crossfade.shape == model::FadeShape::Linear ? "linear" : "cos";
+    const double rate = s.project->sampleRate;
+    for (const std::size_t k : model::compDifferingSeams(s, run))
+        out.differing.push_back({static_cast<std::int64_t>(k),
+                                 s.timeMap->beatAt(static_cast<double>(run[k].coreEnd) / rate),
+                                 run[k].item.str(), run[k + 1].item.str()});
+    out.uniform = out.differing.empty();
+    return out;
 }
 
 // Whether the takes of a run can be extended for a crossfade, and why not.
@@ -243,7 +269,8 @@ void registerCompCommands(cmd::Registry& registry) {
             {"item.kind", "a clip", "lay the clip on the timeline first (item.add {clip})"}};
         c.examples = {{"Take the second take for bars 2 to 3",
                        j(R"({"item":"it_1","crossfade":0,"spans":[{"from":1,"to":3,"index":1}]})"),
-                       j(R"({"pieces":"<any>","crossfade":0,"crossfade_shape":"cos"})"),
+                       j(R"({"pieces":"<any>","crossfade":0,"crossfade_shape":"cos","uniform":true,
+                          "differing_seams":[]})"),
                        "song_with_takes"}};
         c.run = [](const CompArgs& a, Context& ctx) -> Result<CompResult> {
             EngineApp& engine = app(ctx);
@@ -559,8 +586,12 @@ void registerCompCommands(cmd::Registry& registry) {
             "fade_in and fade_out the crossfades in seconds. crossfade and crossfade_shape are the "
             "run's own: its longest seam fade (seconds) and that fade's shape, which a seam "
             "shortened by short pieces does not shrink, so take.comp with them rebuilds the same "
-            "comp (the default 0.01 and cos for one piece, 0 for hard seams). An item with several "
-            "takes and no seams is a comp of one piece.";
+            "comp (the default 0.01 and cos for one piece, 0 for hard seams), as long as uniform "
+            "is "
+            "true: when a seam fade was set by hand to another length or shape, uniform is false "
+            "and differing_seams lists those seams (seam 0 is between the first two pieces; at "
+            "in beats; left and right the items), and a take.comp would give every seam the one "
+            "length and shape. An item with several takes and no seams is a comp of one piece.";
         c.tags = {"take"};
         c.args = schema::object<WhichArgs>("take_comp_get_args")
                      .field("item", &WhichArgs::anyPiece, timelineItemArg())
@@ -568,9 +599,11 @@ void registerCompCommands(cmd::Registry& registry) {
                             schema::arrayOf(timelineItemArg()).maxItems(4096))
                      .build();
         c.result = resultSchema();
-        c.examples = {{"Read a comp", j(R"({"item":"it_1"})"),
-                       j(R"({"pieces":"<any>","crossfade":0.01,"crossfade_shape":"cos"})"),
-                       "song_with_takes"}};
+        c.examples = {
+            {"Read a comp", j(R"({"item":"it_1"})"),
+             j(R"({"pieces":"<any>","crossfade":0.01,"crossfade_shape":"cos","uniform":true,
+                          "differing_seams":[]})"),
+             "song_with_takes"}};
         c.run = [](const WhichArgs& a, Context& ctx) -> Result<CompResult> {
             const model::Session s = app(ctx).view();
             auto which = whichPieces(s, a.anyPiece, a.pieces);

@@ -341,9 +341,18 @@ and the run's take names.
 too; `crossfade` in seconds, `crossfade_shape` `cos` or `linear`): the longest
 seam-side fade of the run and that fade's shape, so a seam clamped by short pieces
 does not shrink it, and `take.comp` called with the read-back values and the spans
-`take.comp.get` gives rebuilds the same comp (byte for byte). A run with no seam (one
+`take.comp.get` gives rebuilds the same comp (byte for byte) when the run is uniform. A run with no seam (one
 piece) reads the default, 0.01 and `cos`; a run whose seams are all hard cuts reads 0;
 a fade of a shape `take.comp` does not offer (a GUI-made one) reads as `cos`.
+
+**Uniform** (`model::compDifferingSeams`; `uniform` and `differing_seams: [{seam, at, left,
+right}]` on `take.comp.get` and `take.comp`): `take.comp` writes every seam with one length
+and shape, so a seam fade edited by hand (another length or shape, a hard cut among crossfaded
+seams, a fade on one side only) is something a re-comp overwrites, and the byte-for-byte claim
+above holds only for a uniform run. The run's seams are compared with the one crossfade that
+fits the most of them (the first seam's on a tie), a seam clamped by short pieces counted as
+fitting; `seam` 0 is between the first two pieces and `at` is in beats. A comp as `take.comp`
+made it is uniform; one piece, or hard cuts only, is uniform.
 
 Refusals, each with a code, a message, a path (`/args/item`, `/args/spans/1/from`) and a hint: `comp.item` (neither or both of `item`
 and `items`, or an empty `items`), `comp.takes` (fewer than two takes),
@@ -378,7 +387,8 @@ boundary, and for MIDI the call warns `comp.midi_boundary`;
 MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
 `take.comp.get` after a save and reopen, and its `crossfade` and `crossfade_shape` (a comp
 with one seam clamped reads back the requested length, a hard-cut run 0, one piece the default;
-`take.comp` with the read-back values and spans is byte for byte the comp); one undo step; and
+`take.comp` with the read-back values and spans is byte for byte the comp; `uniform` and the seams a hand-set length,
+shape or hard cut lists); one undo step; and
 every refusal.
 
 ### 1.6 Sources

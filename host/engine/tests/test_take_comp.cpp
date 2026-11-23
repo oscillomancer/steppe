@@ -925,3 +925,61 @@ TEST_CASE(
         CHECK(model::serializeProject(f.app->head()) == made);
     }
 }
+
+TEST_CASE("take.comp.get says when the seams of a run are not all alike") {
+    const std::string spans = R"({"item":"it_1","crossfade":0.02,"crossfade_shape":"cos",
+                                  "spans":[{"from":0,"to":1,"index":1},
+                                           {"from":2,"to":3,"index":0}]})";
+    auto seamsOf = [](const json::Value& got) {
+        std::vector<std::int64_t> out;
+        for (const auto& d : got.find("differing_seams")->asArray())
+            out.push_back(d.find("seam")->asInt());
+        return out;
+    };
+    SUBCASE("a comp as take.comp made it is uniform, and so is one with a clamped seam") {
+        CompFixture f;
+        f.run("take.comp", spans);
+        auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK(got.find("uniform")->asBool());
+        CHECK(seamsOf(got).empty());
+        CompFixture g;
+        g.run("take.comp", R"({"item":"it_1","crossfade":0.02,
+                               "spans":[{"from":0,"to":0.002,"index":1},{"from":2,"to":3,"index":0}]})");
+        got = g.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK(got.find("uniform")->asBool());
+        // The result of take.comp says the same.
+        CHECK(g.run("take.comp", R"({"item":"it_1","crossfade":0.02,
+                      "spans":[{"from":0,"to":0.002,"index":1},{"from":2,"to":3,"index":0}]})")
+                  .find("uniform")
+                  ->asBool());
+    }
+    SUBCASE("a seam fade set by hand to another length is listed") {
+        CompFixture f;
+        f.run("take.comp", spans);
+        const auto pieces = f.pieces();
+        REQUIRE(pieces.size() >= 3);
+        f.run("item.set", R"({"item":")" + pieces[1].item.str() + R"(","fade_in":0.05})");
+        const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK_FALSE(got.find("uniform")->asBool());
+        CHECK(seamsOf(got) == std::vector<std::int64_t>{0});
+        const auto& first = got.find("differing_seams")->asArray()[0];
+        CHECK(first.find("left")->asString() == pieces[0].item.str());
+        CHECK(first.find("right")->asString() == pieces[1].item.str());
+        CHECK(first.find("at")->asDouble() == doctest::Approx(1.0));
+    }
+    SUBCASE("a seam of another shape, or a hard cut among crossfaded seams, is listed") {
+        CompFixture f;
+        f.run("take.comp", spans);
+        const auto pieces = f.pieces();
+        REQUIRE(pieces.size() >= 3);
+        f.run("item.set", R"({"item":")" + pieces[2].item.str() + R"(","fade_in_shape":"linear"})");
+        CHECK(seamsOf(f.run("take.comp.get", R"({"item":"it_1"})")) ==
+              std::vector<std::int64_t>{1});
+        CompFixture g;
+        g.run("take.comp", spans);
+        const auto gp = g.pieces();
+        g.run("item.set", R"({"item":")" + gp[1].item.str() + R"(","fade_in":0})");
+        CHECK(seamsOf(g.run("take.comp.get", R"({"item":"it_1"})")) ==
+              std::vector<std::int64_t>{0});
+    }
+}
