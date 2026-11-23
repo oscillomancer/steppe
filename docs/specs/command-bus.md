@@ -168,7 +168,12 @@ transaction; run; encode the result through the result schema (a handler
 returning a value that fails its own result schema is a bug: `command.
 bad_result`, logged loudly, and a test failure in examples); log; return.
 Handler errors pass through unchanged (their own codes), with `path`
-prefixed by `/args` when it is an args path.
+prefixed by `/args` when it is a slash path that does not already start with
+`/args` (every such path, whether or not it resolves in the arguments). A
+handler's path may be a locator that does not resolve in the input, as
+`take.comp`'s refusals for a member of an edit group, which name the member
+(`/members/<track id>[/items/<item id>]`, delivered as `/args/members/...`);
+a consumer reads a path as text and never resolves it against the input.
 
 Successful replies may have a `warnings` array. After validating the raw
 handler result and committing any transaction, dispatch appends each
