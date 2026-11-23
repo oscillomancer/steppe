@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // JSON forms of the session objects (core-schema) and the project file
-// `supple.project/2.21` (session-model §5). Fields equal to their defaults are
+// `supple.project/2.22` (session-model §5). Fields equal to their defaults are
 // omitted, so files and diffs stay small; decoding fills them back in.
 #pragma once
 
