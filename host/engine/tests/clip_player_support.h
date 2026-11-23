@@ -157,6 +157,25 @@ inline std::string describe(const std::vector<LaunchLogEntry>& log) {
                std::to_string(e.anchorBeat) + ", epoch " + std::to_string(e.epoch);
     return out;
 }
+// Each of the session's media files and whether it is on disk now, for a
+// failure's message (another process's cleanup once removed a fixture's media).
+inline std::string mediaPresence(const model::Session& s, const fs::path& projectDir) {
+    std::string out;
+    for (const auto& m : s.media) {
+        fs::path path(m.value->path);
+        if (path.is_relative()) {
+            const fs::path inMedia = projectDir / s.project->mediaDir / path;
+            path = fs::exists(inMedia) ? inMedia : projectDir / path;
+        }
+        out += "\n  " + path.string() + (fs::exists(path) ? ": present" : ": missing");
+    }
+    return out.empty() ? std::string("\n  (no media)") : out;
+}
+inline std::string joined(const std::vector<std::string>& lines) {
+    std::string out;
+    for (const auto& line : lines) out += "\n  " + line;
+    return out.empty() ? std::string("\n  (none)") : out;
+}
 // Where `a` from `aFrom` and `b` differ over `n` frames: the first such frame
 // with both values, and how many differ.
 inline std::string differences(const std::vector<float>& a, std::size_t aFrom,

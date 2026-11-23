@@ -210,6 +210,8 @@ TEST_CASE("live launches of clips with take chains play as the offline replay" *
                 INFO(differences(live.left, live.latency, offline->audio.channels[0], 48000 * 5));
                 INFO("live steps and counters:" << live.report);
                 INFO("replay log:" << describe(live.log));
+                INFO("offline warnings:" << joined(offline->warnings));
+                INFO("media at the compare:" << mediaPresence(s, p.app->projectDir()));
                 CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 5) ==
                       0.0);
                 settings.launches.clear();
