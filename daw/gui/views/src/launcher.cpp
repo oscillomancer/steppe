@@ -1190,11 +1190,15 @@ void LauncherHeader::paint(ui::Canvas& c) {
         c.text(r, label, ui::Font::Ui, caption, t.color("ink"), ui::kCenter | ui::kMiddle);
     }
     // Capture, as the transport's record button: a red dot, the cell lit
-    // while armed.
+    // while armed; ending on its boundary, outlined dashed as a queued cell.
     stats.captureLit = view_.captureArmed();
+    stats.captureEnding = stats.captureLit && view_.captureEnding();
     if (const ui::Rect r = captureRect(); r.right() <= b.right() && r.bottom() <= scenesRow().y) {
         const ui::Color red = t.color("armed");
-        if (stats.captureLit) {
+        if (stats.captureEnding) {
+            c.fillRound(r, 3, red.withAlpha(0.2f));
+            strokeDashed(c, r, red.withAlpha(0.7f));
+        } else if (stats.captureLit) {
             c.fillRound(r, 3, red.withAlpha(0.2f));
             c.strokeRound(r, 3, red.withAlpha(0.7f));
         } else {

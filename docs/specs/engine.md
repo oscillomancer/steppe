@@ -562,15 +562,23 @@ the same.*
   - Seeks and wraps use the same formulas, so clips stay on the grid and
     a performance replays exactly from its log.
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
-  was left's sounding notes at the switch sample. Returning to the
+  was left's sounding notes at the switch sample. An audio clip laid one
+  item per period (`clipLaysAsOneItem` false) that fades out reads on in
+  the pass it was in from the switch's song sample (`heldPass`), as its
+  committed piece does, rather than wrapping inside the fade-out. Returning to the
   arrangement does not chase notes (`trackEvents`, engine.md §1.1). An
   audio switch crossfades over a fixed 5 ms of timeline samples, in the
-  source like an item's fade, in both executors and offline.
+  source like an item's fade, in both executors and offline; under a
+  master playrate too, so it is heard as 5 ms divided by the rate.
 - **The launch log and the offline replay.** The engine logs each applied
   launch with its running frame (stream frames since the play start, in
-  the epoch's terms), its song position, and the scene when `launch.scene`
-  launched it (carried through the slot and the executor's ack; the replay
-  ignores it). A transport wrap is not
+  the epoch's terms), its song position, the scene when `launch.scene`
+  launched it, and its song frame: the boundary's sample on the song's
+  unwrapped running count (`LaunchLogEntry::songFrame`; at unity the
+  epoch's start plus the running frame, under a master playrate the rate
+  timeline's unwrapped phase, computed at placement). The scene and the
+  song frame are carried through the slot and the executor's ack; the
+  replay ignores both. A transport wrap is not
   logged: it follows from the loop, which a replay is given. A seek, a
   loop change or a stop ends a capture, so a replay never crosses one
   (ADR-0097, revision 2026-11-20, batch 3).
@@ -583,11 +591,41 @@ the same.*
   loop it runs under, what each track that was not following the
   arrangement played then (its launch, anchor kept), and every launch
   applied after it, by running frame from the start
-  (`Engine::launchCapture`). It begins at the heard position (stopped:
-  where playing starts). A relocation (a seek, a stop, a loop change) ends
-  a capture that has run any frames, where it was heard; one that has not
-  begins again where the transport goes. A capture lives in one transport
-  epoch.
+  (`Engine::launchCapture`). Its running time is song time: song frames
+  from the start (stream frames at unity, the song samples played under a
+  master playrate), heard through the executors' published rate clock
+  (ADR-0097, revision "S3 step B"). It begins at the heard position (stopped:
+  where playing starts) and ends at the heard position, or, ended with a
+  quantize while playing (`launch.capture {on: false, quantize}`), on that
+  quantize's next boundary: placed as a launch of every track with clips
+  made then would be, so a scene launch made with it lands there too. One
+  track's launch, with a nearer floor (a live track in the anticipative
+  engine), can land a boundary earlier, and is then in the capture. The
+  capture runs until that boundary is heard (`endsFrame`;
+  `Engine::launchCaptureEnding` says one is pending) and then ends on
+  it, on the sample a launch there switches on; a launch applied from the
+  boundary on is not in it. `endsBeat` (`ends_at`) is that sample's beat,
+  which the commit's `to` will be; after a transport loop wrap it is the
+  song's beat in the loop, while `to` runs on by running time. On again before it cancels the end, another end replaces it, and
+  `launch.commit` is refused meanwhile (`launch.capture.ending`). A
+  relocation (a seek, a stop, a loop change) ends a capture that has run
+  any frames, where it was heard, ending or not; one that has not begins
+  again where the transport goes. A capture armed while a launched clip's
+  MIDI note sounds commits without the rest of that note, at any rate:
+  the committed piece starts at the capture's start and does not chase
+  it (a stated limit, test_clip_player_rate.cpp); armed in a rest it is
+  exact. A capture lives in one transport epoch
+  (ADR-0097, revision 2026-11-22). It runs through master playrate edits;
+  arming is refused with `launch.playrate` while a launched audio clip
+  plays (one played once, until its pass ends) and the newest plan keeps
+  the pitch, and such a plan arriving ends
+  a running capture with a warning naming the clip (the stretch converter
+  reading it has no committed equivalent). For the same reason a switch
+  that leaves or returns to an arrangement holding audio, queued while the
+  newest plan keeps the pitch (`captureBeforeStretchCut`, at placement and
+  at each service), ends the capture on that switch's boundary, the
+  launch not in it, with a warning naming the track; MIDI launches on
+  other tracks are captured.
 - **Committing it.** `launch.commit` lays the capture out linearly: a
   launch at running frame f lands at the capture's start plus f, whatever
   the loop did. On each track that left the arrangement, the stretches
@@ -653,15 +691,43 @@ the same.*
     (`PlayerReader`): positions are the frames' unwrapped song positions,
     and its source folds them over the loop and maps them by the player's
     phase rule. It keeps no state between quanta, so a launch primes
-    nothing. Under a playrate that keeps the pitch an audio clip has no
+    nothing. A clip that a commit lays one item per period
+    (`clipLaysAsOneItem` false: its period is not its content's whole pass
+    from the start) reads each period alone, silent outside it, as that
+    item does, so the converter does not read across a period's wrap; a
+    quantum that crosses one is read again for its later frames
+    (`PlayerReader::later`). A switch's outgoing side reads nothing past
+    its crossfade, as the commit's pieces: the clip fading out (or a clip
+    chain's input going out) is silent from the anchor plus 240 song
+    samples, and the arrangement's tape items read nothing past it after a
+    switch away, nor before the anchor while a switch back fades them in
+    (`Clip::gateFrom`, set by `launchAudio`; a stretch converter is not
+    cut). Within the kernel's reach before a switch that lands on such a
+    clip's wrap, live reads the pass's end gated at the wrap while the
+    commit reads on (the switch reaches the node at its frame): a stated
+    limit, measured up to 0.011. Under a playrate that keeps the pitch an audio clip has no
     player yet (step 1b): compile warns and its launch is refused with
     `launch.playrate`.
+  - *Capture* runs in song time (above): placement gives each launch its
+    song frame, the boundary's unwrapped song sample, and the capture
+    counts song samples from the published rate clock, so a commit lays
+    each launch on its song position whatever the rate did. The commit
+    meets the rate-1 commit's standard: exact away from the switches'
+    crossfades, within 1e-6 through them (the float32 switch gain). Within
+    the tape kernel's reach of the capture's first and last samples (128
+    song samples each), where its items begin or end while the performance
+    went on, it differs by up to the level of the audio cut there (a stated
+    limit, measured and bounded by the tests). Under a pitch-keeping rate a
+    switch that cuts an arrangement audio item, which a stretch converter
+    reads on past the cut live, ends the capture on its boundary (below).
   - *MIDI* (`rateLaunchMidi`, a clip chain's input, a rack's Notes feed):
     each event at the first frame whose song position reaches it; what is
     held ends where the song enters a new loop pass; a switch's first frame
     reaches back to the anchor (`ClipWindow::Anchor`).
-  - *The switch crossfade* runs in device frames, 5 ms as heard
-    (`launchClock`; `LaunchState::fadeStart` is the node's frame there).
+  - *The switch crossfade* runs over the same 240 song samples as at
+    unity, from the anchor (`LaunchState::fadeStart`), each frame's share
+    by its song position (`launchClock`), as a committed item's fade is:
+    it is heard as 5 ms divided by the rate (ADR-0097, note 2026-11-22).
   - *Clip-time lanes and a clip chain's take envelopes* are not bound to
     the rate timeline; they read the clip position from the song position.
   - A frozen track's print cuts in on a playrate plan (no

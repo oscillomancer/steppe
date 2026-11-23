@@ -332,10 +332,18 @@ ends with its piece, and a note the later piece's take holds into its start is
 chased to the start (the rules of a split).
 
 The result is `{pieces: [{item, from, to, take, index, name, fade_in,
-fade_out}]}` in time order, `from` and `to` the core seam beats and
-`take` the piece's active take id. `take.comp.get {item | items}` (query)
-returns the same list for an existing comp, with each piece's current fades,
+fade_out}], crossfade, crossfade_shape}` in time order, `from` and `to` the core
+seam beats and `take` the piece's active take id. `take.comp.get {item | items}`
+(query) returns the same for an existing comp, with each piece's current fades,
 and the run's take names.
+
+**The crossfade a run reads back as** (`model::compCrossfade`, which the GUI calls
+too; `crossfade` in seconds, `crossfade_shape` `cos` or `linear`): the longest
+seam-side fade of the run and that fade's shape, so a seam clamped by short pieces
+does not shrink it, and `take.comp` called with the read-back values and the spans
+`take.comp.get` gives rebuilds the same comp (byte for byte). A run with no seam (one
+piece) reads the default, 0.01 and `cos`; a run whose seams are all hard cuts reads 0;
+a fade of a shape `take.comp` does not offer (a GUI-made one) reads as `cos`.
 
 Refusals, each with a code, a message, a path (`/args/item`, `/args/spans/1/from`) and a hint: `comp.item` (neither or both of `item`
 and `items`, or an empty `items`), `comp.takes` (fewer than two takes),
@@ -368,7 +376,10 @@ same spans give from scratch, with the full crossfade; a MIDI seam moved five ti
 two pieces and one sounding C4 and G4, as from scratch; pieces that differ keep their
 boundary, and for MIDI the call warns `comp.midi_boundary`;
 MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
-`take.comp.get` after a save and reopen; one undo step; and every refusal.
+`take.comp.get` after a save and reopen, and its `crossfade` and `crossfade_shape` (a comp
+with one seam clamped reads back the requested length, a hard-cut run 0, one piece the default;
+`take.comp` with the read-back values and spans is byte for byte the comp); one undo step; and
+every refusal.
 
 ### 1.6 Sources
 
@@ -1807,7 +1818,14 @@ clip's own at the clip beat it sounds at, a following take's own at the note's c
 beat for its written notes, and the song's for `sounding`. A written note sounds where
 `notePlace` puts it (the take's start offset and playrate), so the right half of a
 split item, a trimmed or a rate-changed take names each note by the chord it sounds
-under, and a take's context phase and period decide the context beat. A key change inside an item changes the names where it
+under, and a take's context phase and period decide the context beat. A clip's note
+reads the clip beat it first sounds at through the clip's loop window, else (it never
+sounds) where its content sits, kept inside the clip: the beat `midi.edit`'s degrees
+read; one before the clip's start reads the clip's context at beat 0. A place before
+the song's start, where nothing sounds, reads the song's context at beat 0. The
+places are `model::writtenNamePlace` (an item's written note), `clipNamePlace` and
+`songNamePlace` (`follow.h`), which the piano roll's labels and messages read too, so
+the two name a note alike. A key change inside an item changes the names where it
 holds, and an item with no chord and one key reads as before.
 
 **Lead sheet.** `context.get`'s `text` and `context.write {text}` use one line per

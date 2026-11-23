@@ -40,6 +40,18 @@ Result<std::vector<CompPiece>> compRun(const Session&, std::optional<Id> item,
 // Joining them loses nothing: a note held across the boundary sounds once.
 bool joinablePieces(const Session&, Id left, Id right);
 
+// The crossfade a run was made with (take.comp's `crossfade` and `crossfade_shape`), read back
+// from the stored pieces for take.comp.get and for a GUI that edits a comp: the longest
+// seam-side fade of the run, and that fade's shape (a seam clamped by short pieces does not
+// shrink it). A run of one piece (no seam) gives the default; a run whose seams are all hard
+// cuts gives 0. A fade of a shape take.comp does not offer reads as cos.
+inline constexpr double kDefaultCompCrossfade = 0.01;  // seconds
+struct CompCrossfade {
+    double seconds = kDefaultCompCrossfade;
+    FadeShape shape = FadeShape::Cos;
+};
+CompCrossfade compCrossfade(const Session&, std::span<const CompPiece> run);
+
 // Moves an item's start (end) to a time, keeping its end (start), in the item's own domain.
 void setItemStartSeconds(const Session&, Item&, double startSec);
 void setItemEndSeconds(const Session&, Item&, double endSec);

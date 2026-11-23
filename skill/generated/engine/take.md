@@ -365,6 +365,14 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "additionalProperties": false
       }
     },
+    "crossfade": {
+      "type": "number",
+      "description": "Seconds."
+    },
+    "crossfade_shape": {
+      "type": "string",
+      "enum": ["cos", "linear"]
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -372,7 +380,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["pieces"],
+  "required": ["pieces", "crossfade", "crossfade_shape"],
   "additionalProperties": false
 }
 
@@ -413,7 +421,9 @@ Result:
 
 ```json
 {
-  "pieces": "<any>"
+  "pieces": "<any>",
+  "crossfade": 0,
+  "crossfade_shape": "cos"
 }
 
 ```
@@ -422,7 +432,7 @@ Result:
 
 List the pieces of a comp: spans, takes and fades.
 
-The pieces of the comp that item belongs to (or items), in time order: from and to are the seams in beats (crossfades taken out), take and index the take each plays, fade_in and fade_out the crossfades in seconds. An item with several takes and no seams is a comp of one piece.
+The pieces of the comp that item belongs to (or items), in time order: from and to are the seams in beats (crossfades taken out), take and index the take each plays, fade_in and fade_out the crossfades in seconds. crossfade and crossfade_shape are the run's own: its longest seam fade (seconds) and that fade's shape, which a seam shortened by short pieces does not shrink, so take.comp with them rebuilds the same comp (the default 0.01 and cos for one piece, 0 for hard seams). An item with several takes and no seams is a comp of one piece.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -499,6 +509,14 @@ Kind: `query`. Exposure: `mcp-exec`.
         "additionalProperties": false
       }
     },
+    "crossfade": {
+      "type": "number",
+      "description": "Seconds."
+    },
+    "crossfade_shape": {
+      "type": "string",
+      "enum": ["cos", "linear"]
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -506,7 +524,7 @@ Kind: `query`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["pieces"],
+  "required": ["pieces", "crossfade", "crossfade_shape"],
   "additionalProperties": false
 }
 
@@ -527,7 +545,9 @@ Result:
 
 ```json
 {
-  "pieces": "<any>"
+  "pieces": "<any>",
+  "crossfade": 0.01,
+  "crossfade_shape": "cos"
 }
 
 ```

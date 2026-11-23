@@ -1128,11 +1128,13 @@ q = nil
 
 ---@class Steppe.launch_capture_args
 ---@field on boolean
+---@field quantize? "bar"|"beat"|"1/2"|"1/4"|"1/8"|"1/16"|"1/32"|"none" on: false only: end at this quantize's next boundary (none, or left out: now)
 
 ---@class Steppe.launch_capture_result
 ---@field on boolean
 ---@field from? number
 ---@field to? number
+---@field ends_at? number
 ---@field warnings? table[]
 
 ---@class Steppe.launch_clip_args
@@ -1173,6 +1175,7 @@ q = nil
 ---@class Steppe.launch_state_result
 ---@field playing boolean
 ---@field capturing boolean
+---@field capture_ends? number
 ---@field tracks table[]
 ---@field warnings? table[]
 
@@ -2154,6 +2157,8 @@ q = nil
 
 ---@class Steppe.take_comp_result
 ---@field pieces table[]
+---@field crossfade number Seconds.
+---@field crossfade_shape "cos"|"linear"
 ---@field warnings? table[]
 
 ---@class Steppe.take_comp_get_args
@@ -2162,6 +2167,8 @@ q = nil
 
 ---@class Steppe.take_comp_get_result
 ---@field pieces table[]
+---@field crossfade number Seconds.
+---@field crossfade_shape "cos"|"linear"
 ---@field warnings? table[]
 
 ---@class Steppe.take_extract_args

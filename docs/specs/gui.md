@@ -1740,9 +1740,13 @@ last keystroke, which in the app is the pass that keystroke woke; a test
 steps it by its own time and waits for nothing. A draft that would replace MIDI changed
 elsewhere since it was loaded is not written by the pause, leaving the panel or
 closing the editor: the panel says so, and Ctrl+Enter applies it over the
-change. This is the
+change. The panel names notes as the roll's labels do (below); whether the MIDI
+changed is judged on the text by the default table, so a key or chord edit,
+which re-spells the names without changing the MIDI, never holds a draft. This is the
 LLM-native differentiator: the same text an agent writes is visible and
-editable by the human. The event list edits notes and CC events;
+editable by the human. The event list edits notes and CC events; its pitch
+cells name notes as the roll's labels do, and a pitch typed in takes one or two
+sharps or flats (`F##4`, `Ebb4`, as a chord tone's spelling shows them);
 double-click editing requires a row hit and edits that row. Roll gesture
 anchors use exact model timing rather than the rounded `midi.notes` query.
 
@@ -1769,7 +1773,8 @@ clip is edited, its context included:
   the grid, and marks the end with a line and "end" as the audio form does
   (none when the end is scrolled out of view).
 - What the roll shows on a clip is the clip's context: its key at the start
-  names the key button and its keys shade the rows and spell the notes; its
+  names the key button and its keys shade the rows; its key and chords spell
+  the notes (where each first sounds, as above); its
   chord points fill the strip's chord row, the last cell ending with the
   clip, and its key points a key row under it (a tick and the key's name at
   each, as on the context track's ruler). A degree drag previews in the clip's key at the note's clip beat, as
@@ -1826,7 +1831,7 @@ written. The roll shows both, from `model::soundingNotes` (what the engine
 compiles) and, for a place no note has yet, `model::placeAt` and
 `soundsAt`:
 - **The sounding view** is the default: each note drawn where it sounds,
-  its name spelled in the song's key; its written pitch a 1-unit outline in
+  its name spelled by the song's key and chord there; its written pitch a 1-unit outline in
   the notes' colour at 60%, under the notes, with no name, only where the
   two differ. A note not heard (outside the loop window, past the end), and
   channel 10, have no outline. A note outside the item is drawn dim, as in
@@ -1862,7 +1867,8 @@ compiles) and, for a place no note has yet, `model::placeAt` and
   take's), Clear the take's context. A take with no context has no row; a
   right-click anywhere on the strip opens the same menu, to give it one.
 - **Key, shading, spelling, title.** The sounding view reads the song's
-  key; the written view the take's own at each note's context beat, and
+  key, and its chords for the names; the written view the take's own at each
+  note's context beat (key and chord for the names), and
   its key button names the take's key where the content starts. The title
   says "follows D major → E minor" (the take's key at its start, the
   song's at the item's start) or "written in D major", and its "outside
@@ -1883,12 +1889,14 @@ compiles) and, for a place no note has yet, `model::placeAt` and
   - **By semitones** it steps the written pitch. Where the note lands on a
     pitch that a neighbouring written pitch also sounds as there (the
     mapping merges an alteration into the next degree), the status line
-    says "Eb4 and E4 both sound as G4 here" (the written pitches named in
-    the take's key, the sounding one in the song's).
+    says "Eb4 and E4 both sound as G4 here" (the written pitches named by
+    the take's key and chord at the note's place, the sounding one by the
+    song's where it sounds, as the labels).
   - A double-click writes the written pitch nearest the row that sounds as
     it there (within an octave); where none does, it writes nothing and the
     status line says "MIDI: nothing written sounds as G#4 here: draw it in
-    Written".
+    Written" (the row named by the song's key and chord there, in the pass
+    shown).
 - **Passes.** A looped item whose passes sound differently shows the pass
   chosen in **Pass 1 of 4** (`midi.pass`, shown only then; its menu lists
   "Pass 2 · bar 3"...), the first by default; edits change every pass.
@@ -2005,8 +2013,21 @@ key (ADR-0095: the key points 64 beats either side of the item and the one
 holding before them); where no key holds, or the point's scale is one this
 build cannot read, the black keys' rows are the dark ones, as on the keyboard
 at the left, so C major looks as the roll always has. The line under each C is
-stronger. Note names follow the key at the note's start (`harmony::spell`);
-the keyboard's C labels keep the default table. A strip 16 units
+stronger. A note's name is spelled by the key and chord holding where it
+starts (`harmony::spell`, ADR-0100: a chord tone by its degree, so G# under E
+and Ab under Ab in C major), at the place `midi.get` names it by, so the two
+always agree (`model::writtenNamePlace`, `clipNamePlace`, `songNamePlace`):
+- an item's written note at its source beat through the take's offset and
+  playrate (`model::notePlace`): a following take's own context at the note's
+  context beat (phase and period), else the song's at its song beat;
+- a clip's note at the clip beat it first sounds at, through the loop window,
+  else its content beat kept inside the clip (as `midi.edit`);
+- in a following take's sounding view, the song's where the note sounds in
+  the pass shown.
+A place before beat 0 (a trimmed item's notes before the song's start, a
+clip take's before the clip's) reads beat 0's context. The notation panel and
+the event list, which show written notes, name them by the written place; the
+keyboard's C labels keep the default table. A strip 16 units
 high above the roll numbers the project's bars (not the item's) at the roll's
 bar lines, in the ruler's mono caption: every bar, or every 2nd, 4th, 8th…
 counted from bar 1, the first stride whose spacing fits the widest number
@@ -2928,8 +2949,15 @@ same heights, scroll and colours.
   keeps the launches while the transport runs. When a stop, a seek or a
   loop change ends the capture, the app commits it (`launch.commit`, one
   undo step, as a recording is committed at stop) and, still lit, arms the
-  next one; a click on the lit cell ends the capture, commits it and turns
-  it off. A capture in which every track followed the arrangement writes
+  next one; a click on the lit cell turns it off and ends the capture:
+  while playing on the next boundary of the project's launch quantize
+  (`launch.capture {on: false, quantize}`, as a scene launch made then would
+  land), the cell staying lit, outlined dashed as a queued cell, until the
+  engine has heard it, then commits it (`CaptureControl::ending`,
+  `ArrangeView::setCaptureEnding`); stopped, at once. A second click before
+  that boundary ends the capture at once (`launch.capture {on: false}`)
+  and commits it: an impatient click means stop. (An agent cancels the end
+  with `launch.capture {on: true}`.) A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
   item in the way) shows its message in the status line. A commit that
   laid clips as written under another key (the answer's `mismatches`, with
@@ -2946,7 +2974,11 @@ same heights, scroll and colours.
 - **The cell follows the engine's capture**, whoever armed it: an agent's
   `launch.capture` lights it too (`CaptureControl::lit`). A click on a cell
   lit that way ends that capture and commits it, as the toggle's own; at
-  stop the app commits only a capture its toggle armed.
+  stop the app commits only a capture its toggle armed. An end the agent
+  asked for (`launch.capture {on: false, quantize}`) shows as the toggle's
+  does, dashed until its boundary (the engine's pending end,
+  `EngineApp::launchCaptureEnding`), and a click then ends the capture at
+  once and commits it, as a second click does.
 - **A refused commit keeps the performance.** When `launch.commit` refuses
   (a locked item under a track that left the arrangement, a clip loop with
   no item equivalent, a captured track or clip deleted meanwhile), nothing
@@ -3160,7 +3192,12 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   again and still kept, then after unlocking a click committing it in one
   undo step and arming; refused twice, a third click drops it. After a
   commit at stop the tracks are back on the arrangement, or queued to it.
-  An agent's capture lights the cell, and a click on it ends and commits it.
+  An agent's capture lights the cell, and a click on it while playing ends
+  it on the next launch quantize boundary, the cell lit until then, and
+  commits it. Off while playing ends on the next bar, then commits; the
+  cell is dashed meanwhile, and a second click ends it at once and commits.
+  An agent's quantized end dashes the cell too, and a click then ends the
+  capture at once and commits it.
 - A master playrate: at a rate that moves the pitch nothing dims; keeping
   the pitch, the audio clip and its scene's ▶ dim and nothing else (golden
   `launcher-refused-dark.png`), its ▶ click is refused with

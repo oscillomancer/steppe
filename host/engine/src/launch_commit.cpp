@@ -360,14 +360,14 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const bool once = clip.mode == model::ClipMode::Once;
             const double P = clip.length;
             if (!(P > 0)) continue;
+            // One looped item for the whole stretch when the clip's period is
+            // its content's pass; else one item per period (the launched
+            // player on a playrate plan reads each period alone, the same),
+            // looped within it when the clip loops its whole content.
+            const bool single = clipLaysAsOneItem(s, clip, take);
             const double content = contentLength(s, take);
             const bool wholeLoop = clip.loop.on && std::abs(clip.loop.start) <= 1e-9 * P &&
                                    std::abs(clip.loop.length - content) <= 1e-9 * std::max(1.0, P);
-            // One looped item for the whole stretch when the clip's period is
-            // its content's pass; else one item per period.
-            const bool single = !once && take.startOffset == 0 &&
-                                std::abs(P - content) <= 1e-9 * std::max(1.0, P) &&
-                                (!clip.loop.on || wholeLoop);
             const Stretch* prev = i ? &stretches[i - 1] : nullptr;
             // The switch crossfades in from the arrangement or a clip.
             const bool fadeIn =
