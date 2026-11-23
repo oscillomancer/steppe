@@ -249,7 +249,13 @@ after `L` ends, and the two are *take-compatible*: the same `lane` and
 timebase, not looped, the same number of takes (at least two), and at each
 index the same kind of source, the same take name and (audio) the same media.
 An overlap is allowed only when every take is audio; MIDI and empty-take
-pieces must touch exactly. A run that cannot be followed uniquely (two items
+pieces must touch exactly. And the source is continuous at the seam: at the
+seam's core sample (below) every take plays the same source position on both
+sides, to a sample (audio, through `audioSourceAt` with the take's warp and
+speed; MIDI, the source beat). A piece cut by `item.split` passes; a copy made by
+`item.duplicate` and placed right after the original holds the same takes but
+another source position, so it is another item, not the next piece, and a comp
+of one leaves the other alone. A run that cannot be followed uniquely (two items
 could continue it) is refused, not guessed.
 
 **`take.comp {item | items, spans, crossfade?, crossfade_shape?, bypass_groups?}`**
@@ -335,7 +341,8 @@ shortened by short pieces; the same call twice (also through another piece, at a
 tempo with off-grid spans) gives the same project bytes; spans that all name the current
 takes change nothing; a comp rebuilt over an earlier one renders as one built from
 scratch, and `take.activate {index}` keeps the seams; real time equals offline in both
-executors; MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
+executors; a copy placed after the original is not pulled into the comp and the original
+stays byte for byte; MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
 `take.comp.get` after a save and reopen; one undo step; and every refusal.
 
 ### 1.6 Sources

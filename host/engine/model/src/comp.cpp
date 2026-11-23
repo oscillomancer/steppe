@@ -4,6 +4,9 @@
 
 #include <algorithm>
 
+#include <cmath>
+
+#include "supple/model/audio_warp.h"
 #include "supple/time/timeline.h"
 
 namespace supple::model {
@@ -39,9 +42,38 @@ bool compatible(const Session& s, const Item& a, const Item& b) {
     return true;
 }
 
+// Whether every take plays the same source at the seam on both sides, to a sample: a split
+// piece does, a copy placed after the original (same takes, other source position) does not, and
+// is another item, not the next piece.
+bool sourceContinues(const Session& s, const Entry& l, const Entry& r) {
+    const double rate = s.project->sampleRate;
+    const std::int64_t at = r.start + (l.end - r.start) / 2;
+    const double seamSec = static_cast<double>(at) / rate;
+    const ItemSpan ls = itemSpan(s, *l.item), rs = itemSpan(s, *r.item);
+    const double seamBeat = s.timeMap->beatAt(seamSec);
+    const double beatSample = s.timeMap->beatAt(seamSec + 1.0 / rate) - seamBeat;
+    for (std::size_t i = 0; i < l.item->takes.size(); ++i) {
+        const Take& x = *s.takes.find(l.item->takes[i]);
+        const Take& y = *s.takes.find(r.item->takes[i]);
+        if (!x.source) continue;
+        if (x.source->kind == Kind::Media) {
+            const double a = audioSourceAt(x, seamSec - ls.startSec);
+            const double b = audioSourceAt(y, seamSec - rs.startSec);
+            const double speed = std::max({1.0, audioSpeed(x), audioSpeed(y)});
+            if (std::fabs(a - b) * rate > speed + 1e-6) return false;
+        } else {
+            const double a = x.startOffset + (seamBeat - ls.startBeat) * x.playrate;
+            const double b = y.startOffset + (seamBeat - rs.startBeat) * y.playrate;
+            if (std::fabs(a - b) > std::max(1.0, x.playrate) * beatSample + 1e-9) return false;
+        }
+    }
+    return true;
+}
+
 bool continues(const Session& s, const Entry& l, const Entry& r) {
     if (!(r.start > l.start && r.start <= l.end && r.end > l.end)) return false;
     if (!compatible(s, *l.item, *r.item)) return false;
+    if (!sourceContinues(s, l, r)) return false;
     return r.start == l.end || (allAudio(s, *l.item) && allAudio(s, *r.item));
 }
 

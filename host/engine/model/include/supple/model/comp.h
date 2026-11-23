@@ -23,7 +23,9 @@ struct CompPiece {
 // and no later than it ends, ends after it, and the two are take-compatible (same lane and
 // timebase, not looped, the same count of at least two takes, and at each index the same kind
 // of source, name and, for audio, media). An overlap is allowed only between audio items; MIDI
-// pieces touch. The core of a seam is the middle sample of the overlap.
+// pieces touch. At the core of the seam every take plays the same source on both sides, to a
+// sample (a copy placed after the original does not, and is not the next piece).
+// The core of a seam is the middle sample of the overlap.
 // Errors: comp.takes (an item with fewer than two takes), comp.loop, comp.mismatch (`items`
 // that do not continue one another, or two items that could continue the run), each with the
 // path of the argument (`/item`, `/items/k`).

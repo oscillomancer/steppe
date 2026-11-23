@@ -32,7 +32,9 @@ Call `take.comp` again on any piece (or give `items`, the pieces in any order) t
 seams or change spans. The crossfades are rebuilt for the whole comp, and the same
 call twice changes nothing. `take.comp.get {item}` reads a comp you did not make.
 A seam where both sides play the same take stays a seam and is a hard cut: the
-source is continuous there.
+source is continuous there. A copy made with `item.duplicate` and placed right after
+the item is not part of its comp (its source does not continue), so comping one leaves
+the other alone.
 
 What to know:
 

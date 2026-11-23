@@ -599,3 +599,32 @@ TEST_CASE("take.comp refusals carry a code, message, path and hint") {
                   "comp.mismatch", "/items/1");
     }
 }
+
+TEST_CASE("take.comp does not pull in a copy of the item placed right after it") {
+    CompFixture f;
+    f.run("item.set", R"({"item":"it_1","fade_out":0.2})");
+    f.run("item.duplicate", R"({"item":"it_1"})");
+    f.run("take.activate", R"({"item":"it_2","index":1})");
+    const model::Session before = f.app->head();
+    const auto original =
+        json::writeCanonical(model::toJson(*before.items.find({model::Kind::Item, 1})));
+    // The copy has the same takes and touches the original, but its source does not continue
+    // the original's at the boundary: it is another item, not the next piece.
+    const auto got = f.run("take.comp.get", R"({"item":"it_2"})");
+    REQUIRE(got.find("pieces")->asArray().size() == 1);
+    CHECK(got.find("pieces")->asArray()[0].find("item")->asString() == "it_2");
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("pieces")->asArray().size() == 1);
+    f.run("take.comp", R"({"item":"it_2","spans":[{"from":5,"to":6,"index":2}]})");
+    const model::Session after = f.app->head();
+    CHECK(json::writeCanonical(model::toJson(*after.items.find({model::Kind::Item, 1}))) ==
+          original);
+    for (model::Id take : before.items.find({model::Kind::Item, 1})->takes)
+        CHECK(json::writeCanonical(model::toJson(*after.takes.find(take))) ==
+              json::writeCanonical(model::toJson(*before.takes.find(take))));
+    // The copy was comped alone: three pieces, and the original's 0.2 s fade-out is still there.
+    CHECK(after.items.size() == 4);
+    CHECK(after.items.find({model::Kind::Item, 1})->fadeOut.length == doctest::Approx(0.2));
+    // Naming both as one comp is refused rather than guessed.
+    f.refused("take.comp", R"({"items":["it_1","it_2"],"spans":[{"from":1,"to":2,"index":0}]})",
+              "comp.mismatch", "/items/1");
+}
