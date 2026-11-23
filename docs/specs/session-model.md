@@ -350,12 +350,17 @@ are taken in track order, inside the one command and so one undo step.
   cut inside, its crossfades, its start offsets and play rates do not matter: a member that is
   still whole beside a split lead is comped to the spans (a region no span covers keeps the take
   the member's own piece plays there, as for any run), and so is one whose crossfade differs.
-- **A track with no item over the run** is skipped and named in the reply (`skipped_tracks`, track
-  ids), not refused.
+- **A track the comp leaves alone** is skipped and named in the reply, not refused:
+  `skipped_tracks: [{track, reason}]`, with `reason` `no_item` (no item over the run) or `one_take`
+  (every item of the track over the run has a single take, so there is nothing to comp: a bass or a
+  DI grouped with takes of drums is ordinary). A skipped track is not a member, is not touched
+  (byte for byte) and does not count against `uniform`.
 - **A track whose items cannot follow refuses the whole call**, before anything is written, with
-  the member's track (`tr_2 (Second)`) in the message and the caller's piece it overlaps most in the
-  path: `comp.group_takes` (an item with fewer than two takes, or fewer takes than the highest
-  index a span plays), `comp.group_mismatch` (its items over the run do not form a run, or start
+  the member's track (`tr_2 (Second)`) in the message and the member in the `path` (below):
+  `comp.group_takes` (an item with several takes but fewer than the highest
+  index a span plays needs; or a track with a one-take item beside items with several, which
+  `take.comp.get` lists in `differing_members`; a track whose items all have one take is skipped
+  instead), `comp.group_mismatch` (its items over the run do not form a run, or start
   or end elsewhere; the inner reason and hint of `compRun` are in the message and hint, for example
   a looped item), `item.locked` (a locked piece of any member). `bypass_groups: true` comps the named
   run alone in every case. `comp.linked`, which an item in an edit group used to get ("set
@@ -404,7 +409,17 @@ the item), `comp.loop` (a looped item: comp an item that does not loop, or
 item's edit group that cannot follow: see Edit groups below; `comp.linked` is retired),
 `item.locked` (any piece locked, a member's too),
 `item.kind` (a clip). Per-item refusals with `items` name the piece in the path
-(`/args/items/2`); with `item`, `/args/item`.
+(`/args/items/2`); with `item`, `/args/item`. A refusal that comes from another member of the
+item's edit group (`comp.group_mismatch`, `comp.group_takes`, `item.locked` for a member's piece)
+points at that member instead of at the call's arguments, since the member's items are not in them:
+the handler's path is `/members/<track id>` with `/items/<item id>` after it when one item is the
+cause (`/members/tr_2/items/it_5`; the extent not matching names only the track), shaped like the
+reply's `members`, and the bus roots it at `/args` as it does every handler path
+(`/args/members/tr_2/items/it_5`). It is a locator, not a pointer that resolves in the call's input;
+no generic consumer resolves an error's path against the input (the bus, the control protocol, the
+Lua bindings and the MCP layer carry it as text; the GUI render dialog strips `/args` to print it),
+so a caller reads the track and item from the path instead of from the message. The lead's own
+refusals (its pieces locked or looped) keep `/args/item` or `/args/items/<i>`.
 
 Playback and offline render read the stored items, so real time equals
 offline in both executors; there is no audio-path code. Old files load
@@ -428,7 +443,7 @@ MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
 `take.comp.get` after a save and reopen, and its `crossfade` and `crossfade_shape` (a comp
 with one seam clamped reads back the requested length, a hard-cut run 0, one piece the default;
 `take.comp` with the read-back values and spans is byte for byte the comp; `uniform` and the seams a hand-set length,
-shape or hard cut lists); an edit group (whole unsplit members, members with other start offsets or play rates, a member with too few takes or a run that does not line up: nothing changes, a missing member entry in the read-back, `bypass_groups` for one item); one undo step; and
+shape or hard cut lists); an edit group (whole unsplit members, members with other start offsets or play rates, a one-take member: skipped as `one_take`, untouched, not counted against `uniform`; a member with too few takes for a span or a run that does not line up: nothing changes, a missing member entry in the read-back, `bypass_groups` for one item); one undo step; and
 every refusal.
 
 ### 1.6 Sources

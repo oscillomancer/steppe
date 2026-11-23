@@ -766,7 +766,8 @@ TEST_CASE("take.comp refusals name the piece they mean in /items/k") {
     const std::string copy = "it_" + std::to_string(f.app->head().items.size());
     f.run("item.move", R"({"item":")" + copy + R"(","track":"tr_2","position":)" + at +
                            R"(,"bypass_groups":true})");
-    f.refused("take.comp", all, "comp.group_mismatch", "/items/1");
+    // The refusal comes from the member, so the path names it, not the caller's piece.
+    f.refused("take.comp", all, "comp.group_mismatch", "/members/tr_2");
 }
 
 namespace {
@@ -1099,6 +1100,7 @@ TEST_CASE("take.comp on a group names a member whose items do not span the same 
     REQUIRE_FALSE(result);
     CHECK(result.error().code == "comp.group_mismatch");
     CHECK(result.error().message.find("tr_2") != std::string::npos);
+    CHECK(result.error().path == "/args/members/tr_2");  // the member, not the caller's piece
     CHECK_FALSE(result.error().hint.empty());
     CHECK(model::serializeProject(f.app->head()) == before);
     // take.comp.get does not refuse: it lists the track as not like the lead.
@@ -1110,15 +1112,16 @@ TEST_CASE("take.comp on a group names a member whose items do not span the same 
 }
 
 TEST_CASE("a member's refusals carry the reason and the hint of what is wrong") {
-    SUBCASE("an item with one take") {
-        GroupFixture f(3, 1);
+    SUBCASE("an item with fewer takes than a span plays") {
+        GroupFixture f(3, 2);  // tr_2 has two takes; a span plays index 2
         const std::string before = model::serializeProject(f.app->head());
         auto result = f.call("take.comp", R"({"item":"it_1","crossfade":0.02,
-            "spans":[{"from":0,"to":1,"index":0}]})");  // index 0 only: still refused
+            "spans":[{"from":0,"to":1,"index":2}]})");
         REQUIRE_FALSE(result);
         CHECK(result.error().code == "comp.group_takes");
         CHECK(result.error().message.find("tr_2") != std::string::npos);
-        CHECK(result.error().hint.find("take") != std::string::npos);
+        CHECK(result.error().hint.find("0..1") != std::string::npos);
+        CHECK(result.error().path == "/args/members/tr_2/items/it_2");
         CHECK(model::serializeProject(f.app->head()) == before);
     }
     SUBCASE("a looped item") {
@@ -1129,6 +1132,7 @@ TEST_CASE("a member's refusals carry the reason and the hint of what is wrong") 
         CHECK(result.error().code == "comp.group_mismatch");
         CHECK(result.error().message.find("tr_2") != std::string::npos);
         CHECK(result.error().hint.find("loop") != std::string::npos);  // compRun's own hint
+        CHECK(result.error().path == "/args/members/tr_2/items/it_2");
         CHECK(result.error().hint.find("bypass_groups") != std::string::npos);
     }
 }
@@ -1139,12 +1143,74 @@ TEST_CASE("a group track with nothing over the comp is skipped and named, not an
     f.run("group.add", R"({"name":"More","members":["tr_1","tr_3"],"links":["edit"]})");
     const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
     REQUIRE(got.find("skipped_tracks")->asArray().size() == 1);
-    CHECK(got.find("skipped_tracks")->asArray()[0].asString() == "tr_3");
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_3");
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "no_item");
     const auto result = f.run("take.comp", kGroupSpans);
     REQUIRE(result.find("skipped_tracks")->asArray().size() == 1);
-    CHECK(result.find("skipped_tracks")->asArray()[0].asString() == "tr_3");
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_3");
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "no_item");
     CHECK(result.find("members")->asArray().size() == 1);  // tr_2 is still comped
     sameComp(f.pieces(GroupFixture::track(1)), f.pieces(GroupFixture::track(2)));
+}
+
+TEST_CASE("a group member with one take is skipped as one_take and left untouched") {
+    // Drums with takes grouped with a one-take bass: ordinary, comps without bypass_groups.
+    GroupFixture f(3, 1);  // tr_2's item has a single take
+    const std::string bassItem = f.pieces(GroupFixture::track(2))[0].item.str();
+    // Byte for byte: the item's and its takes' canonical JSON, as the undo test compares them.
+    auto describeItem = [&] {
+        const model::Session head = f.app->head();
+        const auto& it = *head.items.find(*model::Id::parse(bassItem));
+        std::string out = json::writeCanonical(model::toJson(it));
+        for (const auto& take : it.takes)
+            out += json::writeCanonical(model::toJson(*head.takes.find(take)));
+        return out;
+    };
+    const std::string bassBefore = describeItem();
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    REQUIRE(got.find("skipped_tracks")->asArray().size() == 1);
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_2");
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "one_take");
+    CHECK(got.find("members")->asArray().empty());
+    CHECK(got.find("differing_members")->asArray().empty());
+    CHECK(got.find("uniform")->asBool());  // does not count against uniform
+    const auto steps = f.app->versions().history().size();
+    const auto result = f.run("take.comp", kGroupSpans);
+    CHECK(f.app->versions().history().size() == steps + 1);
+    CHECK(result.find("members")->asArray().empty());
+    REQUIRE(result.find("skipped_tracks")->asArray().size() == 1);
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "one_take");
+    CHECK(f.pieces(GroupFixture::track(1)).size() >= 3);  // the drums are comped
+    REQUIRE(f.pieces(GroupFixture::track(2)).size() == 1);
+    CHECK(describeItem() == bassBefore);
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+}
+
+TEST_CASE("a member with a one-take item and a several-take item is refused, not skipped") {
+    GroupFixture f;  // tr_2's recording: three takes
+    f.run("item.split", R"({"item":"it_2","at":2,"bypass_groups":true})");
+    // Two items on tr_2 now; the later one keeps one take only.
+    std::vector<std::pair<double, model::Id>> byStart;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == GroupFixture::track(2)) byStart.emplace_back(e.value->position, e.id);
+    std::sort(byStart.begin(), byStart.end());
+    REQUIRE(byStart.size() == 2);
+    const std::vector<model::Id> takes = f.app->head().items.find(byStart[1].second)->takes;
+    REQUIRE(takes.size() == 3);
+    f.run("take.remove", R"({"take":")" + takes[1].str() + R"("})");
+    f.run("take.remove", R"({"take":")" + takes[2].str() + R"("})");
+    const std::string before = model::serializeProject(f.app->head());
+    auto result = f.call("take.comp", kGroupSpans);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "comp.group_takes");
+    CHECK(result.error().message.find("tr_2") != std::string::npos);
+    CHECK(result.error().path == "/args/members/tr_2/items/" + byStart[1].second.str());
+    CHECK(model::serializeProject(f.app->head()) == before);
+    // take.comp.get does not refuse: the track is listed as differing, not skipped.
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    CHECK(got.find("skipped_tracks")->asArray().empty());
+    REQUIRE(got.find("differing_members")->asArray().size() == 1);
+    CHECK(got.find("differing_members")->asArray()[0].asString() == "tr_2");
 }
 
 TEST_CASE("a locked member refuses the whole call before anything is written") {
@@ -1154,7 +1220,12 @@ TEST_CASE("a locked member refuses the whole call before anything is written") {
     auto result = f.call("take.comp", kGroupSpans);
     REQUIRE_FALSE(result);
     CHECK(result.error().code == "item.locked");
+    CHECK(result.error().path == "/args/members/tr_2/items/it_2");  // the member's item
     CHECK(model::serializeProject(f.app->head()) == before);
+    // The lead's own lock still points into the call's arguments.
+    GroupFixture g;
+    g.run("item.set", R"({"item":"it_1","locked":true,"bypass_groups":true})");
+    g.refused("take.comp", kGroupSpans, "item.locked", "/item");
 }
 
 TEST_CASE("a member's crossfade or cuts do not matter: it is a member, and comped together") {
