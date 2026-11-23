@@ -508,3 +508,25 @@ TEST_CASE("playrate timeline: a smoothed scalar glide resumes exactly from a sna
             REQUIRE(resumed.rate(device) == whole.rate(device));
     }
 }
+
+TEST_CASE("streaming stretch: its lead is 60 ms of output and 60 ms of analysis at any rate") {
+    // S3 step D's measure: a launched clip's converter warms up cooperatively
+    // over ceil(lookahead / 64) quanta before its switch (one prime per
+    // quantum played); the analysis lookahead is read ahead in the source,
+    // which placement already knows, so it costs no device time.
+    for (const double rate : {44100., 48000., 96000.}) {
+        CAPTURE(rate);
+        StretchReader reader(rate);
+        const int frames = static_cast<int>(rate * 0.06);
+        CHECK(reader.lookahead() == frames);
+        CHECK(reader.analysisLookahead() == frames);
+        // Seek and prime: not ready until the last of those quanta.
+        const RateSource source{nullptr, impulse, 2};
+        reader.seek(source, 0, 1);
+        const auto quanta = static_cast<std::uint32_t>((frames + kRateQuantum - 1) / kRateQuantum);
+        reader.prime(source, quanta - 1);
+        CHECK_FALSE(reader.ready());
+        reader.prime(source, 1);
+        CHECK(reader.ready());
+    }
+}
