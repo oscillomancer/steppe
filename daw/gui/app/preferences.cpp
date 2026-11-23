@@ -164,6 +164,17 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
         json::parse(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
     if (!doc) return std::move(doc).error();
     const json::Value* schema = doc->isObject() ? doc->find("schema") : nullptr;
+    // A newer version's file: its settings are not read, and it is kept (save) before this
+    // version first writes over it. Reading newer minors is a separate decision.
+    if (schema && schema->isString() && engine::preferencesSchemaNewer(schema->asString()))
+        return Error(
+            "preferences.newer",
+            file.filename().string() + " is from a newer version (" + schema->asString() +
+                "), so this version uses its defaults",
+            "/schema",
+            "the file is kept as " +
+                engine::newerPreferencesBackup(file, schema->asString()).filename().string() +
+                " when this version first saves a setting; the newer version reads it");
     if (!schema || !schema->isString() ||
         (schema->asString() != kSchema && schema->asString() != "supple.preferences/1.0" &&
          schema->asString() != "supple.preferences/1.1" &&
@@ -306,6 +317,7 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
 
 Status Preferences::save(const std::filesystem::path& file) const {
     if (audioThreads > 64) return threadLimitError();
+    SUPPLE_TRY(engine::keepNewerPreferences(file));  // a newer version's file is kept once
     json::Value doc = json::Value::object();
     doc["schema"] = kSchema;
     doc["default_monitor"] = monitorName(defaultMonitor);
@@ -425,6 +437,10 @@ void PreferencesDialog::open() {
     form->limit = bodyLimit;
     ui::Node* body = &scroll.content();
     body->layout.gap = 6;
+    // A newer version's file was not read: say so above everything (Preferences::load).
+    if (!fileNotice.empty())
+        body->emplace<ui::TextBlock>("prefs.file.note", fileNotice, ui::Font::Ui, "small",
+                                     "ink-quiet");
     section(*body, "prefs.section.audio", "Audio");
     auto& audio = row(*body, "prefs.audio", "Audio device");
     audio_ = &audio.emplace<ui::Button>("prefs.audio.open", "", [this] {

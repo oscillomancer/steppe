@@ -84,6 +84,9 @@ class PreferencesDialog {
     // The most room the settings under the header may take before they
     // scroll, in design units. 0: what the window leaves (tests set it).
     float bodyLimit = 0;
+    // Shown above the settings while non-empty: the app sets it when the
+    // preferences file could not be used (a newer version's: preferences.newer).
+    std::string fileNotice;
     void setDefaultMonitor(model::Monitor m);  // applied at once and saved
     Status setMemoryLock(bool requested);
     Status setPreventDeepIdle(bool requested);

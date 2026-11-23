@@ -4700,6 +4700,19 @@ same preferences file; embedded hosts may provide their own persistence.
 The engine and GUI share `engine::kPreferencesSchema` for the current machine
 preferences schema, including a new engine-owned preferences file.
 
+A newer version's file is never destroyed (round 134 G2, for every future
+bump). `engine::preferencesSchemaNewer` says whether a label is newer than
+this build's (a higher minor of 1, or a higher major; an absent or malformed
+label is not). Before every write over the file, the engine's MIDI records
+writer and the GUI's `Preferences::save` call `engine::keepNewerPreferences`:
+a file whose schema is newer is first copied, as it is, to
+`<file>.<label, '/' as '-'>.bak` (`preferences.json.supple.preferences-1.12.bak`,
+`newerPreferencesBackup`), once (a backup already there is kept, so it stays
+the newer version's own file); a failed copy refuses the write
+(`preferences.backup`). The engine's writer then keeps the newer label and
+members, as before. Reading a newer minor's settings is a separate decision,
+not made.
+
 MIDI preference records have one writer, EngineApp. Generic GUI preference
 saves preserve the latest records on disk and ask the engine to persist its
 current records; opening a dialog never replaces engine state from a snapshot.

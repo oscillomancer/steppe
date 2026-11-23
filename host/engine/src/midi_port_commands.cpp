@@ -56,6 +56,7 @@ Status writeMidiRecords(const std::filesystem::path& file, json::Value doc,
     }
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
+    SUPPLE_TRY(keepNewerPreferences(file));  // a newer version's file is kept once
     return writeFileAtomic(file, json::writeCanonical(doc) + "\n");
 }
 }  // namespace

@@ -3472,7 +3472,13 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   Saved `zoom_height` bindings are ignored on load, retaining current defaults
   and unrelated customizations without changing the mouse file schema.
 - **Preferences** (Edit > Preferences…): app-wide settings, never project
-  state. The default monitoring of new channels (off, on — the default — or
+  state. A preferences file from a newer version (`engine::preferencesSchemaNewer`)
+  is not read: `Preferences::load` refuses it as `preferences.newer` (path
+  `/schema`), the app starts on the defaults, and it says so in the status line
+  at start and in a line above the settings (`prefs.file.note`,
+  `PreferencesDialog::fileNotice`), as well as on stderr. The file is kept
+  beside itself as `preferences.json.<label, '/' as '-'>.bak` before the first
+  save writes this version's (`engine::keepNewerPreferences`, once; engine.md). The default monitoring of new channels (off, on — the default — or
   auto; `preferences.json`, supple.preferences/1.6, sets
   `EngineApp::defaultMonitor`, so the agents' track.add follows it too), and
   a way into the mouse modifiers.

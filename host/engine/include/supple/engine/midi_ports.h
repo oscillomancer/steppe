@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #pragma once
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -9,6 +10,19 @@
 namespace supple::engine {
 // Shared current machine-preferences schema for engine and GUI writers.
 inline constexpr char kPreferencesSchema[] = "supple.preferences/1.11";
+// Whether `label` names a preferences schema newer than kPreferencesSchema: a
+// higher minor of 1, or a major above 1. An absent or malformed label is not.
+bool preferencesSchemaNewer(std::string_view label);
+// Where a newer build's preferences file is kept before this build first
+// writes over it: <file>.<label, '/' as '-'>.bak, so
+// preferences.json.supple.preferences-1.12.bak.
+std::filesystem::path newerPreferencesBackup(const std::filesystem::path& file,
+                                             std::string_view label);
+// Before every write over `file` (the GUI's preferences, the engine's MIDI
+// records): when it holds a newer schema, copy it to newerPreferencesBackup
+// once; a backup already there is kept. A file that is absent, does not read
+// as a JSON object or is not newer needs none.
+Status keepNewerPreferences(const std::filesystem::path& file);
 // Machine preferences, keyed by the backend's immutable port name. The JSON
 // record is retained, so members a later version adds survive edits. One
 // record per port carries everything it does: routing (ADR-0072) owns

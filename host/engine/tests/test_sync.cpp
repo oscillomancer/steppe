@@ -1419,6 +1419,27 @@ TEST_CASE("midi outputs: the engine writes the clock members and raises an older
     const auto later = readFile(options.midiPreferencesFile).value();
     CHECK(std::string(later.begin(), later.end()).find("supple.preferences/1.12") !=
           std::string::npos);
+    // Round 134 G2: and the newer version's file is kept beside it, once, before the first write
+    // over it: the backup holds what that version wrote, not this write's result.
+    const auto backup = dir / "preferences.json.supple.preferences-1.12.bak";
+    CHECK(newerPreferencesBackup(options.midiPreferencesFile, "supple.preferences/1.12") == backup);
+    REQUIRE(fs::exists(backup));
+    auto text = [](const fs::path& file) {
+        const auto read = readFile(file).value();
+        return std::string(read.begin(), read.end());
+    };
+    CHECK(text(backup) == R"({"schema":"supple.preferences/1.12"})");
+    REQUIRE(bus->execute(
+        {"midi.outputs.set", json::parse(R"({"port": "Synth", "spp": true})").value(), kOrigin}));
+    CHECK(text(backup) == R"({"schema":"supple.preferences/1.12"})");  // the first copy stays
+    // What counts as newer: a higher minor of 1, or a higher major; not this one, an older one or
+    // a label that is not a preferences schema.
+    CHECK(preferencesSchemaNewer("supple.preferences/1.12"));
+    CHECK(preferencesSchemaNewer("supple.preferences/2.0"));
+    CHECK_FALSE(preferencesSchemaNewer(kPreferencesSchema));
+    CHECK_FALSE(preferencesSchemaNewer("supple.preferences/1.9"));
+    CHECK_FALSE(preferencesSchemaNewer("supple.preferences/1.x"));
+    CHECK_FALSE(preferencesSchemaNewer("supple.project/9.0"));
     bus.reset();
     app.reset();
     fs::remove_all(dir);

@@ -706,15 +706,21 @@ int frontendMain(int argc, char** argv) {
     // into the mouse modifiers.
     const fs::path prefsFile = gui::Preferences::defaultFile(product::kSlug);
     gui::Preferences prefs;
+    std::string prefsNotice;  // a newer version's file: said in the UI, not only here
     if (!o.offscreen) {
-        if (auto loaded = gui::Preferences::load(prefsFile))
+        if (auto loaded = gui::Preferences::load(prefsFile)) {
             prefs = *loaded;
-        else
+        } else {
             std::fprintf(stderr, "preferences: %s (using the defaults)\n",
                          loaded.error().toString().c_str());
+            if (loaded.error().code == "preferences.newer")
+                prefsNotice = loaded.error().message + "; " + loaded.error().hint + ".";
+        }
     }
     gui::PreferencesDialog preferences(root, **app, mouseDialog, prefs,
                                        o.offscreen ? fs::path{} : prefsFile);
+    preferences.fileNotice = prefsNotice;
+    if (!prefsNotice.empty()) shell.setStatus(prefsNotice);
     preferences.onError = [](const std::string& message) {
         std::fprintf(stderr, "%s\n", message.c_str());
     };

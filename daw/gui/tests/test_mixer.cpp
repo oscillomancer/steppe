@@ -2219,6 +2219,58 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     CHECK_FALSE(f.app->stackRecordedTakes());  // what record.set {stack_takes} sets
 }
 
+// Round 134 G2: a newer version's preferences file is not read (its settings may mean something
+// this version does not know), and it is not destroyed either: before this version first writes
+// over it, the original is kept beside it, once, and the dialog and status line say so.
+TEST_CASE("preferences: a newer version's file is kept before the first save, and said") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto file = f.dir / "config" / "preferences.json";
+    const std::string newer =
+        R"({"copy_imported_media":false,"future":{"a":1},"schema":"supple.preferences/1.12"})";
+    REQUIRE(writeFileAtomic(file, newer));
+    auto loaded = gui::Preferences::load(file);
+    REQUIRE_FALSE(loaded);
+    CHECK(loaded.error().code == "preferences.newer");
+    CHECK(loaded.error().path == "/schema");
+    CHECK(loaded.error().message.find("newer version (supple.preferences/1.12)") !=
+          std::string::npos);
+    CHECK(loaded.error().message.find("defaults") != std::string::npos);
+    const auto backup = f.dir / "config" / "preferences.json.supple.preferences-1.12.bak";
+    CHECK(loaded.error().hint.find(backup.filename().string()) != std::string::npos);
+    // The app starts on the defaults with that file, and says why above the settings.
+    views::MouseMap map;
+    gui::MouseDialog mouse(*f.root, map, {});
+    gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
+    prefs.fileNotice = loaded.error().message + "; " + loaded.error().hint + ".";
+    prefs.open();
+    f.root->frame(false);
+    REQUIRE(f.root->find("prefs.file.note"));
+    CHECK(f.node("prefs.file.note")->valueText() == prefs.fileNotice);
+    CHECK(f.node("prefs.file.note")->bounds().y < f.node("prefs.audio")->bounds().y);
+    CHECK_FALSE(std::filesystem::exists(backup));  // reading it wrote nothing
+    // The first save keeps the newer file as it was, then writes this version's.
+    REQUIRE(prefs.setCopyImports(false));
+    REQUIRE(std::filesystem::exists(backup));
+    auto text = [](const std::filesystem::path& p) {
+        const auto bytes = readFile(p).value();
+        return std::string(bytes.begin(), bytes.end());
+    };
+    CHECK(text(backup) == newer);
+    CHECK(text(file).find(engine::kPreferencesSchema) != std::string::npos);
+    // Once: should the newer version write its file again, a later save keeps the first copy.
+    REQUIRE(writeFileAtomic(file, std::string(R"({"schema":"supple.preferences/1.12"})")));
+    REQUIRE(prefs.setCopyImports(true));
+    CHECK(text(backup) == newer);
+    REQUIRE(f.root->click("prefs.close"));
+    // Without a notice the dialog has no such line.
+    gui::PreferencesDialog plain(*f.root, *f.app, mouse, gui::Preferences{}, {});
+    plain.open();
+    f.root->frame(false);
+    CHECK(f.root->find("prefs.file.note") == nullptr);
+    REQUIRE(f.root->click("prefs.close"));
+}
+
 TEST_CASE("preferences: canonical round trip, older schemas and rejected values") {
     Fixture f;
     REQUIRE(f.ok);

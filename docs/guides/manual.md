@@ -78,6 +78,11 @@ process audio, locking memory, keeping CPUs out of deep idle) is under
 Locking memory and the CPU idle setting work on Linux only, and are listed
 only there.
 In a low window the settings scroll under the dialog's heading.
+If your preferences file was written by a newer version of Steppe, this
+version does not read it: it uses its defaults and says so at the top of the
+dialog. The first time you change a setting it keeps the newer file beside the
+new one, as `preferences.json.supple.preferences-<version>.bak`, so the newer
+version's settings are not lost.
 
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client
