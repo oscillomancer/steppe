@@ -698,8 +698,10 @@ the same.*
     each launch on its song position whatever the rate did. The commit
     meets the rate-1 commit's standard: exact away from the switches'
     crossfades, within 1e-6 through them (the float32 switch gain). Within
-    the tape kernel's reach of the capture's end (128 song samples) it
-    cannot hold what live read past the end; under a pitch-keeping rate an
+    the tape kernel's reach of the capture's first and last samples (128
+    song samples each), where its items begin or end while the performance
+    went on, it differs by up to the level of the audio cut there (a stated
+    limit, measured and bounded by the tests); under a pitch-keeping rate an
     arrangement audio item cut at a switch is read by a stretch converter
     whose history the commit does not reproduce.
   - *MIDI* (`rateLaunchMidi`, a clip chain's input, a rack's Notes feed):

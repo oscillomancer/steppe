@@ -947,9 +947,13 @@ the rate-1 standard, audio and MIDI, under a constant 0.75 and under an
 envelope, at blocks 128 and 512, in both executors, through a clip's period
 wraps: exact away from the crossfades, at most 1.5e-8 through them (bounded
 at 1e-6 in the test, which prints the worst). MIDI under a pitch-keeping
-rate commits equal to what played. Limits: within the tape kernel's reach
-of the capture's end (128 song samples) the commit cannot hold what live
-read past the end (2e-7 in the test, depending on the audio); and under a
+rate commits equal to what played. Limits: within the tape converter's
+kernel reach of the capture's first and last samples (128 song samples
+each), where the committed items begin or end while the performance went
+on, the commit differs from what played by up to the level of the audio
+cut there (measured up to 0.028 in the tests, in the last 120 to 180
+device frames, about 3 ms; bounded in each test at its measure); a
+commit's edge is a cut at any rate. And under a
 pitch-keeping rate a switch on a track whose arrangement holds audio cuts
 an item a stretch converter reads, which the commit cannot reproduce
 exactly. The tests cover each, and the refusal and the

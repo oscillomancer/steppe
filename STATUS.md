@@ -310,7 +310,8 @@ instructions are in `docs/guides/installing.md`.
       clips can); a capture runs in song time under one, refused (or
       ended, with a warning) only while a launched audio clip plays and
       the playrate keeps the pitch, and its commit meets the rate-1
-      standard except within 128 song samples of the capture's end, and
+      standard except within 128 song samples of the capture's first and
+      last samples (up to the level of the audio cut there), and
       under a pitch-keeping rate where a switch cuts an arrangement audio
       item (its stretch history); there a frozen track's print
       cuts in without the crossfade, and launched audio does not crossfade

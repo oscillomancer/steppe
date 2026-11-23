@@ -384,4 +384,32 @@ inline std::pair<double, std::int64_t> compare(const std::vector<float>& live,
     return {worst, first};
 }
 
+// A capture's commit against what played, over the capture's device frames
+// [start, end): the worst within a switch's crossfade (240 song samples,
+// with the latent gain's shift, from each launch's running frame), within
+// `reach` frames after the start and before the end, where the committed
+// items are cut while the performance went on (the tape converter's kernel
+// reaches 128 song samples across a cut), and away from both.
+struct CommitResidual {
+    double fading = 0, edges = 0, away = 0;
+};
+inline CommitResidual commitResidual(const std::vector<float>& heard, std::uint32_t latency,
+                                     const std::vector<float>& committed,
+                                     const std::vector<LaunchLogEntry>& log, std::int64_t start,
+                                     std::int64_t end, std::int64_t reach) {
+    CommitResidual r;
+    for (std::int64_t k = start; k < end; ++k) {
+        const double d =
+            std::fabs(double(heard[std::size_t(k + latency)]) - double(committed[std::size_t(k)]));
+        bool fading = false;
+        for (const LaunchLogEntry& e : log)
+            fading = fading || (k >= e.runningFrame - 256 && k < e.runningFrame + 768);
+        double& worst = fading                                  ? r.fading
+                        : k < start + reach || k >= end - reach ? r.edges
+                                                                : r.away;
+        worst = std::max(worst, d);
+    }
+    return r;
+}
+
 }  // namespace clip_player_test
