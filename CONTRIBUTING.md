@@ -102,7 +102,7 @@ AppleClang and the system libc++, with deployment target 14.4. Its build preset
 uses two jobs, also enforced explicitly by the workflow, to keep the engine
 command translation units within the hosted runner memory budget. Native macOS
 CI allows 150 minutes for a fresh build plus serial source-export tests;
-Windows allows 120 minutes and Linux retains 60. The root
+Windows and Linux allow 120 minutes each. The root
 project uses `-gline-tables-only` in this preset: assertions and unoptimized code
 remain enabled, with file/line stack traces. For full variable/type debugging
 on a larger machine, configure with `-DCMAKE_CXX_FLAGS_DEBUG=-g`. Isolated stock
