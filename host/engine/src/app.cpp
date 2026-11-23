@@ -2179,11 +2179,15 @@ void EngineApp::retryRestart() {
         restarting_ = false;
         if (engine_) {
             engine_->seek(restartSeconds_);  // the transport position is restored
-            // ... before the tick returns, or the restart says it was not.
+            // ... before the tick returns, or the restart says it was not
+            // yet: the engine runs, and the position is still queued.
             if (auto placed = engine_->awaitTransport(); !placed) {
                 auto ev = json::Value::object();
                 ev["reason"] = restartReason_;
-                ev["error"] = placed.error().message;
+                ev["restarted"] = true;
+                ev["error"] =
+                    "the engine restarted, but the device has not yet taken the "
+                    "restored position; it stays queued";
                 emit("engine.error", std::move(ev));
             }
         }

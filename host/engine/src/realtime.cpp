@@ -1198,10 +1198,12 @@ Status Engine::awaitTransport(double timeoutSeconds) {
     if (done) return okStatus();
     return Error("engine.transport",
                  "the audio engine did not act on the transport request within " +
-                     std::to_string(timeoutSeconds) + " s",
+                     std::to_string(timeoutSeconds) +
+                     " s; it stays queued and takes effect when the device runs again",
                  {},
-                 "the audio device may have stalled: check engine.status (callbacks, xruns), "
-                 "then try again or restart the engine");
+                 "the audio device may have stalled: check engine.status (callbacks, xruns); do "
+                 "not repeat the request, which is still queued, and restart the engine if the "
+                 "device does not recover");
 }
 
 bool Engine::awaitPlan(double timeoutSeconds) {

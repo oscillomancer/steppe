@@ -697,7 +697,8 @@ class Engine {
     // transport request, so transport() reports the new state. With the
     // renderer in the callback: two audio cycles (none for a manual backend).
     // Not acted on within the bound (a stalled device or a starved renderer):
-    // `engine.transport`, and transport() may still report the old state.
+    // `engine.transport`, and transport() may still report the old state; the
+    // request stays queued and takes effect when the device runs again.
     Status awaitTransport(double timeoutSeconds = 1.0);
     // Anticipative, main thread: waits until `frames` of the current
     // transport epoch are rendered ahead of the playhead (at most the

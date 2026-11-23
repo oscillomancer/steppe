@@ -6949,5 +6949,9 @@ TEST_CASE("a transport request a stalled device never acts on is reported, not t
     REQUIRE_FALSE(waited);
     CHECK(waited.error().code == "engine.transport");
     CHECK(waited.error().hint.find("engine.status") != std::string::npos);
+    // The request is still queued (review round 126 B2): the error says so,
+    // and the hint says not to repeat it.
+    CHECK(waited.error().message.find("stays queued") != std::string::npos);
+    CHECK(waited.error().hint.find("still queued") != std::string::npos);
     engine.stop();
 }

@@ -36,6 +36,12 @@ struct RemotePorts {
 
 class RemoteInstance;
 
+// What is left of a `limitMs` deadline `elapsedNs` after it began, in whole
+// milliseconds rounded up, at least 0: a start posted under a live deadline
+// and waited for off the callback has only the rest of its lifecycle
+// deadline (ADR-0101; review round 126 B1).
+int lifecycleLeftMs(int limitMs, std::int64_t elapsedNs) SUPPLE_RT;
+
 // Tests only: whether a new bridge is handed a capture slot as it starts (true), so that a test
 // can send the operation itself. Process-wide.
 void setBridgeCaptureSlotForTests(bool attach);
