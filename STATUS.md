@@ -1055,8 +1055,9 @@ instructions are in `docs/guides/installing.md`.
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);
   a record pass over an item still lays an overlapping item rather than a take of it;
   after a tempo change a Beats-timebase seam's overlap and its fades (seconds) disagree
-  until `take.comp` is called again; MIDI pieces are not joined when a seam moves, so a
-  moved MIDI seam leaves an extra piece.
+  until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
+  stays, and between MIDI pieces of one take a held note sounds again there
+  (`comp.midi_boundary`).
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main

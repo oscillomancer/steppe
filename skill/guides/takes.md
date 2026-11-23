@@ -33,8 +33,9 @@ seams or change spans. The crossfades are rebuilt for the whole comp, and the sa
 call twice changes nothing. `take.comp.get {item}` reads a comp you did not make.
 Pieces of the same take beside each other (after a move, say) are joined into one
 piece again, so moving a seam by a few samples gives exactly what the same spans give
-from scratch; a boundary where the pieces differ (a gain, FX) stays, and so do MIDI
-seams. A copy made with `item.duplicate` and placed right after
+from scratch, MIDI pieces too (a held note stays one note). A boundary where the
+pieces differ (a gain, FX, edited notes) stays; between MIDI pieces of one take it
+makes a held note sound again, and the warning `comp.midi_boundary` names the beats. A copy made with `item.duplicate` and placed right after
 the item is not part of its comp (its source does not continue), so comping one leaves
 the other alone.
 

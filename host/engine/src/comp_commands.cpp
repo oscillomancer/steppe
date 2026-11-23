@@ -184,7 +184,10 @@ void registerCompCommands(cmd::Registry& registry) {
             "piece (or items: the pieces) to move seams: the crossfades are rebuilt for the whole "
             "run, and the same call twice changes nothing. Audio only: a seam is a hard cut, with "
             "the warning comp.crossfade_skipped, when a take is MIDI or empty, warped or has "
-            "envelopes. take.activate {index} on a piece changes its take and keeps the seams. "
+            "envelopes. Pieces of one take beside each other are joined (comp.midi_boundary warns "
+            "of "
+            "MIDI ones that cannot be, where a held note sounds again). "
+            "take.activate {index} on a piece changes its take and keeps the seams. "
             "One undo step. Returns the pieces in time order.";
         c.tags = {"take"};
         auto spanSchema =
@@ -425,6 +428,31 @@ void registerCompCommands(cmd::Registry& registry) {
             std::vector<model::CompPiece> plain;
             for (const Core& k : cores) plain.push_back({k.item, k.lo, k.hi, k.lo, k.hi});
             const std::string refusal = cannotExtend(engine.view(), plain);
+            // A boundary between MIDI pieces that play one take and could not be joined (the
+            // notes of one half were edited, say) stops a held note and strikes it again.
+            std::string reattack;
+            {
+                const model::Session now = engine.view();
+                auto isMidi = [&](Id item) {
+                    const model::Item* it = now.items.find(item);
+                    const model::Take* tk =
+                        it && it->activeTake ? now.takes.find(*it->activeTake) : nullptr;
+                    return tk && tk->source && tk->source->kind == model::Kind::Midi;
+                };
+                for (std::size_t k = 0; k + 1 < n; ++k)
+                    if (cores[k].index == cores[k + 1].index && isMidi(cores[k].item) &&
+                        isMidi(cores[k + 1].item)) {
+                        if (!reattack.empty()) reattack += ", ";
+                        reattack +=
+                            std::to_string(tm.beatAt(static_cast<double>(cores[k].hi) / rate));
+                    }
+            }
+            if (!reattack.empty())
+                ctx.warn("comp.midi_boundary",
+                         "held notes sound again at the boundaries (beats " + reattack +
+                             ") between pieces of one take that could not be joined: they "
+                             "differ in their notes or settings",
+                         "/spans");
             const auto wanted = static_cast<std::int64_t>(std::llround(a.crossfade * rate / 2.0));
             std::vector<std::int64_t> half(n > 0 ? n - 1 : 0, 0);
             bool skipped = false, clamped = false;

@@ -32,10 +32,12 @@ struct CompPiece {
 Result<std::vector<CompPiece>> compRun(const Session&, std::optional<Id> item,
                                        std::span<const Id> items);
 
-// Whether two continuing pieces (left, right: audio, from compRun) are one piece cut in two: the
-// items agree in everything but where they lie, their fades and their takes, and the takes agree
-// in everything but the source offset (which compRun already found continuous), with the same
-// FX and no envelopes or stretch markers. Joining them loses nothing.
+// Whether two continuing pieces (left, right: from compRun) are one piece cut in two: the items
+// agree in everything but where they lie, their fades and their takes, and the takes agree in
+// everything but the source offset (which compRun already found continuous), with the same FX
+// and no envelopes, take markers or stretch markers. Audio takes name one file; MIDI takes
+// hold the same notes (a split gives each half its own copy; a pooled source is one object).
+// Joining them loses nothing: a note held across the boundary sounds once.
 bool joinablePieces(const Session&, Id left, Id right);
 
 // Moves an item's start (end) to a time, keeping its end (start), in the item's own domain.

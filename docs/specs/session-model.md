@@ -283,14 +283,16 @@ nothing:
 2. **Takes.** Each core piece plays the take index it plays now; each span
    paints its index over `[from, to]`. Neighbouring core pieces that will
    play the same take across their seam are joined first when they are one piece cut
-   in two (audio takes; the items agree in everything but their place, fades and
-   takes, the takes in everything but the source offset, with the same FX and no
-   envelopes or stretch markers): the left piece takes the right one's end and
+   in two (the items agree in everything but their place, fades and takes, the takes
+   in everything but the source offset, with the same FX and no envelopes, take markers
+   or stretch markers; audio takes name one file, MIDI takes hold the same notes, as
+   they do after an `item.split`, which gives each half its own copy): the left piece takes the right one's end and
    outer fade-out, and the right piece, its takes and their FX are removed. So a seam
    moved by a few samples leaves no sliver between the old and the new seam to clamp
    the crossfade, and any re-comp equals the same spans applied from scratch. A seam
-   between pieces that differ (a gain, a colour, FX) stays, and so do MIDI seams
-   (their pieces are not joined: a moved MIDI seam leaves an extra piece). Then a piece is
+   between pieces that differ (a gain, a colour, FX, edited notes) stays. Where such a
+   boundary joins MIDI pieces that play one take, a held note stops there and sounds
+   again, and the call warns `comp.midi_boundary` with the beats. Then a piece is
    split where the painted index changes inside it (a split as `item.split` makes,
    at the sample-snapped point, keeping every take in order). A span edge where the
    index does not change makes no split, so a comp whose spans all name the current
@@ -360,7 +362,9 @@ takes change nothing; a comp rebuilt over an earlier one renders as one built fr
 scratch, and `take.activate {index}` keeps the seams; real time equals offline in both
 executors; a copy placed after the original is not pulled into the comp and the original
 stays byte for byte; a seam moved by 1, 24 or 600 samples either way gives exactly what the
-same spans give from scratch, with the full crossfade; pieces that differ keep their boundary;
+same spans give from scratch, with the full crossfade; a MIDI seam moved five times leaves
+two pieces and one sounding C4 and G4, as from scratch; pieces that differ keep their
+boundary, and for MIDI the call warns `comp.midi_boundary`;
 MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
 `take.comp.get` after a save and reopen; one undo step; and every refusal.
 

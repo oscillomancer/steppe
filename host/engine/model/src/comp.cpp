@@ -180,16 +180,29 @@ bool joinablePieces(const Session& s, Id left, Id right) {
     for (std::size_t i = 0; i < l->takes.size(); ++i) {
         const Take* x = s.takes.find(l->takes[i]);
         const Take* y = s.takes.find(r->takes[i]);
-        if (!x || !y || !x->source || x->source->kind != Kind::Media) return false;
+        if (!x || !y || !x->source || !y->source || x->source->kind != y->source->kind)
+            return false;
+        const bool audio = x->source->kind == Kind::Media;
         if (!x->stretchMarkers.empty() || !y->stretchMarkers.empty() || !x->warpPeers.empty() ||
-            !y->warpPeers.empty() || x->chain.size() != y->chain.size())
+            !y->warpPeers.empty() || !x->takeMarkers.empty() || !y->takeMarkers.empty() ||
+            x->chain.size() != y->chain.size())
             return false;
         auto a = toJson(*x), b = toJson(*y);
-        for (const char* key : {"start_offset", "chain"}) {
+        for (const char* key : {"start_offset", "chain", "source"}) {
             a.asObject().erase(key);
             b.asObject().erase(key);
         }
         if (a != b) return false;
+        // The audio source is one file (compRun checked the media); a MIDI piece cut by
+        // item.split holds its own copy of the notes, which are the same notes while neither
+        // half has been edited (a pooled source is one object, and is the same by its id).
+        if (audio) {
+            if (x->source != y->source) return false;
+        } else if (x->source != y->source) {
+            const MidiSource* p = s.midi.find(*x->source);
+            const MidiSource* q = s.midi.find(*y->source);
+            if (!p || !q || p->pooled || q->pooled || toJson(*p) != toJson(*q)) return false;
+        }
         for (std::size_t f = 0; f < x->chain.size(); ++f) {
             const auto* p = s.fx.find(x->chain[f]);
             const auto* q = s.fx.find(y->chain[f]);

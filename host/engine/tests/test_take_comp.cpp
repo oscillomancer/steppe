@@ -637,10 +637,11 @@ struct Shape {
     std::size_t index;
     std::vector<double> offsets;
 };
-std::vector<Shape> shapeOf(const model::Session& s) {
+std::vector<Shape> shapeOf(const model::Session& s, std::optional<model::Id> track = std::nullopt) {
     std::vector<std::pair<std::int64_t, Shape>> out;
     for (const auto& e : s.items) {
         const auto& it = *e.value;
+        if (track && it.track != *track) continue;
         Shape p{it.position, it.length, it.fadeIn.length, it.fadeOut.length, 0, {}};
         for (std::size_t k = 0; k < it.takes.size(); ++k) {
             if (it.takes[k] == *it.activeTake) p.index = k;
@@ -748,4 +749,83 @@ TEST_CASE("take.comp refusals name the piece they mean in /items/k") {
     f.run("item.move", R"({"item":")" + copy + R"(","track":"tr_2","position":)" + at +
                            R"(,"bypass_groups":true})");
     f.refused("take.comp", all, "comp.linked", "/items/1");
+}
+
+namespace {
+// A two-take MIDI item on a new track (tr_2, it_2): take 0 plays C4 and E4 as whole notes in
+// bars 1 and 2, take 1 G4 and B4.
+void midiStack(CompFixture& f) {
+    f.run("track.add", R"({"name":"Keys"})");
+    f.run("item.add", R"({"track":"tr_2","bar":1,"notation":"voice keys; 1: C4:w; 2: E4:w"})");
+    f.run("take.add", R"({"item":"it_2","from":"tk_4"})");
+    f.run("take.activate", R"({"item":"it_2","index":1})");
+    f.run("midi.write", R"({"item":"it_2","notation":"voice keys; 1: G4:w; 2: B4:w"})");
+    f.run("take.activate", R"({"item":"it_2","index":0})");
+}
+// What each piece of the comp sounds, in time order.
+std::vector<std::string> sounding(CompFixture& f, const json::Value& result) {
+    std::vector<std::string> out;
+    for (const auto& p : result.find("pieces")->asArray())
+        out.push_back(
+            f.run("midi.get", R"({"item":")" + p.find("item")->asString() + R"(","sounding":true})")
+                .find("text")
+                ->asString());
+    return out;
+}
+}  // namespace
+
+TEST_CASE("take.comp moving a MIDI seam again and again gives what the same spans give") {
+    CompFixture a, b;
+    midiStack(a);
+    midiStack(b);
+    a.run("take.comp", R"({"item":"it_2","spans":[{"from":3,"to":8,"index":1}]})");
+    json::Value last;
+    for (const char* seam : {"2.5", "2", "1.5", "1", "2.25"}) {
+        last = a.run("take.comp", std::string(R"({"item":"it_2","spans":[{"from":0,"to":)") + seam +
+                                      R"(,"index":0},{"from":)" + seam + R"(,"to":8,"index":1}]})");
+        // However the seam moves, there is one piece for each take: two, not one per move.
+        CHECK(last.find("pieces")->asArray().size() == 2);
+    }
+    const auto want =
+        b.run("take.comp", R"({"item":"it_2","spans":[{"from":2.25,"to":8,"index":1}]})");
+    const auto got = shapeOf(a.app->head(), model::Id{model::Kind::Track, 2});
+    const auto expect = shapeOf(b.app->head(), model::Id{model::Kind::Track, 2});
+    REQUIRE(got.size() == expect.size());
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        CHECK(got[i].position == expect[i].position);
+        CHECK(got[i].length == expect[i].length);
+        CHECK(got[i].index == expect[i].index);
+        CHECK(got[i].offsets == expect[i].offsets);
+    }
+    CHECK(a.app->head().items.size() == b.app->head().items.size());
+    CHECK(a.app->head().takes.size() == b.app->head().takes.size());
+    CHECK(a.app->head().midi.size() == b.app->head().midi.size());
+    // What sounds is the same, and a held note is one note: C4 once, then G4 once.
+    const auto heard = sounding(a, last), wanted = sounding(b, want);
+    CHECK(heard == wanted);
+    REQUIRE(heard.size() == 2);
+    CHECK(heard[0].find("C4") != std::string::npos);
+    CHECK(heard[1].find("G4") != std::string::npos);
+    for (const auto& w : last.find("warnings")->asArray())
+        CHECK(w.find("code")->asString() != "comp.midi_boundary");
+}
+
+TEST_CASE("take.comp warns where MIDI pieces of one take cannot be joined") {
+    CompFixture f;
+    midiStack(f);
+    f.run("take.comp", R"({"item":"it_2","spans":[{"from":4,"to":8,"index":1}]})");
+    // The second half now has a gain of its own: not the first half cut in two.
+    const auto pieces = f.run("take.comp.get", R"({"item":"it_2"})").find("pieces")->asArray();
+    REQUIRE(pieces.size() == 2);
+    f.run("item.set", R"({"item":")" + pieces[1].find("item")->asString() + R"(","gain_db":-3})");
+    const auto result =
+        f.run("take.comp", R"({"item":"it_2","spans":[{"from":0,"to":8,"index":0}]})");
+    CHECK(result.find("pieces")->asArray().size() == 2);
+    bool warned = false;
+    for (const auto& w : result.find("warnings")->asArray())
+        if (w.find("code")->asString() == "comp.midi_boundary") {
+            warned = true;
+            CHECK(w.find("message")->asString().find("4") != std::string::npos);
+        }
+    CHECK(warned);
 }
