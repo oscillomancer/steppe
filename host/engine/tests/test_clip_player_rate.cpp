@@ -662,6 +662,59 @@ TEST_CASE(
         }
 }
 
+TEST_CASE("a once audio clip is judged by where the song is after a relocation" *
+          doctest::description("rt")) {
+    // Review round 117 W3: cl_2 played once (0.75 s from bar 2, song 96000
+    // to 132000) keeps its anchor through a seek, so it sounds again only if
+    // the song comes back to its pass. Sought mid-pass to bar 3 (past it),
+    // a plan that keeps the pitch allows arming; sought back to the start,
+    // it will play again on bar 2, so arming is refused as before; and under
+    // a transport loop over bars 1-2, past its pass, it plays again on the
+    // next pass, so arming is refused too.
+    Project p;
+    twoTracks(p);
+    p.run("clip.set", R"({"clip": "cl_2", "mode": "once"})");
+    const model::Session unity = p.app->head();
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session kept = p.app->head();
+    for (const double seekTo : {4.0, 0.0, -1.0}) {  // -1: no seek, a loop over bars 1-2
+        INFO("sought to " << seekTo << " s");
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(unity, p.app->projectDir()));
+        if (seekTo < 0) engine.setLoop(0, 4, true);
+        engine.play();
+        backend.run(10);
+        engine.service();
+        const Engine::LaunchRequest r = request("tr_2", "cl_2");
+        REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));  // bar 2
+        backend.run(100000 / 128);                                             // in its pass
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        if (seekTo >= 0) {
+            engine.seek(seekTo);
+            backend.run(20);
+        } else {
+            backend.run(60000 / 128);  // past its pass (song 132000), before the wrap
+        }
+        engine.service();
+        REQUIRE(engine.load(kept, p.app->projectDir()));
+        REQUIRE(engine.awaitPlan());
+        // Before the service returns tr_2 to the arrangement.
+        auto armed = engine.captureLaunches(true);
+        if (seekTo > 0) {
+            CHECK_MESSAGE(armed, (armed ? std::string() : armed.error().toString()));
+        } else {
+            REQUIRE_FALSE(armed);
+            CHECK(armed.error().code == "launch.playrate");
+        }
+        engine.stop();
+    }
+}
+
 TEST_CASE("a launched audio clip under a pitch-keeping rate: a capture ends, arming is refused" *
           doctest::description("rt")) {
     // S3 B, Q2 (b): a capture cannot write launched audio as heard while the

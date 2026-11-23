@@ -961,12 +961,27 @@ std::optional<model::Id> Engine::audioUnderStretch() const {
             continue;
         const model::Clip* clip = latest_->clips.find(e.clip);
         if (!clip || clip->kind == model::ClipKind::Midi) continue;
-        // A clip played once is silent after its pass (round 113 T4).
+        // A clip played once sounds only in its pass from its anchor, which a
+        // relocation keeps (round 113 T4, round 117 W3): finished once the
+        // song heard now, in any epoch, is past that pass and no transport
+        // loop brings it back. Its pass is the period the plan plays it by.
         if (clip->mode == model::ClipMode::Once)
-            if (const auto heard = heardSong(e.epoch))
-                if (heard->song >=
-                    double(e.songFrame + time::samplesAt(clip->length, config_.sampleRate)))
-                    continue;
+            if (const auto heard = heardSong(readRateClock()[8])) {
+                std::int64_t period = time::samplesAt(clip->length, config_.sampleRate);
+                if (const detail::Node* n = nodeOf(*plan, track))
+                    if (const int k = detail::playerOf(*n, e.clip); k >= 0)
+                        period = n->players[static_cast<std::size_t>(k)].periodFrames;
+                const auto song = static_cast<std::int64_t>(std::floor(heard->song));
+                const bool loop = heard->looping && heard->loopEnd > heard->loopStart;
+                const std::int64_t at =
+                    loop && song >= heard->loopEnd
+                        ? heard->loopStart +
+                              (song - heard->loopStart) % (heard->loopEnd - heard->loopStart)
+                        : song;
+                const bool again = loop && e.anchorSample < heard->loopEnd &&
+                                   e.anchorSample + period > heard->loopStart;
+                if (!again && at >= e.anchorSample + period) continue;
+            }
         return e.clip;
     }
     return std::nullopt;
