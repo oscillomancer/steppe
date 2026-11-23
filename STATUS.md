@@ -124,10 +124,12 @@ instructions are in `docs/guides/installing.md`.
   `chord.set`/`chord.remove`, `context.at` and `context.get`; regions are
   sections unless `section` is false; `session.describe` shows the key, the
   context and the later tempo and meter changes; `midi.get` returns the context
-  over an item and, with the piano roll, the event list, `midi.edit` readbacks
-  and `rack.probe`, spells notes by the key at the item's start (`libs/harmony`);
-  `midi.get` spells each note by the key and chord at its start (ADR-0100: a chord
-  tone by its degree, doubles where a degree needs them).
+  over an item. `midi.get` and the MIDI editor (the roll's note labels and
+  messages, the notation panel, the event list) spell each note by the key and
+  chord at its start, at the same place (ADR-0100: a chord tone by its degree,
+  doubles where a degree needs them; a place before beat 0 reads beat 0's
+  context); `midi.edit` readbacks and `rack.probe` spell by the key at the
+  item's start (`libs/harmony`).
   A file with a missing or low counter, a duplicate beat, an unknown scale or an
   unparsable chord symbol opens with a warning and keeps the point as data. The
   lead sheet (`context.get`'s `text`, `context.write` as a diff recorded as the
@@ -1520,13 +1522,10 @@ capacity reports retain their original revision/settings.
 ## Known limits
 
 Library boundaries:
-- Chord-tone spelling (ADR-0100) reaches `midi.get` only. The piano roll's note
-  names, its keyboard labels, the MIDI event list and its pitch cell, the notation
-  pane, MIDI-control names and the rack probe stay on the key's rule or the default
-  table: the roll follows in a later step, and the notation pane stays because its
-  conflict check compares the decompiled text, which a chord edit would change
-  without the MIDI changing. The event list's pitch cell reads one accidental, so
-  it could not take a name with `##` or `bb` if it showed one.
+- Chord-tone spelling (ADR-0100) reaches `midi.get` and the MIDI editor (the
+  roll's note labels and messages, the notation panel, the event list) only. The
+  roll's keyboard labels, MIDI-control names, `midi.edit` readbacks and the rack
+  probe stay on the key's rule or the default table.
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.

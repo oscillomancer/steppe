@@ -707,7 +707,6 @@ TEST_CASE("midi.get names each note by its own place: a clip's chords, a followi
     CHECK(heard.find("A#3") == std::string::npos);
 }
 
-// Chords E | Ab | E over C major; an item "E4 Ab4 B4 | Ab4 C5" at bar 1 reads G# under E and Ab
 // under Ab. The cases below move the notes against the song (a split, a trim, a rate, an own
 // context with a phase and a period): each note is named by the chord it sounds under, the
 // place `model::notePlace` gives it, not by its source beat (round 108 S1).
@@ -742,6 +741,34 @@ bool has(const std::string& text, std::string_view part) {
 }
 }  // namespace
 
+// A clip's note reads the clip's context at the clip beat it first sounds at, else (it never
+// sounds) where its content sits, kept inside the clip: the rule midi.edit's degrees and the
+// roll read (clipNoteContext), so a note is named by the chord it is stepped in.
+TEST_CASE("midi.get names a clip's notes by the clip beat they sound at") {
+    Launcher l;
+    l.run(
+        "clip.add",
+        R"({"track": "tr_1", "scene": "sc_1", "notation": "voice a; 1: E4:q Ab4:q B4:q r:*; 2: Ab4:q C5:q r:*"})");
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key C major {E}:w\n2: {Ab}:w"})");
+    const auto text = [&] { return l.run("midi.get", R"({"item": "cl_1"})")["text"].asString(); };
+    SUBCASE("a loop from beat 4: the second bar sounds first, at clip beat 0, under E") {
+        l.run("clip.set", R"({"clip": "cl_1", "loop": {"on": true, "start": 4, "length": 4}})");
+        const auto written = text();
+        CAPTURE(written);
+        CHECK(has(written, "2: G#4:q C5:q"));
+        // The first bar never sounds: its content beats, under E.
+        CHECK(has(written, "1: E4:q G#4:q B4:q"));
+    }
+    SUBCASE("an offset puts the first bar before the clip: it reads beat 0's chord") {
+        const model::Id take = *l.head().clips.find(id("cl_1"))->activeTake;
+        l.run("take.set", R"({"take": ")" + take.str() + R"(", "start_offset": 4})");
+        const auto written = text();
+        CAPTURE(written);
+        CHECK(has(written, "1: E4:q G#4:q B4:q"));  // clip beat -4, kept at 0: under E
+        CHECK(has(written, "2: G#4:q C5:q"));       // clip beat 0, under E
+    }
+}
+
 TEST_CASE("midi.get names the notes of a split item by the chord they sound under") {
     Placed p;
     const auto whole = p.add();
@@ -768,9 +795,9 @@ TEST_CASE("midi.get names the notes of a trimmed item by where they sound") {
     p.l.run("take.set", R"({"take": ")" + trimmed.take + R"(", "start_offset": 4})");
     const auto written = p.text(trimmed.item);
     CAPTURE(written);
-    // Source beat 4 sounds at beat 0, under E; the notes before it lie before the item, where no
-    // key or chord holds (the default table).
-    CHECK(has(written, "1: E4:q Ab4:q B4:q"));
+    // Source beat 4 sounds at beat 0, under E; the notes before it lie before the song's start,
+    // where nothing sounds: they read the song's context at beat 0, as the roll does.
+    CHECK(has(written, "1: E4:q G#4:q B4:q"));
     CHECK(has(written, "2: G#4:q C5:q"));
 }
 
