@@ -47,6 +47,9 @@ input cannot hide, and its output is no longer the in-process output.
    - waits on the instance's done word with a timeout no later than the
      cycle's bridge deadline (Linux `futex` wait, macOS address wait,
      Windows `WaitForSingleObject`), each rechecked before and after;
+     *Note 2026-11-23:* on Windows the wait is on the event and a
+     high-resolution timer, or sliced and spun without one
+     ([ADR-0102](0102-windows-live-wait-timer.md));
    - steady-clock reads for that deadline.
    Nothing else: no wait without that deadline, no process checks or kills,
    no allocation, lock, log or file access. Every other part of the rule is

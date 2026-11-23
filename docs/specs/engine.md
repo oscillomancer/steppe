@@ -2315,6 +2315,13 @@ instance).
   the hung reason; the audio thread only sets the flag, and the main thread
   kills the process when it services the instance. Without a deadline the
   background rules below apply unchanged.
+  On Windows a timed wait waits on the done event together with a
+  high-resolution waitable timer the client creates with the instance, so it
+  ends by the deadline plus that timer's lateness, not a 15.6 ms timer tick
+  later (measured before: 15.7 ms against a 2.67 ms deadline). Without that
+  timer (before Windows 10 1803) it waits in whole milliseconds only while
+  more than two 16 ms ticks are left and spins on the done word, looking at
+  the event, for the rest, so it ends at the deadline (ADR-0102).
   Only the wake and each timed wait are inside `rt::ScopedSanctionedSyscall`,
   so the rtsan preset checks the rest of the path; the background wait
   (ADR-0013: `alive()`, kill) keeps one scope over its loop. The rtsan-only
