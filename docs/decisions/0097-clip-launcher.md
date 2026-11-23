@@ -965,7 +965,8 @@ commit's edge is a cut at any rate. Tests (test_clip_player_rate.cpp):
 the positions and the equality under 0.75 and the envelope ("a capture
 under a master playrate commits by the song positions heard"), a capture
 starting mid-pass ("a capture armed while clips play ..."), the held note
-("a capture armed while a launched clip's note sounds ..."), MIDI with the
+("a capture armed while a launched clip's note sounds ..."), a clip with a
+take chain ("a capture of a clip with a take chain ..."), MIDI with the
 pitch kept ("under a pitch-keeping master playrate a MIDI capture commits
 as heard"), the end at a switch that cuts arrangement audio ("under a
 pitch-keeping rate a switch that cuts arrangement audio ends the capture
