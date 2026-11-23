@@ -3010,7 +3010,9 @@ on the loop range with a take per pass):
   none). A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
   the project is as it was and still editable, and the recording is not in it; the refusal's message
   ends "(the recording is kept: project.recover places it)", the journals and files remaining for
-  recovery.
+  recovery. Not on the refusal of `project.recover`'s own commit (it points back at itself), and a
+  pass whose own placement is out of bounds (`record.sidecar`, unusable as it is) says only "(the
+  recordings are kept where they were made)".
 - The item's `position` and `length` never change by the pass itself. The new take (audio: the pass's media source,
   named `<file>` or `<file> pass n`; MIDI: a source with the played notes only, named `<track> MIDI`,
   `follow: none`, no context) reads the recording by the timeline mapping: `start_offset` is the
