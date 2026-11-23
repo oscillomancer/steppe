@@ -4053,6 +4053,12 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     CHECK(liveCalls.waitMaxNs >= 2'000'000);  // the deadline: at least 2 ms
     MESSAGE("longest live wait " << liveCalls.waitMaxNs << " ns over " << late
                                  << " late cycles (deadline 2.67 ms)");
+#ifdef _WIN32
+    // Iteration only, never merged: ctest prints a test's output only when
+    // it fails, so this fails to show the measure on Windows.
+    FAIL_CHECK("measure: longest live wait " << liveCalls.waitMaxNs << " ns over " << late
+                                             << " late cycles (deadline 2.67 ms)");
+#endif
     const Id crash = build(true).second;
     REQUIRE(pool.find(crash));
     CHECK(pool.find(crash)->failed());
