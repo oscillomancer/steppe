@@ -1067,9 +1067,9 @@ instructions are in `docs/guides/installing.md`.
   top or in the inspector, keeping a comp's crossfade on every re-comp.
   Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
   a looped item's swipe splits and switches with hard cuts until its Loop is off;
-  on a track grouped for edits the swipe also keeps that path (split every member,
-  switch one) until `take.comp` comps every member of an edit group with the same
-  spans and take, which is asked of the builder; the GUI switches to it then;
+  on a track grouped for edits every comp gesture is the group's `take.comp`, and a
+  member that reads differently (`differing_members`) shows broken seam lines and an
+  inspector Group row, but only where it has seams of its own or is selected;
   seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
   empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);
@@ -1086,8 +1086,8 @@ instructions are in `docs/guides/installing.md`.
   a group track with nothing there is named in `skipped_tracks`; `bypass_groups` for the item
   alone); a track whose items cannot follow refuses the call before anything is written
   (`comp.group_takes`, `comp.group_mismatch` with the inner reason, `item.locked`). `comp.linked`
-  is retired (it meant "set bypass_groups"; the call now comps the group). The GUI's comp still
-  refuses linked items (`compsWithTakeComp`) and can use the group comp.
+  is retired (it meant "set bypass_groups"; the call now comps the group). The GUI comps a
+  grouped track through it.
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main

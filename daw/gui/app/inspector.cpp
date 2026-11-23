@@ -523,6 +523,14 @@ std::unique_ptr<ui::Node> Inspector::build() {
     crossfadeShape_->onChange = [this](const std::string& value) {
         setCrossfade(std::nullopt, value == "linear");
     };
+    // A comp piece on an edit-grouped track whose comp the engine reads as
+    // differing from its group's (take.comp.get, differing_members): the
+    // track it differs from. A swipe or a Crossfade edit comps the group again.
+    auto& groupRow = formRow(box, "group", "Group");
+    rows_["group"] = &groupRow;
+    group_ = &groupRow.emplace<ui::TextBlock>("inspector.group", "", ui::Font::Ui, "small", "ink");
+    group_->layout.width = ui::SizeRule::fraction();
+    group_->layout.height = ui::SizeRule::content();
     auto& states = formRow(box, "state", "State");
     state(states, "mute", "Mute", "mute");
     state(states, "loop", "Loop", "accent");
@@ -831,6 +839,20 @@ void Inspector::readItems(bool force) {
             crossfadeShape_->setValue(crossfade->shape == model::FadeShape::Linear ? "linear"
                                                                                    : "cos");
         }
+        const auto from = comp ? views::compDiffersFrom(
+                                     s, itemId,
+                                     [this](const json::Value& args) -> std::optional<json::Value> {
+                                         auto r =
+                                             dispatcher_.execute({"take.comp.get", args, kOrigin});
+                                         if (!r) return std::nullopt;
+                                         return std::move(*r);
+                                     })
+                               : std::nullopt;
+        const model::Track* track = from ? s.tracks.find(*from) : nullptr;
+        const std::string differs =
+            track ? "Differs from " + (track->name.empty() ? from->str() : track->name) : "";
+        rows_["group"]->visible = !differs.empty();
+        if (group_->text() != differs) group_->setText(differs);
     }
     const auto timebase = common(items, [](const model::Item& i) { return i.timebase; });
     timebase_->setValue(timebase ? timebaseName(*timebase) : "");

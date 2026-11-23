@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -30,15 +31,17 @@ struct CompView {
 };
 
 // The comp `item` belongs to (a lone item is a run of one piece); nullopt for
-// an item with fewer than two takes, one compsWithTakeComp turns away (looped,
-// or edited with a group: no seams are drawn or dragged there), or one compRun
-// refuses.
+// an item with fewer than two takes, one compsWithTakeComp turns away (looped:
+// no seams are drawn or dragged there), or one compRun refuses.
 std::optional<CompView> compOf(const model::Session& s, model::Id item);
 
 // A seam of a track, for the lanes and the hit test.
 struct CompSeam {
     model::Id left, right;
     double seconds = 0;
+    // Its comp differs from its edit group's, as the engine reports it
+    // (compDiffersFrom; the lanes fill it in when the app gives a query).
+    bool differs = false;
 };
 // The seams of the comps among `items` (one track's, any order).
 std::vector<CompSeam> compSeams(const model::Session& s, const std::vector<model::Id>& items);
@@ -58,16 +61,32 @@ std::vector<CompSpan> compSpans(const model::Session& s, const CompView& comp);
 // clamped seam does not shrink, and its shape; 0 for a hard-cut comp).
 std::optional<model::CompCrossfade> compCrossfade(const model::Session& s, const CompView& comp);
 
-// Whether the GUI comps `item` with take.comp. A looped item, or one edited
-// together with others (a track group), keeps the older split and
-// take.activate, with hard cuts: take.comp refuses both (comp.loop,
-// comp.linked).
+// Whether the GUI comps `item` with take.comp: any item but a looped one,
+// which keeps the older split and take.activate, with hard cuts (take.comp
+// refuses it, comp.loop). An item edited together with others (a track's
+// edit group) is comped with every member of the group by take.comp.
 bool compsWithTakeComp(const model::Session& s, model::Id item);
+// Whether `item`'s track is edited together with others (an edit group).
+bool compsGroup(const model::Session& s, model::Id item);
 
-// The piece `item` of a comp (two or more pieces) that the GUI comps with
-// take.comp, or nullopt: a lone item, or one compsWithTakeComp turns away,
-// switches its take with take.activate.
+// The comp whose piece `item` the GUI switches with take.comp: one of two or
+// more pieces, or a lone item of an edit group (take.activate would switch it
+// alone; take.comp switches the group's members with it). nullopt: a lone
+// item outside a group, or one compsWithTakeComp turns away, switches its take
+// with take.activate.
 std::optional<CompView> compPieceOf(const model::Session& s, model::Id item);
+
+// take.comp.get with these arguments, run by the app through the command bus
+// (nullopt when it is refused).
+using CompQuery = std::function<std::optional<json::Value>(const json::Value& args)>;
+// Whether the comp `item` belongs to differs from its edit group's, as the
+// engine reports it: take.comp.get asked for the group's first track (in the
+// order take.comp takes members, model::linkedTracks's) with a run there lists
+// `item`'s track in differing_members (other spans, takes, crossfade or shape,
+// or items that cannot follow). Returns that first track; nullopt when it does
+// not differ, is that track, is in no group, or without a query.
+std::optional<model::Id> compDiffersFrom(const model::Session& s, model::Id item,
+                                         const CompQuery& query);
 // The take.comp call that switches piece `item` of `comp` to take `index`:
 // its core span with that take and the comp's crossfade, so the seams are
 // rebuilt and it joins a neighbour that plays the same take. (take.activate

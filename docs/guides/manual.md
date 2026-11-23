@@ -516,11 +516,13 @@ shorter; Ctrl+click there switches between an equal-power and a linear
 crossfade. One crossfade length and shape serves every seam of a comp, and
 the inspector shows it as **Crossfade** for a selected piece: type 0 for hard
 cuts. Clicking a lane of one piece switches just that piece. To make a comp
-one plain item again, select its pieces and use **Consolidate items**. An item
-whose Loop is on is comped with hard cuts (no crossfades) until you turn its
-Loop off, and so is an item on a track grouped for editing: dragging across
-its lane splits every item of the group there and switches the take on this
-one.
+one plain item again, select its pieces and use **Consolidate items**. On a
+track grouped for editing, every track of the group follows: a drag, a click
+on a lane or the take number comps each of them the same way. If one of them
+has been changed on its own since, its seam lines are drawn broken and the
+inspector's **Group** row says which track it differs from; comping again
+brings it back in step. An item whose Loop is on is comped with hard cuts (no
+crossfades) until you turn its Loop off.
 
 ### Changing what the mouse does
 
