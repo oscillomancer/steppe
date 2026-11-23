@@ -1414,7 +1414,7 @@ void registerTakeCommands(cmd::Registry& registry) {
             "get it; a pass over the whole item is heard whole); false: every pass is laid as "
             "new items, layered over what is there. Not an undo step and not saved in the "
             "project. The setting lasts for the process; a client that keeps preferences may "
-            "store it and set it again at start (the GUI's Preferences row is not built yet), "
+            "store it and set it again at start (the GUI keeps its Preferences row's choice), "
             "and a headless session does not. It is read when a recording is committed and "
             "stored in that commit, so undo, redo and merges do not depend on it later.";
         c.tags = {"transport", "take"};

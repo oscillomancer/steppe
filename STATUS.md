@@ -1073,9 +1073,11 @@ instructions are in `docs/guides/installing.md`.
   stays as another take; loop passes append in order, the newest heard over the loop); a pass that starts before an item, or into a locked or looped
   one, is a new item with `record.stack_skipped`; `record.get` / `record.set {stack_takes}` (default
   true, a machine setting that lasts for the process). The decision is stored in `record.commit`
-  (`stack`), so replays do not read the setting; `project.recover` never stacks. Limits: the GUI's
-  Preferences row and any keeping of the setting between runs are not built (the setting is the
-  engine's, default true, and a client may set it at start); recording only some tracks of an edit
+  (`stack`), so replays do not read the setting; `project.recover` never stacks. The GUI keeps it
+  as Preferences > Recording and import > Record over an item (New take / Layer on top,
+  `stack_recorded_takes`, applied at start and on change), and a stop that ends a recording puts
+  `record.stack_skipped` and `record.stack_group` on the status line; a headless session keeps no
+  setting between runs. Limits: recording only some tracks of an edit
   group leaves the others' take counts behind, so a later group `take.comp` playing the new index is
   refused with `comp.group_takes` (the commit warns `record.stack_group` naming them); `midi_overdub`
   is unchanged.

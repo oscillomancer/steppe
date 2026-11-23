@@ -3,7 +3,7 @@
 // Preferences (Edit > Preferences…): app-wide settings, never project state.
 // The monitoring mode, audio thread limit, opt-in process controls, render
 // folder, import copying, the audio device and external sync are saved to
-// <config>/<slug>/preferences.json (supple.preferences/1.10). Buttons open the
+// <config>/<slug>/preferences.json (supple.preferences/1.11). Buttons open the
 // audio device and mouse modifiers dialogs.
 #pragma once
 
@@ -38,7 +38,10 @@ struct Preferences {
     bool lockMemory = false;
     bool preventDeepIdle = false;
     std::filesystem::path renderDirectory{};  // empty: the app's default (mediaHome())
-    bool copyImports = true;        // imported audio is copied into the project's media folder
+    bool copyImports = true;  // imported audio is copied into the project's media folder
+    // A recording pass over an item is a new take of it; off, it is laid on top as an item
+    // (1.11, ADR-0103). The engine keeps it only while it runs: this is its keeper.
+    bool stackRecordedTakes = true;
     AudioDeviceSettings audio;      // the device the engine starts with (1.5)
     bool renderOpenFolder = false;  // open the render folder when a render finishes (1.6)
     engine::SyncSettings sync;      // external sync and LTC output (1.7, ADR-0071)
@@ -85,6 +88,7 @@ class PreferencesDialog {
     Status setMemoryLock(bool requested);
     Status setPreventDeepIdle(bool requested);
     Status setCopyImports(bool on);
+    Status setStackRecordedTakes(bool on);  // saved, and applied to the engine at once
     Status setPluginIsolation(model::Isolation isolation);  // saved; as plug-ins load
     // The remembered load choices (safe-load, topic 7d): saved. Forgetting one is a removal.
     Status setRememberedLoads(std::vector<RememberedLoad> loads);
@@ -117,6 +121,7 @@ class PreferencesDialog {
     std::array<ui::Label*, 4> memoryNote_{};
     ui::Button* latency_ = nullptr;
     ui::Button* imports_ = nullptr;
+    ui::Button* stack_ = nullptr;
     ui::Button* isolation_ = nullptr;
     ui::Button* audio_ = nullptr;
     ui::Node* advanced_ = nullptr;  // the low-level settings, under their heading

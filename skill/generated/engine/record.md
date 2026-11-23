@@ -106,7 +106,7 @@ Result:
 
 Choose whether recording over an item makes a take of it; returns it.
 
-stack_takes true (the default): a pass that starts inside an unlocked, non-looping item of the track becomes a new take of that item, heard over the stretch the pass covers while the rest of the item keeps playing what it did (a comp's pieces all get it; a pass over the whole item is heard whole); false: every pass is laid as new items, layered over what is there. Not an undo step and not saved in the project. The setting lasts for the process; a client that keeps preferences may store it and set it again at start (the GUI's Preferences row is not built yet), and a headless session does not. It is read when a recording is committed and stored in that commit, so undo, redo and merges do not depend on it later.
+stack_takes true (the default): a pass that starts inside an unlocked, non-looping item of the track becomes a new take of that item, heard over the stretch the pass covers while the rest of the item keeps playing what it did (a comp's pieces all get it; a pass over the whole item is heard whole); false: every pass is laid as new items, layered over what is there. Not an undo step and not saved in the project. The setting lasts for the process; a client that keeps preferences may store it and set it again at start (the GUI keeps its Preferences row's choice), and a headless session does not. It is read when a recording is committed and stored in that commit, so undo, redo and merges do not depend on it later.
 
 Kind: `action`. Exposure: `mcp-exec`.
 

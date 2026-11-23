@@ -1043,6 +1043,58 @@ TEST_CASE("file actions: a late recording renews the discard decision before sav
     a.app->stopEngine();
 }
 
+// ADR-0103: a stop that ends a recording passes on where its takes went. A pass
+// into a locked item is a new item (record.stack_skipped), and the status line
+// says so; the other warnings of the reply are not this note's.
+TEST_CASE("app actions: a recording stopped over a locked item says so in the status line") {
+    CHECK(gui::recordingNotice(json::Value::object()).empty());
+    const auto reply = json::parse(R"({"recorded":[
+        {"warnings":[{"code":"record.stack_skipped","message":"the pass is a new item"},
+                     {"code":"recording.loop_runs_full","message":"a loop note"}]},
+        {"warnings":[{"code":"record.stack_group","message":"tr_2 did not record"},
+                     {"code":"record.stack_skipped","message":"the pass is a new item"}]}]})")
+                           .value();
+    CHECK(gui::recordingNotice(reply) == "the pass is a new item; tr_2 did not record");
+
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    App a;
+    REQUIRE(a.ok);
+    REQUIRE(a.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2},
+                               {.anticipative = false}));
+    auto exec = [&](const char* name, const std::string& args) {
+        auto result = a.dispatcher->execute(
+            {name, json::parse(args).value(), {cmd::Origin::Type::Ui, "gui", {}}});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    exec("track.add", R"({"name":"Recorded"})");
+    exec("track.set", R"({"track":"tr_1","armed":true,"record_input":[1,2]})");
+    audio::AudioData tone;
+    tone.channels.assign(2, std::vector<float>(96000, 0.25f));
+    REQUIRE(writeFileAtomic(a.dir / "held.wav",
+                            std::span<const std::uint8_t>(*audio::encodeWav(tone))));
+    json::Value add = json::Value::object();
+    add["track"] = "tr_1";
+    add["audio_file"] = (a.dir / "held.wav").string();
+    add["position"] = 0;
+    const std::string item = exec("item.add", json::writeCompact(add))["item"].asString();
+    exec("item.set", R"({"item":")" + item + R"(","locked":true})");
+    exec("transport.seek", R"({"seconds":0.5})");
+    std::vector<std::string> notes;
+    a.actions->onNotice = [&](const std::string& note) { notes.push_back(note); };
+    REQUIRE(a.actions->run("transport.record"));
+    backend.run(8);
+    a.root->frame(false);
+    CHECK(notes.empty());
+    REQUIRE(a.actions->run("transport.toggle"));  // Space: stop, which commits the pass
+    CHECK_FALSE(a.app->engine()->recording());
+    CHECK(a.app->head().items.size() == 2);  // laid as a new item beside the locked one
+    REQUIRE(notes.size() == 1);
+    CHECK(notes[0].find("not a take of " + item) != std::string::npos);
+    CHECK(notes[0].find("locked") != std::string::npos);
+    a.app->stopEngine();
+}
+
 TEST_CASE("file actions: changed versions and branches renew the discard decision") {
     App a;
     REQUIRE(a.ok);

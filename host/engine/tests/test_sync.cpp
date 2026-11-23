@@ -1405,7 +1405,7 @@ TEST_CASE("midi outputs: the engine writes the clock members and raises an older
     const auto bytes = readFile(options.midiPreferencesFile).value();
     const auto doc = json::parse(std::string(bytes.begin(), bytes.end())).value();
     CHECK(doc.find("schema")->asString() == kPreferencesSchema);
-    CHECK(std::string(kPreferencesSchema) == "supple.preferences/1.10");
+    CHECK(std::string(kPreferencesSchema) == "supple.preferences/1.11");
     CHECK(doc.find("lock_memory")->asBool());  // the GUI's members are kept
     const auto* synth = doc.find("midi_outputs")->find("Synth");
     REQUIRE(synth);

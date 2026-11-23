@@ -2058,6 +2058,8 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
                            "prefs.section.advanced.title"})
         CHECK(f.node(id)->visible);
     CHECK(f.node("prefs.audio")->bounds().y < f.node("prefs.monitor")->bounds().y);
+    CHECK(f.node("prefs.monitor")->bounds().y < f.node("prefs.stack")->bounds().y);
+    CHECK(f.node("prefs.stack")->bounds().y < f.node("prefs.imports")->bounds().y);
     CHECK(f.node("prefs.monitor")->bounds().y < f.node("prefs.isolation")->bounds().y);
     CHECK_FALSE(f.node("prefs.advanced")->visible);
     CHECK(f.node("prefs.advanced.toggle")->valueText() == "Show");
@@ -2171,6 +2173,24 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     CHECK(f.node("prefs.isolation.set")->valueText() == "In a shared bridge process");
     CHECK_FALSE(prefs.setPluginIsolation(model::Isolation::Inherit));
     CHECK(f.app->pluginIsolation() == model::Isolation::SharedBridge);
+    // Recording over an item (ADR-0103), from the menu: the engine's setting at once.
+    CHECK(f.app->stackRecordedTakes());
+    CHECK(f.node("prefs.stack.set")->valueText() == "New take");
+    REQUIRE(f.root->click("prefs.stack.set"));
+    auto* stackMenu = dynamic_cast<ui::List*>(f.root->find("prefs.stack.menu"));
+    REQUIRE(stackMenu);
+    REQUIRE(stackMenu->count() == 2);
+    auto layer = stackMenu->onActivate;
+    layer(1);  // Layer on top
+    CHECK_FALSE(f.app->stackRecordedTakes());
+    CHECK(f.node("prefs.stack.set")->valueText() == "Layer on top");
+    // The row shows the engine's setting: an agent's record.set appears there,
+    // and is not saved (the engine keeps it only while it runs).
+    auto agent = f.dispatcher->execute(
+        {"record.set", json::parse(R"({"stack_takes": true})").value(), kTest});
+    REQUIRE_MESSAGE(agent, (agent ? "" : agent.error().toString()));
+    prefs.refresh();
+    CHECK(f.node("prefs.stack.set")->valueText() == "New take");
     // The render folder: absolute only.
     CHECK_FALSE(prefs.setRenderDirectory("relative/renders"));
     REQUIRE(prefs.setRenderDirectory(f.dir / "my renders"));
@@ -2183,6 +2203,7 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     CHECK(saved->audioThreads == 4);
     CHECK_FALSE(saved->copyImports);
     CHECK(saved->pluginIsolation == model::Isolation::SharedBridge);
+    CHECK_FALSE(saved->stackRecordedTakes);  // the row's choice, not the agent's
     CHECK(saved->renderDirectory == f.dir / "my renders");
     // A failed save changes neither the shown nor the effective setting.
     std::filesystem::remove(file);
@@ -2195,6 +2216,7 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     f.app->setRendersDir({});
     gui::PreferencesDialog again(*f.root, *f.app, mouse, *saved, {});
     CHECK(f.app->rendersDir() == f.dir / "my renders");
+    CHECK_FALSE(f.app->stackRecordedTakes());  // what record.set {stack_takes} sets
 }
 
 TEST_CASE("preferences: canonical round trip, older schemas and rejected values") {
@@ -2209,6 +2231,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.preventDeepIdle = true;
     values.renderDirectory = f.dir / "renders";
     values.copyImports = false;
+    values.stackRecordedTakes = false;
     values.pluginIsolation = model::Isolation::Dedicated;
     values.renderOpenFolder = true;
     values.audio.backend = "portaudio";
@@ -2237,6 +2260,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->preventDeepIdle);
     CHECK(loaded->renderDirectory == f.dir / "renders");
     CHECK_FALSE(loaded->copyImports);
+    CHECK_FALSE(loaded->stackRecordedTakes);  // 1.11, ADR-0103
     CHECK(loaded->pluginIsolation == model::Isolation::Dedicated);
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
@@ -2244,7 +2268,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->rememberedLoads == values.rememberedLoads);  // 1.10, topic 7d
     CHECK(loaded->midiOutputs.empty());  // the engine writes these records, not the GUI
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.10") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.11") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
@@ -2260,6 +2284,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK_FALSE(old->preventDeepIdle);
         CHECK(old->renderDirectory.empty());
         CHECK(old->copyImports);
+        CHECK(old->stackRecordedTakes);
         CHECK(old->pluginIsolation == model::Isolation::InProcess);
         CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
@@ -2291,6 +2316,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
                               {"prevent_deep_idle", "\"true\""},
                               {"render_directory", "\"relative\""},
                               {"copy_imported_media", "1"},
+                              {"stack_recorded_takes", "\"on\""},
                               {"plugin_isolation", "\"inherit\""},
                               {"plugin_isolation", "1"},
                               {"render_open_folder", "\"no\""}}) {
@@ -2632,7 +2658,9 @@ TEST_CASE(
     REQUIRE(f.root->click("prefs.advanced.toggle"));  // the low-level settings
     f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
-    CHECK(offHeight < 760);  // no space reserved for empty notes (eight would add ~190)
+    // No space reserved for empty notes (eight would add ~190); 800 with the
+    // Record over an item row (ADR-0103).
+    CHECK(offHeight < 800);
     CHECK_FALSE(f.node("prefs.memory.note.0")->visible);
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);
     for (const char* id : {"prefs.memory.set", "prefs.latency.set"}) {

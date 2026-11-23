@@ -90,6 +90,13 @@ std::vector<std::string> keySections(const ui::Root& root);
 // GUI-only commands: `gui.selection` (read-only selection for agents, §1.2).
 void registerGuiCommands(cmd::Registry& registry, const UiState& ui);
 
+// What a stop or pause that ended a recording says about where its takes went
+// (ADR-0103), for the status line: the messages of its record.stack_skipped (a
+// pass became a new item, not a take of the item under it) and
+// record.stack_group (tracks of an edit group left a take behind) warnings,
+// joined; "" when there are none.
+std::string recordingNotice(const json::Value& result);
+
 class AppActions {
   public:
     AppActions(const cmd::Registry& registry, cmd::Dispatcher& dispatcher, engine::EngineApp& app,
@@ -137,7 +144,8 @@ class AppActions {
     // Shown by the app (status line): the last action's error, if any.
     std::function<void(const std::string&)> onError;
     // Shown by the app (status line): what an edit did, when it is news (a
-    // bake's "Riff baked: 6 notes written as they sound").
+    // bake's "Riff baked: 6 notes written as they sound"), and what a stop or
+    // pause that ended a recording says about its takes (recordingNotice).
     std::function<void(const std::string&)> onNotice;
     // The action's first key binding ("Ctrl+Z", or ""), for menus; with
     // all, every binding ("Ctrl+Shift+Z, Ctrl+Y"), for the actions list.

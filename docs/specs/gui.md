@@ -3478,7 +3478,8 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   a way into the mouse modifiers.
   The dialog is in sections, each a heading over a rule
   (`prefs.section.<name>.title`): **Audio** (the audio device), **Recording
-  and import** (Input monitoring on new tracks, Copy imported audio),
+  and import** (Input monitoring on new tracks, Record over an item, Copy
+  imported audio),
   **Plug-ins** (Third-party plug-ins run), **Editing** (Mouse modifiers) and
   **Advanced** (Audio processing threads, Lock memory, Keep CPUs out of deep
   idle). Advanced (`prefs.advanced`) is closed until its **Show** is clicked
@@ -3558,6 +3559,20 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   (absent, and in older files, false; other types report
   `preferences.render_open_folder`), set from the render dialog's After
   render section.
+  **Record over an item** (1.11, ADR-0103; `prefs.stack.set`): **New take**
+  (the default: a pass that starts inside an item is a take of it, heard where
+  it was recorded) or **Layer on top** (laid as a new item), from a menu
+  (`prefs.stack.menu`); saved as the boolean `stack_recorded_takes` (absent,
+  and in older files, true; other types report
+  `preferences.stack_recorded_takes`) and applied to
+  `EngineApp::setStackRecordedTakes` (what `record.set {stack_takes}` sets)
+  when the dialog is made at start-up and on each choice. The engine keeps
+  it only while it runs, so the GUI is its keeper. The row shows the engine's
+  setting: an agent's `record.set` appears there and is not saved. A stop or
+  pause that ends a recording, from any action (Space, the transport bar,
+  a menu, the actions list), puts its `record.stack_skipped` and
+  `record.stack_group` warnings on the status line (`gui::recordingNotice`,
+  each message once, joined by "; ").
   **Copy imported audio** (1.4): On by default, saved as the
   boolean `copy_imported_media` (absent, and in older files, means true;
   other types report `preferences.copy_imported_media`) and applied to

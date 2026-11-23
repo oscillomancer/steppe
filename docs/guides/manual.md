@@ -547,8 +547,11 @@ end, the rest stays in the take, hidden; lengthen the item to hear it. If the it
 tracks of an edit group, the others do not get a take, and the recording says so: arm every track
 of the group to keep their takes level. Agents turn this off with
 `record.set {stack_takes: false}` (every pass is then laid as items, as in older versions);
-`record.get` reads it. The app's own Preferences row for it is not built yet; until then the
-setting lasts until Steppe quits.
+`record.get` reads it. In the app it is **Edit > Preferences > Recording and import > Record over
+an item**: **New take** (the default) or **Layer on top**, kept with your other preferences; an
+agent's change shows there and lasts until Steppe quits. When a pass became a new item instead of a
+take, or other tracks of an edit group were left without a take, the status line says so when you
+stop.
 
 ### Changing what the mouse does
 
