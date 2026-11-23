@@ -27,9 +27,13 @@ timeline start have clipped it).
    there is none. When the pass starts before an item and runs into it, or the target is locked,
    looped, frozen, or holds the other kind of material (MIDI under an audio pass), the new item
    carries a `record.stack_skipped` warning naming the item and why, so a doubling is never silent.
-   A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole: the
-   project stays as it was and editable, and the recording is not in it (its journals remain for
-   recovery).
+   A frozen track takes no recording: its pass is left out with `record.frozen_skipped`, the file is
+   kept in the project's media and named in the warning, and the other tracks' takes are placed (a
+   frozen track used to make the whole multitrack commit fail, losing every track's recording;
+   arming a frozen track, and freezing an armed one, are refused, so this is a backstop; decided
+   2026-11-23, round 132). A commit that fails anywhere (a refused nested `take.comp` included) is
+   rolled back whole: the project stays as it was and editable, and the recording is not in it
+   (its journals remain for recovery).
 2. **The item's extent does not change.** Its position and length stay; the new take reads the
    recording by the timeline mapping (`start_offset` negative when the pass starts after the item,
    so the first part is silent; positive past the end of a short pass). What lies beyond the item
@@ -45,7 +49,7 @@ timeline start have clipped it).
    well: the item becomes the pieces before, the pass, and after, as `take.comp` makes them (one
    undo step). The seams of an existing comp are rebuilt from the crossfade `take.comp.get`
    reports (a user's 40 ms linear comp stays 40 ms linear; seams that differed by hand become
-   uniform, as any `take.comp` makes them). A pass that covers the whole of a lone item makes the
+   uniform, as any `take.comp` makes them, and `record.comp_uniform` says so). A pass that covers the whole of a lone item makes the
    new take heard whole with no comp; over a whole comp of several pieces it goes through
    `take.comp` with a single span, which joins the neighbours that now play one take (kept apart
    they would swell by 3 dB across each old equal-power seam). Loop passes are appended in order, one

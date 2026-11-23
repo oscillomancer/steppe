@@ -552,7 +552,9 @@ looped item, still makes a new item, and the recording says so. If the pass runs
 end, the rest stays in the take, hidden; lengthen the item to hear it. If the item was a comp
 (several pieces of one set of takes), every piece gets the take. If you record only some of the
 tracks of an edit group, the others do not get a take, and the recording says so: arm every track
-of the group to keep their takes level. Agents turn this off with
+of the group to keep their takes level. If the item was a comp whose seams you had set to different
+lengths or shapes, a pass inside it makes them all alike again (the comp's own length and shape) and
+the recording says so (`record.comp_uniform`); a comp whose seams are already alike keeps them. Agents turn this off with
 `record.set {stack_takes: false}` (every pass is then laid as items, as in older versions);
 `record.get` reads it. In the app it is **Edit > Preferences > Recording and import > Record over
 an item**: **New take** (the default) or **Layer on top**, kept with your other preferences; an
@@ -863,7 +865,13 @@ metadata; `session.describe` marks frozen channels. Work on other tracks can
 continue during a freeze. Completion refuses if the source sound, input files,
 project/branch or latency schedule changed; submit the freeze again.
 
-Disarm the channel and remove external audio, sidechain/key or MIDI inputs first.
+Disarm the channel and remove external audio, sidechain/key or MIDI inputs first. A frozen
+channel cannot be armed (arming it says to unfreeze it first), and arming a group leaves its frozen
+members unarmed with a warning. If a channel is frozen while a recording is being made on it (an
+agent can do this behind the app's back), nothing is lost: the recording stops as usual, every other
+channel's takes are placed, and the frozen channel's recording is kept as a file in the project's
+media, named in a `record.frozen_skipped` warning. Unfreeze the channel and place the file with
+`item.add {"track":"tr_1","audio_file":"<the file>"}`; a recovered recording follows the same rule.
 V1 requires unity master playrate without an active rate envelope. Tempo, meter,
 project sample rate and master-rate edits name the frozen tracks that must be
 unfrozen first. Missing plugins or unavailable media must be repaired before
