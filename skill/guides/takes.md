@@ -51,7 +51,9 @@ the choice is stored in each recording's commit, so undo, redo and merges do not
 Call `take.comp` again on any piece (or give `items`, the pieces in any order) to move
 seams or change spans. **Without `crossfade`, the seams your spans do not touch stay exactly as
 they are** (a seam fade you set by hand included), and the seams the call makes or moves get the
-comp's own crossfade (a seam you move on its own keeps its own length and shape); an omitted
+comp's own crossfade (its longest seam fade: one long hand-set seam makes the new ones that long; a
+seam you move on its own keeps its own length and shape; a seam your edit leaves too little room
+beside a new one is rebuilt and shortened); an omitted
 crossfade no longer resets the comp to 10 ms. **Give `crossfade` (and `crossfade_shape`) to
 rebuild every seam alike.** The same call twice changes nothing. `take.comp.get {item}` reads a
 comp you did not make: besides the pieces (with `fade_in`, `fade_out` and their shapes) it gives

@@ -1110,8 +1110,10 @@ instructions are in `docs/guides/installing.md`.
   until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
   stays, and between MIDI pieces of one take a held note sounds again there
   (`comp.midi_boundary`); a `take.comp` without `crossfade` keeps the seams its spans do not touch
-  exactly as stored (a hand-set fade included; a seam moved on its own keeps its own length and
-  shape; new seams take the comp's crossfade), so an omitted crossfade no longer resets a comp
+  exactly as stored (a hand-set fade included, unless a span edge leaves it too little room beside
+  a new seam, when it is rebuilt and clamped; a seam moved on its own keeps its own length and
+  shape; new seams take the comp's crossfade, the default 10 ms when the item has no seam between
+  takes), so an omitted crossfade no longer resets a comp
   to 10 ms, and a given one rebuilds every seam alike; `take.comp.get` says `uniform: false`
   for a hand-set seam, informationally, with that seam's own crossfade and shape in
   `differing_seams` and the fade shapes on the pieces. An item in an

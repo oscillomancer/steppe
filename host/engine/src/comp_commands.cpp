@@ -390,13 +390,42 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
     const bool keepSeams = !a.crossfade && !a.shape;
     const model::CompCrossfade current = model::compCrossfade(s, *run);
     std::set<std::int64_t> keptAt;
-    if (keepSeams)
+    if (keepSeams) {
+        // The boundaries the result will have, to see how long the cores beside a seam end up.
+        std::vector<std::int64_t> bounds{runStart, runEnd};
+        for (std::size_t k = 1; k < cores.size(); ++k) bounds.push_back(cores[k].lo);
+        bounds.insert(bounds.end(), breaks.begin(), breaks.end());
+        std::sort(bounds.begin(), bounds.end());
+        bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+        auto reachIn = [](std::int64_t fade, std::int64_t extension) {
+            return std::max<std::int64_t>(0, fade - extension);  // how far a fade enters the core
+        };
         for (std::size_t k = 0; k + 1 < run->size(); ++k) {
-            const std::int64_t at = (*run)[k].coreEnd;
-            if (unjoined[k].index != unjoined[k + 1].index &&
-                indexAt(at - 1) == unjoined[k].index && indexAt(at) == unjoined[k + 1].index)
+            const auto& l = (*run)[k];
+            const auto& r = (*run)[k + 1];
+            const std::int64_t at = l.coreEnd;
+            if (!(unjoined[k].index != unjoined[k + 1].index &&
+                  indexAt(at - 1) == unjoined[k].index && indexAt(at) == unjoined[k + 1].index))
+                continue;
+            // A seam stays only while its reach still fits the cores beside it: a span edge nearer
+            // than the seam's own extension (or its fade) would leave it running past the next
+            // boundary. A side whose core did not get shorter is as it was and stays.
+            const std::int64_t lenL =
+                at - *(std::lower_bound(bounds.begin(), bounds.end(), at) - 1);
+            const std::int64_t lenR = *std::upper_bound(bounds.begin(), bounds.end(), at) - at;
+            const model::Item& li = *s.items.find(l.item);
+            const model::Item& ri = *s.items.find(r.item);
+            const std::int64_t extL = std::max<std::int64_t>(0, l.end - l.coreEnd);
+            const std::int64_t extR = std::max<std::int64_t>(0, r.coreStart - r.start);
+            const auto fadeOut = static_cast<std::int64_t>(std::llround(li.fadeOut.length * rate));
+            const auto fadeIn = static_cast<std::int64_t>(std::llround(ri.fadeIn.length * rate));
+            const bool fitsL = extR <= lenL / 2 && reachIn(fadeOut, extL) <= lenL / 2;
+            const bool fitsR = extL <= lenR / 2 && reachIn(fadeIn, extR) <= lenR / 2;
+            if ((lenL >= l.coreEnd - l.coreStart || fitsL) &&
+                (lenR >= r.coreEnd - r.coreStart || fitsR))
                 keptAt.insert(at);
         }
+    }
 
     // The core, written: every crossfade taken out, so that a split sees plain pieces.
     auto& txn = engine.txn();
@@ -502,7 +531,8 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
     std::vector<model::FadeShape> seamShape(n > 0 ? n - 1 : 0, shape);
     if (keepSeams) {
         // A seam moved on its own (one old seam touched, one new one, between the same two takes)
-        // keeps its own extension and shape, as a seam drag does.
+        // keeps its own length (the longer of its two fades, as take.comp.get reads it) and
+        // shape, as a seam drag does.
         std::vector<std::size_t> touched, made;
         for (std::size_t k = 0; k + 1 < run->size(); ++k)
             if (unjoined[k].index != unjoined[k + 1].index && !keptAt.contains((*run)[k].coreEnd))
@@ -514,9 +544,10 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
             unjoined[touched[0] + 1].index == cores[made[0] + 1].index) {
             const auto& l = (*run)[touched[0]];
             const auto& r = (*run)[touched[0] + 1];
-            wantHalf[made[0]] = std::max(l.end - l.coreEnd, r.coreStart - r.start);
             const model::Item& ri = *s.items.find(r.item);
             const model::Item& li = *s.items.find(l.item);
+            wantHalf[made[0]] = static_cast<std::int64_t>(
+                std::llround(std::max(li.fadeOut.length, ri.fadeIn.length) * rate / 2.0));
             seamShape[made[0]] =
                 (ri.fadeIn.length >= li.fadeOut.length ? ri.fadeIn : li.fadeOut).shape ==
                         model::FadeShape::Linear
@@ -524,15 +555,31 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
                     : model::FadeShape::Cos;
         }
     }
-    // What a kept seam takes of a piece's core, at its start and its end: a rebuilt fade must not
-    // run into it.
+    // What a kept seam takes of a piece's core, at its start and its end: the other piece's audio
+    // running in, and this piece's own fade reaching in (what the user set, as long as it is): a
+    // rebuilt fade must not run into it.
     const model::Session placed = engine.view();
+    auto startOf = [&](std::size_t i) {
+        return time::samplesAt(model::itemSpan(placed, *placed.items.find(cores[i].item)).startSec,
+                               rate);
+    };
+    auto endOf = [&](std::size_t i) {
+        return time::samplesAt(model::itemSpan(placed, *placed.items.find(cores[i].item)).endSec,
+                               rate);
+    };
     auto occupied = [&](std::size_t i, bool atStart) -> std::int64_t {
         if (atStart ? (i == 0 || !isKept(i - 1)) : (i + 1 >= n || !isKept(i))) return 0;
-        const model::ItemSpan span = model::itemSpan(placed, *placed.items.find(cores[i].item));
-        return std::max<std::int64_t>(0, atStart
-                                             ? cores[i].lo - time::samplesAt(span.startSec, rate)
-                                             : time::samplesAt(span.endSec, rate) - cores[i].hi);
+        const model::Item& item = *placed.items.find(cores[i].item);
+        if (atStart) {
+            const std::int64_t own = std::max<std::int64_t>(0, cores[i].lo - startOf(i));
+            const std::int64_t theirs = std::max<std::int64_t>(0, endOf(i - 1) - cores[i].lo);
+            const auto fade = static_cast<std::int64_t>(std::llround(item.fadeIn.length * rate));
+            return std::max(theirs, std::max<std::int64_t>(0, fade - own));
+        }
+        const std::int64_t own = std::max<std::int64_t>(0, endOf(i) - cores[i].hi);
+        const std::int64_t theirs = std::max<std::int64_t>(0, cores[i].hi - startOf(i + 1));
+        const auto fade = static_cast<std::int64_t>(std::llround(item.fadeOut.length * rate));
+        return std::max(theirs, std::max<std::int64_t>(0, fade - own));
     };
     std::vector<std::int64_t> half(n > 0 ? n - 1 : 0, 0);
     bool skipped = false, clamped = false;
@@ -555,9 +602,12 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
             who + "the seams are hard cuts: " + refusal + ", and a crossfade would have to move it",
             "/crossfade");
     if (clamped)
-        ctx.warn("comp.crossfade_clamped",
-                 who + "a crossfade is shorter than asked: the pieces beside the seam are short",
-                 "/crossfade");
+        ctx.warn(
+            "comp.crossfade_clamped",
+            who +
+                "a crossfade is shorter than asked: the pieces beside the seam are short, or a "
+                "seam kept beside it takes the room",
+            "/crossfade");
     auto fade = [&](std::int64_t h, model::FadeShape of) {
         model::Fade f;
         if (h > 0) {
@@ -845,7 +895,9 @@ void registerCompCommands(cmd::Registry& registry) {
             "touch stay exactly as they are, hand-set lengths and shapes included, and the "
             "seams the call makes or moves get the run's own crossfade (crossfade and "
             "crossfade_shape of take.comp.get), or, for a seam moved alone between the same two "
-            "takes, its own. Call it again on any piece (or items: the pieces) to move seams; "
+            "takes, its own (its longer fade); a kept seam a span edge leaves too little room "
+            "beside a new one is rebuilt and clamped. Call it again on any piece (or items: the "
+            "pieces) to move seams; "
             "the same call twice changes nothing. Audio only: a seam is a hard cut, with "
             "the warning comp.crossfade_skipped, when a take is MIDI or empty, warped or has "
             "envelopes. Pieces of one take beside each other are joined (comp.midi_boundary warns "

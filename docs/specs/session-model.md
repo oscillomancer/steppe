@@ -332,14 +332,21 @@ nothing:
 
 **Kept seams** (no `crossfade`, no `crossfade_shape`): a seam of the run is kept when, after
 the spans are painted, its core sample is still a boundary and the take index on its left and
-right is what it was (the two differing). Steps 1 and 3 skip it: its pieces keep their
-extension, fades and take offsets as stored, to the byte, however far from it the call works. A
-boundary a join or a split removes or makes, a seam whose place moved and one whose side now
-plays another take are rebuilt, with the crossfade of the call's default (above). A seam moved
-on its own (exactly one old seam touched and one new, between the same two takes: a seam drag)
-keeps its own extension and shape instead. A rebuilt fade is also clamped by the room a kept
-seam leaves in the piece (`ℓ` minus the half the kept seam occupies at that end), so it never
-runs into a hand-set one, and the call then warns `comp.crossfade_clamped`. A seam between
+right is what it was (the two differing), and the cores beside it still hold it. Steps 1 and 3
+skip it: its pieces keep their extension, fades and take offsets as stored, to the byte, however
+far from it the call works. A boundary a join or a split removes or makes, a seam whose place
+moved and one whose side now plays another take are rebuilt, with the crossfade of the call's
+default (above). A seam moved on its own (exactly one old seam touched and one new, between the
+same two takes: a seam drag) keeps its own length (the longer of its two fades, as `take.comp.get`
+reads it) and shape instead. **Holding the cores:** when a span edge leaves a core beside the seam
+shorter than it was, the seam stays only if its reach fits half of that core: the other piece's
+audio running in (its extension) and the piece's own fade reaching in (its length less its
+extension). Otherwise the seam is touched, so it is rebuilt and clamped with the new one (a kept
+fade left running past a nearer seam would play one take under the next and click). A side whose
+core did not get shorter is as it was and stays. A rebuilt fade is also clamped by the room a kept
+seam leaves in the piece, at that end: the other piece's audio in, or the piece's own fade, as
+the user set it, whichever reaches further, so it never runs into a hand-set one, and the call
+then warns `comp.crossfade_clamped`. A seam between
 takes that cannot be extended (MIDI, warped, envelopes) is still a hard cut where rebuilt; a kept
 one stays as it is. The ids of a piece a split makes are new, as ever; what is kept is
 the seam's geometry and fades.
