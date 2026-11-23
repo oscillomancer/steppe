@@ -3785,12 +3785,32 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
 
 Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<RecordedTake>& takes,
                                                          std::string_view label, bool mayStack) {
-    auto done = commitTakesNow(takes, label, mayStack);
     // A refusal leaves the project as it was and the recordings where they are, with their
-    // journals: say so, and how to get them back.
-    if (!done && std::any_of(takes.begin(), takes.end(), [](const RecordedTake& r) {
-            return r.frames > 0 || !r.midi.empty();
-        })) {
+    // journals: say so.
+    const bool recorded = std::any_of(takes.begin(), takes.end(), [](const RecordedTake& r) {
+        return r.frames > 0 || !r.midi.empty();
+    });
+    // A pass whose own placement is out of bounds is unusable as it is, to project.recover too:
+    // its files are kept, nothing more is promised.
+    {
+        const model::Session initial = view();
+        for (const auto& r : takes) {
+            if (r.frames <= 0) continue;
+            const double rate = r.sampleRate == 0 ? initial.project->sampleRate : r.sampleRate;
+            detail::RecordingInfo side{r.track,    r.startSample, rate,
+                                       r.segments, r.loop.start,  r.loop.end};
+            side.punch = r.punch;
+            if (auto bounds = recordingBounds(initial, side, static_cast<std::uint64_t>(r.frames));
+                !bounds) {
+                Error e = std::move(bounds).error();
+                e.message += " (the recordings are kept where they were made)";
+                return e;
+            }
+        }
+    }
+    auto done = commitTakesNow(takes, label, mayStack);
+    // project.recover (mayStack false) is what the suffix points at: not on its own refusal.
+    if (!done && recorded && mayStack) {
         Error e = std::move(done).error();
         e.message += " (the recording is kept: project.recover places it)";
         return e;
@@ -3804,15 +3824,7 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakesNow(const std::vector<Re
     // branch, redo, a merge) builds the same project whatever the setting is then (ADR-0103).
     const bool stack = mayStack && stackRecordedTakes_;
     std::vector<std::pair<Id, RecordedTake>> pendingHashes;
-    const model::Session initial = view();
-    for (const auto& r : takes) {
-        if (r.frames <= 0) continue;
-        const double rate = r.sampleRate == 0 ? initial.project->sampleRate : r.sampleRate;
-        detail::RecordingInfo side{r.track,    r.startSample, rate,
-                                   r.segments, r.loop.start,  r.loop.end};
-        side.punch = r.punch;
-        SUPPLE_TRY(recordingBounds(initial, side, static_cast<std::uint64_t>(r.frames)));
-    }
+    const model::Session initial = view();  // commitTakes checked the passes' bounds
     auto txnId = beginTransaction({cmd::Origin::Type::Internal, "engine", ""}, label);
     if (!txnId) return std::move(txnId).error();
     // Every error return below leaves the project as it was: an open transaction would answer

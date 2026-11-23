@@ -8,6 +8,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <string>
@@ -631,6 +632,28 @@ TEST_CASE("a recording on a frozen track is kept out, and every other track's is
     }));
     CHECK_FALSE(StackFixture::warned(infos[0], "record.frozen_skipped"));
     CHECK_FALSE(StackFixture::warned(infos[2], "record.frozen_skipped"));
+}
+
+TEST_CASE("a refusal's note about the recording is true of the refusal") {
+    SUBCASE("a pass whose placement is out of bounds: kept, nothing more promised") {
+        StackFixture f;
+        RecordedTake r = f.pass("far.wav", 0.5, 0.5);
+        r.startSample = std::numeric_limits<std::int64_t>::max();
+        r.segments = {{0, r.startSample}};
+        auto done = f.app->commitTakes({r});
+        REQUIRE_FALSE(done);
+        CHECK(done.error().message.find("recordings are kept") != std::string::npos);
+        CHECK(done.error().message.find("project.recover") == std::string::npos);
+    }
+    SUBCASE("a refusal of project.recover's own commit does not point at project.recover") {
+        StackFixture f;
+        f.run("track.add", R"({"name":"Bus","type":"buss"})");
+        auto done = f.app->commitTakes(
+            {f.pass("onbus.wav", 0.5, 0.5, 440.0, model::Id{model::Kind::Track, 2})}, "recover",
+            false);
+        REQUIRE_FALSE(done);
+        CHECK(done.error().message.find("project.recover") == std::string::npos);
+    }
 }
 
 TEST_CASE(
