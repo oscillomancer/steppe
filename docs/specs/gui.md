@@ -383,7 +383,15 @@ vertex pair per column per visible item into a persistent buffer, and draws
 the visible span; scroll shifts the buffer window, zoom rebuilds only
 visible items. While a pyramid builds, the item draws a placeholder and a
 progress hint; editing never waits for peaks. Take rate/stretch maps
-item-time to source-time before sampling the pyramid.
+item-time to source-time before sampling the pyramid. The worker reads media a
+chunk at a time (`audio::readAudioHead`; whole-file reads only for formats it
+does not stream, none of them a recording), so a hold (`PeakService::holdUnder`)
+can stop it between two chunks: an unsaved project's first save holds the
+scratch media folder while it removes the recordings it moved (Windows cannot
+remove an open file; the app registers the hold with
+`EngineApp::addScratchReader`). A stopped read is no failure; held files are not
+opened, and the owner is told when the hold ends, so it asks for them again
+where they now are.
 
 ### 3.2 MIDI
 
@@ -1012,7 +1020,7 @@ action (the first selected item). See engine.md for what the file holds.
 **Takes.** An item with several takes shows each in a lane under its name
 bar when the row is tall enough (at least 14 units a lane), the heard one
 lit and each lane named; a click on a lane hears that take, a swipe comps it
-in, and the badge cycles takes. The menu bar's Item menu adds, for
+in (below), and the badge cycles takes. The menu bar's Item menu adds, for
 several takes: **Show all takes** (a check; UI state, saved in the project's
 UI file as `expanded_takes`): the item's row grows to the name bar plus one
 lane per take, each as tall as the row's own height, so every take can be
@@ -1039,6 +1047,85 @@ with them) and **Render with FX as a new take** (mode take). **Ctrl-drag** below
 bar of an item with several takes takes that take (the lane under the
 pointer, else the heard one) out into an item of its own, anywhere on any
 channel (take.extract, one undo step; elsewhere Ctrl-drag still copies).
+
+**Comping** (session-model §1.5.1). The GUI makes a comp with `take.comp`,
+the call an agent makes, so the two give the same pieces; each gesture is one
+undo step. A **swipe** across part of a take lane sends `take.comp {item,
+spans: [{from, to, index}]}` with the lane's take over the swiped beats (snapped;
+the mouse map's free modifier frees them), which may reach across the comp's
+seams to its outer ends ("Comp take"). A **click** on a lane of a lone item
+hears that take throughout (`take.activate`, which a looped item also takes);
+in a comp it re-comps the pressed piece alone, its core span with that take, so
+its seams are rebuilt and it joins a neighbour playing the same take (a
+`take.activate` would keep the old seam fades, and a piece switched to its
+neighbour's take would sum one source with itself through an equal-power
+crossfade). A click on the take a piece already plays sends nothing. The take
+badge and the inspector's Takes list switch a piece of a comp the same way. Every
+re-comp keeps the comp's **crossfade**: `take.comp` gives every seam of a comp
+one length and shape, so the GUI sends the comp's own, the value
+`take.comp.get` reads back (`model::compCrossfade`: the longest seam-side fade,
+which a clamped seam does not shrink, and its shape; 0 for a hard-cut comp).
+Only a first comp, with no seam between different takes yet, sends none and
+takes `take.comp`'s 10 ms, equal power (`views::compCrossfade` is empty then).
+
+The lanes draw each **seam** of a comp (`model::compRun`, cached per track and
+session version), only where the takes differ on its two sides: a one-unit line
+in the items' outline colour across the pieces at the seam's core, with a notch
+at its foot, over the two seam-side fade curves. No text. A seam takes the
+press six units either side across the pieces' height, in place of the pieces'
+trim edges there (a trim inside a comp would break it), except the left piece's
+take badge, which a long crossfade can bring within reach and which keeps its
+press; the comp's outer ends
+trim and fade as any item's. **Dragging a seam** moves it ("Move comp seam"):
+one `take.comp` with the two stretches beside it as they are, their shared edge
+moved, and the comp's crossfade; it snaps (the free modifier frees it) and stops
+1/64 beat short of the seams beside it. The **top of a seam** (the fade
+handles' square) is the comp's crossfade: a drag sets its length, twice the
+distance from the seam since it is centred there, up to what the shorter side
+allows ("Comp crossfade"), showing the length beside the extent while it is
+dragged ("12 ms", "1.20 s"), as a stretch shows its rate; the fade handles'
+shape click (the mouse map's `fade` context, Ctrl by default) toggles equal
+power and linear ("Comp crossfade shape"). Each is one `take.comp` and applies
+to every seam of the comp; a hard cut is the length dragged or typed to 0, for
+the whole comp (per-seam lengths are not built). **On a track grouped for
+edits** (`model::linkedTracks`, attribute `edit`) every one of these is the same
+`take.comp`, which comps every other track of the group with items over the
+stretch alike (session-model §1.5.1, Edit groups); a click on a lone item there,
+its badge and the Takes list send `take.comp` over the whole item rather than
+`take.activate` (which would switch it alone), so the members follow
+(`views::compPieceOf`). A member whose comp the engine reads as differing from
+the group's (`take.comp.get`'s `differing_members`, asked for the group's first
+track in the order `take.comp` takes members, `views::compDiffersFrom`: other
+spans, takes, crossfade or shape, from an edit that bypassed the group) draws its
+seam lines broken, every other 4 units, and the inspector shows a **Group** row,
+"Differs from Close", for one selected piece of it; any comp gesture on the group
+brings it back in step. A member's comp with no seam of its own shows the
+difference only in the inspector. A **looped item** keeps the swipe it had before
+`take.comp`, which refuses it (`comp.loop`): `item.split` at the swipe's ends and
+`take.activate` of the middle, with hard cuts, until its Loop is turned off. Its
+lane clicks, badge and Takes list switch with `take.activate`
+(`views::compsWithTakeComp`), and its pieces are no comp to the GUI: no seams are
+drawn or dragged there, the boundaries trim and fade as item edges do, and the
+inspector shows Fade in and Fade out, not Crossfade. The inspector shows the same
+for one selected piece (Crossfade, below). Flatten a comp with Consolidate on
+its pieces. Refusals (`item.locked`; `comp.group_mismatch` and `comp.group_takes`
+when a track of the group cannot follow: a looped item, one over another
+stretch, one with fewer takes than a span plays, or a locked one) reach the
+status line, and nothing changes. **Alt** held at the
+press of any comp gesture (a swipe, a lane click, the badge, a seam or its
+crossfade handle) or on a pick in the inspector's Takes list comps this track
+alone: `take.comp` with `bypass_groups`, as Alt on the TCP's fader and pan moves
+one track alone. A refusal from a group member (its path is
+`/args/members/<track>[/items/<item>]`) says so in its hint ("hold Alt to comp this
+track alone", `views::compRefusal`) in place of the argument's name; a member's
+lock reads "unlock it, or hold Alt to comp this track alone". The comped track's
+own refusals keep the engine's hint. The inspector's Crossfade field has
+no Alt, so its refusals keep the engine's hint. A group track with nothing over the
+stretch, or only one-take items there (a bass beside drum takes), is passed over
+(`skipped_tracks`, `no_item` or `one_take`): left as it is, with nothing to show. `take.comp`'s warnings
+(`comp.crossfade_clamped`, `comp.crossfade_skipped`, `comp.midi_boundary`), from
+a gesture or the inspector, are the status line's transient note (their
+messages, joined), as a refusal is: never text on the lanes.
 
 **The marquee.** A drag from empty space, or a right-drag anywhere in the
 lanes (on an automation lane: a right-drag, or a Ctrl-drag from empty
@@ -2810,7 +2897,9 @@ inspector adds no command:
 | Length (`inspector.length`) | "32 beats" | A number, with or without "beats" | `length` |
 | Timebase (`inspector.timebase`) | Its track's setting, Beats, Time, or Beats, start only | A choice | `timebase` |
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
-| Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s" | A number, with or without "s" | `fade_in`, `fade_out` |
+| Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s"; for a comp piece only at the comp's outer ends (its first piece's fade in, its last's fade out) | A number, with or without "s" | `fade_in`, `fade_out` |
+| Crossfade (`inspector.crossfade`, `inspector.crossfade_shape`) | One selected piece of a comp with a seam between takes (session-model §1.5.1): the comp's crossfade, "0.010 s" (`views::compCrossfade`), and its shape, Equal power or Linear | A number, with or without "s" (0: a hard cut), or a choice | `take.comp` with the comp's spans (`views::compSpans`) and the new length or shape, for every seam; one undo step |
+| Group (`inspector.group`) | One selected comp piece on a track grouped for edits whose comp the engine reads as differing from the group's (`views::compDiffersFrom`): "Differs from Close", the group's first track; no row when it is in step | read only | (a comp gesture brings it back in step) |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 | Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |
@@ -3365,7 +3454,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
 - **Mouse modifiers:** a map per context — item drag
   (move, copy, slip; each also off the grid), item edge (trim, stretch), item
   click (select, toggle, extend), automation item edge (stretch, loop), fade
-  handle (drag, cycle shape), empty-lane drag (select, add), automation lane
+  handle, the top of a comp's seam included (drag, cycle shape), empty-lane drag (select, add), automation lane
   (edit, toggle, delete), ruler markers/regions
   (move, remove), tempo points (toggle ramp), and the wheel over the TCP
   (`tcp.wheel`) and the arrangement's lanes and ruler (`arrange.wheel`):

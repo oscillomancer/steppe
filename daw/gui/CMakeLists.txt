@@ -64,7 +64,7 @@ target_include_directories(gui-actions PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/action
 # Views (gui.md §4): the arrange view (ruler, lanes, TCP column) now; mixer,
 # editors follow.
 supple_add_library(gui-views SOURCES views/src/lanes.cpp views/src/item_body.cpp views/src/track_layout.cpp
-                                        views/src/arrange.cpp views/src/item_gestures.cpp views/src/tcp.cpp views/src/envelope_lane.cpp views/src/envelope_edit.cpp views/src/mouse_map.cpp views/src/chord_field.cpp views/src/launcher.cpp
+                                        views/src/arrange.cpp views/src/item_gestures.cpp views/src/comp_view.cpp views/src/tcp.cpp views/src/envelope_lane.cpp views/src/envelope_edit.cpp views/src/mouse_map.cpp views/src/chord_field.cpp views/src/launcher.cpp
   DEPS supple::gui-ui supple::gui-peaks supple::model supple::timeline supple::core-params SDL3::SDL3)
 target_include_directories(gui-views PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/views/include)
 
@@ -230,10 +230,13 @@ if(SUPPLE_BUILD_TESTS)
   # depend on the machine's GPU driver and ThreadSanitizer sees no driver
   # threads (the driver is not built with it; their reports would say
   # nothing about the app). SDL's libdbus is suppressed for the same reason.
-  # The variables mean nothing on macOS and Windows.
+  # The variables mean nothing on macOS and Windows. SUPPLE_TRANSPORT_PATIENT
+  # (every platform): the engine waits as long as a test may for a device to
+  # act on a transport request, so a starved runner is never a refusal
+  # (realtime.h, transportWaitSeconds; Windows CI 45186989443).
   get_property(gui_tests DIRECTORY PROPERTY TESTS)
   foreach(test ${gui_tests})
-    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
+    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "SUPPLE_TRANSPORT_PATIENT=1"
                  "LIBGL_ALWAYS_SOFTWARE=1" "LP_NUM_THREADS=0" "MESA_SHADER_CACHE_DISABLE=true"
                  "TSAN_OPTIONS=halt_on_error=1:suppressions=${PROJECT_SOURCE_DIR}/tools/ci/tsan-gui.supp")
   endforeach()

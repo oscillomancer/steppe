@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <chrono>
 
+#include "../../../tests/file_platform.h"
 #include "rack_runtime.h"
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
@@ -11,10 +12,7 @@ using namespace supple;
 using namespace supple::engine;
 namespace {
 struct ClipFixture {
-    std::filesystem::path dir =
-        std::filesystem::temp_directory_path() /
-        ("rack-clip-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::path dir = supple::test::uniqueTempDir("rack-clip-");
     cmd::Registry registry;
     DummyBackend backend{DummyBackend::Options{.mode = DummyBackend::Mode::Manual}};
     std::unique_ptr<EngineApp> app;

@@ -33,7 +33,10 @@ seams or change spans. The crossfades are rebuilt for the whole comp, and the sa
 call twice changes nothing. `take.comp.get {item}` reads a comp you did not make: besides the pieces it gives the
 `crossfade` (seconds) and `crossfade_shape` the comp has (its longest seam fade, so a seam
 shortened by short pieces does not shrink it), and `take.comp` with those and the spans
-rebuilds it unchanged.
+rebuilds it unchanged, as long as `uniform` is true. A seam fade you set by hand (another
+length or shape, or a hard cut among crossfaded seams) makes it false and lists the seams that
+differ from the rest in `differing_seams`: `take.comp` would give every seam one length and
+shape, so such a comp is not rebuilt byte for byte, and the listed seams are the ones that change.
 Pieces of the same take beside each other (after a move, say) are joined into one
 piece again, so moving a seam by a few samples gives exactly what the same spans give
 from scratch, MIDI pieces too (a held note stays one note). A boundary where the
@@ -52,8 +55,23 @@ What to know:
   warning `comp.crossfade_skipped` says so.
 - A looped item is refused (`comp.loop`); an item with one take has nothing to comp
   (`comp.takes`); a locked item is refused (`item.locked`). An item that is edited
-  together with others (a track group) is refused with `comp.linked`:
-  `bypass_groups: true` comps it alone.
+  together with others (an edit group, drums say) is comped together with them: the same
+  spans, take indices and crossfade apply to the run of every other member, and `members` in the result gives each one's `track`
+  and `pieces`.
+  A track is a member when its items over the comp form a run that starts and ends where the
+  comp does (however it is cut inside, whatever its crossfades, start offsets or play rates: a
+  whole item beside a split one is comped to the spans too); a group track with nothing there
+  (`no_item`) or only one-take items (`one_take`: a bass beside drum takes) is left alone and named in
+  `skipped_tracks` with its reason. A track that cannot follow refuses the whole call and changes
+  nothing: `comp.group_takes` (several takes, but fewer than a span's index), `comp.group_mismatch` (its items do not
+  form a matching run; the message carries the reason, such as a looped item), `item.locked`; the error's
+  `path` names the member (`/args/members/tr_2/items/it_5`, or `/args/members/tr_2` for the track), so read
+  it from there, not from the message.
+  (`comp.linked` is retired: it used to mean "set `bypass_groups`".) `bypass_groups: true` comps only the
+  item you name. `take.comp.get` reads the members too, and `differing_members` lists a member
+  that reads differently from the one you named (or does not line up), with `uniform` false.
+  `differing_seams` lists the seams a `take.comp` with the reported `crossfade` and shape would
+  rewrite.
 - **Flatten a comp** with `item.consolidate` on its pieces: it renders the seam fades
   and layers the overlaps into one item. `item.heal` is for pieces of one source, not
   a comp.

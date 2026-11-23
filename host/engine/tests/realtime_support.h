@@ -25,20 +25,13 @@
 #include <xmmintrin.h>
 #endif
 
-#include <fcntl.h>
-#include <poll.h>
-#include <sched.h>
-#include <sys/resource.h>
-#include <unistd.h>
 #include <cerrno>
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
-#include <supple/engine/jack.h>
 #include <supple/engine/realtime.h>
 #include <supple/host/clap_host.h>
 
-#include "fake_jack.h"
 #include "live_workers.h"
 #include "meters.h"
 #include "plan.h"

@@ -908,7 +908,15 @@ the boundary.
   naming the track (review round 113 T2: the stretch converter reads on
   past the cut live, where the commit splits the item; measured, the
   commit differed for 5664 device frames before a switch away and by up to
-  0.37 after a return). Arming is refused
+  0.37 after a return). *Note 2026-11-23 (review round 117 W1):* only
+  where an audio item of the track lies within 0.25 s of the switch's song
+  position, the converter's reach either side *(note 2026-11-23, round
+  128: the position is the switch's boundary on the timeline, not its
+  unwrapped song frame; the reach is scaled by the fastest master rate
+  above 1, and under a transport loop it runs across the wrap)*; a switch
+  clear of the track's audio is captured, and its commit is exact. (W2:) the end goes
+  with its switch, dropped if that launch is replaced or voided before its
+  boundary, and is kept apart from a quantized end. Arming is refused
   with `launch.playrate` while a launched audio clip plays and the newest
   plan keeps the pitch (no committed item reads a stretch converter's
   history), naming the clip, with the hint to stop it or turn off preserve
@@ -974,7 +982,13 @@ each), where the committed items begin or end while the performance went
 on, the commit differs from what played by up to the level of the audio
 cut there (measured up to 0.028 in the tests, in the last 120 to 180
 device frames, about 3 ms; bounded in each test at its measure); a
-commit's edge is a cut at any rate. Under a rate, a switch on a wrap of a
+commit's edge is a cut at any rate. *(Note 2026-11-23: a capture armed
+while a launched clip's note sounds commits that note struck again at the
+capture's start, since the arrangement strikes a note held into an item's
+start; through the note's rest the commit differs from what played by the
+new attack, 0.063 at rate 1 and 0.24 at 0.75 in the test, at the level
+heard. An earlier statement of this limit said the rest was left out.)*
+Under a rate, a switch on a wrap of a
 clip laid per period differs within the kernel's reach before it (0.0027
 at 0.75, 0.011 under the envelope, bounded in the test). Tests: in test_clip_player_rate_commit.cpp
 the positions and the equality under 0.75 and the envelope ("a capture

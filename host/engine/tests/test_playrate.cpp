@@ -9,6 +9,9 @@
 #include <filesystem>
 #include <limits>
 
+#include "../../../tests/file_platform.h"
+#include "bridge_patience.h"
+#include "stalled_backend.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
@@ -19,9 +22,7 @@ namespace fs = std::filesystem;
 
 namespace {
 struct PlayrateHost {
-    fs::path root = fs::temp_directory_path() /
-                    ("supple-playrate-" +
-                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::path root = supple::test::uniqueTempDir("supple-playrate-");
     DummyBackend backend{
         DummyBackend::Options{.mode = DummyBackend::Mode::Manual, .captureFrames = 131072}};
     std::unique_ptr<EngineApp> app;
@@ -1771,4 +1772,40 @@ TEST_CASE("master playrate scalar control: plugin maintenance still recompiles c
         CHECK(engine.processErrors() == 0);
         engine.stop();
     }
+}
+
+TEST_CASE(
+    "recording from stop under a scheduled playrate is refused when the device never takes the "
+    "place") {
+    // Recording starts where the renderer was placed: with the playrate
+    // scheduled (here an active envelope held at 1, which recording allows),
+    // from stop the engine places it and waits for the device to take it. A
+    // device that stopped calling back never does, so the start is refused
+    // with engine.transport and nothing is written. The bound is short here:
+    // the binary's is patient (bridge_patience.cpp).
+    const engine::test::TransportWait quick(0.05);
+    engine::test::StalledBackend backend;
+    PlayrateHost h;
+    h.arm();
+    model::EditTxn edit(h.app->head(), h.app->head().version + 1);
+    model::Envelope curve;
+    curve.target = {model::kMaster, "playrate"};
+    curve.timebase = model::Timebase::Time;
+    curve.points = {{0, 1}, {1, 1}};
+    edit.create(curve);
+    const auto session = edit.commit().value();
+    REQUIRE(model::validateRecordingPlayrate(session));
+    auto pool = playrateFixturePool();
+    MediaCache media;
+    Engine engine(pool, media, {.anticipative = false, .workers = 0});
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 1}));
+    REQUIRE(engine.load(session));
+    const auto files = h.files();
+    const std::vector<RecordTarget> targets = {
+        {{model::Kind::Track, 1}, {0}, h.root / "stalled.wav", std::nullopt}};
+    const auto refused = engine.startRecording(targets);
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "engine.transport");
+    CHECK(h.files() == files);
+    engine.stop();
 }

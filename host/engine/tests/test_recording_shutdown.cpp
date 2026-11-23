@@ -573,7 +573,7 @@ TEST_CASE("a MIDI journal holds only what its writer writes: channel messages an
     fs::remove_all(dir);
     fs::create_directories(dir);
     const fs::path file = dir / "Keys-1.midi.jsonl";
-    const std::string far = std::to_string(std::int64_t(1) << 62);
+    const std::string huge = std::to_string(std::int64_t(1) << 62);
     auto header = [](std::string_view fields) {
         return std::string(R"({"schema":"supple.midi-recording/1.0","track":"tr_1",)") +
                std::string(fields) + "}\n";
@@ -591,15 +591,15 @@ TEST_CASE("a MIDI journal holds only what its writer writes: channel messages an
             std::string line;
         };
         const Case cases[] = {
-            {&device, "[10,144,255,100]"},          // data byte over 127
-            {&device, "[10,144,60,128]"},           // velocity over 127
-            {&device, "[10,112,60,0]"},             // a data byte where the status goes
-            {&device, "[10,248,0,0]"},              // system real-time: never captured
-            {&device, "[10,240,0,0]"},              // system exclusive: never captured
-            {&device, "[" + far + ",144,60,100]"},  // beyond any timeline
-            {&device, "{\"run\":[" + far + ",0]}"},
-            {&device, "{\"run\":[0," + far + "]}"},
-            {&device, "{\"captured\":" + far + "}"},
+            {&device, "[10,144,255,100]"},           // data byte over 127
+            {&device, "[10,144,60,128]"},            // velocity over 127
+            {&device, "[10,112,60,0]"},              // a data byte where the status goes
+            {&device, "[10,248,0,0]"},               // system real-time: never captured
+            {&device, "[10,240,0,0]"},               // system exclusive: never captured
+            {&device, "[" + huge + ",144,60,100]"},  // beyond any timeline
+            {&device, "{\"run\":[" + huge + ",0]}"},
+            {&device, "{\"run\":[0," + huge + "]}"},
+            {&device, "{\"captured\":" + huge + "}"},
             {&device, "[10,144,60,100,\"" + route + "\",1]"},  // a routed event, unrouted take
             {&routed, "[10,144,60,100]"},                      // a device event, no device
             {&routed, "[10,144,60,100,\"" + route + "\",-1]"},
@@ -624,14 +624,14 @@ TEST_CASE("a MIDI journal holds only what its writer writes: channel messages an
                    R"("device":true,"routed":true,"shift":-9223372036854775808,"loop":[0,0])"),
             header(R"("sample_rate":48000,"start_sample":0,"latency":-1,"device":true,)"
                    R"("routed":false,"shift":0,"loop":[0,0])"),
-            header(R"("sample_rate":48000,"start_sample":)" + far +
+            header(R"("sample_rate":48000,"start_sample":)" + huge +
                    R"(,"latency":0,"device":true,"routed":false,"shift":0,"loop":[0,0])"),
             header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":false,)"
                    R"("routed":true,"shift":)" +
-                   far + R"(,"loop":[0,0])"),
+                   huge + R"(,"loop":[0,0])"),
             header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":true,)"
                    R"("routed":false,"shift":0,"loop":[0,)" +
-                   far + "]"),
+                   huge + "]"),
             header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":true,)"
                    R"("routed":false,"shift":0,"loop":[-5,10])"),
             header(R"("sample_rate":48000,"start_sample":0,"latency":0,"device":false,)"

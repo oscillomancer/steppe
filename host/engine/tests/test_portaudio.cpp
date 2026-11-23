@@ -988,7 +988,7 @@ TEST_CASE("PortAudio MIDI routes, reaches learn and records the heard timeline i
         REQUIRE(engine.startRecording({target}));
         REQUIRE(engine.awaitPlan());
         engine.play();
-        engine.awaitTransport();
+        REQUIRE(engine.awaitTransport());
         midi.send(1, 10, 211, midiWord(0x90, 65, 100));  // wrong device
         midi.send(0, 20, 211, midiWord(0x91, 66, 100));  // wrong channel
         midi.send(0, 64, 211, midiWord(0x90, 60, 100));

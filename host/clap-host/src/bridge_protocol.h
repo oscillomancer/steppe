@@ -22,6 +22,7 @@
 #endif
 #include <cerrno>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -439,11 +440,21 @@ inline void futexWake(std::atomic<std::uint32_t>& word) {
 #endif
 }
 #endif
+#if defined(_WIN32) && !defined(CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
 // Private per-instance auto-reset events on Windows; zero-resource wrapper on POSIX.
 // One waiter per direction. Release/acquire on the words, never event state,
 // publishes commands and outputs. Stale event signals only cause a recheck.
 class SharedSignals {
   public:
+#if defined(_WIN32)
+    // Tests: create() makes no high-resolution timer, so timed waits take the
+    // sliced path that Windows before 10 1803 uses (ADR-0102).
+    static inline std::atomic<bool> withoutHighResolutionTimer{false};
+    // Whether timed waits end on a high-resolution timer.
+    bool highResolution() const { return timer_ != nullptr; }
+#endif
     SharedSignals() = default;
     SharedSignals(const SharedSignals&) = delete;
     SharedSignals& operator=(const SharedSignals&) = delete;
@@ -457,6 +468,11 @@ class SharedSignals {
             clear();
             return false;
         }
+        // The timed waits' end (ADR-0102): a millisecond wait at the default
+        // timer resolution ends up to a 15.6 ms tick late. None: sliced waits.
+        if (!withoutHighResolutionTimer.load(std::memory_order_relaxed))
+            timer_ = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                            TIMER_ALL_ACCESS);
 #endif
         return true;
     }
@@ -464,7 +480,8 @@ class SharedSignals {
 #if defined(_WIN32)
         if (request_) CloseHandle(request_);
         if (done_ && done_ != request_) CloseHandle(done_);
-        request_ = done_ = nullptr;
+        if (timer_) CloseHandle(timer_);
+        request_ = done_ = timer_ = nullptr;
 #endif
     }
 #if defined(_WIN32)
@@ -491,8 +508,11 @@ class SharedSignals {
               bool completion = false) {
         return waitNs(word, seen, timeoutMs < 0 ? -1 : timeoutMs * 1'000'000LL, completion);
     }
-    // Windows waits in whole milliseconds, rounded down: under one, it only
-    // checks the event, and the caller's loop rechecks its deadline.
+    // On Windows a timed wait ends by the timeout plus the high-resolution
+    // timer's lateness: it waits on the event and the timer together. Without
+    // that timer (before Windows 10 1803) it waits in whole milliseconds only
+    // while more than a timer tick is left, and spins on the word, looking at
+    // the event, for the rest (ADR-0102).
     long waitNs(std::atomic<std::uint32_t>& word, std::uint32_t seen, long long timeoutNs,
                 bool completion = false) {
 #if defined(_WIN32)
@@ -500,9 +520,37 @@ class SharedSignals {
             errno = EAGAIN;
             return -1;
         }
-        const auto result = WaitForSingleObject(
-            completion ? done_ : request_,
-            timeoutNs < 0 ? INFINITE : static_cast<DWORD>(timeoutNs / 1'000'000));
+        const HANDLE event = completion ? done_ : request_;
+        DWORD result = WAIT_FAILED;
+        if (timeoutNs < 0) {
+            result = WaitForSingleObject(event, INFINITE);
+        } else if (timer_) {
+            LARGE_INTEGER due;
+            due.QuadPart = -std::max<long long>(1, timeoutNs / 100);  // relative, 100 ns units
+            if (SetWaitableTimer(timer_, &due, 0, nullptr, nullptr, FALSE)) {
+                const HANDLE both[2] = {event, timer_};
+                result = WaitForMultipleObjects(2, both, FALSE, INFINITE);
+                if (result == WAIT_OBJECT_0 + 1) result = WAIT_TIMEOUT;
+            }
+        } else {
+            constexpr long long kTickNs = 16'000'000;  // the default timer resolution, and some
+            const auto end = std::chrono::steady_clock::now() + std::chrono::nanoseconds(timeoutNs);
+            for (;;) {
+                if (word.load(std::memory_order_acquire) != seen) return 0;
+                const long long left = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           end - std::chrono::steady_clock::now())
+                                           .count();
+                if (left <= 0) {
+                    result = WAIT_TIMEOUT;
+                    break;
+                }
+                const DWORD ms =
+                    left > 2 * kTickNs ? static_cast<DWORD>((left - kTickNs) / 1'000'000) : 0;
+                result = WaitForSingleObject(event, ms);
+                if (result != WAIT_TIMEOUT) break;
+                if (ms == 0) YieldProcessor();
+            }
+        }
         if (result == WAIT_OBJECT_0) return 0;
         errno = result == WAIT_TIMEOUT ? ETIMEDOUT : EIO;
         return -1;
@@ -533,6 +581,7 @@ class SharedSignals {
   private:
 #if defined(_WIN32)
     HANDLE request_ = nullptr, done_ = nullptr;
+    HANDLE timer_ = nullptr;  // high-resolution, this side's timed waits (ADR-0102)
 #endif
 };
 

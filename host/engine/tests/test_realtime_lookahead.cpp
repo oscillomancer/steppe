@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 // Real time equals offline for a compensated take's look-ahead, at locates and loops.
 #include <doctest/doctest.h>
+#include "../../../tests/file_platform.h"
 
 #include "realtime_support.h"
 
@@ -194,7 +195,7 @@ TEST_CASE("a compensated take's note just after the loop start plays on time eve
 TEST_CASE("a short take inside its take FX's look-ahead after the loop start plays every pass" *
           doctest::description("rt")) {
     const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-engine-loop-take-" + std::to_string(::getpid()));
+                     ("supple-engine-loop-take-" + std::to_string(supple::test::processId()));
     std::filesystem::remove_all(dir);
     audio::AudioData tone;
     tone.sampleRate = 48000;

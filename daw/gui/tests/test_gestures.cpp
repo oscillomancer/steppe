@@ -20,13 +20,17 @@
 #include "supple/engine/app.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
+#include "supple/json/write.h"
 #include "supple/midi/midi.h"
+#include "supple/model/groups.h"
+#include "supple/model/schemas.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
+#include "supple/views/comp_view.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/tcp.h"
 
@@ -1229,48 +1233,698 @@ TEST_CASE("arrange clipboard: copy, cut, paste onto another channel, duplicate")
     CHECK(f.item(g.selection()[0]).track == f.item(last).track);
 }
 
-TEST_CASE("take comping: click a take lane to hear it, swipe a range to comp it in") {
-    Fixture f;
-    if (!f.ok) return;
+namespace {
+// The generated item with two takes, and the index of the one heard.
+std::pair<model::Id, std::size_t> twoTakeItem(Fixture& f) {
     std::optional<model::Id> it;
     for (const auto& e : f.app->head().items)
         if (e.value->takes.size() == 2) it = e.id;
     REQUIRE(it);
-    const ui::Rect r = f.rectOf(*it);
-    REQUIRE(views::Lanes::showsTakeLanes(r, 2));
-    const std::size_t heard = static_cast<std::size_t>(
-        std::find(f.item(*it).takes.begin(), f.item(*it).takes.end(), *f.item(*it).activeTake) -
-        f.item(*it).takes.begin());
-    const std::size_t other = 1 - heard;
-    auto laneCenter = [&](const ui::Rect& ir, std::size_t lane, float fraction) {
-        const ui::Rect l = views::Lanes::takeLaneRect(ir, 2, lane);
-        return ui::Point{ir.x + ir.w * fraction, l.y + l.h / 2};
+    const auto& takes = f.item(*it).takes;
+    return {*it,
+            static_cast<std::size_t>(
+                std::find(takes.begin(), takes.end(), *f.item(*it).activeTake) - takes.begin())};
+}
+// The items of a track holding `takes` takes, in time order.
+std::vector<const model::Item*> piecesOf(Fixture& f, model::Id track, std::size_t takes = 2) {
+    std::vector<const model::Item*> out;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == track && e.value->takes.size() == takes) out.push_back(e.value.get());
+    std::sort(out.begin(), out.end(), [](auto* a, auto* b) { return a->position < b->position; });
+    return out;
+}
+std::size_t heardOf(const model::Item& it) {
+    return static_cast<std::size_t>(std::find(it.takes.begin(), it.takes.end(), *it.activeTake) -
+                                    it.takes.begin());
+}
+// Every edit the gestures send, as well as running it.
+std::vector<std::vector<views::EditStep>>& recordSteps(Fixture& f) {
+    auto sent = std::make_shared<std::vector<std::vector<views::EditStep>>>();
+    auto& g = f.view->gestures();
+    g.run = [run = g.run, sent](const std::string& label,
+                                const std::vector<views::EditStep>& steps) {
+        sent->push_back(steps);
+        return run(label, steps);
     };
-    // A click on the other take's lane: the whole item plays it (one step).
+    static std::vector<std::shared_ptr<std::vector<std::vector<views::EditStep>>>> keep;
+    keep.push_back(sent);
+    return *sent;
+}
+ui::Point laneAt(const ui::Rect& ir, std::size_t lanes, std::size_t lane, float x) {
+    const ui::Rect l = views::Lanes::takeLaneRect(ir, lanes, lane);
+    return {x, l.y + l.h / 2};
+}
+// The track's items as JSON, by position: what two ways of making a comp must agree on.
+std::string trackJson(Fixture& f, model::Id track) {
+    std::string out;
+    for (const model::Item* it : piecesOf(f, track)) {
+        // Each run makes new take ids: the heard take by its index instead.
+        json::Value j = model::toJson(*it);
+        j.asObject().erase("takes");
+        j.asObject().erase("active_take");
+        j["heard"] = static_cast<std::int64_t>(heardOf(*it));
+        out += json::writeCanonical(j) + "\n";
+    }
+    return out;
+}
+}  // namespace
+
+// session-model §1.5.1: the GUI comps with take.comp, the call an agent makes.
+TEST_CASE("take comping: a click hears a take, a swipe comps with take.comp as an agent does") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const std::size_t other = 1 - heard;
+    const model::Id track = f.item(it).track;
+    const ui::Rect r = f.rectOf(it);
+    REQUIRE(views::Lanes::showsTakeLanes(r, 2));
+    auto& sent = recordSteps(f);
+    // A click on the other take's lane of a lone item: it plays that take
+    // throughout (one step).
     auto steps = f.steps();
-    f.click(laneCenter(r, other, 0.5f));
-    CHECK(*f.item(*it).activeTake == f.item(*it).takes[other]);
+    f.click(laneAt(r, 2, other, r.x + r.w * 0.5f));
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.activate");
+    CHECK(heardOf(f.item(it)) == other);
     CHECK(f.steps() == steps + 1);
-    // Swipe the first take's lane across the middle: split twice, the middle
-    // piece plays the first take, the outer pieces keep the other.
-    const std::size_t items = f.app->head().items.size();
+    // A swipe across the middle of the first take's lane: one take.comp with
+    // the span, and no crossfade (a first comp takes take.comp's 10 ms, equal
+    // power). The pieces overlap at each seam and fade there.
     steps = f.steps();
-    const ui::Rect r2 = f.rectOf(*it);
-    f.drag(laneCenter(r2, heard, 0.3f), laneCenter(r2, heard, 0.6f));
-    CHECK(f.app->head().items.size() == items + 2);
+    f.drag(laneAt(r, 2, heard, r.x + r.w * 0.3f), laneAt(r, 2, heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 2);
+    REQUIRE(sent[1].size() == 1);
+    CHECK(sent[1][0].command == "take.comp");
+    const json::Value swipe = sent[1][0].args;
+    CHECK_FALSE(swipe.find("crossfade"));
+    REQUIRE(swipe.find("spans")->size() == 1);
+    CHECK(swipe.find("spans")->asArray()[0].find("index")->asInt() ==
+          static_cast<std::int64_t>(heard));
     CHECK(f.steps() == steps + 1);
-    const model::Session& s = f.app->head();
-    std::vector<const model::Item*> pieces;
-    for (const auto& e : s.items)
-        if (e.value->track == f.item(*it).track && e.value->takes.size() == 2)
-            pieces.push_back(e.value.get());
-    std::sort(pieces.begin(), pieces.end(),
-              [](auto* a, auto* b) { return a->position < b->position; });
+    auto pieces = piecesOf(f, track);
     REQUIRE(pieces.size() == 3);
-    CHECK(*pieces[0]->activeTake == pieces[0]->takes[other]);
-    CHECK(*pieces[1]->activeTake == pieces[1]->takes[heard]);
-    CHECK(*pieces[2]->activeTake == pieces[2]->takes[other]);
-    CHECK(pieces[1]->position == doctest::Approx(pieces[0]->position + pieces[0]->length));
+    CHECK(heardOf(*pieces[0]) == other);
+    CHECK(heardOf(*pieces[1]) == heard);
+    CHECK(heardOf(*pieces[2]) == other);
+    CHECK(pieces[0]->fadeOut.length == doctest::Approx(0.01).epsilon(0.01));
+    CHECK(pieces[1]->fadeIn.length == doctest::Approx(0.01).epsilon(0.01));
+    CHECK(pieces[1]->fadeIn.shape == model::FadeShape::Cos);
+    CHECK(pieces[0]->fadeIn.length == doctest::Approx(0.5));  // the outer fades stay
+    CHECK(pieces[2]->fadeOut.length == doctest::Approx(0.75));
+    // The same call from an agent gives the same items.
+    const std::string byGui = trackJson(f, track);
+    REQUIRE(f.dispatcher->execute({"history.undo", json::Value::object(), kUi}));
+    REQUIRE(f.dispatcher->execute({"take.comp", swipe, kUi}));
+    f.sync();
+    CHECK(trackJson(f, track) == byGui);
+
+    // A comp whose crossfade was set (50 ms, linear) keeps it on the next
+    // swipe, at every seam.
+    // (The swipe's call again, with a crossfade.)
+    json::Value set = swipe;
+    set["crossfade"] = 0.05;
+    set["crossfade_shape"] = "linear";
+    REQUIRE(f.dispatcher->execute({"take.comp", set, kUi}));
+    f.sync();
+    pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    const ui::Rect last = f.rectOf([&] {
+        for (const auto& e : f.app->head().items)
+            if (e.value.get() == pieces[2]) return e.id;
+        return model::Id{};
+    }());
+    f.drag(laneAt(last, 2, heard, last.x + last.w * 0.4f),
+           laneAt(last, 2, heard, last.x + last.w * 0.7f));
+    REQUIRE(sent.size() == 3);
+    CHECK(sent[2][0].command == "take.comp");
+    REQUIRE(sent[2][0].args.find("crossfade"));
+    CHECK(sent[2][0].args.find("crossfade")->asDouble() == doctest::Approx(0.05));
+    REQUIRE(sent[2][0].args.find("crossfade_shape"));
+    CHECK(sent[2][0].args.find("crossfade_shape")->asString() == "linear");
+    pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 5);
+    for (std::size_t i = 0; i + 1 < pieces.size(); ++i) {
+        CHECK(pieces[i]->fadeOut.length == doctest::Approx(0.05).epsilon(0.01));
+        CHECK(pieces[i]->fadeOut.shape == model::FadeShape::Linear);
+    }
+
+    // A click on a lane in a comp re-comps that piece alone: the first piece
+    // takes the middle one's take and joins it; the crossfade stays.
+    const ui::Rect first = f.rectOf([&] {
+        for (const auto& e : f.app->head().items)
+            if (e.value.get() == pieces[0]) return e.id;
+        return model::Id{};
+    }());
+    f.click(laneAt(first, 2, heard, first.x + first.w * 0.5f));
+    REQUIRE(sent.size() == 4);
+    CHECK(sent[3][0].command == "take.comp");
+    REQUIRE(sent[3][0].args.find("crossfade"));
+    CHECK(sent[3][0].args.find("crossfade")->asDouble() == doctest::Approx(0.05));
+    pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 4);
+    CHECK(heardOf(*pieces[0]) == heard);
+    CHECK(heardOf(*pieces[1]) == other);
+    // A click on the take a piece already plays sends nothing.
+    f.click(laneAt(first, 2, heard, first.x + first.w * 0.2f));
+    CHECK(sent.size() == 4);
+}
+
+// The seams of a comp: drawn where the take changes, and a drag on one is a
+// take.comp with that span edge moved (the crossfade kept).
+TEST_CASE("a comp's seam: found and hit where the take changes, dragged with take.comp") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const model::Session& s0 = f.app->head();
+    const double start = f.item(it).position, length = f.item(it).length;
+    // A comp made by an agent: the middle third plays the other take.
+    json::Value args = json::Value::object();
+    args["item"] = it.str();
+    json::Value span = json::Value::object();
+    span["from"] = start + length / 3;
+    span["to"] = start + 2 * length / 3;
+    span["index"] = static_cast<std::int64_t>(1 - heard);
+    args["spans"] = json::Value::array();
+    args["spans"].push_back(span);
+    REQUIRE(f.dispatcher->execute({"take.comp", args, kUi}));
+    f.sync();
+    (void)s0;
+    const std::size_t row = *f.view->trackLayout().indexOf(track);
+    const auto seams = f.view->lanes().compSeams(row);  // a copy: the cache is rebuilt
+    REQUIRE(seams.size() == 2);
+    const model::Session& s = f.app->head();
+    CHECK(seams[0].seconds == doctest::Approx(s.timeMap->secondsAt(start + length / 3)));
+    auto pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    // The seam takes the press across the pieces' height: not a trim.
+    auto& g = f.view->gestures();
+    const float x = f.view->lanes().xAt(seams[0].seconds);
+    const ui::Rect right = f.rectOf(seams[0].right);
+    for (float y : {right.y + 12, right.y + right.h / 2, right.bottom() - 2}) {
+        const auto h = g.hit({x + 2, y});
+        REQUIRE(h);
+        CHECK(h->zone == views::ItemGestures::Drag::Seam);
+        CHECK(h->item == seams[0].right);
+        CHECK(h->seamLeft == seams[0].left);
+    }
+    CHECK(g.cursorAt({x, right.y + right.h / 2}) == ui::Cursor::ResizeHorizontal);
+    // The comp's outer start still trims.
+    const ui::Rect first = f.rectOf(seams[0].left);
+    CHECK(g.hit({first.x + 2, first.y + first.h / 2})->zone == views::ItemGestures::Drag::TrimLeft);
+    // A free drag (Shift) moves the seam right by 20 px: one take.comp with
+    // the two stretches beside it, and the crossfade the comp has.
+    auto& sent = recordSteps(f);
+    const auto steps = f.steps();
+    const double before = seams[0].seconds;
+    const float y = right.y + right.h / 2;
+    f.drag({x, y}, {x + 20, y}, ui::kShift);
+    REQUIRE(sent.size() == 1);
+    REQUIRE(sent[0].size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    CHECK(sent[0][0].args.find("spans")->size() == 2);
+    REQUIRE(sent[0][0].args.find("crossfade"));
+    CHECK(sent[0][0].args.find("crossfade")->asDouble() == doctest::Approx(0.01).epsilon(0.01));
+    CHECK(f.steps() == steps + 1);
+    const auto moved = f.view->lanes().compSeams(row);
+    REQUIRE(moved.size() == 2);
+    CHECK(moved[0].seconds - before ==
+          doctest::Approx(20.0 / f.view->viewport().pixelsPerSecond).epsilon(0.02));
+    pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(pieces[0]->fadeOut.length == doctest::Approx(0.01).epsilon(0.01));
+    // The seam's top is the comp's crossfade: a drag sets its length (twice
+    // the distance from the seam, as it is centred on it) at every seam.
+    const auto now = f.view->lanes().compSeams(row);
+    const float xs = f.view->lanes().xAt(now[0].seconds);
+    const ui::Rect r2 = f.rectOf(now[0].right);
+    REQUIRE(g.hit({xs, r2.y + 3}));
+    CHECK(g.hit({xs, r2.y + 3})->zone == views::ItemGestures::Drag::CompFade);
+    const double pps = f.view->viewport().pixelsPerSecond;
+    f.drag({xs, r2.y + 3}, {xs + static_cast<float>(0.25 * pps), r2.y + 3}, ui::kShift);
+    REQUIRE(sent.size() == 2);
+    CHECK(sent[1][0].command == "take.comp");
+    REQUIRE(sent[1][0].args.find("crossfade"));
+    CHECK(sent[1][0].args.find("crossfade")->asDouble() == doctest::Approx(0.5).epsilon(0.02));
+    pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(pieces[0]->fadeOut.length == doctest::Approx(0.5).epsilon(0.02));
+    CHECK(pieces[1]->fadeOut.length == doctest::Approx(0.5).epsilon(0.02));
+    CHECK(pieces[2]->fadeIn.length == doctest::Approx(0.5).epsilon(0.02));
+    // The fade handles' shape click (Ctrl) toggles equal power and linear.
+    f.click({xs, r2.y + 3}, ui::kCtrl);
+    REQUIRE(sent.size() == 3);
+    pieces = piecesOf(f, track);
+    CHECK(pieces[0]->fadeOut.shape == model::FadeShape::Linear);
+    CHECK(pieces[2]->fadeIn.shape == model::FadeShape::Linear);
+    CHECK(pieces[1]->fadeOut.length == doctest::Approx(0.5).epsilon(0.02));
+    f.click({xs, r2.y + 3}, ui::kCtrl);
+    CHECK(piecesOf(f, track)[0]->fadeOut.shape == model::FadeShape::Cos);
+    // A plain click there changes nothing.
+    f.click({xs, r2.y + 3});
+    CHECK(sent.size() == 4);
+    // Dragged far past the next seam, it stops short of it: the comp keeps
+    // its three pieces.
+    const float x2 = f.view->lanes().xAt(f.view->lanes().compSeams(row)[0].seconds);
+    f.drag({x2, y}, {x2 + 2000, y}, ui::kShift);
+    REQUIRE(sent.size() == 5);
+    CHECK(piecesOf(f, track).size() == 3);
+    CHECK(f.view->lanes().compSeams(row).size() == 2);
+}
+
+// Round 119 G1: the badge switches a comp piece as a lane click does, with
+// take.comp; take.activate would leave its seam fades over one source.
+TEST_CASE("a comp piece's take badge switches it with take.comp, joining its neighbours") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double start = f.item(it).position, length = f.item(it).length;
+    json::Value args = json::Value::object();
+    args["item"] = it.str();
+    json::Value span = json::Value::object();
+    span["from"] = start + length / 3;
+    span["to"] = start + 2 * length / 3;
+    span["index"] = static_cast<std::int64_t>(1 - heard);
+    args["spans"] = json::Value::array();
+    args["spans"].push_back(span);
+    REQUIRE(f.dispatcher->execute({"take.comp", args, kUi}));
+    f.sync();
+    auto pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    model::Id middle{};
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == pieces[1]) middle = e.id;
+    auto& sent = recordSteps(f);
+    // The middle piece's badge, at the right of its name bar: its next take
+    // is the one either side plays, so the three join into one item.
+    const ui::Rect r = f.rectOf(middle);
+    f.click({r.right() - 16, r.y + 8});
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 1);
+    CHECK(heardOf(*pieces[0]) == heard);
+    CHECK(f.view->lanes().compSeams(*f.view->trackLayout().indexOf(track)).empty());
+    // A lone item's badge still switches its take with take.activate.
+    model::Id whole{};
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == pieces[0]) whole = e.id;
+    const ui::Rect w = f.rectOf(whole);
+    f.click({w.right() - 16, w.y + 8});
+    REQUIRE(sent.size() == 2);
+    CHECK(sent[1][0].command == "take.activate");
+    CHECK(heardOf(f.item(whole)) == 1 - heard);
+}
+
+// Round 119 G2: take.comp refuses a looped item, so a swipe on one splits it
+// and hears the take there, with hard cuts, as before take.comp.
+TEST_CASE("a swipe on a looped item splits it and switches the middle, with hard cuts") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    json::Value loop = json::Value::object();
+    loop["item"] = it.str();
+    loop["loop"] = true;
+    REQUIRE(f.dispatcher->execute({"item.set", loop, kUi}));
+    f.sync();
+    auto& sent = recordSteps(f);
+    const auto steps = f.steps();
+    const ui::Rect r = f.rectOf(it);
+    f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    REQUIRE(sent[0].size() == 3);
+    CHECK(sent[0][0].command == "item.split");
+    CHECK(sent[0][1].command == "item.split");
+    CHECK(sent[0][2].command == "take.activate");
+    CHECK(f.steps() == steps + 1);
+    const auto pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[0]) == heard);
+    CHECK(heardOf(*pieces[1]) == 1 - heard);
+    CHECK(heardOf(*pieces[2]) == heard);
+    CHECK(pieces[0]->fadeOut.length == 0);  // hard cuts
+    CHECK(pieces[1]->fadeIn.length == 0);
+    CHECK(pieces[1]->loop);
+    // No comp there either (round 122 H1): no seams, and the boundary trims.
+    CHECK(f.view->lanes().compSeams(*f.view->trackLayout().indexOf(track)).empty());
+    model::Id second{};
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == pieces[1]) second = e.id;
+    const ui::Rect b = f.rectOf(second);
+    const auto edge = f.view->gestures().hit({b.x + 2, b.y + b.h / 2});
+    REQUIRE(edge);
+    CHECK(edge->zone == views::ItemGestures::Drag::TrimLeft);
+}
+
+// Round 119 G3: take.comp refuses an item edited with a group (comp.linked),
+// so on an edit-grouped track the swipe keeps its older path: item.split,
+// which splits the group's items too, and take.activate of the middle.
+namespace {
+// The lanes' read-back (the shell gives the app's): take.comp.get on the bus.
+void wireCompQuery(Fixture& f) {
+    f.view->lanes().compQuery = [&f](const json::Value& args) -> std::optional<json::Value> {
+        auto r = f.dispatcher->execute({"take.comp.get", args, kUi});
+        if (!r) return std::nullopt;
+        return std::move(*r);
+    };
+}
+model::Id idOf(Fixture& f, const model::Item* item) {
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == item) return e.id;
+    return {};
+}
+}  // namespace
+
+// take.comp on an edit group comps every member (session-model §1.5.1, Edit
+// groups): the grouped swipe, click and badge send it as for a lone track,
+// and a member whose comp no longer reads like the group's breaks its seams.
+TEST_CASE("an edit-grouped track comps every member with take.comp; a member that differs shows") {
+    Fixture f;
+    if (!f.ok) return;
+    wireCompQuery(f);
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double position = f.item(it).position, length = f.item(it).length;
+    // A track grouped with it for edits (made after it, so its id is later:
+    // the lead's track is the group's reference), holding a copy of the item
+    // over the same span (the same takes, so take.comp gives both the same
+    // crossfades).
+    const auto other =
+        f.dispatcher->execute({"track.add", json::parse(R"({"name":"Room"})").value(), kUi});
+    REQUIRE(other);
+    const model::Id room = *model::Id::parse(other->find("track")->asString());
+    json::Value copy = json::Value::object();
+    copy["item"] = it.str();
+    copy["to"] = position + length + 8;
+    const auto copied = f.dispatcher->execute({"item.duplicate", copy, kUi});
+    REQUIRE(copied);
+    json::Value move = json::Value::object();
+    REQUIRE(copied->find("id"));
+    move["item"] = copied->find("id")->asString();
+    move["track"] = room.str();
+    move["position"] = position;
+    REQUIRE(f.dispatcher->execute({"item.move", move, kUi}));
+    json::Value group = json::Value::object();
+    group["name"] = "Kit";
+    group["members"] = json::Value::array();
+    group["members"].push_back(track.str());
+    group["members"].push_back(room.str());
+    auto made = f.dispatcher->execute({"group.add", group, kUi});
+    REQUIRE(made);
+    json::Value links = json::Value::object();
+    links["group"] = made->find("group")->asString();
+    links["links"] = json::Value::array();
+    links["links"].push_back("edit");
+    REQUIRE(f.dispatcher->execute({"group.set", links, kUi}));
+    f.sync();
+    REQUIRE(model::linkedItems(f.app->head(), it).size() == 2);
+    auto& sent = recordSteps(f);
+    // A click on the whole item: take.comp over it (take.activate would switch
+    // it alone), so the member follows.
+    {
+        const ui::Rect r = f.rectOf(it);
+        f.click(laneAt(r, 2, 1 - heard, r.x + r.w * 0.5f));
+        REQUIRE(sent.size() == 1);
+        REQUIRE(sent[0].size() == 1);
+        CHECK(sent[0][0].command == "take.comp");
+        CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
+        CHECK(heardOf(f.item(it)) == 1 - heard);
+        const auto roomPieces = piecesOf(f, room);
+        REQUIRE(roomPieces.size() == 1);
+        CHECK(heardOf(*roomPieces[0]) == 1 - heard);
+        REQUIRE(f.dispatcher->execute({"history.undo", json::Value::object(), kUi}));
+        f.sync();
+    }
+    // A swipe: one take.comp, which comps both tracks alike.
+    const ui::Rect r = f.rectOf(it);
+    f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 2);
+    REQUIRE(sent[1].size() == 1);
+    CHECK(sent[1][0].command == "take.comp");
+    const auto pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[1]) == 1 - heard);
+    const auto roomPieces = piecesOf(f, room);
+    REQUIRE(roomPieces.size() == 3);
+    CHECK(heardOf(*roomPieces[1]) == 1 - heard);
+    // Both are comps: seams on both rows, none differing yet; the boundary
+    // is the seam's, not a trim edge.
+    const std::size_t leadRow = *f.view->trackLayout().indexOf(track);
+    const std::size_t roomRow = *f.view->trackLayout().indexOf(room);
+    {
+        const auto leadSeams = f.view->lanes().compSeams(leadRow);
+        const auto roomSeams = f.view->lanes().compSeams(roomRow);
+        REQUIRE(leadSeams.size() == 2);
+        REQUIRE(roomSeams.size() == 2);
+        for (const auto& seam : leadSeams) CHECK_FALSE(seam.differs);
+        for (const auto& seam : roomSeams) CHECK_FALSE(seam.differs);
+        const ui::Rect b = f.rectOf(idOf(f, pieces[1]));
+        const auto edge = f.view->gestures().hit({b.x + 2, b.y + b.h * 0.6f});
+        REQUIRE(edge);
+        CHECK(edge->zone == views::ItemGestures::Drag::Seam);
+    }
+    // A fade of the member's middle piece set for it alone (bypass_groups, as
+    // an agent can): its comp no longer reads like the group's (take.comp.get
+    // lists it in differing_members), and its seams, only its, are broken.
+    json::Value fade = json::Value::object();
+    fade["item"] = idOf(f, roomPieces[1]).str();
+    fade["fade_in"] = 0.3;
+    fade["bypass_groups"] = true;
+    REQUIRE(f.dispatcher->execute({"item.set", fade, kUi}));
+    f.sync();
+    {
+        json::Value ask = json::Value::object();
+        ask["item"] = it.str();
+        const auto back = f.dispatcher->execute({"take.comp.get", ask, kUi});
+        REQUIRE(back);
+        const json::Value* differing = back->find("differing_members");
+        REQUIRE(differing);
+        REQUIRE(differing->asArray().size() == 1);
+        CHECK(differing->asArray()[0].asString() == room.str());
+        const auto leadSeams = f.view->lanes().compSeams(leadRow);
+        const auto roomSeams = f.view->lanes().compSeams(roomRow);
+        REQUIRE(roomSeams.size() == 2);
+        for (const auto& seam : leadSeams) CHECK_FALSE(seam.differs);
+        for (const auto& seam : roomSeams) CHECK(seam.differs);
+    }
+    // A lane click on a lead piece re-comps the group: the member is in step again.
+    const ui::Rect p = f.rectOf(idOf(f, pieces[0]));
+    f.click(laneAt(p, 2, 1 - heard, p.x + p.w * 0.5f));
+    REQUIRE(sent.size() == 3);
+    CHECK(sent[2][0].command == "take.comp");
+    for (const auto& seam : f.view->lanes().compSeams(roomRow)) CHECK_FALSE(seam.differs);
+}
+
+// A two-take item on a new track and a second track grouped with it for edits:
+// with `locked`, the second track holds a locked copy of the item (a member
+// that cannot follow); otherwise a one-take bass item over the same stretch.
+namespace {
+
+struct Band {
+    model::Id it, track, other, otherItem;
+    std::size_t heard = 0;
+};
+
+Band bandOf(Fixture& f, bool locked) {
+    Band b;
+    auto [it, heard] = twoTakeItem(f);
+    b.it = it;
+    b.heard = heard;
+    b.track = f.item(it).track;
+    const double position = f.item(it).position, length = f.item(it).length;
+    const auto other = f.dispatcher->execute(
+        {"track.add", json::parse(locked ? R"({"name":"Room"})" : R"({"name":"Bass"})").value(),
+         kUi});
+    REQUIRE(other);
+    b.other = *model::Id::parse(other->find("track")->asString());
+    if (locked) {
+        json::Value copy = json::Value::object();
+        copy["item"] = it.str();
+        copy["to"] = position + length + 8;
+        const auto copied = f.dispatcher->execute({"item.duplicate", copy, kUi});
+        REQUIRE(copied);
+        b.otherItem = *model::Id::parse(copied->find("id")->asString());
+        json::Value move = json::Value::object();
+        move["item"] = b.otherItem.str();
+        move["track"] = b.other.str();
+        move["position"] = position;
+        REQUIRE(f.dispatcher->execute({"item.move", move, kUi}));
+        json::Value lock = json::Value::object();
+        lock["item"] = b.otherItem.str();
+        lock["locked"] = true;
+        REQUIRE(f.dispatcher->execute({"item.set", lock, kUi}));
+    } else {
+        json::Value add = json::Value::object();
+        add["track"] = b.other.str();
+        add["position"] = position;
+        add["notation"] = "1: C2:q r:*";
+        auto bass = f.dispatcher->execute({"item.add", add, kUi});
+        REQUIRE(bass);
+        b.otherItem = *model::Id::parse(bass->find("item")->asString());
+        json::Value len = json::Value::object();
+        len["item"] = b.otherItem.str();
+        len["length"] = length;
+        REQUIRE(f.dispatcher->execute({"item.set", len, kUi}));
+    }
+    json::Value group = json::Value::object();
+    group["name"] = "Band";
+    group["members"] = json::Value::array();
+    group["members"].push_back(b.track.str());
+    group["members"].push_back(b.other.str());
+    auto made = f.dispatcher->execute({"group.add", group, kUi});
+    REQUIRE(made);
+    json::Value links = json::Value::object();
+    links["group"] = made->find("group")->asString();
+    links["links"] = json::Value::array();
+    links["links"].push_back("edit");
+    REQUIRE(f.dispatcher->execute({"group.set", links, kUi}));
+    f.sync();
+    return b;
+}
+
+std::size_t itemsOn(Fixture& f, model::Id track) {
+    std::size_t n = 0;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == track) ++n;
+    return n;
+}
+
+}  // namespace
+
+// Round 129: a one-take member (a bass beside drum takes) is passed over by the
+// group's take.comp (skipped_tracks, one_take), so the drums comp without Alt
+// and the bass is left as it was.
+TEST_CASE("a grouped comp passes over a one-take member: the drums comp without Alt") {
+    Fixture f;
+    if (!f.ok) return;
+    wireCompQuery(f);
+    const Band b = bandOf(f, false);
+    std::vector<Error> errors;
+    f.view->gestures().onError = [&](const Error& e) { errors.push_back(e); };
+    auto& sent = recordSteps(f);
+    const model::Item bassBefore = f.item(b.otherItem);
+    const std::size_t row = *f.view->trackLayout().indexOf(b.track);
+    const ui::Rect r = f.rectOf(b.it);
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f),
+           laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
+    CHECK(errors.empty());
+    const auto pieces = piecesOf(f, b.track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[1]) == 1 - b.heard);
+    CHECK(f.view->lanes().compSeams(row).size() == 2);
+    // The bass: one item, where and as long as it was, with its one take.
+    REQUIRE(itemsOn(f, b.other) == 1);
+    const model::Item& bass = f.item(b.otherItem);
+    CHECK(bass.position == bassBefore.position);
+    CHECK(bass.length == bassBefore.length);
+    CHECK(bass.takes == bassBefore.takes);
+    // A member passed over does not read as differing.
+    CHECK(f.view->lanes().compSeams(*f.view->trackLayout().indexOf(b.other)).empty());
+    for (const auto& seam : f.view->lanes().compSeams(row)) CHECK_FALSE(seam.differs);
+}
+
+// Round 129 U1/U2: a group track that cannot follow (here a locked copy of the
+// item) refuses the group's take.comp before anything is written; the refusal
+// reaches the status line with a hint to hold Alt, and nothing changes. With
+// Alt the gesture comps this track alone (bypass_groups), as Alt moves a fader
+// alone.
+TEST_CASE("a grouped comp a track cannot follow is refused with an Alt hint; Alt comps alone") {
+    Fixture f;
+    if (!f.ok) return;
+    wireCompQuery(f);
+    const Band b = bandOf(f, true);
+    std::vector<Error> errors;
+    f.view->gestures().onError = [&](const Error& e) { errors.push_back(e); };
+    auto& sent = recordSteps(f);
+    const std::uint64_t version = f.app->head().version;
+    const std::size_t row = *f.view->trackLayout().indexOf(b.track);
+    const ui::Rect r = f.rectOf(b.it);
+    // The swipe: one take.comp for the group, refused before anything is written.
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f),
+           laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].code == "item.locked");
+    // The engine names the member in the path, which is what the hint keys on.
+    CHECK(errors[0].path == "/args/members/" + b.other.str() + "/items/" + b.otherItem.str());
+    CHECK(errors[0].hint == "unlock it, or hold Alt to comp this track alone");
+    // Nothing changed: the same version, one whole item, no seams.
+    CHECK(f.app->head().version == version);
+    CHECK(piecesOf(f, b.track).size() == 1);
+    CHECK(heardOf(f.item(b.it)) == b.heard);
+    CHECK(f.view->lanes().compSeams(row).empty());
+    // A lane click on the whole item is refused the same way.
+    f.click(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.5f));
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[1].code == "item.locked");
+    CHECK(f.app->head().version == version);
+    // With Alt the swipe comps this track alone; the locked copy is untouched.
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f),
+           ui::kAlt);
+    REQUIRE(sent.size() == 3);
+    const json::Value* bypass = sent[2][0].args.find("bypass_groups");
+    REQUIRE(bypass);
+    CHECK(bypass->asBool());
+    CHECK(errors.size() == 2);
+    const auto pieces = piecesOf(f, b.track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[1]) == 1 - b.heard);
+    CHECK(itemsOn(f, b.other) == 1);
+    CHECK(f.item(b.otherItem).locked);
+    CHECK(f.view->lanes().compSeams(row).size() == 2);
+}
+
+// Round 119 G4: take.comp's warnings reach the status line's note, and the
+// left piece's take badge keeps its press when a long crossfade brings it
+// within the seam's reach.
+TEST_CASE("a comp's warnings go to the status note; the badge wins over a seam beside it") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double start = f.item(it).position, length = f.item(it).length;
+    // A comp with a 2 s crossfade: at 16 px a second, each seam's crossfade
+    // is 32 px wide, so the left piece's badge reaches the seam's zone.
+    json::Value args = json::Value::object();
+    args["item"] = it.str();
+    json::Value span = json::Value::object();
+    span["from"] = start + length / 3;
+    span["to"] = start + 2 * length / 3;
+    span["index"] = static_cast<std::int64_t>(1 - heard);
+    args["spans"] = json::Value::array();
+    args["spans"].push_back(span);
+    args["crossfade"] = 2.0;
+    REQUIRE(f.dispatcher->execute({"take.comp", args, kUi}));
+    f.sync();
+    const std::size_t row = *f.view->trackLayout().indexOf(track);
+    const auto seams = f.view->lanes().compSeams(row);
+    REQUIRE(seams.size() == 2);
+    auto& g = f.view->gestures();
+    const float x = f.view->lanes().xAt(seams[0].seconds);
+    const ui::Rect left = f.rectOf(seams[0].left);
+    REQUIRE(left.right() - x > 12);  // the crossfade's half reaches past the zone
+    const auto onBadge = g.hit({x, left.y + 8});
+    REQUIRE(onBadge);
+    CHECK(onBadge->takeBadge);
+    CHECK(onBadge->item == seams[0].left);
+    // Below the name bar the seam keeps its press.
+    CHECK(g.hit({x, left.y + left.h / 2})->zone == views::ItemGestures::Drag::Seam);
+    // A swipe of a narrow stretch keeps the 2 s crossfade, which the short
+    // piece clamps: take.comp's warning goes to the note.
+    std::vector<std::string> notices;
+    g.onNotice = [&](const std::string& n) { notices.push_back(n); };
+    const ui::Rect first = f.rectOf(seams[0].left);
+    const float mid = first.x + first.w * 0.4f;
+    f.drag(laneAt(first, 2, 1 - heard, mid), laneAt(first, 2, 1 - heard, mid + 8), ui::kShift);
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0].find("shorter") != std::string::npos);
 }
 
 namespace {

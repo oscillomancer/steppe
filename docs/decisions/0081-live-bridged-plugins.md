@@ -47,6 +47,9 @@ input cannot hide, and its output is no longer the in-process output.
    - waits on the instance's done word with a timeout no later than the
      cycle's bridge deadline (Linux `futex` wait, macOS address wait,
      Windows `WaitForSingleObject`), each rechecked before and after;
+     *Note 2026-11-23:* on Windows the wait is on the event and a
+     high-resolution timer, or sliced and spun without one
+     ([ADR-0102](0102-windows-live-wait-timer.md));
    - steady-clock reads for that deadline.
    Nothing else: no wait without that deadline, no process checks or kills,
    no allocation, lock, log or file access. Every other part of the rule is
@@ -117,6 +120,10 @@ that order before anything else (`docs/specs/engine.md`, live deadline).
 A start the deadline passes is unanswered, not refused: the engine asks
 again on the next cycle rather than leaving the stage passed through until
 another plan.
+
+*Note 2026-11-22:* such a start is no longer judged by point 4's late rule
+and later cycles do not wait for it; it fails at the lifecycle deadline
+([ADR-0101](0101-bridged-start-lifecycle-deadline.md)).
 
 *Amended 2026-11-15 (review round 19):* the reset that follows an overflow
 is sent only when a note or MIDI event was dropped. A block's own events

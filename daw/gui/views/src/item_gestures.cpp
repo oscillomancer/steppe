@@ -19,6 +19,7 @@
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
 #include "supple/views/arrange.h"
+#include "supple/views/comp_view.h"
 #include "supple/views/envelope_lane.h"
 
 namespace supple::views {
@@ -103,6 +104,36 @@ struct Placed {
     model::Id track;
     double start = 0, end = 0;
 };
+
+// The comp `item` belongs to and the stretch (compSpans) that ends at the
+// seam after piece `left`: the seam is that stretch's `to`.
+struct SeamAt {
+    CompView comp;
+    std::vector<CompSpan> spans;
+    std::size_t k = 0;
+};
+std::optional<SeamAt> seamAt(const model::Session& s, model::Id item, model::Id left) {
+    auto comp = compOf(s, item);
+    if (!comp) return std::nullopt;
+    auto spans = compSpans(s, *comp);
+    for (std::size_t i = 0; i < comp->pieces.size(); ++i)
+        if (comp->pieces[i].item == left) {
+            const double at = s.timeMap->beatAt(static_cast<double>(comp->pieces[i].coreEnd) /
+                                                s.project->sampleRate);
+            for (std::size_t j = 0; j + 1 < spans.size(); ++j)
+                if (std::abs(spans[j].to - at) < 1e-6) return SeamAt{*comp, spans, j};
+        }
+    return std::nullopt;
+}
+// The same seam found again by its beat (the pieces may have been rebuilt).
+std::optional<SeamAt> seamAtBeat(const model::Session& s, model::Id item, double beat) {
+    auto comp = compOf(s, item);
+    if (!comp) return std::nullopt;
+    auto spans = compSpans(s, *comp);
+    for (std::size_t j = 0; j + 1 < spans.size(); ++j)
+        if (std::abs(spans[j].to - beat) < 1e-6) return SeamAt{*comp, spans, j};
+    return std::nullopt;
+}
 
 // Crossfades for the overlaps the placed items make with the items they do
 // not move: the earlier item fades out and the later fades in over the
@@ -388,6 +419,38 @@ class Ghost : public ui::Node {
                 c.strokeRect(box, t.color("focus"));
                 break;
             }
+            case ItemGestures::Drag::Seam:
+                if (anchor)
+                    if (const auto row = v.trackLayout().indexOf(anchor->track)) {
+                        const ui::Rect ir =
+                            const_cast<ArrangeView&>(v).lanes().itemRect(*row, *anchor);
+                        const float x = v.xAt(s.timeMap->secondsAt(st.seamBeat + st.deltaBeats));
+                        c.fillRect({x - 1, ir.y, 2, ir.h}, t.color("focus"));
+                    }
+                break;
+            case ItemGestures::Drag::CompFade:
+                if (anchor)
+                    if (const auto row = v.trackLayout().indexOf(anchor->track)) {
+                        // The crossfade's extent about its seam, and its length
+                        // while it is dragged (as a stretch shows its rate).
+                        const ui::Rect ir =
+                            const_cast<ArrangeView&>(v).lanes().itemRect(*row, *anchor);
+                        const double seam = s.timeMap->secondsAt(st.seamBeat);
+                        const float x0 = v.xAt(seam - st.fadeSeconds / 2),
+                                    x1 = v.xAt(seam + st.fadeSeconds / 2);
+                        c.fillRect({x0, ir.y, std::max(1.0f, x1 - x0), ir.h},
+                                   t.color("focus").withAlpha(0.25f));
+                        c.fillRect({x0 - 0.75f, ir.y, 1.5f, ir.h}, t.color("focus"));
+                        c.fillRect({x1 - 0.75f, ir.y, 1.5f, ir.h}, t.color("focus"));
+                        char buf[32];
+                        if (st.fadeSeconds < 1)
+                            std::snprintf(buf, sizeof buf, "%.0f ms", st.fadeSeconds * 1000);
+                        else
+                            std::snprintf(buf, sizeof buf, "%.2f s", st.fadeSeconds);
+                        c.text({x1 + 4, ir.y + 2, 64, 14}, buf, ui::Font::Mono, t.type("caption"),
+                               t.color("ink"), ui::kLeft | ui::kMiddle);
+                    }
+                break;
             case ItemGestures::Drag::Comp:
                 if (anchor && st.compTo > st.compFrom) {
                     const auto row = v.trackLayout().indexOf(anchor->track);
@@ -656,6 +719,36 @@ std::optional<ItemGestures::Hit> ItemGestures::hit(ui::Point p) const {
         return std::nullopt;  // a lane has no items
     const model::Session& s = view_.session();
     const model::Id track = view_.trackLayout().rows()[*row].track;
+    // A comp's seam, across the pieces' height: it moves the seam, never
+    // trims the pieces beside it (that would break the comp).
+    for (const CompSeam& seam : view_.lanes().compSeams(*row)) {
+        if (std::abs(view_.xAt(seam.seconds) - p.x) > kEdge) continue;
+        // The left piece's take badge, which a long crossfade can bring
+        // within reach of the seam, keeps its press.
+        if (const model::Item* left = itemOf(s, seam.left)) {
+            const ui::Rect lr = const_cast<ArrangeView&>(view_).lanes().itemRect(*row, *left);
+            if (left->takes.size() > 1 && p.x >= lr.right() - 24 && p.x < lr.right() - kHandle &&
+                p.y >= lr.y && p.y < lr.y + 16) {
+                Hit h;
+                h.item = seam.left;
+                h.row = *row;
+                h.rect = lr;
+                h.zone = Drag::Move;
+                h.takeBadge = true;
+                return h;
+            }
+        }
+        const model::Item* right = itemOf(s, seam.right);
+        if (!right) continue;
+        Hit h;
+        h.item = seam.right;
+        h.row = *row;
+        h.rect = const_cast<ArrangeView&>(view_).lanes().itemRect(*row, *right);
+        if (p.y < h.rect.y || p.y >= h.rect.bottom()) continue;
+        h.zone = p.y < h.rect.y + kHandle ? Drag::CompFade : Drag::Seam;
+        h.seamLeft = seam.left;
+        return h;
+    }
     std::optional<Hit> best;
     double bestStart = -1e300;
     for (const auto& e : s.items) {
@@ -705,6 +798,8 @@ ui::Cursor ItemGestures::cursorAt(ui::Point p) const {
             case Drag::Slip:
             case Drag::Warp:
             case Drag::AutoItemLength:
+            case Drag::Seam:
+            case Drag::CompFade:
                 return ui::Cursor::ResizeHorizontal;
             case Drag::Move:
             case Drag::AutoItemMove:
@@ -756,6 +851,7 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
         free_ = (e.mods & ui::kShift) != 0;
         copy_ = false;
         cycleFade_ = false;
+        alone_ = (e.mods & ui::kAlt) != 0;
         marqueeAdd_ = false;
         mixed_ = false;
         state_ = State{};
@@ -852,6 +948,36 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
             }
             state_.drag = h->zone;
             if (h->takeLane) state_.takeLane = *h->takeLane;
+            if (state_.drag == Drag::Comp && pressed) {  // a swipe reaches across the comp
+                state_.compLo = startBeat(s, *pressed);
+                state_.compHi = startBeat(s, *pressed) + lengthBeats(s, *pressed);
+                if (const auto comp =
+                        compsWithTakeComp(s, h->item) ? compOf(s, h->item) : std::nullopt) {
+                    const auto spans = compSpans(s, *comp);
+                    state_.compLo = spans.front().from;
+                    state_.compHi = spans.back().to;
+                }
+            }
+            if (state_.drag == Drag::Seam || state_.drag == Drag::CompFade) {
+                const auto at = h->seamLeft ? seamAt(s, h->item, *h->seamLeft) : std::nullopt;
+                if (!at) {
+                    state_ = State{};
+                    return true;
+                }
+                const auto& spans = at->spans;
+                const std::size_t k = at->k;
+                state_.seamBeat = spans[k].to;
+                state_.seamLo = spans[k].from + kMinLength;  // a seam stops short of the next
+                state_.seamHi = spans[k + 1].to - kMinLength;
+                // A crossfade is centred on its seam, as long as the shorter side allows.
+                const double seam = s.timeMap->secondsAt(spans[k].to);
+                state_.fadeMax = 2 * std::min(seam - s.timeMap->secondsAt(spans[k].from),
+                                              s.timeMap->secondsAt(spans[k + 1].to) - seam);
+                const auto crossfade = compCrossfade(s, at->comp);
+                state_.fadeSeconds = crossfade ? crossfade->seconds : model::kDefaultCompCrossfade;
+                cycleFade_ = state_.drag == Drag::CompFade &&
+                             mouse.behaviour("fade", e.mods) == "cycle_shape";
+            }
             if (state_.drag == Drag::Move && pressed && !pressed->locked && pressed->activeTake &&
                 e.pos.y >= h->rect.y + 17 && !(e.mods & ui::kAlt)) {
                 const auto* take = s.takes.find(*pressed->activeTake);
@@ -1052,13 +1178,23 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
             }
             case Drag::Comp:
                 if (anchor) {
-                    const double start = startBeat(s, *anchor),
-                                 end = startBeat(s, *anchor) + lengthBeats(s, *anchor);
+                    const double start = state_.compLo, end = state_.compHi;
                     const double a0 = std::clamp(snap(beatAtX(press_.x), free_), start, end);
                     const double a1 = std::clamp(snap(beatAtX(e.pos.x), free_), start, end);
                     state_.compFrom = std::min(a0, a1);
                     state_.compTo = std::max(a0, a1);
                 }
+                break;
+            case Drag::CompFade:
+                state_.fadeSeconds = std::clamp(
+                    2 * std::abs(view_.timeAt(e.pos.x) - s.timeMap->secondsAt(state_.seamBeat)),
+                    0.0, std::max(0.0, state_.fadeMax));
+                break;
+            case Drag::Seam:
+                if (state_.seamHi > state_.seamLo)
+                    state_.deltaBeats = std::clamp(snap(state_.seamBeat + raw, free_),
+                                                   state_.seamLo, state_.seamHi) -
+                                        state_.seamBeat;
                 break;
             case Drag::EnvPoint:
             case Drag::AutoItemMove:
@@ -1579,9 +1715,23 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
     const model::Session& s = view_.session();
     const model::Item* anchor =
         state_.anchor.kind == model::Kind::Item ? itemOf(s, state_.anchor) : nullptr;
-    auto runSteps = [&](const std::string& label, const std::vector<EditStep>& steps) {
+    auto runSteps = [&](const std::string& label, std::vector<EditStep> steps) {
         if (steps.empty() || !run) return;
-        if (auto r = run(label, steps); !r && onError) onError(r.error());
+        // Alt at the press comps this track alone, as Alt on the fader moves
+        // it alone: take.comp with bypass_groups, past an edit group.
+        if (alone_)
+            for (EditStep& step : steps)
+                if (step.command == "take.comp") step.args["bypass_groups"] = true;
+        auto r = run(label, steps);
+        if (!r) {
+            if (onError)
+                onError(steps.back().command == "take.comp" ? compRefusal(r.error()) : r.error());
+            return;
+        }
+        // take.comp's warnings say why a seam is shorter or hard, or a note
+        // is struck again: a transient note, not text on the lanes.
+        if (onNotice && steps.back().command == "take.comp")
+            if (const std::string w = resultWarnings(*r); !w.empty()) onNotice(w);
     };
     if (state_.drag == Drag::Marquee && state_.env && !moved_) {
         if (e.button == 3) openEnvMenu(*state_.env, press_);  // a right-click on a lane
@@ -1653,42 +1803,108 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
         return;
     }
     if (state_.drag == Drag::Comp && anchor && !anchor->locked) {
-        // A click hears that take for the whole item; a swipe splits the item
-        // at the range and hears that take there (the piece keeps the take
-        // order, so the take is chosen by index).
-        json::Value activate = json::Value::object();
-        activate["index"] = static_cast<std::int64_t>(state_.takeLane);
+        // take.comp, as an agent would call it (session-model §1.5.1): a
+        // swipe paints its range with the lane's take, a click in a comp
+        // that piece; a re-comp keeps the comp's crossfade, a first one takes
+        // take.comp's default. On an edit-grouped track take.comp comps every
+        // member with it. A click on a lone item hears that take throughout:
+        // take.activate (which a looped item also takes), or take.comp over
+        // the whole item in an edit group, so the members follow.
+        const bool takeComp = compsWithTakeComp(s, state_.anchor);
+        const auto comp = compOf(s, state_.anchor);
+        const bool inComp = takeComp && comp && comp->pieces.size() > 1;
         const double start = startBeat(s, *anchor),
                      end = startBeat(s, *anchor) + lengthBeats(s, *anchor);
-        const bool whole = !moved_ || state_.compTo - state_.compFrom < kMinLength ||
-                           (state_.compFrom <= start + 1e-9 && state_.compTo >= end - 1e-9);
-        if (whole) {
+        const bool click = !moved_ || state_.compTo - state_.compFrom < kMinLength;
+        const bool whole =
+            click || (state_.compFrom <= start + 1e-9 && state_.compTo >= end - 1e-9);
+        if (!inComp && whole) {
             if (anchor->activeTake && state_.takeLane < anchor->takes.size() &&
                 anchor->takes[state_.takeLane] == *anchor->activeTake)
                 return;
+            if (const auto lone = takeComp ? compPieceOf(s, state_.anchor) : std::nullopt) {
+                runSteps("Switch take",
+                         {{"take.comp", compPieceArgs(s, *lone, state_.anchor, state_.takeLane)}});
+                return;
+            }
+            json::Value activate = json::Value::object();
+            activate["index"] = static_cast<std::int64_t>(state_.takeLane);
             activate["item"] = state_.anchor.str();
             runSteps("Switch take", {{"take.activate", std::move(activate)}});
             return;
         }
-        std::vector<EditStep> steps;
-        std::string target = state_.anchor.str();
-        if (state_.compFrom > start + 1e-9) {
-            json::Value split = json::Value::object();
-            split["item"] = target;
-            split["at"] = state_.compFrom;
-            steps.push_back({"item.split", std::move(split)});
-            target = "$step" + std::to_string(steps.size() - 1) + ".right";
+        if (!takeComp) {
+            // take.comp refuses a looped item (comp.loop): the swipe splits it
+            // at the range and hears that take there, with hard cuts, as it
+            // did before take.comp (an agent can do the same with item.split
+            // and take.activate).
+            std::vector<EditStep> steps;
+            std::string target = state_.anchor.str();
+            if (state_.compFrom > start + 1e-9) {
+                json::Value split = json::Value::object();
+                split["item"] = target;
+                split["at"] = state_.compFrom;
+                steps.push_back({"item.split", std::move(split)});
+                target = "$step" + std::to_string(steps.size() - 1) + ".right";
+            }
+            if (state_.compTo < end - 1e-9) {
+                json::Value split = json::Value::object();
+                split["item"] = target;
+                split["at"] = state_.compTo;
+                steps.push_back({"item.split", std::move(split)});
+                target = "$step" + std::to_string(steps.size() - 1) + ".left";
+            }
+            json::Value activate = json::Value::object();
+            activate["item"] = target;
+            activate["index"] = static_cast<std::int64_t>(state_.takeLane);
+            steps.push_back({"take.activate", std::move(activate)});
+            runSteps("Comp take", steps);
+            return;
         }
-        if (state_.compTo < end - 1e-9) {
-            json::Value split = json::Value::object();
-            split["item"] = target;
-            split["at"] = state_.compTo;
-            steps.push_back({"item.split", std::move(split)});
-            target = "$step" + std::to_string(steps.size() - 1) + ".left";
+        if (click) {
+            if (compPieceIndex(*comp, state_.anchor) == state_.takeLane) return;
+            runSteps("Comp take",
+                     {{"take.comp", compPieceArgs(s, *comp, state_.anchor, state_.takeLane)}});
+            return;
         }
-        activate["item"] = target;
-        steps.push_back({"take.activate", std::move(activate)});
-        runSteps("Comp take", steps);
+        const CompSpan span{state_.compFrom, state_.compTo, state_.takeLane};
+        const auto crossfade = comp ? compCrossfade(s, *comp) : std::nullopt;
+        runSteps("Comp take", {{"take.comp", compArgs(state_.anchor, {span}, crossfade)}});
+        return;
+    }
+    if (state_.drag == Drag::Seam) {
+        if (!moved_ || std::abs(state_.deltaBeats) < 1e-9) return;
+        // The two stretches beside the seam, as they are now, with their
+        // shared edge moved; what they do not cover keeps its take.
+        auto at = seamAtBeat(s, state_.anchor, state_.seamBeat);
+        if (!at) return;
+        auto& spans = at->spans;
+        const double to = state_.seamBeat + state_.deltaBeats;
+        spans[at->k].to = to;
+        spans[at->k + 1].from = to;
+        runSteps("Move comp seam",
+                 {{"take.comp", compArgs(state_.anchor, {spans[at->k], spans[at->k + 1]},
+                                         compCrossfade(s, at->comp))}});
+        return;
+    }
+    if (state_.drag == Drag::CompFade) {
+        // The comp's crossfade, at every seam (take.comp has one per comp):
+        // its length dragged, or its shape toggled by the fade handles'
+        // cycle_shape click. The stretches beside the seam stay as they are.
+        if (!moved_ && !cycleFade_) return;
+        auto at = seamAtBeat(s, state_.anchor, state_.seamBeat);
+        if (!at) return;
+        model::CompCrossfade crossfade =
+            compCrossfade(s, at->comp).value_or(model::CompCrossfade{});
+        if (moved_)
+            crossfade.seconds = state_.fadeSeconds;
+        else
+            crossfade.shape = crossfade.shape == model::FadeShape::Linear
+                                  ? model::FadeShape::Cos
+                                  : model::FadeShape::Linear;
+        runSteps(moved_ ? "Comp crossfade" : "Comp crossfade shape",
+                 {{"take.comp",
+                   compArgs(state_.anchor, {at->spans[at->k], at->spans[at->k + 1]}, crossfade)}});
         return;
     }
     if (state_.drag == Drag::TakeOut) {
@@ -1776,6 +1992,15 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             auto at = std::find(takes.begin(), takes.end(), *anchor->activeTake);
             const model::Id next =
                 (at == takes.end() || at + 1 == takes.end()) ? takes.front() : *(at + 1);
+            // A piece of a comp, or a lone item of an edit group, switches as a
+            // lane click does: take.comp (the group's members follow).
+            if (const auto comp = compPieceOf(s, state_.anchor)) {
+                const auto index = static_cast<std::size_t>(
+                    std::find(takes.begin(), takes.end(), next) - takes.begin());
+                runSteps("Switch take",
+                         {{"take.comp", compPieceArgs(s, *comp, state_.anchor, index)}});
+                return;
+            }
             json::Value args = json::Value::object();
             args["item"] = state_.anchor.str();
             args["take"] = next.str();
@@ -1974,6 +2199,8 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             return;
         }
         case Drag::Comp:
+        case Drag::Seam:
+        case Drag::CompFade:
         case Drag::TakeOut:
         case Drag::EnvPoint:
         case Drag::AutoItemMove:

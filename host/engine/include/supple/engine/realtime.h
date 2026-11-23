@@ -565,6 +565,17 @@ struct PluginOutputs {
     bool droppedAll = false;
 };
 
+// The bound of Engine::awaitTransport() (main thread): 1 s, the time a
+// device that runs has to act on a transport request before the request is
+// refused with engine.transport. A test raises it, so a starved runner never
+// becomes a refusal (AGENTS.md: no pass or fail by wall-clock time):
+// setTransportWaitSeconds in its own process (0 restores the default), or
+// SUPPLE_TRANSPORT_PATIENT=1 (exactly "1": kPatientTransportSeconds) in the
+// environment of a process it starts.
+inline constexpr double kTransportWaitSeconds = 1.0, kPatientTransportSeconds = 60.0;
+double transportWaitSeconds();
+void setTransportWaitSeconds(double seconds);
+
 // Prepared main-thread rack timing, without instantiating plug-ins for queries.
 struct RackLatencyInfo {
     std::int64_t latency = 0;
@@ -696,7 +707,12 @@ class Engine {
     // Main thread: waits (bounded) until the renderer has acted on every
     // transport request, so transport() reports the new state. With the
     // renderer in the callback: two audio cycles (none for a manual backend).
-    void awaitTransport(double timeoutSeconds = 1.0);
+    // Not acted on within the bound (a stalled device or a starved renderer):
+    // `engine.transport`, and transport() may still report the old state; the
+    // request stays queued and takes effect when the device runs again.
+    // Bounded by transportWaitSeconds().
+    Status awaitTransport() { return awaitTransport(transportWaitSeconds()); }
+    Status awaitTransport(double timeoutSeconds);
     // Anticipative, main thread: waits until `frames` of the current
     // transport epoch are rendered ahead of the playhead (at most the
     // render-ahead amount; before the epoch is heard, at least the whole
@@ -1077,6 +1093,13 @@ class Engine {
     static constexpr int kRendererTransportTries = 64;
     void rendererLoop(std::uint64_t firstEpoch);
     void scheduleBackground();  // main thread, start(): renderer and pool policy
+    // The background policy start() asks for under the callback's (ADR-0026),
+    // or why none: for the renderer and `helpers` pool threads.
+    struct BackgroundRequest {
+        ThreadPolicy want{ThreadPolicy::Kind::Normal, 0};
+        std::string refused;
+    };
+    BackgroundRequest backgroundRequest(unsigned helpers) const;
     std::uint64_t relocate(std::uint64_t previous);  // returns the epoch it relocated for
     std::int64_t playedPosition(std::uint64_t epoch, std::int64_t epochStart) const;
     // The anticipative executors' position in `epoch`, also before the
@@ -1337,10 +1360,23 @@ class Engine {
     // not placed yet (relocating, or a relocation before it ran).
     struct CaptureState {
         bool on = false, any = false, pending = false;
-        // A quantized end (captureLaunches): it ends at endSong once heard
-        // there (service).
+        // An end it ends at once heard there (service): the earlier of its
+        // own quantized end (captureLaunches) and a switch's that cuts
+        // stretched arrangement audio (captureBeforeStretchCut); kept apart
+        // so a switch replaced or voided before its boundary drops only its
+        // own (round 117 W2). settleCaptureEnd() sets these three.
         bool ending = false;
         double endBeat = 0;
+        bool userEnding = false;
+        std::int64_t userEndSong = 0;
+        double userEndBeat = 0;
+        // The switch's: its slot (SIZE_MAX: none) and generation, track and
+        // boundary.
+        std::size_t cutSlot = SIZE_MAX;
+        std::uint64_t cutGeneration = 0;
+        model::Id cutTrack;
+        std::int64_t cutSong = 0;
+        double cutBeat = 0;
         std::uint64_t epoch = 0;
         // Its start and end on the song's running count (heardSong), and the
         // song sample it began at.
@@ -1349,6 +1385,8 @@ class Engine {
     };
     CaptureState capture_;
     void placeCapture();       // a pending start, once the clock reads
+    void settleCaptureEnd();   // ending/endSong/endBeat from the two ends
+    void dropStaleCut();       // a switch's end whose launch no longer stands
     void captureRelocating();  // writeTransport: a relocation is coming
     // A quantized end heard: it ends there. Service runs it, and so do
     // captureRelocating and captureLaunches first.
@@ -1384,9 +1422,12 @@ class Engine {
     // Main thread: a launched audio clip that plays (by the log) while the
     // newest plan keeps the pitch under a master playrate (S3 B, Q2).
     std::optional<model::Id> audioUnderStretch() const;
-    // Main thread: whether `r` leaves or returns to an arrangement that holds
-    // audio (round 113 T2), by the log.
-    bool cutsArrangementAudio(const LaunchRequest& r) const;
+    // Main thread: whether `r`, switching on timeline sample `anchor` (its
+    // boundary, not the unwrapped song frame), leaves or returns to an
+    // arrangement with audio within the stretch converter's reach of it,
+    // across a transport loop's wrap too (round 113 T2, rounds 117 and 128
+    // W1), by the log.
+    bool cutsArrangementAudio(const LaunchRequest& r, std::int64_t anchor) const;
     // Main thread: under a pitch-keeping plan, ends a running capture on the
     // boundary of a queued switch that cuts arrangement audio (that launch
     // not in it), with a warning naming the track.
@@ -1434,6 +1475,11 @@ class Engine {
     // before publication; the renderer preserves these scheduled trajectories.
     SpscRing<detail::Plan*, 1024> ratePlanRequests_;
     std::unique_ptr<detail::Workers> workers_;
+#if defined(__APPLE__)
+    // macOS without a device policy: whether the pool and the renderer set the
+    // background policy on themselves as they started (start(), ADR-0026).
+    Status selfApplied_;
+#endif
     std::unique_ptr<detail::LiveWorkers> liveWorkers_;
     std::atomic<detail::LiveWorkers*> liveWorkersReady_{nullptr};
     std::vector<std::string> startWarnings_;  // scheduling fallbacks, kept with plan warnings

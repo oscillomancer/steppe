@@ -142,7 +142,13 @@ keeps a copy of the old one beside it as `<file>.pre-branches.bak`.
 
 Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
-save moves them into `media/` beside the project file. While a recording runs, a
+save moves them into `media/` beside the project file; a file that could not be removed from
+the unsaved folder afterwards stays there, and the save warns with its path (the project
+already uses the copy; delete the old one by hand). On Windows that is a file something still
+has open: the waveform display of a recording you saved at once, a render or freeze still
+running, or another program. After you quit and start Steppe again,
+that file is in the earlier run's unsaved folder, which the list of unsaved projects to recover
+shows; recover it or delete it there. While a recording runs, a
 project cannot be saved for the first time, or saved as into another
 folder: stop recording first, and its files move or are copied then.
 Saving in place works while recording. Quitting, or starting
@@ -507,6 +513,26 @@ the number to hear the next take. **Item > Show all takes** lays the takes
 out as lanes inside the item: click a lane to hear that take, or drag across
 part of a lane to use that take for that stretch only. Ctrl-drag from below
 the name bar pulls a take out into an item of its own.
+
+Dragging across a lane makes a **comp**: the item is split where the take
+changes, and each seam between two takes gets a short crossfade (10 ms at
+first). A line with a small notch at its foot marks each seam. Drag the line
+to move the seam, or drag the top of it to make the crossfade longer or
+shorter; Ctrl+click there switches between an equal-power and a linear
+crossfade. One crossfade length and shape serves every seam of a comp, and
+the inspector shows it as **Crossfade** for a selected piece: type 0 for hard
+cuts. Clicking a lane of one piece switches just that piece. To make a comp
+one plain item again, select its pieces and use **Consolidate items**. On a
+track grouped for editing, every track of the group follows: a drag, a click
+on a lane or the take number comps each of them the same way. If one of them
+has been changed on its own since, its seam lines are drawn broken and the
+inspector's **Group** row says which track it differs from; comping again
+brings it back in step. A track of the group with a single take there (a bass beside
+the drum takes) is left as it is. If a track cannot follow (a looped or locked
+item, or one that starts or ends elsewhere), the status line says so and nothing
+changes: hold **Alt** while you drag, click or pick a take to comp this track
+alone. An item whose Loop is on is comped with hard cuts (no
+crossfades) until you turn its Loop off.
 
 ### Changing what the mouse does
 

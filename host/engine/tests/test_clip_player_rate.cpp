@@ -556,6 +556,8 @@ TEST_CASE("under a pitch-keeping rate a switch that cuts arrangement audio ends 
             INFO("back " << back << ", anticipative " << options.anticipative);
             Project p;
             twoTracks(p);
+            // tr_2's item (5 s) from beat 4: it sounds at both switches.
+            p.run("item.move", R"({"item": "it_2", "position": 4})");
             p.run("scene.add", "{}");  // sc_2
             const std::string clip = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
                                                        R"("notation": "voice v; 1: C4:w"})")["clip"]
@@ -603,6 +605,249 @@ TEST_CASE("under a pitch-keeping rate a switch that cuts arrangement audio ends 
             CHECK(worst == 0.0);
             CHECK(first == -1);
         }
+}
+
+TEST_CASE("under a pitch-keeping rate a capture's end at a switch goes with that switch" *
+          doctest::description("rt")) {
+    // Review round 117 W2: tr_2's switch to a MIDI clip on bar 3 (song
+    // 192000), over its audio item, sets the capture's end there, with one
+    // warning. Replaced before its boundary by a return to the arrangement,
+    // or voided with its clip removed, the end goes with it: the capture runs
+    // on past bar 3 and commits exactly.
+    for (const bool removed : {false, true})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("clip removed " << removed << ", anticipative " << options.anticipative);
+            Project p;
+            twoTracks(p);
+            p.run("scene.add", "{}");  // sc_2
+            const std::string clip = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
+                                                       R"("notation": "voice v; 1: C4:w"})")["clip"]
+                                         .asString();
+            auto launchIt = j(R"({})");
+            launchIt["clip"] = clip;
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+            AppLive live(p, options, 128, 48000 * 9 + 16384);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            const double from = p.run("launch.capture", R"({"on": true})")["from"].asDouble();
+            live.until(128000 + 8000);           // into bar 2
+            p.runArgs("launch.clip", launchIt);  // bar 3
+            json::Value state = p.run("launch.state", "{}");
+            REQUIRE(state.find("capture_ends"));
+            CHECK(state["capture_ends"].asDouble() == 8.0);
+            const auto ends = [&] {
+                const auto& w = p.app->engine()->warnings();
+                return std::count_if(w.begin(), w.end(), [](const std::string& m) {
+                    return m.find("the capture ends at tr_2's switch") != std::string::npos;
+                });
+            };
+            CHECK(ends() == 1);
+            if (removed) {
+                auto args = j(R"({})");
+                args["clip"] = clip;
+                p.runArgs("clip.remove", args);
+            } else {
+                p.run("launch.arrangement", R"({"track": "tr_2"})");
+            }
+            live.until(live.cycles * 128 + 16 * 128);
+            state = p.run("launch.state", "{}");
+            CHECK(state["capturing"].asBool());
+            CHECK_FALSE(state.find("capture_ends"));
+            live.until(256000 + 40000);  // past bar 3
+            CHECK(p.run("launch.state", "{}")["capturing"].asBool());
+            CHECK(ends() <= 1);  // no other (a new plan starts the list again)
+            json::Value done = p.run("launch.commit", "{}");
+            CHECK(done["from"].asDouble() == from);
+            const double to = done["to"].asDouble();
+            CHECK(to > 8.5);
+            live.until(live.cycles * 128 + 20 * 128);
+            const std::vector<float> heard = live.stop();
+            const std::vector<float> committed = arrangement(p, 9.0, 128);
+            const std::int64_t start = std::llround(from * double(kBeat) / 0.75);
+            const std::int64_t end = std::llround(to * double(kBeat) / 0.75);
+            REQUIRE(end + std::int64_t(live.latency) <= std::int64_t(heard.size()));
+            REQUIRE(end <= std::int64_t(committed.size()));
+            const auto [worst, first] = compare(heard, live.latency, committed, start, end);
+            CHECK_MESSAGE(worst == 0.0, "differs by " << worst << " from frame " << first);
+        }
+}
+
+TEST_CASE(
+    "under a pitch-keeping rate a switch clear of the track's audio does not end the capture" *
+    doctest::description("rt")) {
+    // Review round 117 W1: only a switch within the stretch converter's reach
+    // of the track's arrangement audio ends a capture. tr_2's item (5 s of a
+    // ramp) ends 0.1 s or 1 s before tr_2's switch to a MIDI clip on bar 4
+    // (song 288000). Within the reach the capture ends there, as before;
+    // clear of it the capture runs on, and its commit is exact to its last
+    // sample: the converter reads nothing of the item there.
+    for (const double gap : {0.1, 1.0})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("gap " << gap << " s, anticipative " << options.anticipative);
+            const bool nearAudio = gap < 0.25;
+            Project p;
+            twoTracks(p);
+            auto move = j(R"({"item": "it_2"})");  // 240000 samples: it ends at 288000 - gap
+            move["position"] = (288000.0 - gap * 48000 - 240000) / double(kBeat);
+            p.runArgs("item.move", move);
+            p.run("scene.add", "{}");  // sc_2
+            const std::string clip = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
+                                                       R"("notation": "voice v; 1: C4:w"})")["clip"]
+                                         .asString();
+            auto launchIt = j(R"({})");
+            launchIt["clip"] = clip;
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+            AppLive live(p, options, 128, 48000 * 9 + 16384);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            const double from = p.run("launch.capture", R"({"on": true})")["from"].asDouble();
+            live.until(256000 + 8000);           // into bar 3
+            p.runArgs("launch.clip", launchIt);  // bar 4: song 288000
+            json::Value state = p.run("launch.state", "{}");
+            CHECK(state["capturing"].asBool());
+            CHECK(bool(state.find("capture_ends")) == nearAudio);
+            live.until(std::llround(12.0 * double(kBeat) / 0.75) + 40000);
+            CHECK(p.run("launch.state", "{}")["capturing"].asBool() == !nearAudio);
+            json::Value done = p.run("launch.commit", "{}");
+            CHECK(done["from"].asDouble() == from);
+            const double to = done["to"].asDouble();
+            if (nearAudio)
+                CHECK(to == 12.0);
+            else
+                CHECK(to > 12.5);
+            live.until(live.cycles * 128 + 20 * 128);
+            const std::vector<float> heard = live.stop();
+            const std::vector<float> committed = arrangement(p, 9.0, 128);
+            const std::int64_t start = std::llround(from * double(kBeat) / 0.75);
+            const std::int64_t end = std::llround(to * double(kBeat) / 0.75);
+            REQUIRE(end + std::int64_t(live.latency) <= std::int64_t(heard.size()));
+            REQUIRE(end <= std::int64_t(committed.size()));
+            const auto [worst, first] = compare(heard, live.latency, committed, start, end);
+            CHECK_MESSAGE(worst == 0.0, "differs by " << worst << " from frame " << first);
+        }
+}
+
+TEST_CASE(
+    "under a pitch-keeping rate a switch's reach is judged on the timeline, across a wrap and "
+    "by the rate" *
+    doctest::description("rt")) {
+    // Review round 128 W1, by the decision launch.state reports (a capture
+    // that ends at the switch says `capture_ends`):
+    //  - a transport loop over 0-6 s, tr_2's switch to a MIDI clip on bar 3
+    //    (4 s) on the second pass: its song frame is 10 s (the anchor plus a
+    //    pass), and the audio is judged at the anchor (L1): tr_2's item over
+    //    1.5-6.5 s ends the capture, and one at 9-14 s, never heard, does not;
+    //  - a loop over 0-5.6 s and the switch on the beat at 5.5 s: the item at
+    //    0-5 s lies just past the wrap, where the converter runs on, and ends it;
+    //  - at rate 2 an item ending 0.4 s before the switch on bar 4 (6 s) is
+    //    within the reach, 0.25 s of song at most rate 1, scaled by the rate
+    //    above it: the scalar's, or an envelope's points over a scalar of
+    //    0.75 (round 128 N2).
+    struct Case {
+        const char* name;
+        double rate, loopEnd, itemSeconds, launchSong;
+        bool quantizeBeat, ends, envelope = false;
+    };
+    for (const Case& c :
+         {Case{"pass 2, audio at the anchor", 0.75, 6.0, 1.5, 8.2, false, true},
+          Case{"pass 2, audio at the song frame", 0.75, 6.0, 9.0, 8.2, false, false},
+          Case{"audio past the wrap", 0.75, 5.6, 0.0, 5.1, true, true},
+          Case{"rate 2, 0.4 s clear", 2.0, 0.0, 0.6, 4.4, false, true},
+          Case{"an envelope at 2, 0.4 s clear", 2.0, 0.0, 0.6, 4.4, false, true, true}}) {
+        INFO(c.name);
+        Project p;
+        twoTracks(p);
+        auto move = j(R"({"item": "it_2"})");  // 5 s of a ramp
+        move["position"] = c.itemSeconds * 48000 / double(kBeat);
+        p.runArgs("item.move", move);
+        p.run("scene.add", "{}");  // sc_2
+        const std::string clip = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
+                                                   R"("notation": "voice v; 1: C4:w"})")["clip"]
+                                     .asString();
+        auto launchIt = j(R"({})");
+        launchIt["clip"] = clip;
+        if (c.quantizeBeat) {
+            auto q = j(R"({"quantize": "beat"})");
+            q["clip"] = clip;
+            p.runArgs("clip.set", q);
+        }
+        auto rate = j(R"({"preserve_pitch": true})");
+        rate["rate"] = c.envelope ? 0.75 : c.rate;
+        p.runArgs("transport.playrate.set", rate);
+        if (c.envelope)  // it replaces the scalar: rate 2 throughout
+            p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                             R"({"beat": 0, "value": 2}, {"beat": 32, "value": 2}]})");
+        if (c.loopEnd > 0) {
+            auto loop = j(R"({"start_seconds": 0, "enabled": true})");
+            loop["end_seconds"] = c.loopEnd;
+            p.runArgs("transport.loop", loop);
+        }
+        AppLive live(p, kInCallback, 128, 48000 * 12);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        REQUIRE(p.run("launch.capture", R"({"on": true})")["from"].isNumber());
+        // To `launchSong` seconds of song heard (past the loop's end: the
+        // second pass), then the launch.
+        live.until(std::llround(c.launchSong * 48000 / c.rate));
+        p.runArgs("launch.clip", launchIt);
+        json::Value state = p.run("launch.state", "{}");
+        CHECK(state["capturing"].asBool());
+        CHECK(bool(state.find("capture_ends")) == c.ends);
+        live.stop();
+    }
+}
+
+TEST_CASE("a once audio clip is judged by where the song is after a relocation" *
+          doctest::description("rt")) {
+    // Review round 117 W3: cl_2 played once (0.75 s from bar 2, song 96000
+    // to 132000) keeps its anchor through a seek, so it sounds again only if
+    // the song comes back to its pass. Sought mid-pass to bar 3 (past it),
+    // a plan that keeps the pitch allows arming; sought back to the start,
+    // it will play again on bar 2, so arming is refused as before; and under
+    // a transport loop over bars 1-2, past its pass, it plays again on the
+    // next pass, so arming is refused too.
+    Project p;
+    twoTracks(p);
+    p.run("clip.set", R"({"clip": "cl_2", "mode": "once"})");
+    const model::Session unity = p.app->head();
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session kept = p.app->head();
+    for (const double seekTo : {4.0, 0.0, -1.0}) {  // -1: no seek, a loop over bars 1-2
+        INFO("sought to " << seekTo << " s");
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(unity, p.app->projectDir()));
+        if (seekTo < 0) engine.setLoop(0, 4, true);
+        engine.play();
+        backend.run(10);
+        engine.service();
+        const Engine::LaunchRequest r = request("tr_2", "cl_2");
+        REQUIRE(engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar));  // bar 2
+        backend.run(100000 / 128);                                             // in its pass
+        engine.service();
+        REQUIRE(engine.launchLog().size() == 1);
+        if (seekTo >= 0) {
+            engine.seek(seekTo);
+            backend.run(20);
+        } else {
+            backend.run(60000 / 128);  // past its pass (song 132000), before the wrap
+        }
+        engine.service();
+        REQUIRE(engine.load(kept, p.app->projectDir()));
+        REQUIRE(engine.awaitPlan());
+        // Before the service returns tr_2 to the arrangement.
+        auto armed = engine.captureLaunches(true);
+        if (seekTo > 0) {
+            CHECK_MESSAGE(armed, (armed ? std::string() : armed.error().toString()));
+        } else {
+            REQUIRE_FALSE(armed);
+            CHECK(armed.error().code == "launch.playrate");
+        }
+        engine.stop();
+    }
 }
 
 TEST_CASE("a launched audio clip under a pitch-keeping rate: a capture ends, arming is refused" *

@@ -19,6 +19,7 @@
 #include "supple/peaks/peaks.h"
 #include "supple/ui/gl.h"
 #include "supple/ui/node.h"
+#include "supple/views/comp_view.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::views {
@@ -86,6 +87,13 @@ class Lanes : public ui::Node {
     // each take in its own lane under its label; the heard one is lit.
     static bool showsTakeLanes(const ui::Rect& item, std::size_t takes);
     static ui::Rect takeLaneRect(const ui::Rect& item, std::size_t takes, std::size_t index);
+    // The comp seams of a row (between pieces that play different takes),
+    // for the session version they were found at. Each is drawn as a line
+    // across the pieces with a notch at the foot; a drag there moves it.
+    const std::vector<CompSeam>& compSeams(std::size_t row) const;
+    // take.comp.get, for a comp on an edit-grouped track: whether it differs
+    // from its group (CompSeam::differs). Set by the app; unset, none differs.
+    CompQuery compQuery;
 
     void arrange(const ui::Canvas& canvas, const ui::Rect& bounds) override;
     void paint(ui::Canvas& canvas) override;
@@ -118,6 +126,8 @@ class Lanes : public ui::Node {
     const std::vector<model::SoundingNote>& soundingOf(model::Id item);
     std::uint64_t soundingVersion_ = ~std::uint64_t{0};
     std::map<model::Id, std::vector<model::SoundingNote>> sounding_;
+    mutable std::uint64_t seamsVersion_ = ~std::uint64_t{0};
+    mutable std::map<std::size_t, std::vector<CompSeam>> seams_;
     void drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t rgba,
                    std::uint32_t shade);
     void drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r);

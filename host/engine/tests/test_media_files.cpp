@@ -184,9 +184,7 @@ TEST_CASE("media copy accepts a valid filename without room for a staging suffix
 }
 
 TEST_CASE("media folder copy excludes its destination subtree and resolved aliases") {
-    const auto root = fs::temp_directory_path() /
-                      ("engine-media-copy-" +
-                       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto root = supple::test::uniqueTempDir("engine-media-copy-");
     struct Cleanup {
         fs::path path;
         fs::path cwd = fs::current_path();

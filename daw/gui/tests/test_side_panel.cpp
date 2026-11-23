@@ -773,6 +773,110 @@ TEST_CASE("inspector: one item's fields each run item.set, one undo step each") 
     CHECK_FALSE(f.inView("inspector.item"));
 }
 
+// session-model §1.5.1: a comp piece shows the comp's crossfade, one length
+// and shape for every seam, and a change is one take.comp.
+TEST_CASE("inspector: a comp piece's crossfade, length and shape, for every seam") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(1, std::vector<float>(48000, 0.25f));
+    const auto path = f.dir / "tone.wav";
+    REQUIRE(audio::writeWav(path, audio));
+    const std::string track = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    json::Value add = json::Value::object();
+    add["track"] = track;
+    add["audio_file"] = path.string();
+    add["position"] = 0;
+    auto added = f.dispatcher->execute({"item.add", add, kTest});
+    REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+    const std::string it = (*added)["item"].asString();
+    f.exec("take.add",
+           R"({"item":")" + it + R"(","from":")" + (*added)["take"].asString() + R"("})");
+    // The middle of the item plays the second take: three pieces, two seams.
+    auto comp = f.exec("take.comp",
+                       R"({"item":")" + it + R"(","spans":[{"from":0.6,"to":1.4,"index":1}]})");
+    REQUIRE(comp["pieces"].size() == 3);
+    std::vector<std::string> pieces;
+    for (const auto& p : comp["pieces"].asArray()) pieces.push_back(p.find("item")->asString());
+    f.side->show("inspector");
+    f.ui.selectedItems = {pieces[1]};
+    f.pass();
+    REQUIRE(f.inView("inspector.crossfade"));
+    CHECK(f.field("inspector.crossfade").text() == "0.010 s");
+    CHECK(f.text("inspector.crossfade_shape") == "Equal power");
+    // Its fades are the crossfade's: no Fade in or Fade out rows.
+    CHECK_FALSE(f.inView("inspector.fade_in"));
+    CHECK_FALSE(f.inView("inspector.fade_out"));
+    // A length for every seam: one take.comp, one undo step.
+    auto before = f.steps();
+    f.type("inspector.crossfade", "0.05");
+    CHECK(f.steps() == before + 1);
+    for (const auto& id : pieces) {
+        const model::Item& p = f.item(id);
+        if (id != pieces[0]) CHECK(p.fadeIn.length == doctest::Approx(0.05).epsilon(0.01));
+        if (id != pieces[2]) CHECK(p.fadeOut.length == doctest::Approx(0.05).epsilon(0.01));
+    }
+    CHECK(f.field("inspector.crossfade").text() == "0.050 s");
+    // A length the short pieces cannot hold: take.comp clamps it, and its
+    // warning goes to the status line's note.
+    std::vector<std::string> notices;
+    f.actions->onNotice = [&](const std::string& n) { notices.push_back(n); };
+    f.type("inspector.crossfade", "5");
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0].find("shorter") != std::string::npos);
+    f.actions->onNotice = nullptr;
+    f.type("inspector.crossfade", "0.05");
+    before = f.steps();
+    // The shape, the same way.
+    dynamic_cast<ui::Dropdown*>(f.node("inspector.crossfade_shape"))->choose("linear");
+    f.pass();
+    CHECK(f.steps() == before + 1);
+    CHECK(f.item(pieces[0]).fadeOut.shape == model::FadeShape::Linear);
+    CHECK(f.item(pieces[2]).fadeIn.shape == model::FadeShape::Linear);
+    CHECK(f.item(pieces[1]).fadeIn.length == doctest::Approx(0.05).epsilon(0.01));
+    // The first piece keeps its own fade-in; the last, its fade-out.
+    f.ui.selectedItems = {pieces[0]};
+    f.pass();
+    CHECK(f.inView("inspector.fade_in"));
+    CHECK_FALSE(f.inView("inspector.fade_out"));
+    f.ui.selectedItems = {pieces[2]};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.fade_in"));
+    CHECK(f.inView("inspector.fade_out"));
+    // An item that is no comp has no Crossfade row.
+    f.ui.selectedItems = {f.exec("item.add", R"({"track":")" + track +
+                                                 R"(","bar":5,"notation":"1: C4:q r:*"})")["item"]
+                              .asString()};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.crossfade"));
+    CHECK(f.inView("inspector.fade_in"));
+    CHECK(errors.empty());
+
+    // The Takes list switches a piece as a lane click does (take.comp): the
+    // middle piece back to the first take joins the three into one item,
+    // with no seam left to bump.
+    f.ui.selectedItems = {pieces[1]};
+    f.pass();
+    auto* list = dynamic_cast<ui::List*>(f.node("inspector.takes"));
+    REQUIRE(list);
+    before = f.steps();
+    list->select(0, true);
+    f.pass();
+    CHECK(f.steps() == before + 1);
+    std::size_t left = 0;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track.str() == track && e.value->takes.size() == 2) {
+            ++left;
+            CHECK(e.value->fadeOut.length == 0);  // the comp's end: no fade
+            CHECK(e.value->fadeIn.length == 0);
+        }
+    CHECK(left == 1);
+    CHECK(errors.empty());
+}
+
 TEST_CASE("inspector: an audio take's speed and pitch, and the choice of the take heard") {
     Fixture f;
     if (!f.ok) return;
@@ -1280,4 +1384,131 @@ TEST_CASE("the status line counts scenes beside tracks only when there are some"
     CHECK(gui::countsText(f.app->head()).find("  1 scene  version") != std::string::npos);
     f.exec("scene.add", "{}");
     CHECK(gui::countsText(f.app->head()).find("  2 scenes  version") != std::string::npos);
+}
+
+// A comp piece on an edit-grouped track: the inspector names the track its
+// comp differs from when the engine reads it so (take.comp.get's
+// differing_members, asked for the group's first track), and nothing when it
+// is in step.
+// Round 129 V1: a comp a locked group track cannot follow. A Takes pick's
+// refusal names Alt, which a pick can send; the Crossfade field has no Alt, so
+// its refusal keeps the engine's hint.
+TEST_CASE("inspector: a refused grouped comp names Alt for a Takes pick, not for Crossfade") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(1, std::vector<float>(48000, 0.25f));
+    const auto path = f.dir / "tone.wav";
+    REQUIRE(audio::writeWav(path, audio));
+    std::vector<std::string> tracks, items;
+    for (const char* name : {"Close", "Room"}) {
+        tracks.push_back(
+            f.exec("track.add", std::string(R"({"name":")") + name + R"("})")["track"].asString());
+        json::Value add = json::Value::object();
+        add["track"] = tracks.back();
+        add["audio_file"] = path.string();
+        add["position"] = 0;
+        auto added = f.dispatcher->execute({"item.add", add, kTest});
+        REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+        items.push_back((*added)["item"].asString());
+        f.exec("take.add", R"({"item":")" + items.back() + R"(","from":")" +
+                               (*added)["take"].asString() + R"("})");
+    }
+    const std::string group = f.exec("group.add", R"({"name":"Kit","members":[")" + tracks[0] +
+                                                      R"(",")" + tracks[1] + R"("]})")["group"]
+                                  .asString();
+    f.exec("group.set", R"({"group":")" + group + R"(","links":["edit"]})");
+    // Close comped alone, then Room's item locked: the group's take.comp refuses.
+    auto comp = f.exec("take.comp", R"({"item":")" + items[0] +
+                                        R"(","spans":[{"from":0.6,"to":1.4,"index":1}],)" +
+                                        R"("bypass_groups":true})");
+    REQUIRE(comp["pieces"].size() == 3);
+    f.exec("item.set", R"({"item":")" + items[1] + R"(","locked":true,"bypass_groups":true})");
+    f.side->show("inspector");
+    f.ui.selectedItems = {comp["pieces"].asArray()[1].find("item")->asString()};
+    f.pass();
+    REQUIRE(f.inView("inspector.crossfade"));
+    const std::uint64_t version = f.app->head().version;
+    f.type("inspector.crossfade", "0.05");
+    f.pass();
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("unlock it with item.set") != std::string::npos);
+    CHECK(errors[0].find("hold Alt") == std::string::npos);
+    auto* list = dynamic_cast<ui::List*>(f.node("inspector.takes"));
+    REQUIRE(list);
+    list->select(0, true);
+    f.pass();
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[1].find("unlock it, or hold Alt to comp this track alone") != std::string::npos);
+    CHECK(f.app->head().version == version);
+    // A lock on the comped track's own piece: its path points into the call's
+    // arguments, not at a member, so Alt would not help and the hint is the
+    // engine's.
+    f.exec("item.set", R"({"item":")" + items[1] + R"(","locked":false,"bypass_groups":true})");
+    f.exec("item.set", R"({"item":")" + comp["pieces"].asArray()[0].find("item")->asString() +
+                           R"(","locked":true,"bypass_groups":true})");
+    f.pass();
+    const std::uint64_t locked = f.app->head().version;
+    list->select(1, true);
+    list->select(0, true);
+    f.pass();
+    REQUIRE(errors.size() == 3);
+    CHECK(errors[2].find("unlock it with item.set") != std::string::npos);
+    CHECK(errors[2].find("hold Alt") == std::string::npos);
+    CHECK(f.app->head().version == locked);
+}
+
+TEST_CASE("inspector: a grouped comp piece that differs from its group names the track") {
+    Fixture f;
+    if (!f.ok) return;
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(1, std::vector<float>(48000, 0.25f));
+    const auto path = f.dir / "tone.wav";
+    REQUIRE(audio::writeWav(path, audio));
+    // Two tracks, each a two-take item over the same span, grouped for edits.
+    std::vector<std::string> tracks, items;
+    for (const char* name : {"Close", "Room"}) {
+        tracks.push_back(
+            f.exec("track.add", std::string(R"({"name":")") + name + R"("})")["track"].asString());
+        json::Value add = json::Value::object();
+        add["track"] = tracks.back();
+        add["audio_file"] = path.string();
+        add["position"] = 0;
+        auto added = f.dispatcher->execute({"item.add", add, kTest});
+        REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+        items.push_back((*added)["item"].asString());
+        f.exec("take.add", R"({"item":")" + items.back() + R"(","from":")" +
+                               (*added)["take"].asString() + R"("})");
+    }
+    const std::string group = f.exec("group.add", R"({"name":"Kit","members":[")" + tracks[0] +
+                                                      R"(",")" + tracks[1] + R"("]})")["group"]
+                                  .asString();
+    f.exec("group.set", R"({"group":")" + group + R"(","links":["edit"]})");
+    // One take.comp comps both.
+    auto comp = f.exec(
+        "take.comp", R"({"item":")" + items[0] + R"(","spans":[{"from":0.6,"to":1.4,"index":1}]})");
+    REQUIRE(comp["members"].size() == 1);
+    const json::Value& member = comp["members"].asArray().front();
+    const json::Value* memberPieces = member.find("pieces");
+    REQUIRE(memberPieces);
+    REQUIRE(memberPieces->asArray().size() == 3);
+    const std::string roomMiddle = memberPieces->asArray()[1].find("item")->asString();
+    f.side->show("inspector");
+    f.ui.selectedItems = {roomMiddle};
+    f.pass();
+    REQUIRE(f.inView("inspector.crossfade"));
+    CHECK_FALSE(f.inView("inspector.group"));  // in step: no row
+    // Its fade set for it alone: it differs from Close, the group's first track.
+    f.exec("item.set", R"({"item":")" + roomMiddle + R"(","fade_in":0.3,"bypass_groups":true})");
+    f.pass();
+    REQUIRE(f.inView("inspector.group"));
+    CHECK(f.text("inspector.group") == "Differs from Close");
+    // Close's own pieces are the reference: no row there.
+    f.ui.selectedItems = {comp["pieces"].asArray()[1].find("item")->asString()};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.group"));
 }
