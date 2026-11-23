@@ -89,7 +89,15 @@ struct CompFixture {
         std::filesystem::remove_all(dir);
     }
     Result<json::Value> call(const char* command, std::string_view args = "{}") {
-        return bus->execute({command, *json::parse(args), origin});
+        auto parsed = json::parse(args);
+        // A path built into the text on Windows has backslashes that are not JSON: say so.
+        REQUIRE_MESSAGE(parsed, "arguments of " << std::string(command)
+                                                << " are not JSON: " << std::string(args));
+        return bus->execute({command, *parsed, origin});
+    }
+    // For arguments that carry a path or other text: built as a value, never spliced in.
+    Result<json::Value> callValue(const char* command, json::Value args) {
+        return bus->execute({command, std::move(args), origin});
     }
     json::Value run(const char* command, std::string_view args = "{}") {
         auto result = call(command, args);
@@ -512,10 +520,13 @@ TEST_CASE("take.comp.get reads a comp, and a saved project reads it alike") {
     for (std::size_t i = 0; i < 4; ++i)
         CHECK(list[i].find("index")->asInt() == static_cast<std::int64_t>(take[i]));
     // Save, reopen, read again.
-    const auto file = f.dir / "comp.supple";
-    auto saved = f.call("project.save", R"({"path":")" + file.string() + R"("})");
+    // A backslash in the name (a Windows path has them) must survive as a JSON value.
+    const auto file = f.dir / "comp\\dir.supple";
+    auto where = json::Value::object();
+    where["path"] = file.string();
+    auto saved = f.callValue("project.save", where);
     REQUIRE_MESSAGE(saved, (saved ? "" : saved.error().toString()));
-    REQUIRE(f.call("project.open", R"({"path":")" + file.string() + R"("})"));
+    REQUIRE(f.callValue("project.open", where));
     const auto again = f.run("take.comp.get", R"({"item":"it_2"})");
     CHECK(json::writeCompact(again) == json::writeCompact(made));
 }
