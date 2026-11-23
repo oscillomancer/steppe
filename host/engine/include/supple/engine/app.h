@@ -1065,6 +1065,8 @@ class EngineApp : public cmd::Host {
     MainThreadWake mainWake_;
     MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;
     std::array<std::vector<MidiPortPreferenceWarning>, 2> midiPreferencesWarnings_;
+    // The preferences file this engine last wrote and its bytes (keepNewerPreferences).
+    mutable std::pair<std::filesystem::path, std::string> midiPreferencesWritten_;
     // setMidiPreferences with the skipped records to keep: an explicit
     // correction leaves its own out, so it is not written back.
     Status applyMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs, bool save,

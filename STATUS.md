@@ -1076,7 +1076,7 @@ instructions are in `docs/guides/installing.md`.
   (`stack`), so replays do not read the setting; `project.recover` never stacks. The GUI keeps it
   as Preferences > Recording and import > Record over an item (New take / Layer on top,
   `stack_recorded_takes`, applied at start and on change; a newer version's preferences file is
-  kept as `preferences.json.<schema>.bak` before the first save, and the app says it is using
+  kept as `preferences.json.<schema>.bak` (numbered, never overwritten) before a save, and the app says it is using
   defaults), and every warning of a recording's commit
   (each a `record.warning` event) reaches its status line, whatever stopped the recording; a
   headless session keeps no

@@ -81,8 +81,10 @@ In a low window the settings scroll under the dialog's heading.
 If your preferences file was written by a newer version of Steppe, this
 version does not read it: it uses its defaults and says so at the top of the
 dialog. The first time you change a setting it keeps the newer file beside the
-new one, as `preferences.json.supple.preferences-<version>.bak`, so the newer
-version's settings are not lost.
+new one, as `preferences.json.supple.preferences-<version>.bak` (a later copy
+gets a number, `….2.bak`; none is ever overwritten). The newer version reads
+only `preferences.json`: to use its settings there again, rename the `.bak`
+file back to `preferences.json`.
 
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client

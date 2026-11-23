@@ -34,34 +34,46 @@ bool preferencesSchemaNewer(std::string_view label) {
     return mine && theirs && *theirs > *mine;
 }
 std::filesystem::path newerPreferencesBackup(const std::filesystem::path& file,
-                                             std::string_view label) {
+                                             std::string_view label, int n) {
     std::string tag(label);
     for (char& c : tag)
         if (c == '/' || c == '\\') c = '-';
     auto out = file;
-    out += "." + tag + ".bak";
+    out += "." + tag + (n > 1 ? "." + std::to_string(n) : std::string()) + ".bak";
     return out;
 }
-Status keepNewerPreferences(const std::filesystem::path& file) {
+Status keepNewerPreferences(const std::filesystem::path& file, std::string_view ownBytes) {
     std::error_code ec;
     if (file.empty() || !std::filesystem::exists(file, ec)) return {};
     auto bytes = readFile(file);
     if (!bytes) return {};  // the write that follows reports what is wrong with the file
-    auto doc =
-        json::parse(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+    const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+    if (!ownBytes.empty() && text == ownBytes) return {};  // this writer's own last write
+    auto doc = json::parse(text);
     if (!doc || !doc->isObject()) return {};
     const json::Value* schema = doc->find("schema");
     if (!schema || !schema->isString() || !preferencesSchemaNewer(schema->asString())) return {};
-    const auto backup = newerPreferencesBackup(file, schema->asString());
-    if (std::filesystem::exists(backup, ec)) return {};  // once: the first copy is the original
-    if (auto written = writeFileAtomic(backup, std::span<const std::uint8_t>(*bytes)); !written)
-        return Error("preferences.backup",
-                     "cannot keep the newer version's preferences as " + backup.string() + ": " +
-                         written.error().message,
-                     backup.string(),
-                     "free space or allow writing in " + backup.parent_path().string() +
-                         ", then change the setting again");
-    return {};
+    // Never overwrite a backup: each different file the newer version left gets its own name.
+    constexpr int kMostBackups = 1000;
+    for (int n = 1; n <= kMostBackups; ++n) {
+        const auto backup = newerPreferencesBackup(file, schema->asString(), n);
+        if (std::filesystem::exists(backup, ec)) {
+            if (auto kept = readFile(backup); kept && *kept == *bytes) return {};  // kept already
+            continue;
+        }
+        if (auto written = writeFileAtomic(backup, std::span<const std::uint8_t>(*bytes)); !written)
+            return Error("preferences.backup",
+                         "cannot keep the newer version's preferences as " + backup.string() +
+                             ": " + written.error().message,
+                         backup.string(),
+                         "free space or allow writing in " + backup.parent_path().string() +
+                             ", then change the setting again");
+        return {};
+    }
+    return Error("preferences.backup",
+                 "the newer version's preferences already have " + std::to_string(kMostBackups) +
+                     " backups beside " + file.string(),
+                 file.string(), "move the old .bak files elsewhere, then change the setting again");
 }
 MidiPortSettings midiPortSettings(const MidiPortPreferences& preferences, std::string_view name) {
     MidiPortSettings result;

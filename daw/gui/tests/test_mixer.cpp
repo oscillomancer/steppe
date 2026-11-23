@@ -2238,6 +2238,9 @@ TEST_CASE("preferences: a newer version's file is kept before the first save, an
     CHECK(loaded.error().message.find("defaults") != std::string::npos);
     const auto backup = f.dir / "config" / "preferences.json.supple.preferences-1.12.bak";
     CHECK(loaded.error().hint.find(backup.filename().string()) != std::string::npos);
+    // The newer version reads preferences.json only: the hint says to rename the backup back.
+    CHECK(loaded.error().hint.find("rename that file back to preferences.json") !=
+          std::string::npos);
     // The app starts on the defaults with that file, and says why above the settings.
     views::MouseMap map;
     gui::MouseDialog mouse(*f.root, map, {});
@@ -2258,10 +2261,20 @@ TEST_CASE("preferences: a newer version's file is kept before the first save, an
     };
     CHECK(text(backup) == newer);
     CHECK(text(file).find(engine::kPreferencesSchema) != std::string::npos);
-    // Once: should the newer version write its file again, a later save keeps the first copy.
-    REQUIRE(writeFileAtomic(file, std::string(R"({"schema":"supple.preferences/1.12"})")));
+    // Never over a backup: newer, older, newer again (other settings), older: the second round
+    // goes beside the first, numbered; the first is untouched.
+    const std::string second = R"({"schema":"supple.preferences/1.12"})";
+    REQUIRE(writeFileAtomic(file, second));
     REQUIRE(prefs.setCopyImports(true));
     CHECK(text(backup) == newer);
+    const auto backup2 = f.dir / "config" / "preferences.json.supple.preferences-1.12.2.bak";
+    REQUIRE(std::filesystem::exists(backup2));
+    CHECK(text(backup2) == second);
+    // A newer file already kept (the same bytes as a backup) is not copied again.
+    REQUIRE(writeFileAtomic(file, newer));
+    REQUIRE(prefs.setCopyImports(false));
+    CHECK_FALSE(std::filesystem::exists(f.dir / "config" /
+                                        "preferences.json.supple.preferences-1.12.3.bak"));
     REQUIRE(f.root->click("prefs.close"));
     // Without a notice the dialog has no such line.
     gui::PreferencesDialog plain(*f.root, *f.app, mouse, gui::Preferences{}, {});

@@ -3476,9 +3476,11 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   is not read: `Preferences::load` refuses it as `preferences.newer` (path
   `/schema`), the app starts on the defaults, and it says so in the status line
   at start and in a line above the settings (`prefs.file.note`,
-  `PreferencesDialog::fileNotice`), as well as on stderr. The file is kept
-  beside itself as `preferences.json.<label, '/' as '-'>.bak` before the first
-  save writes this version's (`engine::keepNewerPreferences`, once; engine.md). The default monitoring of new channels (off, on — the default — or
+  `PreferencesDialog::fileNotice`), as well as on stderr; the hint says to
+  rename the backup back to `preferences.json` to use it in the newer version.
+  The file is kept beside itself as `preferences.json.<label, '/' as '-'>.bak`
+  (a later, different copy as `….2.bak` and on; never overwritten) before a
+  save writes this version's (`engine::keepNewerPreferences`; engine.md). The default monitoring of new channels (off, on — the default — or
   auto; `preferences.json`, supple.preferences/1.6, sets
   `EngineApp::defaultMonitor`, so the agents' track.add follows it too), and
   a way into the mouse modifiers.

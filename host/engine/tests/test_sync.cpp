@@ -1429,9 +1429,23 @@ TEST_CASE("midi outputs: the engine writes the clock members and raises an older
         return std::string(read.begin(), read.end());
     };
     CHECK(text(backup) == R"({"schema":"supple.preferences/1.12"})");
+    // The engine keeps the newer label, so its own write still reads as newer: it is not taken for
+    // the newer version's next round and copied again.
     REQUIRE(bus->execute(
         {"midi.outputs.set", json::parse(R"({"port": "Synth", "spp": true})").value(), kOrigin}));
     CHECK(text(backup) == R"({"schema":"supple.preferences/1.12"})");  // the first copy stays
+    const auto backup2 = dir / "preferences.json.supple.preferences-1.12.2.bak";
+    CHECK_FALSE(fs::exists(backup2));
+    // The newer version writes again: that round gets the next name, never over the first.
+    const std::string again = R"({"future":true,"schema":"supple.preferences/1.12"})";
+    REQUIRE(writeFileAtomic(options.midiPreferencesFile, again));
+    REQUIRE(bus->execute(
+        {"midi.outputs.set", json::parse(R"({"port": "Synth", "mtc": false})").value(), kOrigin}));
+    CHECK(text(backup) == R"({"schema":"supple.preferences/1.12"})");
+    REQUIRE(fs::exists(backup2));
+    CHECK(text(backup2) == again);
+    CHECK(newerPreferencesBackup(options.midiPreferencesFile, "supple.preferences/1.12", 2) ==
+          backup2);
     // What counts as newer: a higher minor of 1, or a higher major; not this one, an older one or
     // a label that is not a preferences schema.
     CHECK(preferencesSchemaNewer("supple.preferences/1.12"));

@@ -172,9 +172,11 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
             file.filename().string() + " is from a newer version (" + schema->asString() +
                 "), so this version uses its defaults",
             "/schema",
-            "the file is kept as " +
+            "this version keeps the file as " +
                 engine::newerPreferencesBackup(file, schema->asString()).filename().string() +
-                " when this version first saves a setting; the newer version reads it");
+                " (or a numbered .bak beside it) when it first saves a setting; to use those "
+                "settings in the newer version again, rename that file back to " +
+                file.filename().string());
     if (!schema || !schema->isString() ||
         (schema->asString() != kSchema && schema->asString() != "supple.preferences/1.0" &&
          schema->asString() != "supple.preferences/1.1" &&

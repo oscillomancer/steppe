@@ -4705,12 +4705,17 @@ bump). `engine::preferencesSchemaNewer` says whether a label is newer than
 this build's (a higher minor of 1, or a higher major; an absent or malformed
 label is not). Before every write over the file, the engine's MIDI records
 writer and the GUI's `Preferences::save` call `engine::keepNewerPreferences`:
-a file whose schema is newer is first copied, as it is, to
-`<file>.<label, '/' as '-'>.bak` (`preferences.json.supple.preferences-1.12.bak`,
-`newerPreferencesBackup`), once (a backup already there is kept, so it stays
-the newer version's own file); a failed copy refuses the write
-(`preferences.backup`). The engine's writer then keeps the newer label and
-members, as before. Reading a newer minor's settings is a separate decision,
+a file whose schema is newer is first copied, as it is, to the first free
+name of `<file>.<label, '/' as '-'>.bak`, `….2.bak`, `….3.bak`
+(`preferences.json.supple.preferences-1.12.bak`, `newerPreferencesBackup`).
+A backup is never overwritten, so going newer, older, newer, older keeps
+each round the newer version left. No copy is made when a backup of that
+label already holds the same bytes, or when the file holds what this writer
+last wrote there: the engine's writer then keeps the newer label and members,
+as before, so its own writes still read as newer, and it remembers its last
+write (`EngineApp`'s, per file) to tell them from the newer version's. A failed
+copy refuses the write (`preferences.backup`). The newer version reads only
+`preferences.json`: its user renames a backup back to use it. Reading a newer minor's settings is a separate decision,
 not made.
 
 MIDI preference records have one writer, EngineApp. Generic GUI preference
