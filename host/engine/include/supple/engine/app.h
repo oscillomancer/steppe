@@ -795,6 +795,9 @@ class EngineApp : public cmd::Host {
     Result<std::vector<RecordedInfo>> commitTakes(const std::vector<RecordedTake>& takes,
                                                   std::string_view label = "record",
                                                   bool mayStack = true);
+    // commitTakes without the "recording is kept" note on a refusal.
+    Result<std::vector<RecordedInfo>> commitTakesNow(const std::vector<RecordedTake>& takes,
+                                                     std::string_view label, bool mayStack);
     // Places recorded takes as items in the open transaction, with `punch`
     // as it was when they were recorded. `pendingHashes` (live commits): the
     // sources whose files still need hashing, and warnings are emitted; null

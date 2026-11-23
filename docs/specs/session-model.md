@@ -2996,17 +2996,21 @@ on the loop range with a take per pass):
   MIDI), or a comp piece that is locked. A **frozen track takes no recording at all** (a new item
   would break its print, and the transaction would be refused whole): its recording is left out with
   a `record.frozen_skipped` warning (`track`, `file`; the hint names `track.unfreeze` and
-  `item.add`), every other track's takes of the commit are placed, and the file stays in the
-  project's media (a source for audio, which a save carries; a MIDI recording's journal is kept for
-  `project.recover`). `track.set {armed: true}` on a frozen track fails with `track.frozen` (the
+  `project.recover`), every other track's takes of the commit are placed, and the recording stays
+  where it was recorded with its journal, neither released (not a source of the project), so that
+  `project.recover` places it exactly, timeline position and loop passes included, once the track is
+  unfrozen. `track.set {armed: true}` on a frozen track fails with `track.frozen` (the
   frozen-track rule of §freeze: arming is a sound edit), `track.freeze` of an armed track fails with
   `freeze.unsupported`, and arming an edit group skips frozen members with a `track.frozen`
   warning, so the leave-out is a backstop for a freeze made behind the app's back. Recovery
   (`project.recover`, `record.commit` replays) follows the same rule. A pass inside a comp whose
-  seams differed (hand-set lengths, shapes or hard cuts among crossfades) rebuilds all of them as
-  the run's one crossfade, and warns `record.comp_uniform` so that does not happen silently. A commit that fails anywhere (a refused nested `take.comp`
-  included) is rolled back whole: the project is as it was and still editable, and the recording
-  is not in it (its journals remain for recovery).
+  seams differed (hand-set lengths, shapes or hard cuts among crossfades) rebuilds those the pass
+  leaves in place as the run's one crossfade, and warns `record.comp_uniform` so that does not
+  happen silently (seams the pass covers are joined away, and a pass over a whole comp warns of
+  none). A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
+  the project is as it was and still editable, and the recording is not in it; the refusal's message
+  ends "(the recording is kept: project.recover places it)", the journals and files remaining for
+  recovery.
 - The item's `position` and `length` never change by the pass itself. The new take (audio: the pass's media source,
   named `<file>` or `<file> pass n`; MIDI: a source with the played notes only, named `<track> MIDI`,
   `follow: none`, no context) reads the recording by the timeline mapping: `start_offset` is the

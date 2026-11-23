@@ -3254,7 +3254,8 @@ struct StackTarget {
     // A comp's own crossfade (what take.comp.get reports), so that a pass over part of it rebuilds
     // the seams as they were; unset for a lone item (take.comp's default).
     std::optional<model::CompCrossfade> crossfade;
-    std::size_t differingSeams = 0;  // hand-set seams the rebuild makes uniform
+    std::vector<std::int64_t>
+        differingSeams;  // hand-set seams (timeline samples) a rebuild makes uniform
     std::optional<RecordingWarning> skipped;
 };
 
@@ -3314,7 +3315,8 @@ StackTarget stackTarget(const model::Session& s, const RecordedTake& r, const It
         out.coreStart = run->front().coreStart;
         out.coreEnd = run->back().coreEnd;
         out.crossfade = model::compCrossfade(s, *run);
-        out.differingSeams = model::compDifferingSeams(s, *run).size();
+        for (const std::size_t k : model::compDifferingSeams(s, *run))
+            out.differingSeams.push_back((*run)[k].coreEnd);
     }
     for (Id piece : pieces) {
         const model::Item& it = *s.items.find(piece);
@@ -3427,12 +3429,17 @@ Result<std::size_t> hearPasses(const StackEnv& env, model::EditTxn& t, const mod
     if (midi) {
         args["crossfade"] = 0.0;
     } else if (st.crossfade) {  // the comp's own, so the seams away from the pass stay as they were
-        if (st.differingSeams > 0)
+        // Seams the pass covers are joined away, not made uniform: only those that stay count.
+        const auto remaining = std::count_if(
+            st.differingSeams.begin(), st.differingSeams.end(), [&](std::int64_t seam) {
+                return std::none_of(heard.begin(), heard.end(),
+                                    [&](const Heard& h) { return h.lo < seam && seam < h.hi; });
+            });
+        if (remaining > 0)
             warnings.push_back(
                 {"record.comp_uniform",
                  "the seams of " + st.target.str() + "'s comp differed (" +
-                     std::to_string(st.differingSeams) +
-                     " of them, by hand); the pass made them all " +
+                     std::to_string(remaining) + " of them, by hand); the pass made them all " +
                      std::to_string(std::lround(st.crossfade->seconds * 1000.0)) + " ms, " +
                      (st.crossfade->shape == model::FadeShape::Linear ? "linear" : "equal-power"),
                  "/crossfade",
@@ -3638,23 +3645,20 @@ Result<RecordedInfo> stackMidi(model::EditTxn& t, const model::Session& s, const
 }
 
 // A recording on a frozen track is not placed: a frozen track takes no new items. The warning names
-// the file, which stays (audio: also as a source of the project's media, so a first save moves it
-// with the project); the other tracks of the commit are placed as usual.
-RecordedInfo frozenSkipped(const model::Session& s, const RecordedTake& r,
-                           std::optional<Id> source) {
+// the file, which stays where it was recorded with its journal (neither is released), so that
+// project.recover places it, with its timeline position and loop passes, once the track is
+// unfrozen; the other tracks of the commit are placed as usual.
+RecordedInfo frozenSkipped(const model::Session& s, const RecordedTake& r) {
     RecordedInfo info;
     info.warnings = recordingWarnings(r);
     if (!info.warnings) info.warnings.emplace();
     const std::string track = r.track.str() + " (" + model::trackLabel(s, r.track) + ")";
     info.warnings->push_back(
         {"record.frozen_skipped",
-         track + " is frozen, so its recording was not placed; the file is kept: " +
-             r.file.string() + (source ? " (media source " + source->str() + ")" : std::string()),
+         track + " is frozen, so its recording was not placed; it is kept: " + r.file.string(),
          "/track",
-         source ? "track.unfreeze " + r.track.str() + ", then item.add {track: \"" + r.track.str() +
-                      "\", audio_file: \"" + r.file.string() + "\"} places it"
-                : "its journal is kept: track.unfreeze " + r.track.str() +
-                      ", then project.recover places it",
+         "track.unfreeze " + r.track.str() +
+             ", then project.recover places it where it was played (project.recoverable lists it)",
          r.track.str(), r.file.string()});
     info.track = r.track.str();
     info.file = r.file.string();
@@ -3817,6 +3821,21 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
 
 Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<RecordedTake>& takes,
                                                          std::string_view label, bool mayStack) {
+    auto done = commitTakesNow(takes, label, mayStack);
+    // A refusal leaves the project as it was and the recordings where they are, with their
+    // journals: say so, and how to get them back.
+    if (!done && std::any_of(takes.begin(), takes.end(), [](const RecordedTake& r) {
+            return r.frames > 0 || !r.midi.empty();
+        })) {
+        Error e = std::move(done).error();
+        e.message += " (the recording is kept: project.recover places it)";
+        return e;
+    }
+    return done;
+}
+
+Result<std::vector<RecordedInfo>> EngineApp::commitTakesNow(const std::vector<RecordedTake>& takes,
+                                                            std::string_view label, bool mayStack) {
     // Decided once, here, and stored in record.commit's arguments, so that a replay (another
     // branch, redo, a merge) builds the same project whatever the setting is then (ADR-0103).
     const bool stack = mayStack && stackRecordedTakes_;
@@ -3907,9 +3926,8 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
     // The takes are in the project now; owned journals go once a saved
     // file or autosave holds them (ADR-0080/0082).
     for (const RecordedTake& r : takes)
-        if (const model::Track* tr = initial.tracks.find(r.track); tr && tr->freeze && r.isMidi)
-            continue;  // not placed (record.frozen_skipped): its journal is all that holds the
-                       // notes
+        if (const model::Track* tr = initial.tracks.find(r.track); tr && tr->freeze)
+            continue;  // not placed (record.frozen_skipped): the journal is what recover reads
         else if (r.isMidi && !r.file.empty())
             recordingJournalsPending_.push_back(r.file);
         else if (!r.isMidi && !r.journal.empty())
@@ -4071,7 +4089,7 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
         // A frozen track takes no new items (validateFrozenTransition refuses the whole commit):
         // leave its recording out with a warning, keep the file, and place every other track's.
         if (s.tracks.find(r.track)->freeze) {
-            out.push_back(frozenSkipped(s, r, r.isMidi ? std::optional<Id>{} : sourceOf(r, rate)));
+            out.push_back(frozenSkipped(s, r));
             continue;
         }
         // The runs on the timeline (ADR-0015): one per loop pass, or one.
