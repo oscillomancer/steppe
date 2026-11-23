@@ -12,6 +12,13 @@ adds macOS/Windows mechanisms while retaining these Linux semantics.
 adds PortAudio on macOS/Windows and device-derived, self-applied helper policies;
 Linux mechanisms and callback publication/lifetime rules remain unchanged.
 
+**macOS note, 2026-11-23:** rule 3's "on the main thread" does not hold on
+macOS without a device policy: macOS takes a thread's QoS only from the
+thread itself, so the pool's helpers and the renderer each set it on
+themselves as they start, through one all-or-none startup barrier, and every
+one of them goes back to normal if any refuses (`specs/engine.md`, "How it is
+applied"). The rule's outcome is unchanged.
+
 ## Context
 
 The renderer renders up to 200 ms ahead of the device callback. It works

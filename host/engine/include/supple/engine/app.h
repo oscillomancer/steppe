@@ -50,6 +50,7 @@ class AuditionLoader;
 namespace detail {
 class RuntimeProtection;
 class SessionLock;
+struct HashRead;
 }  // namespace detail
 
 struct AppOptions {
@@ -98,6 +99,10 @@ struct AppOptions {
     std::shared_ptr<RuntimeProtectionOps> runtimeProtectionOps;  // null: Linux operations
     std::function<void()> jobStartedHook;   // worker-entry barrier for deterministic tests
     std::function<void()> jobFinishedHook;  // worker completion notification for tests
+    // Tests: how many bytes a recording's hash worker reads at a time (0: 64 KiB), and a call
+    // from that worker between two chunks, with nothing locked, so a test can save mid-read.
+    std::size_t hashChunkBytes = 0;
+    std::function<void()> hashChunkHook;
     // External sync's locate time (ADR-0071 §4): how long a seek takes to be
     // heard, which starts and relocates lead by. Unset: measured on the
     // steady clock as the app seeks (production). Set: that many seconds
@@ -381,6 +386,23 @@ class EngineApp : public cmd::Host {
     // discarded (quit, new, open). Does nothing once the project is saved,
     // and never touches a folder holding the work directory.
     void clearScratch();
+    // Readers outside the engine that open scratch media by path on their own
+    // thread (the GUI's waveform worker). A first save calls each, on the
+    // thread that saves, with the scratch media folder it is about to empty,
+    // after the project points at the copies and before it removes the files:
+    // the reader lets go of every file under that folder (a file that is open
+    // cannot be removed on Windows) and returns what the save calls when it is
+    // done with them.
+    // - Register every reader before the first save. A save holds the list's
+    //   mutex while it calls them, so registering from inside a reader (or
+    //   during a save) deadlocks; there is no removal.
+    // - The save calls the reader, and later what it returned, on the model
+    //   thread. In the GUI that is the main loop's thread, which also destroys
+    //   the reader's owner: a reader that checks whether its owner is still
+    //   there before using it relies on that, and would race if saves ran on
+    //   another thread.
+    using ScratchReader = std::function<std::function<void()>(const std::filesystem::path& folder)>;
+    void addScratchReader(ScratchReader reader);
     // Unsaved projects earlier runs left behind (ADR-0078), oldest first:
     // folders beside the scratch folder whose lock no running app holds and
     // that hold an autosave or a file. Unreadable autosaves are skipped with
@@ -1062,6 +1084,21 @@ class EngineApp : public cmd::Host {
     };
     std::vector<JobThread> jobs_;
     std::mutex recordingFinalizeMutex_;  // sidecar publication vs scratch relocation, never RT
+    // The readers of the hash workers of recordings (a worker has its file open while it reads).
+    // Model thread only. A first save closes those of the scratch files it removes, and has them
+    // go on at the files' new place: Windows cannot remove an open file.
+    std::vector<std::weak_ptr<detail::HashRead>> hashReads_;
+    std::mutex scratchReadersMutex_;
+    std::vector<ScratchReader> scratchReaders_;
+    // Scratch files a first save of this run could not remove (project.media_leftover), as they
+    // were (size and time). A later first save in the same scratch folder, of another project,
+    // leaves them out and tries to remove them again; one rewritten since is not one of them.
+    struct ScratchLeftover {
+        std::filesystem::path file;
+        std::uintmax_t size = 0;
+        std::filesystem::file_time_type time;
+    };
+    std::vector<ScratchLeftover> scratchLeftovers_;  // model thread only
     std::map<std::string, std::unique_ptr<host::Instance>> scratch_;
     LoadOverrides overrides_;
     std::uint64_t overridesVersion_ = 0;
@@ -1081,7 +1118,8 @@ class EngineApp : public cmd::Host {
                       std::vector<schema::Warning>* warnings);
     void harvestRan();
     Status moveScratchMedia(const std::filesystem::path& dest,
-                            const std::function<Status()>& publish);
+                            const std::function<Status()>& publish,
+                            std::vector<schema::Warning>* warnings);
     std::unique_ptr<SourcePreparation> sourcePreparation_;
     // File audition (ADR-0094): the decoder, the request it serves, the
     // engine's serial for the voice published (0: none), what plays.

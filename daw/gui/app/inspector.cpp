@@ -523,6 +523,14 @@ std::unique_ptr<ui::Node> Inspector::build() {
     crossfadeShape_->onChange = [this](const std::string& value) {
         setCrossfade(std::nullopt, value == "linear");
     };
+    // A comp piece on an edit-grouped track whose comp the engine reads as
+    // differing from its group's (take.comp.get, differing_members): the
+    // track it differs from. A swipe or a Crossfade edit comps the group again.
+    auto& groupRow = formRow(box, "group", "Group");
+    rows_["group"] = &groupRow;
+    group_ = &groupRow.emplace<ui::TextBlock>("inspector.group", "", ui::Font::Ui, "small", "ink");
+    group_->layout.width = ui::SizeRule::fraction();
+    group_->layout.height = ui::SizeRule::content();
     auto& states = formRow(box, "state", "State");
     state(states, "mute", "Mute", "mute");
     state(states, "loop", "Loop", "accent");
@@ -596,8 +604,12 @@ std::unique_ptr<ui::Node> Inspector::build() {
             const auto at = item ? std::find(item->takes.begin(), item->takes.end(), takeIds_[i])
                                  : std::vector<model::Id>::const_iterator{};
             if (item && at != item->takes.end()) {
-                runComp(views::compPieceArgs(s, *comp, ids_.front(),
-                                             static_cast<std::size_t>(at - item->takes.begin())));
+                auto args = views::compPieceArgs(
+                    s, *comp, ids_.front(), static_cast<std::size_t>(at - item->takes.begin()));
+                // Alt on the pick comps this track alone, as on the lanes.
+                const bool alone = (takes_->selectModifiers() & ui::kAlt) != 0;
+                if (alone) args["bypass_groups"] = true;
+                runComp(std::move(args), true);
                 return;
             }
         }
@@ -831,6 +843,20 @@ void Inspector::readItems(bool force) {
             crossfadeShape_->setValue(crossfade->shape == model::FadeShape::Linear ? "linear"
                                                                                    : "cos");
         }
+        const auto from = comp ? views::compDiffersFrom(
+                                     s, itemId,
+                                     [this](const json::Value& args) -> std::optional<json::Value> {
+                                         auto r =
+                                             dispatcher_.execute({"take.comp.get", args, kOrigin});
+                                         if (!r) return std::nullopt;
+                                         return std::move(*r);
+                                     })
+                               : std::nullopt;
+        const model::Track* track = from ? s.tracks.find(*from) : nullptr;
+        const std::string differs =
+            track ? "Differs from " + (track->name.empty() ? from->str() : track->name) : "";
+        rows_["group"]->visible = !differs.empty();
+        if (group_->text() != differs) group_->setText(differs);
     }
     const auto timebase = common(items, [](const model::Item& i) { return i.timebase; });
     timebase_->setValue(timebase ? timebaseName(*timebase) : "");
@@ -1146,8 +1172,12 @@ void Inspector::setCrossfade(std::optional<double> seconds, std::optional<bool> 
     runComp(views::compArgs(ids_.front(), views::compSpans(s, *comp), crossfade));
 }
 
-void Inspector::runComp(json::Value args) {
+void Inspector::runComp(json::Value args, bool pick) {
     auto r = dispatcher_.execute({"take.comp", std::move(args), kOrigin});
+    // A Takes pick a group track cannot follow: the hint says to hold Alt,
+    // which a pick sends, not the argument. A typed Crossfade has no Alt, so
+    // its refusal keeps the engine's words.
+    if (!r && pick) r = views::compRefusal(r.error());
     // Its warnings (a crossfade clamped or skipped) go to the status line.
     if (r && actions_.onNotice)
         if (const std::string w = views::resultWarnings(*r); !w.empty()) actions_.onNotice(w);

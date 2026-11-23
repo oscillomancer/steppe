@@ -90,11 +90,12 @@ TEST_CASE("a switch on a period wrap: the clip going out reads on in its pass, l
                 for (std::int64_t k = 0; k < end; ++k) {
                     const double d = std::fabs(double(heard[std::size_t(k + live.latency)]) -
                                                double(committed[std::size_t(k)]));
-                    bool near = false;
+                    bool nearLaunch = false;
                     for (const LaunchLogEntry& e : log)
-                        near = near || (k >= e.runningFrame - 256 && k < e.runningFrame + 768);
+                        nearLaunch =
+                            nearLaunch || (k >= e.runningFrame - 256 && k < e.runningFrame + 768);
                     double& worst = k >= rf - reach && k < rf ? before
-                                    : near                    ? fading
+                                    : nearLaunch              ? fading
                                     : k >= end - reach        ? edges
                                                               : away;
                     worst = std::max(worst, d);

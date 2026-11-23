@@ -15,6 +15,7 @@
 #include <supple/engine/realtime.h>
 
 #include <clap/ext/params.h>
+#include "../../../tests/file_platform.h"
 #include "bridge_patience.h"
 #include "carry_matches.h"
 #include "plan.h"
@@ -1354,9 +1355,7 @@ TEST_CASE("racks: feed-forward latency aligns independent Outs with reference im
         host::setBridgeExecutable(BRIDGE_PATH);
         bridged = true;
     }
-    const auto dir =
-        std::filesystem::temp_directory_path() /
-        ("rack-pdc-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto dir = supple::test::uniqueTempDir("rack-pdc-");
     std::filesystem::create_directories(dir);
     struct Cleanup {
         std::filesystem::path dir;

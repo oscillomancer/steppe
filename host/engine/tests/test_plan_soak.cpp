@@ -10,9 +10,20 @@
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include "../../../tests/file_platform.h"
 #include "carry_matches.h"
 #include "rack_runtime.h"
 #include "realtime_common.h"
+
+// The engine waits for a device to act on a transport request (1 s, then
+// engine.transport); on a starved runner a healthy dummy device took longer
+// (Windows CI 45186989443), so this binary waits as long as a test may.
+namespace {
+[[maybe_unused]] const bool kTransportPatient = [] {
+    supple::engine::setTransportWaitSeconds(supple::engine::kPatientTransportSeconds);
+    return true;
+}();
+}  // namespace
 #include "supple/base/files.h"
 #include "supple/base/thread.h"
 #include "supple/engine/app.h"
@@ -312,9 +323,7 @@ struct Soak {
                   .workers = 2,
                   .verifyPlans = true} {
         automaticCheckpoints = !explicitCheckpoints;
-        root = std::filesystem::temp_directory_path() /
-               ("supple-plan-soak-" +
-                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        root = supple::test::uniqueTempDir("supple-plan-soak-");
         const auto candidate = root;
         for (unsigned suffix = 0;; ++suffix) {
             root = candidate.string() + "-" + std::to_string(suffix);

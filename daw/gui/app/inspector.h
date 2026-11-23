@@ -90,7 +90,9 @@ class Inspector {
     // a new length, or a new shape (linear, else equal power).
     void setCrossfade(std::optional<double> seconds, std::optional<bool> linear);
     // One take.comp, its warnings to the status line (actions' onNotice).
-    void runComp(json::Value args);
+    // take.comp from the inspector; `pick` for a Takes list pick, whose
+    // refusal names Alt (views::compRefusal).
+    void runComp(json::Value args, bool pick = false);
     void bake();
     void run(const char* command, json::Value args);
     void finish(const Result<json::Value>& result);
@@ -122,10 +124,11 @@ class Inspector {
     std::map<std::string, ui::Toggle*> states_;
     ui::Dropdown* timebase_ = nullptr;
     ui::Dropdown* crossfadeShape_ = nullptr;  // a comp piece's: the comp's crossfade shape
-    ui::Label* writtenIn_ = nullptr;          // the heard take's own key (Written in)
-    ui::Dropdown* follow_ = nullptr;          // how the heard MIDI take sounds (take.set {follow})
-    ui::Button* bake_ = nullptr;              // take.bake, beside it
-    ui::Node* clipBox_ = nullptr;             // one launcher clip's fields (clip.set)
+    ui::TextBlock* group_ = nullptr;  // a comp piece's: the edit group's track it differs from
+    ui::Label* writtenIn_ = nullptr;  // the heard take's own key (Written in)
+    ui::Dropdown* follow_ = nullptr;  // how the heard MIDI take sounds (take.set {follow})
+    ui::Button* bake_ = nullptr;      // take.bake, beside it
+    ui::Node* clipBox_ = nullptr;     // one launcher clip's fields (clip.set)
     ui::Node* clipColors_ = nullptr;
     ui::Dropdown* clipMode_ = nullptr;
     ui::Dropdown* clipQuantize_ = nullptr;

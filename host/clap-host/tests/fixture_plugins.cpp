@@ -25,6 +25,8 @@
 //     latency in frames. Byte 0 = 50: an underflow probe, out = (in · 2^-100) · 2^100, exact for
 //     |in| >= 2^-26 and zero below it when process() runs with FTZ/DAZ (ADR-0025).
 #include <clap/clap.h>
+
+#include "shared_page.h"
 #if defined(_WIN32)
 #include <io.h>
 #ifndef WIN32_LEAN_AND_MEAN
@@ -36,8 +38,6 @@
 #include <windows.h>
 
 #else
-#include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
 #endif
@@ -1744,26 +1744,19 @@ const clap_plugin_t* make(const clap_host_t* host, const clap_plugin_descriptor_
 // of every kind, out of time order (see noteEchoStress); key 121 emits 300
 // CC 1 events, one per frame from the note's time (wrapping); key 119 takes
 // 30 ms over its block (a block that misses a live deadline, ADR-0088), or,
-// when SUPPLE_TEST_ECHO_GATE names a file of three atomic words (POSIX),
-// sets word 0, spins until the test sets word 1 and sets word 2: a block
-// that is late for exactly as long as the test wants, with no system call.
+// when SUPPLE_TEST_ECHO_GATE names a shared page of three atomic words
+// (SharedPage: a file on POSIX, a section on Windows), sets word 0, spins until the test sets word
+// 1 and sets word 2: a block that is late for exactly as long as the test wants, with no system
+// call.
 
 std::atomic<unsigned>* echoGate() {
-#if defined(_WIN32)
-    return nullptr;
-#else
-    // Mapped once, on the main thread (the plug-in's creation), never freed.
-    static std::atomic<unsigned>* const gate = []() -> std::atomic<unsigned>* {
-        const char* file = std::getenv("SUPPLE_TEST_ECHO_GATE");
-        if (!file) return nullptr;
-        const int fd = ::open(file, O_RDWR);
-        if (fd < 0) return nullptr;
-        void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        ::close(fd);
-        return words == MAP_FAILED ? nullptr : static_cast<std::atomic<unsigned>*>(words);
+    // Mapped once, on the main thread (the plug-in's creation), kept for the
+    // process's life.
+    static const supple::test::SharedPage page = [] {
+        const char* name = std::getenv("SUPPLE_TEST_ECHO_GATE");
+        return name ? supple::test::SharedPage::open(name) : supple::test::SharedPage{};
     }();
-    return gate;
-#endif
+    return static_cast<std::atomic<unsigned>*>(page.data());
 }
 // Set when a note echo is made (main thread), read by its process.
 std::atomic<std::atomic<unsigned>*> gEchoGate{nullptr};

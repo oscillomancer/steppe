@@ -51,24 +51,29 @@ struct CompFixture {
         registerEngineCommands(registry);
         bus = std::make_unique<cmd::Dispatcher>(registry, *app);
         run("track.add", R"({"name":"Audio"})");
+        record("tr_1", "passes.wav", 300.0, passes);
+    }
+    // A loop recording of `passes` passes of 2 s on `track`, each a different sine from `hz` up.
+    void record(const std::string& track, const std::string& name, double hz0, std::size_t passes) {
         const double rate = app->head().project->sampleRate;
         audio::AudioData data;
         data.sampleRate = rate;
         data.channels.assign(2, std::vector<float>(passes * kPass));
         for (std::size_t p = 0; p < passes; ++p)
             for (std::int64_t n = 0; n < kPass; ++n) {
-                const double hz = 300.0 + 150.0 * static_cast<double>(p);
+                const double hz = hz0 + 150.0 * static_cast<double>(p);
                 const auto at = static_cast<std::size_t>(p * kPass + n);
                 data.channels[0][at] = data.channels[1][at] = static_cast<float>(
                     0.5 * std::sin(2 * std::numbers::pi * hz * static_cast<double>(n) / rate));
             }
-        const auto file = app->mediaDir() / "passes.wav";
+        const auto file = app->mediaDir() / name;
         REQUIRE(audio::writeWav(file, data));
         auto args = *json::parse(R"({"takes":[{"track":"tr_1","hash":"","start_sample":0,
             "loop_start":0,"overflow_frames":0,"midi":false,"events":[]}],
             "punch":{"enabled":false,"start":0,"end":0}})");
         auto& take = args["takes"].asArray()[0];
         take["file"] = file.string();
+        take["track"] = track;
         take["frames"] = static_cast<std::int64_t>(passes) * kPass;
         take["loop_end"] = kPass;
         take["sample_rate"] = rate;
@@ -116,11 +121,12 @@ struct CompFixture {
     }
     double rate() const { return app->head().project->sampleRate; }
     // Items of tr_1 in time order.
-    std::vector<Piece> pieces() const {
+    std::vector<Piece> pieces(std::optional<model::Id> track = std::nullopt) const {
         const model::Session& s = app->head();
         std::vector<Piece> out;
         for (const auto& e : s.items) {
             const auto& it = *e.value;
+            if (track && it.track != *track) continue;
             const auto span = model::itemSpan(s, it);
             Piece p;
             p.item = e.id;
@@ -752,7 +758,7 @@ TEST_CASE("take.comp refusals name the piece they mean in /items/k") {
     f.run("item.set", R"({"item":")" + pieces[2].item.str() + R"(","locked":true})");
     f.refused("take.comp", all, "item.locked", "/items/2");
     f.run("item.set", R"({"item":")" + pieces[2].item.str() + R"(","locked":false})");
-    // An edit-linked peer: a copy on another track with the same span as a piece.
+    // An edit-linked peer beside only one piece: the group's other track does not line up.
     f.run("track.add", R"({"name":"Other"})");
     f.run("group.add", R"({"name":"Edit","members":["tr_1","tr_2"],"links":["edit"]})");
     const std::string at = beatsText(f.app->head().items.find(pieces[1].item)->position);
@@ -760,7 +766,8 @@ TEST_CASE("take.comp refusals name the piece they mean in /items/k") {
     const std::string copy = "it_" + std::to_string(f.app->head().items.size());
     f.run("item.move", R"({"item":")" + copy + R"(","track":"tr_2","position":)" + at +
                            R"(,"bypass_groups":true})");
-    f.refused("take.comp", all, "comp.linked", "/items/1");
+    // The refusal comes from the member, so the path names it, not the caller's piece.
+    f.refused("take.comp", all, "comp.group_mismatch", "/members/tr_2");
 }
 
 namespace {
@@ -924,4 +931,388 @@ TEST_CASE(
         REQUIRE_MESSAGE(again, (again ? "" : again.error().toString()));
         CHECK(model::serializeProject(f.app->head()) == made);
     }
+}
+
+TEST_CASE("take.comp.get says when the seams of a run are not all alike") {
+    const std::string spans = R"({"item":"it_1","crossfade":0.02,"crossfade_shape":"cos",
+                                  "spans":[{"from":0,"to":1,"index":1},
+                                           {"from":2,"to":3,"index":0}]})";
+    auto seamsOf = [](const json::Value& got) {
+        std::vector<std::int64_t> out;
+        for (const auto& d : got.find("differing_seams")->asArray())
+            out.push_back(d.find("seam")->asInt());
+        return out;
+    };
+    SUBCASE("a comp as take.comp made it is uniform, and so is one with a clamped seam") {
+        CompFixture f;
+        f.run("take.comp", spans);
+        auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK(got.find("uniform")->asBool());
+        CHECK(seamsOf(got).empty());
+        CompFixture g;
+        g.run("take.comp", R"({"item":"it_1","crossfade":0.02,
+                               "spans":[{"from":0,"to":0.002,"index":1},{"from":2,"to":3,"index":0}]})");
+        got = g.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK(got.find("uniform")->asBool());
+        // The result of take.comp says the same.
+        CHECK(g.run("take.comp", R"({"item":"it_1","crossfade":0.02,
+                      "spans":[{"from":0,"to":0.002,"index":1},{"from":2,"to":3,"index":0}]})")
+                  .find("uniform")
+                  ->asBool());
+    }
+    SUBCASE("a seam fade set by hand to another length: the seams a rebuild rewrites") {
+        CompFixture f;
+        f.run("take.comp", spans);
+        const auto pieces = f.pieces();
+        REQUIRE(pieces.size() >= 3);
+        f.run("item.set", R"({"item":")" + pieces[1].item.str() + R"(","fade_in":0.05})");
+        const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK_FALSE(got.find("uniform")->asBool());
+        // The read-back is the longest fade, 0.05; take.comp with it rewrites every seam that
+        // is not already 0.05 on both sides: all three (seam 0 has the hand-set side only).
+        CHECK(got.find("crossfade")->asDouble() == doctest::Approx(0.05));
+        CHECK(seamsOf(got) == std::vector<std::int64_t>{0, 1, 2});
+        const auto& first = got.find("differing_seams")->asArray()[0];
+        CHECK(first.find("left")->asString() == pieces[0].item.str());
+        CHECK(first.find("right")->asString() == pieces[1].item.str());
+        CHECK(first.find("at")->asDouble() == doctest::Approx(1.0));
+    }
+    SUBCASE("a seam of another shape, or a hard cut among crossfaded seams, is listed") {
+        CompFixture f;
+        f.run("take.comp", spans);
+        const auto pieces = f.pieces();
+        REQUIRE(pieces.size() >= 3);
+        f.run("item.set", R"({"item":")" + pieces[2].item.str() + R"(","fade_in_shape":"linear"})");
+        CHECK(seamsOf(f.run("take.comp.get", R"({"item":"it_1"})")) ==
+              std::vector<std::int64_t>{1});
+        CompFixture g;
+        g.run("take.comp", spans);
+        const auto gp = g.pieces();
+        g.run("item.set", R"({"item":")" + gp[1].item.str() + R"(","fade_in":0})");
+        CHECK(seamsOf(g.run("take.comp.get", R"({"item":"it_1"})")) ==
+              std::vector<std::int64_t>{0});
+    }
+}
+
+// Edit groups (a multitrack loop recording): the same call comps every member.
+namespace {
+struct GroupFixture : CompFixture {
+    // tr_1 and tr_2 each hold one item of three takes, from one loop recording; the two are
+    // an edit group.
+    explicit GroupFixture(std::size_t passes = 3, std::size_t otherPasses = 3)
+        : CompFixture(passes) {
+        run("track.add", R"({"name":"Second"})");
+        record("tr_2", "second.wav", 500.0, otherPasses);
+        run("group.add", R"({"name":"Drums","members":["tr_1","tr_2"],"links":["edit"]})");
+    }
+    static model::Id track(unsigned n) { return {model::Kind::Track, n}; }
+    static std::string idOf(const std::vector<Piece>& pieces, std::size_t k) {
+        return pieces[k].item.str();
+    }
+};
+const char* const kGroupSpans = R"({"item":"it_1","crossfade":0.02,
+    "spans":[{"from":0,"to":1,"index":1},{"from":2,"to":3,"index":0}]})";
+
+// Seams and takes of the pieces of two tracks, side by side.
+void sameComp(const std::vector<Piece>& a, const std::vector<Piece>& b) {
+    REQUIRE(a.size() == b.size());
+    for (std::size_t k = 0; k < a.size(); ++k) {
+        CHECK(a[k].start == b[k].start);
+        CHECK(a[k].end == b[k].end);
+        CHECK(a[k].index == b[k].index);
+        CHECK(a[k].fadeIn == b[k].fadeIn);
+        CHECK(a[k].fadeOut == b[k].fadeOut);
+    }
+}
+}  // namespace
+
+TEST_CASE("take.comp on a group comps every member, whole items first") {
+    GroupFixture f;
+    REQUIRE(f.pieces(GroupFixture::track(1)).size() == 1);  // whole, unsplit, both
+    REQUIRE(f.pieces(GroupFixture::track(2)).size() == 1);
+    const model::Session before = f.app->head();
+    const auto steps = f.app->versions().history().size();
+    const auto result = f.run("take.comp", kGroupSpans);
+    const auto lead = f.pieces(GroupFixture::track(1));
+    const auto second = f.pieces(GroupFixture::track(2));
+    CHECK(lead.size() >= 3);
+    sameComp(lead, second);
+    // The result: the named run's pieces as before, the other member under `members`.
+    CHECK(result.find("pieces")->asArray().size() == lead.size());
+    const auto& members = result.find("members")->asArray();
+    REQUIRE(members.size() == 1);
+    CHECK(members[0].find("track")->asString() == "tr_2");
+    REQUIRE(members[0].find("pieces")->asArray().size() == second.size());
+    CHECK(members[0].find("pieces")->asArray()[0].find("item")->asString() == second[0].item.str());
+    CHECK(members[0].find("crossfade")->asDouble() == result.find("crossfade")->asDouble());
+    // One undo step puts both back.
+    CHECK(f.app->versions().history().size() == steps + 1);
+    f.run("history.undo");
+    const model::Session& after = f.app->head();
+    REQUIRE(after.items.size() == 2);
+    for (const auto& e : before.items)
+        CHECK(json::writeCompact(model::toJson(*after.items.find(e.id))) ==
+              json::writeCompact(model::toJson(*e.value)));
+    CHECK(after.takes.size() == before.takes.size());
+}
+
+TEST_CASE("take.comp on a group: each member equals the same comp made on its own") {
+    GroupFixture f;
+    f.run("take.comp", kGroupSpans);
+    GroupFixture alone;  // the same fixture, comped member by member with bypass_groups
+    alone.run("take.comp", std::string(kGroupSpans).insert(1, R"("bypass_groups":true,)"));
+    alone.run("take.comp", R"({"item":")" + alone.pieces(GroupFixture::track(2))[0].item.str() +
+                               R"(","bypass_groups":true,"crossfade":0.02,
+                      "spans":[{"from":0,"to":1,"index":1},{"from":2,"to":3,"index":0}]})");
+    sameComp(f.pieces(GroupFixture::track(1)), alone.pieces(GroupFixture::track(1)));
+    sameComp(f.pieces(GroupFixture::track(2)), alone.pieces(GroupFixture::track(2)));
+}
+
+TEST_CASE("take.comp with bypass_groups comps only the named item") {
+    GroupFixture f;
+    const auto result =
+        f.run("take.comp", std::string(kGroupSpans).insert(1, R"("bypass_groups":true,)"));
+    CHECK(f.pieces(GroupFixture::track(1)).size() >= 3);
+    CHECK(f.pieces(GroupFixture::track(2)).size() == 1);
+    CHECK(result.find("members")->asArray().empty());
+}
+
+TEST_CASE("take.comp on a group names a member that lacks the take index, and changes nothing") {
+    GroupFixture f(3, 2);  // tr_2's recording has two passes: no take index 2
+    const std::string before = model::serializeProject(f.app->head());
+    auto result = f.call("take.comp", R"({"item":"it_1","crossfade":0.02,
+        "spans":[{"from":0,"to":1,"index":1},{"from":2,"to":3,"index":2}]})");
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "comp.group_takes");
+    CHECK(result.error().message.find("tr_2") != std::string::npos);
+    CHECK_FALSE(result.error().hint.empty());
+    CHECK(model::serializeProject(f.app->head()) == before);
+}
+
+TEST_CASE("take.comp on a group names a member whose items do not span the same stretch") {
+    GroupFixture f;
+    f.run("take.comp", kGroupSpans);
+    // tr_2's last piece shortened by hand: the member now ends before the lead does.
+    f.run("item.set", R"({"item":")" + f.pieces(GroupFixture::track(2)).back().item.str() +
+                          R"(","length":0.5,"bypass_groups":true})");
+    const std::string before = model::serializeProject(f.app->head());
+    auto result = f.call("take.comp", kGroupSpans);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "comp.group_mismatch");
+    CHECK(result.error().message.find("tr_2") != std::string::npos);
+    CHECK(result.error().path == "/args/members/tr_2");  // the member, not the caller's piece
+    CHECK_FALSE(result.error().hint.empty());
+    CHECK(model::serializeProject(f.app->head()) == before);
+    // take.comp.get does not refuse: it lists the track as not like the lead.
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    CHECK(got.find("members")->asArray().empty());
+    REQUIRE(got.find("differing_members")->asArray().size() == 1);
+    CHECK(got.find("differing_members")->asArray()[0].asString() == "tr_2");
+    CHECK_FALSE(got.find("uniform")->asBool());
+}
+
+TEST_CASE("a member's refusals carry the reason and the hint of what is wrong") {
+    SUBCASE("an item with fewer takes than a span plays") {
+        GroupFixture f(3, 2);  // tr_2 has two takes; a span plays index 2
+        const std::string before = model::serializeProject(f.app->head());
+        auto result = f.call("take.comp", R"({"item":"it_1","crossfade":0.02,
+            "spans":[{"from":0,"to":1,"index":2}]})");
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "comp.group_takes");
+        CHECK(result.error().message.find("tr_2") != std::string::npos);
+        CHECK(result.error().hint.find("0..1") != std::string::npos);
+        CHECK(result.error().path == "/args/members/tr_2/items/it_2");
+        CHECK(model::serializeProject(f.app->head()) == before);
+    }
+    SUBCASE("a looped item") {
+        GroupFixture f;
+        f.run("item.set", R"({"item":"it_2","loop":true,"bypass_groups":true})");
+        auto result = f.call("take.comp", kGroupSpans);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == "comp.group_mismatch");
+        CHECK(result.error().message.find("tr_2") != std::string::npos);
+        CHECK(result.error().hint.find("loop") != std::string::npos);  // compRun's own hint
+        CHECK(result.error().path == "/args/members/tr_2/items/it_2");
+        CHECK(result.error().hint.find("bypass_groups") != std::string::npos);
+    }
+}
+
+TEST_CASE("a group track with nothing over the comp is skipped and named, not an error") {
+    GroupFixture f;
+    f.run("track.add", R"({"name":"Empty"})");  // tr_3: in the edit group, no item
+    f.run("group.add", R"({"name":"More","members":["tr_1","tr_3"],"links":["edit"]})");
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    REQUIRE(got.find("skipped_tracks")->asArray().size() == 1);
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_3");
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "no_item");
+    const auto result = f.run("take.comp", kGroupSpans);
+    REQUIRE(result.find("skipped_tracks")->asArray().size() == 1);
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_3");
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "no_item");
+    CHECK(result.find("members")->asArray().size() == 1);  // tr_2 is still comped
+    sameComp(f.pieces(GroupFixture::track(1)), f.pieces(GroupFixture::track(2)));
+}
+
+TEST_CASE("a group member with one take is skipped as one_take and left untouched") {
+    // Drums with takes grouped with a one-take bass: ordinary, comps without bypass_groups.
+    GroupFixture f(3, 1);  // tr_2's item has a single take
+    const std::string bassItem = f.pieces(GroupFixture::track(2))[0].item.str();
+    // Byte for byte: the item's and its takes' canonical JSON, as the undo test compares them.
+    auto describeItem = [&] {
+        const model::Session head = f.app->head();
+        const auto& it = *head.items.find(*model::Id::parse(bassItem));
+        std::string out = json::writeCanonical(model::toJson(it));
+        for (const auto& take : it.takes)
+            out += json::writeCanonical(model::toJson(*head.takes.find(take)));
+        return out;
+    };
+    const std::string bassBefore = describeItem();
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    REQUIRE(got.find("skipped_tracks")->asArray().size() == 1);
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_2");
+    CHECK(got.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "one_take");
+    CHECK(got.find("members")->asArray().empty());
+    CHECK(got.find("differing_members")->asArray().empty());
+    CHECK(got.find("uniform")->asBool());  // does not count against uniform
+    const auto steps = f.app->versions().history().size();
+    const auto result = f.run("take.comp", kGroupSpans);
+    CHECK(f.app->versions().history().size() == steps + 1);
+    CHECK(result.find("members")->asArray().empty());
+    REQUIRE(result.find("skipped_tracks")->asArray().size() == 1);
+    CHECK(result.find("skipped_tracks")->asArray()[0].find("reason")->asString() == "one_take");
+    CHECK(f.pieces(GroupFixture::track(1)).size() >= 3);  // the drums are comped
+    REQUIRE(f.pieces(GroupFixture::track(2)).size() == 1);
+    CHECK(describeItem() == bassBefore);
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+}
+
+TEST_CASE("a member with a one-take item and a several-take item is refused, not skipped") {
+    GroupFixture f;  // tr_2's recording: three takes
+    f.run("item.split", R"({"item":"it_2","at":2,"bypass_groups":true})");
+    // Two items on tr_2 now; the later one keeps one take only.
+    std::vector<std::pair<double, model::Id>> byStart;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == GroupFixture::track(2)) byStart.emplace_back(e.value->position, e.id);
+    std::sort(byStart.begin(), byStart.end());
+    REQUIRE(byStart.size() == 2);
+    const std::vector<model::Id> takes = f.app->head().items.find(byStart[1].second)->takes;
+    REQUIRE(takes.size() == 3);
+    f.run("take.remove", R"({"take":")" + takes[1].str() + R"("})");
+    f.run("take.remove", R"({"take":")" + takes[2].str() + R"("})");
+    const std::string before = model::serializeProject(f.app->head());
+    auto result = f.call("take.comp", kGroupSpans);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "comp.group_takes");
+    CHECK(result.error().message.find("tr_2") != std::string::npos);
+    CHECK(result.error().path == "/args/members/tr_2/items/" + byStart[1].second.str());
+    CHECK(model::serializeProject(f.app->head()) == before);
+    // take.comp.get does not refuse: the track is listed as differing, not skipped.
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    CHECK(got.find("skipped_tracks")->asArray().empty());
+    REQUIRE(got.find("differing_members")->asArray().size() == 1);
+    CHECK(got.find("differing_members")->asArray()[0].asString() == "tr_2");
+}
+
+TEST_CASE("a locked member refuses the whole call before anything is written") {
+    GroupFixture f;
+    f.run("item.set", R"({"item":"it_2","locked":true,"bypass_groups":true})");
+    const std::string before = model::serializeProject(f.app->head());
+    auto result = f.call("take.comp", kGroupSpans);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "item.locked");
+    CHECK(result.error().path == "/args/members/tr_2/items/it_2");  // the member's item
+    CHECK(model::serializeProject(f.app->head()) == before);
+    // The lead's own lock still points into the call's arguments.
+    GroupFixture g;
+    g.run("item.set", R"({"item":"it_1","locked":true,"bypass_groups":true})");
+    g.refused("take.comp", kGroupSpans, "item.locked", "/item");
+}
+
+TEST_CASE("a member's crossfade or cuts do not matter: it is a member, and comped together") {
+    SUBCASE("the same seams with another crossfade") {
+        GroupFixture f;
+        f.run("take.comp", std::string(kGroupSpans).insert(1, R"("bypass_groups":true,)"));
+        f.run("take.comp", R"({"item":")" + f.pieces(GroupFixture::track(2))[0].item.str() +
+                               R"(","bypass_groups":true,"crossfade":0.01,
+                      "spans":[{"from":0,"to":1,"index":1},{"from":2,"to":3,"index":0}]})");
+        // Read back, tr_2 is a member that differs (its crossfade), not a track that is missing.
+        const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        REQUIRE(got.find("members")->asArray().size() == 1);
+        CHECK(got.find("members")->asArray()[0].find("crossfade")->asDouble() ==
+              doctest::Approx(0.01));
+        CHECK_FALSE(got.find("uniform")->asBool());
+        REQUIRE(got.find("differing_members")->asArray().size() == 1);
+        // The group comp reaches it and gives both the one crossfade.
+        const auto result = f.run("take.comp", kGroupSpans);
+        REQUIRE(result.find("members")->asArray().size() == 1);
+        sameComp(f.pieces(GroupFixture::track(1)), f.pieces(GroupFixture::track(2)));
+        CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+    }
+    SUBCASE("a whole member beside a split lead") {
+        GroupFixture f;
+        f.run("take.comp", std::string(kGroupSpans).insert(1, R"("bypass_groups":true,)"));
+        REQUIRE(f.pieces(GroupFixture::track(2)).size() == 1);
+        const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        REQUIRE(got.find("members")->asArray().size() == 1);
+        REQUIRE(got.find("differing_members")->asArray().size() == 1);
+        // The group comp splits it to the same spans (each region it leaves out keeps its take).
+        const auto result = f.run("take.comp", kGroupSpans);
+        REQUIRE(result.find("members")->asArray().size() == 1);
+        sameComp(f.pieces(GroupFixture::track(1)), f.pieces(GroupFixture::track(2)));
+        CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+    }
+}
+
+TEST_CASE("take.comp on a group: a member with other start offsets or play rates lines up") {
+    SUBCASE("another start_offset on its takes") {
+        GroupFixture f;
+        for (const auto& e : f.app->head().items)
+            if (e.value->track == GroupFixture::track(2))
+                for (const auto t : e.value->takes)
+                    f.run("take.set", R"({"take":")" + t.str() + R"(","start_offset":0.25})");
+        f.run("take.comp", kGroupSpans);
+        sameComp(f.pieces(GroupFixture::track(1)), f.pieces(GroupFixture::track(2)));
+    }
+    SUBCASE("a play rate on its takes") {
+        GroupFixture f;
+        for (const auto& e : f.app->head().items)
+            if (e.value->track == GroupFixture::track(2))
+                for (const auto t : e.value->takes)
+                    f.run("take.set", R"({"take":")" + t.str() + R"(","playrate":2})");
+        const auto result = f.run("take.comp", kGroupSpans);
+        const auto lead = f.pieces(GroupFixture::track(1));
+        const auto second = f.pieces(GroupFixture::track(2));
+        REQUIRE(lead.size() == 4);
+        sameComp(lead, second);
+        CHECK(result.find("members")->asArray()[0].find("crossfade")->asDouble() ==
+              doctest::Approx(0.02));
+        // Each member reads as it sounds: the same spans, takes and seams.
+        CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+    }
+}
+
+TEST_CASE("take.comp.get on a group lists the members, and a member that differs") {
+    GroupFixture f;
+    f.run("take.comp", kGroupSpans);
+    auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    REQUIRE(got.find("members")->asArray().size() == 1);
+    CHECK(got.find("uniform")->asBool());
+    CHECK(got.find("differing_members")->asArray().empty());
+    // tr_2's seam fade by hand: the member is not uniform, and the group is not.
+    const auto second = f.pieces(GroupFixture::track(2));
+    f.run("item.set",
+          R"({"item":")" + second[1].item.str() + R"(","fade_in":0.05,"bypass_groups":true})");
+    got = f.run("take.comp.get", R"({"item":"it_1"})");
+    CHECK_FALSE(got.find("uniform")->asBool());
+    CHECK_FALSE(got.find("members")->asArray()[0].find("uniform")->asBool());
+    // And a member comped differently from the lead (here: bypass, other spans) is listed.
+    GroupFixture g;
+    g.run("take.comp", kGroupSpans);
+    const auto gs = g.pieces(GroupFixture::track(2));
+    g.run("take.comp", R"({"item":")" + gs[0].item.str() + R"(","bypass_groups":true,
+                           "crossfade":0.02,"spans":[{"from":0,"to":1,"index":0}]})");
+    auto other = g.run("take.comp.get", R"({"item":"it_1"})");
+    CHECK_FALSE(other.find("uniform")->asBool());
+    REQUIRE(other.find("differing_members")->asArray().size() == 1);
+    CHECK(other.find("differing_members")->asArray()[0].asString() == "tr_2");
 }

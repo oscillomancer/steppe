@@ -184,7 +184,9 @@ bool List::onPointer(const PointerEvent& e) {
                 const auto row = rowAt(e.pos);
                 if (!row) return true;
                 auto context = onContext;
+                selectMods_ = e.mods;
                 select(*row, true);
+                selectMods_ = 0;
                 context(*row, e.pos);
                 return true;
             }
@@ -192,7 +194,9 @@ bool List::onPointer(const PointerEvent& e) {
             const auto row = rowAt(e.pos);
             if (!row) return true;
             auto activate = onActivate;
+            selectMods_ = e.mods;
             select(*row, true);
+            selectMods_ = 0;
             press_ = e.clicks >= 2 ? std::nullopt : std::optional(Press{*row, e.pos});
             if (e.clicks >= 2 && activate) activate(*row);
             return true;

@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <chrono>
 #include <cmath>
+#include "../../../tests/file_platform.h"
 #include "bridge_patience.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
@@ -13,10 +14,7 @@ using namespace supple;
 using namespace supple::engine;
 namespace {
 struct GroupsHost {
-    std::filesystem::path root =
-        std::filesystem::temp_directory_path() /
-        ("supple-groups-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::path root = supple::test::uniqueTempDir("supple-groups-");
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;

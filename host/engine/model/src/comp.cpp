@@ -234,6 +234,45 @@ CompCrossfade compCrossfade(const Session& s, std::span<const CompPiece> run) {
     return out;
 }
 
+namespace {
+// The seams (see compDifferingSeams) that are not what take.comp writes for `read`.
+std::vector<std::size_t> seamsOffFrom(const Session& s, std::span<const CompPiece> run,
+                                      const CompCrossfade& read) {
+    std::vector<std::size_t> out;
+    const double rate = s.project->sampleRate;
+    const auto wanted = static_cast<std::int64_t>(std::llround(read.seconds * rate / 2.0));
+    auto indexOf = [&](const Item& item) {
+        const auto at = item.activeTake
+                            ? std::find(item.takes.begin(), item.takes.end(), *item.activeTake)
+                            : item.takes.end();
+        return at - item.takes.begin();
+    };
+    for (std::size_t k = 0; k + 1 < run.size(); ++k) {
+        const Item& left = *s.items.find(run[k].item);
+        const Item& right = *s.items.find(run[k + 1].item);
+        std::int64_t h = 0;
+        if (indexOf(left) != indexOf(right) && wanted > 0)
+            h = std::min({wanted, (run[k].coreEnd - run[k].coreStart) / 2,
+                          (run[k + 1].coreEnd - run[k + 1].coreStart) / 2});
+        Fade expected;
+        if (h > 0) {
+            expected.length = static_cast<double>(2 * h) / rate;
+            expected.shape = read.shape;
+        }
+        auto same = [&](const Fade& fade) {
+            return fade.length == expected.length && (h == 0 || fade.shape == expected.shape);
+        };
+        if (!same(left.fadeOut) || !same(right.fadeIn)) out.push_back(k);
+    }
+    return out;
+}
+}  // namespace
+
+std::vector<std::size_t> compDifferingSeams(const Session& s, std::span<const CompPiece> run) {
+    if (run.size() < 2) return {};
+    return seamsOffFrom(s, run, compCrossfade(s, run));
+}
+
 void setItemStartSeconds(const Session& s, Item& it, double startSec) {
     const time::TimeMap& tm = *s.timeMap;
     const ItemSpan span = itemSpan(s, it);

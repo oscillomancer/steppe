@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // A capture armed while launched clips play, under a master playrate and at
-// rate 1 (ADR-0097, review round 113): from its first sample, and without
-// the rest of a held note. Split from test_clip_player_rate.cpp so no ctest
+// rate 1 (ADR-0097, review round 113): from its first sample, and with a
+// held note struck again at its start. Split from test_clip_player_rate.cpp so no ctest
 // entry runs much past a minute (CI 45118821222 timed the file out at 600 s
 // on Linux).
 #include "clip_player_support.h"
@@ -79,14 +79,16 @@ TEST_CASE("a capture armed while clips play under a master playrate commits from
         }
 }
 
-TEST_CASE("a capture armed while a launched clip's note sounds commits without the rest of it" *
+TEST_CASE("a capture armed while a launched clip's note sounds commits it struck again" *
           doctest::description("rt")) {
-    // Round 113 (a), a stated limit at any rate: armed at song 112500, while
+    // Round 113, a stated limit at any rate: armed at song 112500, while
     // tr_1's clip holds E3 (beats 4.5 to 5, song 108000 to 120000), the
-    // commit's MIDI piece starts at the capture's start without that note,
-    // so until the note's end what played is not in the commit; after it the
-    // commit meets the standard, and armed in a rest it is exact (the case
-    // above). It is the same at rate 1 and under a rate.
+    // commit's MIDI piece starts at the capture's start, inside the note,
+    // and the arrangement strikes a note held into an item's start again
+    // there (plan.cpp's chase). So the note sounds through its rest, at the
+    // level heard, but from a new attack; after it the commit meets the
+    // standard, and armed in a rest it is exact (the case above). It is the
+    // same at rate 1 and under a rate.
     for (const double rate : {1.0, 0.75})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("rate " << rate << ", anticipative " << options.anticipative);
@@ -125,13 +127,45 @@ TEST_CASE("a capture armed while a launched clip's note sounds commits without t
             REQUIRE(end + std::int64_t(live.latency) <= std::int64_t(heard.size()));
             REQUIRE(end <= std::int64_t(committed.size()));
             const std::int64_t reach = rate == 1.0 ? 0 : std::llround(128 / rate) + 64;
-            // The rest of the held note is missing from the commit...
+            // The note is struck again at the capture's start: the commit
+            // differs from there to the note's end...
             const auto [gap, firstGap] =
                 compare(heard, live.latency, committed, start, noteEnd + reach);
             MESSAGE("the held note's rest: worst " << gap << " over " << (noteEnd - start)
                                                    << " frames");
             CHECK(firstGap == start);
             CHECK(gap > 0.05);
+            // ...but it sounds there at the level heard, with no gap: without
+            // the note the commit would hold only tr_2 there.
+            const auto rms = [](const std::vector<float>& v, std::int64_t off, std::int64_t a,
+                                std::int64_t b) {
+                double e = 0;
+                for (std::int64_t k = a; k < b; ++k) {
+                    const double x = double(v[std::size_t(k + off)]);
+                    e += x * x;
+                }
+                return std::sqrt(e / double(b - a));
+            };
+            const double heardRest = rms(heard, std::int64_t(live.latency), start, noteEnd);
+            const double committedRest = rms(committed, 0, start, noteEnd);
+            MESSAGE("the held note's rest: rms heard " << heardRest << ", committed "
+                                                       << committedRest);
+            CHECK(committedRest == doctest::Approx(heardRest).epsilon(0.02));
+            // The same pitch, which a level alone does not show (round 128):
+            // as many zero crossings after the new attack's first 2000 frames.
+            const auto crossings = [](const std::vector<float>& v, std::int64_t off, std::int64_t a,
+                                      std::int64_t b) {
+                int n = 0;
+                for (std::int64_t k = a + 1; k < b; ++k)
+                    if ((v[std::size_t(k - 1 + off)] < 0) != (v[std::size_t(k + off)] < 0)) ++n;
+                return n;
+            };
+            const int heardCrossings =
+                crossings(heard, std::int64_t(live.latency), start + 2000, noteEnd);
+            const int committedCrossings = crossings(committed, 0, start + 2000, noteEnd);
+            MESSAGE("the held note's rest: zero crossings heard "
+                    << heardCrossings << ", committed " << committedCrossings);
+            CHECK(std::abs(committedCrossings - heardCrossings) <= 2);
             // ...and after it the commit meets the standard.
             const std::vector<LaunchLogEntry> switches(log.begin() + 2, log.end());
             const CommitResidual r = commitResidual(heard, live.latency, committed, switches,

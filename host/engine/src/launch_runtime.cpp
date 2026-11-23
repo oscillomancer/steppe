@@ -961,25 +961,76 @@ std::optional<model::Id> Engine::audioUnderStretch() const {
             continue;
         const model::Clip* clip = latest_->clips.find(e.clip);
         if (!clip || clip->kind == model::ClipKind::Midi) continue;
-        // A clip played once is silent after its pass (round 113 T4).
+        // A clip played once sounds only in its pass from its anchor, which a
+        // relocation keeps (round 113 T4, round 117 W3): finished once the
+        // song heard now, in any epoch, is past that pass and no transport
+        // loop brings it back. Its pass is the period the plan plays it by.
         if (clip->mode == model::ClipMode::Once)
-            if (const auto heard = heardSong(e.epoch))
-                if (heard->song >=
-                    double(e.songFrame + time::samplesAt(clip->length, config_.sampleRate)))
-                    continue;
+            if (const auto heard = heardSong(readRateClock()[8])) {
+                std::int64_t period = time::samplesAt(clip->length, config_.sampleRate);
+                if (const detail::Node* n = nodeOf(*plan, track))
+                    if (const int k = detail::playerOf(*n, e.clip); k >= 0)
+                        period = n->players[static_cast<std::size_t>(k)].periodFrames;
+                const auto song = static_cast<std::int64_t>(std::floor(heard->song));
+                const bool loop = heard->looping && heard->loopEnd > heard->loopStart;
+                const std::int64_t at =
+                    loop && song >= heard->loopEnd
+                        ? heard->loopStart +
+                              (song - heard->loopStart) % (heard->loopEnd - heard->loopStart)
+                        : song;
+                const bool again = loop && e.anchorSample < heard->loopEnd &&
+                                   e.anchorSample + period > heard->loopStart;
+                if (!again && at >= e.anchorSample + period) continue;
+            }
         return e.clip;
     }
     return std::nullopt;
 }
 
-bool Engine::cutsArrangementAudio(const LaunchRequest& r) const {
+bool Engine::cutsArrangementAudio(const LaunchRequest& r, std::int64_t anchor) const {
     if (!latest_) return false;
+    // The stretch converter's reach either side of the switch: the history it
+    // primes from and its lookahead (about 0.12 s measured at 0.75, round 113
+    // T2). An item clear of it is neither read on past the cut nor primed
+    // from. 0.25 s of song at most rate 1, scaled by the fastest master rate
+    // the plan can play above 1: a reach in device time covers rate times as
+    // much song (round 128 W1), and one in song time is covered either way.
+    constexpr double kStretchReachSeconds = 0.25;
+    double fastest = std::max(1.0, latest_->project->playrate.rate);
+    if (const auto env = model::activePlayrateEnvelope(*latest_))
+        for (const auto& pt : model::effectivePoints(*latest_, *env))
+            fastest = std::max(fastest, pt.value);
+    // A sync chase's scale is composed into the plan's scalar.
+    if (const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire))
+        fastest = std::max(fastest, plan->masterPlayrate.rate);
+    fastest = std::min(fastest, model::kMaxPlayrate);
+    const auto reach =
+        static_cast<std::int64_t>(std::ceil(kStretchReachSeconds * fastest * config_.sampleRate));
+    // The window around the switch on the timeline (`anchor`: its boundary,
+    // not the unwrapped song frame, round 128 L1). Under a transport loop the
+    // converter runs across the wrap, so a part of the window past the loop
+    // end continues at its start, and a part before the start at its end.
+    std::vector<std::pair<std::int64_t, std::int64_t>> windows{{anchor - reach, anchor + reach}};
+    const std::int64_t loopStart = loopStart_.load(std::memory_order_relaxed);
+    const std::int64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
+    if (loopOn_.load(std::memory_order_relaxed) && loopEnd > loopStart && anchor >= loopStart &&
+        anchor <= loopEnd) {
+        if (anchor + reach > loopEnd)
+            windows.push_back({loopStart, loopStart + (anchor + reach - loopEnd)});
+        if (anchor - reach < loopStart)
+            windows.push_back({loopEnd - (loopStart - (anchor - reach)), loopEnd});
+    }
     bool audio = false;
     for (const auto& e : latest_->items) {
         const model::Item& item = *e.value;
-        if (item.track != r.track || !item.activeTake) continue;
+        if (item.track != r.track || !item.activeTake || item.mute) continue;
         const model::Take* take = latest_->takes.find(*item.activeTake);
-        audio = take && take->source && take->source->kind != model::Kind::Midi;
+        if (!take || !take->source || take->source->kind == model::Kind::Midi) continue;
+        const model::ItemSpan span = model::itemSpan(*latest_, item);
+        const double from = span.startSec * config_.sampleRate;
+        const double to = span.endSec * config_.sampleRate;
+        for (const auto& [a, b] : windows)
+            if (from < double(b) && to > double(a)) audio = true;
         if (audio) break;
     }
     if (!audio) return false;
@@ -996,31 +1047,77 @@ bool Engine::cutsArrangementAudio(const LaunchRequest& r) const {
     return arrangement != (r.action == LaunchLogEntry::Action::Arrangement);
 }
 
+void Engine::dropStaleCut() {
+    // The switch that set an end ends it only while its launch stands: its
+    // slot still holds it (the same generation, not voided or missed), or
+    // it applied and is in the log. Replaced or voided before its boundary,
+    // its end is dropped (round 117 W2).
+    if (capture_.cutSlot == SIZE_MAX) return;
+    const std::uint64_t st =
+        (*launchSlots_)[capture_.cutSlot].state.load(std::memory_order_acquire);
+    const std::uint64_t s = status(st);
+    const bool holds =
+        (st >> 3) == capture_.cutGeneration &&
+        (s == LaunchSlot::kPending || s == LaunchSlot::kCommitted || s == LaunchSlot::kApplied);
+    const bool logged =
+        std::any_of(launchLog_.begin(), launchLog_.end(), [&](const LaunchLogEntry& e) {
+            return e.epoch == capture_.epoch && e.track == capture_.cutTrack &&
+                   e.songFrame == capture_.cutSong;
+        });
+    if (holds || logged) return;
+    capture_.cutSlot = SIZE_MAX;
+    settleCaptureEnd();
+}
+
 void Engine::captureBeforeStretchCut() {
     if (!capture_.on || capture_.pending || !latest_) return;
-    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
-    if (!plan || !plan->rateStretch) return;
+    auto& slots = *launchSlots_;
+    dropStaleCut();
     // The stretch converter reads on past the switch live (its lookahead,
     // its history), where the commit cuts the item: up to 0.37 for tens of
     // ms in the test. Ended on the switch's boundary, the track never leaves
-    // the arrangement within the capture, and what it holds is exact.
-    for (LaunchSlot& s : *launchSlots_) {
-        const std::uint64_t st = s.state.load(std::memory_order_acquire);
-        if ((status(st) != LaunchSlot::kPending && status(st) != LaunchSlot::kCommitted) ||
-            s.epoch.load() != capture_.epoch)
-            continue;
-        const std::int64_t song = s.songFrame.load();
-        if (song <= capture_.startSong || (capture_.ending && capture_.endSong <= song) ||
-            !cutsArrangementAudio(s.request))
-            continue;
-        capture_.ending = true;
-        capture_.endSong = song;
-        capture_.endBeat =
-            latest_->timeMap->beatAt(double(s.anchorSample.load()) / config_.sampleRate);
-        warnings_.push_back("launch: the capture ends at " + s.request.track.str() +
-                            "'s switch: its arrangement holds audio, which a capture cannot write "
-                            "as heard where a switch cuts it while the master playrate keeps the "
-                            "pitch");
+    // the arrangement within the capture, and what it holds is exact. The
+    // earliest such switch queued sets it, with one warning.
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    const std::size_t before = capture_.cutSlot;
+    const std::uint64_t beforeGeneration = capture_.cutGeneration;
+    if (plan && plan->rateStretch)
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            LaunchSlot& s = slots[i];
+            const std::uint64_t st = s.state.load(std::memory_order_acquire);
+            if ((status(st) != LaunchSlot::kPending && status(st) != LaunchSlot::kCommitted) ||
+                s.epoch.load() != capture_.epoch)
+                continue;
+            const std::int64_t song = s.songFrame.load();
+            if (song <= capture_.startSong ||
+                (capture_.cutSlot != SIZE_MAX && capture_.cutSong <= song) ||
+                !cutsArrangementAudio(s.request, s.anchorSample.load()))
+                continue;
+            capture_.cutSlot = i;
+            capture_.cutGeneration = st >> 3;
+            capture_.cutTrack = s.request.track;
+            capture_.cutSong = song;
+            capture_.cutBeat =
+                latest_->timeMap->beatAt(double(s.anchorSample.load()) / config_.sampleRate);
+        }
+    if (capture_.cutSlot != SIZE_MAX &&
+        (capture_.cutSlot != before || capture_.cutGeneration != beforeGeneration))
+        warnings_.push_back("launch: the capture ends at " + capture_.cutTrack.str() +
+                            "'s switch: its arrangement plays audio there, which a capture cannot "
+                            "write as heard where a switch cuts it while the master playrate keeps "
+                            "the pitch");
+    settleCaptureEnd();
+}
+
+void Engine::settleCaptureEnd() {
+    const bool cut = capture_.cutSlot != SIZE_MAX;
+    capture_.ending = capture_.userEnding || cut;
+    if (cut && (!capture_.userEnding || capture_.cutSong < capture_.userEndSong)) {
+        capture_.endSong = capture_.cutSong;
+        capture_.endBeat = capture_.cutBeat;
+    } else if (capture_.userEnding) {
+        capture_.endSong = capture_.userEndSong;
+        capture_.endBeat = capture_.userEndBeat;
     }
 }
 
@@ -1061,7 +1158,8 @@ void Engine::captureRelocating() {
     captureEnding();  // a quantized end heard before the service: it ended there
     if (!capture_.on || capture_.pending) return;
     const std::int64_t heard = captureHeard();
-    capture_.ending = false;           // a quantized end not reached: it ends here instead
+    capture_.ending = capture_.userEnding = false;  // an end not reached: it ends here instead
+    capture_.cutSlot = SIZE_MAX;
     if (heard > capture_.startSong) {  // it ran: running time ends here
         capture_.endSong = heard;
         capture_.on = false;
@@ -1072,8 +1170,9 @@ void Engine::captureRelocating() {
 
 Status Engine::captureLaunches(bool on, std::optional<model::LaunchQuantize> quantize) {
     captureEnding();  // a quantized end heard before the service: it ended there
-    if (on && capture_.on && capture_.ending) {  // on again before its end: it runs on
-        capture_.ending = false;
+    if (on && capture_.on && capture_.userEnding) {  // on again before its end: it runs on
+        capture_.userEnding = false;                 // (to a switch's end, if one is queued)
+        settleCaptureEnd();
         return {};
     }
     if (on == capture_.on) return {};
@@ -1090,12 +1189,13 @@ Status Engine::captureLaunches(bool on, std::optional<model::LaunchQuantize> qua
         auto placed = placeLaunch(every, *quantize);
         if (!placed) return std::move(placed).error();
         if (placed->epoch == capture_.epoch && placed->songFrame > capture_.startSong) {
-            capture_.ending = true;
-            capture_.endSong = placed->songFrame;
+            capture_.userEnding = true;
+            capture_.userEndSong = placed->songFrame;
             // The beat of the sample it ends on, as the commit's `to` reads
             // it (the boundary's own beat when that is a whole sample).
-            capture_.endBeat =
+            capture_.userEndBeat =
                 latest_->timeMap->beatAt(double(placed->anchorSample) / config_.sampleRate);
+            settleCaptureEnd();
             return {};
         }
         // A boundary in another epoch (a relocation is coming): it ends now.
@@ -1119,14 +1219,17 @@ Status Engine::captureLaunches(bool on, std::optional<model::LaunchQuantize> qua
     }
     capture_.endSong = capture_.pending ? capture_.startSong : captureHeard();
     capture_.pending = false;
-    capture_.ending = false;
+    capture_.ending = capture_.userEnding = false;
+    capture_.cutSlot = SIZE_MAX;
     capture_.on = false;
     return {};
 }
 
 void Engine::captureEnding() {
+    if (capture_.on && !capture_.pending) dropStaleCut();
     if (!capture_.on || !capture_.ending || captureHeard() < capture_.endSong) return;
-    capture_.ending = false;  // heard its boundary: it ends there
+    capture_.ending = capture_.userEnding = false;  // heard its boundary: it ends there
+    capture_.cutSlot = SIZE_MAX;
     capture_.on = false;
 }
 
