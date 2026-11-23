@@ -176,6 +176,15 @@ std::optional<harmony::Key> RollState::degreeKeyAt(std::size_t i, double project
     return writtenKeyAt(projectBeat + shift);
 }
 
+harmony::Place RollState::heardPlace(double rollBeat, double shift) const {
+    return songPlace ? songPlace(itemPosition + rollBeat + shift) : harmony::Place{};
+}
+
+harmony::Place RollState::namePlace(std::size_t i, const RollNote& n) const {
+    if (soundingView()) return heardPlace(n.start, i < sounds.size() ? sounds[i].shift : passShift);
+    return writtenPlace ? writtenPlace(n.start) : harmony::Place{};
+}
+
 int RollState::drawnPitch(std::size_t i, const RollNote& n) const {
     if (!soundingView()) return n.pitch;
     return soundingPitch(i, n).value_or(n.pitch);
@@ -407,9 +416,9 @@ class Roll : public ui::Node {
                               : s_.outsideKey(n) ? t.color("meter-hot")
                                                  : t.color("ground").withAlpha(0.7f)));
             if (r.w > 34 && s_.rowHeight >= 11)
-                c.text({r.x + 3, r.y, r.w - 4, r.h},
-                       harmony::spell(n.pitch, s_.keyAt(s_.itemPosition + n.start)), ui::Font::Ui,
-                       t.type("caption") - 1, t.color("ground"), ui::kLeft | ui::kMiddle);
+                c.text({r.x + 3, r.y, r.w - 4, r.h}, harmony::spell(n.pitch, s_.namePlace(i, n)),
+                       ui::Font::Ui, t.type("caption") - 1, t.color("ground"),
+                       ui::kLeft | ui::kMiddle);
         }
         if (s_.drag == RollState::Drag::Marquee) {
             c.fillRect(s_.marquee, t.color("selection").withAlpha(0.35f));
@@ -651,7 +660,7 @@ class Roll : public ui::Node {
                         const auto written = writtenFor(pitch, at);
                         if (!written) {
                             editor_.refuse("MIDI: nothing written sounds as " +
-                                           harmony::spell(pitch, s_.keyAt(s_.itemPosition + at)) +
+                                           harmony::spell(pitch, s_.heardPlace(at, s_.passShift)) +
                                            " here: draw it in Written");
                             s_.drag = RollState::Drag::None;
                             return true;
@@ -809,14 +818,18 @@ class Roll : public ui::Node {
                         twin.pitch = std::clamp(other, 0, 127);
                         if (twin.pitch == landed.pitch || s_.soundingPitch(anchor_, twin) != heard)
                             continue;
-                        // The written pitches in the take's key, the sounding
-                        // one in the song's, as each view names them.
-                        const double at = s_.itemPosition + landed.start;
-                        const auto own = s_.degreeKeyAt(anchor_, at);
+                        // The written pitches by the take's place, the
+                        // sounding one by the song's, as each view names them.
+                        const harmony::Place own =
+                            s_.writtenPlace ? s_.writtenPlace(landed.start) : harmony::Place{};
+                        const double shift =
+                            anchor_ < s_.sounds.size() ? s_.sounds[anchor_].shift : s_.passShift;
                         const int lo = std::min(landed.pitch, twin.pitch);
                         const int hi = std::max(landed.pitch, twin.pitch);
                         merged = harmony::spell(lo, own) + " and " + harmony::spell(hi, own) +
-                                 " both sound as " + harmony::spell(*heard, s_.keyAt(at)) + " here";
+                                 " both sound as " +
+                                 harmony::spell(*heard, s_.heardPlace(landed.start, shift)) +
+                                 " here";
                         break;
                     }
             }
@@ -2718,6 +2731,8 @@ Status MidiEditor::reload() {
         state_.sounds.clear();
         state_.soundsAt = nullptr;
         state_.writtenKeyAt = nullptr;
+        state_.writtenPlace = nullptr;
+        state_.songPlace = nullptr;
         state_.otherChords.clear();
         state_.rowLabel.clear();
         state_.otherLabel.clear();
@@ -2765,6 +2780,38 @@ Status MidiEditor::reload() {
     state_.soundsAt = nullptr;
     state_.writtenKeyAt = nullptr;
     state_.passes = 1;
+    {
+        // The places notes are named by, as midi.get names them (ADR-0100):
+        // an item's written note at its unwrapped source beat (the roll's
+        // beat less frameShift, through the offset and playrate), a clip's
+        // where it first sounds (ClipContextAxis, as midi.edit), and a heard
+        // note at its song beat.
+        const auto ownerId = model::Id::parse(state_.item);
+        const auto takeId = owner->item ? owner->item->activeTake : owner->clip->activeTake;
+        if (ownerId && takeId) {
+            state_.writtenPlace = [this, id = *ownerId, takeId = *takeId, clip = state_.clip,
+                                   start = state_.itemPosition, shift = state_.frameShift,
+                                   offset = take->startOffset,
+                                   rate](double rollBeat) -> harmony::Place {
+                const model::Session& s = app_.head();
+                const model::Take* t = s.takes.find(takeId);
+                if (!t) return {};
+                if (clip) {
+                    const model::Clip* c = s.clips.find(id);
+                    if (!c) return {};
+                    return model::clipNamePlace(*c, clipContextAxis(*c).contextBeat(rollBeat));
+                }
+                return model::writtenNamePlace(s, *t, start, offset + (rollBeat - shift) * rate);
+            };
+        } else {
+            state_.writtenPlace = nullptr;
+        }
+        state_.songPlace = nullptr;
+        if (owner->item)
+            state_.songPlace = [this](double songBeat) {
+                return model::songNamePlace(app_.head(), songBeat);
+            };
+    }
     state_.passShift = 0;
     state_.passesDiffer = false;
     const auto itemId = owner->item ? model::Id::parse(state_.item) : std::nullopt;
@@ -3127,12 +3174,25 @@ std::function<midi::Meter(int)> meterAtItem(const model::Session& session, doubl
 }
 }  // namespace
 
-std::optional<std::string> MidiEditor::modelText() const {
+std::optional<std::string> MidiEditor::modelText(bool named) const {
     const auto owner = midiOwner(app_.head(), state_.item);
     if (!owner || !owner->source) return std::nullopt;
     notation::DecompileOptions options;
     options.meterAt = meterAtItem(
         app_.head(), owner->item ? model::itemSpan(app_.head(), *owner->item).startBeat : 0.0);
+    if (named && state_.writtenPlace && owner->take) {
+        // Each note by the place the roll's label reads (ADR-0100), from its
+        // source tick to its roll beat.
+        const double ppq = owner->source->sequence.ppq > 0
+                               ? static_cast<double>(owner->source->sequence.ppq)
+                               : 960.0;
+        const double offset = owner->take->startOffset;
+        const double rate = owner->take->playrate > 0 ? owner->take->playrate : 1.0;
+        options.placeAt = [this, ppq, offset, rate](std::int64_t tick) {
+            return state_.writtenPlace((static_cast<double>(tick) / ppq - offset) / rate +
+                                       state_.frameShift);
+        };
+    }
     auto text = notation::decompile(owner->source->sequence, options);
     if (!text) return std::nullopt;
     return std::move(*text);
@@ -3140,12 +3200,16 @@ std::optional<std::string> MidiEditor::modelText() const {
 
 void MidiEditor::reloadText() {
     if (!text_) return;
-    auto text = modelText();
+    auto text = modelText(true);
     if (!text) {
         showDiagnostics({}, "notation unavailable: the item has no MIDI it can show");
         return;
     }
-    appliedText_ = baseText_ = std::move(*text);
+    // The pane names notes as the roll does; whether the MIDI changed under a
+    // draft is judged on the default table's text, which a chord edit leaves
+    // as it was.
+    appliedText_ = std::move(*text);
+    baseText_ = modelText().value_or(std::string());
     text_->setText(appliedText_);
     textDirty_ = textConflict_ = false;
     showDiagnostics({}, "");

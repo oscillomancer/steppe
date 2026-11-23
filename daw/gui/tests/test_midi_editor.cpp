@@ -17,6 +17,8 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <numeric>
+#include <regex>
 #include <set>
 #include <thread>
 
@@ -5384,6 +5386,15 @@ TEST_CASE("a following take's roll: the pencil writes what sounds as the row, or
     CHECK(f.notes().asArray().size() == before);
     REQUIRE(errors.size() == 1);
     CHECK(errors[0] == "MIDI: nothing written sounds as G#4 here: draw it in Written");
+    // Under the song's Ab chord the same row is named as its root (ADR-0100);
+    // a key follow ignores the chord, so still nothing sounds as it.
+    f.exec("chord.set", R"({"at":4,"symbol":"Ab"})");
+    f.frame();
+    f.pointer(ui::PointerEvent::Type::Down, f.at(2.6, 68), 2);
+    f.pointer(ui::PointerEvent::Type::Up, f.at(2.6, 68), 2);
+    CHECK(f.notes().asArray().size() == before);
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[1] == "MIDI: nothing written sounds as Ab4 here: draw it in Written");
 }
 
 TEST_CASE("a following take's roll: a degree drag steps the written pitch as it sounds") {
@@ -5422,6 +5433,224 @@ TEST_CASE("a following take's roll: a degree drag steps the written pitch as it 
     CHECK(s.drawnPitch(1, s.notes[1]) == 67);
     REQUIRE(notices.size() == 1);
     CHECK(notices[0] == "Eb4 and E4 both sound as G4 here");
+}
+
+TEST_CASE("a following take's roll: a merge names the written pitches by the take's chord") {
+    Fixture f;
+    if (!f.ok) return;
+    // The take in C major over a B chord, under E minor: E4 sounds as G4.
+    f.exec("key.set", R"({"at":0,"tonic":"E","scale":"minor"})");
+    followTake(f, R"([{"beat":0,"type":"key","tonic":"C","scale":"major"},
+                      {"beat":0,"type":"chord","symbol":"B"}])",
+               "key");
+    auto& s = f.editor->state();
+    REQUIRE(s.following);
+    REQUIRE_FALSE(s.degrees);
+    std::vector<std::string> notices;
+    f.actions->onNotice = [&](const std::string& n) { notices.push_back(n); };
+    // E4 a row down is written 63, which sounds as G4 too: the take's place
+    // names it as B's third, D#4, where the key alone said Eb4.
+    f.drag(f.at(1.5, 67), f.at(1.5, 66));
+    CHECK(f.notes().asArray()[1].find("pitch")->asInt() == 63);
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0] == "D#4 and E4 both sound as G4 here");
+}
+
+namespace {
+// The roll's note labels in start order (pitch order within a start), each
+// spelled as the roll draws it: its drawn pitch by the place it is named by.
+std::vector<std::string> rollNames(Fixture& f) {
+    const auto& s = f.editor->state();
+    std::vector<std::size_t> order(s.notes.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        if (s.notes[a].start != s.notes[b].start) return s.notes[a].start < s.notes[b].start;
+        return s.notes[a].pitch < s.notes[b].pitch;
+    });
+    std::vector<std::string> out;
+    for (const std::size_t i : order)
+        out.push_back(harmony::spell(s.drawnPitch(i, s.notes[i]), s.namePlace(i, s.notes[i])));
+    return out;
+}
+// midi.get's note names, in the text's order (one voice, so start order).
+std::vector<std::string> getNames(Fixture& f, const std::string& id, bool sounding = false) {
+    const std::string text = f.exec("midi.get", R"({"item":")" + id + R"(","sounding":)" +
+                                                    (sounding ? "true" : "false") + "}")["text"]
+                                 .asString();
+    INFO(text);
+    std::vector<std::string> out;
+    const std::regex name("([A-G](?:##|bb|#|b|x)?-?[0-9]+):");
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), name);
+         it != std::sregex_iterator(); ++it)
+        out.push_back((*it)[1].str());
+    return out;
+}
+// Chords E | Ab | E over C major, and an item "E4 Ab4 B4 | Ab4 C5" at bar 1:
+// G# under E, Ab under Ab (the engine's midi.get cases, round 108 S1).
+struct Chorded {
+    Fixture& f;
+    std::string item, take;
+    explicit Chorded(Fixture& fixture) : f(fixture) {
+        f.exec("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+        f.exec("chord.set", R"({"at":0,"symbol":"E"})");
+        f.exec("chord.set", R"({"at":4,"symbol":"Ab"})");
+        f.exec("chord.set", R"({"at":8,"symbol":"E"})");
+        const std::string track = f.exec("track.add", R"({"name":"Chorded"})")["track"].asString();
+        auto r = f.exec(
+            "item.add",
+            R"({"track":")" + track +
+                R"(","bar":1,"notation":"voice a; 1: E4:q Ab4:q B4:q r:*; 2: Ab4:q C5:q r:*"})");
+        item = r["item"].asString();
+        take = r["take"].asString();
+    }
+    void open() {
+        REQUIRE(f.editor->open(item));
+        f.frame();
+    }
+};
+}  // namespace
+
+// ADR-0100: the roll's labels spell each note by the key and chord where it
+// starts, by the place midi.get names it at (model::writtenNamePlace), so the
+// two agree however the take is moved against the song.
+TEST_CASE("the roll names each note by its chord, as midi.get does") {
+    Fixture f;
+    if (!f.ok) return;
+    Chorded c(f);
+    const std::vector<std::string> underE{"E4", "G#4", "B4", "G#4", "C5"};
+    SUBCASE("in place: G# under E, Ab under Ab") {
+        c.open();
+        CHECK(rollNames(f) == std::vector<std::string>{"E4", "G#4", "B4", "Ab4", "C5"});
+        CHECK(rollNames(f) == getNames(f, c.item));
+    }
+    SUBCASE("trimmed: the notes before the song's start read beat 0's chord") {
+        f.exec("take.set", R"({"take":")" + c.take + R"(","start_offset":4})");
+        c.open();
+        CHECK(rollNames(f) == underE);
+        CHECK(rollNames(f) == getNames(f, c.item));
+    }
+    SUBCASE("at twice the rate, source beat 4 sounds at beat 2, under E") {
+        f.exec("take.set", R"({"take":")" + c.take + R"(","playrate":2})");
+        c.open();
+        CHECK(rollNames(f) == underE);
+        CHECK(rollNames(f) == getNames(f, c.item));
+    }
+    SUBCASE("a following take: written by its own context, phase and period") {
+        f.exec("take.set", R"({"take":")" + c.take +
+                               R"(","context":"1: key C major {E}:w\n2: {Ab}:w","follow":"key"})");
+        // Phase 4 and period 8 swap the context's halves: the first source
+        // bar reads Ab (Ab its root), the second E (Ab its third).
+        auto tx = f.app->beginTransaction(kTest, "period and phase");
+        REQUIRE(tx);
+        f.app->txn().modify<model::Take>(*model::Id::parse(c.take), [](model::Take& t) {
+            t.contextPeriod = 8.0;
+            t.contextPhase = 4.0;
+        });
+        REQUIRE(f.app->commitTransaction(*tx));
+        c.open();
+        auto& s = f.editor->state();
+        REQUIRE(s.following);
+        s.written = true;
+        CHECK(rollNames(f) == std::vector<std::string>{"E4", "Ab4", "B4", "G#4", "C5"});
+        CHECK(rollNames(f) == getNames(f, c.item));
+        // As it sounds, each note by the song's chord where it sounds.
+        s.written = false;
+        CHECK(rollNames(f) == getNames(f, c.item, true));
+    }
+}
+
+TEST_CASE("the notation pane names notes as the roll does, and a chord edit blocks no draft") {
+    Fixture f;
+    if (!f.ok) return;
+    Chorded c(f);
+    f.item = c.item;
+    c.open();
+    ui::TextArea* text = f.editor->notation();
+    REQUIRE(text);
+    CHECK(text->text().find("1: E4:q G#4:q B4:q") != std::string::npos);
+    CHECK(text->text().find("2: Ab4:q C5:q") != std::string::npos);
+    // The draft replaces the MIDI only if it did not change elsewhere, judged
+    // on the default table's text: the spelled one shown differs from it
+    // (G#4), and a chord edit while typing changes no MIDI. The draft is
+    // written after the pause, not held as a conflict.
+    using std::chrono::milliseconds;
+    f.root->focus(text);
+    f.root->key(SDLK_A, ui::kCtrl);
+    f.root->text("voice a; 1: G#4:w");
+    f.frame();
+    f.exec("chord.set", R"({"at":0,"symbol":"Ab"})");
+    f.frame();
+    f.now += milliseconds(300);
+    f.frame();
+    REQUIRE(f.notes().size() == 1);
+    CHECK(f.notes().asArray()[0]["pitch"].asInt() == 68);
+    CHECK(text->marks().empty());
+    // A chord edit while the pane is not typed in re-spells it.
+    f.root->focus(f.editor->roll());
+    f.exec("chord.set", R"({"at":0,"symbol":"E"})");
+    f.frame();
+    CHECK(text->text().find("1: G#4:w") != std::string::npos);
+    f.exec("chord.set", R"({"at":0,"symbol":"Ab"})");
+    f.frame();
+    CHECK(text->text().find("1: Ab4:w") != std::string::npos);
+}
+
+TEST_CASE("the event list names notes as the roll does, and its pitch cell takes doubles") {
+    Fixture f;
+    if (!f.ok) return;
+    Chorded c(f);
+    f.item = c.item;
+    showEventList(f);
+    auto* events = f.editor->eventList();
+    REQUIRE(events->list()->count() == 5);
+    CHECK(events->rowText(1)[3] == "G#4");  // under E
+    CHECK(events->rowText(3)[3] == "Ab4");  // under Ab
+    using Col = gui::MidiEventList::Column;
+    // A name with two accidentals, as a chord tone's spelling shows them.
+    editEventCell(f, 0, Col::Pitch, "Fbb4");
+    CHECK(f.notes().asArray()[0]["pitch"].asInt() == 63);
+    editEventCell(f, 0, Col::Pitch, "D##4");
+    CHECK(f.notes().asArray()[0]["pitch"].asInt() == 64);
+    // Three, or a sharp after a flat, are not a name.
+    for (const char* bad : {"E###4", "Eb#4"}) {
+        editEventCell(f, 0, Col::Pitch, bad);
+        CHECK(f.notes().asArray()[0]["pitch"].asInt() == 64);
+        f.root->key(SDLK_ESCAPE);
+        f.frame();
+    }
+}
+
+TEST_CASE("the roll names a clip's notes by the clip beat they sound at, as midi.get does") {
+    Fixture f;
+    if (!f.ok) return;
+    f.exec("scene.add", R"({"name":"Verse"})");
+    const std::string track = f.app->head().items.find(*model::Id::parse(f.item))->track.str();
+    const std::string clip =
+        f.exec(
+             "clip.add",
+             R"({"track":")" + track +
+                 R"(","scene":"sc_1","notation":"voice a; 1: E4:q Ab4:q B4:q r:*; 2: Ab4:q C5:q r:*"})")
+            .find("clip")
+            ->asString();
+    f.exec("clip.set", R"({"clip":")" + clip + R"(","context":"1: key C major {E}:w\n2: {Ab}:w"})");
+    // The project's chord is not read by a clip.
+    f.exec("chord.set", R"({"at":0,"symbol":"Dm"})");
+    const std::vector<std::string> underE{"E4", "G#4", "B4", "G#4", "C5"};
+    SUBCASE("a loop from beat 4: the second bar sounds first, under E") {
+        f.exec("clip.set", R"({"clip":")" + clip + R"(","loop":{"on":true,"start":4,"length":4}})");
+        REQUIRE(f.editor->open(clip));
+        f.frame();
+        CHECK(rollNames(f) == underE);
+        CHECK(rollNames(f) == getNames(f, clip));
+    }
+    SUBCASE("an offset puts the first bar before the clip: it reads beat 0's chord") {
+        const model::Id take = *f.app->head().clips.find(*model::Id::parse(clip))->activeTake;
+        f.exec("take.set", R"({"take":")" + take.str() + R"(","start_offset":4})");
+        REQUIRE(f.editor->open(clip));
+        f.frame();
+        CHECK(rollNames(f) == underE);
+        CHECK(rollNames(f) == getNames(f, clip));
+    }
 }
 
 TEST_CASE("a following take's strip: its own row takes edits, each one take.set {context}") {
