@@ -4586,6 +4586,11 @@ Status EngineApp::deleteSession(const std::string& session) {
 
 // First save: stage and verify copies while the scratch originals remain.
 // Failed relocation/publication removes only files this operation created.
+void EngineApp::addScratchReader(ScratchReader reader) {
+    std::lock_guard guard(scratchReadersMutex_);
+    scratchReaders_.push_back(std::move(reader));
+}
+
 Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Status()>& publish,
                                    std::vector<schema::Warning>* warnings) {
     std::lock_guard lock(recordingFinalizeMutex_);
@@ -4710,7 +4715,10 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
     struct Readers {
         std::vector<std::pair<std::shared_ptr<detail::HashRead>, fs::path>> held;
         SourcePreparation* preparation = nullptr;
+        std::vector<std::function<void()>> outside;  // what the outside readers gave back
         ~Readers() {
+            for (auto& resume : outside)
+                if (resume) resume();
             if (preparation) preparation->resume();
             for (auto& [reader, now] : held) {
                 std::lock_guard guard(reader->mutex);
@@ -4731,6 +4739,12 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
     if (auditionLoader_ && auditionDecoding_) {
         stopAudition();
         auditionLoader_->waitIdle();
+    }
+    // And the readers outside the engine (the GUI's waveform worker), each of which returns when it
+    // has let go of the files under the folder.
+    {
+        std::lock_guard guard(scratchReadersMutex_);
+        for (const auto& reader : scratchReaders_) readers.outside.push_back(reader(from));
     }
     for (const auto& weak : hashReads_)
         if (auto reader = weak.lock()) {

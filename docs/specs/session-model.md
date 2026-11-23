@@ -760,9 +760,10 @@ copy, publishes the file, and then removes the scratch original; one that cannot
 stays, and the save says so with a
 `project.media_leftover` warning naming its path: the project already uses the copy. The first
 save closes what the engine holds on those files (the recording's hash reader, the plan's decode
-worker, a file audition's decoder); what it cannot is a reader outside it or on its own thread
-(the GUI's peak worker, a render, freeze, consolidate or analysis job still decoding them) and
-another program. The app
+worker, a file audition's decoder) and asks the readers outside it that registered
+(`EngineApp::addScratchReader`: the GUI's peak worker) to let go; what it cannot is a reader on
+its own thread (a render, freeze, consolidate or analysis job still decoding them) and another
+program. The app
 remembers such a file (its size and time); a later first save in the same scratch folder, of
 another unsaved project, does not copy it into its own media, and tries to remove it again. With the app's copy-imports setting on (the GUI's
 default), item.add copies an imported audio file into the media folder (a

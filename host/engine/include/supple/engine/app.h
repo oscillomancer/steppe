@@ -386,6 +386,16 @@ class EngineApp : public cmd::Host {
     // discarded (quit, new, open). Does nothing once the project is saved,
     // and never touches a folder holding the work directory.
     void clearScratch();
+    // Readers outside the engine that open scratch media by path on their own
+    // thread (the GUI's waveform worker). A first save calls each, on the
+    // thread that saves, with the scratch media folder it is about to empty,
+    // after the project points at the copies and before it removes the files:
+    // the reader lets go of every file under that folder (a file that is open
+    // cannot be removed on Windows) and returns what the save calls when it is
+    // done with them. Register before the first save; the reader must outlive
+    // the app's saves.
+    using ScratchReader = std::function<std::function<void()>(const std::filesystem::path& folder)>;
+    void addScratchReader(ScratchReader reader);
     // Unsaved projects earlier runs left behind (ADR-0078), oldest first:
     // folders beside the scratch folder whose lock no running app holds and
     // that hold an autosave or a file. Unreadable autosaves are skipped with
@@ -1070,6 +1080,8 @@ class EngineApp : public cmd::Host {
     // Model thread only. A first save closes those of the scratch files it removes, and has them
     // go on at the files' new place: Windows cannot remove an open file.
     std::vector<std::weak_ptr<detail::HashRead>> hashReads_;
+    std::mutex scratchReadersMutex_;
+    std::vector<ScratchReader> scratchReaders_;
     // Scratch files a first save of this run could not remove (project.media_leftover), as they
     // were (size and time). A later first save in the same scratch folder, of another project,
     // leaves them out and tries to remove them again; one rewritten since is not one of them.

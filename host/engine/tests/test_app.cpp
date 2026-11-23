@@ -1540,6 +1540,55 @@ TEST_CASE("a first save that cannot remove a scratch file says so and points at 
     CHECK(app->mediaDir() == root.path / "song" / "media");
 }
 
+// A reader outside the engine (the GUI's waveform worker) that has a scratch file open is asked
+// to let go of the folder's files after they are copied and before they are removed, and is told
+// when the save is done with them.
+TEST_CASE("a first save asks the readers outside the engine to let go of the scratch files") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    AppOptions o;
+    o.workdir = root.path / "work";
+    o.scratchDir = root.path / "unsaved-outside";
+    o.chainDir = root.path / "chains";
+    o.templateDir = root.path / "templates";
+    o.projectTemplateDir = root.path / "project-templates";
+    o.pluginPath = {kFixture};
+    auto created = EngineApp::create(o, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "recording_interrupted");
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    const fs::path scratchFile = o.scratchDir / "media" / "rec" / "Vocal-1.wav";
+    const fs::path moved = root.path / "song" / "media" / "rec" / "Vocal-1.wav";
+    // The outside reader keeps the recording from being removed (open on Windows, its folder
+    // read-only elsewhere) until it is asked to let go.
+    HoldFile hold(scratchFile);
+    if (!hold.usable()) return;
+    fs::path asked;
+    bool copiedFirst = false, resumed = false, goneAtResume = false;
+    app->addScratchReader([&](const fs::path& folder) -> std::function<void()> {
+        asked = folder;
+        copiedFirst = fs::exists(moved) && fs::exists(scratchFile);
+        hold.release();
+        return [&] {
+            resumed = true;
+            goneAtResume = !fs::exists(scratchFile);
+        };
+    });
+    std::vector<schema::Warning> warnings;
+    const auto saved = app->save(root.path / "song" / "song.json", &warnings);
+    REQUIRE_MESSAGE(saved, (saved ? "" : saved.error().toString()));
+    CHECK(asked.lexically_normal() == (o.scratchDir / "media").lexically_normal());
+    CHECK(copiedFirst);
+    CHECK(resumed);
+    CHECK(goneAtResume);
+    for (const auto& w : warnings) CHECK_MESSAGE(w.code != "project.media_leftover", w.message);
+    CHECK(fs::exists(moved));
+    CHECK_FALSE(fs::exists(o.scratchDir));
+}
+
 // A first save that left a file behind (the folder cannot be written), then another unsaved
 // project in the same scratch folder: its first save does not carry the file into its media.
 TEST_CASE("a scratch file the first save could not remove does not go with the next project") {
