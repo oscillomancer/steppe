@@ -140,7 +140,8 @@ dummy/offline rendering, sandbox and their tests run on all three platforms:
 `_engine_test_sources`) and adds only Linux's own on Linux. A case in a
 portable file that needs Linux is fenced with a one-line reason above it, and
 `engine.portable-sources` fails on a POSIX-only header or call outside a
-conditional there. `SUPPLE_TEST_PORTABLE_ONLY=ON` builds the portable list
+conditional there that names a platform (`__linux__`, `_WIN32`, `__APPLE__`,
+`SUPPLE_TEST_JACK`). `SUPPLE_TEST_PORTABLE_ONLY=ON` builds the portable list
 alone on Linux, a local check before native CI. Native core-base sources/tests, JSON-RPC control transport/model loop
 and standalone MCP/proxy no longer share the hosting gate (ADR-0035).
 Linux-specific descriptor/permission/signal probes and memory-residency/rlimit

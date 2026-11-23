@@ -5,7 +5,7 @@
 Every source in `_engine_test_sources` (host/engine/CMakeLists.txt) builds on
 Linux, macOS and Windows. Only Linux is built locally, so this check catches
 the commonest slips before native CI does: a POSIX-only header or call, or the
-JACK test fixtures, outside a preprocessor conditional, and a variable named
+JACK test fixtures, outside a platform conditional, and a variable named
 after a Windows header macro. A case that needs one
 is fenced (`#if defined(__linux__)`, `#if !defined(_WIN32)`, or
 `#if defined(SUPPLE_TEST_JACK)`) with a one-line reason above it.
@@ -36,7 +36,12 @@ CALLS = re.compile(
 # variables: clang-cl then sees an expression where a name should be.
 WINDOWS_MACROS = re.compile(r"[\w:>]\s+(far|near)\s*[({=;,]")
 OPEN = re.compile(r"#\s*(if|ifdef|ifndef)\b")
+BRANCH = re.compile(r"#\s*(elif|elifdef|elifndef)\b")
 CLOSE = re.compile(r"#\s*endif\b")
+# Only a conditional that names a platform fences: `#if defined(__SSE2__)` or
+# `#if SUPPLE_EDITORS` is true on Windows x64 too (review round 111, E3). Its
+# #else and #elif branches are platform branches as well.
+PLATFORM = re.compile(r"\b(__linux__|_WIN32|__APPLE__|SUPPLE_TEST_JACK)\b")
 
 
 def portable_sources(engine: pathlib.Path) -> list[pathlib.Path]:
@@ -49,16 +54,20 @@ def portable_sources(engine: pathlib.Path) -> list[pathlib.Path]:
 
 def problems(path: pathlib.Path) -> list[str]:
     found = []
-    depth = 0
+    fences: list[bool] = []  # one per open conditional: does its chain name a platform?
     for number, line in enumerate(path.read_text().splitlines(), 1):
         stripped = line.strip()
         if OPEN.match(stripped):
-            depth += 1
+            fences.append(bool(PLATFORM.search(stripped)))
+            continue
+        if BRANCH.match(stripped) and fences:
+            fences[-1] = fences[-1] or bool(PLATFORM.search(stripped))
             continue
         if CLOSE.match(stripped):
-            depth -= 1
+            if fences:
+                fences.pop()
             continue
-        if depth or stripped.startswith("//"):
+        if any(fences) or stripped.startswith("//"):
             continue
         code = stripped.split("//", 1)[0]
         if HEADERS.search(code) or CALLS.search(code) or WINDOWS_MACROS.search(code):
@@ -77,7 +86,7 @@ def main() -> int:
         print(line)
     if found:
         print(
-            f"{len(found)} POSIX-only or JACK use(s) outside a conditional in "
+            f"{len(found)} POSIX-only or JACK use(s) outside a platform conditional in "
             "engine.tests' portable sources: use tests/file_platform.h or "
             "supple::waitFor, or fence the case with a one-line reason."
         )
