@@ -30,7 +30,10 @@ copies made with `take.add`, or renders. One take is *active*, the one you hear.
 
 Call `take.comp` again on any piece (or give `items`, the pieces in any order) to move
 seams or change spans. The crossfades are rebuilt for the whole comp, and the same
-call twice changes nothing. `take.comp.get {item}` reads a comp you did not make.
+call twice changes nothing. `take.comp.get {item}` reads a comp you did not make: besides the pieces it gives the
+`crossfade` (seconds) and `crossfade_shape` the comp has (its longest seam fade, so a seam
+shortened by short pieces does not shrink it), and `take.comp` with those and the spans
+rebuilds it unchanged.
 Pieces of the same take beside each other (after a move, say) are joined into one
 piece again, so moving a seam by a few samples gives exactly what the same spans give
 from scratch, MIDI pieces too (a held note stays one note). A boundary where the

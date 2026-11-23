@@ -862,3 +862,66 @@ TEST_CASE(
     f.run("take.comp", spans);
     CHECK(f.pieces().size() == 4);
 }
+
+TEST_CASE("take.comp.get reads back the crossfade the comp was made with") {
+    SUBCASE("a run of one piece reads the default") {
+        CompFixture f;
+        const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK(got.find("crossfade")->asDouble() == doctest::Approx(0.01));
+        CHECK(got.find("crossfade_shape")->asString() == "cos");
+    }
+    SUBCASE("hard cuts read 0") {
+        CompFixture f;
+        f.run("take.comp",
+              R"({"item":"it_1","crossfade":0,"spans":[{"from":1,"to":2,"index":0}]})");
+        const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK(got.find("crossfade")->asDouble() == 0.0);
+    }
+    SUBCASE("a seam clamped by a short piece does not shrink it") {
+        CompFixture f;
+        // 20 ms asked for. The first piece is 48 samples (2 ms), so the seam at its end is
+        // clamped to 24 samples either side; the seams at beats 2 and 3 have room: 480 each.
+        const auto made = f.run("take.comp",
+                                R"({"item":"it_1","crossfade":0.02,"crossfade_shape":"linear",
+                                    "spans":[{"from":0,"to":0.002,"index":1},
+                                             {"from":2,"to":3,"index":0}]})");
+        bool clamped = false;
+        for (const auto& w : made.find("warnings")->asArray())
+            clamped = clamped || w.find("code")->asString() == "comp.crossfade_clamped";
+        CHECK(clamped);
+        const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        CHECK(got.find("crossfade")->asDouble() == doctest::Approx(0.02).epsilon(1e-9));
+        CHECK(got.find("crossfade_shape")->asString() == "linear");
+        // take.comp itself answers the same.
+        CHECK(made.find("crossfade")->asDouble() == got.find("crossfade")->asDouble());
+    }
+}
+
+TEST_CASE(
+    "take.comp with the read-back crossfade and spans rebuilds the same comp, byte for byte") {
+    for (const char* shape : {"cos", "linear"}) {
+        CAPTURE(shape);
+        CompFixture f;
+        f.run("take.comp", std::string(R"({"item":"it_1","crossfade":0.02,"crossfade_shape":")") +
+                               shape + R"(","spans":[{"from":0,"to":0.002,"index":1},
+                                                     {"from":2,"to":3,"index":0}]})");
+        const std::string made = model::serializeProject(f.app->head());
+        const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+        auto args = json::Value::object();
+        args["item"] = "it_1";
+        args["crossfade"] = got.find("crossfade")->asDouble();
+        args["crossfade_shape"] = got.find("crossfade_shape")->asString();
+        auto spans = json::Value::array();
+        for (const auto& piece : got.find("pieces")->asArray()) {
+            auto span = json::Value::object();
+            span["from"] = piece.find("from")->asDouble();
+            span["to"] = piece.find("to")->asDouble();
+            span["index"] = piece.find("index")->asInt();
+            spans.push_back(std::move(span));
+        }
+        args["spans"] = std::move(spans);
+        auto again = f.bus->execute({"take.comp", args, origin});
+        REQUIRE_MESSAGE(again, (again ? "" : again.error().toString()));
+        CHECK(model::serializeProject(f.app->head()) == made);
+    }
+}

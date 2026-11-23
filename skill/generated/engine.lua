@@ -2154,6 +2154,8 @@ q = nil
 
 ---@class Steppe.take_comp_result
 ---@field pieces table[]
+---@field crossfade number Seconds.
+---@field crossfade_shape "cos"|"linear"
 ---@field warnings? table[]
 
 ---@class Steppe.take_comp_get_args
@@ -2162,6 +2164,8 @@ q = nil
 
 ---@class Steppe.take_comp_get_result
 ---@field pieces table[]
+---@field crossfade number Seconds.
+---@field crossfade_shape "cos"|"linear"
 ---@field warnings? table[]
 
 ---@class Steppe.take_extract_args

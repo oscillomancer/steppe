@@ -332,10 +332,18 @@ ends with its piece, and a note the later piece's take holds into its start is
 chased to the start (the rules of a split).
 
 The result is `{pieces: [{item, from, to, take, index, name, fade_in,
-fade_out}]}` in time order, `from` and `to` the core seam beats and
-`take` the piece's active take id. `take.comp.get {item | items}` (query)
-returns the same list for an existing comp, with each piece's current fades,
+fade_out}], crossfade, crossfade_shape}` in time order, `from` and `to` the core
+seam beats and `take` the piece's active take id. `take.comp.get {item | items}`
+(query) returns the same for an existing comp, with each piece's current fades,
 and the run's take names.
+
+**The crossfade a run reads back as** (`model::compCrossfade`, which the GUI calls
+too; `crossfade` in seconds, `crossfade_shape` `cos` or `linear`): the longest
+seam-side fade of the run and that fade's shape, so a seam clamped by short pieces
+does not shrink it, and `take.comp` called with the read-back values and the spans
+`take.comp.get` gives rebuilds the same comp (byte for byte). A run with no seam (one
+piece) reads the default, 0.01 and `cos`; a run whose seams are all hard cuts reads 0;
+a fade of a shape `take.comp` does not offer (a GUI-made one) reads as `cos`.
 
 Refusals, each with a code, a message, a path (`/args/item`, `/args/spans/1/from`) and a hint: `comp.item` (neither or both of `item`
 and `items`, or an empty `items`), `comp.takes` (fewer than two takes),
@@ -368,7 +376,10 @@ same spans give from scratch, with the full crossfade; a MIDI seam moved five ti
 two pieces and one sounding C4 and G4, as from scratch; pieces that differ keep their
 boundary, and for MIDI the call warns `comp.midi_boundary`;
 MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
-`take.comp.get` after a save and reopen; one undo step; and every refusal.
+`take.comp.get` after a save and reopen, and its `crossfade` and `crossfade_shape` (a comp
+with one seam clamped reads back the requested length, a hard-cut run 0, one piece the default;
+`take.comp` with the read-back values and spans is byte for byte the comp); one undo step; and
+every refusal.
 
 ### 1.6 Sources
 

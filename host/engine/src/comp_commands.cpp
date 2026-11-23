@@ -33,7 +33,7 @@ struct CompArgs {
     std::optional<std::string> anyPiece;
     std::optional<std::vector<std::string>> pieces;
     std::vector<SpanArg> spans;
-    double crossfade = 0.01;
+    double crossfade = model::kDefaultCompCrossfade;
     std::string shape = "cos";
     bool allowLinked = false;
 };
@@ -53,6 +53,8 @@ struct PieceOut {
 };
 struct CompResult {
     std::vector<PieceOut> pieces;
+    double crossfade = model::kDefaultCompCrossfade;
+    std::string shape = "cos";
 };
 
 schema::Schema<PieceOut> pieceSchema() {
@@ -70,6 +72,9 @@ schema::Schema<PieceOut> pieceSchema() {
 schema::Schema<CompResult> resultSchema() {
     return schema::object<CompResult>("comp_result")
         .field("pieces", &CompResult::pieces, schema::arrayOf(pieceSchema()))
+        .field("crossfade", &CompResult::crossfade, schema::number().doc("Seconds."))
+        .field("crossfade_shape", &CompResult::shape,
+               schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
         .build();
 }
 
@@ -128,6 +133,13 @@ std::vector<PieceOut> describePieces(const model::Session& s,
         out.push_back(std::move(o));
     }
     return out;
+}
+
+// The pieces and the crossfade the run reads back as (model::compCrossfade).
+CompResult describe(const model::Session& s, const std::vector<model::CompPiece>& run) {
+    const model::CompCrossfade crossfade = model::compCrossfade(s, run);
+    return CompResult{describePieces(s, run), crossfade.seconds,
+                      crossfade.shape == model::FadeShape::Linear ? "linear" : "cos"};
 }
 
 // Whether the takes of a run can be extended for a crossfade, and why not.
@@ -205,7 +217,7 @@ void registerCompCommands(cmd::Registry& registry) {
                 .field("spans", &CompArgs::spans,
                        schema::arrayOf(spanSchema).minItems(1).maxItems(4096))
                 .field("crossfade", &CompArgs::crossfade, schema::number().min(0).doc("Seconds."))
-                .defaultValue(0.01)
+                .defaultValue(model::kDefaultCompCrossfade)
                 .field("crossfade_shape", &CompArgs::shape,
                        schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
                 .defaultValue(std::string("cos"))
@@ -231,7 +243,8 @@ void registerCompCommands(cmd::Registry& registry) {
             {"item.kind", "a clip", "lay the clip on the timeline first (item.add {clip})"}};
         c.examples = {{"Take the second take for bars 2 to 3",
                        j(R"({"item":"it_1","crossfade":0,"spans":[{"from":1,"to":3,"index":1}]})"),
-                       j(R"({"pieces":"<any>"})"), "song_with_takes"}};
+                       j(R"({"pieces":"<any>","crossfade":0,"crossfade_shape":"cos"})"),
+                       "song_with_takes"}};
         c.run = [](const CompArgs& a, Context& ctx) -> Result<CompResult> {
             EngineApp& engine = app(ctx);
             const model::Session s = engine.view();
@@ -530,7 +543,7 @@ void registerCompCommands(cmd::Registry& registry) {
             }
             auto final = model::compRun(engine.view(), std::nullopt, ids);
             if (!final) return std::move(final).error();
-            return CompResult{describePieces(engine.view(), *final)};
+            return describe(engine.view(), *final);
         };
         addChecked(registry, std::move(c));
     }();
@@ -543,8 +556,11 @@ void registerCompCommands(cmd::Registry& registry) {
         c.description =
             "The pieces of the comp that item belongs to (or items), in time order: from and to "
             "are the seams in beats (crossfades taken out), take and index the take each plays, "
-            "fade_in and fade_out the crossfades in seconds. An item with several takes and no "
-            "seams is a comp of one piece.";
+            "fade_in and fade_out the crossfades in seconds. crossfade and crossfade_shape are the "
+            "run's own: its longest seam fade (seconds) and that fade's shape, which a seam "
+            "shortened by short pieces does not shrink, so take.comp with them rebuilds the same "
+            "comp (the default 0.01 and cos for one piece, 0 for hard seams). An item with several "
+            "takes and no seams is a comp of one piece.";
         c.tags = {"take"};
         c.args = schema::object<WhichArgs>("take_comp_get_args")
                      .field("item", &WhichArgs::anyPiece, timelineItemArg())
@@ -552,7 +568,8 @@ void registerCompCommands(cmd::Registry& registry) {
                             schema::arrayOf(timelineItemArg()).maxItems(4096))
                      .build();
         c.result = resultSchema();
-        c.examples = {{"Read a comp", j(R"({"item":"it_1"})"), j(R"({"pieces":"<any>"})"),
+        c.examples = {{"Read a comp", j(R"({"item":"it_1"})"),
+                       j(R"({"pieces":"<any>","crossfade":0.01,"crossfade_shape":"cos"})"),
                        "song_with_takes"}};
         c.run = [](const WhichArgs& a, Context& ctx) -> Result<CompResult> {
             const model::Session s = app(ctx).view();
@@ -560,7 +577,7 @@ void registerCompCommands(cmd::Registry& registry) {
             if (!which) return std::move(which).error();
             auto run = model::compRun(s, which->first, which->second);
             if (!run) return std::move(run).error();
-            return CompResult{describePieces(s, *run)};
+            return describe(s, *run);
         };
         addChecked(registry, std::move(c));
     }();
