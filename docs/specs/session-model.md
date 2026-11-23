@@ -816,7 +816,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.21`)
+## 5. Project file (`supple.project/2.22`)
 
 ### 5.1 Shape
 
@@ -838,9 +838,9 @@ track's points (ADR-0095); 2.18 adds scenes, clips and
 on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2); 2.20
 adds a clip's `context` and `follow` (ADR-0098); 2.21 adds a MIDI take's
 `context`, `context_period`, `context_phase` and `follow` ("Take context and
-follow").
+follow"); 2.22 adds an audio clip's `fade_in` and `fade_out` ("Clip fades").
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.21,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.22,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
@@ -2094,6 +2094,7 @@ present, and the project field `launch_quantize`, written only when not
 | `quantize` | Overrides `launch_quantize` for this clip: `bar`, `beat`, `1/2` … `1/32`, `none`. |
 | `name`, `color`, `mute`, `gain_db` | As an item's. An item has no name field of its own: its name is its active take's (`item.set {name}`), so a clip's name and an item's go with the clip or item they come from (below). |
 | `context`, `follow` | Schema 2.20: the key and chords the clip was written against, and how it follows the context track when laid ("Clip context", the contract for X1 and X2). |
+| `fade_in`, `fade_out` | Schema 2.22, audio clips only: an item's fade (`{length, shape, curve}`, `length` in seconds of played time), shaping each pass of the period ("Clip fades"). |
 
 **The clip's kind and unit.** A clip's `kind` is set when it is made and
 never changes. `length`, `loop` and the clip's take envelopes are in beats
@@ -2357,6 +2358,26 @@ Scenes (2):
     tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · -6 dB · muted
   sc_2 Chorus (no clips)
 ```
+
+### Clip fades (schema 2.22, ADR-0097 S3 step C; the contract)
+
+*Built so far: the fields, the file and the checks. The commands, playback
+and the conversions follow in step C.*
+
+Writers emit `supple.project/2.22`. An audio clip gains `fade_in` and
+`fade_out`, each an item's fade: `{length, shape, curve}`, `length` in
+seconds of played take time (the clip's unit), `shape` and `curve` as an
+item's. Each is written only when its length, shape or curve is not the
+default. Earlier files load unchanged and nothing migrates; a 2.21 build
+drops both members with its newer-minor warning.
+
+- **A MIDI clip holds none,** as MIDI items play none: a fade with a length
+  on a MIDI clip fails the commit (`/clips/<id>/fade_in`).
+- **A length** is finite and 0 or more, and a curve finite. A fade may be
+  longer than the period, as an item's may be longer than the item.
+- **What they mean:** the fade-in shapes each pass from the period's start
+  and the fade-out each pass to its end (a `once` clip's one pass), the two
+  multiplied where they overlap, as an item multiplies its fades.
 
 ### Clip context (schema 2.20, ADR-0098; the contract for steps X1 and X2)
 

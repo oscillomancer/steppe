@@ -261,6 +261,7 @@ struct Fade {
     double length = 0.0;  // seconds
     FadeShape shape = FadeShape::Linear;
     double curve = 0.0;  // % -100..100
+    bool operator==(const Fade&) const = default;
 };
 
 struct Item {
@@ -621,6 +622,9 @@ struct Clip {
     std::string name, color;
     bool mute = false;
     double gainDb = 0.0;
+    // Audio clips only (schema 2.22, ADR-0097 revision 2026-11-23): an item's
+    // fades, shaping each pass of the period, in seconds of played time.
+    Fade fadeIn, fadeOut;
     // The key and chords the clip was written against (ADR-0098): the context
     // track's points with `beat` counted from the clip's start in beats, by
     // beat and then type (key first), each on the 1/960 grid. An audio clip

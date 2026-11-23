@@ -72,6 +72,13 @@ void checkLauncher(const Session& s, std::vector<Error>& errors) {
                  it->second.str() + " is already in " + c.track.str() + "'s " + c.scene.str());
         if (!(std::isfinite(c.length) && c.length > 0))
             fail(at("clips", e.id, "length"), "length must be finite and above 0");
+        for (auto [name, fade] :
+             {std::pair{"fade_in", c.fadeIn}, std::pair{"fade_out", c.fadeOut}}) {
+            if (!(std::isfinite(fade.length) && fade.length >= 0 && std::isfinite(fade.curve)))
+                fail(at("clips", e.id, name), "a fade's length is finite and 0 or more");
+            else if (fade.length > 0 && c.kind == ClipKind::Midi)
+                fail(at("clips", e.id, name), "a MIDI clip has no fades, as MIDI items play none");
+        }
         if (c.loop.on && !(std::isfinite(c.loop.start) && c.loop.start >= 0 &&
                            std::isfinite(c.loop.length) && c.loop.length > 0))
             fail(at("clips", e.id, "loop"),

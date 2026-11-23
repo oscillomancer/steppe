@@ -107,7 +107,7 @@ TEST_CASE("launcher: sc and cl ids parse and allocate") {
 TEST_CASE("launcher: scenes and clips save, reopen and serialize the same") {
     const Fixture f = fixture();
     const std::string bytes = serializeProject(f.s);
-    CHECK(bytes.find("\"supple.project/2.21\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.22\"") != std::string::npos);
     auto doc = json::parse(bytes).value();
     json::Value& sc = doc["scenes"]["sc_2"];
     CHECK(sc["name"] == "Chorus");
@@ -160,6 +160,8 @@ TEST_CASE("launcher: every clip field and the project quantize round-trip") {
     pad.scene = f.chorus;
     pad.kind = ClipKind::Audio;
     pad.length = 6.5;
+    pad.fadeIn = {0.25, FadeShape::Cos, 20};  // schema 2.22
+    pad.fadeOut = {1.5, FadeShape::FastSlow, -10};
     const Id padId = t.create(pad);
     Project p = t.project();
     p.launchQuantize = LaunchQuantize::None;
@@ -173,6 +175,11 @@ TEST_CASE("launcher: every clip field and the project quantize round-trip") {
     CHECK(doc["clips"][padId.str()]["length"] == 6.5);
     CHECK(doc["clips"]["cl_1"]["quantize"] == "1/16");
     CHECK(doc["clips"]["cl_1"]["gain_db"] == -3.5);
+    CHECK_FALSE(doc["clips"]["cl_1"].find("fade_in"));  // none: not written
+    CHECK(doc["clips"][padId.str()]["fade_in"]["length"] == 0.25);
+    CHECK(doc["clips"][padId.str()]["fade_in"]["shape"] == "cos");
+    CHECK(doc["clips"][padId.str()]["fade_in"]["curve"] == 20.0);
+    CHECK(doc["clips"][padId.str()]["fade_out"]["shape"] == "fast_slow");
     CHECK(doc["project"]["launch_quantize"] == "none");
     auto back = parseProject(bytes);
     REQUIRE(back);
@@ -323,6 +330,33 @@ TEST_CASE("launcher: lengths and loops must be positive and finite") {
     CHECK(
         says(edit<Clip>(f.s, f.clip, [](Clip& c) { c.loop = {true, -1, 2}; }), "/clips/cl_1/loop"));
     CHECK(edit<Clip>(f.s, f.clip, [](Clip& c) { c.loop = {false, 0, 0}; }));  // off: unchecked
+}
+
+TEST_CASE("launcher: a clip's fades are an audio clip's, finite and 0 or more") {
+    const Fixture f = fixture();
+    // MIDI items play no fades, so a MIDI clip holds none.
+    CHECK(says(edit<Clip>(f.s, f.clip, [](Clip& c) { c.fadeIn.length = 0.5; }),
+               "/clips/cl_1/fade_in a MIDI clip has no fades"));
+    CHECK(says(edit<Clip>(f.s, f.clip, [](Clip& c) { c.fadeOut.length = 0.5; }),
+               "/clips/cl_1/fade_out"));
+    EditTxn t(f.s, f.s.version + 1);
+    Clip pad;
+    pad.track = f.a;
+    pad.scene = f.chorus;
+    pad.kind = ClipKind::Audio;
+    pad.length = 2;
+    const Id padId = t.create(pad);
+    const Session s = t.commit().value();
+    for (double bad :
+         {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
+        CHECK(says(edit<Clip>(s, padId, [&](Clip& c) { c.fadeIn.length = bad; }),
+                   "/clips/" + padId.str() + "/fade_in"));
+    CHECK(
+        says(edit<Clip>(s, padId,
+                        [](Clip& c) { c.fadeOut.curve = std::numeric_limits<double>::infinity(); }),
+             "/clips/" + padId.str() + "/fade_out"));
+    // Longer than the period, as an item's fade may be longer than the item.
+    CHECK(edit<Clip>(s, padId, [](Clip& c) { c.fadeIn.length = 3; }));
 }
 
 TEST_CASE("launcher: a clip's active take is one of its takes") {

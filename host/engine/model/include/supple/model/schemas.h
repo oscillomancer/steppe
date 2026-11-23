@@ -60,7 +60,7 @@ json::Value toJson(const T& object) {
     return schemaOf<T>().encode(object);
 }
 
-inline constexpr std::string_view kProjectSchema = "supple.project/2.21";
+inline constexpr std::string_view kProjectSchema = "supple.project/2.22";
 
 // The whole session as the canonical project document (members in the
 // spec's order, objects keyed by ID in ID order). A project file also keeps
