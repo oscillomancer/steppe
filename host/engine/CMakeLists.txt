@@ -85,7 +85,8 @@ if(SUPPLE_BUILD_TESTS)
   supple_add_tests(engine SOURCES ${_engine_test_sources} LABELS rt SPLIT)
   # Helpers with no test case of their own (a SPLIT entry for them would match nothing).
   target_sources(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/host/clap-host/tests/shared_page.cpp
-                                      tests/native_files.cpp tests/native_cpus.cpp)
+                                      tests/native_files.cpp tests/native_cpus.cpp
+                                      tests/native_threads.cpp)
   # The longest engine file under ThreadSanitizer: it ran past the presets'
   # 600 s on a busy machine and took 363 s alone.
   set_tests_properties(engine.tests.test_realtime_playrate PROPERTIES TIMEOUT 1200)

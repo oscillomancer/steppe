@@ -56,6 +56,7 @@
 #include "live_workers.h"
 #include "meters.h"
 #include "native_cpus.h"
+#include "native_threads.h"
 #include "plan.h"
 #include "realtime_support.h"
 #include "recording.h"
@@ -6054,21 +6055,9 @@ TEST_CASE("the device thread's MXCSR is restored after every node" * doctest::de
     std::filesystem::remove_all(dir);
 }
 #endif
-// Linux only for now: it reads the OS thread names from /proc/self/task/*/comm.
-#if defined(__linux__)
-namespace {
-std::set<std::string> threadNames() {
-    std::set<std::string> names;
-    for (const auto& task : std::filesystem::directory_iterator("/proc/self/task")) {
-        std::ifstream comm(task.path() / "comm");
-        std::string name;
-        if (std::getline(comm, name)) names.insert(name);
-    }
-    return names;
-}
-}  // namespace
-
-TEST_CASE("the engine's threads carry their role names") {
+// The names the OS shows (native_threads.h: /proc on Linux, Mach thread info
+// on macOS, GetThreadDescription on Windows), as a debugger or crash report does.
+TEST_CASE("the engine's threads carry their role names, as the OS shows them") {
     DummyBackend backend({.mode = DummyBackend::Mode::Thread, .paced = true});
     auto pool = makePool();
     MediaCache media;
@@ -6078,7 +6067,7 @@ TEST_CASE("the engine's threads carry their role names") {
     const std::set<std::string> want = {"audio-dummy", "audio-render", "audio-bg-1",
                                         "audio-bg-2",  "audio-live-1", "audio-live-2"};
     auto named = [&] {
-        const auto names = threadNames();
+        const auto names = supple::test::osThreadNames();
         return std::includes(names.begin(), names.end(), want.begin(), want.end());
     };
     // Each thread names itself as it starts; the deadline only bounds a failure.
@@ -6088,7 +6077,6 @@ TEST_CASE("the engine's threads carry their role names") {
     CHECK(named());
     engine.stop();
 }
-#endif
 
 // --- background scheduling (ADR-0026) -----------------------------------------------------
 

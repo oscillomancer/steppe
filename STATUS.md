@@ -1567,9 +1567,8 @@ Engine and hosting:
   port gates"), each fenced with its reason: the JACK backend's (`test_jack`,
   `test_bench`, six JACK cases in `test_app`/`test_realtime`) and the Linux
   protections (`test_runtime_protection`), by design; recording header errors
-  through a `/proc/self/fd` fault (checked everywhere through the writer's I/O
-  seam too) and the OS thread role names (`test_realtime`), until
-  native variants land; the `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` refusals
+  through a `/proc/self/fd` fault (`test_realtime`; checked everywhere through
+  the writer's I/O seam too); the `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` refusals
   (`test_realtime`). Not on macOS, which has no CPU affinity: the restricted
   CPU mask (`test_realtime`, `test_workers`). Not on Windows: the posix-fd
   part of the CLAP host services case (`test_app`: CLAP's posix-fd extension
