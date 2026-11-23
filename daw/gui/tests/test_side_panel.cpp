@@ -773,6 +773,110 @@ TEST_CASE("inspector: one item's fields each run item.set, one undo step each") 
     CHECK_FALSE(f.inView("inspector.item"));
 }
 
+// session-model §1.5.1: a comp piece shows the comp's crossfade, one length
+// and shape for every seam, and a change is one take.comp.
+TEST_CASE("inspector: a comp piece's crossfade, length and shape, for every seam") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(1, std::vector<float>(48000, 0.25f));
+    const auto path = f.dir / "tone.wav";
+    REQUIRE(audio::writeWav(path, audio));
+    const std::string track = f.exec("track.add", R"({"name":"Keys"})")["track"].asString();
+    json::Value add = json::Value::object();
+    add["track"] = track;
+    add["audio_file"] = path.string();
+    add["position"] = 0;
+    auto added = f.dispatcher->execute({"item.add", add, kTest});
+    REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+    const std::string it = (*added)["item"].asString();
+    f.exec("take.add",
+           R"({"item":")" + it + R"(","from":")" + (*added)["take"].asString() + R"("})");
+    // The middle of the item plays the second take: three pieces, two seams.
+    auto comp = f.exec("take.comp",
+                       R"({"item":")" + it + R"(","spans":[{"from":0.6,"to":1.4,"index":1}]})");
+    REQUIRE(comp["pieces"].size() == 3);
+    std::vector<std::string> pieces;
+    for (const auto& p : comp["pieces"].asArray()) pieces.push_back(p.find("item")->asString());
+    f.side->show("inspector");
+    f.ui.selectedItems = {pieces[1]};
+    f.pass();
+    REQUIRE(f.inView("inspector.crossfade"));
+    CHECK(f.field("inspector.crossfade").text() == "0.010 s");
+    CHECK(f.text("inspector.crossfade_shape") == "Equal power");
+    // Its fades are the crossfade's: no Fade in or Fade out rows.
+    CHECK_FALSE(f.inView("inspector.fade_in"));
+    CHECK_FALSE(f.inView("inspector.fade_out"));
+    // A length for every seam: one take.comp, one undo step.
+    auto before = f.steps();
+    f.type("inspector.crossfade", "0.05");
+    CHECK(f.steps() == before + 1);
+    for (const auto& id : pieces) {
+        const model::Item& p = f.item(id);
+        if (id != pieces[0]) CHECK(p.fadeIn.length == doctest::Approx(0.05).epsilon(0.01));
+        if (id != pieces[2]) CHECK(p.fadeOut.length == doctest::Approx(0.05).epsilon(0.01));
+    }
+    CHECK(f.field("inspector.crossfade").text() == "0.050 s");
+    // A length the short pieces cannot hold: take.comp clamps it, and its
+    // warning goes to the status line's note.
+    std::vector<std::string> notices;
+    f.actions->onNotice = [&](const std::string& n) { notices.push_back(n); };
+    f.type("inspector.crossfade", "5");
+    REQUIRE(notices.size() == 1);
+    CHECK(notices[0].find("shorter") != std::string::npos);
+    f.actions->onNotice = nullptr;
+    f.type("inspector.crossfade", "0.05");
+    before = f.steps();
+    // The shape, the same way.
+    dynamic_cast<ui::Dropdown*>(f.node("inspector.crossfade_shape"))->choose("linear");
+    f.pass();
+    CHECK(f.steps() == before + 1);
+    CHECK(f.item(pieces[0]).fadeOut.shape == model::FadeShape::Linear);
+    CHECK(f.item(pieces[2]).fadeIn.shape == model::FadeShape::Linear);
+    CHECK(f.item(pieces[1]).fadeIn.length == doctest::Approx(0.05).epsilon(0.01));
+    // The first piece keeps its own fade-in; the last, its fade-out.
+    f.ui.selectedItems = {pieces[0]};
+    f.pass();
+    CHECK(f.inView("inspector.fade_in"));
+    CHECK_FALSE(f.inView("inspector.fade_out"));
+    f.ui.selectedItems = {pieces[2]};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.fade_in"));
+    CHECK(f.inView("inspector.fade_out"));
+    // An item that is no comp has no Crossfade row.
+    f.ui.selectedItems = {f.exec("item.add", R"({"track":")" + track +
+                                                 R"(","bar":5,"notation":"1: C4:q r:*"})")["item"]
+                              .asString()};
+    f.pass();
+    CHECK_FALSE(f.inView("inspector.crossfade"));
+    CHECK(f.inView("inspector.fade_in"));
+    CHECK(errors.empty());
+
+    // The Takes list switches a piece as a lane click does (take.comp): the
+    // middle piece back to the first take joins the three into one item,
+    // with no seam left to bump.
+    f.ui.selectedItems = {pieces[1]};
+    f.pass();
+    auto* list = dynamic_cast<ui::List*>(f.node("inspector.takes"));
+    REQUIRE(list);
+    before = f.steps();
+    list->select(0, true);
+    f.pass();
+    CHECK(f.steps() == before + 1);
+    std::size_t left = 0;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track.str() == track && e.value->takes.size() == 2) {
+            ++left;
+            CHECK(e.value->fadeOut.length == 0);  // the comp's end: no fade
+            CHECK(e.value->fadeIn.length == 0);
+        }
+    CHECK(left == 1);
+    CHECK(errors.empty());
+}
+
 TEST_CASE("inspector: an audio take's speed and pitch, and the choice of the take heard") {
     Fixture f;
     if (!f.ok) return;

@@ -10,7 +10,10 @@
 // (Alt-drag: the source moves under the item), fade handles at the top
 // corners (Ctrl+click cycles a fade's shape), the take badge cycles takes, double-click opens a
 // MIDI item, and files dropped on the lanes. An item showing its take lanes: click a lane to hear
-// that take, swipe across one to comp that range (split + take), drag the name bar to move it. On
+// that take (in a comp, for that piece), swipe across one to comp that range (take.comp, keeping
+// the comp's crossfade), drag a comp's seam to move it or the top of the seam to set the comp's
+// crossfade (the fade handles' shape click toggles equal power and linear), drag the name bar to
+// move the item. On
 // an automation lane: click selects a point (Ctrl toggles; a right-drag or a Ctrl-drag from empty
 // space is the marquee) or adds one on empty space, drag moves the selected points, in every
 // lane (snapped; Shift frees), Alt+click deletes one, a right-click opens the lane's menu (points,
@@ -97,6 +100,9 @@ class ItemGestures {
     std::function<void(const std::vector<model::Id>& items)> onBake;
     std::function<void(double seconds)> onSeek;  // a click on empty space
     std::function<void(const Error&)> onError;   // a refused gesture (status line)
+    // A comp's warnings (take.comp: a crossfade clamped or skipped, a held
+    // note struck again), for the status line's transient note.
+    std::function<void(const std::string&)> onNotice;
     // The keys bound to an app action ("Ctrl+C"), shown in the menus.
     std::function<std::string(std::string_view action)> keysFor;
     // REAPER's default: a move, copy or trim that makes two items overlap on a
@@ -253,7 +259,9 @@ class ItemGestures {
         Comp,
         AutoItemMove,
         AutoItemLength,
-        TakeOut  // Ctrl-drag on a take: it leaves its item for a place of its own
+        TakeOut,  // Ctrl-drag on a take: it leaves its item for a place of its own
+        Seam,     // a comp's seam between two takes: take.comp with the span edge moved
+        CompFade  // the top of a comp's seam: the comp's crossfade length (a drag) or shape
     };
     struct State {
         Drag drag = Drag::None;
@@ -263,10 +271,15 @@ class ItemGestures {
         model::Id anchor{};               // the item under the press
         double deltaBeats = 0;            // move / trim-left / trim-right / slip, snapped
         int deltaRows = 0;                // move
-        double fadeSeconds = 0;           // fade in/out length being drawn
+        double fadeSeconds = 0;           // fade in/out (comp fade: crossfade) length being drawn
+        double fadeMax = 0;               // comp fade: the longest the pieces beside allow
         bool stretch = false;             // Alt on the right edge: length and play rate together
         std::size_t takeLane = 0;         // comp / take out: the take (index) under the press
         double compFrom = 0, compTo = 0;  // comp: the range being swiped (beats)
+        double compLo = 0, compHi = 0;    // comp: where a swipe may reach (the run's core)
+        // seam: the seam's beat at the press and how far it may go (beats);
+        // deltaBeats is the move.
+        double seamBeat = 0, seamLo = 0, seamHi = 0;
         ui::Rect marquee{};
         std::vector<model::Id> marqueeBase;  // what a marquee adds to
         std::map<model::Id, std::vector<model::EnvPoint>> pointBase;
@@ -305,6 +318,7 @@ class ItemGestures {
         Drag zone = Drag::None;
         bool takeBadge = false;
         std::optional<std::size_t> takeLane;  // a take lane under the point (comping)
+        std::optional<model::Id> seamLeft;    // Seam: the piece before the seam (item: after it)
     };
     std::optional<Hit> hit(ui::Point p) const;
     // A visible take envelope of the item's active take at `p` (on a point or

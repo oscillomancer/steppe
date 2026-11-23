@@ -1072,8 +1072,15 @@ instructions are in `docs/guides/installing.md`.
   engine or the audio path. Calling it again rebuilds the seams and changes nothing when
   the arguments are the same; `take.activate {index}` on a piece keeps them. Nothing in
   the file marks a comp: the run of pieces is found by adjacency and equal takes.
-  Limits: the GUI's swipe still makes hard cuts and has no crossfade setting or seam
-  drag (the GUI step); seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
+  The GUI comps with `take.comp` (a swipe, a lane click in a comp), draws each seam
+  between takes, moves one by a drag and sets the comp's crossfade by dragging a seam's
+  top or in the inspector, keeping a comp's crossfade on every re-comp.
+  Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
+  a looped item's swipe splits and switches with hard cuts until its Loop is off;
+  on a track grouped for edits the swipe also keeps that path (split every member,
+  switch one) until `take.comp` comps every member of an edit group with the same
+  spans and take, which is asked of the builder; the GUI switches to it then;
+  seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
   empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);
   a record pass over an item still lays an overlapping item rather than a take of it;
