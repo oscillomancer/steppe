@@ -2961,6 +2961,16 @@ TEST_CASE("a late bridge's carry full of parameters still takes a later value of
     CHECK(std::none_of(got.begin(), got.end(), [](const Event& e) { return e.paramId == 9999; }));
 }
 
+TEST_CASE("a start posted under a live deadline is waited for off the callback for what is left") {
+    // Review round 126 B1: a pending start reached by a call off the callback
+    // waits only the rest of its lifecycle deadline, counted from its post.
+    CHECK(lifecycleLeftMs(7000, 0) == 7000);
+    CHECK(lifecycleLeftMs(7000, 6'000'000'000) == 1000);
+    CHECK(lifecycleLeftMs(7000, 6'999'000'001) == 1);  // rounded up
+    CHECK(lifecycleLeftMs(7000, 7'000'000'000) == 0);
+    CHECK(lifecycleLeftMs(7000, 9'000'000'000) == 0);  // past it: no wait at all
+}
+
 TEST_CASE("a bridged start that misses its live deadline is unanswered, not refused") {
     // Round 16: the engine took it for a refusal and never asked again.
     {

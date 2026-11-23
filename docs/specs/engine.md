@@ -2309,7 +2309,8 @@ instance).
   atomic load, no wait, so those cycles are not late), stop, reset and flush
   are kept, and the start is not judged by the late rule: it fails as hung
   once the lifecycle deadline (5/2 of the bridge deadline plus 2 s) has
-  passed since it was posted (ADR-0101). A stop reaches such an instance too, and the bridge
+  passed since it was posted (ADR-0101), a call off the callback that
+  reaches it waiting only the rest of that deadline. A stop reaches such an instance too, and the bridge
   stops an instance still processing before it deactivates it. `host::bridgeLateCalls()` counts late calls
   process-wide. Consecutive late calls spanning 50 ms fail the instance with
   the hung reason; the audio thread only sets the flag, and the main thread

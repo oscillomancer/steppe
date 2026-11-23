@@ -69,6 +69,12 @@ int lifecycleDeadlineMs(int deadlineMs) SUPPLE_RT {
         std::min<std::int64_t>(5 * std::int64_t(deadlineMs) / 2 + 2000, INT32_MAX));
 }
 }  // namespace
+int lifecycleLeftMs(int limitMs, std::int64_t elapsedNs) SUPPLE_RT {
+    const std::int64_t left = std::int64_t{limitMs} * 1'000'000 - elapsedNs;
+    return left <= 0
+               ? 0
+               : static_cast<int>(std::min<std::int64_t>((left + 999'999) / 1'000'000, INT32_MAX));
+}
 void setBridgeDeadlineMs(int ms) {
     gBridgeDeadlineMs.store(std::max(ms, 1), std::memory_order_relaxed);
 }
@@ -1193,7 +1199,11 @@ bool RemoteInstance::answered(std::uint32_t req, Cmd cmd) SUPPLE_RT {
     // killed either.
     const int own = callDeadlineMs_.load(std::memory_order_relaxed);
     const int deadlineMs = own > 0 ? own : bridgeDeadlineMs();
-    const int limitMs = cmd == Cmd::Process ? deadlineMs : lifecycleDeadlineMs(deadlineMs);
+    int limitMs = cmd == Cmd::Process ? deadlineMs : lifecycleDeadlineMs(deadlineMs);
+    // A start posted under a live deadline has been running since then
+    // (ADR-0101): only the rest of its lifecycle deadline is left.
+    if (cmd == Cmd::StartProcessing && startAskedNs_)
+        limitMs = lifecycleLeftMs(limitMs, steadyNanoseconds() - startAskedNs_);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(limitMs);
     for (;;) {
         const std::uint32_t seen = hdr_->done.load(std::memory_order_acquire);
