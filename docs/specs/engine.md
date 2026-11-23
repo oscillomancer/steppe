@@ -1956,7 +1956,9 @@ first use, and no plug-in code runs early to warm it.
   when present (ADR-0014/0082). Repair checks both RIFF and data byte
   counts against the whole frames physically present, including a torn size
   whose rounded-down frame count already matches; partial trailing frames are
-  not included in either repaired size. Punch in/out and loop recording (one take per pass); MIDI recording
+  not included in either repaired size. Punch in/out and loop recording (one take per pass; a pass over an existing item is a take of
+  it, heard where it was recorded through a `take.comp` made in the commit's transaction,
+  ADR-0103: `record.commit` carries `stack`); MIDI recording
   into MIDI takes, each journaled for crash recovery (below). Audio ring overflow becomes equal-length silence at its file
   position and is still reported; loop run positions remain in file-time units.
   Disk and periodic header errors stop only the failing target and retain that

@@ -112,6 +112,8 @@ inline schema::Schema<RecordedInfo> recordedSchema() {
         .field("seconds", &RecordedInfo::seconds, schema::number())
         .field("lost_frames", &RecordedInfo::lostFrames, schema::integer())
         .field("takes", &RecordedInfo::takes, schema::arrayOf(schema::string()))
+        .field("stacked", &RecordedInfo::stacked,
+               schema::boolean().doc("The takes went into an existing item (ADR-0103)."))
         .field("warnings", &RecordedInfo::warnings, schema::arrayOf(recordingWarningSchema()))
         .build();
 }

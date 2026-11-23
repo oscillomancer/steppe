@@ -121,3 +121,4 @@ current state.
 | [0100](0100-chord-tone-spelling.md) | Chord tones are spelled by their degree | Accepted |
 | [0101](0101-bridged-start-lifecycle-deadline.md) | A bridged start in the callback fails at the lifecycle deadline | Accepted |
 | [0102](0102-windows-live-wait-timer.md) | Windows live bridge waits end on a high-resolution timer | Accepted |
+| [0103](0103-recording-over-an-item.md) | Recording over an item makes a take of it | Accepted |

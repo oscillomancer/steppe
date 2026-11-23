@@ -110,6 +110,10 @@ Kind: `query`. Exposure: `mcp-exec`.
               "type": "string"
             }
           },
+          "stacked": {
+            "type": "boolean",
+            "description": "The takes went into an existing item (ADR-0103)."
+          },
           "warnings": {
             "type": "array",
             "items": {
@@ -140,7 +144,7 @@ Kind: `query`. Exposure: `mcp-exec`.
             }
           }
         },
-        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
+        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes", "stacked"],
         "additionalProperties": false
       }
     },
@@ -486,6 +490,10 @@ Kind: `action`. Exposure: `mcp-exec`.
               "type": "string"
             }
           },
+          "stacked": {
+            "type": "boolean",
+            "description": "The takes went into an existing item (ADR-0103)."
+          },
           "warnings": {
             "type": "array",
             "items": {
@@ -516,7 +524,7 @@ Kind: `action`. Exposure: `mcp-exec`.
             }
           }
         },
-        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
+        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes", "stacked"],
         "additionalProperties": false
       }
     },
@@ -666,6 +674,10 @@ Kind: `action`. Exposure: `mcp-tool`.
               "type": "string"
             }
           },
+          "stacked": {
+            "type": "boolean",
+            "description": "The takes went into an existing item (ADR-0103)."
+          },
           "warnings": {
             "type": "array",
             "items": {
@@ -696,7 +708,7 @@ Kind: `action`. Exposure: `mcp-tool`.
             }
           }
         },
-        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
+        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes", "stacked"],
         "additionalProperties": false
       }
     },
@@ -1138,6 +1150,10 @@ Kind: `action`. Exposure: `mcp-exec`.
               "type": "string"
             }
           },
+          "stacked": {
+            "type": "boolean",
+            "description": "The takes went into an existing item (ADR-0103)."
+          },
           "warnings": {
             "type": "array",
             "items": {
@@ -1168,7 +1184,7 @@ Kind: `action`. Exposure: `mcp-exec`.
             }
           }
         },
-        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
+        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes", "stacked"],
         "additionalProperties": false
       }
     },
@@ -1325,6 +1341,10 @@ Kind: `action`. Exposure: `mcp-tool`.
               "type": "string"
             }
           },
+          "stacked": {
+            "type": "boolean",
+            "description": "The takes went into an existing item (ADR-0103)."
+          },
           "warnings": {
             "type": "array",
             "items": {
@@ -1355,7 +1375,7 @@ Kind: `action`. Exposure: `mcp-tool`.
             }
           }
         },
-        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
+        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes", "stacked"],
         "additionalProperties": false
       }
     },
@@ -1506,6 +1526,10 @@ Kind: `action`. Exposure: `mcp-tool`.
               "type": "string"
             }
           },
+          "stacked": {
+            "type": "boolean",
+            "description": "The takes went into an existing item (ADR-0103)."
+          },
           "warnings": {
             "type": "array",
             "items": {
@@ -1536,7 +1560,7 @@ Kind: `action`. Exposure: `mcp-tool`.
             }
           }
         },
-        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
+        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes", "stacked"],
         "additionalProperties": false
       }
     },

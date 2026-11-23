@@ -1,5 +1,9 @@
 # ADR-0098: Clips know the context
 
+**Note, 2026-11-23:** a MIDI pass over an item whose take follows is now a new, heard take of that
+item, not a separate item; the following take stays as another take (ADR-0103). A `midi_overdub`
+still leaves a following item alone (`record.follow_kept`).
+
 **Status:** Accepted, 2026-11-20. Written by the lead from the
 co-director's outline (`designs/headline-core.md` §7); the co-director
 accepted it with the seven differences listed below. Revised the same day
