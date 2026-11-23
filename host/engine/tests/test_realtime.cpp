@@ -52,6 +52,7 @@
 #if defined(SUPPLE_TEST_JACK)
 #include "fake_jack.h"
 #endif
+#include "../../../tests/wav_stream_test_support.h"
 #include "live_workers.h"
 #include "meters.h"
 #include "plan.h"
@@ -99,6 +100,13 @@ struct RecorderTestAccess {
         return false;
     }
 #endif
+    // Every platform: the target's writer fails its flushes from now on (its own
+    // I/O seam, audio::WavStreamWriterTestAccess), as a full disk would.
+    static void failFlushes(Recorder& recorder, std::size_t index,
+                            audio::WavStreamWriterTestAccess::Fault& fault) {
+        fault.failFlush = true;
+        audio::WavStreamWriterTestAccess::inject(recorder.tracks_[index]->writer, fault);
+    }
     static void updateHeaders(Recorder& recorder) { recorder.updateHeaders(); }
     static void failTarget(Recorder& recorder, std::size_t index) {
         recorder.tracks_[index]->writer.abandon();
@@ -4247,6 +4255,33 @@ TEST_CASE("recording header errors retain the first error and spare other target
     std::filesystem::remove_all(dir);
 }
 #endif
+
+// The same on every platform, through the writer's I/O seam: the header
+// update's flush fails while the writer thread is stalled.
+TEST_CASE("a failed header update keeps its error and spares the other targets (I/O seam)") {
+    using Access = detail::RecorderTestAccess;
+    const auto dir = supple::test::uniqueTempDir("supple-rec-header-seam-");
+    detail::Recorder recorder({{Id{model::Kind::Track, 1}, {0}, dir / "bad.wav", {}},
+                               {Id{model::Kind::Track, 2}, {0}, dir / "good.wav", {}}},
+                              16, 0);
+    Access::stall(recorder);
+    REQUIRE(recorder.open());
+    REQUIRE(waitForRecorder([&] { return Access::stalled(recorder); }));
+    audio::WavStreamWriterTestAccess::Fault fault;
+    Access::failFlushes(recorder, 0, fault);
+    Access::updateHeaders(recorder);  // the same routine the writer runs periodically
+    Access::failTarget(recorder, 0);  // later append errors must not replace the header error
+    const std::array<float, 32> data{};
+    const float* input[] = {data.data()};
+    recorder.capture(input, 1, 32, 0);
+    const auto takes = recorder.finish();
+    REQUIRE(takes.size() == 2);
+    CHECK(takes[0].error.find("file.write") != std::string::npos);
+    CHECK(takes[1].error.empty());
+    CHECK(takes[1].frames == 32);
+    std::error_code ignored;
+    std::filesystem::remove_all(dir, ignored);
+}
 
 TEST_CASE("a full recording loop table keeps its runs and stops adding input") {
     using Access = detail::RecorderTestAccess;
