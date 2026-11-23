@@ -3889,7 +3889,11 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     // start is seen, the stage passes audio through and those cycles are not
     // late (ADR-0101): on a slow runner the answer came three cycles after
     // the release (CI 45267253541), which this case once counted as late.
-    constexpr int kCycles = 2048;  // a guard against a bridge that never answers
+    // A guard against a bridge that never answers: after the release, a
+    // cycle still awaiting the start's answer sleeps 10 ms, so half of these
+    // outlast the 7 s lifecycle deadline at which the engine fails it as hung
+    // (ADR-0101); how fast cycles spin decides nothing.
+    constexpr int kCycles = 2048;
     auto pool = makePool();
     MediaCache media;
     DummyBackend backend(constantInput(kCycles * 128));
@@ -3923,18 +3927,22 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     gate->release();
     REQUIRE(gate->wentOn());
     // Each cycle after those until one is processed: passed through while
-    // the bridge's answer is still unseen (not late), or silent or passed
-    // through otherwise (a late cycle), never anything else.
-    for (; cycle < kCycles / 2; ++cycle) {
+    // the bridge's answer is still unseen (not late; the bridge is given
+    // time), or silent or passed through otherwise (a late cycle), never
+    // anything else.
+    for (; cycle < kCycles / 2 && !instance->failed(); ++cycle) {
         backend.run(1);  // on this thread: the instance is read after it
         if (at(cycle) == doctest::Approx(processed).epsilon(1e-4)) break;
         CHECK((at(cycle) == 0.5 || at(cycle) == 0.0));
-        if (at(cycle) == 0.5 && instance->startUnanswered())
+        if (at(cycle) == 0.5 && instance->startUnanswered()) {
             ++starting;
-        else
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        } else {
             ++unprocessed;
+        }
     }
     MESSAGE(starting << " cycles passed through awaiting the start's answer");
+    REQUIRE_FALSE(instance->failed());
     REQUIRE_MESSAGE(cycle < kCycles / 2, "the started bridge never processed a block");
     // Once started, a cycle is processed or, late, silent: never passed through.
     for (int more = 0; more < 16; ++more) {
