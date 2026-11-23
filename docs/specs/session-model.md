@@ -2992,11 +2992,15 @@ on the loop range with a take per pass):
   each get a copy of the played source with their own `start_offset`, as `item.split` leaves them.
 - Heard afterwards (D1, round 132): **where it was recorded, and nowhere else.** Cut to the run's
   extent (its crossfades taken out), each pass covers a stretch of the timeline, and a newer pass
-  hears over an older one. When one pass covers the whole run, that take is the active take of every
-  piece, no comp. Otherwise the commit calls `take.comp` on the target in the same transaction
-  (`bypass_groups`; the default crossfade for audio, `crossfade: 0` for MIDI, so no
+  hears over an older one. When one pass covers the whole of a lone item, that take is its active
+  take, no comp. Otherwise the commit calls `take.comp` on the target in the same transaction
+  (`bypass_groups`; for audio the default crossfade on a lone item and, on an existing comp, the
+  run's own `crossfade` and `crossfade_shape` as `take.comp.get` reports them, so its seams are
+  rebuilt as they were and seams set by hand become uniform; `crossfade: 0` for MIDI, so no
   `comp.crossfade_skipped`): a span for each stretch, playing the new take's index, and every
-  stretch outside the spans keeps the take its piece played (a comp keeps its pieces there). The
+  stretch outside the spans keeps the take its piece played (a comp keeps its pieces there). A pass
+  over the whole of a comp of several pieces is one span over the run, which joins the pieces that
+  now play one take (kept apart they would swell by 3 dB across each old equal-power seam). The
   item thus becomes up to three pieces (before, the pass, after) for one pass, or more for a loop
   or a comp, as `take.comp` makes them, and one undo step restores it. The warnings of that
   `take.comp` (`comp.crossfade_clamped`, `comp.crossfade_skipped`) are part of the recording's

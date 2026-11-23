@@ -40,10 +40,15 @@ timeline start have clipped it).
    132, replacing "the new take is heard on every piece the pass touches", which left the rest of
    the item silent: a pass over bar 5 of eight bars made bars 1-4 and 6-8 mute.) In the commit's
    own transaction the pass's stretch is comped to the new take through `take.comp` (the default
-   crossfade for audio, hard cuts for MIDI, `bypass_groups`), and everything outside it keeps
-   playing what it played, in a comp as well: the item becomes the pieces before, the pass, and
-   after, as `take.comp` makes them (one undo step). A pass that covers the whole item or run
-   (or more) makes the new take heard whole with no comp. Loop passes are appended in order, one
+   crossfade for a lone item, the comp's own crossfade and shape for an existing comp, hard cuts for
+   MIDI, `bypass_groups`), and everything outside it keeps playing what it played, in a comp as
+   well: the item becomes the pieces before, the pass, and after, as `take.comp` makes them (one
+   undo step). The seams of an existing comp are rebuilt from the crossfade `take.comp.get`
+   reports (a user's 40 ms linear comp stays 40 ms linear; seams that differed by hand become
+   uniform, as any `take.comp` makes them). A pass that covers the whole of a lone item makes the
+   new take heard whole with no comp; over a whole comp of several pieces it goes through
+   `take.comp` with a single span, which joins the neighbours that now play one take (kept apart
+   they would swell by 3 dB across each old equal-power seam). Loop passes are appended in order, one
    take per pass, and the newest pass is heard over each stretch of the loop range, older passes
    staying as takes. The new take is heard also when the target's active take followed the
    context (ADR-0098): the following take stays as another take, untouched, over the rest, and

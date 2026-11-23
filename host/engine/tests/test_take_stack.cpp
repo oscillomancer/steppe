@@ -8,6 +8,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <numbers>
 #include <string>
 
@@ -426,20 +427,110 @@ TEST_CASE("a punch into bar 5 of an eight-bar item: the old take around it, the 
     }
 }
 
-TEST_CASE("a pass over an item at a pitch-keeping rate reads the new take by the timeline too") {
+TEST_CASE("a pass under a master pitch-keeping rate goes through the stretch converter, in step") {
     StackFixture f(4.0);
-    // The item plays at half speed with its pitch kept (the stretch path reads the take).
-    f.run("take.set", R"({"take":"tk_1","playrate":0.5,"preserve_pitch":true})");
+    // Half speed with the pitch kept: every take, the new one too, is read through the stretcher.
+    f.run("transport.playrate.set", R"({"rate":0.5,"preserve_pitch":true})");
     const model::Session before = f.app->head();
-    auto done = f.app->commitTakes({f.pass("rate.wav", 1.0, 1.0)});
+    const auto old = f.render(before, 4.0);
+    auto done = f.app->commitTakes({f.pass("rate.wav", 1.0, 1.0)});  // timeline 1 s to 2 s
     REQUIRE(done);
-    CHECK(f.pieces().size() >= 2);
-    const auto mixed = f.render(f.app->head(), 4.0);
-    double peak = 0;
-    for (std::size_t n = 0; n < mixed.size(); ++n)
+    REQUIRE(f.pieces().size() == 3);
+    const model::Session session = f.app->head();
+    const auto mixed = f.render(session, 4.0);
+    const auto at = [&](double seconds) { return static_cast<std::size_t>(seconds * kRate); };
+    // Output time is twice the timeline's: the pass is heard from 2 s to 4 s of output. Before it
+    // the old take plays as it did; in it the new one does (another tone, so another signal).
+    CHECK(maxDiff(mixed, 0, old, at(1.5)) == 0.0);
+    double peak = 0, differs = 0;
+    for (std::size_t n = at(2.2); n < at(3.8); ++n) {
         peak = std::max(peak, double(std::fabs(mixed[n])));
+        differs = std::max(differs, double(std::fabs(mixed[n] - old[n])));
+    }
     CHECK(peak > 0.1);
-    CHECK(f.render(f.app->head(), 4.0) == mixed);  // deterministic
+    CHECK(differs > 0.1);
+    // Real time renders as offline, in both executors, through the stretcher.
+    for (const EngineOptions& options :
+         {kInCallback, EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
+        INFO("anticipative " << options.anticipative << ", workers " << options.workers);
+        auto rtPool = makePool();
+        MediaCache media;
+        const std::int64_t frames = static_cast<std::int64_t>(at(4.0));
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames + 4096});
+        Engine engine(rtPool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(session, f.dir));
+        engine.play();
+        const std::int64_t cycles = (frames + 4096) / 128;
+        if (options.anticipative)
+            runAhead(engine, backend, cycles, 128);
+        else
+            backend.run(cycles);
+        engine.stop();
+        CHECK(engine.processErrors() == 0);
+        CHECK(maxDiff(backend.capture().channels[0], engine.outputLatency(), mixed,
+                      static_cast<std::size_t>(frames)) == 0.0);
+    }
+}
+
+TEST_CASE("a partial pass over a comp leaves its other seams as they were") {
+    StackFixture f;
+    f.run("take.add", R"({"item":"it_1","from":"tk_1"})");
+    // A user's comp: 40 ms linear crossfades, two seams (beats 1 and 3: 0.5 s and 1.5 s).
+    f.run("take.comp",
+          R"({"item":"it_1","crossfade":0.04,"crossfade_shape":"linear","spans":[
+              {"from":0,"to":1,"index":0},{"from":1,"to":3,"index":1},{"from":3,"to":4,"index":0}]})");
+    // A piece's place and fades, as the pass must leave them where it did not come.
+    const auto shape = [&](const model::Session& s, model::Id id) {
+        const model::Item& it = *s.items.find(id);
+        return std::tuple(it.position, it.length, it.fadeIn.length, it.fadeIn.shape,
+                          it.fadeOut.length, it.fadeOut.shape);
+    };
+    const auto ids0 = f.pieces();
+    REQUIRE(ids0.size() == 3);
+    const model::Session beforeAll = f.app->head();
+    // A pass inside the middle piece only (0.75 s to 1.25 s), far from both seams.
+    auto done = f.app->commitTakes({f.pass("mid.wav", 0.75, 0.5)});
+    REQUIRE(done);
+    const model::Session after = f.app->head();
+    REQUIRE(f.pieces().size() == 5);
+    // The first and the last piece, whose seams are 0.25 s from the pass, keep their place and
+    // their 40 ms linear fades exactly.
+    const auto ids = f.pieces();
+    CHECK(shape(after, ids.front()) == shape(beforeAll, ids0.front()));
+    CHECK(shape(after, ids.back()) == shape(beforeAll, ids0.back()));
+    for (const auto id : {ids.front(), ids.back()}) {
+        const model::Item& it = *after.items.find(id);
+        CHECK(std::max(it.fadeIn.length, it.fadeOut.length) == doctest::Approx(0.04));
+        CHECK((it.fadeIn.length > 0 ? it.fadeIn.shape : it.fadeOut.shape) ==
+              model::FadeShape::Linear);
+    }
+    // And the read-back is still the user's crossfade, uniform.
+    const auto got = f.run("take.comp.get", R"({"item":")" + ids.front().str() + R"("})");
+    CHECK(got.find("crossfade")->asDouble() == doctest::Approx(0.04));
+    CHECK(got.find("crossfade_shape")->asString() == "linear");
+    CHECK(got.find("uniform")->asBool());
+}
+
+TEST_CASE("a pass over a whole comp joins the pieces: flat across the old seams") {
+    StackFixture f;
+    f.run("take.add", R"({"item":"it_1","from":"tk_1"})");
+    f.run("take.comp",
+          R"({"item":"it_1","spans":[{"from":0,"to":2,"index":0},{"from":2,"to":4,"index":1}]})");
+    REQUIRE(f.pieces().size() == 2);
+    auto done = f.app->commitTakes({f.pass("whole.wav", 0.0, 3.0)});  // covers the item
+    REQUIRE(done);
+    REQUIRE(f.pieces().size() == 1);  // the neighbours that now play one take are one item
+    const auto out = f.render(f.app->head(), 2.0);
+    const auto at = [&](double seconds) { return static_cast<std::size_t>(seconds * kRate); };
+    double around = 0, elsewhere = 0;
+    for (std::size_t n = at(0.1); n < at(1.9); ++n) {
+        const bool seam = n > at(0.98) && n < at(1.02);  // the old seam, at 1 s
+        (seam ? around : elsewhere) =
+            std::max(seam ? around : elsewhere, double(std::fabs(out[n])));
+    }
+    CHECK(elsewhere > 0.1);
+    CHECK(around <= elsewhere * 1.001);  // no 3 dB swell where the pieces used to meet
 }
 
 TEST_CASE("a refused commit leaves the session editable and the project as it was") {

@@ -3215,6 +3215,9 @@ struct StackTarget {
     Id target;
     std::vector<Id> pieces;
     std::int64_t coreStart = 0, coreEnd = 0;  // the run's extent, crossfades taken out
+    // A comp's own crossfade (what take.comp.get reports), so that a pass over part of it rebuilds
+    // the seams as they were; unset for a lone item (take.comp's default).
+    std::optional<model::CompCrossfade> crossfade;
     std::optional<RecordingWarning> skipped;
 };
 
@@ -3273,6 +3276,7 @@ StackTarget stackTarget(const model::Session& s, const RecordedTake& r, const It
         for (const auto& p : *run) pieces.push_back(p.item);
         out.coreStart = run->front().coreStart;
         out.coreEnd = run->back().coreEnd;
+        out.crossfade = model::compCrossfade(s, *run);
     }
     for (Id piece : pieces) {
         const model::Item& it = *s.items.find(piece);
@@ -3362,7 +3366,11 @@ Result<std::size_t> hearPasses(const StackEnv& env, model::EditTxn& t, const mod
     std::size_t newest = 0;
     for (const Heard& h : heard) newest = std::max(newest, h.pass);
     if (heard.empty()) return ip.takes.size() - 1;
-    if (heard.size() == 1 && heard[0].lo <= st.coreStart && heard[0].hi >= st.coreEnd) {
+    // One pass over the whole of a lone item: its take, no comp. Over a comp's pieces it goes
+    // through take.comp too, whose single span joins the neighbours that now play one take (kept
+    // apart they would swell by 3 dB across each old equal-power seam).
+    if (heard.size() == 1 && heard[0].lo <= st.coreStart && heard[0].hi >= st.coreEnd &&
+        st.pieces.size() == 1) {
         for (std::size_t k = 0; k < st.pieces.size(); ++k)
             t.modify<model::Item>(st.pieces[k],
                                   [&](model::Item& x) { x.activeTake = made[k][heard[0].pass]; });
@@ -3378,7 +3386,13 @@ Result<std::size_t> hearPasses(const StackEnv& env, model::EditTxn& t, const mod
     args["item"] = st.target.str();
     args["bypass_groups"] =
         true;  // the pass is this track's; its group's other tracks are not comped
-    if (midi) args["crossfade"] = 0.0;
+    if (midi) {
+        args["crossfade"] = 0.0;
+    } else if (st.crossfade) {  // the comp's own, so the seams away from the pass stay as they were
+        args["crossfade"] = st.crossfade->seconds;
+        args["crossfade_shape"] =
+            st.crossfade->shape == model::FadeShape::Linear ? "linear" : "cos";
+    }
     auto spans = json::Value::array();
     for (const Heard& h : heard) {
         auto span = json::Value::object();
