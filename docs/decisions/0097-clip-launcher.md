@@ -911,7 +911,9 @@ the boundary.
   0.37 after a return). *Note 2026-11-23 (review round 117 W1):* only
   where an audio item of the track lies within 0.25 s of the switch's song
   position, the converter's reach either side; a switch clear of the
-  track's audio is captured, and its commit is exact. Arming is refused
+  track's audio is captured, and its commit is exact. (W2:) the end goes
+  with its switch, dropped if that launch is replaced or voided before its
+  boundary, and is kept apart from a quantized end. Arming is refused
   with `launch.playrate` while a launched audio clip plays and the newest
   plan keeps the pitch (no committed item reads a stretch converter's
   history), naming the clip, with the hint to stop it or turn off preserve

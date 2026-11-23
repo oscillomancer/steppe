@@ -1337,10 +1337,23 @@ class Engine {
     // not placed yet (relocating, or a relocation before it ran).
     struct CaptureState {
         bool on = false, any = false, pending = false;
-        // A quantized end (captureLaunches): it ends at endSong once heard
-        // there (service).
+        // An end it ends at once heard there (service): the earlier of its
+        // own quantized end (captureLaunches) and a switch's that cuts
+        // stretched arrangement audio (captureBeforeStretchCut); kept apart
+        // so a switch replaced or voided before its boundary drops only its
+        // own (round 117 W2). settleCaptureEnd() sets these three.
         bool ending = false;
         double endBeat = 0;
+        bool userEnding = false;
+        std::int64_t userEndSong = 0;
+        double userEndBeat = 0;
+        // The switch's: its slot (SIZE_MAX: none) and generation, track and
+        // boundary.
+        std::size_t cutSlot = SIZE_MAX;
+        std::uint64_t cutGeneration = 0;
+        model::Id cutTrack;
+        std::int64_t cutSong = 0;
+        double cutBeat = 0;
         std::uint64_t epoch = 0;
         // Its start and end on the song's running count (heardSong), and the
         // song sample it began at.
@@ -1349,6 +1362,8 @@ class Engine {
     };
     CaptureState capture_;
     void placeCapture();       // a pending start, once the clock reads
+    void settleCaptureEnd();   // ending/endSong/endBeat from the two ends
+    void dropStaleCut();       // a switch's end whose launch no longer stands
     void captureRelocating();  // writeTransport: a relocation is coming
     // A quantized end heard: it ends there. Service runs it, and so do
     // captureRelocating and captureLaunches first.

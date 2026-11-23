@@ -629,7 +629,11 @@ the same.*
   placement and at each service), ends the capture on that switch's
   boundary, the launch not in it, with a warning naming the track; MIDI
   launches on other tracks, and switches clear of a track's audio, are
-  captured (round 117 W1).
+  captured (round 117 W1). That end goes with its switch: replaced before
+  its boundary (another launch on the track) or voided (an edit that leaves
+  it nothing to play), it is dropped and the capture runs on; it is kept
+  apart from a quantized end, the earlier of the two ending the capture,
+  and on again cancels only the quantized one (round 117 W2).
 - **Committing it.** `launch.commit` lays the capture out linearly: a
   launch at running frame f lands at the capture's start plus f, whatever
   the loop did. On each track that left the arrangement, the stretches
