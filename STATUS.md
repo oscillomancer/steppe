@@ -1096,7 +1096,9 @@ instructions are in `docs/guides/installing.md`.
   the file marks a comp: the run of pieces is found by adjacency and equal takes.
   The GUI comps with `take.comp` (a swipe, a lane click in a comp), draws each seam
   between takes, moves one by a drag and sets the comp's crossfade by dragging a seam's
-  top or in the inspector, keeping a comp's crossfade on every re-comp.
+  top or in the inspector. Its re-comps and seam drags send no crossfade, so a seam set by
+  hand elsewhere stays as stored; only the crossfade handle and the inspector's Crossfade
+  send one, which rebuilds every seam.
   Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
   a looped item's swipe splits and switches with hard cuts until its Loop is off;
   on a track grouped for edits every comp gesture is the group's `take.comp` (Alt
