@@ -46,6 +46,7 @@
 
 #include "../../clap-host/tests/lifecycle_gate.h"
 #include "../../clap-host/tests/scope_probe.h"
+#include "../../clap-host/tests/shared_page.h"
 #include "bridge_patience.h"
 #include "engine_test_access.h"
 #if defined(SUPPLE_TEST_JACK)
@@ -6662,20 +6663,12 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     // 1 s deadline keeps every healthy block on time. The host must end 67
     // and reset the controllers itself. (Round 22: a 30 ms spin against a
     // 10 ms deadline let a loaded machine skip the check.)
-#if defined(_WIN32)
-    MESSAGE("POSIX only: the echo's gate is a shared mapping (see STATUS)");
-#else
     host::setBridgeExecutable(BRIDGE_PATH);
-    const std::filesystem::path file =
-        std::filesystem::temp_directory_path() /
-        ("supple-echo-gate-" + std::to_string(supple::test::processId()));
-    const int fd = ::open(file.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
-    REQUIRE(fd >= 0);
-    REQUIRE(::ftruncate(fd, 4096) == 0);
-    void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    ::close(fd);
-    REQUIRE(words != MAP_FAILED);
-    auto* gate = static_cast<std::atomic<unsigned>*>(words);
+    // The gate: a page the bridge maps too (a file on POSIX, a section on Windows).
+    const std::string gateName = supple::test::SharedPage::nameFor("supple-echo-gate");
+    supple::test::SharedPage page = supple::test::SharedPage::create(gateName);
+    REQUIRE(page);
+    auto* gate = static_cast<std::atomic<unsigned>*>(page.data());
     for (int i = 0; i < 3; ++i) new (gate + i) std::atomic<unsigned>(0);
     // Only a guard against a bridge that died: the gate orders the test.
     auto reached = [&](int word) {
@@ -6685,19 +6678,13 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
             std::this_thread::yield();
         return gate[word].load(std::memory_order_acquire) != 0;
     };
-    // Opens the gate and removes the file however the test ends (after the
-    // engine, declared later, has stopped).
+    // Opens the gate however the test ends (after the engine, declared later,
+    // has stopped); the page is unmapped, and its file removed, after that.
     struct Release {
         std::atomic<unsigned>* words;
-        std::filesystem::path path;
-        ~Release() {
-            words[1].store(1, std::memory_order_release);
-            ::munmap(words, 4096);
-            std::error_code ec;
-            std::filesystem::remove(path, ec);
-        }
-    } release{gate, file};
-    ::setenv("SUPPLE_TEST_ECHO_GATE", file.c_str(), 1);
+        ~Release() { words[1].store(1, std::memory_order_release); }
+    } release{gate};
+    REQUIRE(supple::test::environment("SUPPLE_TEST_ECHO_GATE", gateName.c_str()) == 0);
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     model::Track tr;
     tr.parent = kMaster;
@@ -6743,7 +6730,7 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     engine.setMidiPreferences({}, {{"Synth", port}});
     REQUIRE(engine.load(*session));
     engine.play();
-    ::unsetenv("SUPPLE_TEST_ECHO_GATE");      // the bridge has it
+    supple::test::environment("SUPPLE_TEST_ECHO_GATE", nullptr);  // the bridge has it
     backend.run(180);                         // to 0.48 s: key 60 (the echo's 67) is held
     REQUIRE(engine.bridgeLateCycles() == 0);  // the healthy baseline
     backend.run(200);                         // through key 119's gated block, lost at its deadline
@@ -6774,7 +6761,6 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     CHECK(std::count_if(heard.begin(), heard.end(), [&](const auto& m) {
               return is(m, 0x80, 67) || (is(m, 0x90, 67) && m.event.bytes[2] == 0);
           }) == 1);
-#endif
 }
 
 namespace {

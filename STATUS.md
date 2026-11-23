@@ -1571,8 +1571,7 @@ Engine and hosting:
   `/proc/self/fd` fault and the OS thread role names (`test_realtime`), until
   native variants land; the restricted CPU mask (`test_realtime`,
   `test_workers`) and the `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` refusals
-  (`test_realtime`). Not on Windows: a bridged note plug-in's lost block
-  (its gate is POSIX shared memory), and the posix-fd part of the CLAP host
+  (`test_realtime`). Not on Windows: the posix-fd part of the CLAP host
   services case (`test_app`: CLAP's posix-fd extension is not offered on
   Windows, which the case checks).
 - Open in `engine.tests` off Linux:
