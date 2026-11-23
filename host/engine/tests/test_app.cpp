@@ -36,6 +36,7 @@
 #include "history_sequence.h"
 #include "recording.h"
 #include "render_commands.h"
+#include "source_preparation.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -1232,12 +1233,16 @@ std::vector<std::string> openFilesNamed([[maybe_unused]] const std::string& name
 }
 }  // namespace
 
-TEST_CASE("the first save closes the recording's hash reader before it removes the scratch file") {
+namespace {
+// Where the hash worker is when the save comes: held at its entry, before it opens the file;
+// or held between two chunks, part-way through it (the save closes the stream, the worker opens
+// the copy and hashes it again from the start).
+void firstSaveWithHeldHashWorker(bool midRead) {
     Root root;
     cmd::Registry registry;
     registerEngineCommands(registry);
     std::atomic<bool> armed{false}, entered{false}, release{false};
-    std::atomic<int> completed{0};
+    std::atomic<int> completed{0}, chunkCalls{0};
     AppOptions o;
     o.workdir = root.path / "work";
     o.scratchDir = root.path / "unsaved-hash";
@@ -1248,11 +1253,21 @@ TEST_CASE("the first save closes the recording's hash reader before it removes t
     // The first job after `armed` (the recovered recording's hash worker) waits at its entry:
     // the first save then comes while that worker has the file, and before it reads a byte.
     o.jobStartedHook = [&] {
-        if (armed.load() && !entered.exchange(true)) {
+        if (!midRead && armed.load() && !entered.exchange(true)) {
             entered.notify_all();
             release.wait(false);
         }
     };
+    // Or, in 4 KiB chunks, after the first one: the save comes with the file half read.
+    if (midRead) {
+        o.hashChunkBytes = 4096;
+        o.hashChunkHook = [&] {
+            if (armed.load() && chunkCalls.fetch_add(1) == 0 && !entered.exchange(true)) {
+                entered.notify_all();
+                release.wait(false);
+            }
+        };
+    }
     o.jobFinishedHook = [&] {
         completed.fetch_add(1);
         completed.notify_all();
@@ -1300,6 +1315,93 @@ TEST_CASE("the first save closes the recording's hash reader before it removes t
     REQUIRE(digest);
     CHECK(app->head().media.begin()->value->hash == *digest);
     CHECK(openFilesNamed("Vocal-1.wav").empty());
+    // Part-way through, the worker read the whole copy again: one chunk of the scratch file,
+    // then every chunk of the moved one.
+    if (midRead) CHECK(chunkCalls.load() >= static_cast<int>(fs::file_size(moved) / 4096));
+}
+}  // namespace
+
+TEST_CASE("the first save closes the recording's hash reader before it removes the scratch file") {
+    SUBCASE("the worker has not read yet") { firstSaveWithHeldHashWorker(false); }
+    SUBCASE("the worker is part-way through the file") { firstSaveWithHeldHashWorker(true); }
+}
+
+TEST_CASE("SourcePreparation: pause cancels the running request and drops the pending one") {
+    // The decode is a stand-in that records which request (by its rate) it served.
+    std::mutex mutex;
+    std::vector<double> served;
+    std::atomic<int> entered{0}, woken{0};
+    std::atomic<bool> gate{false};  // request 1 holds on this and ignores a cancel
+    const auto session = model::Session::create(model::Project{});
+    auto prepare = [&](const model::Session&, const fs::path&, double rate,
+                       const std::function<bool()>& cancelled) {
+        {
+            std::lock_guard lock(mutex);
+            served.push_back(rate);
+        }
+        entered.fetch_add(1);
+        entered.notify_all();
+        if (rate == 1) {  // runs until it is cancelled
+            while (!cancelled()) std::this_thread::yield();
+        } else if (rate == 2) {  // runs until the test lets it go
+            gate.wait(false);
+        }
+        return Result<std::shared_ptr<const PreparedSources>>(
+            std::make_shared<const PreparedSources>());
+    };
+    auto make = [&] {
+        return std::make_unique<SourcePreparation>(
+            [&] {
+                woken.fetch_add(1);
+                woken.notify_all();
+            },
+            prepare);
+    };
+    auto waitEntered = [&](int count) {
+        for (int value = entered.load(); value < count; value = entered.load()) entered.wait(value);
+    };
+    struct Open {
+        std::atomic<bool>& gate;
+        ~Open() {
+            gate.store(true);
+            gate.notify_all();
+        }
+    } open{gate};
+    SUBCASE("pause returns once the running request is cancelled, and drops its result") {
+        auto sp = make();
+        sp->request(session, {}, 1);
+        waitEntered(1);
+        sp->pause();  // returns only when the worker is out of the decode
+        CHECK_FALSE(sp->take().has_value());
+        sp->resume();
+        sp->request(session, {}, 3);  // served after resume
+        waitEntered(2);
+        for (int value = woken.load(); value < 1; value = woken.load()) woken.wait(value);
+        CHECK(sp->take().has_value());
+        CHECK(served == std::vector<double>{1, 3});
+    }
+    SUBCASE("a request pending at pause is not run, and one after resume is served") {
+        auto sp = make();
+        sp->request(session, {}, 2);  // running, held on the gate: it does not see a cancel
+        waitEntered(1);
+        sp->request(session, {}, 4);  // pending behind it
+        std::thread pauser([&] { sp->pause(); });
+        // Let the held request go: pause() returns when the worker has left the decode.
+        gate.store(true);
+        gate.notify_all();
+        pauser.join();
+        sp->resume();
+        sp->request(session, {}, 3);
+        waitEntered(2);
+        for (int value = woken.load(); value < 1; value = woken.load()) woken.wait(value);
+        CHECK(sp->take().has_value());
+        CHECK(served == std::vector<double>{2, 3});  // 4 never ran
+    }
+    SUBCASE("the destructor while paused returns") {
+        auto sp = make();
+        sp->pause();
+        sp.reset();
+    }
 }
 
 #if !defined(_WIN32)

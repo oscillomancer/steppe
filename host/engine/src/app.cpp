@@ -3422,15 +3422,18 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
         const auto generation = projectGeneration();
         const auto branch = versions_->branch();
         auto* dispatcher = commands_;
+        const std::size_t chunk = options_.hashChunkBytes ? options_.hashChunkBytes : 65536;
         startJob([this, dispatcher, source, expected, take = std::move(pendingTake), reader,
-                  generation, branch](supple::StopToken stop) mutable {
+                  generation, branch, chunk,
+                  chunkHook = options_.hashChunkHook](supple::StopToken stop) mutable {
             Result<std::string> result =
                 Error("file.open", "cannot open recording for hashing", take.file.string(),
                       "restore a readable file and reimport it to retry hashing");
             Sha256 digest;
-            std::array<std::uint8_t, 65536> buffer{};
-            std::uint64_t seen = 0;
+            std::vector<std::uint8_t> buffer(chunk);
+            std::uint64_t seen = 0, chunks = 0;
             for (;;) {
+                if (chunks++ > 0 && chunkHook) chunkHook();
                 std::unique_lock lock(reader->mutex);
                 reader->wake.wait(lock, [&] { return !reader->held; });
                 if (stop.stop_requested()) {

@@ -99,6 +99,10 @@ struct AppOptions {
     std::shared_ptr<RuntimeProtectionOps> runtimeProtectionOps;  // null: Linux operations
     std::function<void()> jobStartedHook;   // worker-entry barrier for deterministic tests
     std::function<void()> jobFinishedHook;  // worker completion notification for tests
+    // Tests: how many bytes a recording's hash worker reads at a time (0: 64 KiB), and a call
+    // from that worker between two chunks, with nothing locked, so a test can save mid-read.
+    std::size_t hashChunkBytes = 0;
+    std::function<void()> hashChunkHook;
     // External sync's locate time (ADR-0071 §4): how long a seek takes to be
     // heard, which starts and relocates lead by. Unset: measured on the
     // steady clock as the app seeks (production). Set: that many seconds

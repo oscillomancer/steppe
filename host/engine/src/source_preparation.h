@@ -11,8 +11,15 @@ namespace supple::engine {
 // No plug-ins, model mutation, or callback-owned state lives on this worker.
 class SourcePreparation {
   public:
-    explicit SourcePreparation(std::function<void()> wake)
-        : wake_(std::move(wake)), worker_([this](StopToken) { run(); }) {}
+    // What decodes the media for a request: MediaCache::prepareSources unless a test gives
+    // its own (`cancelled` says the request was overtaken).
+    using Prepare = std::function<Result<std::shared_ptr<const PreparedSources>>(
+        const model::Session&, const std::filesystem::path&, double,
+        const std::function<bool()>& cancelled)>;
+    explicit SourcePreparation(std::function<void()> wake, Prepare prepare = {})
+        : wake_(std::move(wake)),
+          prepare_(std::move(prepare)),
+          worker_([this](StopToken) { run(); }) {}
     ~SourcePreparation() {
         {
             std::lock_guard lock(mutex_);
@@ -75,8 +82,11 @@ class SourcePreparation {
                 busy_ = true;
             }
             const auto serial = request->generation;
-            auto result = cache.prepareSources(request->session, request->directory, request->rate,
-                                               [&] { return generation_.load() != serial; });
+            const auto cancelled = [&] { return generation_.load() != serial; };
+            auto result =
+                prepare_ ? prepare_(request->session, request->directory, request->rate, cancelled)
+                         : cache.prepareSources(request->session, request->directory, request->rate,
+                                                cancelled);
             cache.trimVariants();
             {
                 std::lock_guard lock(mutex_);
@@ -90,6 +100,7 @@ class SourcePreparation {
         }
     }
     std::function<void()> wake_;
+    Prepare prepare_;
     std::mutex mutex_;
     std::condition_variable changed_, idle_;
     bool stopping_ = false, paused_ = false, busy_ = false;
