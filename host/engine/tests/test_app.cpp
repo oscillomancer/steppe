@@ -1358,13 +1358,20 @@ TEST_CASE("AuditionLoader: waitIdle returns when a cancelled read has let go of 
     } unblock{release};
     loader.request({file, 48000, 48000});
     inRead.wait(false);
-    CHECK_FALSE(openFilesNamed("audition-held.wav").empty());  // Linux: the read has it open
+#if defined(__linux__)
+    // The read has the file open (openFilesNamed lists descriptors on Linux only).
+    CHECK_FALSE(openFilesNamed("audition-held.wav").empty());
+#endif
     loader.cancel();
+    std::atomic<bool> letGo{false};
     std::thread waiter([&] {
         loader.waitIdle();
+        // Not before the read was let go: waitIdle waited for it, on every platform.
+        CHECK(letGo.load());
         idle.store(true);
         idle.notify_all();
     });
+    letGo.store(true);
     release.store(true);
     release.notify_all();
     idle.wait(false);
@@ -1378,7 +1385,6 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
     std::mutex mutex;
     std::vector<double> served;
     std::atomic<int> entered{0}, woken{0};
-    std::atomic<bool> gate{false};  // request 1 holds on this and ignores a cancel
     const auto session = model::Session::create(model::Project{});
     auto prepare = [&](const model::Session&, const fs::path&, double rate,
                        const std::function<bool()>& cancelled) {
@@ -1388,11 +1394,8 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
         }
         entered.fetch_add(1);
         entered.notify_all();
-        if (rate == 1) {  // runs until it is cancelled
+        if (rate == 1 || rate == 2)  // runs until pause() cancels it
             while (!cancelled()) std::this_thread::yield();
-        } else if (rate == 2) {  // runs until the test lets it go
-            gate.wait(false);
-        }
         return Result<std::shared_ptr<const PreparedSources>>(
             std::make_shared<const PreparedSources>());
     };
@@ -1407,13 +1410,6 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
     auto waitEntered = [&](int count) {
         for (int value = entered.load(); value < count; value = entered.load()) entered.wait(value);
     };
-    struct Open {
-        std::atomic<bool>& gate;
-        ~Open() {
-            gate.store(true);
-            gate.notify_all();
-        }
-    } open{gate};
     SUBCASE("pause returns once the running request is cancelled, and drops its result") {
         auto sp = make();
         sp->request(session, {}, 1);
@@ -1429,14 +1425,12 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
     }
     SUBCASE("a request pending at pause is not run, and one after resume is served") {
         auto sp = make();
-        sp->request(session, {}, 2);  // running, held on the gate: it does not see a cancel
+        sp->request(session, {}, 2);  // running, until the pause cancels it
         waitEntered(1);
         sp->request(session, {}, 4);  // pending behind it
-        std::thread pauser([&] { sp->pause(); });
-        // Let the held request go: pause() returns when the worker has left the decode.
-        gate.store(true);
-        gate.notify_all();
-        pauser.join();
+        // pause() drops 4 and cancels 2 under one lock, so when 2 sees the cancel 4 is gone and
+        // the worker cannot start it: it returns when the worker has left the decode.
+        sp->pause();
         sp->resume();
         sp->request(session, {}, 3);
         waitEntered(2);
