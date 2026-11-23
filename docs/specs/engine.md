@@ -2758,7 +2758,11 @@ harness. See the tooling README for schemas, limits and invocation details.
   recording started from stop under a scheduled playrate waits the same
   way for the renderer to take its start, and is refused alike; a restart
   whose device has not taken the restored position reports `engine.error`
-  with `restarted: true` (below).
+  with `restarted: true` (below). The 1 s is `transportWaitSeconds()`: tests raise
+  it to 60 s, so a starved runner never becomes a refusal (in process with
+  `setTransportWaitSeconds`, for a binary a test starts with
+  `SUPPLE_TRANSPORT_PATIENT=1`, which every engine and GUI ctest entry
+  sets), and a test of the refusal sets a short bound of its own.
   `transport.stop` returns to where play started. `<slug>-engine play FILE`
   plays a project through the device from the CLI.
 - **Anticipative processing** (ADR-0012, `EngineOptions`, default on): a

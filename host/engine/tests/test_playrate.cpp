@@ -10,6 +10,7 @@
 #include <limits>
 
 #include "../../../tests/file_platform.h"
+#include "bridge_patience.h"
 #include "stalled_backend.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
@@ -1780,7 +1781,9 @@ TEST_CASE(
     // scheduled (here an active envelope held at 1, which recording allows),
     // from stop the engine places it and waits for the device to take it. A
     // device that stopped calling back never does, so the start is refused
-    // with engine.transport and nothing is written.
+    // with engine.transport and nothing is written. The bound is short here:
+    // the binary's is patient (bridge_patience.cpp).
+    const engine::test::TransportWait quick(0.05);
     engine::test::StalledBackend backend;
     PlayrateHost h;
     h.arm();

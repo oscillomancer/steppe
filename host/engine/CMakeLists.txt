@@ -308,3 +308,15 @@ target_link_libraries(engine-playrate-project-bench PRIVATE supple::engine)
 supple_target_defaults(engine-playrate-project-bench)
 
 target_link_libraries(${PRODUCT_SLUG}-engine PRIVATE supple::diagnostics)
+
+if(SUPPLE_BUILD_TESTS)
+  # The engine waits for a device to act on a transport request (1 s, then
+  # engine.transport). On a starved runner a healthy dummy device took longer
+  # (Windows CI 45186989443), so every test here, and the engine binaries the
+  # Python ones start, waits as long as a test may (realtime.h,
+  # transportWaitSeconds); a test of the refusal sets its own short bound.
+  get_property(engine_tests DIRECTORY PROPERTY TESTS)
+  foreach(test ${engine_tests})
+    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "SUPPLE_TRANSPORT_PATIENT=1")
+  endforeach()
+endif()
