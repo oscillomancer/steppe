@@ -1545,8 +1545,10 @@ Engine and hosting:
     counter). If it recurs, the case prints the first differing frame, its
     counters, the offline render's warnings and whether the media still exist.
   - Windows: the first save of an unsaved project leaves the recording in the
-    scratch folder (`test_app`), and a hung bridged plug-in's start can go
-    unanswered on a loaded runner (`test_realtime`); both are being fixed.
+    scratch folder (`test_app`), being fixed. A bridged plug-in's slow start
+    on a loaded runner (`test_realtime`) is no longer failed by the late rule
+    (ADR-0101); whether Windows' live wait overshoots the cycle's deadline is
+    being measured on native CI.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue

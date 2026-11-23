@@ -2305,7 +2305,11 @@ instance).
   answer comes, in the order reset, stop, flush; a reset drops the carried
   notes, which came before it. A start not answered by the deadline returns
   false with `startUnanswered()` set; asked again, it returns the answer
-  (no second start). A stop reaches such an instance too, and the bridge
+  (no second start). Until then the callback only looks for that answer (an
+  atomic load, no wait, so those cycles are not late), stop, reset and flush
+  are kept, and the start is not judged by the late rule: it fails as hung
+  once the lifecycle deadline (5/2 of the bridge deadline plus 2 s) has
+  passed since it was posted (ADR-0101). A stop reaches such an instance too, and the bridge
   stops an instance still processing before it deactivates it. `host::bridgeLateCalls()` counts late calls
   process-wide. Consecutive late calls spanning 50 ms fail the instance with
   the hung reason; the audio thread only sets the flag, and the main thread
@@ -2577,8 +2581,8 @@ harness. See the tooling README for schemas, limits and invocation details.
   refuses, so a retry that succeeds starts it clean; the next plan retries
   it. A bridged plug-in whose start is not answered by the live deadline
   (`Instance::startUnanswered()`, ADR-0081) has not refused: it is reset and
-  let go the same way, uncounted, and the next cycle asks again; one that
-  never answers fails as a hung bridge. Per-stage event storage is reserved for the most events any block-long
+  let go the same way, uncounted, and the next cycle looks again; one that
+  never answers fails as a hung bridge at the lifecycle deadline (ADR-0101). Per-stage event storage is reserved for the most events any block-long
   window holds, so a seek off the block grid never allocates. Plans share
   ownership of the session's TimeMap (a session version may be freed while
   its plan plays).

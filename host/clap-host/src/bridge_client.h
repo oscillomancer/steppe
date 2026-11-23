@@ -304,6 +304,9 @@ class RemoteInstance {
     std::uint32_t outstanding_ = 0;  // a late live request not yet answered (if pending_)
     bool pending_ = false;           // apart from its number, which wraps through 0
     bool startUnanswered_ = false;
+    // Steady ns of a start posted under a live deadline and not answered by
+    // it (the outstanding request, ADR-0101); 0: none.
+    std::int64_t startAskedNs_ = 0;
     std::uint8_t lifecycle_ = 0;  // kept commands, a bit each (bridge_client.cpp)
     std::unique_ptr<Event[]> carried_ = std::make_unique<Event[]>(kMaxCarried);
     std::uint32_t carriedCount_ = 0;

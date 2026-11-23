@@ -530,6 +530,7 @@ void RemoteInstance::unmap() {
     outstanding_ = 0;
     pending_ = false;
     startUnanswered_ = false;
+    startAskedNs_ = 0;
     lifecycle_ = 0;
     carriedCount_ = 0;
     lateSince_ = 0;
@@ -1251,7 +1252,7 @@ bool RemoteInstance::settle() SUPPLE_RT {
     if (pending_) {
         TimingCounters& timing = gTiming[tLiveDeadline ? 1 : 0];
         const std::int64_t from = steadyNanoseconds();
-        const bool ok = answered(outstanding_, Cmd::Process);
+        const bool ok = answered(outstanding_, startAskedNs_ ? Cmd::StartProcessing : Cmd::Process);
         timing.settles.fetch_add(1, std::memory_order_relaxed);
         add(timing.waitMax, timing.waitSum, steadyNanoseconds() - from);
         if (!ok) {
@@ -1262,6 +1263,7 @@ bool RemoteInstance::settle() SUPPLE_RT {
             return false;
         }
         pending_ = false;  // that late request's output is not used
+        startAskedNs_ = 0;
     }
     while (lifecycle_) {
         const Cmd cmd = lifecycle_ & kKeepReset  ? Cmd::Reset
@@ -1277,6 +1279,12 @@ void RemoteInstance::lifecycle(Cmd cmd) SUPPLE_RT {
     if (cmd == Cmd::Reset) dropCarriedNotes();  // they came before it
     if (cmd == Cmd::StopProcessing) startUnanswered_ = false;
     if (!hdr_ || process_->failed()) return;
+    // Behind a start still unanswered, in the callback: kept, not waited for
+    // (ADR-0101); sent once the start's answer is seen.
+    if (pending_ && startAskedNs_ && tLiveDeadline) {
+        lifecycle_ = static_cast<std::uint8_t>(lifecycle_ | keepBit(cmd));
+        return;
+    }
     if (settle()) {
         (void)post(cmd);  // answered, or outstanding: either way the bridge has it
         return;
@@ -1419,7 +1427,12 @@ RemoteInstance::Sent RemoteInstance::post(Cmd cmd) SUPPLE_RT {
     timing.late.fetch_add(1, std::memory_order_relaxed);
     outstanding_ = req;
     pending_ = true;
-    late();
+    // A start is judged by the lifecycle deadline from here (ADR-0101), not
+    // by the late rule, which is for blocks (ADR-0081 §4).
+    if (cmd == Cmd::StartProcessing)
+        startAskedNs_ = posted;
+    else
+        late();
     return Sent::Late;
 }
 
@@ -1483,6 +1496,25 @@ void resetBridgeTiming() {
 bool RemoteInstance::startProcessing() SUPPLE_RT {
     startUnanswered_ = false;
     if (!hdr_ || process_->failed()) return false;
+    // A start a live deadline passed (ADR-0101): looked at, never waited for
+    // again, so the cycles until its answer are not late; failed as hung only
+    // once the lifecycle deadline has passed since it was posted, as a start
+    // off the callback is. The main thread kills the bridge when it reaps.
+    if (pending_ && startAskedNs_ && tLiveDeadline) {
+        if (hdr_->done.load(std::memory_order_acquire) != outstanding_) {
+            const int own = callDeadlineMs_.load(std::memory_order_relaxed);
+            const std::int64_t limitNs =
+                std::int64_t{lifecycleDeadlineMs(own > 0 ? own : bridgeDeadlineMs())} * 1'000'000;
+            if (steadyNanoseconds() - startAskedNs_ >= limitNs)
+                process_->fail(BridgeProcess::kHung);
+            else
+                startUnanswered_ = true;
+            return false;
+        }
+        pending_ = false;  // answered: whether it started is in the header
+        startAskedNs_ = 0;
+        lateSince_ = 0;
+    }
     if (!settle()) {
         startUnanswered_ = pending_ && !process_->failed();
         return false;

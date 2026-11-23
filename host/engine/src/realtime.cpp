@@ -1649,8 +1649,9 @@ void Engine::startFree(std::vector<host::Instance*>& owned,
             in->reset();
             if (in->startUnanswered()) {
                 // Not refused: a bridge that has not answered by the live
-                // deadline (ADR-0081). Asked again next cycle; one that never
-                // answers fails within 50 ms like any late bridge.
+                // deadline (ADR-0081). Looked at again next cycle, without a
+                // wait; one that never answers fails at the lifecycle
+                // deadline, as a start off the callback (ADR-0101).
                 in->setOwner(nullptr);
                 continue;
             }

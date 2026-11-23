@@ -118,6 +118,10 @@ A start the deadline passes is unanswered, not refused: the engine asks
 again on the next cycle rather than leaving the stage passed through until
 another plan.
 
+*Note 2026-11-22:* such a start is no longer judged by point 4's late rule
+and later cycles do not wait for it; it fails at the lifecycle deadline
+([ADR-0101](0101-bridged-start-lifecycle-deadline.md)).
+
 *Amended 2026-11-15 (review round 19):* the reset that follows an overflow
 is sent only when a note or MIDI event was dropped. A block's own events
 (at most 2048) always all reach the plug-in: carried parameters it sets
