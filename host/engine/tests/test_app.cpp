@@ -5,6 +5,11 @@
 #if !defined(_WIN32)
 #include <poll.h>
 #include <unistd.h>
+#else
+#include <fcntl.h>
+#include <io.h>
+#include <share.h>
+#include <sys/stat.h>
 #endif
 
 #include <chrono>
@@ -1446,9 +1451,50 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
     }
 }
 
-#if !defined(_WIN32)
+namespace {
+// Something that makes `file` impossible to remove while it lives, as a first save meets it: on
+// Windows the file is open with no delete sharing (what a reader's stream has, and the one way
+// to keep a file there); elsewhere a removal cannot be held off by a handle, so the file's folder
+// is made read-only (a user who is not root; `usable()` says whether it can be done).
+class HoldFile {
+  public:
+    explicit HoldFile(const fs::path& file) {
+#if defined(_WIN32)
+        _wsopen_s(&fd_, file.c_str(), _O_RDONLY | _O_BINARY, _SH_DENYNO, _S_IREAD);
+        usable_ = fd_ >= 0;
+#else
+        folder_ = file.parent_path();
+        usable_ = ::geteuid() != 0;  // root removes a file whatever its folder allows
+        if (usable_)
+            fs::permissions(folder_, fs::perms::owner_read | fs::perms::owner_exec,
+                            fs::perm_options::replace);
+#endif
+    }
+    ~HoldFile() { release(); }
+    HoldFile(const HoldFile&) = delete;
+    HoldFile& operator=(const HoldFile&) = delete;
+    bool usable() const { return usable_; }
+    void release() {
+#if defined(_WIN32)
+        if (fd_ >= 0) _close(fd_);
+        fd_ = -1;
+#else
+        std::error_code ec;
+        fs::permissions(folder_, fs::perms::owner_all, fs::perm_options::replace, ec);
+#endif
+    }
+
+  private:
+    bool usable_ = false;
+#if defined(_WIN32)
+    int fd_ = -1;
+#else
+    fs::path folder_;
+#endif
+};
+}  // namespace
+
 TEST_CASE("a first save that cannot remove a scratch file says so and points at the moved copy") {
-    if (::geteuid() == 0) return;  // root removes a file whatever its folder allows
     Root root;
     cmd::Registry registry;
     registerEngineCommands(registry);
@@ -1467,15 +1513,9 @@ TEST_CASE("a first save that cannot remove a scratch file says so and points at 
     REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
     const fs::path rec = o.scratchDir / "media" / "rec";
     const fs::path scratchFile = rec / "Vocal-1.wav";
-    // A folder that cannot be written: its files cannot be removed.
-    fs::permissions(rec, fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
-    struct Restore {
-        fs::path rec;
-        ~Restore() {
-            std::error_code ec;
-            fs::permissions(rec, fs::perms::owner_all, fs::perm_options::replace, ec);
-        }
-    } restore{rec};
+    // The recording cannot be removed (held open on Windows, its folder read-only elsewhere).
+    HoldFile hold(scratchFile);
+    if (!hold.usable()) return;
     std::vector<schema::Warning> warnings;
     const auto saved = app->save(root.path / "song" / "song.json", &warnings);
     REQUIRE_MESSAGE(saved, (saved ? "" : saved.error().toString()));
@@ -1503,7 +1543,6 @@ TEST_CASE("a first save that cannot remove a scratch file says so and points at 
 // A first save that left a file behind (the folder cannot be written), then another unsaved
 // project in the same scratch folder: its first save does not carry the file into its media.
 TEST_CASE("a scratch file the first save could not remove does not go with the next project") {
-    if (::geteuid() == 0) return;  // root removes a file whatever its folder allows
     Root root;
     cmd::Registry registry;
     registerEngineCommands(registry);
@@ -1527,19 +1566,14 @@ TEST_CASE("a scratch file the first save could not remove does not go with the n
         std::ofstream out(stray, std::ios::binary);
         out << "project A's";
     }
-    struct Restore {
-        fs::path rec;
-        void now() const {
-            std::error_code ec;
-            fs::permissions(rec, fs::perms::owner_all, fs::perm_options::replace, ec);
-        }
-        ~Restore() { now(); }
-    } restore{rec};
-    fs::permissions(rec, fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
+    // The stray file cannot be removed by project A's first save (a folder that cannot be
+    // written takes the recording's files with it; on Windows only the file that is held).
+    HoldFile hold(stray);
+    if (!hold.usable()) return;
     std::vector<schema::Warning> warnings;
     REQUIRE(app->save(root.path / "a" / "a.json", &warnings));
     REQUIRE(fs::exists(stray));  // the leftover
-    restore.now();
+    hold.release();
     // The recording's own leftovers go (project B's fixture writes the same names anew).
     for (const auto& entry : std::vector<fs::directory_entry>(fs::directory_iterator(rec), {}))
         if (entry.path() != stray) fs::remove(entry.path());
@@ -1554,7 +1588,6 @@ TEST_CASE("a scratch file the first save could not remove does not go with the n
     CHECK_FALSE(fs::exists(stray));
     CHECK_FALSE(fs::exists(o.scratchDir));
 }
-#endif
 
 TEST_CASE("two armed tracks with one name record to two files (review round 8)") {
     Root root;
