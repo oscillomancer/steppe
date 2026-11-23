@@ -46,13 +46,17 @@
 
 #include "../../clap-host/tests/lifecycle_gate.h"
 #include "../../clap-host/tests/scope_probe.h"
+#include "../../clap-host/tests/shared_page.h"
 #include "bridge_patience.h"
 #include "engine_test_access.h"
 #if defined(SUPPLE_TEST_JACK)
 #include "fake_jack.h"
 #endif
+#include "../../../tests/wav_stream_test_support.h"
 #include "live_workers.h"
 #include "meters.h"
+#include "native_cpus.h"
+#include "native_threads.h"
 #include "plan.h"
 #include "realtime_support.h"
 #include "recording.h"
@@ -98,6 +102,13 @@ struct RecorderTestAccess {
         return false;
     }
 #endif
+    // Every platform: the target's writer fails its flushes from now on (its own
+    // I/O seam, audio::WavStreamWriterTestAccess), as a full disk would.
+    static void failFlushes(Recorder& recorder, std::size_t index,
+                            audio::WavStreamWriterTestAccess::Fault& fault) {
+        fault.failFlush = true;
+        audio::WavStreamWriterTestAccess::inject(recorder.tracks_[index]->writer, fault);
+    }
     static void updateHeaders(Recorder& recorder) { recorder.updateHeaders(); }
     static void failTarget(Recorder& recorder, std::size_t index) {
         recorder.tracks_[index]->writer.abandon();
@@ -4260,6 +4271,33 @@ TEST_CASE("recording header errors retain the first error and spare other target
 }
 #endif
 
+// The same on every platform, through the writer's I/O seam: the header
+// update's flush fails while the writer thread is stalled.
+TEST_CASE("a failed header update keeps its error and spares the other targets (I/O seam)") {
+    using Access = detail::RecorderTestAccess;
+    const auto dir = supple::test::uniqueTempDir("supple-rec-header-seam-");
+    detail::Recorder recorder({{Id{model::Kind::Track, 1}, {0}, dir / "bad.wav", {}},
+                               {Id{model::Kind::Track, 2}, {0}, dir / "good.wav", {}}},
+                              16, 0);
+    Access::stall(recorder);
+    REQUIRE(recorder.open());
+    REQUIRE(waitForRecorder([&] { return Access::stalled(recorder); }));
+    audio::WavStreamWriterTestAccess::Fault fault;
+    Access::failFlushes(recorder, 0, fault);
+    Access::updateHeaders(recorder);  // the same routine the writer runs periodically
+    Access::failTarget(recorder, 0);  // later append errors must not replace the header error
+    const std::array<float, 32> data{};
+    const float* input[] = {data.data()};
+    recorder.capture(input, 1, 32, 0);
+    const auto takes = recorder.finish();
+    REQUIRE(takes.size() == 2);
+    CHECK(takes[0].error.find("file.write") != std::string::npos);
+    CHECK(takes[1].error.empty());
+    CHECK(takes[1].frames == 32);
+    std::error_code ignored;
+    std::filesystem::remove_all(dir, ignored);
+}
+
 TEST_CASE("a full recording loop table keeps its runs and stops adding input") {
     using Access = detail::RecorderTestAccess;
     const auto dir = std::filesystem::temp_directory_path() /
@@ -6030,21 +6068,9 @@ TEST_CASE("the device thread's MXCSR is restored after every node" * doctest::de
     std::filesystem::remove_all(dir);
 }
 #endif
-// Linux only for now: it reads the OS thread names from /proc/self/task/*/comm.
-#if defined(__linux__)
-namespace {
-std::set<std::string> threadNames() {
-    std::set<std::string> names;
-    for (const auto& task : std::filesystem::directory_iterator("/proc/self/task")) {
-        std::ifstream comm(task.path() / "comm");
-        std::string name;
-        if (std::getline(comm, name)) names.insert(name);
-    }
-    return names;
-}
-}  // namespace
-
-TEST_CASE("the engine's threads carry their role names") {
+// The names the OS shows (native_threads.h: /proc on Linux, Mach thread info
+// on macOS, GetThreadDescription on Windows), as a debugger or crash report does.
+TEST_CASE("the engine's threads carry their role names, as the OS shows them") {
     DummyBackend backend({.mode = DummyBackend::Mode::Thread, .paced = true});
     auto pool = makePool();
     MediaCache media;
@@ -6054,7 +6080,7 @@ TEST_CASE("the engine's threads carry their role names") {
     const std::set<std::string> want = {"audio-dummy", "audio-render", "audio-bg-1",
                                         "audio-bg-2",  "audio-live-1", "audio-live-2"};
     auto named = [&] {
-        const auto names = threadNames();
+        const auto names = supple::test::osThreadNames();
         return std::includes(names.begin(), names.end(), want.begin(), want.end());
     };
     // Each thread names itself as it starts; the deadline only bounds a failure.
@@ -6064,7 +6090,6 @@ TEST_CASE("the engine's threads carry their role names") {
     CHECK(named());
     engine.stop();
 }
-#endif
 
 // --- background scheduling (ADR-0026) -----------------------------------------------------
 
@@ -6113,19 +6138,20 @@ bool mayElevate(int threads, int priority) {
 }
 // The policy the background pool and renderer ask for at `priority`.
 ThreadPolicy elevated(int priority) { return {Kind::Fifo, priority}; }
-bool warnsNormal(const Engine& engine, std::string_view because) {
-    for (const auto& w : engine.warnings())
-        if (w.find("background audio threads run at normal priority") != std::string::npos &&
-            w.find(because) != std::string::npos)
-            return true;
-    return false;
-}
 #else
 // Off Linux the pool asks for the platform's high policy, with no priority
 // levels or rlimits (Engine::start): only the two-free-CPUs rule refuses it.
 bool mayElevate(int threads, int) { return threads + 2 <= static_cast<int>(allowedCpuCount()); }
 ThreadPolicy elevated(int) { return {Kind::High, 0}; }
 #endif
+// Whether the engine warned that its background threads run normal, `because`.
+[[maybe_unused]] bool warnsNormal(const Engine& engine, std::string_view because) {
+    for (const auto& w : engine.warnings())
+        if (w.find("background audio threads run at normal priority") != std::string::npos &&
+            w.find(because) != std::string::npos)
+            return true;
+    return false;
+}
 }  // namespace
 
 TEST_CASE("background threads run real-time below a real-time callback (ADR-0026)") {
@@ -6246,16 +6272,11 @@ TEST_CASE("default pools run real-time below a real-time callback with three CPU
     CHECK(engine.scheduling().renderer == ThreadPolicy{});
 }
 
-// Linux only: CPU affinity through sched_setaffinity (none on macOS; Windows
-// counts the process mask).
-#if defined(__linux__)
+// Not on macOS, which has no CPU affinity. Linux restricts the starting
+// thread, Windows the process (native_cpus.h): what allowedCpuCount reads.
+#if defined(__linux__) || defined(_WIN32)
 TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-time") {
-    cpu_set_t all;
-    CPU_ZERO(&all);
-    REQUIRE(::sched_getaffinity(0, sizeof(all), &all) == 0);
-    std::vector<int> cpus;
-    for (int c = 0; c < CPU_SETSIZE; ++c)
-        if (CPU_ISSET(c, &all)) cpus.push_back(c);
+    const std::vector<int> cpus = supple::test::allowedCpuList();
     if (cpus.size() < 4) {
         MESSAGE("fewer than four allowed CPUs: no smaller mask to try");
         return;
@@ -6269,10 +6290,8 @@ TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-ti
     unsigned live = 0;
     ThreadPolicy renderer, background;
     std::thread([&] {
-        cpu_set_t some;
-        CPU_ZERO(&some);
-        for (std::size_t i = 0; i < n; ++i) CPU_SET(cpus[i], &some);
-        restricted = ::sched_setaffinity(0, sizeof(some), &some) == 0;
+        const supple::test::CpuRestriction only(cpus, n);
+        restricted = only.ok();
         ReportingBackend backend({Kind::Fifo, 83});
         Engine engine(pool, media);  // default (Automatic) pools
         started = engine.start(backend, {.blockSize = 128}).ok();
@@ -6289,8 +6308,10 @@ TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-ti
     CHECK(live <= n - 1);
     CHECK_FALSE(capWarning);
     if (elevated) {
-        CHECK(renderer == ThreadPolicy{Kind::Fifo, Engine::kBackgroundPriority});
-        CHECK(background == renderer);
+        CHECK(renderer == ::elevated(Engine::kBackgroundPriority));
+        // `background` is the helpers' policy: a default pool on three CPUs
+        // has none (a four-CPU machine, such as native CI's Windows runner).
+        CHECK(background == (n > 3 ? renderer : ThreadPolicy{}));
     }
 }
 #endif
@@ -6675,20 +6696,12 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     // 1 s deadline keeps every healthy block on time. The host must end 67
     // and reset the controllers itself. (Round 22: a 30 ms spin against a
     // 10 ms deadline let a loaded machine skip the check.)
-#if defined(_WIN32)
-    MESSAGE("POSIX only: the echo's gate is a shared mapping (see STATUS)");
-#else
     host::setBridgeExecutable(BRIDGE_PATH);
-    const std::filesystem::path file =
-        std::filesystem::temp_directory_path() /
-        ("supple-echo-gate-" + std::to_string(supple::test::processId()));
-    const int fd = ::open(file.c_str(), O_CREAT | O_TRUNC | O_RDWR, 0600);
-    REQUIRE(fd >= 0);
-    REQUIRE(::ftruncate(fd, 4096) == 0);
-    void* words = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    ::close(fd);
-    REQUIRE(words != MAP_FAILED);
-    auto* gate = static_cast<std::atomic<unsigned>*>(words);
+    // The gate: a page the bridge maps too (a file on POSIX, a section on Windows).
+    const std::string gateName = supple::test::SharedPage::nameFor("supple-echo-gate");
+    supple::test::SharedPage page = supple::test::SharedPage::create(gateName);
+    REQUIRE(page);
+    auto* gate = static_cast<std::atomic<unsigned>*>(page.data());
     for (int i = 0; i < 3; ++i) new (gate + i) std::atomic<unsigned>(0);
     // Only a guard against a bridge that died: the gate orders the test.
     auto reached = [&](int word) {
@@ -6698,19 +6711,13 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
             std::this_thread::yield();
         return gate[word].load(std::memory_order_acquire) != 0;
     };
-    // Opens the gate and removes the file however the test ends (after the
-    // engine, declared later, has stopped).
+    // Opens the gate however the test ends (after the engine, declared later,
+    // has stopped); the page is unmapped, and its file removed, after that.
     struct Release {
         std::atomic<unsigned>* words;
-        std::filesystem::path path;
-        ~Release() {
-            words[1].store(1, std::memory_order_release);
-            ::munmap(words, 4096);
-            std::error_code ec;
-            std::filesystem::remove(path, ec);
-        }
-    } release{gate, file};
-    ::setenv("SUPPLE_TEST_ECHO_GATE", file.c_str(), 1);
+        ~Release() { words[1].store(1, std::memory_order_release); }
+    } release{gate};
+    REQUIRE(supple::test::environment("SUPPLE_TEST_ECHO_GATE", gateName.c_str()) == 0);
     model::EditTxn t(model::Session::create({.console9 = false}), 1);
     model::Track tr;
     tr.parent = kMaster;
@@ -6756,7 +6763,7 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     engine.setMidiPreferences({}, {{"Synth", port}});
     REQUIRE(engine.load(*session));
     engine.play();
-    ::unsetenv("SUPPLE_TEST_ECHO_GATE");      // the bridge has it
+    supple::test::environment("SUPPLE_TEST_ECHO_GATE", nullptr);  // the bridge has it
     backend.run(180);                         // to 0.48 s: key 60 (the echo's 67) is held
     REQUIRE(engine.bridgeLateCycles() == 0);  // the healthy baseline
     backend.run(200);                         // through key 119's gated block, lost at its deadline
@@ -6787,7 +6794,6 @@ TEST_CASE("a bridged note plug-in's lost block ends the notes its output held" *
     CHECK(std::count_if(heard.begin(), heard.end(), [&](const auto& m) {
               return is(m, 0x80, 67) || (is(m, 0x90, 67) && m.event.bytes[2] == 0);
           }) == 1);
-#endif
 }
 
 namespace {

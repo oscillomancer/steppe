@@ -6120,3 +6120,33 @@ TEST_CASE("a VST3 editor's edit during modulation is the plug-in's, recorded onc
             app.stopEngine();
         }
 }
+
+// Off Linux the app has no process-wide memory lock or CPU idle-latency
+// request (runtime_protection.cpp's #else operations): a preference carried
+// over from Linux, applied at start or toggled, fails with an error that says
+// so and how to fix it, and holds nothing. Linux's own are test_runtime_protection's.
+#if !defined(__linux__)
+TEST_CASE("off Linux, memory locking and the CPU idle request refuse with a Linux-only hint") {
+    Root root;
+    auto app = makeApp(root.path / "work");
+    REQUIRE(app);
+    REQUIRE(app->startEngine("dummy", 256));
+    const auto locked = app->setMemoryLock(true);
+    REQUIRE_FALSE(locked);
+    CHECK(locked.error().code == "engine.memory_lock");
+    CHECK(locked.error().path == "/lock_memory");
+    CHECK(locked.error().hint.find("Linux-only") != std::string::npos);
+    CHECK(app->memoryLockStatus().requested);  // the intent is kept, as on Linux
+    CHECK_FALSE(app->memoryLockStatus().active);
+    const auto idle = app->setPreventDeepIdle(true);
+    REQUIRE_FALSE(idle);
+    CHECK(idle.error().code == "engine.cpu_idle_latency");
+    CHECK(idle.error().path == "/prevent_deep_idle");
+    CHECK(idle.error().hint.find("Linux-only") != std::string::npos);
+    CHECK_FALSE(app->cpuIdleLatencyStatus().active);
+    // Turning them off again is no error.
+    CHECK(app->setMemoryLock(false));
+    CHECK(app->setPreventDeepIdle(false));
+    app->stopEngine();
+}
+#endif
