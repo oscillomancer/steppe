@@ -1529,7 +1529,23 @@ Engine and hosting:
   native variants land; the restricted CPU mask (`test_realtime`,
   `test_workers`) and the `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` refusals
   (`test_realtime`). Not on Windows: a bridged note plug-in's lost block
-  (its gate is POSIX shared memory).
+  (its gate is POSIX shared memory), and the posix-fd part of the CLAP host
+  services case (`test_app`: CLAP's posix-fd extension is not offered on
+  Windows, which the case checks).
+- Open in `engine.tests` off Linux:
+  - macOS: the clip player's take-chain launch case
+    (`test_clip_player_live.cpp`) once showed a live/offline difference of
+    0.2289 (native CI 45069703846), against real-time = offline. It is
+    unexplained and has not recurred: 120 repetitions of the case on macOS
+    (60 with heap scribbling), a run of every engine entry under parallel load,
+    a full macOS round, and local sanitizer and heap-perturbation runs all
+    passed. The likeliest cause, two test processes sharing a fixture folder
+    named by the clock alone, is fixed (folders are named by process and
+    counter). If it recurs, the case prints the first differing frame, its
+    counters, the offline render's warnings and whether the media still exist.
+  - Windows: the first save of an unsaved project leaves the recording in the
+    scratch folder (`test_app`), and a hung bridged plug-in's start can go
+    unanswered on a loaded runner (`test_realtime`); both are being fixed.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue
