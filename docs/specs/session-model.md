@@ -356,8 +356,8 @@ are taken in track order, inside the one command and so one undo step.
   DI grouped with takes of drums is ordinary). A skipped track is not a member, is not touched
   (byte for byte) and does not count against `uniform`.
 - **A track whose items cannot follow refuses the whole call**, before anything is written, with
-  the member's track (`tr_2 (Second)`) in the message and the caller's piece it overlaps most in the
-  path: `comp.group_takes` (an item with several takes but fewer than the highest
+  the member's track (`tr_2 (Second)`) in the message and the member in the `path` (below):
+  `comp.group_takes` (an item with several takes but fewer than the highest
   index a span plays needs; or a track with a one-take item beside items with several, which
   `take.comp.get` lists in `differing_members`; a track whose items all have one take is skipped
   instead), `comp.group_mismatch` (its items over the run do not form a run, or start
@@ -409,7 +409,17 @@ the item), `comp.loop` (a looped item: comp an item that does not loop, or
 item's edit group that cannot follow: see Edit groups below; `comp.linked` is retired),
 `item.locked` (any piece locked, a member's too),
 `item.kind` (a clip). Per-item refusals with `items` name the piece in the path
-(`/args/items/2`); with `item`, `/args/item`.
+(`/args/items/2`); with `item`, `/args/item`. A refusal that comes from another member of the
+item's edit group (`comp.group_mismatch`, `comp.group_takes`, `item.locked` for a member's piece)
+points at that member instead of at the call's arguments, since the member's items are not in them:
+the handler's path is `/members/<track id>` with `/items/<item id>` after it when one item is the
+cause (`/members/tr_2/items/it_5`; the extent not matching names only the track), shaped like the
+reply's `members`, and the bus roots it at `/args` as it does every handler path
+(`/args/members/tr_2/items/it_5`). It is a locator, not a pointer that resolves in the call's input;
+no generic consumer resolves an error's path against the input (the bus, the control protocol, the
+Lua bindings and the MCP layer carry it as text; the GUI render dialog strips `/args` to print it),
+so a caller reads the track and item from the path instead of from the message. The lead's own
+refusals (its pieces locked or looped) keep `/args/item` or `/args/items/<i>`.
 
 Playback and offline render read the stored items, so real time equals
 offline in both executors; there is no audio-path code. Old files load

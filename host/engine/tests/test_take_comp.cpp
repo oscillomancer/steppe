@@ -766,7 +766,8 @@ TEST_CASE("take.comp refusals name the piece they mean in /items/k") {
     const std::string copy = "it_" + std::to_string(f.app->head().items.size());
     f.run("item.move", R"({"item":")" + copy + R"(","track":"tr_2","position":)" + at +
                            R"(,"bypass_groups":true})");
-    f.refused("take.comp", all, "comp.group_mismatch", "/items/1");
+    // The refusal comes from the member, so the path names it, not the caller's piece.
+    f.refused("take.comp", all, "comp.group_mismatch", "/members/tr_2");
 }
 
 namespace {
@@ -1099,6 +1100,7 @@ TEST_CASE("take.comp on a group names a member whose items do not span the same 
     REQUIRE_FALSE(result);
     CHECK(result.error().code == "comp.group_mismatch");
     CHECK(result.error().message.find("tr_2") != std::string::npos);
+    CHECK(result.error().path == "/args/members/tr_2");  // the member, not the caller's piece
     CHECK_FALSE(result.error().hint.empty());
     CHECK(model::serializeProject(f.app->head()) == before);
     // take.comp.get does not refuse: it lists the track as not like the lead.
@@ -1119,6 +1121,7 @@ TEST_CASE("a member's refusals carry the reason and the hint of what is wrong") 
         CHECK(result.error().code == "comp.group_takes");
         CHECK(result.error().message.find("tr_2") != std::string::npos);
         CHECK(result.error().hint.find("0..1") != std::string::npos);
+        CHECK(result.error().path == "/args/members/tr_2/items/it_2");
         CHECK(model::serializeProject(f.app->head()) == before);
     }
     SUBCASE("a looped item") {
@@ -1129,6 +1132,7 @@ TEST_CASE("a member's refusals carry the reason and the hint of what is wrong") 
         CHECK(result.error().code == "comp.group_mismatch");
         CHECK(result.error().message.find("tr_2") != std::string::npos);
         CHECK(result.error().hint.find("loop") != std::string::npos);  // compRun's own hint
+        CHECK(result.error().path == "/args/members/tr_2/items/it_2");
         CHECK(result.error().hint.find("bypass_groups") != std::string::npos);
     }
 }
@@ -1200,6 +1204,7 @@ TEST_CASE("a member with a one-take item and a several-take item is refused, not
     REQUIRE_FALSE(result);
     CHECK(result.error().code == "comp.group_takes");
     CHECK(result.error().message.find("tr_2") != std::string::npos);
+    CHECK(result.error().path == "/args/members/tr_2/items/" + byStart[1].second.str());
     CHECK(model::serializeProject(f.app->head()) == before);
     // take.comp.get does not refuse: the track is listed as differing, not skipped.
     const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
@@ -1215,7 +1220,12 @@ TEST_CASE("a locked member refuses the whole call before anything is written") {
     auto result = f.call("take.comp", kGroupSpans);
     REQUIRE_FALSE(result);
     CHECK(result.error().code == "item.locked");
+    CHECK(result.error().path == "/args/members/tr_2/items/it_2");  // the member's item
     CHECK(model::serializeProject(f.app->head()) == before);
+    // The lead's own lock still points into the call's arguments.
+    GroupFixture g;
+    g.run("item.set", R"({"item":"it_1","locked":true,"bypass_groups":true})");
+    g.refused("take.comp", kGroupSpans, "item.locked", "/item");
 }
 
 TEST_CASE("a member's crossfade or cuts do not matter: it is a member, and comped together") {

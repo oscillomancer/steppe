@@ -1080,7 +1080,7 @@ instructions are in `docs/guides/installing.md`.
   drum takes) is left untouched and named in `skipped_tracks` with its reason; `bypass_groups` for
   the item alone); a track whose items cannot follow refuses the call before anything is written
   (`comp.group_takes` for too few takes for a span, `comp.group_mismatch` with the inner reason,
-  `item.locked`). `comp.linked`
+  `item.locked`), the error's path naming the member (`/args/members/<track>[/items/<item>]`). `comp.linked`
   is retired (it meant "set bypass_groups"; the call now comps the group). The GUI's comp still
   refuses linked items (`compsWithTakeComp`) and can use the group comp.
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
