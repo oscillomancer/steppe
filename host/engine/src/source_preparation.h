@@ -29,6 +29,24 @@ class SourcePreparation {
         result_.reset();
         changed_.notify_one();
     }
+    // Before files it may be reading are removed (a first save moves the scratch media): drops
+    // the pending request, cancels the running one and returns when the worker is not reading.
+    // It starts nothing until resume(); the caller requests again for what it has moved.
+    void pause() {
+        std::unique_lock lock(mutex_);
+        paused_ = true;
+        ++generation_;
+        request_.reset();
+        result_.reset();
+        idle_.wait(lock, [&] { return !busy_; });
+    }
+    void resume() {
+        {
+            std::lock_guard lock(mutex_);
+            paused_ = false;
+        }
+        changed_.notify_one();
+    }
     std::optional<Result<std::shared_ptr<const PreparedSources>>> take() {
         std::lock_guard lock(mutex_);
         auto out = std::move(result_);
@@ -49,10 +67,12 @@ class SourcePreparation {
             std::optional<Request> request;
             {
                 std::unique_lock lock(mutex_);
-                changed_.wait(lock, [&] { return stopping_ || request_.has_value(); });
+                changed_.wait(lock,
+                              [&] { return stopping_ || (request_.has_value() && !paused_); });
                 if (stopping_) return;
                 request = std::move(request_);
                 request_.reset();
+                busy_ = true;
             }
             const auto serial = request->generation;
             auto result = cache.prepareSources(request->session, request->directory, request->rate,
@@ -60,6 +80,8 @@ class SourcePreparation {
             cache.trimVariants();
             {
                 std::lock_guard lock(mutex_);
+                busy_ = false;
+                idle_.notify_all();
                 if (stopping_) return;
                 if (generation_.load() != serial) continue;
                 result_ = std::move(result);
@@ -69,8 +91,8 @@ class SourcePreparation {
     }
     std::function<void()> wake_;
     std::mutex mutex_;
-    std::condition_variable changed_;
-    bool stopping_ = false;
+    std::condition_variable changed_, idle_;
+    bool stopping_ = false, paused_ = false, busy_ = false;
     std::atomic<std::uint64_t> generation_{0};
     std::optional<Request> request_;
     std::optional<Result<std::shared_ptr<const PreparedSources>>> result_;

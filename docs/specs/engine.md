@@ -1828,7 +1828,10 @@ first use, and no plug-in code runs early to warm it.
   snapshots stay immutable. Transactions opened before completion retain the
   hash on commit. If the originating branch has undone/deleted the take, or the
   project was replaced, the update is dropped. A save while the job is pending
-  writes a valid empty hash. Hash/read/sidecar failures leave it empty and emit
+  writes a valid empty hash. A first save closes the worker's reader of the scratch file while it
+  removes the file (a file that is open cannot be removed on Windows) and the worker reads it
+  again from the new place, so the hash still arrives; the decode worker that prepares media for
+  the plan is stopped for the move and asked again after it. Hash/read/sidecar failures leave it empty and emit
   `bus.post_failed` with a structured error. Adding the same bytes again reuses
   a media source whose hash is already known. Metadata for an import comes from the container's header
   (`audio::inspect`), never a decode: adding one file to many items costs one

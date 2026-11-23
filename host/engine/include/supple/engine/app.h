@@ -50,6 +50,7 @@ class AuditionLoader;
 namespace detail {
 class RuntimeProtection;
 class SessionLock;
+struct HashRead;
 }  // namespace detail
 
 struct AppOptions {
@@ -1061,6 +1062,10 @@ class EngineApp : public cmd::Host {
     };
     std::vector<JobThread> jobs_;
     std::mutex recordingFinalizeMutex_;  // sidecar publication vs scratch relocation, never RT
+    // The readers of the hash workers of recordings (a worker has its file open while it reads).
+    // Model thread only. A first save closes those of the scratch files it removes, and has them
+    // go on at the files' new place: Windows cannot remove an open file.
+    std::vector<std::weak_ptr<detail::HashRead>> hashReads_;
     std::map<std::string, std::unique_ptr<host::Instance>> scratch_;
     LoadOverrides overrides_;
     std::uint64_t overridesVersion_ = 0;

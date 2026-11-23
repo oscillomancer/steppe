@@ -1212,6 +1212,96 @@ TEST_CASE("an unsaved project records into its scratch folder; the first save mo
     }
 }
 
+namespace {
+// The files this process holds open whose name ends with `name`: Linux only (/proc), where a
+// removed file that is still open is listed too.
+std::vector<std::string> openFilesNamed([[maybe_unused]] const std::string& name) {
+    std::vector<std::string> out;
+#if defined(__linux__)
+    std::error_code ec;
+    for (fs::directory_iterator it("/proc/self/fd", ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code link;
+        const fs::path target = fs::read_symlink(it->path(), link);
+        std::string text = target.string();
+        constexpr std::string_view gone = " (deleted)";
+        if (text.ends_with(gone)) text.resize(text.size() - gone.size());
+        if (!link && text.ends_with(name)) out.push_back(target.string());
+    }
+#endif
+    return out;
+}
+}  // namespace
+
+TEST_CASE("the first save closes the recording's hash reader before it removes the scratch file") {
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    std::atomic<bool> armed{false}, entered{false}, release{false};
+    std::atomic<int> completed{0};
+    AppOptions o;
+    o.workdir = root.path / "work";
+    o.scratchDir = root.path / "unsaved-hash";
+    o.chainDir = root.path / "chains";
+    o.templateDir = root.path / "templates";
+    o.projectTemplateDir = root.path / "project-templates";
+    o.pluginPath = {kFixture};
+    // The first job after `armed` (the recovered recording's hash worker) waits at its entry:
+    // the first save then comes while that worker has the file, and before it reads a byte.
+    o.jobStartedHook = [&] {
+        if (armed.load() && !entered.exchange(true)) {
+            entered.notify_all();
+            release.wait(false);
+        }
+    };
+    o.jobFinishedHook = [&] {
+        completed.fetch_add(1);
+        completed.notify_all();
+    };
+    auto created = EngineApp::create(o, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Dispatcher d(registry, *app);
+    struct Release {
+        std::atomic<bool>& flag;
+        ~Release() {
+            flag.store(true);
+            flag.notify_all();
+        }
+    } unblock{release};
+    auto waitCompleted = [&](int count) {
+        for (int value = completed.load(); value < count; value = completed.load())
+            completed.wait(value);
+    };
+    app->setupFixture(d, "recording_interrupted");  // rec/Vocal-1.wav in the scratch media
+    const fs::path scratchFile = o.scratchDir / "media" / "rec" / "Vocal-1.wav";
+    const int base = completed.load();
+    armed.store(true);
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    entered.wait(false);
+    REQUIRE(fs::exists(scratchFile));
+    std::vector<schema::Warning> warnings;
+    REQUIRE(app->save(root.path / "song" / "song.json", &warnings));
+    const fs::path moved = root.path / "song" / "media" / "rec" / "Vocal-1.wav";
+    CHECK(fs::exists(moved));
+    // A reader still open on the file would keep it on Windows; on Linux it is the open
+    // descriptor that shows it.
+    CHECK(openFilesNamed("unsaved-hash/media/rec/Vocal-1.wav").empty());
+    CHECK_FALSE(fs::exists(o.scratchDir));
+    CHECK(warnings.empty());
+    // The hash is still computed, from the file where it is now.
+    release.store(true);
+    release.notify_all();
+    waitCompleted(base + 1);
+    d.flushJobEvents();
+    waitCompleted(base + 2);
+    d.flushJobEvents();
+    REQUIRE(app->head().media.size() == 1);
+    const auto digest = sha256File(moved);
+    REQUIRE(digest);
+    CHECK(app->head().media.begin()->value->hash == *digest);
+    CHECK(openFilesNamed("Vocal-1.wav").empty());
+}
+
 TEST_CASE("two armed tracks with one name record to two files (review round 8)") {
     Root root;
     cmd::Registry registry;
