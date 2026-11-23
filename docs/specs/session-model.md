@@ -756,8 +756,13 @@ another folder are refused (`project.recording`): the recording's files
 move or are copied once it stops. Saving in place, or as another file in
 the same folder, works while recording. A first save copies each scratch file, checks the
 copy, publishes the file, and then removes the scratch original; one that cannot be removed
-(held open elsewhere, or a folder that cannot be written) stays, and the save says so with a
-`project.media_leftover` warning naming its path: the project already uses the copy. The app
+(held open, which Windows does not allow to be removed, or a folder that cannot be written)
+stays, and the save says so with a
+`project.media_leftover` warning naming its path: the project already uses the copy. The first
+save closes what the engine holds on those files (the recording's hash reader, the plan's decode
+worker, a file audition's decoder); what it cannot is a reader outside it or on its own thread
+(the GUI's peak worker, a render, freeze, consolidate or analysis job still decoding them) and
+another program. The app
 remembers such a file (its size and time); a later first save in the same scratch folder, of
 another unsaved project, does not copy it into its own media, and tries to remove it again. With the app's copy-imports setting on (the GUI's
 default), item.add copies an imported audio file into the media folder (a

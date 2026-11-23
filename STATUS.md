@@ -36,9 +36,13 @@ and the script suite build independently of those services; see
 CONTRIBUTING.md for the complete gate list. On Windows, a save blocked by
 another program that holds the file open (no delete sharing) retries for about
 a second, then reports which file and what to close. A first save closes the recording
-hash reader and pauses the media decode worker before it removes the scratch media; a scratch
-file that still cannot be removed (another program, a folder that cannot be written) stays and
-the save names it in a `project.media_leftover` warning (the project uses the copy).
+hash reader, pauses the media decode worker and cancels a file audition's decode before it
+removes the scratch media. What it does not hold, on Windows: the GUI's waveform (peak) worker,
+which builds a fresh recording's pyramid from the file, and render, freeze, consolidate and
+analysis jobs that started before the save and are still decoding the scratch files (each holds
+a file only while it decodes it). Another program, or a folder that cannot be written, does too.
+A scratch file that still cannot be removed stays and the save names it in a
+`project.media_leftover` warning (the project uses the copy).
 
 The bridge port implements native macOS shared memory/address wakes and Windows
 mapping/event handle transfer, notifications and process isolation (ADR-0037).

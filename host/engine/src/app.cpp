@@ -4727,6 +4727,11 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
         sourcePreparation_->pause();
         readers.preparation = sourcePreparation_.get();
     }
+    // And the file audition's decoder, if it is reading a file now (a decoded voice is in memory).
+    if (auditionLoader_ && auditionDecoding_) {
+        stopAudition();
+        auditionLoader_->waitIdle();
+    }
     for (const auto& weak : hashReads_)
         if (auto reader = weak.lock()) {
             std::lock_guard guard(reader->mutex);

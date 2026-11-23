@@ -1831,7 +1831,9 @@ first use, and no plug-in code runs early to warm it.
   writes a valid empty hash. A first save closes the worker's reader of the scratch file while it
   removes the file (a file that is open cannot be removed on Windows) and the worker reads it
   again from the new place, so the hash still arrives; the decode worker that prepares media for
-  the plan is stopped for the move and asked again after it. Hash/read/sidecar failures leave it empty and emit
+  the plan is stopped for the move and asked again after it, and so is a file audition's decode.
+  Readers on other threads (the GUI's peak worker, offline render, freeze, consolidate and analysis
+  jobs) are not held: each has a file open only while it decodes it. Hash/read/sidecar failures leave it empty and emit
   `bus.post_failed` with a structured error. Adding the same bytes again reuses
   a media source whose hash is already known. Metadata for an import comes from the container's header
   (`audio::inspect`), never a decode: adding one file to many items costs one

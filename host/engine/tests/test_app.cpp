@@ -32,6 +32,7 @@
 #if defined(SUPPLE_TEST_JACK)
 #include "fake_jack.h"
 #endif
+#include "audition_loader.h"
 #include "bridge_patience.h"
 #include "history_sequence.h"
 #include "recording.h"
@@ -1324,6 +1325,47 @@ void firstSaveWithHeldHashWorker(bool midRead) {
 TEST_CASE("the first save closes the recording's hash reader before it removes the scratch file") {
     SUBCASE("the worker has not read yet") { firstSaveWithHeldHashWorker(false); }
     SUBCASE("the worker is part-way through the file") { firstSaveWithHeldHashWorker(true); }
+}
+
+TEST_CASE("AuditionLoader: waitIdle returns when a cancelled read has let go of its file") {
+    Root root;
+    fs::create_directories(root.path);
+    audio::AudioData tone;
+    tone.sampleRate = 48000;
+    tone.channels.assign(2, std::vector<float>(48000, 0.25f));
+    const fs::path file = root.path / "audition-held.wav";
+    REQUIRE(audio::writeWav(file, tone));
+    std::atomic<bool> inRead{false}, release{false}, idle{false};
+    // The read asks whether to stop between chunks, with the file open: hold it there.
+    AuditionLoader loader([] {},
+                          [&](std::uint64_t) {
+                              if (!inRead.exchange(true)) {
+                                  inRead.notify_all();
+                                  release.wait(false);
+                              }
+                          });
+    struct Release {
+        std::atomic<bool>& flag;
+        ~Release() {
+            flag.store(true);
+            flag.notify_all();
+        }
+    } unblock{release};
+    loader.request({file, 48000, 48000});
+    inRead.wait(false);
+    CHECK_FALSE(openFilesNamed("audition-held.wav").empty());  // Linux: the read has it open
+    loader.cancel();
+    std::thread waiter([&] {
+        loader.waitIdle();
+        idle.store(true);
+        idle.notify_all();
+    });
+    release.store(true);
+    release.notify_all();
+    idle.wait(false);
+    waiter.join();
+    CHECK(openFilesNamed("audition-held.wav").empty());
+    CHECK(loader.discarded() == 1);
 }
 
 TEST_CASE("SourcePreparation: pause cancels the running request and drops the pending one") {
