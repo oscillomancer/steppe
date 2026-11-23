@@ -684,7 +684,7 @@ TEST_CASE(
     for (const double gap : {0.1, 1.0})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("gap " << gap << " s, anticipative " << options.anticipative);
-            const bool near = gap < 0.25;
+            const bool nearAudio = gap < 0.25;
             Project p;
             twoTracks(p);
             auto move = j(R"({"item": "it_2"})");  // 240000 samples: it ends at 288000 - gap
@@ -705,13 +705,13 @@ TEST_CASE(
             p.runArgs("launch.clip", launchIt);  // bar 4: song 288000
             json::Value state = p.run("launch.state", "{}");
             CHECK(state["capturing"].asBool());
-            CHECK(bool(state.find("capture_ends")) == near);
+            CHECK(bool(state.find("capture_ends")) == nearAudio);
             live.until(std::llround(12.0 * double(kBeat) / 0.75) + 40000);
-            CHECK(p.run("launch.state", "{}")["capturing"].asBool() == !near);
+            CHECK(p.run("launch.state", "{}")["capturing"].asBool() == !nearAudio);
             json::Value done = p.run("launch.commit", "{}");
             CHECK(done["from"].asDouble() == from);
             const double to = done["to"].asDouble();
-            if (near)
+            if (nearAudio)
                 CHECK(to == 12.0);
             else
                 CHECK(to > 12.5);
@@ -725,6 +725,71 @@ TEST_CASE(
             const auto [worst, first] = compare(heard, live.latency, committed, start, end);
             CHECK_MESSAGE(worst == 0.0, "differs by " << worst << " from frame " << first);
         }
+}
+
+TEST_CASE(
+    "under a pitch-keeping rate a switch's reach is judged on the timeline, across a wrap and "
+    "by the rate" *
+    doctest::description("rt")) {
+    // Review round 128 W1, by the decision launch.state reports (a capture
+    // that ends at the switch says `capture_ends`):
+    //  - a transport loop over 0-6 s, tr_2's switch to a MIDI clip on bar 3
+    //    (4 s) on the second pass: its song frame is 10 s (the anchor plus a
+    //    pass), and the audio is judged at the anchor (L1): tr_2's item over
+    //    1.5-6.5 s ends the capture, and one at 9-14 s, never heard, does not;
+    //  - a loop over 0-5.6 s and the switch on the beat at 5.5 s: the item at
+    //    0-5 s lies just past the wrap, where the converter runs on, and ends it;
+    //  - at rate 2 an item ending 0.4 s before the switch on bar 4 (6 s) is
+    //    within the reach, 0.25 s of song at most rate 1, scaled by the rate
+    //    above it.
+    struct Case {
+        const char* name;
+        double rate, loopEnd, itemSeconds, launchSong;
+        bool quantizeBeat, ends;
+    };
+    for (const Case& c :
+         {Case{"pass 2, audio at the anchor", 0.75, 6.0, 1.5, 8.2, false, true},
+          Case{"pass 2, audio at the song frame", 0.75, 6.0, 9.0, 8.2, false, false},
+          Case{"audio past the wrap", 0.75, 5.6, 0.0, 5.1, true, true},
+          Case{"rate 2, 0.4 s clear", 2.0, 0.0, 0.6, 4.4, false, true}}) {
+        INFO(c.name);
+        Project p;
+        twoTracks(p);
+        auto move = j(R"({"item": "it_2"})");  // 5 s of a ramp
+        move["position"] = c.itemSeconds * 48000 / double(kBeat);
+        p.runArgs("item.move", move);
+        p.run("scene.add", "{}");  // sc_2
+        const std::string clip = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
+                                                   R"("notation": "voice v; 1: C4:w"})")["clip"]
+                                     .asString();
+        auto launchIt = j(R"({})");
+        launchIt["clip"] = clip;
+        if (c.quantizeBeat) {
+            auto q = j(R"({"quantize": "beat"})");
+            q["clip"] = clip;
+            p.runArgs("clip.set", q);
+        }
+        auto rate = j(R"({"preserve_pitch": true})");
+        rate["rate"] = c.rate;
+        p.runArgs("transport.playrate.set", rate);
+        if (c.loopEnd > 0) {
+            auto loop = j(R"({"start_seconds": 0, "enabled": true})");
+            loop["end_seconds"] = c.loopEnd;
+            p.runArgs("transport.loop", loop);
+        }
+        AppLive live(p, kInCallback, 128, 48000 * 12);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        REQUIRE(p.run("launch.capture", R"({"on": true})")["from"].isNumber());
+        // To `launchSong` seconds of song heard (past the loop's end: the
+        // second pass), then the launch.
+        live.until(std::llround(c.launchSong * 48000 / c.rate));
+        p.runArgs("launch.clip", launchIt);
+        json::Value state = p.run("launch.state", "{}");
+        CHECK(state["capturing"].asBool());
+        CHECK(bool(state.find("capture_ends")) == c.ends);
+        live.stop();
+    }
 }
 
 TEST_CASE("a once audio clip is judged by where the song is after a relocation" *

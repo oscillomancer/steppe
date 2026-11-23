@@ -1399,10 +1399,12 @@ class Engine {
     // Main thread: a launched audio clip that plays (by the log) while the
     // newest plan keeps the pitch under a master playrate (S3 B, Q2).
     std::optional<model::Id> audioUnderStretch() const;
-    // Main thread: whether `r`, switching on song sample `song`, leaves or
-    // returns to an arrangement with audio within the stretch converter's
-    // reach of it (round 113 T2, round 117 W1), by the log.
-    bool cutsArrangementAudio(const LaunchRequest& r, std::int64_t song) const;
+    // Main thread: whether `r`, switching on timeline sample `anchor` (its
+    // boundary, not the unwrapped song frame), leaves or returns to an
+    // arrangement with audio within the stretch converter's reach of it,
+    // across a transport loop's wrap too (round 113 T2, rounds 117 and 128
+    // W1), by the log.
+    bool cutsArrangementAudio(const LaunchRequest& r, std::int64_t anchor) const;
     // Main thread: under a pitch-keeping plan, ends a running capture on the
     // boundary of a queued switch that cuts arrangement audio (that launch
     // not in it), with a warning naming the track.

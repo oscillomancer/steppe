@@ -625,7 +625,10 @@ the same.*
   a running capture with a warning naming the clip (the stretch converter
   reading it has no committed equivalent). For the same reason a switch
   that leaves or returns to an arrangement with an audio item within
-  0.25 s of its song position (the converter's reach either side), queued
+  reach of its boundary on the timeline (the converter's reach either
+  side: 0.25 s of song, times the fastest master rate the plan plays
+  where that is above 1; under a transport loop the reach runs across the
+  wrap, as the converter does; round 128 W1), queued
   while the newest plan keeps the pitch (`captureBeforeStretchCut`, at
   placement and at each service), ends the capture on that switch's
   boundary, the launch not in it, with a warning naming the track; MIDI

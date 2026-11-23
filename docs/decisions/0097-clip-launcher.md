@@ -910,8 +910,11 @@ the boundary.
   commit differed for 5664 device frames before a switch away and by up to
   0.37 after a return). *Note 2026-11-23 (review round 117 W1):* only
   where an audio item of the track lies within 0.25 s of the switch's song
-  position, the converter's reach either side; a switch clear of the
-  track's audio is captured, and its commit is exact. (W2:) the end goes
+  position, the converter's reach either side *(note 2026-11-23, round
+  128: the position is the switch's boundary on the timeline, not its
+  unwrapped song frame; the reach is scaled by the fastest master rate
+  above 1, and under a transport loop it runs across the wrap)*; a switch
+  clear of the track's audio is captured, and its commit is exact. (W2:) the end goes
   with its switch, dropped if that launch is replaced or voided before its
   boundary, and is kept apart from a quantized end. Arming is refused
   with `launch.playrate` while a launched audio clip plays and the newest

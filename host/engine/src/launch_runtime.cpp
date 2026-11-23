@@ -987,13 +987,39 @@ std::optional<model::Id> Engine::audioUnderStretch() const {
     return std::nullopt;
 }
 
-bool Engine::cutsArrangementAudio(const LaunchRequest& r, std::int64_t song) const {
+bool Engine::cutsArrangementAudio(const LaunchRequest& r, std::int64_t anchor) const {
     if (!latest_) return false;
     // The stretch converter's reach either side of the switch: the history it
-    // primes from and its lookahead (about 0.12 s measured, round 113 T2).
-    // An item clear of it is neither read on past the cut nor primed from.
+    // primes from and its lookahead (about 0.12 s measured at 0.75, round 113
+    // T2). An item clear of it is neither read on past the cut nor primed
+    // from. 0.25 s of song at most rate 1, scaled by the fastest master rate
+    // the plan can play above 1: a reach in device time covers rate times as
+    // much song (round 128 W1), and one in song time is covered either way.
     constexpr double kStretchReachSeconds = 0.25;
-    const double reach = kStretchReachSeconds * config_.sampleRate;  // song samples
+    double fastest = std::max(1.0, latest_->project->playrate.rate);
+    if (const auto env = model::activePlayrateEnvelope(*latest_))
+        for (const auto& pt : model::effectivePoints(*latest_, *env))
+            fastest = std::max(fastest, pt.value);
+    // A sync chase's scale is composed into the plan's scalar.
+    if (const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire))
+        fastest = std::max(fastest, plan->masterPlayrate.rate);
+    fastest = std::min(fastest, model::kMaxPlayrate);
+    const auto reach =
+        static_cast<std::int64_t>(std::ceil(kStretchReachSeconds * fastest * config_.sampleRate));
+    // The window around the switch on the timeline (`anchor`: its boundary,
+    // not the unwrapped song frame, round 128 L1). Under a transport loop the
+    // converter runs across the wrap, so a part of the window past the loop
+    // end continues at its start, and a part before the start at its end.
+    std::vector<std::pair<std::int64_t, std::int64_t>> windows{{anchor - reach, anchor + reach}};
+    const std::int64_t loopStart = loopStart_.load(std::memory_order_relaxed);
+    const std::int64_t loopEnd = loopEnd_.load(std::memory_order_relaxed);
+    if (loopOn_.load(std::memory_order_relaxed) && loopEnd > loopStart && anchor >= loopStart &&
+        anchor <= loopEnd) {
+        if (anchor + reach > loopEnd)
+            windows.push_back({loopStart, loopStart + (anchor + reach - loopEnd)});
+        if (anchor - reach < loopStart)
+            windows.push_back({loopEnd - (loopStart - (anchor - reach)), loopEnd});
+    }
     bool audio = false;
     for (const auto& e : latest_->items) {
         const model::Item& item = *e.value;
@@ -1001,8 +1027,10 @@ bool Engine::cutsArrangementAudio(const LaunchRequest& r, std::int64_t song) con
         const model::Take* take = latest_->takes.find(*item.activeTake);
         if (!take || !take->source || take->source->kind == model::Kind::Midi) continue;
         const model::ItemSpan span = model::itemSpan(*latest_, item);
-        audio = span.startSec * config_.sampleRate - reach < double(song) &&
-                span.endSec * config_.sampleRate + reach > double(song);
+        const double from = span.startSec * config_.sampleRate;
+        const double to = span.endSec * config_.sampleRate;
+        for (const auto& [a, b] : windows)
+            if (from < double(b) && to > double(a)) audio = true;
         if (audio) break;
     }
     if (!audio) return false;
@@ -1063,7 +1091,7 @@ void Engine::captureBeforeStretchCut() {
             const std::int64_t song = s.songFrame.load();
             if (song <= capture_.startSong ||
                 (capture_.cutSlot != SIZE_MAX && capture_.cutSong <= song) ||
-                !cutsArrangementAudio(s.request, song))
+                !cutsArrangementAudio(s.request, s.anchorSample.load()))
                 continue;
             capture_.cutSlot = i;
             capture_.cutGeneration = st >> 3;
