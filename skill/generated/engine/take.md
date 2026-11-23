@@ -276,6 +276,262 @@ Result:
 
 ```
 
+## `take.comp@1`
+
+Comp an item's takes: each span plays one take, crossfaded at the seams.
+
+item (any piece, or an item with several takes to start one) or items (the pieces, in any order). Spans {from, to, take|index} (beats; index is the take's 0-based place in the item's take order) choose which take plays; what no span covers keeps its take. The item is split where the take changes into pieces that each keep all the takes, and a crossfade (seconds, default 0.01; shape cos is equal power, linear for phase-coherent material) is centred on every seam between different takes: the pieces overlap and fade, so nothing new reaches the audio path. Call it again on any piece (or items: the pieces) to move seams: the crossfades are rebuilt for the whole run, and the same call twice changes nothing. Audio only: a seam is a hard cut, with the warning comp.crossfade_skipped, when a take is MIDI or empty, warped or has envelopes. Pieces of one take beside each other are joined (comp.midi_boundary warns of MIDI ones that cannot be, where a held note sounds again). take.activate {index} on a piece changes its take and keeps the seams. One undo step. Returns the pieces in time order.
+
+Kind: `edit`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
+| `items` | array |  |  |  |  |
+| `spans` | array |  |  |  |  |
+| `spans[].from` | number or string | beats | 0.0.. |  | Quantity strings are range-checked by the server. |
+| `spans[].to` | number or string | beats | 0.0.. |  | Quantity strings are range-checked by the server. |
+| `spans[].take` | string |  |  |  | Take id, e.g. "tk_1". |
+| `spans[].index` | integer |  | 0.0.. |  |  |
+| `crossfade` | number |  | 0.0.. | 0.01 | Seconds. |
+| `crossfade_shape` | string |  |  | "cos" | One of: cos, linear. |
+| `bypass_groups` | boolean |  |  | false |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "comp_result",
+  "properties": {
+    "pieces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "comp_piece",
+        "properties": {
+          "item": {
+            "type": "string"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+              }
+            ],
+            "x-unit": "beats",
+            "x-unit-strings": true,
+            "description": "Quantity strings are range-checked by the server."
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+              }
+            ],
+            "x-unit": "beats",
+            "x-unit-strings": true,
+            "description": "Quantity strings are range-checked by the server."
+          },
+          "take": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "fade_in": {
+            "type": "number",
+            "description": "Seconds."
+          },
+          "fade_out": {
+            "type": "number",
+            "description": "Seconds."
+          }
+        },
+        "required": ["item", "from", "to", "take", "index", "name", "fade_in", "fade_out"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["pieces"],
+  "additionalProperties": false
+}
+
+```
+
+### Errors
+
+- `comp.item`: neither or both of item and items, or an empty items Hint: give item (any piece) or items (the pieces)
+- `comp.takes`: an item has fewer than two takes Hint: record several passes or take.add, or use take.activate
+- `comp.mismatch`: the pieces cannot be followed as one comp, or two could continue it Hint: name the pieces in items (take.comp.get lists a comp's pieces)
+- `comp.span`: a span is empty, out of order, overlapping or outside the comp Hint: give from before to, inside the comp, in time order without overlap
+- `comp.take`: a span has no or both of take and index, or one not in the item Hint: give take (an id of the item) or index (0..takes-1); take.list lists them
+- `comp.loop`: a looped item Hint: comp an item that does not loop
+- `comp.linked`: the item has linked peers Hint: set bypass_groups true to comp it alone, or take it out of its track group
+- `item.locked`: a piece is locked Hint: item.set {locked: false}
+- `item.kind`: a clip Hint: lay the clip on the timeline first (item.add {clip})
+
+### Examples
+
+**Take the second take for bars 2 to 3** (`song_with_takes`)
+
+```json
+{
+  "item": "it_1",
+  "crossfade": 0,
+  "spans": [
+    {
+      "from": 1,
+      "to": 3,
+      "index": 1
+    }
+  ]
+}
+
+```
+
+Result:
+
+```json
+{
+  "pieces": "<any>"
+}
+
+```
+
+## `take.comp.get@1`
+
+List the pieces of a comp: spans, takes and fades.
+
+The pieces of the comp that item belongs to (or items), in time order: from and to are the seams in beats (crossfades taken out), take and index the take each plays, fade_in and fade_out the crossfades in seconds. An item with several takes and no seams is a comp of one piece.
+
+Kind: `query`. Exposure: `mcp-exec`.
+
+### Arguments
+
+| Field | Type | Unit | Range | Default | Description |
+| --- | --- | --- | --- | --- | --- |
+| `item` | string |  |  |  | Item id, e.g. "it_1" (a clip's id is refused with item.kind). |
+| `items` | array |  |  |  |  |
+
+### Result
+
+```json
+{
+  "type": "object",
+  "title": "comp_result",
+  "properties": {
+    "pieces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "comp_piece",
+        "properties": {
+          "item": {
+            "type": "string"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+              }
+            ],
+            "x-unit": "beats",
+            "x-unit-strings": true,
+            "description": "Quantity strings are range-checked by the server."
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+              }
+            ],
+            "x-unit": "beats",
+            "x-unit-strings": true,
+            "description": "Quantity strings are range-checked by the server."
+          },
+          "take": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "fade_in": {
+            "type": "number",
+            "description": "Seconds."
+          },
+          "fade_out": {
+            "type": "number",
+            "description": "Seconds."
+          }
+        },
+        "required": ["item", "from", "to", "take", "index", "name", "fade_in", "fade_out"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": ["pieces"],
+  "additionalProperties": false
+}
+
+```
+
+### Examples
+
+**Read a comp** (`song_with_takes`)
+
+```json
+{
+  "item": "it_1"
+}
+
+```
+
+Result:
+
+```json
+{
+  "pieces": "<any>"
+}
+
+```
+
 ## `take.extract@1`
 
 Take a take out of its item or clip into an item of its own on any channel.

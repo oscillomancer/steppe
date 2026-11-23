@@ -27,8 +27,7 @@ Session
 ├── tracks         tr_*  typed strips: channel | buss | master (ADR-0019);
 │                        a forest rooted at the masters, tr_0 the main master
 │   ├── chain      fx_* (ordered; containers nest), input chain
-│   └── lanes      comp lanes (fixed lanes)
-├── items          it_*  (on a track + lane), each with takes tk_*
+├── items          it_*  (on a track), each with takes tk_*
 ├── sources        md_* audio media, mi_* MIDI sources (pooled or unique)
 ├── routes         sd_*  edges: track→track, track→hw out, hw in→track
 ├── envelopes      en_*  automation (targets any param), automation items ai_*
@@ -164,7 +163,6 @@ Fields:
 | `timebase` | enum or `project` | default for its items (channels) |
 | `chain`, `input_chain` | [fx id] | §1.7; `input_chain` on channels only |
 | `chain_midi` | `bus` \| `instrument` | what the chain does with MIDI (ADR-0068), default `bus`: every plug-in with a note input hears the chain's MIDI bus and note-output plug-ins feed it; `instrument`: only the chain's first plug-in with a note input hears the track's MIDI, as before 2.10. Kept by track templates and `track.duplicate`; part of the freeze hash, omitted at its default |
-| `lanes` | `{mode: none|fixed|comp, lanes: [ln id], comp: …}` | channels only |
 | `locked`, `hidden_tcp`, `hidden_mixer`, `folder_compact` | bool / enum | UI state kept in the model because it is user intent, but tagged `ui: true` so diffs/merges can ignore it |
 | `learn` | [binding] | MIDI learn on the strip's own controls (ADR-0058), one per control, sorted by `param`, omitted when empty: `{param, midi, mode, soft_takeover}` with `midi` and `mode` as an effect's (§1.7). `param`: `volume`, `pan`, `width`, `pan_left`, `pan_right`, `pan_boost` (these four on channels/busses), `mute`, `solo`, `phase_invert`, `mono`, `armed` (channels, masters), `monitor` (channels) or `lane_mute` (masters). Copied with `track.duplicate`, not kept by track templates; ignored by the freeze hash |
 
@@ -229,6 +227,148 @@ it is allowed.
 (`normal|reverse_stereo|mono_mix|left|right|...`), `stretch_markers`
 (array of `{source_pos, item_pos, slope?}` objects, seconds), `take_markers` (array of
 `{pos, name?, color?}` objects), `chain` (take FX), envelopes via §1.9.
+
+### 1.5.1 Comping
+
+A **comp** is what plays when an item's takes are chosen piece by piece.
+It is stored as ordinary items: **adjacent pieces on one track, each holding
+all the takes in the same order, each with its own active take**, which is
+what `item.split` leaves and `take.activate {index}` chooses from (the GUI's
+swipe on a take lane has always built one). No field marks a comp and no
+engine code knows of it: the pieces play as items do, and a seam between two
+takes is two items that overlap with a fade each, which the engine sums as it
+sums any overlap. Fixed lanes are not built: `Item.lane` is stored and
+playback does not read it, and no lane objects or track `lanes` field exist.
+
+**The run.** `take.comp` and `take.comp.get` act on a *run*: the pieces of
+one comp, found from `item` (any piece) or named in `items`. Two items of one
+track continue each other (left `L`, right `R`, in project samples at the
+project rate, `itemSpan` through the time map) when `R` starts after `L`
+starts, `R` starts no later than `L` ends (they touch or overlap), `R` ends
+after `L` ends, and the two are *take-compatible*: the same `lane` and
+timebase, not looped, the same number of takes (at least two), and at each
+index the same kind of source, the same take name and (audio) the same media.
+An overlap is allowed only when every take is audio; MIDI and empty-take
+pieces must touch exactly. And the source is continuous at the seam: at the
+seam's core sample (below) every take plays the same source position on both
+sides, to a sample (audio, through `audioSourceAt` with the take's warp and
+speed; MIDI, the source beat). A piece cut by `item.split` passes; a copy made by
+`item.duplicate` and placed right after the original holds the same takes but
+another source position, so it is another item, not the next piece, and a comp
+of one leaves the other alone. A run that cannot be followed uniquely (two items
+could continue it) is refused, not guessed.
+
+**`take.comp {item | items, spans, crossfade?, crossfade_shape?, bypass_groups?}`**
+(edit, one undo step). `spans` is a list of `{from, to, take | index}`:
+`from` and `to` in beats (the domain of `item.split`'s `at`), `take` a take id
+or `index` its 0-based position in the item's take order (exactly one). A
+take id may be any piece's: it names an index. Spans are in time order, do
+not overlap and lie inside the run (`from` before `to`, all compared in
+project samples after the time map). Parts of the run no span covers keep their
+current take. `crossfade` is seconds (default 0.01, at least 0) and
+`crossfade_shape` is `cos` (equal power, the default) or `linear`; both apply
+to every seam of the run.
+
+The result is a pure function of the run's *core* (below), the spans and the
+two crossfade arguments, so a second call with the same arguments changes
+nothing:
+
+1. **Core.** The run's seams are the points where neighbouring pieces meet.
+   For an overlap of `o` samples the seam is at the overlap's middle sample
+   (`R`'s start plus `o/2`); a touching pair meets at one sample. The core of
+   a run is the same pieces with every crossfade taken out: `L` ends and `R`
+   starts at the seam, `R`'s audio takes' source offsets move forward by the
+   time removed, and the seam-side fades are cleared. Outer ends are never
+   touched.
+2. **Takes.** Each core piece plays the take index it plays now; each span
+   paints its index over `[from, to]`. Neighbouring core pieces that will
+   play the same take across their seam are joined first when they are one piece cut
+   in two (the items agree in everything but their place, fades and takes, the takes
+   in everything but the source offset, with the same FX and no envelopes, take markers
+   or stretch markers; audio takes name one file, MIDI takes hold the same notes, as
+   they do after an `item.split`, which gives each half its own copy): the left piece takes the right one's end and
+   outer fade-out, and the right piece, its takes and their FX are removed. So a seam
+   moved by a few samples leaves no sliver between the old and the new seam to clamp
+   the crossfade, and any re-comp equals the same spans applied from scratch. A seam
+   between pieces that differ (a gain, a colour, FX, edited notes) stays. Where such a
+   boundary joins MIDI pieces that play one take, a held note stops there and sounds
+   again, and the call warns `comp.midi_boundary` with the beats. Then a piece is
+   split where the painted index changes inside it (a split as `item.split` makes,
+   at the sample-snapped point, keeping every take in order). A span edge where the
+   index does not change makes no split, so a comp whose spans all name the current
+   takes changes nothing, except that any identical same-take pieces in the run are
+   joined, wherever they are (a split made only to `take.activate` one half later is
+   lost to a re-comp before it: activate after the re-comp).
+3. **Seams.** At a seam whose sides play different takes and whose pieces
+   are all audio without warp markers or take envelopes, the crossfade is
+   `2·h` samples with `h = min(round(crossfade·rate/2), ⌊ℓL/2⌋, ⌊ℓR/2⌋)`
+   (`ℓ` the core lengths of the pieces beside the seam, so neighbouring
+   crossfades never overlap and a fade never outlasts its piece). `L` then
+   ends `h` samples after the seam and `R` starts `h` before it, with its audio
+   takes' source offsets moved back by `h` samples of item time (the take's
+   speed applied, as `item.split` rebases forward), and `L`'s fade-out and
+   `R`'s fade-in are `2·h` samples long in `crossfade_shape`. Every seam-side
+   fade is rewritten: `0` for any other seam. Seam points, extensions and fade
+   lengths are whole project samples, so the pieces tile on project sample
+   boundaries (`time::samplesAt` of one piece's end is the next one's start,
+   before extension). A value that differs from the stored one by no more than 1e-9
+   (in its own unit: seconds, or beats for a Beats-timebase position or length) is
+   kept as stored, so the same call twice gives the same bytes; one sample is
+   thousands of times that at any rate and tempo, so only float noise is absorbed.
+   The overlap of a Beats-timebase piece is stored in beats and a fade in seconds:
+   after a tempo change they disagree (a bump or a dip across the seam) until
+   `take.comp` is called again with the spans `take.comp.get` gives, which rebuilds
+   both. `take.comp.get` does not warn of it (a limit, as for any crossfade of a Beats
+   item).
+4. The first piece keeps its fade-in and the last its fade-out; the comp's
+   outer start and end do not move.
+
+A crossfade is skipped, with the warning `comp.crossfade_skipped` naming the
+reason, when a take of the run is MIDI or empty, has stretch markers, or has
+take envelopes (a take-relative curve would have to move with the extension);
+the seams are then hard cuts. A crossfade shortened by short pieces warns
+`comp.crossfade_clamped`. MIDI seams are always hard: a note held across a seam
+ends with its piece, and a note the later piece's take holds into its start is
+chased to the start (the rules of a split).
+
+The result is `{pieces: [{item, from, to, take, index, name, fade_in,
+fade_out}]}` in time order, `from` and `to` the core seam beats and
+`take` the piece's active take id. `take.comp.get {item | items}` (query)
+returns the same list for an existing comp, with each piece's current fades,
+and the run's take names.
+
+Refusals, each with a code, a message, a path (`/args/item`, `/args/spans/1/from`) and a hint: `comp.item` (neither or both of `item`
+and `items`, or an empty `items`), `comp.takes` (fewer than two takes),
+`comp.mismatch` (`items` that do not continue one another, or two items could continue
+the run),
+`comp.span` (a span empty, unordered, overlapping or outside the run),
+`comp.take` (a span without exactly one of `take` and `index`, or one not in
+the item), `comp.loop` (a looped item: comp an item that does not loop, or
+`item.set {loop: false}` first), `comp.linked` (the item has linked
+peers: `bypass_groups` comps it alone), `item.locked` (any piece locked),
+`item.kind` (a clip). Per-item refusals with `items` name the piece in the path
+(`/args/items/2`); with `item`, `/args/item`.
+
+Playback and offline render read the stored items, so real time equals
+offline in both executors; there is no audio-path code. Old files load
+unchanged: nothing is added to the schema.
+
+**Tests.** A loop-recorded item of three passes comped by spans: the pieces, their
+takes, fades and sample positions, and the master equal to each take rendered alone
+outside the seams and to the shape's gains inside them, at playrate 1 and 2 and on an
+item trimmed at the front; seams on whole samples for spans off the grid and a
+crossfade that is not a whole number of samples; a crossfade of 0, `linear`, and one
+shortened by short pieces; the same call twice (also through another piece, at an odd
+tempo with off-grid spans) gives the same project bytes; spans that all name the current
+takes change nothing, bar identical same-take splits, which join; a comp rebuilt over an earlier one renders as one built from
+scratch, and `take.activate {index}` keeps the seams; real time equals offline in both
+executors; a copy placed after the original is not pulled into the comp and the original
+stays byte for byte; a seam moved by 1, 24 or 600 samples either way gives exactly what the
+same spans give from scratch, with the full crossfade; a MIDI seam moved five times leaves
+two pieces and one sounding C4 and G4, as from scratch; pieces that differ keep their
+boundary, and for MIDI the call warns `comp.midi_boundary`;
+MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
+`take.comp.get` after a save and reopen; one undo step; and every refusal.
 
 ### 1.6 Sources
 
@@ -1136,11 +1276,12 @@ and naming. All `edit` unless marked (q) query or (a) action.
   one result per track, no rendering; exact eligibility in engine.md),
   `item.remove`, `item.move`, `item.set`, `item.split {item, at, snap?: none|zero_crossing}`
   (default none; audio zero-crossing search and errors in engine.md),
-  `item.duplicate`, `item.glue` (a+edit), `take.add`, `take.remove`,
+  `item.duplicate`, `take.add`, `take.remove`,
   `item.paste {version?, items: [{item, track, position}]}` copies the retained
   version's takes and their FX, including referenced opaque state blobs when
   the current session no longer contains them (for example after undo),
-  `take.set`, `take.activate`, `take.remove` (the item goes with its last
+  `take.set`, `take.activate`, `take.comp`, `take.comp.get` (§1.5.1),
+  `take.remove` (the item goes with its last
   take), `take.extract {take, track, position}` (into an item of its own),
   `item.explode-takes {item, mode: tracks|serial}` (recording order: the
   first take stays, the others on new channels below or one after another),
@@ -1176,6 +1317,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   unrolled, notes ending by their item's end; gaps empty, overlaps layered),
   or a lone item's MIDI takes layered into one take; the earliest item, its
   settings and take FX are kept.
+  There is no separate glue command: `item.consolidate` renders audio and
+  merges MIDI (a background action, MIDI-only selections included), and
+  `item.heal` rejoins the pieces of one source as an edit.
 - **FX**: `fx.add {track?|take?, plugin, index?, patch?, chain?}`
   (exactly one of track or take), `fx.remove`,
   `fx.move`, `fx.copy {fx, track, index?, chain?}` (live settings),
@@ -2637,7 +2781,6 @@ missing from this table is a defect of this contract.
 | `item.explode-takes`, `take.extract` (from an item) | The four members go with the take unchanged. |
 | `take.extract` (from a clip) | As placement lays the clip, with the clip's `follow`. |
 | `item.consolidate` (MIDI) | What sounds is preserved, and checked. Items of one track into one item: when the heard takes all follow in one mode, the result follows in it; its context, in the result's source beats, is each source's `contextOver` its span, beats divided by that source's playrate (onto the result's axis, which runs at the result's playrate of 1), placed where the source sat, not repeating; the result's `context_phase` is 0. A note chased at the first source's start keeps its true start in the result's source, before the result's start (its `start_offset` positive), so it is chased there and maps as before. A note chased at a later source's start is written, as today, as a note at that source's old start, where its place changes. The command computes every heard note's sounding key before and after with `soundingNotes`, and refuses (`item.follow_merge`, naming the item and the note's song beat; hint: `take.bake` the following takes first) when any would differ, and also when a following source's context is too long to carry into the result (more points than a take holds: a repeated context over many bars), even when only chord points are cut on a take that follows `key` and nothing would sound differently (conservative; the hint is the same). When none follow, as today; mixed modes (some following, some not, or different modes) are refused with the same error. A lone item's takes layered into one take: allowed when none follow, or when all follow in one mode with the same `contextOver` the item's span; else `item.follow_merge`. |
-| `item.glue` | Named in §4 but not registered (not built). When built, as `item.consolidate` (MIDI). |
 | `item.heal` | Audio pieces only; MIDI takes are not healed. |
 | `midi.write` (on a take) | Replaces the written notes; the context and `follow` stay, and the answer carries `follows: "key" | "chords"` when the take follows. Chord symbols in the text do not change a take's context (`take.set` does). |
 | `midi.edit` | Below. |
@@ -2740,8 +2883,8 @@ lanes are built, the new items go on a lane that plays beside the following
 item's, never on one that replaces it; in comp mode they are a new lane outside
 the comp.
 
-**Comps and take lanes.** A lane item's takes keep their own members; a comp
-plays each piece by its take, as a split does.
+**Comps.** A comp's pieces keep their takes' own members; each piece plays by its
+active take, as a split does (§1.5.1).
 
 **Context edits.** A context edit (`context.write` and the other context
 commands) answers `context.no_key` naming each following item that now has a

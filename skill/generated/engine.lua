@@ -2144,6 +2144,26 @@ q = nil
 ---@field unrolled boolean
 ---@field warnings? table[]
 
+---@class Steppe.take_comp_args
+---@field item? string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
+---@field items? string[]
+---@field spans table[]
+---@field crossfade? number Seconds. (default: 0.01)
+---@field crossfade_shape? "cos"|"linear" (default: "cos")
+---@field bypass_groups? boolean (default: false)
+
+---@class Steppe.take_comp_result
+---@field pieces table[]
+---@field warnings? table[]
+
+---@class Steppe.take_comp_get_args
+---@field item? string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
+---@field items? string[]
+
+---@class Steppe.take_comp_get_result
+---@field pieces table[]
+---@field warnings? table[]
+
 ---@class Steppe.take_extract_args
 ---@field take string Take id, e.g. "tk_1".
 ---@field track? string Default: the item's or clip's track.
@@ -2973,10 +2993,14 @@ q = nil
 ---@field activate fun(args: Steppe.take_activate_args): Steppe.take_activate_result Choose the take heard from an item or clip.
 ---@field add fun(args: Steppe.take_add_args): Steppe.take_add_result Add a take to an item or clip, optionally copied from one of its takes.
 ---@field bake fun(args: Steppe.take_bake_args): Steppe.take_bake_result Write a following take's sounding pitches into its notes, and stop following.
+---@field comp fun(args: Steppe.take_comp_args): Steppe.take_comp_result Comp an item's takes: each span plays one take, crossfaded at the seams.
 ---@field extract fun(args: Steppe.take_extract_args): Steppe.take_extract_result Take a take out of its item or clip into an item of its own on any channel.
 ---@field list fun(args: Steppe.take_list_args): Steppe.take_list_result List the takes of an item or clip and identify its active take.
 ---@field remove fun(args: Steppe.take_remove_args): Steppe.take_remove_result Delete a take from its item or clip (which goes with its last take).
 ---@field set fun(args: Steppe.take_set_args): Steppe.take_set_result Set a take's gain, pan, name, rate, pitch, context, follow and more.
+
+---@class Steppe.take.comp
+---@field get fun(args?: Steppe.take_comp_get_args): Steppe.take_comp_get_result List the pieces of a comp: spans, takes and fades.
 
 ---@class Steppe.take.hits
 ---@field detect fun(args: Steppe.take_hits_detect_args): Steppe.take_hits_detect_result Detect transient candidates in audio takes, then commit one undoable edit.
