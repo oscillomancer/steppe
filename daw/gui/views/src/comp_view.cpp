@@ -64,21 +64,13 @@ std::vector<CompSpan> compSpans(const model::Session& s, const CompView& comp) {
     return out;
 }
 
-std::optional<CompCrossfade> compCrossfade(const model::Session& s, const CompView& comp) {
+std::optional<model::CompCrossfade> compCrossfade(const model::Session& s, const CompView& comp) {
     if (comp.seams.empty()) return std::nullopt;
-    const model::Fade* longest = nullptr;
-    for (const auto& seam : comp.seams) {
-        const model::Item& l = *s.items.find(comp.pieces[seam.left].item);
-        const model::Item& r = *s.items.find(comp.pieces[seam.left + 1].item);
-        for (const model::Fade* fade : {&l.fadeOut, &r.fadeIn})
-            if (!longest || fade->length > longest->length) longest = fade;
-    }
-    return CompCrossfade{longest->length,
-                         longest->length > 0 && longest->shape == model::FadeShape::Linear};
+    return model::compCrossfade(s, comp.pieces);
 }
 
 json::Value compArgs(model::Id item, const std::vector<CompSpan>& spans,
-                     const std::optional<CompCrossfade>& crossfade) {
+                     const std::optional<model::CompCrossfade>& crossfade) {
     json::Value args = json::Value::object();
     args["item"] = item.str();
     json::Value list = json::Value::array();
@@ -92,7 +84,7 @@ json::Value compArgs(model::Id item, const std::vector<CompSpan>& spans,
     args["spans"] = std::move(list);
     if (crossfade) {
         args["crossfade"] = crossfade->seconds;
-        args["crossfade_shape"] = crossfade->linear ? "linear" : "cos";
+        args["crossfade_shape"] = crossfade->shape == model::FadeShape::Linear ? "linear" : "cos";
     }
     return args;
 }

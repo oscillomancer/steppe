@@ -50,18 +50,13 @@ std::vector<CompSpan> compSpans(const model::Session& s, const CompView& comp);
 
 // The crossfade a re-comp keeps, since take.comp gives every seam of a run
 // one length and shape: nullopt for a run with no seam between different
-// takes (a first comp takes take.comp's default), else the longest
-// seam-side fade of those seams (a clamped seam does not shrink it; 0 for a
-// hard-cut comp) and its shape, linear or else equal power.
-// Read from the fades until take.comp.get reports the run's value.
-struct CompCrossfade {
-    double seconds = 0;
-    bool linear = false;
-};
-std::optional<CompCrossfade> compCrossfade(const model::Session& s, const CompView& comp);
+// takes (a first comp takes take.comp's default), else what take.comp.get
+// reads back (model::compCrossfade: the longest seam-side fade, which a
+// clamped seam does not shrink, and its shape; 0 for a hard-cut comp).
+std::optional<model::CompCrossfade> compCrossfade(const model::Session& s, const CompView& comp);
 
 // take.comp's arguments: `item`, the spans, and the crossfade when given.
 json::Value compArgs(model::Id item, const std::vector<CompSpan>& spans,
-                     const std::optional<CompCrossfade>& crossfade);
+                     const std::optional<model::CompCrossfade>& crossfade);
 
 }  // namespace supple::views

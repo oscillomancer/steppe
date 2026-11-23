@@ -1053,11 +1053,11 @@ its seams are rebuilt and it joins a neighbour playing the same take (a
 neighbour's take would sum one source with itself through an equal-power
 crossfade). A click on the take a piece already plays sends nothing. Every
 re-comp keeps the comp's **crossfade**: `take.comp` gives every seam of a comp
-one length and shape, so the GUI sends the comp's own (`views::compCrossfade`:
-the longest seam-side fade among the seams between different takes, which a
-clamped seam does not shrink, and its shape, linear or else equal power; 0 for
-a hard-cut comp). Only a first comp, with no seam between different takes yet,
-sends none and takes `take.comp`'s 10 ms, equal power.
+one length and shape, so the GUI sends the comp's own, the value
+`take.comp.get` reads back (`model::compCrossfade`: the longest seam-side fade,
+which a clamped seam does not shrink, and its shape; 0 for a hard-cut comp).
+Only a first comp, with no seam between different takes yet, sends none and
+takes `take.comp`'s 10 ms, equal power (`views::compCrossfade` is empty then).
 
 The lanes draw each **seam** of a comp (`model::compRun`, cached per track and
 session version), only where the takes differ on its two sides: a one-unit line

@@ -814,7 +814,8 @@ void Inspector::readItems(bool force) {
         if (inComp) {
             const auto crossfade = views::compCrossfade(s, *comp);
             show("crossfade", fixed(crossfade->seconds, 3, "s"), force);
-            crossfadeShape_->setValue(crossfade->linear ? "linear" : "cos");
+            crossfadeShape_->setValue(crossfade->shape == model::FadeShape::Linear ? "linear"
+                                                                                   : "cos");
         }
     }
     const auto timebase = common(items, [](const model::Item& i) { return i.timebase; });
@@ -1124,10 +1125,10 @@ void Inspector::setCrossfade(std::optional<double> seconds, std::optional<bool> 
     const model::Session& s = app_.head();
     const auto comp = views::compOf(s, ids_.front());
     if (!comp || comp->seams.empty()) return;
-    views::CompCrossfade crossfade =
-        views::compCrossfade(s, *comp).value_or(views::CompCrossfade{0.01, false});
+    model::CompCrossfade crossfade =
+        views::compCrossfade(s, *comp).value_or(model::CompCrossfade{});
     if (seconds) crossfade.seconds = *seconds;
-    if (linear) crossfade.linear = *linear;
+    if (linear) crossfade.shape = *linear ? model::FadeShape::Linear : model::FadeShape::Cos;
     run("take.comp", views::compArgs(ids_.front(), views::compSpans(s, *comp), crossfade));
 }
 

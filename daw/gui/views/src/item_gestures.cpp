@@ -957,7 +957,7 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                 state_.fadeMax = 2 * std::min(seam - s.timeMap->secondsAt(spans[k].from),
                                               s.timeMap->secondsAt(spans[k + 1].to) - seam);
                 const auto crossfade = compCrossfade(s, at->comp);
-                state_.fadeSeconds = crossfade ? crossfade->seconds : 0.01;
+                state_.fadeSeconds = crossfade ? crossfade->seconds : model::kDefaultCompCrossfade;
                 cycleFade_ = state_.drag == Drag::CompFade &&
                              mouse.behaviour("fade", e.mods) == "cycle_shape";
             }
@@ -1831,11 +1831,14 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
         if (!moved_ && !cycleFade_) return;
         auto at = seamAtBeat(s, state_.anchor, state_.seamBeat);
         if (!at) return;
-        CompCrossfade crossfade = compCrossfade(s, at->comp).value_or(CompCrossfade{0.01, false});
+        model::CompCrossfade crossfade =
+            compCrossfade(s, at->comp).value_or(model::CompCrossfade{});
         if (moved_)
             crossfade.seconds = state_.fadeSeconds;
         else
-            crossfade.linear = !crossfade.linear;
+            crossfade.shape = crossfade.shape == model::FadeShape::Linear
+                                  ? model::FadeShape::Cos
+                                  : model::FadeShape::Linear;
         runSteps(moved_ ? "Comp crossfade" : "Comp crossfade shape",
                  {{"take.comp",
                    compArgs(state_.anchor, {at->spans[at->k], at->spans[at->k + 1]}, crossfade)}});
