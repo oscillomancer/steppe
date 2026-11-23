@@ -133,6 +133,8 @@ class Inspector {
     ui::Dropdown* clipMode_ = nullptr;
     ui::Dropdown* clipQuantize_ = nullptr;
     ui::Dropdown* clipFollow_ = nullptr;
+    ui::Dropdown* clipFadeInShape_ = nullptr;  // an audio clip's fade shapes
+    ui::Dropdown* clipFadeOutShape_ = nullptr;
     ui::Node* takeBox_ = nullptr;  // speed and pitch: an audio take's
     ui::Toggle* keepPitch_ = nullptr;
     ui::Node* takesBox_ = nullptr;  // the take list: an item with several
