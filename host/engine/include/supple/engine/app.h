@@ -1070,6 +1070,15 @@ class EngineApp : public cmd::Host {
     // Model thread only. A first save closes those of the scratch files it removes, and has them
     // go on at the files' new place: Windows cannot remove an open file.
     std::vector<std::weak_ptr<detail::HashRead>> hashReads_;
+    // Scratch files a first save of this run could not remove (project.media_leftover), as they
+    // were (size and time). A later first save in the same scratch folder, of another project,
+    // leaves them out and tries to remove them again; one rewritten since is not one of them.
+    struct ScratchLeftover {
+        std::filesystem::path file;
+        std::uintmax_t size = 0;
+        std::filesystem::file_time_type time;
+    };
+    std::vector<ScratchLeftover> scratchLeftovers_;  // model thread only
     std::map<std::string, std::unique_ptr<host::Instance>> scratch_;
     LoadOverrides overrides_;
     std::uint64_t overridesVersion_ = 0;

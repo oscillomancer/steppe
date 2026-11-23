@@ -757,7 +757,9 @@ move or are copied once it stops. Saving in place, or as another file in
 the same folder, works while recording. A first save copies each scratch file, checks the
 copy, publishes the file, and then removes the scratch original; one that cannot be removed
 (held open elsewhere, or a folder that cannot be written) stays, and the save says so with a
-`project.media_leftover` warning naming its path: the project already uses the copy. With the app's copy-imports setting on (the GUI's
+`project.media_leftover` warning naming its path: the project already uses the copy. The app
+remembers such a file (its size and time); a later first save in the same scratch folder, of
+another unsaved project, does not copy it into its own media, and tries to remove it again. With the app's copy-imports setting on (the GUI's
 default), item.add copies an imported audio file into the media folder (a
 same-named file with other bytes gets `-2`, `-3`…; the same bytes are
 reused) instead of naming it where it is. The GUI gives each project a

@@ -4598,6 +4598,17 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
                   : publish();
     if (fs::equivalent(from, dest, ec)) return publish();
     ec.clear();
+    // What an earlier project's first save could not remove is not this project's.
+    auto leftover = [&](const fs::path& file) {
+        std::error_code error;
+        const auto size = fs::file_size(file, error);
+        const auto time = fs::last_write_time(file, error);
+        return !error && std::any_of(scratchLeftovers_.begin(), scratchLeftovers_.end(),
+                                     [&](const ScratchLeftover& old) {
+                                         return old.file == file && old.size == size &&
+                                                old.time == time;
+                                     });
+    };
     std::vector<fs::path> files;
     for (auto it = fs::recursive_directory_iterator(from, ec); !ec && it != fs::end(it);
          it.increment(ec)) {
@@ -4608,7 +4619,8 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
                          it->path().string(),
                          "replace the scratch-media symlink with its actual media file, or save "
                          "into another project directory");
-        if (fs::is_regular_file(status)) files.push_back(it->path().lexically_relative(from));
+        if (fs::is_regular_file(status) && !leftover(it->path()))
+            files.push_back(it->path().lexically_relative(from));
     }
     if (ec)
         return Error("project.media_move", ec.message(), from.string(),
@@ -4724,13 +4736,15 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
             readers.held.emplace_back(reader, dest / reader->path.lexically_relative(from));
         }
     // What stays is said, not ignored: the project already points at the copies.
-    std::set<fs::path> left;
+    std::vector<ScratchLeftover> fresh;
     std::vector<fs::path> emptyDirs;
     for (const auto& rel : files) {
         ec.clear();
         fs::remove(from / rel, ec);
         if (ec && ec != std::errc::no_such_file_or_directory) {
-            left.insert(from / rel);
+            std::error_code stat;
+            fresh.push_back({from / rel, fs::file_size(from / rel, stat),
+                             fs::last_write_time(from / rel, stat)});
             if (warnings)
                 warnings->push_back(
                     {"project.media_leftover",
@@ -4743,12 +4757,26 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
              parent = parent.parent_path())
             emptyDirs.push_back(parent);
     }
+    // Files an earlier first save could not remove: tried again, silently (they were reported).
+    for (auto old = scratchLeftovers_.begin(); old != scratchLeftovers_.end();) {
+        ec.clear();
+        fs::remove(old->file, ec);
+        if (!ec || ec == std::errc::no_such_file_or_directory) {
+            for (auto parent = old->file.parent_path(); parent != from && within(parent, from);
+                 parent = parent.parent_path())
+                emptyDirs.push_back(parent);
+            old = scratchLeftovers_.erase(old);
+        } else {
+            ++old;
+        }
+    }
+    scratchLeftovers_.insert(scratchLeftovers_.end(), fresh.begin(), fresh.end());
     std::sort(emptyDirs.begin(), emptyDirs.end(),
               [](const auto& a, const auto& b) { return a.native().size() > b.native().size(); });
     emptyDirs.erase(std::unique(emptyDirs.begin(), emptyDirs.end()), emptyDirs.end());
     auto holdsLeftover = [&](const fs::path& dir) {
-        return std::any_of(left.begin(), left.end(),
-                           [&](const fs::path& file) { return within(file, dir); });
+        return std::any_of(scratchLeftovers_.begin(), scratchLeftovers_.end(),
+                           [&](const ScratchLeftover& old) { return within(old.file, dir); });
     };
     for (const auto& dir : emptyDirs) {
         ec.clear();

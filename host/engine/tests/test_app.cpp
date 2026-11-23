@@ -1457,6 +1457,61 @@ TEST_CASE("a first save that cannot remove a scratch file says so and points at 
     CHECK(app->head().media.begin()->value->path == "rec/Vocal-1.wav");
     CHECK(app->mediaDir() == root.path / "song" / "media");
 }
+
+// A first save that left a file behind (the folder cannot be written), then another unsaved
+// project in the same scratch folder: its first save does not carry the file into its media.
+TEST_CASE("a scratch file the first save could not remove does not go with the next project") {
+    if (::geteuid() == 0) return;  // root removes a file whatever its folder allows
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    AppOptions o;
+    o.workdir = root.path / "work";
+    o.scratchDir = root.path / "unsaved-next";
+    o.chainDir = root.path / "chains";
+    o.templateDir = root.path / "templates";
+    o.projectTemplateDir = root.path / "project-templates";
+    o.pluginPath = {kFixture};
+    auto created = EngineApp::create(o, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Dispatcher d(registry, *app);
+    const fs::path rec = o.scratchDir / "media" / "rec";
+    // Project A: a recording and a file of its own that the save cannot remove.
+    app->setupFixture(d, "recording_interrupted");
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    const fs::path stray = rec / "Stray.wav";
+    {
+        std::ofstream out(stray, std::ios::binary);
+        out << "project A's";
+    }
+    struct Restore {
+        fs::path rec;
+        void now() const {
+            std::error_code ec;
+            fs::permissions(rec, fs::perms::owner_all, fs::perm_options::replace, ec);
+        }
+        ~Restore() { now(); }
+    } restore{rec};
+    fs::permissions(rec, fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
+    std::vector<schema::Warning> warnings;
+    REQUIRE(app->save(root.path / "a" / "a.json", &warnings));
+    REQUIRE(fs::exists(stray));  // the leftover
+    restore.now();
+    // The recording's own leftovers go (project B's fixture writes the same names anew).
+    for (const auto& entry : std::vector<fs::directory_entry>(fs::directory_iterator(rec), {}))
+        if (entry.path() != stray) fs::remove(entry.path());
+    // Project B, unsaved, in the same scratch folder.
+    REQUIRE(app->newProject(model::Project{}));
+    app->setupFixture(d, "recording_interrupted");
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    REQUIRE(app->save(root.path / "b" / "b.json"));
+    CHECK(fs::exists(root.path / "b" / "media" / "rec" / "Vocal-1.wav"));
+    CHECK_FALSE(fs::exists(root.path / "b" / "media" / "rec" / "Stray.wav"));
+    // The leftover could be removed this time, so it was, and the scratch folder is gone.
+    CHECK_FALSE(fs::exists(stray));
+    CHECK_FALSE(fs::exists(o.scratchDir));
+}
 #endif
 
 TEST_CASE("two armed tracks with one name record to two files (review round 8)") {
