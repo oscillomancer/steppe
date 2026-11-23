@@ -2,7 +2,79 @@
 // Copyright (c) 2026 Supple Audio
 #include "supple/engine/midi_ports.h"
 #include <cmath>
+#include <optional>
+#include <utility>
+#include "supple/base/files.h"
+#include "supple/json/json.h"
 namespace supple::engine {
+namespace {
+// supple.preferences/<major>.<minor> as numbers, or nothing.
+std::optional<std::pair<int, int>> preferencesVersion(std::string_view label) {
+    constexpr std::string_view prefix = "supple.preferences/";
+    if (!label.starts_with(prefix)) return std::nullopt;
+    label.remove_prefix(prefix.size());
+    const auto dot = label.find('.');
+    if (dot == std::string_view::npos || dot == 0 || dot + 1 == label.size()) return std::nullopt;
+    auto number = [](std::string_view digits) -> std::optional<int> {
+        if (digits.size() > 6) return std::nullopt;
+        int n = 0;
+        for (char c : digits) {
+            if (c < '0' || c > '9') return std::nullopt;
+            n = n * 10 + (c - '0');
+        }
+        return n;
+    };
+    const auto major = number(label.substr(0, dot)), minor = number(label.substr(dot + 1));
+    if (!major || !minor) return std::nullopt;
+    return std::pair{*major, *minor};
+}
+}  // namespace
+bool preferencesSchemaNewer(std::string_view label) {
+    const auto mine = preferencesVersion(kPreferencesSchema), theirs = preferencesVersion(label);
+    return mine && theirs && *theirs > *mine;
+}
+std::filesystem::path newerPreferencesBackup(const std::filesystem::path& file,
+                                             std::string_view label, int n) {
+    std::string tag(label);
+    for (char& c : tag)
+        if (c == '/' || c == '\\') c = '-';
+    auto out = file;
+    out += "." + tag + (n > 1 ? "." + std::to_string(n) : std::string()) + ".bak";
+    return out;
+}
+Status keepNewerPreferences(const std::filesystem::path& file, std::string_view ownBytes) {
+    std::error_code ec;
+    if (file.empty() || !std::filesystem::exists(file, ec)) return {};
+    auto bytes = readFile(file);
+    if (!bytes) return {};  // the write that follows reports what is wrong with the file
+    const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+    if (!ownBytes.empty() && text == ownBytes) return {};  // this writer's own last write
+    auto doc = json::parse(text);
+    if (!doc || !doc->isObject()) return {};
+    const json::Value* schema = doc->find("schema");
+    if (!schema || !schema->isString() || !preferencesSchemaNewer(schema->asString())) return {};
+    // Never overwrite a backup: each different file the newer version left gets its own name.
+    constexpr int kMostBackups = 1000;
+    for (int n = 1; n <= kMostBackups; ++n) {
+        const auto backup = newerPreferencesBackup(file, schema->asString(), n);
+        if (std::filesystem::exists(backup, ec)) {
+            if (auto kept = readFile(backup); kept && *kept == *bytes) return {};  // kept already
+            continue;
+        }
+        if (auto written = writeFileAtomic(backup, std::span<const std::uint8_t>(*bytes)); !written)
+            return Error("preferences.backup",
+                         "cannot keep the newer version's preferences as " + backup.string() +
+                             ": " + written.error().message,
+                         backup.string(),
+                         "free space or allow writing in " + backup.parent_path().string() +
+                             ", then change the setting again");
+        return {};
+    }
+    return Error("preferences.backup",
+                 "the newer version's preferences already have " + std::to_string(kMostBackups) +
+                     " backups beside " + file.string(),
+                 file.string(), "move the old .bak files elsewhere, then change the setting again");
+}
 MidiPortSettings midiPortSettings(const MidiPortPreferences& preferences, std::string_view name) {
     MidiPortSettings result;
     const auto found = preferences.find(name);

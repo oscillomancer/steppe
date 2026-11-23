@@ -2058,6 +2058,8 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
                            "prefs.section.advanced.title"})
         CHECK(f.node(id)->visible);
     CHECK(f.node("prefs.audio")->bounds().y < f.node("prefs.monitor")->bounds().y);
+    CHECK(f.node("prefs.monitor")->bounds().y < f.node("prefs.stack")->bounds().y);
+    CHECK(f.node("prefs.stack")->bounds().y < f.node("prefs.imports")->bounds().y);
     CHECK(f.node("prefs.monitor")->bounds().y < f.node("prefs.isolation")->bounds().y);
     CHECK_FALSE(f.node("prefs.advanced")->visible);
     CHECK(f.node("prefs.advanced.toggle")->valueText() == "Show");
@@ -2171,6 +2173,24 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     CHECK(f.node("prefs.isolation.set")->valueText() == "In a shared bridge process");
     CHECK_FALSE(prefs.setPluginIsolation(model::Isolation::Inherit));
     CHECK(f.app->pluginIsolation() == model::Isolation::SharedBridge);
+    // Recording over an item (ADR-0103), from the menu: the engine's setting at once.
+    CHECK(f.app->stackRecordedTakes());
+    CHECK(f.node("prefs.stack.set")->valueText() == "New take");
+    REQUIRE(f.root->click("prefs.stack.set"));
+    auto* stackMenu = dynamic_cast<ui::List*>(f.root->find("prefs.stack.menu"));
+    REQUIRE(stackMenu);
+    REQUIRE(stackMenu->count() == 2);
+    auto layer = stackMenu->onActivate;
+    layer(1);  // Layer on top
+    CHECK_FALSE(f.app->stackRecordedTakes());
+    CHECK(f.node("prefs.stack.set")->valueText() == "Layer on top");
+    // The row shows the engine's setting: an agent's record.set appears there,
+    // and is not saved (the engine keeps it only while it runs).
+    auto agent = f.dispatcher->execute(
+        {"record.set", json::parse(R"({"stack_takes": true})").value(), kTest});
+    REQUIRE_MESSAGE(agent, (agent ? "" : agent.error().toString()));
+    prefs.refresh();
+    CHECK(f.node("prefs.stack.set")->valueText() == "New take");
     // The render folder: absolute only.
     CHECK_FALSE(prefs.setRenderDirectory("relative/renders"));
     REQUIRE(prefs.setRenderDirectory(f.dir / "my renders"));
@@ -2183,6 +2203,7 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     CHECK(saved->audioThreads == 4);
     CHECK_FALSE(saved->copyImports);
     CHECK(saved->pluginIsolation == model::Isolation::SharedBridge);
+    CHECK_FALSE(saved->stackRecordedTakes);  // the row's choice, not the agent's
     CHECK(saved->renderDirectory == f.dir / "my renders");
     // A failed save changes neither the shown nor the effective setting.
     std::filesystem::remove(file);
@@ -2195,6 +2216,72 @@ TEST_CASE("preferences: the dialog applies each setting at once and saves it") {
     f.app->setRendersDir({});
     gui::PreferencesDialog again(*f.root, *f.app, mouse, *saved, {});
     CHECK(f.app->rendersDir() == f.dir / "my renders");
+    CHECK_FALSE(f.app->stackRecordedTakes());  // what record.set {stack_takes} sets
+}
+
+// Round 134 G2: a newer version's preferences file is not read (its settings may mean something
+// this version does not know), and it is not destroyed either: before this version first writes
+// over it, the original is kept beside it, once, and the dialog and status line say so.
+TEST_CASE("preferences: a newer version's file is kept before the first save, and said") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto file = f.dir / "config" / "preferences.json";
+    const std::string newer =
+        R"({"copy_imported_media":false,"future":{"a":1},"schema":"supple.preferences/1.12"})";
+    REQUIRE(writeFileAtomic(file, newer));
+    auto loaded = gui::Preferences::load(file);
+    REQUIRE_FALSE(loaded);
+    CHECK(loaded.error().code == "preferences.newer");
+    CHECK(loaded.error().path == "/schema");
+    CHECK(loaded.error().message.find("newer version (supple.preferences/1.12)") !=
+          std::string::npos);
+    CHECK(loaded.error().message.find("defaults") != std::string::npos);
+    const auto backup = f.dir / "config" / "preferences.json.supple.preferences-1.12.bak";
+    CHECK(loaded.error().hint.find(backup.filename().string()) != std::string::npos);
+    // The newer version reads preferences.json only: the hint says to rename the backup back.
+    CHECK(loaded.error().hint.find("rename that file back to preferences.json") !=
+          std::string::npos);
+    // The app starts on the defaults with that file, and says why above the settings.
+    views::MouseMap map;
+    gui::MouseDialog mouse(*f.root, map, {});
+    gui::PreferencesDialog prefs(*f.root, *f.app, mouse, gui::Preferences{}, file);
+    prefs.fileNotice = loaded.error().message + "; " + loaded.error().hint + ".";
+    prefs.open();
+    f.root->frame(false);
+    REQUIRE(f.root->find("prefs.file.note"));
+    CHECK(f.node("prefs.file.note")->valueText() == prefs.fileNotice);
+    CHECK(f.node("prefs.file.note")->bounds().y < f.node("prefs.audio")->bounds().y);
+    CHECK_FALSE(std::filesystem::exists(backup));  // reading it wrote nothing
+    // The first save keeps the newer file as it was, then writes this version's.
+    REQUIRE(prefs.setCopyImports(false));
+    REQUIRE(std::filesystem::exists(backup));
+    auto text = [](const std::filesystem::path& p) {
+        const auto bytes = readFile(p).value();
+        return std::string(bytes.begin(), bytes.end());
+    };
+    CHECK(text(backup) == newer);
+    CHECK(text(file).find(engine::kPreferencesSchema) != std::string::npos);
+    // Never over a backup: newer, older, newer again (other settings), older: the second round
+    // goes beside the first, numbered; the first is untouched.
+    const std::string second = R"({"schema":"supple.preferences/1.12"})";
+    REQUIRE(writeFileAtomic(file, second));
+    REQUIRE(prefs.setCopyImports(true));
+    CHECK(text(backup) == newer);
+    const auto backup2 = f.dir / "config" / "preferences.json.supple.preferences-1.12.2.bak";
+    REQUIRE(std::filesystem::exists(backup2));
+    CHECK(text(backup2) == second);
+    // A newer file already kept (the same bytes as a backup) is not copied again.
+    REQUIRE(writeFileAtomic(file, newer));
+    REQUIRE(prefs.setCopyImports(false));
+    CHECK_FALSE(std::filesystem::exists(f.dir / "config" /
+                                        "preferences.json.supple.preferences-1.12.3.bak"));
+    REQUIRE(f.root->click("prefs.close"));
+    // Without a notice the dialog has no such line.
+    gui::PreferencesDialog plain(*f.root, *f.app, mouse, gui::Preferences{}, {});
+    plain.open();
+    f.root->frame(false);
+    CHECK(f.root->find("prefs.file.note") == nullptr);
+    REQUIRE(f.root->click("prefs.close"));
 }
 
 TEST_CASE("preferences: canonical round trip, older schemas and rejected values") {
@@ -2209,6 +2296,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     values.preventDeepIdle = true;
     values.renderDirectory = f.dir / "renders";
     values.copyImports = false;
+    values.stackRecordedTakes = false;
     values.pluginIsolation = model::Isolation::Dedicated;
     values.renderOpenFolder = true;
     values.audio.backend = "portaudio";
@@ -2237,6 +2325,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->preventDeepIdle);
     CHECK(loaded->renderDirectory == f.dir / "renders");
     CHECK_FALSE(loaded->copyImports);
+    CHECK_FALSE(loaded->stackRecordedTakes);  // 1.11, ADR-0103
     CHECK(loaded->pluginIsolation == model::Isolation::Dedicated);
     CHECK(loaded->renderOpenFolder);
     CHECK(loaded->audio == values.audio);
@@ -2244,7 +2333,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
     CHECK(loaded->rememberedLoads == values.rememberedLoads);  // 1.10, topic 7d
     CHECK(loaded->midiOutputs.empty());  // the engine writes these records, not the GUI
     const auto bytes = readFile(file).value();
-    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.10") !=
+    CHECK(std::string(bytes.begin(), bytes.end()).find("supple.preferences/1.11") !=
           std::string::npos);
     REQUIRE(loaded->save(file));
     CHECK(readFile(file).value() == bytes);
@@ -2260,6 +2349,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
         CHECK_FALSE(old->preventDeepIdle);
         CHECK(old->renderDirectory.empty());
         CHECK(old->copyImports);
+        CHECK(old->stackRecordedTakes);
         CHECK(old->pluginIsolation == model::Isolation::InProcess);
         CHECK_FALSE(old->renderOpenFolder);
         CHECK(old->audio == gui::AudioDeviceSettings{});
@@ -2291,6 +2381,7 @@ TEST_CASE("preferences: canonical round trip, older schemas and rejected values"
                               {"prevent_deep_idle", "\"true\""},
                               {"render_directory", "\"relative\""},
                               {"copy_imported_media", "1"},
+                              {"stack_recorded_takes", "\"on\""},
                               {"plugin_isolation", "\"inherit\""},
                               {"plugin_isolation", "1"},
                               {"render_open_folder", "\"no\""}}) {
@@ -2632,7 +2723,9 @@ TEST_CASE(
     REQUIRE(f.root->click("prefs.advanced.toggle"));  // the low-level settings
     f.root->frame(false);
     const float offHeight = f.node("prefs")->bounds().h;
-    CHECK(offHeight < 760);  // no space reserved for empty notes (eight would add ~190)
+    // No space reserved for empty notes (eight would add ~190); 800 with the
+    // Record over an item row (ADR-0103).
+    CHECK(offHeight < 800);
     CHECK_FALSE(f.node("prefs.memory.note.0")->visible);
     CHECK_FALSE(f.node("prefs.latency.note.0")->visible);
     for (const char* id : {"prefs.memory.set", "prefs.latency.set"}) {

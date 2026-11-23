@@ -24,9 +24,12 @@ Result<json::Value> preferencesDocument(const std::filesystem::path& file) {
                      "repair the preferences file or choose another file");
     return doc;
 }
+// `written`: the file this writer last wrote and its bytes, so that its own write over a newer
+// version's file (whose label it keeps) is not taken for the newer version's next one.
 Status writeMidiRecords(const std::filesystem::path& file, json::Value doc,
                         const MidiPortPreferences& inputs, const MidiPortPreferences& outputs,
-                        const std::array<std::vector<MidiPortPreferenceWarning>, 2>& warnings) {
+                        const std::array<std::vector<MidiPortPreferenceWarning>, 2>& warnings,
+                        std::pair<std::filesystem::path, std::string>& written) {
     // A writer of a newer minor version keeps its label; an older or absent
     // label rises to this one, whose members the records may now carry.
     constexpr std::string_view prefix = "supple.preferences/1.";
@@ -56,14 +59,19 @@ Status writeMidiRecords(const std::filesystem::path& file, json::Value doc,
     }
     std::error_code ec;
     std::filesystem::create_directories(file.parent_path(), ec);
-    return writeFileAtomic(file, json::writeCanonical(doc) + "\n");
+    // A newer version's file is kept (never over a backup), unless it is this writer's own.
+    SUPPLE_TRY(keepNewerPreferences(file, written.first == file ? written.second : std::string()));
+    std::string text = json::writeCanonical(doc) + "\n";
+    SUPPLE_TRY(writeFileAtomic(file, text));
+    written = {file, std::move(text)};
+    return {};
 }
 }  // namespace
 Status EngineApp::writeMidiPreferences(const std::filesystem::path& file) const {
     auto doc = preferencesDocument(file);
     if (!doc) return doc.error();
     return writeMidiRecords(file, std::move(*doc), midiInputsPreferences_, midiOutputsPreferences_,
-                            midiPreferencesWarnings_);
+                            midiPreferencesWarnings_, midiPreferencesWritten_);
 }
 Status EngineApp::setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs,
                                      bool save) {
@@ -92,7 +100,7 @@ Status EngineApp::applyMidiPreferences(
     }
     if (doc) {
         auto written = writeMidiRecords(options_.midiPreferencesFile, std::move(*doc), inputs,
-                                        outputs, warnings);
+                                        outputs, warnings, midiPreferencesWritten_);
         if (!written) {
             if (engine_) {
                 engine_->setMidiPreferences(oldInputs, oldOutputs);

@@ -56,6 +56,9 @@ const char* monitorName(model::Monitor m) {
     return m == model::Monitor::Off ? "off" : m == model::Monitor::On ? "on" : "auto";
 }
 
+// Record over an item: a new take of it (ADR-0103), or laid on top as an item.
+const char* stackLabel(bool on) { return on ? "New take" : "Layer on top"; }
+
 std::string isolationLabel(model::Isolation i) {
     switch (i) {
         case model::Isolation::SharedBridge:
@@ -161,6 +164,19 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
         json::parse(std::string_view(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
     if (!doc) return std::move(doc).error();
     const json::Value* schema = doc->isObject() ? doc->find("schema") : nullptr;
+    // A newer version's file: its settings are not read, and it is kept (save) before this
+    // version first writes over it. Reading newer minors is a separate decision.
+    if (schema && schema->isString() && engine::preferencesSchemaNewer(schema->asString()))
+        return Error(
+            "preferences.newer",
+            file.filename().string() + " is from a newer version (" + schema->asString() +
+                "), so this version uses its defaults",
+            "/schema",
+            "this version keeps the file as " +
+                engine::newerPreferencesBackup(file, schema->asString()).filename().string() +
+                " (or a numbered .bak beside it) when it first saves a setting; to use those "
+                "settings in the newer version again, rename that file back to " +
+                file.filename().string());
     if (!schema || !schema->isString() ||
         (schema->asString() != kSchema && schema->asString() != "supple.preferences/1.0" &&
          schema->asString() != "supple.preferences/1.1" &&
@@ -171,7 +187,8 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
          schema->asString() != "supple.preferences/1.6" &&
          schema->asString() != "supple.preferences/1.7" &&
          schema->asString() != "supple.preferences/1.8" &&
-         schema->asString() != "supple.preferences/1.9"))
+         schema->asString() != "supple.preferences/1.9" &&
+         schema->asString() != "supple.preferences/1.10"))
         return Error("preferences.schema", file.string() + " is not a " + kSchema + " document",
                      "/schema");
     if (const json::Value* m = doc->find("default_monitor")) {
@@ -207,6 +224,14 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
             return Error("preferences.copy_imported_media", "copy_imported_media must be a boolean",
                          "/copy_imported_media", "use true or false");
         out.copyImports = v->asBool();
+    }
+    if (const auto* v = doc->find("stack_recorded_takes")) {  // 1.11, ADR-0103
+        if (!v->isBool())
+            return Error("preferences.stack_recorded_takes",
+                         "stack_recorded_takes must be a boolean", "/stack_recorded_takes",
+                         "use true (a pass over an item is a new take of it) or false (laid on "
+                         "top as an item)");
+        out.stackRecordedTakes = v->asBool();
     }
     if (const auto* v = doc->find("plugin_isolation")) {  // 1.9, ADR-0081
         const std::string name = v->isString() ? v->asString() : std::string();
@@ -294,6 +319,7 @@ Result<Preferences> Preferences::load(const std::filesystem::path& file) {
 
 Status Preferences::save(const std::filesystem::path& file) const {
     if (audioThreads > 64) return threadLimitError();
+    SUPPLE_TRY(engine::keepNewerPreferences(file));  // a newer version's file is kept once
     json::Value doc = json::Value::object();
     doc["schema"] = kSchema;
     doc["default_monitor"] = monitorName(defaultMonitor);
@@ -302,6 +328,7 @@ Status Preferences::save(const std::filesystem::path& file) const {
     doc["audio_threads"] = static_cast<std::int64_t>(audioThreads);
     if (!renderDirectory.empty()) doc["render_directory"] = renderDirectory.string();
     doc["copy_imported_media"] = copyImports;
+    doc["stack_recorded_takes"] = stackRecordedTakes;
     doc["plugin_isolation"] = isolationName(pluginIsolation);
     doc["render_open_folder"] = renderOpenFolder;
     if (!rememberedLoads.empty()) {
@@ -350,6 +377,7 @@ PreferencesDialog::PreferencesDialog(ui::Root& root, engine::EngineApp& app, Mou
     (void)app_.setPreventDeepIdle(prefs_.preventDeepIdle);
     if (!prefs_.renderDirectory.empty()) app_.setRendersDir(prefs_.renderDirectory);
     app_.setCopyImportedMedia(prefs_.copyImports);
+    app_.setStackRecordedTakes(prefs_.stackRecordedTakes);
     if (!app_.setPluginIsolation(prefs_.pluginIsolation))
         prefs_.pluginIsolation = app_.pluginIsolation();
 }
@@ -411,6 +439,10 @@ void PreferencesDialog::open() {
     form->limit = bodyLimit;
     ui::Node* body = &scroll.content();
     body->layout.gap = 6;
+    // A newer version's file was not read: say so above everything (Preferences::load).
+    if (!fileNotice.empty())
+        body->emplace<ui::TextBlock>("prefs.file.note", fileNotice, ui::Font::Ui, "small",
+                                     "ink-quiet");
     section(*body, "prefs.section.audio", "Audio");
     auto& audio = row(*body, "prefs.audio", "Audio device");
     audio_ = &audio.emplace<ui::Button>("prefs.audio.open", "", [this] {
@@ -436,6 +468,27 @@ void PreferencesDialog::open() {
         root_.openPopup(
             ui::makeMenu("prefs.monitor.menu", std::move(items), [this] { root_.closePopup(); }),
             monitor_->bounds());
+    };
+
+    auto& stack = row(*body, "prefs.stack", "Record over an item");
+    stack_ = &stack.emplace<ui::Button>("prefs.stack.set", "");
+    stack_->layout.width = ui::SizeRule::fraction();
+    stack_->layout.height = ui::SizeRule::fixed(26);
+    stack_->onClick = [this] {
+        std::vector<ui::MenuItem> items;
+        for (bool on : {true, false}) {
+            ui::MenuItem item;
+            item.label = stackLabel(on);
+            item.checked = app_.stackRecordedTakes() == on;
+            item.run = [this, on] {
+                if (auto result = setStackRecordedTakes(on); !result && onError)
+                    onError("preferences: " + result.error().toString());
+            };
+            items.push_back(std::move(item));
+        }
+        root_.openPopup(
+            ui::makeMenu("prefs.stack.menu", std::move(items), [this] { root_.closePopup(); }),
+            stack_->bounds());
     };
 
     auto& imports = row(*body, "prefs.imports", "Copy imported audio");
@@ -591,6 +644,7 @@ void PreferencesDialog::open() {
         latency_ = nullptr;
         latencyNote_.fill(nullptr);
         imports_ = nullptr;
+        stack_ = nullptr;
         isolation_ = nullptr;
         audio_ = nullptr;
         advanced_ = nullptr;
@@ -724,6 +778,8 @@ void PreferencesDialog::refresh() {
     if (advancedToggle_) advancedToggle_->setText(advancedOpen_ ? "Hide" : "Show");
     if (latency_) latency_->setText(prefs_.preventDeepIdle ? "On" : "Off");
     if (imports_) imports_->setText(prefs_.copyImports ? "On" : "Off");
+    // The engine's own setting: an agent's record.set shows here too.
+    if (stack_) stack_->setText(stackLabel(app_.stackRecordedTakes()));
     if (isolation_) isolation_->setText(isolationLabel(prefs_.pluginIsolation));
     // Held without the option while a bridged plug-in plays live (ADR-0086).
     const auto& latency = app_.cpuIdleLatencyStatus();
@@ -785,6 +841,16 @@ Status PreferencesDialog::setCopyImports(bool on) {
     if (!file_.empty()) SUPPLE_TRY(save(next));
     prefs_ = next;
     app_.setCopyImportedMedia(on);
+    refresh();
+    return {};
+}
+
+Status PreferencesDialog::setStackRecordedTakes(bool on) {
+    auto next = prefs_;
+    next.stackRecordedTakes = on;
+    if (!file_.empty()) SUPPLE_TRY(save(next));
+    prefs_ = next;
+    app_.setStackRecordedTakes(on);  // what record.set {stack_takes} sets
     refresh();
     return {};
 }

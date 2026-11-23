@@ -147,3 +147,7 @@ and delay tails at every pass).
   transport sets `CLAP_TRANSPORT_IS_LOOP_ACTIVE` with the loop's beats and
   seconds (each executor passes its own loop).
 - Not yet: loop passes that span a loop change, MIDI recording.
+
+**Note, 2026-11-23:** a pass that starts inside an existing item is now a take of that item, not a
+new item layered over it (ADR-0103; `record.set {stack_takes: false}` keeps the layering described
+in §6).

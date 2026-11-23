@@ -751,12 +751,12 @@ void registerProjectCommands(cmd::Registry& registry) {
         c.examples = {{"Recover everything", j("{}"),
                        j(R"({"recovered": [{"track": "tr_1", "item": "it_1", "take": "tk_1",
                               "file": "<any>", "seconds": 1.0, "lost_frames": 0,
-                              "takes": ["tk_1"]}]})"),
+                              "takes": ["tk_1"], "stacked": false}]})"),
                        "recording_interrupted"},
                       {"Recover an unsaved project", j(R"({"session": "20261114-090000-4242"})"),
                        j(R"({"recovered": [{"track": "tr_1", "item": "<any>", "take": "<any>",
                               "file": "<any>", "seconds": 1.0, "lost_frames": 0,
-                              "takes": "<any>"}], "autosave": "autosave-1.json"})"),
+                              "takes": "<any>", "stacked": false}], "autosave": "autosave-1.json"})"),
                        "session_left_behind"}};
         c.run = [](const RecoverArgs& a, Context& ctx) -> Result<RecoverResult> {
             EngineApp& app = engine::app(ctx);
