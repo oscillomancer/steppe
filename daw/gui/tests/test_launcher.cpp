@@ -1247,6 +1247,69 @@ TEST_CASE(
     CHECK(f.errors.empty());
 }
 
+// Round 136 M1: a fade longer than the period is accepted, and the cell shows
+// only the share a pass reaches, as the engine plays it: an 8 s linear fade-in
+// on a 2 s pass ends at gain 0.25, so at the pass's end the shade covers the
+// top three quarters of the body. Overlapping fades are each drawn on their own.
+TEST_CASE("launcher: a fade longer than its clip's period shows the share a pass reaches") {
+    LauncherFixture f;
+    f.song();
+    audio::AudioData silence;  // no waveform: the shade alone changes the pixels
+    silence.sampleRate = 48000;
+    silence.channels.assign(1, std::vector<float>(96000, 0.0f));
+    const auto wav = f.dir / "silence.wav";
+    REQUIRE(audio::writeWav(wav, silence));
+    json::Value add = json::Value::object();
+    add["track"] = "tr_3";
+    add["scene"] = "sc_3";
+    add["audio_file"] = wav.string();
+    const std::string pad = f.exec("clip.add", *json::write(add))["clip"].asString();
+    views::LauncherPane& pane = f.view->launcherPane();
+    auto frame = [&] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        do {
+            f.root->damageAll();
+            f.root->frame(false);
+            if (pane.stats.pending == 0) return f.root->readBack();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        } while (std::chrono::steady_clock::now() < deadline);
+        FAIL("peaks never became ready");
+        return gui::Image{};
+    };
+    const ui::Rect body = views::LauncherPane::bodyRect(pane.cellRect(f.row("tr_3"), 2));
+    REQUIRE(body.h >= 20);
+    // How far a pixel moved from the unfaded cell's (RGBA, summed).
+    auto moved = [](const gui::Image& a, const gui::Image& b, float x, float y) {
+        const auto i = (static_cast<std::size_t>(y) * static_cast<std::size_t>(a.width) +
+                        static_cast<std::size_t>(x)) *
+                       4;
+        int d = 0;
+        for (std::size_t c = 0; c < 4; ++c) d += std::abs(int(a.rgba[i + c]) - int(b.rgba[i + c]));
+        return d;
+    };
+    const gui::Image plain = frame();
+    const float high = body.y + body.h * 0.35f, low = body.y + body.h * 0.9f;
+    // Fade-in: at the pass's end the gain is 0.25 (the curve a quarter up).
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","fade_in":8})");
+    gui::Image faded = frame();
+    CHECK(pane.stats.fades == 1);
+    const float end = body.right() - 2;
+    CHECK(moved(plain, faded, end, high) > 12);  // above the curve: shaded
+    CHECK(moved(plain, faded, end, low) < 6);    // under it: as it was
+    // Fade-out: it starts a pass at 0.25, the same at the pass's start.
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","fade_in":0,"fade_out":8})");
+    faded = frame();
+    CHECK(pane.stats.fades == 1);
+    const float start = body.x + 2;
+    CHECK(moved(plain, faded, start, high) > 12);
+    CHECK(moved(plain, faded, start, low) < 6);
+    // Overlapping fades, 1.5 s each on a 2 s pass: two curves, each on its own.
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","fade_in":1.5,"fade_out":1.5})");
+    (void)frame();
+    CHECK(pane.stats.fades == 2);
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inserts it") {
     LauncherFixture f;
     f.song();

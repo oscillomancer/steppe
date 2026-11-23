@@ -3092,9 +3092,14 @@ same heights, scroll and colours.
   one pass's over its body as an item's are drawn (`views::drawFadeCurve`,
   shared with `Lanes::drawFades`): the gain curve from the period's start
   and to its end, and the shade over what it takes away, above the key
-  strip and cut at the Arr column. A fade is drawn only where there is room:
-  a body at least `LauncherPane::kFadeRoom` (8 units) high and a fade at
-  least 2 units wide. A MIDI clip has no fades and draws none; no text is
+  strip and cut at the Arr column. A fade longer than the period is accepted,
+  as the engine accepts it, and the cell shows only the share a pass reaches,
+  as the engine plays it: a fade-in of L on a period P ends at
+  `fadeGain(P / L)` at the pass's end, and a fade-out starts the pass there.
+  Each fade is shown on its own: fades that overlap draw two curves, as an
+  item's do. A fade is drawn only where there is room:
+  a body at least `LauncherPane::kFadeRoom` (8 units) high and the part shown
+  at least 2 units wide. A MIDI clip has no fades and draws none; no text is
   drawn for a fade. A muted clip is dimmed, as a
   muted item is. Clips launch under a master
   playrate; the engine refuses only an audio clip while the playrate keeps
@@ -3246,7 +3251,10 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   audio clip with an equal-power fade-in and fade-out
   (`launcher-fades-dark.png`). Its fades are drawn where there is room:
   one fade one curve, none under 2 units wide or in a body under
-  `kFadeRoom`, none for MIDI clips (`test_launcher.cpp`). The inspector's
+  `kFadeRoom`, none for MIDI clips; an 8 s fade-in or fade-out on a 2 s
+  pass of silence shades the top of the body at the pass's end (or start)
+  and not its foot (gain 0.25 there), and two overlapping fades draw two
+  curves (`test_launcher.cpp`). The inspector's
   Fade in and Fade out each run one `clip.set`, one undo step, undo takes
   back one, a refusal reaches the status line, and a MIDI clip shows
   neither row (`test_side_panel.cpp`).
