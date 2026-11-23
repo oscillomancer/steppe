@@ -51,6 +51,9 @@ What to know:
 - **Flatten a comp** with `item.consolidate` on its pieces: it renders the seam fades
   and layers the overlaps into one item. `item.heal` is for pieces of one source, not
   a comp.
+- On the default Beats timebase a seam's overlap is stored in beats and its fades in
+  seconds, so after `tempo.set` they disagree (a bump or a dip across the seam). Call
+  `take.comp` again with the spans `take.comp.get` gives: it rebuilds both.
 - One undo step. Nothing marks a comp in the file: its pieces are ordinary items.
   A comp is found from its pieces by their place and by holding the same takes, so
   renaming a take in one piece makes it a separate item (give `items` to be explicit,

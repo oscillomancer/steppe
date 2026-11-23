@@ -309,6 +309,11 @@ nothing:
    boundaries (`time::samplesAt` of one piece's end is the next one's start,
    before extension). Values that differ from the stored ones by under 1 ns are
    kept as stored, so the same call twice gives the same bytes.
+   The overlap of a Beats-timebase piece is stored in beats and a fade in seconds:
+   after a tempo change they disagree (a bump or a dip across the seam) until
+   `take.comp` is called again with the spans `take.comp.get` gives, which rebuilds
+   both. `take.comp.get` does not warn of it (a limit, as for any crossfade of a Beats
+   item); the fix would need fades in beats.
 4. The first piece keeps its fade-in and the last its fade-out; the comp's
    outer start and end do not move.
 
