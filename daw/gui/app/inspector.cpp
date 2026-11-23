@@ -609,7 +609,7 @@ std::unique_ptr<ui::Node> Inspector::build() {
                 // Alt on the pick comps this track alone, as on the lanes.
                 const bool alone = (takes_->selectModifiers() & ui::kAlt) != 0;
                 if (alone) args["bypass_groups"] = true;
-                runComp(std::move(args));
+                runComp(std::move(args), true);
                 return;
             }
         }
@@ -1172,11 +1172,12 @@ void Inspector::setCrossfade(std::optional<double> seconds, std::optional<bool> 
     runComp(views::compArgs(ids_.front(), views::compSpans(s, *comp), crossfade));
 }
 
-void Inspector::runComp(json::Value args) {
+void Inspector::runComp(json::Value args, bool pick) {
     auto r = dispatcher_.execute({"take.comp", std::move(args), kOrigin});
-    // A group track that cannot follow: the hint says to hold Alt (a pick
-    // here, or a gesture on the lanes), not the argument.
-    if (!r && !ids_.empty()) r = views::compRefusal(r.error(), app_.head(), ids_.front());
+    // A Takes pick a group track cannot follow: the hint says to hold Alt,
+    // which a pick sends, not the argument. A typed Crossfade has no Alt, so
+    // its refusal keeps the engine's words.
+    if (!r && pick && !ids_.empty()) r = views::compRefusal(r.error(), app_.head(), ids_.front());
     // Its warnings (a crossfade clamped or skipped) go to the status line.
     if (r && actions_.onNotice)
         if (const std::string w = views::resultWarnings(*r); !w.empty()) actions_.onNotice(w);

@@ -90,7 +90,9 @@ class Inspector {
     // a new length, or a new shape (linear, else equal power).
     void setCrossfade(std::optional<double> seconds, std::optional<bool> linear);
     // One take.comp, its warnings to the status line (actions' onNotice).
-    void runComp(json::Value args);
+    // take.comp from the inspector; `pick` for a Takes list pick, whose
+    // refusal names Alt (views::compRefusal).
+    void runComp(json::Value args, bool pick = false);
     void bake();
     void run(const char* command, json::Value args);
     void finish(const Result<json::Value>& result);

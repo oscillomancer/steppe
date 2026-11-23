@@ -1390,6 +1390,62 @@ TEST_CASE("the status line counts scenes beside tracks only when there are some"
 // comp differs from when the engine reads it so (take.comp.get's
 // differing_members, asked for the group's first track), and nothing when it
 // is in step.
+// Round 129 V1: a comp a locked group track cannot follow. A Takes pick's
+// refusal names Alt, which a pick can send; the Crossfade field has no Alt, so
+// its refusal keeps the engine's hint.
+TEST_CASE("inspector: a refused grouped comp names Alt for a Takes pick, not for Crossfade") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(1, std::vector<float>(48000, 0.25f));
+    const auto path = f.dir / "tone.wav";
+    REQUIRE(audio::writeWav(path, audio));
+    std::vector<std::string> tracks, items;
+    for (const char* name : {"Close", "Room"}) {
+        tracks.push_back(
+            f.exec("track.add", std::string(R"({"name":")") + name + R"("})")["track"].asString());
+        json::Value add = json::Value::object();
+        add["track"] = tracks.back();
+        add["audio_file"] = path.string();
+        add["position"] = 0;
+        auto added = f.dispatcher->execute({"item.add", add, kTest});
+        REQUIRE_MESSAGE(added, (added ? "" : added.error().toString()));
+        items.push_back((*added)["item"].asString());
+        f.exec("take.add", R"({"item":")" + items.back() + R"(","from":")" +
+                               (*added)["take"].asString() + R"("})");
+    }
+    const std::string group = f.exec("group.add", R"({"name":"Kit","members":[")" + tracks[0] +
+                                                      R"(",")" + tracks[1] + R"("]})")["group"]
+                                  .asString();
+    f.exec("group.set", R"({"group":")" + group + R"(","links":["edit"]})");
+    // Close comped alone, then Room's item locked: the group's take.comp refuses.
+    auto comp = f.exec("take.comp", R"({"item":")" + items[0] +
+                                        R"(","spans":[{"from":0.6,"to":1.4,"index":1}],)" +
+                                        R"("bypass_groups":true})");
+    REQUIRE(comp["pieces"].size() == 3);
+    f.exec("item.set", R"({"item":")" + items[1] + R"(","locked":true,"bypass_groups":true})");
+    f.side->show("inspector");
+    f.ui.selectedItems = {comp["pieces"].asArray()[1].find("item")->asString()};
+    f.pass();
+    REQUIRE(f.inView("inspector.crossfade"));
+    const std::uint64_t version = f.app->head().version;
+    f.type("inspector.crossfade", "0.05");
+    f.pass();
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("unlock it with item.set") != std::string::npos);
+    CHECK(errors[0].find("hold Alt") == std::string::npos);
+    auto* list = dynamic_cast<ui::List*>(f.node("inspector.takes"));
+    REQUIRE(list);
+    list->select(0, true);
+    f.pass();
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[1].find("unlock it, or hold Alt to comp this track alone") != std::string::npos);
+    CHECK(f.app->head().version == version);
+}
+
 TEST_CASE("inspector: a grouped comp piece that differs from its group names the track") {
     Fixture f;
     if (!f.ok) return;

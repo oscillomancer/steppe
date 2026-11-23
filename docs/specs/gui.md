@@ -1110,7 +1110,8 @@ alone: `take.comp` with `bypass_groups`, as Alt on the TCP's fader and pan moves
 one track alone. A group refusal's hint says so ("hold Alt to comp this track
 alone", `views::compRefusal`) in place of the argument's name; a lock on another
 track's item reads "unlock it, or hold Alt to comp this track alone", and one on
-the track's own item keeps the engine's hint. A group track with nothing over the
+the track's own item keeps the engine's hint. The inspector's Crossfade field has
+no Alt, so its refusals keep the engine's hint. A group track with nothing over the
 stretch, or only one-take items there (a bass beside drum takes), is passed over
 (`skipped_tracks`, `no_item` or `one_take`): left as it is, with nothing to show. `take.comp`'s warnings
 (`comp.crossfade_clamped`, `comp.crossfade_skipped`, `comp.midi_boundary`), from
