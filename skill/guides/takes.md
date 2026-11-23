@@ -64,7 +64,9 @@ What to know:
   (`no_item`) or only one-take items (`one_take`: a bass beside drum takes) is left alone and named in
   `skipped_tracks` with its reason. A track that cannot follow refuses the whole call and changes
   nothing: `comp.group_takes` (several takes, but fewer than a span's index), `comp.group_mismatch` (its items do not
-  form a matching run; the message carries the reason, such as a looped item), `item.locked`.
+  form a matching run; the message carries the reason, such as a looped item), `item.locked`; the error's
+  `path` names the member (`/args/members/tr_2/items/it_5`, or `/args/members/tr_2` for the track), so read
+  it from there, not from the message.
   (`comp.linked` is retired: it used to mean "set `bypass_groups`".) `bypass_groups: true` comps only the
   item you name. `take.comp.get` reads the members too, and `differing_members` lists a member
   that reads differently from the one you named (or does not line up), with `uniform` false.
