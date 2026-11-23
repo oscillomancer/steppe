@@ -280,7 +280,7 @@ Result:
 
 Comp an item's takes: each span plays one take, crossfaded at the seams.
 
-item (any piece, or an item with several takes to start one) or items (the pieces, in any order). Spans {from, to, take|index} (beats; index is the take's 0-based place in the item's take order) choose which take plays; what no span covers keeps its take. The item is split where the take changes into pieces that each keep all the takes, and a crossfade (seconds, default 0.01; shape cos is equal power, linear for phase-coherent material) is centred on every seam between different takes: the pieces overlap and fade, so nothing new reaches the audio path. Call it again on any piece (or items: the pieces) to move seams: the crossfades are rebuilt for the whole run, and the same call twice changes nothing. Audio only: a seam is a hard cut, with the warning comp.crossfade_skipped, when a take is MIDI or empty, warped or has envelopes. Pieces of one take beside each other are joined (comp.midi_boundary warns of MIDI ones that cannot be, where a held note sounds again). take.activate {index} on a piece changes its take and keeps the seams. One undo step. Returns the pieces in time order.
+item (any piece, or an item with several takes to start one) or items (the pieces, in any order). Spans {from, to, take|index} (beats; index is the take's 0-based place in the item's take order) choose which take plays; what no span covers keeps its take. The item is split where the take changes into pieces that each keep all the takes, and a crossfade (seconds, default 0.01; shape cos is equal power, linear for phase-coherent material) is centred on every seam between different takes: the pieces overlap and fade, so nothing new reaches the audio path. Call it again on any piece (or items: the pieces) to move seams: the crossfades are rebuilt for the whole run, and the same call twice changes nothing. Audio only: a seam is a hard cut, with the warning comp.crossfade_skipped, when a take is MIDI or empty, warped or has envelopes. Pieces of one take beside each other are joined (comp.midi_boundary warns of MIDI ones that cannot be, where a held note sounds again). take.activate {index} on a piece changes its take and keeps the seams. One undo step. Returns the pieces in time order. An item in an edit group (a multitrack recording, drums): without bypass_groups the same spans, take indices and crossfade apply to the run of every other member of the group, matched by span (the same call as item.split); the result lists them under members, each with its track and pieces. A member that cannot follow (comp.group_mismatch, or comp.group_takes for a take index it lacks) refuses the whole call before anything changes. bypass_groups true comps only the named item.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -411,6 +411,138 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "additionalProperties": false
       }
     },
+    "members": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "comp_member",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "pieces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "comp_piece",
+              "properties": {
+                "item": {
+                  "type": "string"
+                },
+                "from": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+                    }
+                  ],
+                  "x-unit": "beats",
+                  "x-unit-strings": true,
+                  "description": "Quantity strings are range-checked by the server."
+                },
+                "to": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+                    }
+                  ],
+                  "x-unit": "beats",
+                  "x-unit-strings": true,
+                  "description": "Quantity strings are range-checked by the server."
+                },
+                "take": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "fade_in": {
+                  "type": "number",
+                  "description": "Seconds."
+                },
+                "fade_out": {
+                  "type": "number",
+                  "description": "Seconds."
+                }
+              },
+              "required": ["item", "from", "to", "take", "index", "name", "fade_in", "fade_out"],
+              "additionalProperties": false
+            }
+          },
+          "crossfade": {
+            "type": "number",
+            "description": "Seconds."
+          },
+          "crossfade_shape": {
+            "type": "string",
+            "enum": ["cos", "linear"]
+          },
+          "uniform": {
+            "type": "boolean"
+          },
+          "differing_seams": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "comp_seam",
+              "properties": {
+                "seam": {
+                  "type": "integer",
+                  "description": "0: between the first two pieces."
+                },
+                "at": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+                    }
+                  ],
+                  "x-unit": "beats",
+                  "x-unit-strings": true,
+                  "description": "Quantity strings are range-checked by the server."
+                },
+                "left": {
+                  "type": "string"
+                },
+                "right": {
+                  "type": "string"
+                }
+              },
+              "required": ["seam", "at", "left", "right"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "track",
+          "pieces",
+          "crossfade",
+          "crossfade_shape",
+          "uniform",
+          "differing_seams"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "differing_members": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -418,7 +550,15 @@ Kind: `edit`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["pieces", "crossfade", "crossfade_shape", "uniform", "differing_seams"],
+  "required": [
+    "pieces",
+    "crossfade",
+    "crossfade_shape",
+    "uniform",
+    "differing_seams",
+    "members",
+    "differing_members"
+  ],
   "additionalProperties": false
 }
 
@@ -432,7 +572,9 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `comp.span`: a span is empty, out of order, overlapping or outside the comp Hint: give from before to, inside the comp, in time order without overlap
 - `comp.take`: a span has no or both of take and index, or one not in the item Hint: give take (an id of the item) or index (0..takes-1); take.list lists them
 - `comp.loop`: a looped item Hint: comp an item that does not loop
-- `comp.linked`: the item has linked peers Hint: set bypass_groups true to comp it alone, or take it out of its track group
+- `comp.linked`: two items of one group track sit beside one piece Hint: set bypass_groups true to comp it alone, or take the extra item away
+- `comp.group_mismatch`: a member of the edit group has items beside only some of the pieces, or a run that does not line up in samples Hint: comp it alone with bypass_groups, or fix its pieces first
+- `comp.group_takes`: a member of the edit group lacks a take index a span plays Hint: comp it alone with bypass_groups, or use indices it has
 - `item.locked`: a piece is locked Hint: item.set {locked: false}
 - `item.kind`: a clip Hint: lay the clip on the timeline first (item.add {clip})
 
@@ -463,7 +605,9 @@ Result:
   "crossfade": 0,
   "crossfade_shape": "cos",
   "uniform": true,
-  "differing_seams": []
+  "differing_seams": [],
+  "members": [],
+  "differing_members": []
 }
 
 ```
@@ -595,6 +739,138 @@ Kind: `query`. Exposure: `mcp-exec`.
         "additionalProperties": false
       }
     },
+    "members": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "title": "comp_member",
+        "properties": {
+          "track": {
+            "type": "string"
+          },
+          "pieces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "comp_piece",
+              "properties": {
+                "item": {
+                  "type": "string"
+                },
+                "from": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+                    }
+                  ],
+                  "x-unit": "beats",
+                  "x-unit-strings": true,
+                  "description": "Quantity strings are range-checked by the server."
+                },
+                "to": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+                    }
+                  ],
+                  "x-unit": "beats",
+                  "x-unit-strings": true,
+                  "description": "Quantity strings are range-checked by the server."
+                },
+                "take": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "fade_in": {
+                  "type": "number",
+                  "description": "Seconds."
+                },
+                "fade_out": {
+                  "type": "number",
+                  "description": "Seconds."
+                }
+              },
+              "required": ["item", "from", "to", "take", "index", "name", "fade_in", "fade_out"],
+              "additionalProperties": false
+            }
+          },
+          "crossfade": {
+            "type": "number",
+            "description": "Seconds."
+          },
+          "crossfade_shape": {
+            "type": "string",
+            "enum": ["cos", "linear"]
+          },
+          "uniform": {
+            "type": "boolean"
+          },
+          "differing_seams": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "title": "comp_seam",
+              "properties": {
+                "seam": {
+                  "type": "integer",
+                  "description": "0: between the first two pieces."
+                },
+                "at": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\s*[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:\\s*(?:beats|qn))?\\s*$"
+                    }
+                  ],
+                  "x-unit": "beats",
+                  "x-unit-strings": true,
+                  "description": "Quantity strings are range-checked by the server."
+                },
+                "left": {
+                  "type": "string"
+                },
+                "right": {
+                  "type": "string"
+                }
+              },
+              "required": ["seam", "at", "left", "right"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "track",
+          "pieces",
+          "crossfade",
+          "crossfade_shape",
+          "uniform",
+          "differing_seams"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "differing_members": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -602,7 +878,15 @@ Kind: `query`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["pieces", "crossfade", "crossfade_shape", "uniform", "differing_seams"],
+  "required": [
+    "pieces",
+    "crossfade",
+    "crossfade_shape",
+    "uniform",
+    "differing_seams",
+    "members",
+    "differing_members"
+  ],
   "additionalProperties": false
 }
 
@@ -627,7 +911,9 @@ Result:
   "crossfade": 0.01,
   "crossfade_shape": "cos",
   "uniform": true,
-  "differing_seams": []
+  "differing_seams": [],
+  "members": [],
+  "differing_members": []
 }
 
 ```

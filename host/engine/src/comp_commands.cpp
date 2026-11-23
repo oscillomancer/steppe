@@ -56,12 +56,23 @@ struct SeamOut {
     double at = 0;
     std::string left, right;
 };
+// Another member of the named run's edit group: its comp, read like the named one.
+struct MemberOut {
+    std::string track;
+    std::vector<PieceOut> pieces;
+    double crossfade = model::kDefaultCompCrossfade;
+    std::string shape = "cos";
+    bool uniform = true;
+    std::vector<SeamOut> differing;
+};
 struct CompResult {
     std::vector<PieceOut> pieces;
     double crossfade = model::kDefaultCompCrossfade;
     std::string shape = "cos";
     bool uniform = true;
     std::vector<SeamOut> differing;
+    std::vector<MemberOut> members;
+    std::vector<std::string> differingMembers;
 };
 
 schema::Schema<PieceOut> pieceSchema() {
@@ -84,6 +95,17 @@ schema::Schema<SeamOut> seamSchema() {
         .field("right", &SeamOut::right, schema::string())
         .build();
 }
+schema::Schema<MemberOut> memberSchema() {
+    return schema::object<MemberOut>("comp_member")
+        .field("track", &MemberOut::track, schema::string())
+        .field("pieces", &MemberOut::pieces, schema::arrayOf(pieceSchema()))
+        .field("crossfade", &MemberOut::crossfade, schema::number().doc("Seconds."))
+        .field("crossfade_shape", &MemberOut::shape,
+               schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
+        .field("uniform", &MemberOut::uniform, schema::boolean())
+        .field("differing_seams", &MemberOut::differing, schema::arrayOf(seamSchema()))
+        .build();
+}
 schema::Schema<CompResult> resultSchema() {
     return schema::object<CompResult>("comp_result")
         .field("pieces", &CompResult::pieces, schema::arrayOf(pieceSchema()))
@@ -92,6 +114,9 @@ schema::Schema<CompResult> resultSchema() {
                schema::enumeration<std::string>({{"cos", "cos"}, {"linear", "linear"}}))
         .field("uniform", &CompResult::uniform, schema::boolean())
         .field("differing_seams", &CompResult::differing, schema::arrayOf(seamSchema()))
+        .field("members", &CompResult::members, schema::arrayOf(memberSchema()))
+        .field("differing_members", &CompResult::differingMembers,
+               schema::arrayOf(schema::string()))
         .build();
 }
 
@@ -200,6 +225,487 @@ struct Core {
 
 bool near(double a, double b) { return std::fabs(a - b) <= 1e-9; }
 
+// One run comped on its own: `who` is "" for the named run, "on <track>: " for a member of its
+// edit group (it prefixes the warnings).
+Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& who) {
+    EngineApp& engine = app(ctx);
+    const model::Session s = engine.view();
+    auto which = whichPieces(s, a.anyPiece, a.pieces);
+    if (!which) return std::move(which).error();
+    auto run = model::compRun(s, which->first, which->second);
+    if (!run) return std::move(run).error();
+    for (const auto& p : *run) {
+        // The path names the piece the caller gave: /item, or /items/k.
+        std::string where = "/item";
+        if (!a.anyPiece) {
+            const auto at = std::find(which->second.begin(), which->second.end(), p.item);
+            where = "/items/" + std::to_string(at - which->second.begin());
+        }
+        SUPPLE_TRY(checkUnlocked(s, p.item, where));
+    }
+    const double rate = s.project->sampleRate;
+    const time::TimeMap& tm = *s.timeMap;
+    auto snap = [&](double beat) { return time::samplesAt(tm.secondsAt(beat), rate); };
+    const std::int64_t runStart = run->front().coreStart, runEnd = run->back().coreEnd;
+    const std::size_t takeCount = s.items.find(run->front().item)->takes.size();
+
+    // The spans, in samples, each with the take index it plays.
+    std::vector<Painted> spans;
+    std::int64_t previousEnd = runStart;
+    for (std::size_t i = 0; i < a.spans.size(); ++i) {
+        const SpanArg& span = a.spans[i];
+        const std::string at = "/spans/" + std::to_string(i);
+        if (span.take.has_value() == span.index.has_value())
+            return Error("comp.take", "give take or index, exactly one", at,
+                         "take: \"tk_2\" (a take of the item) or index: 1");
+        std::size_t index = 0;
+        if (span.index) {
+            if (*span.index >= static_cast<std::int64_t>(takeCount))
+                return Error(
+                    "comp.take", "the item has " + std::to_string(takeCount) + " takes",
+                    at + "/index",
+                    "use take.list for the item: indices 0.." + std::to_string(takeCount - 1));
+            index = static_cast<std::size_t>(*span.index);
+        } else {
+            std::optional<std::size_t> found;
+            if (const auto id = Id::parse(*span.take))
+                for (const auto& p : *run) {
+                    const auto& takes = s.items.find(p.item)->takes;
+                    const auto hit = std::find(takes.begin(), takes.end(), *id);
+                    if (hit != takes.end()) found = static_cast<std::size_t>(hit - takes.begin());
+                }
+            if (!found)
+                return Error("comp.take", *span.take + " is not a take of this comp", at + "/take",
+                             "use a take id from take.list of a piece, or index");
+            index = *found;
+        }
+        const std::int64_t lo = snap(span.from), hi = snap(span.to);
+        if (hi <= lo)
+            return Error("comp.span", "the span is empty", at + "/to",
+                         "give from before to, at least a sample apart");
+        if (lo < runStart)
+            return Error("comp.span", "the span starts before the comp", at + "/from",
+                         "start at beat " +
+                             std::to_string(tm.beatAt(static_cast<double>(runStart) / rate)) +
+                             " or later");
+        if (hi > runEnd)
+            return Error("comp.span", "the span ends after the comp", at + "/to",
+                         "end at beat " +
+                             std::to_string(tm.beatAt(static_cast<double>(runEnd) / rate)) +
+                             " or earlier");
+        if (lo < previousEnd)
+            return Error("comp.span", "the span overlaps the one before it", at + "/from",
+                         "give the spans in time order, each starting where the last ended "
+                         "or later");
+        previousEnd = hi;
+        spans.push_back({lo, hi, index});
+    }
+
+    // What each core piece plays now, and where the take must change.
+    std::vector<Core> cores;
+    for (const auto& p : *run)
+        cores.push_back({p.item, p.coreStart, p.coreEnd,
+                         takeIndex(*s.items.find(p.item), s.items.find(p.item)->activeTake)});
+    // Over the pieces as they are now, whatever is joined or split below.
+    const std::vector<Core> unjoined = cores;
+    auto indexAt = [&](std::int64_t n) {
+        for (const Painted& p : spans)
+            if (p.lo <= n && n < p.hi) return p.index;
+        for (const Core& k : unjoined)
+            if (k.lo <= n && n < k.hi) return k.index;
+        return std::size_t{0};
+    };
+    // Pieces that are one piece cut in two and will play the same take are joined first,
+    // so that a moved seam leaves no leftover boundary to clamp its crossfade: the result
+    // is what the same spans give from scratch.
+    std::vector<std::vector<Id>> joins;
+    {
+        std::vector<Core> joined;
+        for (const Core& k : cores) {
+            const bool join = !joined.empty() && indexAt(k.lo - 1) == indexAt(k.lo) &&
+                              model::joinablePieces(s, joins.back().back(), k.item);
+            if (join) {
+                joined.back().hi = k.hi;
+                joins.back().push_back(k.item);
+            } else {
+                joined.push_back(k);
+                joins.push_back({k.item});
+            }
+        }
+        cores = std::move(joined);
+    }
+    std::set<std::int64_t> breaks;
+    auto isSeam = [&](std::int64_t n) {
+        return std::any_of(cores.begin(), cores.end(), [&](const Core& k) { return k.lo == n; });
+    };
+    for (const Painted& p : spans)
+        for (std::int64_t n : {p.lo, p.hi})
+            if (n > runStart && n < runEnd && !isSeam(n) && indexAt(n - 1) != indexAt(n))
+                breaks.insert(n);
+
+    // The core, written: every crossfade taken out, so that a split sees plain pieces.
+    auto& txn = engine.txn();
+    std::map<Id, model::Item> originalItems;
+    std::map<Id, model::Take> originalTakes;
+    for (const auto& p : *run) {
+        const model::Item& it = *s.items.find(p.item);
+        originalItems[p.item] = it;
+        for (Id t : it.takes) originalTakes[t] = *s.takes.find(t);
+    }
+    for (std::size_t k = 0; k + 1 < run->size(); ++k) {
+        const auto& left = (*run)[k];
+        const auto& right = (*run)[k + 1];
+        const double seam = static_cast<double>(left.coreEnd) / rate;
+        model::Item l = *txn.get<model::Item>(left.item);
+        model::Item r = *txn.get<model::Item>(right.item);
+        if (left.end != left.coreEnd) model::setItemEndSeconds(s, l, seam);
+        if (right.start != right.coreStart) {
+            const double delta = seam - model::itemSpan(s, r).startSec;
+            for (Id t : r.takes)
+                txn.modify<model::Take>(
+                    t, [&](model::Take& take) { model::rebaseAudioTake(take, delta); });
+            model::setItemStartSeconds(s, r, seam);
+        }
+        l.fadeOut = {};
+        r.fadeIn = {};
+        txn.put(left.item, std::move(l));
+        txn.put(right.item, std::move(r));
+    }
+
+    std::set<Id> removed;
+    for (const auto& group : joins)
+        for (std::size_t m = 1; m < group.size(); ++m) {
+            model::Item l = *txn.get<model::Item>(group[0]);
+            const model::Item r = *txn.get<model::Item>(group[m]);
+            model::setItemEndToItemEnd(s, l, r);
+            l.fadeOut = r.fadeOut;
+            txn.put(group[0], std::move(l));
+            for (Id t : r.takes) SUPPLE_TRY(removeTakeObjects(txn, engine.view(), t));
+            txn.remove<model::Item>(group[m]);
+            removed.insert(group[m]);
+        }
+
+    // The splits, left to right, each through item.split (it copies every take).
+    for (const std::int64_t at : breaks) {
+        const auto hit = std::find_if(cores.begin(), cores.end(),
+                                      [&](const Core& k) { return k.lo < at && at < k.hi; });
+        if (hit == cores.end()) continue;
+        auto args = json::Value::object();
+        args["item"] = hit->item.str();
+        args["at"] = tm.beatAt(static_cast<double>(at) / rate);
+        args["bypass_groups"] = true;
+        auto split = ctx.service<const cmd::Registry>().find("item.split")->invoke(args, ctx);
+        if (!split) return std::move(split).error();
+        const auto made = Id::parse(split->find("right")->asString());
+        Core right{*made, at, hit->hi, hit->index};
+        hit->hi = at;
+        cores.insert(std::next(hit), right);
+    }
+    for (Core& k : cores) k.index = indexAt(k.lo);
+
+    // The seams.
+    const std::size_t n = cores.size();
+    std::vector<Id> ids;
+    for (const Core& k : cores) ids.push_back(k.item);
+    std::vector<model::CompPiece> plain;
+    for (const Core& k : cores) plain.push_back({k.item, k.lo, k.hi, k.lo, k.hi});
+    const std::string refusal = cannotExtend(engine.view(), plain);
+    // A boundary between MIDI pieces that play one take and could not be joined (the
+    // notes of one half were edited, say) stops a held note and strikes it again.
+    std::string reattack;
+    {
+        const model::Session now = engine.view();
+        auto isMidi = [&](Id item) {
+            const model::Item* it = now.items.find(item);
+            const model::Take* tk =
+                it && it->activeTake ? now.takes.find(*it->activeTake) : nullptr;
+            return tk && tk->source && tk->source->kind == model::Kind::Midi;
+        };
+        for (std::size_t k = 0; k + 1 < n; ++k)
+            if (cores[k].index == cores[k + 1].index && isMidi(cores[k].item) &&
+                isMidi(cores[k + 1].item)) {
+                if (!reattack.empty()) reattack += ", ";
+                reattack += std::to_string(tm.beatAt(static_cast<double>(cores[k].hi) / rate));
+            }
+    }
+    if (!reattack.empty())
+        ctx.warn("comp.midi_boundary",
+                 who + "held notes sound again at the boundaries (beats " + reattack +
+                     ") between pieces of one take that could not be joined: they "
+                     "differ in their notes or settings",
+                 "/spans");
+    const auto wanted = static_cast<std::int64_t>(std::llround(a.crossfade * rate / 2.0));
+    std::vector<std::int64_t> half(n > 0 ? n - 1 : 0, 0);
+    bool skipped = false, clamped = false;
+    for (std::size_t k = 0; k + 1 < n; ++k) {
+        if (cores[k].index == cores[k + 1].index || wanted == 0) continue;
+        if (!refusal.empty()) {
+            skipped = true;
+            continue;
+        }
+        half[k] = std::min(
+            {wanted, (cores[k].hi - cores[k].lo) / 2, (cores[k + 1].hi - cores[k + 1].lo) / 2});
+        clamped = clamped || half[k] < wanted;
+    }
+    if (skipped)
+        ctx.warn(
+            "comp.crossfade_skipped",
+            who + "the seams are hard cuts: " + refusal + ", and a crossfade would have to move it",
+            "/crossfade");
+    if (clamped)
+        ctx.warn("comp.crossfade_clamped",
+                 who + "a crossfade is shorter than asked: the pieces beside the seam are short",
+                 "/crossfade");
+    const auto shape = a.shape == "linear" ? model::FadeShape::Linear : model::FadeShape::Cos;
+    auto fade = [&](std::int64_t h) {
+        model::Fade f;
+        if (h > 0) {
+            f.length = static_cast<double>(2 * h) / rate;
+            f.shape = shape;
+        }
+        return f;
+    };
+    for (std::size_t i = 0; i < n; ++i) {
+        model::Item item = *txn.get<model::Item>(cores[i].item);
+        item.activeTake = item.takes[cores[i].index];
+        const std::int64_t before = i > 0 ? half[i - 1] : 0;
+        const std::int64_t after = i + 1 < n ? half[i] : 0;
+        if (refusal.empty()) {
+            // Whole samples at both ends, the audio taken back or forward with them.
+            if (i > 0) {
+                const double start = static_cast<double>(cores[i].lo - before) / rate;
+                const double delta = start - model::itemSpan(s, item).startSec;
+                for (Id t : item.takes)
+                    txn.modify<model::Take>(
+                        t, [&](model::Take& take) { model::rebaseAudioTake(take, delta); });
+                model::setItemStartSeconds(s, item, start);
+            }
+            if (i + 1 < n)
+                model::setItemEndSeconds(s, item, static_cast<double>(cores[i].hi + after) / rate);
+        }
+        if (i > 0) item.fadeIn = fade(before);
+        if (i + 1 < n) item.fadeOut = fade(after);
+        txn.put(cores[i].item, std::move(item));
+    }
+
+    // A value that is where it was, to a nanosecond, stays as stored: a second call with
+    // the same arguments gives the same bytes.
+    for (const auto& [id, was] : originalItems) {
+        if (removed.contains(id)) continue;
+        model::Item now = *txn.get<model::Item>(id);
+        auto keep = [](double& value, double old) {
+            if (near(value, old)) value = old;
+        };
+        keep(now.position, was.position);
+        keep(now.length, was.length);
+        keep(now.fadeIn.length, was.fadeIn.length);
+        keep(now.fadeOut.length, was.fadeOut.length);
+        txn.put(id, std::move(now));
+        for (Id t : was.takes) {
+            model::Take take = *txn.get<model::Take>(t);
+            keep(take.startOffset, originalTakes.at(t).startOffset);
+            txn.put(t, std::move(take));
+        }
+    }
+    auto final = model::compRun(engine.view(), std::nullopt, ids);
+    if (!final) return std::move(final).error();
+    return describe(engine.view(), *final);
+}
+
+// "tr_2 (Second)": the id the commands take and the name the user sees.
+std::string trackNamed(const model::Session& s, Id track) {
+    return track.str() + " (" + model::trackLabel(s, track) + ")";
+}
+
+// The path that names each piece of the run as the caller gave it: /item, or /items/k.
+std::vector<std::string> piecePaths(bool single, const std::vector<Id>& given,
+                                    const std::vector<model::CompPiece>& run) {
+    std::vector<std::string> out;
+    for (const auto& p : run) {
+        const auto at = std::find(given.begin(), given.end(), p.item);
+        if (single)
+            out.push_back("/item");
+        else
+            out.push_back(at == given.end() ? "/items"
+                                            : "/items/" + std::to_string(at - given.begin()));
+    }
+    return out;
+}
+
+struct Member {
+    Id track;
+    std::vector<model::CompPiece> run;
+};
+
+// The other tracks of the run's edit group that have an item beside each of its pieces
+// (linkedItems: the same span on the same lane), as runs of their own, in track order. A track with
+// an item beside only some of the pieces, a run that does not line up with the named one in
+// samples, or two items beside one piece is refused (comp.group_mismatch, comp.linked); with `off`,
+// those tracks go into it instead and the rest are returned (take.comp.get). A track with no item
+// beside any piece is not a member.
+Result<std::vector<Member>> groupMembers(const model::Session& s,
+                                         const std::vector<model::CompPiece>& run,
+                                         std::vector<Id>* off,
+                                         const std::vector<std::string>& paths) {
+    const Id lead = s.items.find(run.front().item)->track;
+    std::map<Id, std::vector<std::optional<Id>>> beside;
+    std::set<Id> ambiguous;
+    for (std::size_t k = 0; k < run.size(); ++k)
+        for (Id peer : model::linkedItems(s, run[k].item)) {
+            const Id track = s.items.find(peer)->track;
+            if (track == lead) continue;
+            auto& slots = beside[track];
+            slots.resize(run.size());
+            if (slots[k]) ambiguous.insert(track);
+            slots[k] = peer;
+        }
+    std::vector<Member> out;
+    for (auto& [track, slots] : beside) {
+        const std::string who = trackNamed(s, track);
+        std::optional<Error> problem;
+        if (ambiguous.contains(track))
+            problem =
+                Error("comp.linked", who + " has two items beside one piece of the comp", paths[0],
+                      "set bypass_groups true to comp it alone, or take the extra item "
+                      "away");
+        std::vector<Id> items;
+        // The piece it sits beside, for the error's path.
+        std::size_t named = 0;
+        while (named < slots.size() && !slots[named]) ++named;
+        for (std::size_t k = 0; k < slots.size() && !problem; ++k) {
+            if (slots[k]) {
+                items.push_back(*slots[k]);
+            } else {
+                problem = Error("comp.group_mismatch",
+                                who + " has an item beside only some of the pieces of the comp",
+                                paths[named],
+                                "comp it alone with bypass_groups, or make its pieces line up "
+                                "with " +
+                                    run[k].item.str());
+            }
+        }
+        Member m{track, {}};
+        if (!problem) {
+            auto theirs = model::compRun(s, std::nullopt, items);
+            if (!theirs) {
+                problem =
+                    Error("comp.group_mismatch", who + ": " + theirs.error().message, paths[0],
+                          "comp it alone with bypass_groups, or fix its pieces first");
+            } else {
+                bool same = theirs->size() == run.size();
+                for (std::size_t k = 0; same && k < run.size(); ++k)
+                    same = (*theirs)[k].coreStart == run[k].coreStart &&
+                           (*theirs)[k].coreEnd == run[k].coreEnd;
+                if (!same)
+                    problem =
+                        Error("comp.group_mismatch",
+                              who + "'s comp does not line up with this one in samples", paths[0],
+                              "comp it alone with bypass_groups, or comp the group again "
+                              "from the pieces that line up");
+                else
+                    m.run = std::move(*theirs);
+            }
+        }
+        if (problem) {
+            if (!off) return *problem;
+            off->push_back(track);
+            continue;
+        }
+        out.push_back(std::move(m));
+    }
+    return out;
+}
+
+MemberOut memberOf(const model::Session& s, Id track, const CompResult& r) {
+    MemberOut m;
+    m.track = track.str();
+    m.pieces = r.pieces;
+    m.crossfade = r.crossfade;
+    m.shape = r.shape;
+    m.uniform = r.uniform;
+    m.differing = r.differing;
+    (void)s;
+    return m;
+}
+
+// Members that read back differently from the named run: other spans, takes or crossfade.
+// Then `uniform` of the whole group.
+void finishGroup(CompResult& lead, std::vector<std::string> notLikeIt) {
+    for (const MemberOut& m : lead.members) {
+        bool same = m.pieces.size() == lead.pieces.size() && m.crossfade == lead.crossfade &&
+                    m.shape == lead.shape;
+        for (std::size_t k = 0; same && k < m.pieces.size(); ++k)
+            same = m.pieces[k].from == lead.pieces[k].from && m.pieces[k].to == lead.pieces[k].to &&
+                   m.pieces[k].index == lead.pieces[k].index;
+        if (!same) notLikeIt.push_back(m.track);
+    }
+    std::sort(notLikeIt.begin(), notLikeIt.end());
+    lead.differingMembers = std::move(notLikeIt);
+    bool uniform = lead.uniform && lead.differingMembers.empty();
+    for (const MemberOut& m : lead.members) uniform = uniform && m.uniform;
+    lead.uniform = uniform;
+}
+
+// take.comp without bypass_groups: the named run and the run of every other member of its edit
+// group, with the same spans and take indices. Everything is checked before anything is written.
+Result<CompResult> compGroup(const CompArgs& a, Context& ctx) {
+    const model::Session s = app(ctx).view();
+    auto which = whichPieces(s, a.anyPiece, a.pieces);
+    if (!which) return std::move(which).error();
+    auto run = model::compRun(s, which->first, which->second);
+    if (!run) return std::move(run).error();
+    const auto paths = piecePaths(a.anyPiece.has_value(), which->second, *run);
+    auto members = groupMembers(s, *run, nullptr, paths);
+    if (!members) return std::move(members).error();
+    if (members->empty()) return compOne(a, ctx, "");
+    // The take each span plays, as an index (every member plays the same index).
+    const std::size_t leadTakes = s.items.find(run->front().item)->takes.size();
+    std::vector<std::optional<std::int64_t>> indices;
+    std::int64_t highest = -1;
+    for (const SpanArg& span : a.spans) {
+        std::optional<std::int64_t> index = span.index;
+        if (!index && span.take)
+            if (const auto id = Id::parse(*span.take))
+                for (const auto& p : *run) {
+                    const auto& takes = s.items.find(p.item)->takes;
+                    const auto hit = std::find(takes.begin(), takes.end(), *id);
+                    if (hit != takes.end()) index = hit - takes.begin();
+                }
+        indices.push_back(index);
+        if (index && *index < static_cast<std::int64_t>(leadTakes))
+            highest = std::max(highest, *index);
+    }
+    for (const Member& m : *members) {
+        const std::size_t theirs = s.items.find(m.run.front().item)->takes.size();
+        if (highest >= static_cast<std::int64_t>(theirs))
+            return Error("comp.group_takes",
+                         trackNamed(s, m.track) + " has " + std::to_string(theirs) +
+                             " takes, and a span plays take index " + std::to_string(highest),
+                         paths[0],
+                         "comp it alone with bypass_groups, or give spans that use indices 0.." +
+                             std::to_string(theirs - 1));
+        for (const auto& p : m.run) SUPPLE_TRY(checkUnlocked(s, p.item, paths[0]));
+    }
+    auto lead = compOne(a, ctx, "");
+    if (!lead) return lead;
+    for (const Member& m : *members) {
+        CompArgs each = a;
+        each.anyPiece.reset();
+        each.pieces = std::vector<std::string>();
+        for (const auto& p : m.run) each.pieces->push_back(p.item.str());
+        each.allowLinked = true;
+        for (std::size_t k = 0; k < each.spans.size(); ++k) {
+            each.spans[k].take.reset();
+            each.spans[k].index = indices[k];
+        }
+        auto got = compOne(each, ctx, "on " + trackNamed(s, m.track) + ": ");
+        if (!got) return got;
+        lead->members.push_back(memberOf(s, m.track, *got));
+    }
+    finishGroup(*lead, {});
+    return lead;
+}
+
 }  // namespace
 
 void registerCompCommands(cmd::Registry& registry) {
@@ -226,7 +732,14 @@ void registerCompCommands(cmd::Registry& registry) {
             "of "
             "MIDI ones that cannot be, where a held note sounds again). "
             "take.activate {index} on a piece changes its take and keeps the seams. "
-            "One undo step. Returns the pieces in time order.";
+            "One undo step. Returns the pieces in time order. An item in an edit group (a "
+            "multitrack "
+            "recording, drums): without bypass_groups the same spans, take indices and crossfade "
+            "apply to the run of every other member of the group, matched by span (the same call "
+            "as item.split); the result lists them under members, each with its track and "
+            "pieces. A member that cannot follow (comp.group_mismatch, or comp.group_takes for a "
+            "take index it lacks) refuses the whole call before anything changes. "
+            "bypass_groups true comps only the named item.";
         c.tags = {"take"};
         auto spanSchema =
             schema::object<SpanArg>("take_comp_span")
@@ -263,314 +776,23 @@ void registerCompCommands(cmd::Registry& registry) {
             {"comp.take", "a span has no or both of take and index, or one not in the item",
              "give take (an id of the item) or index (0..takes-1); take.list lists them"},
             {"comp.loop", "a looped item", "comp an item that does not loop"},
-            {"comp.linked", "the item has linked peers",
-             "set bypass_groups true to comp it alone, or take it out of its track group"},
+            {"comp.linked", "two items of one group track sit beside one piece",
+             "set bypass_groups true to comp it alone, or take the extra item away"},
+            {"comp.group_mismatch",
+             "a member of the edit group has items beside only some of the pieces, or a run "
+             "that does not line up in samples",
+             "comp it alone with bypass_groups, or fix its pieces first"},
+            {"comp.group_takes", "a member of the edit group lacks a take index a span plays",
+             "comp it alone with bypass_groups, or use indices it has"},
             {"item.locked", "a piece is locked", "item.set {locked: false}"},
             {"item.kind", "a clip", "lay the clip on the timeline first (item.add {clip})"}};
         c.examples = {{"Take the second take for bars 2 to 3",
                        j(R"({"item":"it_1","crossfade":0,"spans":[{"from":1,"to":3,"index":1}]})"),
                        j(R"({"pieces":"<any>","crossfade":0,"crossfade_shape":"cos","uniform":true,
-                          "differing_seams":[]})"),
+                          "differing_seams":[],"members":[],"differing_members":[]})"),
                        "song_with_takes"}};
         c.run = [](const CompArgs& a, Context& ctx) -> Result<CompResult> {
-            EngineApp& engine = app(ctx);
-            const model::Session s = engine.view();
-            auto which = whichPieces(s, a.anyPiece, a.pieces);
-            if (!which) return std::move(which).error();
-            auto run = model::compRun(s, which->first, which->second);
-            if (!run) return std::move(run).error();
-            for (const auto& p : *run) {
-                // The path names the piece the caller gave: /item, or /items/k.
-                std::string where = "/item";
-                if (!a.anyPiece) {
-                    const auto at = std::find(which->second.begin(), which->second.end(), p.item);
-                    where = "/items/" + std::to_string(at - which->second.begin());
-                }
-                SUPPLE_TRY(checkUnlocked(s, p.item, where));
-                if (!a.allowLinked && model::linkedItems(s, p.item).size() > 1)
-                    return Error("comp.linked",
-                                 p.item.str() + " is edited together with other items", where,
-                                 "set bypass_groups true to comp it alone, or take it out of its "
-                                 "track group");
-            }
-            const double rate = s.project->sampleRate;
-            const time::TimeMap& tm = *s.timeMap;
-            auto snap = [&](double beat) { return time::samplesAt(tm.secondsAt(beat), rate); };
-            const std::int64_t runStart = run->front().coreStart, runEnd = run->back().coreEnd;
-            const std::size_t takeCount = s.items.find(run->front().item)->takes.size();
-
-            // The spans, in samples, each with the take index it plays.
-            std::vector<Painted> spans;
-            std::int64_t previousEnd = runStart;
-            for (std::size_t i = 0; i < a.spans.size(); ++i) {
-                const SpanArg& span = a.spans[i];
-                const std::string at = "/spans/" + std::to_string(i);
-                if (span.take.has_value() == span.index.has_value())
-                    return Error("comp.take", "give take or index, exactly one", at,
-                                 "take: \"tk_2\" (a take of the item) or index: 1");
-                std::size_t index = 0;
-                if (span.index) {
-                    if (*span.index >= static_cast<std::int64_t>(takeCount))
-                        return Error("comp.take",
-                                     "the item has " + std::to_string(takeCount) + " takes",
-                                     at + "/index",
-                                     "use take.list for the item: indices 0.." +
-                                         std::to_string(takeCount - 1));
-                    index = static_cast<std::size_t>(*span.index);
-                } else {
-                    std::optional<std::size_t> found;
-                    if (const auto id = Id::parse(*span.take))
-                        for (const auto& p : *run) {
-                            const auto& takes = s.items.find(p.item)->takes;
-                            const auto hit = std::find(takes.begin(), takes.end(), *id);
-                            if (hit != takes.end())
-                                found = static_cast<std::size_t>(hit - takes.begin());
-                        }
-                    if (!found)
-                        return Error("comp.take", *span.take + " is not a take of this comp",
-                                     at + "/take",
-                                     "use a take id from take.list of a piece, or index");
-                    index = *found;
-                }
-                const std::int64_t lo = snap(span.from), hi = snap(span.to);
-                if (hi <= lo)
-                    return Error("comp.span", "the span is empty", at + "/to",
-                                 "give from before to, at least a sample apart");
-                if (lo < runStart)
-                    return Error(
-                        "comp.span", "the span starts before the comp", at + "/from",
-                        "start at beat " +
-                            std::to_string(tm.beatAt(static_cast<double>(runStart) / rate)) +
-                            " or later");
-                if (hi > runEnd)
-                    return Error("comp.span", "the span ends after the comp", at + "/to",
-                                 "end at beat " +
-                                     std::to_string(tm.beatAt(static_cast<double>(runEnd) / rate)) +
-                                     " or earlier");
-                if (lo < previousEnd)
-                    return Error("comp.span", "the span overlaps the one before it", at + "/from",
-                                 "give the spans in time order, each starting where the last ended "
-                                 "or later");
-                previousEnd = hi;
-                spans.push_back({lo, hi, index});
-            }
-
-            // What each core piece plays now, and where the take must change.
-            std::vector<Core> cores;
-            for (const auto& p : *run)
-                cores.push_back(
-                    {p.item, p.coreStart, p.coreEnd,
-                     takeIndex(*s.items.find(p.item), s.items.find(p.item)->activeTake)});
-            // Over the pieces as they are now, whatever is joined or split below.
-            const std::vector<Core> unjoined = cores;
-            auto indexAt = [&](std::int64_t n) {
-                for (const Painted& p : spans)
-                    if (p.lo <= n && n < p.hi) return p.index;
-                for (const Core& k : unjoined)
-                    if (k.lo <= n && n < k.hi) return k.index;
-                return std::size_t{0};
-            };
-            // Pieces that are one piece cut in two and will play the same take are joined first,
-            // so that a moved seam leaves no leftover boundary to clamp its crossfade: the result
-            // is what the same spans give from scratch.
-            std::vector<std::vector<Id>> joins;
-            {
-                std::vector<Core> joined;
-                for (const Core& k : cores) {
-                    const bool join = !joined.empty() && indexAt(k.lo - 1) == indexAt(k.lo) &&
-                                      model::joinablePieces(s, joins.back().back(), k.item);
-                    if (join) {
-                        joined.back().hi = k.hi;
-                        joins.back().push_back(k.item);
-                    } else {
-                        joined.push_back(k);
-                        joins.push_back({k.item});
-                    }
-                }
-                cores = std::move(joined);
-            }
-            std::set<std::int64_t> breaks;
-            auto isSeam = [&](std::int64_t n) {
-                return std::any_of(cores.begin(), cores.end(),
-                                   [&](const Core& k) { return k.lo == n; });
-            };
-            for (const Painted& p : spans)
-                for (std::int64_t n : {p.lo, p.hi})
-                    if (n > runStart && n < runEnd && !isSeam(n) && indexAt(n - 1) != indexAt(n))
-                        breaks.insert(n);
-
-            // The core, written: every crossfade taken out, so that a split sees plain pieces.
-            auto& txn = engine.txn();
-            std::map<Id, model::Item> originalItems;
-            std::map<Id, model::Take> originalTakes;
-            for (const auto& p : *run) {
-                const model::Item& it = *s.items.find(p.item);
-                originalItems[p.item] = it;
-                for (Id t : it.takes) originalTakes[t] = *s.takes.find(t);
-            }
-            for (std::size_t k = 0; k + 1 < run->size(); ++k) {
-                const auto& left = (*run)[k];
-                const auto& right = (*run)[k + 1];
-                const double seam = static_cast<double>(left.coreEnd) / rate;
-                model::Item l = *txn.get<model::Item>(left.item);
-                model::Item r = *txn.get<model::Item>(right.item);
-                if (left.end != left.coreEnd) model::setItemEndSeconds(s, l, seam);
-                if (right.start != right.coreStart) {
-                    const double delta = seam - model::itemSpan(s, r).startSec;
-                    for (Id t : r.takes)
-                        txn.modify<model::Take>(
-                            t, [&](model::Take& take) { model::rebaseAudioTake(take, delta); });
-                    model::setItemStartSeconds(s, r, seam);
-                }
-                l.fadeOut = {};
-                r.fadeIn = {};
-                txn.put(left.item, std::move(l));
-                txn.put(right.item, std::move(r));
-            }
-
-            std::set<Id> removed;
-            for (const auto& group : joins)
-                for (std::size_t m = 1; m < group.size(); ++m) {
-                    model::Item l = *txn.get<model::Item>(group[0]);
-                    const model::Item r = *txn.get<model::Item>(group[m]);
-                    model::setItemEndToItemEnd(s, l, r);
-                    l.fadeOut = r.fadeOut;
-                    txn.put(group[0], std::move(l));
-                    for (Id t : r.takes) SUPPLE_TRY(removeTakeObjects(txn, engine.view(), t));
-                    txn.remove<model::Item>(group[m]);
-                    removed.insert(group[m]);
-                }
-
-            // The splits, left to right, each through item.split (it copies every take).
-            for (const std::int64_t at : breaks) {
-                const auto hit = std::find_if(cores.begin(), cores.end(), [&](const Core& k) {
-                    return k.lo < at && at < k.hi;
-                });
-                if (hit == cores.end()) continue;
-                auto args = json::Value::object();
-                args["item"] = hit->item.str();
-                args["at"] = tm.beatAt(static_cast<double>(at) / rate);
-                args["bypass_groups"] = true;
-                auto split =
-                    ctx.service<const cmd::Registry>().find("item.split")->invoke(args, ctx);
-                if (!split) return std::move(split).error();
-                const auto made = Id::parse(split->find("right")->asString());
-                Core right{*made, at, hit->hi, hit->index};
-                hit->hi = at;
-                cores.insert(std::next(hit), right);
-            }
-            for (Core& k : cores) k.index = indexAt(k.lo);
-
-            // The seams.
-            const std::size_t n = cores.size();
-            std::vector<Id> ids;
-            for (const Core& k : cores) ids.push_back(k.item);
-            std::vector<model::CompPiece> plain;
-            for (const Core& k : cores) plain.push_back({k.item, k.lo, k.hi, k.lo, k.hi});
-            const std::string refusal = cannotExtend(engine.view(), plain);
-            // A boundary between MIDI pieces that play one take and could not be joined (the
-            // notes of one half were edited, say) stops a held note and strikes it again.
-            std::string reattack;
-            {
-                const model::Session now = engine.view();
-                auto isMidi = [&](Id item) {
-                    const model::Item* it = now.items.find(item);
-                    const model::Take* tk =
-                        it && it->activeTake ? now.takes.find(*it->activeTake) : nullptr;
-                    return tk && tk->source && tk->source->kind == model::Kind::Midi;
-                };
-                for (std::size_t k = 0; k + 1 < n; ++k)
-                    if (cores[k].index == cores[k + 1].index && isMidi(cores[k].item) &&
-                        isMidi(cores[k + 1].item)) {
-                        if (!reattack.empty()) reattack += ", ";
-                        reattack +=
-                            std::to_string(tm.beatAt(static_cast<double>(cores[k].hi) / rate));
-                    }
-            }
-            if (!reattack.empty())
-                ctx.warn("comp.midi_boundary",
-                         "held notes sound again at the boundaries (beats " + reattack +
-                             ") between pieces of one take that could not be joined: they "
-                             "differ in their notes or settings",
-                         "/spans");
-            const auto wanted = static_cast<std::int64_t>(std::llround(a.crossfade * rate / 2.0));
-            std::vector<std::int64_t> half(n > 0 ? n - 1 : 0, 0);
-            bool skipped = false, clamped = false;
-            for (std::size_t k = 0; k + 1 < n; ++k) {
-                if (cores[k].index == cores[k + 1].index || wanted == 0) continue;
-                if (!refusal.empty()) {
-                    skipped = true;
-                    continue;
-                }
-                half[k] = std::min({wanted, (cores[k].hi - cores[k].lo) / 2,
-                                    (cores[k + 1].hi - cores[k + 1].lo) / 2});
-                clamped = clamped || half[k] < wanted;
-            }
-            if (skipped)
-                ctx.warn("comp.crossfade_skipped",
-                         "the seams are hard cuts: " + refusal +
-                             ", and a crossfade would have to move it",
-                         "/crossfade");
-            if (clamped)
-                ctx.warn("comp.crossfade_clamped",
-                         "a crossfade is shorter than asked: the pieces beside the seam are short",
-                         "/crossfade");
-            const auto shape =
-                a.shape == "linear" ? model::FadeShape::Linear : model::FadeShape::Cos;
-            auto fade = [&](std::int64_t h) {
-                model::Fade f;
-                if (h > 0) {
-                    f.length = static_cast<double>(2 * h) / rate;
-                    f.shape = shape;
-                }
-                return f;
-            };
-            for (std::size_t i = 0; i < n; ++i) {
-                model::Item item = *txn.get<model::Item>(cores[i].item);
-                item.activeTake = item.takes[cores[i].index];
-                const std::int64_t before = i > 0 ? half[i - 1] : 0;
-                const std::int64_t after = i + 1 < n ? half[i] : 0;
-                if (refusal.empty()) {
-                    // Whole samples at both ends, the audio taken back or forward with them.
-                    if (i > 0) {
-                        const double start = static_cast<double>(cores[i].lo - before) / rate;
-                        const double delta = start - model::itemSpan(s, item).startSec;
-                        for (Id t : item.takes)
-                            txn.modify<model::Take>(
-                                t, [&](model::Take& take) { model::rebaseAudioTake(take, delta); });
-                        model::setItemStartSeconds(s, item, start);
-                    }
-                    if (i + 1 < n)
-                        model::setItemEndSeconds(s, item,
-                                                 static_cast<double>(cores[i].hi + after) / rate);
-                }
-                if (i > 0) item.fadeIn = fade(before);
-                if (i + 1 < n) item.fadeOut = fade(after);
-                txn.put(cores[i].item, std::move(item));
-            }
-
-            // A value that is where it was, to a nanosecond, stays as stored: a second call with
-            // the same arguments gives the same bytes.
-            for (const auto& [id, was] : originalItems) {
-                if (removed.contains(id)) continue;
-                model::Item now = *txn.get<model::Item>(id);
-                auto keep = [](double& value, double old) {
-                    if (near(value, old)) value = old;
-                };
-                keep(now.position, was.position);
-                keep(now.length, was.length);
-                keep(now.fadeIn.length, was.fadeIn.length);
-                keep(now.fadeOut.length, was.fadeOut.length);
-                txn.put(id, std::move(now));
-                for (Id t : was.takes) {
-                    model::Take take = *txn.get<model::Take>(t);
-                    keep(take.startOffset, originalTakes.at(t).startOffset);
-                    txn.put(t, std::move(take));
-                }
-            }
-            auto final = model::compRun(engine.view(), std::nullopt, ids);
-            if (!final) return std::move(final).error();
-            return describe(engine.view(), *final);
+            return a.allowLinked ? compOne(a, ctx, "") : compGroup(a, ctx);
         };
         addChecked(registry, std::move(c));
     }();
@@ -602,7 +824,7 @@ void registerCompCommands(cmd::Registry& registry) {
         c.examples = {
             {"Read a comp", j(R"({"item":"it_1"})"),
              j(R"({"pieces":"<any>","crossfade":0.01,"crossfade_shape":"cos","uniform":true,
-                          "differing_seams":[]})"),
+                          "differing_seams":[],"members":[],"differing_members":[]})"),
              "song_with_takes"}};
         c.run = [](const WhichArgs& a, Context& ctx) -> Result<CompResult> {
             const model::Session s = app(ctx).view();
@@ -610,7 +832,19 @@ void registerCompCommands(cmd::Registry& registry) {
             if (!which) return std::move(which).error();
             auto run = model::compRun(s, which->first, which->second);
             if (!run) return std::move(run).error();
-            return describe(s, *run);
+            CompResult out = describe(s, *run);
+            // The other members of its edit group, read the same way; one that does not line up
+            // is listed in differing_members.
+            std::vector<Id> off;
+            auto members = groupMembers(s, *run, &off,
+                                        piecePaths(a.anyPiece.has_value(), which->second, *run));
+            if (!members) return std::move(members).error();
+            for (const Member& m : *members)
+                out.members.push_back(memberOf(s, m.track, describe(s, m.run)));
+            std::vector<std::string> notLikeIt;
+            for (Id track : off) notLikeIt.push_back(track.str());
+            finishGroup(out, std::move(notLikeIt));
+            return out;
         };
         addChecked(registry, std::move(c));
     }();

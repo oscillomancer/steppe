@@ -2158,6 +2158,8 @@ q = nil
 ---@field crossfade_shape "cos"|"linear"
 ---@field uniform boolean
 ---@field differing_seams table[]
+---@field members table[]
+---@field differing_members string[]
 ---@field warnings? table[]
 
 ---@class Steppe.take_comp_get_args
@@ -2170,6 +2172,8 @@ q = nil
 ---@field crossfade_shape "cos"|"linear"
 ---@field uniform boolean
 ---@field differing_seams table[]
+---@field members table[]
+---@field differing_members string[]
 ---@field warnings? table[]
 
 ---@class Steppe.take_extract_args

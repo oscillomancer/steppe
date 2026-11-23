@@ -1059,7 +1059,10 @@ instructions are in `docs/guides/installing.md`.
   stays, and between MIDI pieces of one take a held note sounds again there
   (`comp.midi_boundary`); a seam fade edited by hand (another length or shape) is overwritten
   by the next `take.comp`, which gives every seam one length and shape: `take.comp.get` says
-  `uniform: false` and lists the seams that differ.
+  `uniform: false` and lists the seams that differ. An item in an edit group is comped with
+  every member (same spans and take indices, one undo step, `members` in the result;
+  `bypass_groups` for the item alone); a member with fewer takes or a run that does not line
+  up refuses the call (`comp.group_takes`, `comp.group_mismatch`).
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main
