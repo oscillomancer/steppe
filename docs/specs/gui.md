@@ -3087,7 +3087,15 @@ same heights, scroll and colours.
   "G dor", "Eb hm") right-aligned in a 12-unit strip at the foot of its
   body, under the preview, with "→" before it in full ink when the clip
   follows the key or the chords, in quiet ink when it plays as written; a
-  body lower than two strips shows no key. A muted clip is dimmed, as a
+  body lower than two strips shows no key. An audio clip's own fades
+  (`fade_in`, `fade_out`, schema 2.22) shape every pass, so the cell draws
+  one pass's over its body as an item's are drawn (`views::drawFadeCurve`,
+  shared with `Lanes::drawFades`): the gain curve from the period's start
+  and to its end, and the shade over what it takes away, above the key
+  strip and cut at the Arr column. A fade is drawn only where there is room:
+  a body at least `LauncherPane::kFadeRoom` (8 units) high and a fade at
+  least 2 units wide. A MIDI clip has no fades and draws none; no text is
+  drawn for a fade. A muted clip is dimmed, as a
   muted item is. Clips launch under a master
   playrate; the engine refuses only an audio clip while the playrate keeps
   the pitch at other than a steady 1 (`launch.playrate`), and the pane dims
@@ -3212,12 +3220,17 @@ same heights, scroll and colours.
   that renders play the arrangement only (§4.8; built with L2).
 - **Inspector.** After a launcher click it shows the selected clip (before
   tracks and items): its header (name; "MIDI clip on Bass, Verse"; its
-  colour) and its fields, each one `clip.set`: Name, Colour, Length (beats,
-  or seconds for an audio clip), Gain, Plays (Loop / Once), Launch (the
+  colour) and its fields, each one `clip.set` and one undo step: Name,
+  Colour, Length (beats, or seconds for an audio clip), Gain, for an audio
+  clip **Fade in** and **Fade out** (each a length in seconds, 72 units
+  wide, and a shape: Linear, Slow, Fast, Slow, then fast, Fast, then slow,
+  Equal power, Exponential; `fade_in`/`fade_out` and their `_shape`; a MIDI
+  clip shows neither row), Plays (Loop / Once), Launch (the
   project's quantize, Bar … 1/32, At once), Follow (None / Key / Chords,
   ADR-0098: Key and Chords are disabled, their labels saying why, unless the
   clip is MIDI with a key at its start) and Mute. Several clips show only
-  their count.
+  their count. A refusal (a negative fade, say) goes to the status line and
+  the field shows the clip's value again.
 - **Status line.** It counts scenes beside tracks only when there are some
   ("4 tracks  2 scenes  version 9", `gui::countsText`).
 - **Sections.** A section's right-click menu captures it as a scene
@@ -3229,7 +3242,14 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
 - Golden images of the pane with playing, queued, held, empty and selected
   cells and Capture lit, in both themes (`launcher-dark.png`,
   `launcher-light.png`), and a playing clip in every track colour
-  (`launcher-playing-dark.png`, `launcher-playing-light.png`).
+  (`launcher-playing-dark.png`, `launcher-playing-light.png`), and an
+  audio clip with an equal-power fade-in and fade-out
+  (`launcher-fades-dark.png`). Its fades are drawn where there is room:
+  one fade one curve, none under 2 units wide or in a body under
+  `kFadeRoom`, none for MIDI clips (`test_launcher.cpp`). The inspector's
+  Fade in and Fade out each run one `clip.set`, one undo step, undo takes
+  back one, a refusal reaches the status line, and a MIDI clip shows
+  neither row (`test_side_panel.cpp`).
 - Capture with the dummy engine: armed, a launch, a stop committing the
   performance in one undo step and arming the next; refused without an
   engine; off with nothing played writing nothing. A commit refused by a
