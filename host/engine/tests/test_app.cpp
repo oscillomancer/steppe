@@ -1540,9 +1540,10 @@ TEST_CASE("a first save that cannot remove a scratch file says so and points at 
     CHECK(app->mediaDir() == root.path / "song" / "media");
 }
 
+namespace {
 // A first save that left a file behind (the folder cannot be written), then another unsaved
 // project in the same scratch folder: its first save does not carry the file into its media.
-TEST_CASE("a scratch file the first save could not remove does not go with the next project") {
+void nextProjectAfterLeftover(bool namesStray) {
     Root root;
     cmd::Registry registry;
     registerEngineCommands(registry);
@@ -1563,8 +1564,10 @@ TEST_CASE("a scratch file the first save could not remove does not go with the n
     REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
     const fs::path stray = rec / "Stray.wav";
     {
-        std::ofstream out(stray, std::ios::binary);
-        out << "project A's";
+        audio::AudioData wav;
+        wav.sampleRate = 48000;
+        wav.channels.assign(2, std::vector<float>(480, 0.25f));
+        REQUIRE(audio::writeWav(stray, wav));
     }
     // The stray file cannot be removed by project A's first save (a folder that cannot be
     // written takes the recording's files with it; on Windows only the file that is held).
@@ -1581,12 +1584,27 @@ TEST_CASE("a scratch file the first save could not remove does not go with the n
     REQUIRE(app->newProject(model::Project{}));
     app->setupFixture(d, "recording_interrupted");
     REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    if (namesStray) {  // B uses the very file: imported in place, unchanged
+        REQUIRE(d.execute({"track.add", j(R"({"name":"Uses it"})"), kTest}));
+        auto add = *json::parse(R"({"track":"tr_2","position":0})");
+        add["audio_file"] = stray.string();
+        REQUIRE(d.execute({"item.add", add, kTest}));
+    }
     REQUIRE(app->save(root.path / "b" / "b.json"));
     CHECK(fs::exists(root.path / "b" / "media" / "rec" / "Vocal-1.wav"));
-    CHECK_FALSE(fs::exists(root.path / "b" / "media" / "rec" / "Stray.wav"));
-    // The leftover could be removed this time, so it was, and the scratch folder is gone.
-    CHECK_FALSE(fs::exists(stray));
-    CHECK_FALSE(fs::exists(o.scratchDir));
+    // A file B's project names goes with it; one it does not, does not.
+    CHECK(fs::exists(root.path / "b" / "media" / "rec" / "Stray.wav") == namesStray);
+    if (!namesStray) {
+        // The leftover could be removed this time, so it was, and the scratch folder is gone.
+        CHECK_FALSE(fs::exists(stray));
+        CHECK_FALSE(fs::exists(o.scratchDir));
+    }
+}
+}  // namespace
+
+TEST_CASE("a scratch file the first save could not remove does not go with the next project") {
+    SUBCASE("B does not use it") { nextProjectAfterLeftover(false); }
+    SUBCASE("B names that very file: it is copied") { nextProjectAfterLeftover(true); }
 }
 
 TEST_CASE("two armed tracks with one name record to two files (review round 8)") {

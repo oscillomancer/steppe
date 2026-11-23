@@ -762,9 +762,14 @@ stays, and the save says so with a
 save closes what the engine holds on those files (the recording's hash reader, the plan's decode
 worker, a file audition's decoder); what it cannot is a reader outside it or on its own thread
 (the GUI's peak worker, a render, freeze, consolidate or analysis job still decoding them) and
-another program. The app
-remembers such a file (its size and time); a later first save in the same scratch folder, of
-another unsaved project, does not copy it into its own media, and tries to remove it again. With the app's copy-imports setting on (the GUI's
+another program. Within one
+run, the app remembers such a file (its size and time); a later first save in the same scratch
+folder, of another unsaved project, does not copy it into its own media (unless a version of
+that project names it), and tries to remove it again. The list is not kept across a restart,
+and does not need to be: each run has its own scratch folder (the GUI's, named by start time and
+process), so after a restart the file is in an earlier run's folder, which `project.recoverable`
+lists like any folder that holds files, to recover or discard; a project recovered from that
+folder owns what is in it. With the app's copy-imports setting on (the GUI's
 default), item.add copies an imported audio file into the media folder (a
 same-named file with other bytes gets `-2`, `-3`…; the same bytes are
 reused) instead of naming it where it is. The GUI gives each project a
