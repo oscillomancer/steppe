@@ -25,8 +25,11 @@ timeline start have clipped it).
 1. **The target** is the item of the track, on the main lane, whose span contains the span's first
    heard sample (the anchor `midi_overdub` uses). The pass is laid as a new item, as before, when
    there is none. When the pass starts before an item and runs into it, or the target is locked,
-   looped, or holds the other kind of material (MIDI under an audio pass), the new item carries a
-   `record.stack_skipped` warning naming the item and why, so a doubling is never silent.
+   looped, frozen, or holds the other kind of material (MIDI under an audio pass), the new item
+   carries a `record.stack_skipped` warning naming the item and why, so a doubling is never silent.
+   A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole: the
+   project stays as it was and editable, and the recording is not in it (its journals remain for
+   recovery).
 2. **The item's extent does not change.** Its position and length stay; the new take reads the
    recording by the timeline mapping (`start_offset` negative when the pass starts after the item,
    so the first part is silent; positive past the end of a short pass). What lies beyond the item
@@ -37,10 +40,15 @@ timeline start have clipped it).
    132, replacing "the new take is heard on every piece the pass touches", which left the rest of
    the item silent: a pass over bar 5 of eight bars made bars 1-4 and 6-8 mute.) In the commit's
    own transaction the pass's stretch is comped to the new take through `take.comp` (the default
-   crossfade for audio, hard cuts for MIDI, `bypass_groups`), and everything outside it keeps
-   playing what it played, in a comp as well: the item becomes the pieces before, the pass, and
-   after, as `take.comp` makes them (one undo step). A pass that covers the whole item or run
-   (or more) makes the new take heard whole with no comp. Loop passes are appended in order, one
+   crossfade for a lone item, the comp's own crossfade and shape for an existing comp, hard cuts for
+   MIDI, `bypass_groups`), and everything outside it keeps playing what it played, in a comp as
+   well: the item becomes the pieces before, the pass, and after, as `take.comp` makes them (one
+   undo step). The seams of an existing comp are rebuilt from the crossfade `take.comp.get`
+   reports (a user's 40 ms linear comp stays 40 ms linear; seams that differed by hand become
+   uniform, as any `take.comp` makes them). A pass that covers the whole of a lone item makes the
+   new take heard whole with no comp; over a whole comp of several pieces it goes through
+   `take.comp` with a single span, which joins the neighbours that now play one take (kept apart
+   they would swell by 3 dB across each old equal-power seam). Loop passes are appended in order, one
    take per pass, and the newest pass is heard over each stretch of the loop range, older passes
    staying as takes. The new take is heard also when the target's active take followed the
    context (ADR-0098): the following take stays as another take, untouched, over the rest, and
