@@ -1536,6 +1536,38 @@ TEST_CASE("a comp piece's take badge switches it with take.comp, joining its nei
     CHECK(heardOf(f.item(whole)) == 1 - heard);
 }
 
+// Round 119 G2: take.comp refuses a looped item, so a swipe on one splits it
+// and hears the take there, with hard cuts, as before take.comp.
+TEST_CASE("a swipe on a looped item splits it and switches the middle, with hard cuts") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    json::Value loop = json::Value::object();
+    loop["item"] = it.str();
+    loop["loop"] = true;
+    REQUIRE(f.dispatcher->execute({"item.set", loop, kUi}));
+    f.sync();
+    auto& sent = recordSteps(f);
+    const auto steps = f.steps();
+    const ui::Rect r = f.rectOf(it);
+    f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    REQUIRE(sent[0].size() == 3);
+    CHECK(sent[0][0].command == "item.split");
+    CHECK(sent[0][1].command == "item.split");
+    CHECK(sent[0][2].command == "take.activate");
+    CHECK(f.steps() == steps + 1);
+    const auto pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[0]) == heard);
+    CHECK(heardOf(*pieces[1]) == 1 - heard);
+    CHECK(heardOf(*pieces[2]) == heard);
+    CHECK(pieces[0]->fadeOut.length == 0);  // hard cuts
+    CHECK(pieces[1]->fadeIn.length == 0);
+    CHECK(pieces[1]->loop);
+}
+
 namespace {
 // The generated item with two takes, given two more: four in all.
 model::Id fourTakeItem(Fixture& f) {

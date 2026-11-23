@@ -1794,6 +1794,34 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             runSteps("Switch take", {{"take.activate", std::move(activate)}});
             return;
         }
+        if (anchor->loop) {
+            // take.comp refuses a looped item: the swipe splits it at the
+            // range and hears that take there, with hard cuts, as it did
+            // before take.comp (an agent can do the same with item.split and
+            // take.activate).
+            std::vector<EditStep> steps;
+            std::string target = state_.anchor.str();
+            if (state_.compFrom > start + 1e-9) {
+                json::Value split = json::Value::object();
+                split["item"] = target;
+                split["at"] = state_.compFrom;
+                steps.push_back({"item.split", std::move(split)});
+                target = "$step" + std::to_string(steps.size() - 1) + ".right";
+            }
+            if (state_.compTo < end - 1e-9) {
+                json::Value split = json::Value::object();
+                split["item"] = target;
+                split["at"] = state_.compTo;
+                steps.push_back({"item.split", std::move(split)});
+                target = "$step" + std::to_string(steps.size() - 1) + ".left";
+            }
+            json::Value activate = json::Value::object();
+            activate["item"] = target;
+            activate["index"] = static_cast<std::int64_t>(state_.takeLane);
+            steps.push_back({"take.activate", std::move(activate)});
+            runSteps("Comp take", steps);
+            return;
+        }
         if (click) {
             if (compPieceIndex(*comp, state_.anchor) == state_.takeLane) return;
             runSteps("Comp take",

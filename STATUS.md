@@ -1066,6 +1066,7 @@ instructions are in `docs/guides/installing.md`.
   between takes, moves one by a drag and sets the comp's crossfade by dragging a seam's
   top or in the inspector, keeping a comp's crossfade on every re-comp.
   Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
+  a looped item's swipe splits and switches with hard cuts until its Loop is off;
   the GUI does not show `take.comp`'s warnings; seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
   empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);

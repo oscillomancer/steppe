@@ -1077,9 +1077,12 @@ dragged ("12 ms", "1.20 s"), as a stretch shows its rate; the fade handles'
 shape click (the mouse map's `fade` context, Ctrl by default) toggles equal
 power and linear ("Comp crossfade shape"). Each is one `take.comp` and applies
 to every seam of the comp; a hard cut is the length dragged or typed to 0, for
-the whole comp (per-seam lengths are not built). The inspector shows the same
+the whole comp (per-seam lengths are not built). A **looped item** keeps the
+swipe it had before `take.comp`, which refuses one (`comp.loop`): `item.split`
+at the swipe's ends and `take.activate` of the middle, with hard cuts, until its
+Loop is turned off. The inspector shows the same
 for one selected piece (Crossfade, below). Flatten a comp with Consolidate on
-its pieces. Refusals (`comp.loop`, `comp.linked`, `item.locked`) reach the
+its pieces. Refusals (`comp.linked`, `item.locked`) reach the
 status line; the GUI sends no `bypass_groups`, and `take.comp`'s warnings
 (`comp.crossfade_clamped`, `comp.crossfade_skipped`, `comp.midi_boundary`) are
 not shown.
