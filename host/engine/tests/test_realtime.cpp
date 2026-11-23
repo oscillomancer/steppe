@@ -6296,7 +6296,9 @@ TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-ti
     CHECK_FALSE(capWarning);
     if (elevated) {
         CHECK(renderer == ::elevated(Engine::kBackgroundPriority));
-        CHECK(background == renderer);
+        // `background` is the helpers' policy: a default pool on three CPUs
+        // has none (a four-CPU machine, such as native CI's Windows runner).
+        CHECK(background == (n > 3 ? renderer : ThreadPolicy{}));
     }
 }
 #endif
