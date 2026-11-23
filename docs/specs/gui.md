@@ -1056,17 +1056,19 @@ the mouse map's free modifier frees them), which may reach across the comp's
 seams to its outer ends ("Comp take"). A **click** on a lane of a lone item
 hears that take throughout (`take.activate`, which a looped item also takes);
 in a comp it re-comps the pressed piece alone, its core span with that take, so
-its seams are rebuilt and it joins a neighbour playing the same take (a
+its own seams are remade and it joins a neighbour playing the same take (a
 `take.activate` would keep the old seam fades, and a piece switched to its
 neighbour's take would sum one source with itself through an equal-power
 crossfade). A click on the take a piece already plays sends nothing. The take
-badge and the inspector's Takes list switch a piece of a comp the same way. Every
-re-comp keeps the comp's **crossfade**: `take.comp` gives every seam of a comp
-one length and shape, so the GUI sends the comp's own, the value
-`take.comp.get` reads back (`model::compCrossfade`: the longest seam-side fade,
-which a clamped seam does not shrink, and its shape; 0 for a hard-cut comp).
-Only a first comp, with no seam between different takes yet, sends none and
-takes `take.comp`'s 10 ms, equal power (`views::compCrossfade` is empty then).
+badge and the inspector's Takes list switch a piece of a comp the same way. None
+of these sends a **crossfade**: `take.comp` without one keeps every seam the
+call does not touch as it is stored, a seam an agent set by hand (its own
+length or shape, `item.set` on the pieces beside it) included, and gives the
+seams it makes the comp's own crossfade (`model::compCrossfade`: the longest
+seam-side fade and its shape; 0 for a hard-cut comp), or on a first comp, with
+no seam between different takes yet, its 10 ms, equal power. A crossfade sent
+would rebuild every seam with it, so only the crossfade handle and the
+inspector's Crossfade field send one.
 
 The lanes draw each **seam** of a comp (`model::compRun`, cached per track and
 session version), only where the takes differ on its two sides: a one-unit line
@@ -1078,16 +1080,19 @@ take badge, which a long crossfade can bring within reach and which keeps its
 press; the comp's outer ends
 trim and fade as any item's. **Dragging a seam** moves it ("Move comp seam"):
 one `take.comp` with the two stretches beside it as they are, their shared edge
-moved, and the comp's crossfade; it snaps (the free modifier frees it) and stops
+moved, and no crossfade, so the seam keeps its own length and shape and the
+other seams are not touched; it snaps (the free modifier frees it) and stops
 1/64 beat short of the seams beside it. The **top of a seam** (the fade
 handles' square) is the comp's crossfade: a drag sets its length, twice the
 distance from the seam since it is centred there, up to what the shorter side
 allows ("Comp crossfade"), showing the length beside the extent while it is
 dragged ("12 ms", "1.20 s"), as a stretch shows its rate; the fade handles'
 shape click (the mouse map's `fade` context, Ctrl by default) toggles equal
-power and linear ("Comp crossfade shape"). Each is one `take.comp` and applies
-to every seam of the comp; a hard cut is the length dragged or typed to 0, for
-the whole comp (per-seam lengths are not built). **On a track grouped for
+power and linear ("Comp crossfade shape"). Each is one `take.comp` with the
+crossfade and applies to every seam of the comp, hand-set ones included; a hard
+cut is the length dragged or typed to 0, for the whole comp (the GUI sets no
+per-seam length; an agent's hand-set seam keeps its own until the crossfade is
+set). **On a track grouped for
 edits** (`model::linkedTracks`, attribute `edit`) every one of these is the same
 `take.comp`, which comps every other track of the group with items over the
 stretch alike (session-model §1.5.1, Edit groups); a click on a lone item there,

@@ -528,7 +528,10 @@ to move the seam, or drag the top of it to make the crossfade longer or
 shorter; Ctrl+click there switches between an equal-power and a linear
 crossfade. One crossfade length and shape serves every seam of a comp, and
 the inspector shows it as **Crossfade** for a selected piece: type 0 for hard
-cuts. Clicking a lane of one piece switches just that piece. To make a comp
+cuts. Changing the crossfade there or at a seam's top sets every seam. Moving
+a seam, or comping again elsewhere, leaves the other seams as they are, even
+one an agent shortened or reshaped by hand. Clicking a lane of one piece
+switches just that piece. To make a comp
 one plain item again, select its pieces and use **Consolidate items**. On a
 track grouped for editing, every track of the group follows: a drag, a click
 on a lane or the take number comps each of them the same way. If one of them
