@@ -562,7 +562,10 @@ the same.*
   - Seeks and wraps use the same formulas, so clips stay on the grid and
     a performance replays exactly from its log.
 - **Switching (L-d, B5).** Leaving the arrangement or a clip ends what
-  was left's sounding notes at the switch sample. Returning to the
+  was left's sounding notes at the switch sample. An audio clip laid one
+  item per period (`clipLaysAsOneItem` false) that fades out reads on in
+  the pass it was in from the switch's song sample (`heldPass`), as its
+  committed piece does, rather than wrapping inside the fade-out. Returning to the
   arrangement does not chase notes (`trackEvents`, engine.md §1.1). An
   audio switch crossfades over a fixed 5 ms of timeline samples, in the
   source like an item's fade, in both executors and offline; under a
@@ -699,7 +702,10 @@ the same.*
     samples, and the arrangement's tape items read nothing past it after a
     switch away, nor before the anchor while a switch back fades them in
     (`Clip::gateFrom`, set by `launchAudio`; a stretch converter is not
-    cut). Under a playrate that keeps the pitch an audio clip has no
+    cut). Within the kernel's reach before a switch that lands on such a
+    clip's wrap, live reads the pass's end gated at the wrap while the
+    commit reads on (the switch reaches the node at its frame): a stated
+    limit, measured up to 0.011. Under a playrate that keeps the pitch an audio clip has no
     player yet (step 1b): compile warns and its launch is refused with
     `launch.playrate`.
   - *Capture* runs in song time (above): placement gives each launch its

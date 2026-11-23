@@ -367,6 +367,20 @@ inline std::vector<float> arrangement(Project& p, double seconds, std::uint32_t 
     return r->audio.channels[0];
 }
 
+// The project's master offline, replaying `log`.
+inline std::vector<float> replay(Project& p, double seconds, std::vector<LaunchLogEntry> log,
+                                 std::uint32_t block = 512) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = seconds;
+    settings.blockSize = block;
+    settings.projectDir = p.app->projectDir();
+    settings.launches = std::move(log);
+    auto r = renderOffline(p.app->head(), pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    return r->audio.channels[0];
+}
+
 // The largest difference between live (its latency taken off) and
 // offline over [from, to), and the first frame past `tolerance`.
 inline std::pair<double, std::int64_t> compare(const std::vector<float>& live,

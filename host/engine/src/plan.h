@@ -833,6 +833,7 @@ struct ClipPlayer;
 struct PlayerReader {
     std::unique_ptr<RateClipState> state;
     std::int64_t until = INT64_MAX;  // the reading's (PlayerSource::until)
+    std::int64_t hold = INT64_MAX;   // and its PlayerSource::hold
     // A quantum crossing a period of a ClipPlayer::periodItems clip: the
     // later period's reading, for its frames (playerQuantum).
     std::array<std::array<float, kRateQuantum>, 2> later{};
@@ -1646,6 +1647,9 @@ struct ClipChainInput {
     // Going out on the playrate path: the song sample from which its audio
     // reads nothing, the switch's crossfade end (S3 B).
     std::int64_t until = INT64_MAX;
+    // Going out: the switch's song sample, from which a periodItems clip
+    // reads on in the pass it was in, not wrapping mid-fade (playerFrame).
+    std::int64_t hold = INT64_MAX;
 };
 ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT;
 // The clock a switch's crossfade runs on (LaunchState::fadeStart) at the

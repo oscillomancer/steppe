@@ -942,6 +942,19 @@ the boundary.
   it, the tape kernel read on past the cut and a commit differed by up to
   7.7e-5 in each crossfade's last 128 song samples. A stretch converter is
   not cut: its history runs on (see the limits).
+
+  *Note 2026-11-22 (review round 113):* a clip laid one item per period
+  that fades out at a switch reads on in the pass it was in from the
+  switch's song sample, as its committed piece does (the stretch's last
+  item runs 240 song samples past the switch, into the take beyond the
+  period's end), instead of jumping to the period's start where a wrap
+  falls inside the fade-out. At any rate, rate 1 included: the output at
+  unity changes in exactly that case, which differed from the commit by
+  0.011 there, and the jump was a step inside the fade. Under a playrate,
+  within the tape kernel's reach before such a switch (128 song samples)
+  live still read the pass's end gated at the wrap, since the switch
+  reaches the node only at its frame: a stated limit with the kernel
+  edges, 0.0027 at 0.75 and 0.011 under the envelope in the test.
 - **The standard is the rate-1 commit's** (test_clip_player.cpp): exact
   away from the switches' crossfades, and within 1e-6 through them, the
   float32 rounding of the live switch gain against an item's fade in
@@ -961,12 +974,16 @@ each), where the committed items begin or end while the performance went
 on, the commit differs from what played by up to the level of the audio
 cut there (measured up to 0.028 in the tests, in the last 120 to 180
 device frames, about 3 ms; bounded in each test at its measure); a
-commit's edge is a cut at any rate. Tests (test_clip_player_rate.cpp):
+commit's edge is a cut at any rate. Under a rate, a switch on a wrap of a
+clip laid per period differs within the kernel's reach before it (0.0027
+at 0.75, 0.011 under the envelope, bounded in the test). Tests (test_clip_player_rate.cpp):
 the positions and the equality under 0.75 and the envelope ("a capture
 under a master playrate commits by the song positions heard"), a capture
 starting mid-pass ("a capture armed while clips play ..."), the held note
 ("a capture armed while a launched clip's note sounds ..."), a clip with a
-take chain ("a capture of a clip with a take chain ..."), MIDI with the
+take chain ("a capture of a clip with a take chain ..."), a switch on a
+period wrap at rate 1 and under a rate ("a switch on a period wrap ..."),
+MIDI with the
 pitch kept ("under a pitch-keeping master playrate a MIDI capture commits
 as heard"), the end at a switch that cuts arrangement audio ("under a
 pitch-keeping rate a switch that cuts arrangement audio ends the capture

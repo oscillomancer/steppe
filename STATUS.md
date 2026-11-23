@@ -312,7 +312,9 @@ instructions are in `docs/guides/installing.md`.
       playrate keeps the pitch, and ended on its boundary by a switch that
       cuts arrangement audio while the pitch is kept; its commit meets the
       rate-1 standard except within 128 song samples of the capture's
-      first and last samples (up to the level of the audio cut there);
+      first and last samples (up to the level of the audio cut there),
+      and within 128 song samples before a switch that lands on the wrap
+      of a clip laid per period (up to 0.011 in the test);
       there a frozen track's print
       cuts in without the crossfade, and launched audio does not crossfade
       between trajectories when a plan swap changes the rate;
