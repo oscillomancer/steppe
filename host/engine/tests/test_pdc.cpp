@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include "../../../tests/file_platform.h"
 #include "plan.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/realtime.h"
@@ -84,10 +85,7 @@ void run(Engine& engine, DummyBackend& backend, bool anticipative, int cycles) {
 }
 
 struct AudioFile {
-    std::filesystem::path directory =
-        std::filesystem::temp_directory_path() /
-        ("supple-pdc-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::path directory = supple::test::uniqueTempDir("supple-pdc-");
     std::filesystem::path path = directory / "source.wav";
     explicit AudioFile(bool pulses = false) {
         std::filesystem::create_directories(directory);

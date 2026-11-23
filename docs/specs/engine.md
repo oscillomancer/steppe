@@ -1432,6 +1432,14 @@ classes from it, all process-local:
   - the renderer plus its helpers would leave fewer than two of the process's
     allowed CPUs to the rest of the system;
   - or any thread refuses.
+
+  Off Linux the policy asked for is the platform's High (no priority levels
+  or rlimits; the CPU rule still applies). On Windows the main thread sets it
+  as above. macOS takes a thread's QoS only from the thread itself, so there
+  the pool's helpers and the renderer set it on themselves as they start,
+  all or none through one startup barrier (as with a device's own policy):
+  if any of them refuses, every one goes back to normal, and the start waits
+  for that before it reads back what each holds.
 - **Lifetime.** Threads end at `stop()`, so nothing is restored. CPU affinity
   is never changed: threads keep the inherited mask.
 - **Bridges.** `host::setBridgeAudioPolicy` carries the applied background
@@ -1901,7 +1909,16 @@ first use, and no plug-in code runs early to warm it.
   snapshots stay immutable. Transactions opened before completion retain the
   hash on commit. If the originating branch has undone/deleted the take, or the
   project was replaced, the update is dropped. A save while the job is pending
-  writes a valid empty hash. Hash/read/sidecar failures leave it empty and emit
+  writes a valid empty hash. A first save closes the worker's reader of the scratch file while it
+  removes the file (a file that is open cannot be removed on Windows) and the worker reads it
+  again from the new place, so the hash still arrives; the decode worker that prepares media for
+  the plan is stopped for the move and asked again after it, and so is a file audition's decode.
+  A reader outside the engine registers with `EngineApp::addScratchReader`: the save calls it,
+  after the project points at the copies and before it removes the files, with the scratch media
+  folder; it returns once it has let go of every file there and gives back what the save calls
+  when it is done (the GUI's peak worker: `PeakService::holdUnder`). Readers on other threads
+  (offline render, freeze, consolidate and analysis jobs) are not held: each has a file open only
+  while it decodes it. Hash/read/sidecar failures leave it empty and emit
   `bus.post_failed` with a structured error. Adding the same bytes again reuses
   a media source whose hash is already known. Metadata for an import comes from the container's header
   (`audio::inspect`), never a decode: adding one file to many items costs one
@@ -2377,12 +2394,24 @@ instance).
   answer comes, in the order reset, stop, flush; a reset drops the carried
   notes, which came before it. A start not answered by the deadline returns
   false with `startUnanswered()` set; asked again, it returns the answer
-  (no second start). A stop reaches such an instance too, and the bridge
+  (no second start). Until then the callback only looks for that answer (an
+  atomic load, no wait, so those cycles are not late), stop, reset and flush
+  are kept, and the start is not judged by the late rule: it fails as hung
+  once the lifecycle deadline (5/2 of the bridge deadline plus 2 s) has
+  passed since it was posted (ADR-0101), a call off the callback that
+  reaches it waiting only the rest of that deadline. A stop reaches such an instance too, and the bridge
   stops an instance still processing before it deactivates it. `host::bridgeLateCalls()` counts late calls
   process-wide. Consecutive late calls spanning 50 ms fail the instance with
   the hung reason; the audio thread only sets the flag, and the main thread
   kills the process when it services the instance. Without a deadline the
   background rules below apply unchanged.
+  On Windows a timed wait waits on the done event together with a
+  high-resolution waitable timer the client creates with the instance, so it
+  ends by the deadline plus that timer's lateness, not a 15.6 ms timer tick
+  later (measured before: 15.7 ms against a 2.67 ms deadline). Without that
+  timer (before Windows 10 1803) it waits in whole milliseconds only while
+  more than two 16 ms ticks are left and spins on the done word, looking at
+  the event, for the rest, so it ends at the deadline (ADR-0102).
   Only the wake and each timed wait are inside `rt::ScopedSanctionedSyscall`,
   so the rtsan preset checks the rest of the path; the background wait
   (ADR-0013: `alive()`, kill) keeps one scope over its loop. The rtsan-only
@@ -2501,7 +2530,9 @@ is 0.001 linear (-60 dB); sub-floor readings do not wake main. Moving meters
 use GUI frame deadlines and remain disarmed; there is no per-block meter wake.
 
 `engine.restarting {reason}` announces restart; exhaustion emits
-`engine.error {reason, error}`.
+`engine.error {reason, error}`. A restart whose device has not taken the
+restored position within 1 s emits `engine.error {reason, restarted: true,
+error}`: the engine runs, and the position stays queued.
 The backend kind, block/options, transport position and loop are restored;
 playback stays stopped. There is no global main-thread safety poll.
 
@@ -2649,8 +2680,8 @@ harness. See the tooling README for schemas, limits and invocation details.
   refuses, so a retry that succeeds starts it clean; the next plan retries
   it. A bridged plug-in whose start is not answered by the live deadline
   (`Instance::startUnanswered()`, ADR-0081) has not refused: it is reset and
-  let go the same way, uncounted, and the next cycle asks again; one that
-  never answers fails as a hung bridge. Per-stage event storage is reserved for the most events any block-long
+  let go the same way, uncounted, and the next cycle looks again; one that
+  never answers fails as a hung bridge at the lifecycle deadline (ADR-0101). Per-stage event storage is reserved for the most events any block-long
   window holds, so a seek off the block grid never allocates. Plans share
   ownership of the session's TimeMap (a session version may be freed while
   its plan plays).
@@ -2732,7 +2763,20 @@ harness. See the tooling README for schemas, limits and invocation details.
   64-frame request, 0 xruns, final callback on the JACK thread.
 - **Control:** `engine.start {backend: jack|dummy, block, rate, force_graph}`, `engine.stop`,
   `engine.status`, `transport.play|pause|stop|seek|get`. Transport actions
-  wait (≤ 1 s) for two audio cycles so their answer is the new state;
+  wait (≤ 1 s) for two audio cycles so their answer is the new state; if
+  the device has not run them by then (a stalled device, a starved
+  renderer), the action is refused with `engine.transport`, whose hint
+  points at `engine.status`, rather than answered with the old state. The
+  request stays queued and takes effect when the device runs again, so it
+  is not to be repeated. A
+  recording started from stop under a scheduled playrate waits the same
+  way for the renderer to take its start, and is refused alike; a restart
+  whose device has not taken the restored position reports `engine.error`
+  with `restarted: true` (below). The 1 s is `transportWaitSeconds()`: tests raise
+  it to 60 s, so a starved runner never becomes a refusal (in process with
+  `setTransportWaitSeconds`, for a binary a test starts with
+  `SUPPLE_TRANSPORT_PATIENT=1`, which every engine and GUI ctest entry
+  sets), and a test of the refusal sets a short bound of its own.
   `transport.stop` returns to where play started. `<slug>-engine play FILE`
   plays a project through the device from the CLI.
 - **Anticipative processing** (ADR-0012, `EngineOptions`, default on): a

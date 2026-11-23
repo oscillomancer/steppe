@@ -44,19 +44,49 @@ if(SUPPLE_PLATFORM_LINUX)
   target_sources(engine PRIVATE src/jack_backend.cpp)
 endif()
 
-if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
-  # A stand-in libjack: the JACK backend is tested without a server or device.
-  add_library(engine-fake-jack MODULE tests/fake_jack.cpp)
-  set_target_properties(engine-fake-jack PROPERTIES PREFIX "" OUTPUT_NAME "fake-libjack")
-  supple_target_defaults(engine-fake-jack)
-  # Its handle types are its own (as a real libjack's, which is C and carries
-  # no signature for -fsanitize=function to check).
-  target_compile_options(engine-fake-jack PRIVATE $<$<CXX_COMPILER_ID:Clang>:-fno-sanitize=function>)
+# engine.tests: one source list for every platform, and a Linux addition for
+# what exists only there (the JACK backend through a stand-in libjack, and the
+# Linux memory/latency protections). A case inside a portable file that needs
+# Linux is fenced with a one-line reason (`SUPPLE_TEST_JACK` for JACK), so a
+# new test file runs on macOS and Windows unless it says why not.
+# SUPPLE_TEST_PORTABLE_ONLY builds the portable list alone on Linux: a local
+# check that no portable file reaches the Linux addition.
+option(SUPPLE_TEST_PORTABLE_ONLY "Build engine.tests without its Linux-only addition" OFF)
+set(_engine_linux_tests OFF)
+if(SUPPLE_PLATFORM_LINUX AND NOT SUPPLE_TEST_PORTABLE_ONLY)
+  set(_engine_linux_tests ON)
+endif()
+set(_engine_test_sources
+  tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_take_comp.cpp tests/test_audio_warp.cpp
+  tests/test_offline.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp
+  tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp
+  tests/test_realtime.cpp tests/test_audition.cpp tests/test_realtime_arming.cpp
+  tests/test_realtime_lookahead.cpp tests/test_realtime_playrate.cpp tests/test_app.cpp
+  tests/test_commands.cpp tests/test_context_commands.cpp tests/test_clip_launcher.cpp
+  tests/test_clip_player.cpp tests/test_clip_player_live.cpp tests/test_clip_player_rack.cpp
+  tests/test_clip_player_rate.cpp tests/test_clip_player_rate_commit.cpp tests/test_clip_player_rate_armed.cpp
+  tests/test_clip_player_rate_chain.cpp tests/test_clip_player_rate_wrap.cpp tests/test_clip_player_rate_live.cpp
+  tests/test_clip_player_follow.cpp tests/test_launch_access.cpp tests/test_scene_section.cpp
+  tests/test_scripts.cpp tests/test_strips.cpp
+  tests/test_plan_dump.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_patch_edits.cpp
+  tests/test_pdc.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_workers.cpp
+  tests/test_live_workers.cpp tests/test_meters.cpp tests/test_learn.cpp tests/test_dsp.cpp
+  tests/test_bridge_engine.cpp tests/test_offline_bridge.cpp tests/test_render.cpp tests/test_racks.cpp
+  tests/test_modulation_engine.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp
+  tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp
+  tests/test_rack_patches_play.cpp tests/test_sync.cpp tests/test_crash_commands.cpp
+  tests/test_load_overrides.cpp tests/test_suspects.cpp)
+if(_engine_linux_tests)
+  list(APPEND _engine_test_sources
+    tests/test_jack.cpp tests/test_runtime_protection.cpp)
+endif()
 
-  supple_add_tests(engine SOURCES tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_take_comp.cpp tests/test_audio_warp.cpp tests/test_offline.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_realtime.cpp tests/test_audition.cpp tests/test_realtime_arming.cpp tests/test_realtime_lookahead.cpp tests/test_realtime_playrate.cpp tests/test_app.cpp
-                   tests/test_commands.cpp tests/test_context_commands.cpp tests/test_clip_launcher.cpp tests/test_clip_player.cpp tests/test_clip_player_live.cpp tests/test_clip_player_rack.cpp tests/test_clip_player_rate.cpp tests/test_clip_player_rate_commit.cpp tests/test_clip_player_rate_armed.cpp tests/test_clip_player_rate_chain.cpp tests/test_clip_player_rate_wrap.cpp tests/test_clip_player_rate_live.cpp tests/test_clip_player_follow.cpp tests/test_launch_access.cpp tests/test_scene_section.cpp tests/test_scripts.cpp tests/test_strips.cpp tests/test_plan_dump.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_patch_edits.cpp tests/test_pdc.cpp
-                   tests/test_runtime_protection.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_jack.cpp tests/test_workers.cpp tests/test_live_workers.cpp tests/test_meters.cpp
-                   tests/test_learn.cpp tests/test_dsp.cpp tests/test_bridge_engine.cpp tests/test_offline_bridge.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_modulation_engine.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp tests/test_crash_commands.cpp tests/test_load_overrides.cpp tests/test_suspects.cpp LABELS rt SPLIT)
+if(SUPPLE_BUILD_TESTS)
+  supple_add_tests(engine SOURCES ${_engine_test_sources} LABELS rt SPLIT)
+  # Helpers with no test case of their own (a SPLIT entry for them would match nothing).
+  target_sources(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/host/clap-host/tests/shared_page.cpp
+                                      tests/native_files.cpp tests/native_cpus.cpp
+                                      tests/native_threads.cpp)
   # The longest engine file under ThreadSanitizer: it ran past the presets'
   # 600 s on a busy machine and took 363 s alone.
   set_tests_properties(engine.tests.test_realtime_playrate PROPERTIES TIMEOUT 1200)
@@ -66,24 +96,33 @@ if(SUPPLE_BUILD_TESTS AND SUPPLE_PLATFORM_LINUX)
                        PROPERTIES TIMEOUT 1200)
   target_include_directories(engine.tests PRIVATE src ${PROJECT_SOURCE_DIR}/plugins/common/include)
   target_include_directories(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/fuzz)
-  add_dependencies(engine.tests clap-host-fixtures clap-host-vst3-fixtures engine-fake-jack ${PRODUCT_SLUG}-bridge)
+  add_dependencies(engine.tests clap-host-fixtures clap-host-vst3-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)
   target_compile_definitions(engine.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>"
                              FIXTURE_VST3_PATH="${CMAKE_BINARY_DIR}/host/clap-host/test-vst3.vst3"
-                             FAKE_JACK_PATH="$<TARGET_FILE:engine-fake-jack>"
                              BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>"
                              STOCK_CLAP_DIR="${CMAKE_BINARY_DIR}/plugins/clap"
                              SUPPLE_SCRIPT_EXAMPLES="${PROJECT_SOURCE_DIR}/plugins/suite/examples"
-                             SUPPLE_RACK_GUIDE="${PROJECT_SOURCE_DIR}/skill/guides/rack.md")
-  target_link_libraries(engine.tests PRIVATE ${CMAKE_DL_LIBS})
+                             SUPPLE_RACK_GUIDE="${PROJECT_SOURCE_DIR}/skill/guides/rack.md"
+                             SUPPLE_EDITORS=$<BOOL:${SUPPLE_BUILD_GUI}>)
+  # Only Linux builds locally: this catches a POSIX-only header or call, or the
+  # JACK fixtures, outside a conditional in the portable list before native CI.
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME engine.portable-sources
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/portable_sources.py ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties(engine.portable-sources PROPERTIES LABELS engine)
 endif()
 
-if(SUPPLE_BUILD_TESTS AND NOT SUPPLE_PLATFORM_LINUX)
-  supple_add_tests(engine SOURCES tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_take_comp.cpp tests/test_audio_warp.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_clip_launcher.cpp tests/test_clip_player.cpp tests/test_clip_player_live.cpp tests/test_clip_player_rack.cpp tests/test_clip_player_rate.cpp tests/test_clip_player_rate_commit.cpp tests/test_clip_player_rate_armed.cpp tests/test_clip_player_rate_chain.cpp tests/test_clip_player_rate_wrap.cpp tests/test_clip_player_rate_live.cpp tests/test_clip_player_follow.cpp tests/test_launch_access.cpp tests/test_scene_section.cpp tests/test_groups.cpp tests/test_plan_dump.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp tests/test_audition.cpp tests/test_bridge_engine.cpp tests/test_offline_bridge.cpp tests/test_page_faults.cpp tests/test_idle_hold.cpp tests/test_playrate.cpp tests/test_mix_edits.cpp tests/test_patch_edits.cpp tests/test_pdc.cpp tests/test_render.cpp tests/test_racks.cpp tests/test_modulation_engine.cpp tests/test_rack_clip.cpp tests/test_rack_levels.cpp tests/test_module_library.cpp tests/test_rack_recipes.cpp tests/test_rack_patches.cpp tests/test_rack_patches_play.cpp tests/test_sync.cpp tests/test_crash_commands.cpp tests/test_load_overrides.cpp tests/test_suspects.cpp LABELS rt SPLIT)
-  target_include_directories(engine.tests PRIVATE src ${PROJECT_SOURCE_DIR}/plugins/common/include)
-  add_dependencies(engine.tests clap-host-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)
-  target_compile_definitions(engine.tests PRIVATE FIXTURE_CLAP_PATH="$<TARGET_FILE:clap-host-fixtures>" BRIDGE_PATH="$<TARGET_FILE:${PRODUCT_SLUG}-bridge>"
-                             STOCK_CLAP_DIR="${CMAKE_BINARY_DIR}/plugins/clap"
-                             SUPPLE_RACK_GUIDE="${PROJECT_SOURCE_DIR}/skill/guides/rack.md")
+if(SUPPLE_BUILD_TESTS AND _engine_linux_tests)
+  # A stand-in libjack: the JACK backend is tested without a server or device.
+  add_library(engine-fake-jack MODULE tests/fake_jack.cpp)
+  set_target_properties(engine-fake-jack PROPERTIES PREFIX "" OUTPUT_NAME "fake-libjack")
+  supple_target_defaults(engine-fake-jack)
+  # Its handle types are its own (as a real libjack's, which is C and carries
+  # no signature for -fsanitize=function to check).
+  target_compile_options(engine-fake-jack PRIVATE $<$<CXX_COMPILER_ID:Clang>:-fno-sanitize=function>)
+  add_dependencies(engine.tests engine-fake-jack)
+  target_compile_definitions(engine.tests PRIVATE SUPPLE_TEST_JACK=1 FAKE_JACK_PATH="$<TARGET_FILE:engine-fake-jack>")
+  target_link_libraries(engine.tests PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 if(SUPPLE_BUILD_TESTS)
@@ -107,11 +146,10 @@ target_compile_definitions(engine-bench PRIVATE
   BENCH_DRIVER="${PROJECT_SOURCE_DIR}/tools/bench/run.py"
   BENCH_RECIPE="${CMAKE_CURRENT_SOURCE_DIR}/bench/session.json"
   BENCH_PLUGINS="${CMAKE_BINARY_DIR}/plugins/clap")
-if(SUPPLE_BUILD_TESTS)
+if(SUPPLE_BUILD_TESTS AND _engine_linux_tests)
   target_sources(engine.tests PRIVATE tests/test_bench.cpp bench/session.cpp)
   target_include_directories(engine.tests PRIVATE bench)
-  target_compile_definitions(engine.tests PRIVATE BENCH_RECIPE="${CMAKE_CURRENT_SOURCE_DIR}/bench/session.json"
-                             SUPPLE_EDITORS=$<BOOL:${SUPPLE_BUILD_GUI}>)
+  target_compile_definitions(engine.tests PRIVATE BENCH_RECIPE="${CMAKE_CURRENT_SOURCE_DIR}/bench/session.json")
   add_test(NAME engine.tests.test_bench COMMAND engine.tests "-sf=*/test_bench.cpp")
   set_tests_properties(engine.tests.test_bench PROPERTIES LABELS "engine;rt" ENVIRONMENT
     "RTSAN_OPTIONS=halt_on_error=1;UBSAN_OPTIONS=print_stacktrace=1")
@@ -274,3 +312,15 @@ target_link_libraries(engine-playrate-project-bench PRIVATE supple::engine)
 supple_target_defaults(engine-playrate-project-bench)
 
 target_link_libraries(${PRODUCT_SLUG}-engine PRIVATE supple::diagnostics)
+
+if(SUPPLE_BUILD_TESTS)
+  # The engine waits for a device to act on a transport request (1 s, then
+  # engine.transport). On a starved runner a healthy dummy device took longer
+  # (Windows CI 45186989443), so every test here, and the engine binaries the
+  # Python ones start, waits as long as a test may (realtime.h,
+  # transportWaitSeconds); a test of the refusal sets its own short bound.
+  get_property(engine_tests DIRECTORY PROPERTY TESTS)
+  foreach(test ${engine_tests})
+    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "SUPPLE_TRANSPORT_PATIENT=1")
+  endforeach()
+endif()

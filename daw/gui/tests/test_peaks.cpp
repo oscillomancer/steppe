@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Supple Audio
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -199,6 +200,110 @@ TEST_CASE("the peak service builds once off-thread, caches on disk and loads the
         drainUntil([] { return false; }, 5);
     }
     std::filesystem::remove_all(dir.parent_path());
+}
+
+namespace {
+// The files this process holds open whose name ends with `name`: Linux only
+// (/proc), where a removed file that is still open is listed too.
+std::vector<std::string> openFilesNamed([[maybe_unused]] const std::string& name) {
+    std::vector<std::string> out;
+#if defined(__linux__)
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it("/proc/self/fd", ec), end; !ec && it != end;
+         it.increment(ec)) {
+        std::error_code link;
+        const auto target = std::filesystem::read_symlink(it->path(), link);
+        std::string text = target.string();
+        constexpr std::string_view gone = " (deleted)";
+        if (text.ends_with(gone)) text.resize(text.size() - gone.size());
+        if (!link && text.ends_with(name)) out.push_back(target.string());
+    }
+#endif
+    return out;
+}
+}  // namespace
+
+// A first save moves a fresh recording out of the scratch folder and removes
+// it there, which Windows refuses while the waveform worker has it open: a
+// hold makes the worker let go between two chunks and open nothing there.
+TEST_CASE("a hold makes the peak worker let go of the files under a folder until it ends") {
+    const auto dir = scratch("hold");
+    const auto media = dir / "media";
+    std::filesystem::create_directories(media);
+    const auto wav = media / "Vocal-1.wav";  // several 16384-frame chunks
+    REQUIRE(writeFileAtomic(wav, std::span<const std::uint8_t>(*audio::encodeWav(tone(100000)))));
+    // The owner's loop: a posted task runs when the test takes it; it waits for
+    // the next one without a time limit (no wall-clock decision).
+    std::mutex m;
+    std::condition_variable wake;
+    std::vector<std::function<void()>> posted;
+    auto post = [&](std::function<void()> f) {
+        {
+            std::lock_guard lock(m);
+            posted.push_back(std::move(f));
+        }
+        wake.notify_all();
+    };
+    auto drain = [&](bool wait) {
+        std::vector<std::function<void()>> now;
+        {
+            std::unique_lock lock(m);
+            if (wait) wake.wait(lock, [&] { return !posted.empty(); });
+            now.swap(posted);
+        }
+        for (auto& f : now) f();
+    };
+    peaks::PeakService service(dir / "cache", post);
+    std::vector<std::string> ready;
+    service.onReady = [&](const std::string& key) { ready.push_back(key); };
+    // The worker stops at its first chunk boundary until the hold is in place,
+    // then lingers there with the file open: a hold that returned before the
+    // worker let go would find it still open. (The pause decides nothing when
+    // the hold waits, as it must.)
+    std::atomic<bool> entered{false}, go{false};
+    service.readHook = [&](const std::filesystem::path&) {
+        if (!entered.exchange(true)) {
+            entered.notify_all();
+            go.wait(false);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    };
+    CHECK(service.get("", wav) == nullptr);  // a fresh recording: no hash yet
+    entered.wait(false);
+    std::function<void()> release;
+    std::thread holder([&] { release = service.holdUnder(media); });
+    while (!service.holding()) std::this_thread::yield();
+    go.store(true);
+    go.notify_all();
+    holder.join();  // returns once the worker has let go
+    // Nothing of the file is open: it can be removed, as a first save does
+    // after copying it, and the stopped read is no failure.
+    CHECK(openFilesNamed("Vocal-1.wav").empty());
+    const auto moved = dir / "song" / "Vocal-1.wav";
+    std::filesystem::create_directories(moved.parent_path());
+    std::filesystem::copy_file(wav, moved);
+    std::error_code removed;
+    std::filesystem::remove(wav, removed);
+    CHECK_FALSE(removed);
+    CHECK(service.stats().built == 0);
+    CHECK(service.stats().failed == 0);
+    CHECK_FALSE(service.failure("", wav));
+    // While held, nothing under the folder is queued.
+    REQUIRE(writeFileAtomic(media / "Vocal-2.wav",
+                            std::span<const std::uint8_t>(*audio::encodeWav(tone(4800)))));
+    CHECK(service.get("", media / "Vocal-2.wav") == nullptr);
+    // The hold ends: the owner hears of both at once (release posts them), and
+    // asks again where they are now.
+    release();
+    drain(false);
+    CHECK(ready.size() == 2);
+    CHECK(service.stats().built == 0);
+    CHECK(service.get("", moved) == nullptr);  // queued
+    while (ready.size() < 3) drain(true);      // built (or failed), then announced
+    const auto pyramid = service.get("", moved);
+    REQUIRE(pyramid);
+    CHECK(pyramid->frames() == 100000);
+    CHECK(service.stats().built == 1);
 }
 
 TEST_CASE("partial peak buckets weight RMS by the number of samples") {

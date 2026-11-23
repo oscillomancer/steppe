@@ -119,3 +119,5 @@ current state.
 | [0098](0098-clip-context.md) | Clips know the context | Accepted |
 | [0099](0099-three-step-describe-index.md) | A three-step describe index | Accepted |
 | [0100](0100-chord-tone-spelling.md) | Chord tones are spelled by their degree | Accepted |
+| [0101](0101-bridged-start-lifecycle-deadline.md) | A bridged start in the callback fails at the lifecycle deadline | Accepted |
+| [0102](0102-windows-live-wait-timer.md) | Windows live bridge waits end on a high-resolution timer | Accepted |

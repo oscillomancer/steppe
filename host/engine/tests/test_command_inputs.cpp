@@ -9,6 +9,16 @@
 #include "../../../tests/file_platform.h"
 #include "../../../tests/fuzz/command_inputs.h"
 
+// The engine waits for a device to act on a transport request (1 s, then
+// engine.transport); on a starved runner a healthy dummy device took longer
+// (Windows CI 45186989443), so this binary waits as long as a test may.
+namespace {
+[[maybe_unused]] const bool kTransportPatient = [] {
+    supple::engine::setTransportWaitSeconds(supple::engine::kPatientTransportSeconds);
+    return true;
+}();
+}  // namespace
+
 using namespace supple;
 
 TEST_CASE("registered engine argument mutations fail structurally without changing the project") {

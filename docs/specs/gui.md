@@ -383,7 +383,15 @@ vertex pair per column per visible item into a persistent buffer, and draws
 the visible span; scroll shifts the buffer window, zoom rebuilds only
 visible items. While a pyramid builds, the item draws a placeholder and a
 progress hint; editing never waits for peaks. Take rate/stretch maps
-item-time to source-time before sampling the pyramid.
+item-time to source-time before sampling the pyramid. The worker reads media a
+chunk at a time (`audio::readAudioHead`; whole-file reads only for formats it
+does not stream, none of them a recording), so a hold (`PeakService::holdUnder`)
+can stop it between two chunks: an unsaved project's first save holds the
+scratch media folder while it removes the recordings it moved (Windows cannot
+remove an open file; the app registers the hold with
+`EngineApp::addScratchReader`). A stopped read is no failure; held files are not
+opened, and the owner is told when the hold ends, so it asks for them again
+where they now are.
 
 ### 3.2 MIDI
 

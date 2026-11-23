@@ -6,9 +6,21 @@
 #                    git push origin <branch> refs/tags/ci/<branch>-<n>
 # Omit the annotation (or use platforms=all) to run all three platforms.
 # Delete the remote tag after the run: git push origin :refs/tags/ci/<branch>-<n>
+# An iteration run may narrow itself: -f targets='engine.tests ...' -f tests='^engine'
+# (the tests' executables must be among the targets), and chase an intermittent
+# failure with -f repeat=<n> -f scribble=true. Merges need a run without them.
 # Linux runs the full dev preset; macOS arm64 and Windows clang-cl run all
 # currently portable targets/tests. Port gates are listed in CONTRIBUTING.md.
 name: Build and test
+# A narrowed iteration run says so in its title, so it never reads as a full
+# run in `gh run list` or on the branch page (review round 111, E2).
+run-name: >-
+  ${{ github.event_name == 'push' && format('{0} {1}', github.workflow, github.ref_name)
+  || format('{0} ({1}){2}', github.workflow, inputs.platforms,
+  (inputs.targets != '' || inputs.tests != '' || inputs.repeat != '' || inputs.scribble)
+  && format(' ITERATION, not a merge gate: targets "{0}", tests "{1}", repeat "{2}", scribble {3}',
+  inputs.targets, inputs.tests, inputs.repeat, inputs.scribble)
+  || '') }}
 
 on:
   workflow_dispatch:
@@ -18,14 +30,35 @@ on:
         type: choice
         options: [linux, macos, windows, all]
         default: all
+      # Iteration runs only; a run that gates a merge leaves both empty.
+      targets:
+        description: Build only these targets (space-separated; empty builds everything)
+        type: string
+        default: ''
+      tests:
+        description: Run only the CTest entries matching this regex (empty runs all)
+        type: string
+        default: ''
+      # Chasing an intermittent failure: rerun the selected tests until one
+      # fails, with junk in fresh and freed heap memory if asked.
+      repeat:
+        description: Rerun each selected test until it fails, at most this many times (empty runs once)
+        type: string
+        default: ''
+      scribble:
+        description: Junk-fill heap memory (macOS MallocPreScribble and MallocScribble, Linux MALLOC_PERTURB_)
+        type: boolean
+        default: false
   push:
     tags: ['ci/**']
 
 permissions:
   contents: read
 
+# Dispatches for different platforms on one branch run side by side; a new
+# one for the same platforms supersedes the old (the jobs' own groups too).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.platforms || 'all' }}
   cancel-in-progress: true
 
 env:
@@ -202,15 +235,27 @@ jobs:
         # compiler concurrency on every runner.
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{ matrix.platform == 'macos' && '2' || '6' }}
+          SUPPLE_CI_TARGETS: ${{ inputs.targets }}
+          SUPPLE_CI_TESTS: ${{ inputs.tests }}
+          SUPPLE_CI_REPEAT: ${{ inputs.repeat }}
+          SUPPLE_CI_SCRIBBLE: ${{ inputs.scribble }}
         run: |
+          if [[ -n "$SUPPLE_CI_TARGETS$SUPPLE_CI_TESTS$SUPPLE_CI_REPEAT" || "$SUPPLE_CI_SCRIBBLE" == true ]]; then
+            narrowed="targets '$SUPPLE_CI_TARGETS', tests '$SUPPLE_CI_TESTS', repeat '$SUPPLE_CI_REPEAT', scribble ${SUPPLE_CI_SCRIBBLE:-false}"
+            narrowed="${narrowed//[$'\r\n%']/ }"
+            echo "::warning title=Iteration run::not a merge gate: $narrowed"
+            printf '**Iteration run, not a merge gate:** %s\n' "$narrowed" >> "$GITHUB_STEP_SUMMARY"
+          fi
           build_log="$RUNNER_TEMP/native-build.log"
-          if cmake --build --preset ${{ matrix.preset }} --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" -- -k 0 2>&1 | tee "$build_log"; then
+          target_args=()
+          for target in $SUPPLE_CI_TARGETS; do target_args+=(--target "$target"); done
+          if cmake --build --preset ${{ matrix.preset }} "${target_args[@]}" --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" -- -k 0 2>&1 | tee "$build_log"; then
             :
           elif [[ '${{ matrix.platform }}' == windows ]] && tr -d '\000' < "$build_log" | grep -F 'The process cannot access the file because it is being used by another process.' > /dev/null; then
             # Temporary scanner/file locks can race manifest embedding. Ninja
             # has finished the other targets; retry only its unfinished work.
             sleep 1
-            cmake --build --preset ${{ matrix.preset }} --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" -- -k 0
+            cmake --build --preset ${{ matrix.preset }} "${target_args[@]}" --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" -- -k 0
           else
             exit 1
           fi
@@ -220,7 +265,12 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: '1'
           TMPDIR: /tmp
           SUPPLE_PICTURE_OUTPUT_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/pictures
-        run: xvfb-run -a -s '-screen 0 1920x1080x24' ctest --preset dev
+          SUPPLE_CI_TESTS: ${{ inputs.tests }}
+          SUPPLE_CI_REPEAT: ${{ inputs.repeat }}
+          SUPPLE_CI_SCRIBBLE: ${{ inputs.scribble }}
+        run: |
+          if [[ "$SUPPLE_CI_SCRIBBLE" == true ]]; then export MALLOC_PERTURB_=165; fi
+          xvfb-run -a -s '-screen 0 1920x1080x24' ctest --preset dev ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
       # The runner's desktop is 1024x768, smaller than the stock editors and
       # the 1320x840 the probes resize them to; win32-embedding can only see
       # what is on screen.
@@ -236,9 +286,18 @@ jobs:
         if: matrix.platform != 'linux'
         env:
           SUPPLE_PICTURE_OUTPUT_DIR: ${{ github.workspace }}/build/${{ matrix.preset }}/pictures
+          SUPPLE_CI_TESTS: ${{ inputs.tests }}
+          SUPPLE_CI_REPEAT: ${{ inputs.repeat }}
+          SUPPLE_CI_SCRIBBLE: ${{ inputs.scribble }}
         # The macOS runner has three cores: six tests at once there pushed the
         # instruments' reset, state and validator checks past their timeouts.
-        run: ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }}
+        # libmalloc reads MallocScribble when it is set at all, even empty, so
+        # it is exported only when asked. Windows has no counterpart here.
+        run: |
+          if [[ "$SUPPLE_CI_SCRIBBLE" == true && '${{ matrix.platform }}' == macos ]]; then
+            export MallocPreScribble=1 MallocScribble=1
+          fi
+          ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
       - name: Save Linux compiler cache
         if: always() && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4

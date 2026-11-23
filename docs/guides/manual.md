@@ -142,7 +142,13 @@ keeps a copy of the old one beside it as `<file>.pre-branches.bak`.
 
 Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
-save moves them into `media/` beside the project file. While a recording runs, a
+save moves them into `media/` beside the project file; a file that could not be removed from
+the unsaved folder afterwards stays there, and the save warns with its path (the project
+already uses the copy; delete the old one by hand). On Windows that is a file something still
+has open: the waveform display of a recording you saved at once, a render or freeze still
+running, or another program. After you quit and start Steppe again,
+that file is in the earlier run's unsaved folder, which the list of unsaved projects to recover
+shows; recover it or delete it there. While a recording runs, a
 project cannot be saved for the first time, or saved as into another
 folder: stop recording first, and its files move or are copied then.
 Saving in place works while recording. Quitting, or starting

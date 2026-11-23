@@ -61,6 +61,15 @@ test → Run workflow, or
 Choices are `linux`, `macos`, `windows`, and `all` (the default).
 Ordinary branch pushes never start a build.
 
+An iteration run may narrow itself with `-f targets='engine.tests'` (build
+only these) and `-f tests='^engine\.tests\.test_app$'` (a CTest regex). To chase an
+intermittent failure, `-f repeat=<n>` reruns each selected test until it
+fails, at most n times, and `-f scribble=true` junk-fills fresh and freed
+heap memory (`MallocPreScribble`/`MallocScribble` on macOS, `MALLOC_PERTURB_`
+on Linux; nothing on Windows). A run that gates a merge uses none of them; a
+run that uses any says `ITERATION, not a merge gate` in its title, with a
+warning and a summary line naming the inputs.
+
 A deliberate CI tag also starts a run:
 
 ```sh
@@ -126,8 +135,14 @@ core-base native waits/wakes/thread setup, command bus, control-protocol/MCP,
 Lua, DSP/Console 9/analysis, MIDI/notation/timeline/optimizer,
 session model, plugin support, all stock SDK-free DSP engines, and the
 script compiler/runtime and suite semantic layer. Audio-file I/O, engine/CLI,
-dummy/offline rendering, sandbox and their portable tests run on all three
-platforms. Native core-base sources/tests, JSON-RPC control transport/model loop
+dummy/offline rendering, sandbox and their tests run on all three platforms:
+`engine.tests` builds one source list everywhere (`host/engine/CMakeLists.txt`,
+`_engine_test_sources`) and adds only Linux's own on Linux. A case in a
+portable file that needs Linux is fenced with a one-line reason above it, and
+`engine.portable-sources` fails on a POSIX-only header or call outside a
+conditional there that names a platform (`__linux__`, `_WIN32`, `__APPLE__`,
+`SUPPLE_TEST_JACK`). `SUPPLE_TEST_PORTABLE_ONLY=ON` builds the portable list
+alone on Linux, a local check before native CI. Native core-base sources/tests, JSON-RPC control transport/model loop
 and standalone MCP/proxy no longer share the hosting gate (ADR-0035).
 Linux-specific descriptor/permission/signal probes and memory-residency/rlimit
 tests remain guarded with portable boundary coverage alongside them.
@@ -136,6 +151,14 @@ These gates are explicit, with no no-op RT implementations:
 | Gate | Off on | Reason / follow-up |
 |---|---|---|
 | JACK/fake JACK and hardware capacity benchmark | macOS, Windows | Linux graph/hardware tooling; native device audio uses PortAudio (ADR-0038) |
+| `engine.tests`: `test_jack`, `test_bench` and six JACK cases in `test_app`/`test_realtime` (`SUPPLE_TEST_JACK`) | macOS, Windows | the JACK backend through the stand-in libjack (above) |
+| `engine.tests`: `test_runtime_protection` | macOS, Windows | Linux THP, mlock and `/dev/cpu_dma_latency`; off Linux, `test_app` checks that the memory lock and CPU idle request refuse with a Linux-only hint |
+| `engine.tests` case: recording header errors through an operating-system fault (`test_realtime`) | macOS, Windows | a `/proc/self/fd` fault on the recorder's descriptor; the same error is checked on every platform through the writer's I/O seam |
+| `engine.tests` checks inside the first-save and audition cases (`test_app`): no open descriptor on a scratch file (`openFilesNamed`, `/proc/self/fd`) | macOS, Windows | a removed file that is still open is listed only on Linux; the same cases check on every platform that the scratch folder is gone and no warning came, which an open handle fails on Windows |
+| `engine.tests` cases: the first save that cannot remove a scratch file (`test_app`) | none (two mechanisms) | `HoldFile`: Windows opens the file with no delete sharing; elsewhere the folder is made read-only (not as root, where the case returns) |
+| `engine.tests` cases: the restricted CPU mask (`test_realtime`, `test_workers`) | macOS | macOS has no CPU affinity; Linux restricts the thread and Windows the process (`native_cpus.h`), as `allowedCpuCount` reads them |
+| `engine.tests` case: elevation refusals (`test_realtime`) | macOS, Windows | Linux's `RLIMIT_RTPRIO`/`RLIMIT_RTTIME`, which the other platforms do not have |
+| `engine.tests` case: CLAP posix-fd service (`test_app`) | Windows | CLAP's posix-fd extension is not offered on Windows, which the test checks |
 
 Research GUI spikes and host fuzzers reject configuration on non-Linux
 platforms rather than silently building incomplete targets. Renders must

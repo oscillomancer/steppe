@@ -107,8 +107,8 @@ TEST_CASE("live launches through the bridge play as the offline replay" *
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("looped " << bool(loop) << ", anticipative " << options.anticipative);
             const std::vector<Step> steps{{10, {request("tr_1", "cl_1")}}};
-            const Live live =
-                playLive(s, p.app->projectDir(), test::patient(options), 128, frames, steps, loop);
+            const Live live = playLive(s, p.app->projectDir(), engine::test::patient(options), 128,
+                                       frames, steps, loop);
             REQUIRE(live.log.size() == 1);
             InstancePool pool = makePool();
             OfflineSettings settings;
@@ -134,8 +134,8 @@ TEST_CASE("a clip chain through the bridge plays as the offline replay" *
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("looped " << bool(loop) << ", anticipative " << options.anticipative);
             const std::vector<Step> steps{{10, {request("tr_1", "cl_1")}}};
-            const Live live =
-                playLive(s, p.app->projectDir(), test::patient(options), 128, frames, steps, loop);
+            const Live live = playLive(s, p.app->projectDir(), engine::test::patient(options), 128,
+                                       frames, steps, loop);
             REQUIRE(live.log.size() == 1);
             InstancePool pool = makePool();
             OfflineSettings settings;
@@ -206,6 +206,12 @@ TEST_CASE("live launches of clips with take chains play as the offline replay" *
                 settings.loop = loop;
                 auto offline = renderOffline(s, pool, settings);
                 REQUIRE(offline);
+                // Said only on a failure (macOS once differed here, intermittently).
+                INFO(differences(live.left, live.latency, offline->audio.channels[0], 48000 * 5));
+                INFO("live steps and counters:" << live.report);
+                INFO("replay log:" << describe(live.log));
+                INFO("offline warnings:" << joined(offline->warnings));
+                INFO("media at the compare:" << mediaPresence(s, p.app->projectDir()));
                 CHECK(maxDiff(live.left, live.latency, offline->audio.channels[0], 48000 * 5) ==
                       0.0);
                 settings.launches.clear();
