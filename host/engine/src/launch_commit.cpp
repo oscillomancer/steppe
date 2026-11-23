@@ -375,6 +375,25 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const bool fadeOut = x.to < perf.frames && !heldBy(x, x.to);
             const double speed = take.playrate > 0 ? take.playrate : 1.0;
             const std::string path = at + "/launches";
+            // The clip's own fades, in song samples as its player has them
+            // (S3 step C, Q4): each piece takes them on the pass edges it has.
+            const std::int64_t Pf = midi ? 0 : time::samplesAt(P, rate);
+            const std::int64_t Lin = midi ? 0 : time::samplesAt(clip.fadeIn.length, rate);
+            const std::int64_t Lout = midi ? 0 : time::samplesAt(clip.fadeOut.length, rate);
+            const bool fades = Pf > 0 && (Lin > 0 || Lout > 0);
+            // Rule 7: what an item's fades, each running from its own edge,
+            // cannot write.
+            const auto refuse = [&](std::int64_t frame, const std::string& what) {
+                return Error("launch.commit.fade",
+                             clipId.str() + " on " + track.str() + " " + what + " at beat " +
+                                 json::formatDouble(beatAt(double(perf.start + frame))) +
+                                 ", which an item's fades, each running from its own edge, cannot "
+                                 "write",
+                             path,
+                             "capture it again with its switches outside the clip's fades and the "
+                             "transport loop's wrap off them, or set the clip's fades to 0 "
+                             "(clip.set) first; the performance is kept");
+            };
             // How the plan played this clip, after its budget (follow_tables.h): what each laid
             // take follows. A drum-only clip, one with no readable key, and audio follow nothing.
             model::ClipFollow outcome = model::ClipFollow::None;
@@ -409,16 +428,53 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                     model::placeItem(now, item, beat0, beat1 - beat0);
                     if (phase != 0) envelopePos = [phase](double b) { return b - phase; };
                 } else {
-                    if (lastOfStretch && fadeOut) end += F;
+                    // The piece's phases at its edges, and how it ends: a switch
+                    // inside its pass's fade-out lets that fade stand in, to the
+                    // pass's end (rule 4); a switch on a pass's end goes out in
+                    // the next pass, laid by the caller; else the switch's
+                    // crossfade.
+                    const auto ph0 = static_cast<std::int64_t>(phase);
+                    const std::int64_t ph1 = ph0 + (f1 - f0);
+                    const bool switched = lastOfStretch && fadeOut;
+                    const bool standIn =
+                        fades && switched && Lout > 0 && ph1 >= Pf - Lout && ph1 < Pf;
+                    const bool crossfades = switched && !standIn && !(fades && ph1 == Pf);
+                    if (fades) {
+                        if (ph0 > 0 && ph0 < Lin)
+                            return refuse(f0, "would start inside its fade-in");
+                        if (!standIn && Lout > 0 &&
+                            (crossfades ? ph1 + F > Pf - Lout : ph1 > Pf - Lout && ph1 < Pf))
+                            return refuse(f1, crossfades ? "would fade out over its own fade-out"
+                                                         : "would end inside its fade-out");
+                        if (standIn) {
+                            // Rule 5: a further switch while it sounds cuts it.
+                            const std::int64_t standEnd = f0 + (Pf - ph0);
+                            if (i + 1 < stretches.size() && stretches[i + 1].to < standEnd &&
+                                stretches[i + 1].to < perf.frames)
+                                return refuse(stretches[i + 1].to,
+                                              "would be cut while its fade-out stands in");
+                            if (nextWrap(f1) < standEnd)
+                                return refuse(nextWrap(f1),
+                                              "would wrap while its fade-out stands in");
+                        }
+                    }
+                    if (standIn) end = perf.start + f0 + (Pf - ph0);
+                    if (crossfades) end += F;
                     const double startSec = double(perf.start + f0) / rate;
                     model::placeItemSeconds(now, item, startSec, double(end) / rate);
                     const double phaseSec = phase / rate;
                     envelopePos = [map, startSec, pos, phaseSec](double secs) {
                         return map->beatAt(startSec + secs - phaseSec) - pos;
                     };
-                    if (firstOfStretch && fadeIn)
+                    // On a pass's start its fade-in, which stands in for the
+                    // switch's (rule 3); on a pass's end its fade-out.
+                    if (ph0 == 0 && Lin > 0)
+                        item.fadeIn = clip.fadeIn;
+                    else if (firstOfStretch && fadeIn)
                         item.fadeIn = model::Fade{double(F) / rate, model::FadeShape::Linear, 0.0};
-                    if (lastOfStretch && fadeOut)
+                    if ((standIn || (ph1 == Pf && !crossfades)) && Lout > 0)
+                        item.fadeOut = clip.fadeOut;
+                    else if (crossfades)
                         item.fadeOut = model::Fade{double(F) / rate, model::FadeShape::Linear, 0.0};
                 }
                 item.loop = loopItem || item.loop;
@@ -518,7 +574,6 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                         }
                     }
                 } else {
-                    const std::int64_t Pf = time::samplesAt(P, rate);
                     if (Pf <= 0) break;
                     const std::int64_t q = Sg - x.e->anchor;
                     std::int64_t limit = h;
@@ -535,6 +590,11 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                             const std::int64_t e = std::min(limit, f + (Pf - ph));
                             SUPPLE_TRY(
                                 lay(f, e, 0, 0, double(ph), wholeLoop, f == x.from, e == x.to));
+                            // Switched on its pass's end, a clip with fades has
+                            // begun its next pass: the crossfade long, from its
+                            // fade-in (Q4; the player's held pass).
+                            if (fades && !once && fadeOut && e == x.to && ph + (e - f) == Pf)
+                                SUPPLE_TRY(lay(e, e, 0, 0, 0.0, wholeLoop, false, true));
                             f = e;
                             if (once) break;
                         }

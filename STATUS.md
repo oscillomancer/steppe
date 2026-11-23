@@ -286,6 +286,14 @@ instructions are in `docs/guides/installing.md`.
     over 5 ms.
   - A clip's phase is a function of the song position and its anchor.
     `once` and the loop window play as specified.
+  - An audio clip's `fade_in` and `fade_out` (schema 2.22, S3 step C)
+    fade every pass, at unity and under a playrate, and stand in for a
+    switch's 5 ms fades: a launched clip with a fade-in starts with it
+    alone, and one switched away inside its fade-out plays it out to its
+    pass's end. `launch.commit` lays such a clip one item per pass with
+    its fades, as heard; what an item's fades cannot write (a piece
+    starting or ending inside a clip fade, a cut fade-out) is refused with
+    `launch.commit.fade`.
   - `launch.state` (and `Engine::launchState()` for the GUI) reports what
     each track plays as heard, the clip's position, and what is queued.
   - The engine logs every applied launch. The tests replay that log

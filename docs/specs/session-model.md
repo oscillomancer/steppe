@@ -1422,7 +1422,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `scene` names the scene when `launch.scene` launched it (none for a
   track's own launch), so a commit knows a scene was launched whole.
   Errors `launch.capture` (nothing captured), `launch.commit` (a captured
-  track or clip is gone), `item.locked`, `clip.unsupported`); `scene.insert`,
+  track or clip is gone), `item.locked`, `clip.unsupported`,
+  `launch.commit.fade` (a piece would start or end inside an audio clip's
+  own fade: engine.md "Committing it")); `scene.insert`,
   `scene.capture {region}`, `arrangement.build {sequence}` (L4a: "Scenes and
   clips", "Scene ↔ section").
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,

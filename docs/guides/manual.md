@@ -1790,7 +1790,12 @@ the others. Launching a clip while stopped starts playback with it from
 the play position. A track whose clips have take FX with latency waits
 that much longer, so the clip is still heard on its boundary. At the
 switch, notes still sounding end and audio crossfades over 5 ms. Returning to the arrangement does not restart a
-note already under way: it sounds from its next start. A clip keeps its
+note already under way: it sounds from its next start. An audio clip can
+fade in and out on every pass (`clip.set {fade_in, fade_out}`, in seconds,
+with the same shapes as an item's fades). Its own fades replace the 5 ms
+switch: a launched clip with a fade-in starts with its own fade, and a
+clip launched away during its fade-out finishes that fade-out, overlapping
+the incoming clip by up to the fade's length. A clip keeps its
 place against the bars, so relaunching a loop of whole bars stays in
 phase.
 
@@ -1820,7 +1825,12 @@ heard, even if the transport loop jumped back meanwhile. On each track that
 played a clip or was stopped, those stretches replace what the timeline had
 there; tracks that stayed on the arrangement are left alone. Each clip
 becomes copies of its takes, starting where the clip was in its loop, with
-the 5 ms switch crossfades as item fades. MIDI is copied, so editing the
+the 5 ms switch crossfades as item fades, and an audio clip's own fades on
+the items where its passes start and end. When an item's fades cannot say
+what you heard (the capture began or ended inside a clip's fade, the loop
+jumped there, or a switch cut short a fade-out), the commit is refused with
+`launch.commit.fade` and the performance kept: set the clip's fades to 0,
+or capture it again. MIDI is copied, so editing the
 items leaves the clips alone; `launch.commit {pooled: true}` shares it
 instead. Stopping, seeking or changing the loop ends a capture, and
 committing again writes the same performance over itself.

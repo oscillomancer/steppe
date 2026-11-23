@@ -219,6 +219,41 @@ inline void twoTracks(Project& p) {
     p.run("fx.patch.merge", R"({"fx": "fx_2", "patch": {"params": {"latency": "short"}}})");
 }
 
+// S3 step C: tr_1 holds three audio clips of ramps, no arrangement. cl_1
+// has fades: a 0.3 s period (14400 frames), a 0.1 s fade-in (4800) and a
+// 0.12 s fade-out (5760, from phase 8640); cl_2 and cl_3 none, cl_3 on the
+// beat.
+inline void fadingClips(Project& p) {
+    p.run("scene.add", R"({"name": "C"})");  // sc_3
+    for (const char* scene : {"sc_1", "sc_2", "sc_3"}) {
+        auto args = j(R"({"track": "tr_1"})");
+        args["scene"] = scene;
+        args["audio_file"] = p.ramp((std::string(scene) + ".wav").c_str(), 48000).string();
+        p.runArgs("clip.add", args);
+    }
+    p.run("clip.set", R"({"clip": "cl_1", "length": 0.3, "fade_in": 0.1, "fade_out": 0.12})");
+    p.run("clip.set", R"({"clip": "cl_3", "quantize": "beat"})");
+}
+// Its performance, captured: cl_1 on bar 2 (its fade-in stands in for the
+// switch's, rule 3); cl_2 on bar 3, 9600 into cl_1's seventh pass, inside
+// its fade-out, which stands in to the pass's end at 196800 (rule 4); cl_1
+// on bar 4; cl_3 on beat 15 (360000), exactly on cl_1's fifth pass end,
+// where cl_1 goes out in its next pass from its fade-in. `logged` waits for
+// the n-th launch to be logged.
+template <typename Logged>
+inline void fadingPerformance(Project& p, Logged&& logged) {
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+    logged(1);
+    p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 3
+    logged(2);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 4
+    logged(3);
+    // Past beat 14 (336000), so the beat's boundary is 15.
+    logged(-345000);
+    p.run("launch.clip", R"({"clip": "cl_3"})");
+    logged(4);
+}
+
 // tr_1 plays the sine: four bars of whole notes, and a clip of two eighth
 // notes a bar. tr_2's rack turns tr_1's notes into its gate: a Notes module
 // sourcing tr_1 (with a device, which makes the rack live, so the anticipative

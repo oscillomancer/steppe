@@ -656,6 +656,21 @@ the same.*
   The arrangement a loop repeated is not copied. What it writes plays as
   the capture was heard: exactly away from the switches, and to rounding
   through the fades.
+  An audio clip with fades (S3 step C, Q4) is laid one item per pass,
+  each with the clip's fade-in where it starts on a pass's start and its
+  fade-out where it ends on a pass's end. A switch's fades give way to
+  them as live: a piece starting on a pass's start with a fade-in takes no
+  5 ms fade-in (rule 3); a switch inside the pass's fade-out runs the
+  piece on to the pass's end under the clip's fade-out, with no 5 ms
+  fade-out (rule 4); a switch exactly on a pass's end lays the next
+  pass's first 5 ms, with the clip's fade-in and the switch's fade-out.
+  An item's fade runs from its own edge, so what a piece would cut out of
+  a clip's fade is refused with `launch.commit.fade`, naming the clip,
+  the track and the beat, the performance kept (rule 7): a piece
+  starting inside the fade-in or ending inside the fade-out (the capture's
+  start or end, or a loop wrap, there), a switch whose 5 ms would reach
+  into the fade-out from before it, and a stand-in that a further switch
+  cuts (rule 5) or a loop wrap crosses.
   A scene launched whole also writes a section. `launch.scene` logs each
   clip it starts with the scene's id, all on one running frame; the commit
   writes a section for a scene whose launches at a frame all still hold (a
