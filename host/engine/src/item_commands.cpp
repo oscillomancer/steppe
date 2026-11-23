@@ -1025,35 +1025,27 @@ void registerItemCommands(cmd::Registry& registry) {
             {
                 const bool heard = shown == &heardSeq;
                 const double ppq = shown->ppq > 0 ? static_cast<double>(shown->ppq) : 960.0;
-                const bool own = !clip && !heard && take->follow != model::ClipFollow::None;
                 // A source note sounds where `model::notePlace` puts it (the take's start offset
-                // and playrate), and reads the take's context at its own context beat (phase and
-                // period): the mapping the roll uses. A heard note is already in item time. A
-                // clip's note reads the clip beat it first sounds at, through the loop window,
-                // else where its content sits kept inside the clip, as midi.edit reads it
-                // (clipNoteContext). A place before the song's start, where nothing sounds,
-                // reads beat 0's context, as the roll does.
-                options.placeAt = [&s, clip, own, heard, take, start, ppq](std::int64_t tick) {
+                // and playrate), and a following take's reads its own context at its context beat
+                // (phase and period). A heard note is already in item time. A clip's note reads
+                // the clip beat it first sounds at, through the loop window, else where its
+                // content sits kept inside the clip, as midi.edit reads it (clipNoteContext). A
+                // place before beat 0 reads beat 0's context. The roll's labels read the same
+                // functions (model::writtenNamePlace and the others).
+                options.placeAt = [&s, clip, heard, take, start, ppq](std::int64_t tick) {
                     const double beat = static_cast<double>(tick) / ppq;
-                    if (heard) {
-                        const double at = start + beat + model::kPlaceSlack;
-                        return harmony::Place{model::keyAt(s, at), model::chordAt(s, at)};
-                    }
-                    const model::NotePlace where =
-                        model::notePlace(*take, clip ? 0.0 : start, beat);
+                    if (heard) return model::songNamePlace(s, start + beat);
                     if (clip) {
                         const auto sounds =
                             detail::clipSoundingBeats(*clip, *take, static_cast<int>(ppq), tick);
-                        const double at =
-                            (sounds.empty() ? std::clamp(where.songBeat, 0.0,
-                                                         std::max(0.0, clip->length - 1.0 / 960.0))
-                                            : sounds.front()) +
-                            model::kPlaceSlack;
-                        return harmony::Place{model::keyAt(*clip, at), model::chordAt(*clip, at)};
+                        const double content = model::notePlace(*take, 0.0, beat).songBeat;
+                        return model::clipNamePlace(
+                            *clip, sounds.empty()
+                                       ? std::clamp(content, 0.0,
+                                                    std::max(0.0, clip->length - 1.0 / 960.0))
+                                       : sounds.front());
                     }
-                    if (own) return model::takePlaceAt(take->context, where.contextBeat, true);
-                    const double at = std::max(0.0, where.songBeat) + model::kPlaceSlack;
-                    return harmony::Place{model::keyAt(s, at), model::chordAt(s, at)};
+                    return model::writtenNamePlace(s, *take, start, beat);
                 };
             }
             auto text = notation::decompile(*shown, options);

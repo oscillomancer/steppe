@@ -1667,8 +1667,10 @@ under, and a take's context phase and period decide the context beat. A clip's n
 reads the clip beat it first sounds at through the clip's loop window, else (it never
 sounds) where its content sits, kept inside the clip: the beat `midi.edit`'s degrees
 read; one before the clip's start reads the clip's context at beat 0. A place before
-the song's start, where nothing sounds, reads the song's context at beat 0, as the
-roll does. A key change inside an item changes the names where it
+the song's start, where nothing sounds, reads the song's context at beat 0. The
+places are `model::writtenNamePlace` (an item's written note), `clipNamePlace` and
+`songNamePlace` (`follow.h`), which the piano roll's labels and messages read too, so
+the two name a note alike. A key change inside an item changes the names where it
 holds, and an item with no chord and one key reads as before.
 
 **Lead sheet.** `context.get`'s `text` and `context.write {text}` use one line per

@@ -301,6 +301,23 @@ harmony::Followed soundsAt(const PlaceReading& place, int channel, int key) {
                            chords ? harmony::FollowMode::Chords : harmony::FollowMode::Key);
 }
 
+harmony::Place songNamePlace(const Session& s, double songBeat) {
+    const double at = std::max(0.0, songBeat) + kPlaceSlack;
+    return harmony::Place{keyAt(s, at), chordAt(s, at)};
+}
+
+harmony::Place clipNamePlace(const Clip& clip, double clipBeat) {
+    const double at = std::max(0.0, clipBeat) + kPlaceSlack;
+    return harmony::Place{keyAt(clip, at), chordAt(clip, at)};
+}
+
+harmony::Place writtenNamePlace(const Session& s, const Take& take, double itemStartBeat,
+                                double unwrappedSourceBeat) {
+    const NotePlace where = notePlace(take, itemStartBeat, unwrappedSourceBeat);
+    if (take.follow != ClipFollow::None) return takePlaceAt(take.context, where.contextBeat, true);
+    return songNamePlace(s, where.songBeat);
+}
+
 // --- what a note sounds as ----------------------------------------------------------------
 
 harmony::Followed soundingKey(std::span<const ContextPoint> context, ClipFollow follow,
