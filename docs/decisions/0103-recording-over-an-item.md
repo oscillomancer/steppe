@@ -49,7 +49,7 @@ timeline start have clipped it).
    well: the item becomes the pieces before, the pass, and after, as `take.comp` makes them (one
    undo step). The seams of an existing comp are rebuilt from the crossfade `take.comp.get`
    reports (a user's 40 ms linear comp stays 40 ms linear; seams that differed by hand become
-   uniform, as any `take.comp` makes them). A pass that covers the whole of a lone item makes the
+   uniform, as any `take.comp` makes them, and `record.comp_uniform` says so). A pass that covers the whole of a lone item makes the
    new take heard whole with no comp; over a whole comp of several pieces it goes through
    `take.comp` with a single span, which joins the neighbours that now play one take (kept apart
    they would swell by 3 dB across each old equal-power seam). Loop passes are appended in order, one

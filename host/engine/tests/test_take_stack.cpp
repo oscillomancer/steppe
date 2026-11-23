@@ -511,6 +511,7 @@ TEST_CASE("a partial pass over a comp leaves its other seams as they were") {
     CHECK(got.find("crossfade")->asDouble() == doctest::Approx(0.04));
     CHECK(got.find("crossfade_shape")->asString() == "linear");
     CHECK(got.find("uniform")->asBool());
+    CHECK_FALSE(StackFixture::warned((*done)[0], "record.comp_uniform"));  // nothing was hand-set
 }
 
 TEST_CASE("a pass over a whole comp joins the pieces: flat across the old seams") {
@@ -653,6 +654,28 @@ TEST_CASE("a frozen track cannot be armed, and an armed track cannot be frozen")
         CHECK(s.tracks.find(model::Id{model::Kind::Track, 1})->record.armed);
         CHECK_FALSE(s.tracks.find(model::Id{model::Kind::Track, 2})->record.armed);
     }
+}
+
+TEST_CASE("a partial pass that makes hand-set seams uniform says so") {
+    StackFixture f;
+    f.run("take.add", R"({"item":"it_1","from":"tk_1"})");
+    // A comp whose seams differ: take.comp makes one length and shape, so set a seam by hand
+    // after: item.set of a piece's fade makes the seam differ from the run's crossfade.
+    f.run("take.comp",
+          R"({"item":"it_1","crossfade":0.04,"crossfade_shape":"linear","spans":[
+              {"from":0,"to":1,"index":0},{"from":1,"to":3,"index":1},{"from":3,"to":4,"index":0}]})");
+    const auto ids = f.pieces();
+    REQUIRE(ids.size() == 3);
+    f.run("item.set", R"({"item":")" + ids[1].str() + R"(","fade_in":0.02})");
+    REQUIRE_FALSE(
+        f.run("take.comp.get", R"({"item":")" + ids[0].str() + R"("})").find("uniform")->asBool());
+    auto done = f.app->commitTakes({f.pass("mid.wav", 0.75, 0.5)});
+    REQUIRE(done);
+    REQUIRE(StackFixture::warned((*done)[0], "record.comp_uniform"));
+    // Uniform seams, and a comp that was already uniform says nothing (see the 40 ms test).
+    CHECK(f.run("take.comp.get", R"({"item":")" + f.pieces().front().str() + R"("})")
+              .find("uniform")
+              ->asBool());
 }
 
 TEST_CASE("an audio pass over a MIDI item is not stacked into, and says why") {

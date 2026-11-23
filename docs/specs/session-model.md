@@ -2985,7 +2985,9 @@ on the loop range with a take per pass):
   frozen-track rule of §freeze: arming is a sound edit), `track.freeze` of an armed track fails with
   `freeze.unsupported`, and arming an edit group skips frozen members with a `track.frozen`
   warning, so the leave-out is a backstop for a freeze made behind the app's back. Recovery
-  (`project.recover`, `record.commit` replays) follows the same rule. A commit that fails anywhere (a refused nested `take.comp`
+  (`project.recover`, `record.commit` replays) follows the same rule. A pass inside a comp whose
+  seams differed (hand-set lengths, shapes or hard cuts among crossfades) rebuilds all of them as
+  the run's one crossfade, and warns `record.comp_uniform` so that does not happen silently. A commit that fails anywhere (a refused nested `take.comp`
   included) is rolled back whole: the project is as it was and still editable, and the recording
   is not in it (its journals remain for recovery).
 - The item's `position` and `length` never change by the pass itself. The new take (audio: the pass's media source,

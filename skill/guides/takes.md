@@ -38,7 +38,8 @@ a comp's pieces all get the new take. Recording only some tracks of an edit grou
 `record.stack_group`: the others get no take, so a group `take.comp` of the new index is refused
 (`comp.group_takes`); arm the whole group to keep them level. A frozen track takes no recording:
 its pass is left out with `record.frozen_skipped` (the file is kept in the project's media; unfreeze
-and `item.add` it) and the others are placed. A pass
+and `item.add` it) and the others are placed. A pass inside a comp with hand-set seams makes them
+uniform and warns `record.comp_uniform`. A pass
 that starts before an item, or into a locked or looped one, makes a new item and warns
 `record.stack_skipped`; a pass that runs past the item's end keeps the rest hidden in the take
 (`record.take_beyond_item`). The recorded result says `stacked: true` when the takes went into an
