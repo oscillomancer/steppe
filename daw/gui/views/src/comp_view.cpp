@@ -143,7 +143,7 @@ json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::
             span.from = beatOfSample(s, p.coreStart);
             span.to = beatOfSample(s, p.coreEnd);
         }
-    return compArgs(item, {span}, compCrossfade(s, comp));
+    return compArgs(item, {span}, std::nullopt);
 }
 
 Error compRefusal(Error error) {

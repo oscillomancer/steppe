@@ -89,8 +89,9 @@ using CompQuery = std::function<std::optional<json::Value>(const json::Value& ar
 std::optional<model::Id> compDiffersFrom(const model::Session& s, model::Id item,
                                          const CompQuery& query);
 // The take.comp call that switches piece `item` of `comp` to take `index`:
-// its core span with that take and the comp's crossfade, so the seams are
-// rebuilt and it joins a neighbour that plays the same take. (take.activate
+// its core span with that take and no crossfade, so its own seams are remade
+// with the comp's crossfade, the others kept as they are (hand-set ones
+// included), and it joins a neighbour that plays the same take. (take.activate
 // would keep the seam fades: a piece switched to its neighbour's take would
 // sum one source with itself through an equal-power crossfade.)
 json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::Id item,
