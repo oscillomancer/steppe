@@ -3602,23 +3602,20 @@ Result<RecordedInfo> stackMidi(model::EditTxn& t, const model::Session& s, const
 }
 
 // A recording on a frozen track is not placed: a frozen track takes no new items. The warning names
-// the file, which stays (audio: also as a source of the project's media, so a first save moves it
-// with the project); the other tracks of the commit are placed as usual.
-RecordedInfo frozenSkipped(const model::Session& s, const RecordedTake& r,
-                           std::optional<Id> source) {
+// the file, which stays where it was recorded with its journal (neither is released), so that
+// project.recover places it, with its timeline position and loop passes, once the track is
+// unfrozen; the other tracks of the commit are placed as usual.
+RecordedInfo frozenSkipped(const model::Session& s, const RecordedTake& r) {
     RecordedInfo info;
     info.warnings = recordingWarnings(r);
     if (!info.warnings) info.warnings.emplace();
     const std::string track = r.track.str() + " (" + model::trackLabel(s, r.track) + ")";
     info.warnings->push_back(
         {"record.frozen_skipped",
-         track + " is frozen, so its recording was not placed; the file is kept: " +
-             r.file.string() + (source ? " (media source " + source->str() + ")" : std::string()),
+         track + " is frozen, so its recording was not placed; it is kept: " + r.file.string(),
          "/track",
-         source ? "track.unfreeze " + r.track.str() + ", then item.add {track: \"" + r.track.str() +
-                      "\", audio_file: \"" + r.file.string() + "\"} places it"
-                : "its journal is kept: track.unfreeze " + r.track.str() +
-                      ", then project.recover places it",
+         "track.unfreeze " + r.track.str() +
+             ", then project.recover places it where it was played (project.recoverable lists it)",
          r.track.str(), r.file.string()});
     info.track = r.track.str();
     info.file = r.file.string();
@@ -3847,9 +3844,8 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
     // The takes are in the project now; owned journals go once a saved
     // file or autosave holds them (ADR-0080/0082).
     for (const RecordedTake& r : takes)
-        if (const model::Track* tr = initial.tracks.find(r.track); tr && tr->freeze && r.isMidi)
-            continue;  // not placed (record.frozen_skipped): its journal is all that holds the
-                       // notes
+        if (const model::Track* tr = initial.tracks.find(r.track); tr && tr->freeze)
+            continue;  // not placed (record.frozen_skipped): the journal is what recover reads
         else if (r.isMidi && !r.file.empty())
             recordingJournalsPending_.push_back(r.file);
         else if (!r.isMidi && !r.journal.empty())
@@ -3987,7 +3983,7 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
         // A frozen track takes no new items (validateFrozenTransition refuses the whole commit):
         // leave its recording out with a warning, keep the file, and place every other track's.
         if (s.tracks.find(r.track)->freeze) {
-            out.push_back(frozenSkipped(s, r, r.isMidi ? std::optional<Id>{} : sourceOf(r, rate)));
+            out.push_back(frozenSkipped(s, r));
             continue;
         }
         // The runs on the timeline (ADR-0015): one per loop pass, or one.

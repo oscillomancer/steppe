@@ -1068,8 +1068,8 @@ instructions are in `docs/guides/installing.md`.
   engine's, default true, and a client may set it at start); recording only some tracks of an edit
   group leaves the others' take counts behind, so a later group `take.comp` playing the new index is
   refused with `comp.group_takes` (the commit warns `record.stack_group` naming them); `midi_overdub`
-  is unchanged; a frozen track's recording is left out with `record.frozen_skipped` (kept in the
-  project's media, the other tracks' placed; arming a frozen track and freezing an armed one are
+  is unchanged; a frozen track's recording is left out with `record.frozen_skipped` (kept with its
+  journal for `project.recover` after unfreezing, the other tracks' placed; arming a frozen track and freezing an armed one are
   refused), and a pass inside a comp with hand-set seams makes them uniform with `record.comp_uniform`.
 - **Comping** (session-model §1.5.1): `take.comp {item|items, spans, crossfade?,
   crossfade_shape?}` and `take.comp.get` make a comp from an item's takes (a loop

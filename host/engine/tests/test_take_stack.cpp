@@ -15,6 +15,7 @@
 #include "../../../tests/file_platform.h"
 #include "command_helpers.h"
 #include "realtime_common.h"
+#include "recording.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
 #include "supple/json/json.h"
@@ -91,10 +92,31 @@ struct StackFixture {
         for (std::size_t n = 0; n < data.channels[0].size(); ++n)
             data.channels[0][n] = data.channels[1][n] = static_cast<float>(
                 0.5 * std::sin(2 * std::numbers::pi * hz * static_cast<double>(n) / kRate));
-        fs::create_directories(app->mediaDir());
         const auto file = app->mediaDir() / name;
+        fs::create_directories(file.parent_path());
         REQUIRE(audio::writeWav(file, data));
         return file;
+    }
+    // A pass as the recorder leaves it: in the recordings folder with its sidecar, so that
+    // project.recover can place it. `loopSeconds` > 0: passes of that loop over `seconds` of
+    // audio, the loop starting at `from`.
+    RecordedTake onDisk(const std::string& name, double from, double seconds, model::Id track,
+                        double loopSeconds = 0) {
+        RecordedTake r = pass("rec/" + name, from, seconds, 440.0, track);
+        engine::detail::RecordingInfo side{track, r.startSample, kRate, {}, 0, 0};
+        if (loopSeconds > 0) {
+            r.loop.start = r.startSample;
+            r.loop.end = r.startSample + static_cast<std::int64_t>(loopSeconds * kRate);
+            const auto per = static_cast<std::int64_t>(loopSeconds * kRate);
+            for (std::int64_t at = 0; at < r.frames; at += per)
+                r.segments.push_back({at, r.startSample});
+            r.segments.erase(r.segments.begin());  // pass() put one in already
+            side.loopStart = r.loop.start;
+            side.loopEnd = r.loop.end;
+        }
+        side.segments = r.segments;
+        REQUIRE(engine::detail::writeSidecar(r.file, side));
+        return r;
     }
     Result<json::Value> call(const char* command, std::string_view args = "{}") {
         auto parsed = json::parse(args);
@@ -591,24 +613,52 @@ TEST_CASE("a recording on a frozen track is kept out, and every other track's is
         CHECK(f.pieces(tr2).size() == frozenBefore);
     }
     REQUIRE(infos.size() == 3);
-    // The frozen track's file is named by a warning and kept: in the project's media, as a source.
+    // The frozen track's file is named by a warning and kept, as a recording still to recover: not
+    // a source of the project, so that project.recover places it.
     REQUIRE(StackFixture::warned(infos[1], "record.frozen_skipped"));
     const RecordingWarning& w = infos[1].warnings->back();
     CHECK(w.track == "tr_2");
     CHECK(w.message.find("two.wav") != std::string::npos);
+    CHECK(w.hint.find("project.recover") != std::string::npos);
     CHECK(fs::exists(w.file));
     CHECK(fs::path(w.file).filename() == "two.wav");
     const model::Session after = f.app->head();
-    CHECK(std::any_of(after.media.begin(), after.media.end(), [&](const auto& e) {
+    CHECK_FALSE(std::any_of(after.media.begin(), after.media.end(), [&](const auto& e) {
         return fs::path(e.value->path).filename() == "two.wav";
     }));
     CHECK_FALSE(StackFixture::warned(infos[0], "record.frozen_skipped"));
     CHECK_FALSE(StackFixture::warned(infos[2], "record.frozen_skipped"));
-    // Unfrozen, it is placed by hand from the file the warning names.
+}
+
+TEST_CASE(
+    "a frozen track's recording is recovered exactly after unfreezing, loop passes included") {
+    StackFixture f;
+    threeTracksMiddleFrozen(f);
+    const model::Id tr2{model::Kind::Track, 2};
+    const auto before = f.pieces(tr2).size();
+    // Two passes of a half-second loop starting at 0.5 s, on the frozen track.
+    const RecordedTake loop = f.onDisk("frozen-loop.wav", 0.5, 1.0, tr2, 0.5);
+    REQUIRE(loop.segments.size() == 2);
+    auto done = f.app->commitTakes({loop});
+    REQUIRE(done);
+    REQUIRE(StackFixture::warned((*done)[0], "record.frozen_skipped"));
+    CHECK(f.pieces(tr2).size() == before);
     f.run("track.unfreeze", R"({"track":"tr_2"})");
-    auto add = *json::parse(R"({"track":"tr_2","position":0.5})");
-    add["audio_file"] = w.file;
-    CHECK(f.call("item.add", json::writeCompact(add)));
+    json::Value listed = f.run("project.recoverable");
+    REQUIRE(listed["recordings"].size() == 1);
+    auto recovered = f.call("project.recover", R"({"files":["rec/frozen-loop.wav"]})");
+    REQUIRE_MESSAGE(recovered, (recovered ? "" : recovered.error().toString()));
+    // One item on the loop range, a take per pass: where it was played.
+    const auto pieces = f.pieces(tr2);
+    REQUIRE(pieces.size() == before + 1);
+    const model::Session s = f.app->head();
+    const model::Item* laid = nullptr;
+    for (const auto id : pieces)
+        if (s.items.find(id)->takes.size() == 2) laid = s.items.find(id);
+    REQUIRE(laid != nullptr);
+    // In beats, at 120 bpm: 0.5 s is one beat.
+    CHECK(laid->position == doctest::Approx(1.0));
+    CHECK(laid->length == doctest::Approx(1.0));
 }
 
 TEST_CASE("a commit of a frozen track's recording alone leaves its items as they were") {
