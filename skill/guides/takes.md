@@ -35,7 +35,9 @@ Pieces of the same take beside each other (after a move, say) are joined into on
 piece again, so moving a seam by a few samples gives exactly what the same spans give
 from scratch, MIDI pieces too (a held note stays one note). A boundary where the
 pieces differ (a gain, FX, edited notes) stays; between MIDI pieces of one take it
-makes a held note sound again, and the warning `comp.midi_boundary` names the beats. A copy made with `item.duplicate` and placed right after
+makes a held note sound again, and the warning `comp.midi_boundary` names the beats. A re-comp joins identical same-take pieces anywhere in the run, not only at a moved
+seam: to switch one half of a piece later, `take.activate` after the re-comp, not
+before. A copy made with `item.duplicate` and placed right after
 the item is not part of its comp (its source does not continue), so comping one leaves
 the other alone.
 

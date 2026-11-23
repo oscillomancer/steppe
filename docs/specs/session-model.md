@@ -296,7 +296,9 @@ nothing:
    split where the painted index changes inside it (a split as `item.split` makes,
    at the sample-snapped point, keeping every take in order). A span edge where the
    index does not change makes no split, so a comp whose spans all name the current
-   takes changes nothing.
+   takes changes nothing, except that any identical same-take pieces in the run are
+   joined, wherever they are (a split made only to `take.activate` one half later is
+   lost to a re-comp before it: activate after the re-comp).
 3. **Seams.** At a seam whose sides play different takes and whose pieces
    are all audio without warp markers or take envelopes, the crossfade is
    `2·h` samples with `h = min(round(crossfade·rate/2), ⌊ℓL/2⌋, ⌊ℓR/2⌋)`
@@ -358,7 +360,7 @@ item trimmed at the front; seams on whole samples for spans off the grid and a
 crossfade that is not a whole number of samples; a crossfade of 0, `linear`, and one
 shortened by short pieces; the same call twice (also through another piece, at an odd
 tempo with off-grid spans) gives the same project bytes; spans that all name the current
-takes change nothing; a comp rebuilt over an earlier one renders as one built from
+takes change nothing, bar identical same-take splits, which join; a comp rebuilt over an earlier one renders as one built from
 scratch, and `take.activate {index}` keeps the seams; real time equals offline in both
 executors; a copy placed after the original is not pulled into the comp and the original
 stays byte for byte; a seam moved by 1, 24 or 600 samples either way gives exactly what the

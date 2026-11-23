@@ -292,7 +292,8 @@ TEST_CASE("take.comp twice at an odd tempo, with off-grid spans, still gives the
         CHECK(pieces[i].end - pieces[i + 1].start == 2 * std::llround(0.0137 * f.rate() / 2));
 }
 
-TEST_CASE("take.comp whose spans all name the current takes changes nothing") {
+TEST_CASE(
+    "take.comp whose spans all name the current takes changes nothing, bar identical splits") {
     CompFixture f;
     const std::string before = model::serializeProject(f.app->head());
     // The item plays take 2: a span of take 2 inside it splits nothing.
@@ -828,4 +829,25 @@ TEST_CASE("take.comp warns where MIDI pieces of one take cannot be joined") {
             CHECK(w.find("message")->asString().find("4") != std::string::npos);
         }
     CHECK(warned);
+}
+
+TEST_CASE(
+    "take.comp joins identical same-take pieces anywhere in the run, not only at a moved seam") {
+    CompFixture f;
+    f.run("take.activate", R"({"item":"it_1","index":0})");
+    const char* spans = R"({"item":"it_1","spans":[{"from":1,"to":2,"index":1}]})";
+    f.run("take.comp", spans);
+    REQUIRE(f.pieces().size() == 3);
+    // A split of the last piece in two identical halves: the same take, nothing different.
+    const std::string last = f.pieces()[2].item.str();
+    f.run("item.split", R"({"item":")" + last + R"(","at":3})");
+    REQUIRE(f.pieces().size() == 4);
+    // The same spans again join them (activate a take on a half after the re-comp, not before).
+    f.run("take.comp", spans);
+    CHECK(f.pieces().size() == 3);
+    // A half with another take is not identical, and its split stays.
+    f.run("item.split", R"({"item":")" + last + R"(","at":3})");
+    f.run("take.activate", R"({"item":")" + f.pieces()[3].item.str() + R"(","index":2})");
+    f.run("take.comp", spans);
+    CHECK(f.pieces().size() == 4);
 }
