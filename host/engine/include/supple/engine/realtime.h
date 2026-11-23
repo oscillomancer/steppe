@@ -570,7 +570,7 @@ struct PluginOutputs {
 // refused with engine.transport. A test raises it, so a starved runner never
 // becomes a refusal (AGENTS.md: no pass or fail by wall-clock time):
 // setTransportWaitSeconds in its own process (0 restores the default), or
-// SUPPLE_TRANSPORT_PATIENT=1 (exactly "1": kPatientTransportSeconds) in the
+// SUPPLE_TEST_TRANSPORT_PATIENT=1 (exactly "1": kPatientTransportSeconds) in the
 // environment of a process it starts.
 inline constexpr double kTransportWaitSeconds = 1.0, kPatientTransportSeconds = 60.0;
 double transportWaitSeconds();

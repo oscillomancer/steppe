@@ -321,6 +321,6 @@ if(SUPPLE_BUILD_TESTS)
   # transportWaitSeconds); a test of the refusal sets its own short bound.
   get_property(engine_tests DIRECTORY PROPERTY TESTS)
   foreach(test ${engine_tests})
-    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "SUPPLE_TRANSPORT_PATIENT=1")
+    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "SUPPLE_TEST_TRANSPORT_PATIENT=1")
   endforeach()
 endif()
