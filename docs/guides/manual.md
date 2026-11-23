@@ -1841,7 +1841,9 @@ there; tracks that stayed on the arrangement are left alone. Each clip
 becomes copies of its takes, starting where the clip was in its loop, with
 the 5 ms switch crossfades as item fades, and an audio clip's own fades on
 the items where its passes start and end. A clip still fading out when the
-capture ends is laid to the end of its pass, as you heard it. When an
+capture ends is laid to the end of its pass, as you heard it; on that
+track the items under that tail are removed and the next one starts with a
+5 ms fade-in, and the commit's reply ends there. When an
 item's fades cannot say what you heard (the capture began inside a clip's
 fade-in, the loop jumped inside a fade, or a switch cut short a fade-out),
 the commit is refused with `launch.commit.fade` and the performance kept:

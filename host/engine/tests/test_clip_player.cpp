@@ -1871,6 +1871,62 @@ FadesCommitted fadesCommitted(Project& p, const EngineOptions& options, std::uin
             log};
 }
 
+TEST_CASE("a played-out tail clears the arrangement under it, undone byte for byte") {
+    // Review round 135, L1 and L3: cl_1 still fading out at the capture's end
+    // (12000 into its fourth pass) is laid to its pass's end (153600). The
+    // arrangement item under it is cut at the switch, removed under the
+    // tail and split there with a 5 ms fade-in; the reply's `to` ends there.
+    // Undo restores the project but for its id counters; a locked item in
+    // the tail refuses with the project unchanged.
+    Project p;
+    fadingClips(p);
+    auto add = j(R"({"track": "tr_1", "bar": 1, "name": "arrangement"})");
+    add["audio_file"] = p.ramp("arrangement.wav", 300000).string();
+    const std::string item = p.runArgs("item.add", add)["item"].asString();
+    // The project without its id counters, which undo does not wind back.
+    const auto project = [&]() {
+        std::string text = model::serializeProject(p.app->head());
+        const auto from = text.find("\"next_ids\"");
+        const auto to = text.find('}', from);
+        return text.erase(from, to - from);
+    };
+    const std::string before = project();
+    json::Value args = json::Value::object();
+    args["performance"] = j(R"({"sample_rate": 48000, "start": 0, "frames": 151200,
+        "launches": [{"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 96000, "anchor_beat": 4}]})");
+    json::Value done = p.runArgs("launch.commit", args);
+    CHECK(done["to"].asDouble() == doctest::Approx(153600.0 / 24000.0));
+    std::vector<std::tuple<std::int64_t, std::int64_t, double, double>> arrangement;
+    for (const auto& e : p.app->head().items) {
+        const model::Item& it = *e.value;
+        const model::Take* take = p.app->head().takes.find(*it.activeTake);
+        if (!take || take->name.find("arrangement") == std::string::npos) continue;
+        const model::ItemSpan span = model::itemSpan(p.app->head(), it);
+        arrangement.emplace_back(std::llround(span.startSec * 48000),
+                                 std::llround(span.endSec * 48000), it.fadeIn.length,
+                                 it.fadeOut.length);
+    }
+    std::sort(arrangement.begin(), arrangement.end());
+    REQUIRE(arrangement.size() == 2);
+    CHECK(arrangement[0] ==
+          std::tuple<std::int64_t, std::int64_t, double, double>{0, 96000 + kFade, 0.0, 0.005});
+    CHECK(std::get<0>(arrangement[1]) == 153600);
+    CHECK(std::get<1>(arrangement[1]) == 300000);
+    CHECK(std::get<2>(arrangement[1]) == doctest::Approx(0.005));
+    p.run("history.undo", "{}");
+    CHECK(project() == before);
+    // A locked item in the tail: refused, the project as it was.
+    json::Value lock = j(R"({"locked": true})");
+    lock["item"] = item;
+    p.runArgs("item.set", lock);
+    const std::string locked = model::serializeProject(p.app->head());
+    auto refused = p.bus->execute({"launch.commit", args, kOrigin});
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "item.locked");
+    CHECK(model::serializeProject(p.app->head()) == locked);
+}
+
 TEST_CASE("a switch quantized to a clip's fade-out plays it out at any tempo; live is the commit" *
           doctest::description("rt")) {
     // Review round 135, H1: at 130 bpm a 4-bar clip with a 1-bar fade-out,
@@ -2110,8 +2166,11 @@ TEST_CASE("launch.commit refuses what an item's fades cannot write of a clip's f
         },
         "would start inside its fade-in");
     // A loop wrap inside a fade-out: the loop ends 10000 into the fourth pass.
+    // It says how far in: 1360 samples, or a rounding case of one.
     refused([&] { return commit(kCl1, 192000, 0, 96000 + 3 * 14400 + 10000); },
-            "would end inside its fade-out at a loop wrap");
+            "would end inside its fade-out at a loop wrap, 1360 samples (28.33 ms) into it,");
+    refused([&] { return commit(kCl1, 192000, 0, 96000 + 3 * 14400 + 8641); },
+            "would end inside its fade-out at a loop wrap, 1 sample (0.02 ms) into it,");
     // A stand-in cut: cl_2 at 9600 into a pass, the arrangement 2000 later.
     refused(
         [&] {

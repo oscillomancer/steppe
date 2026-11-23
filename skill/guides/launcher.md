@@ -208,7 +208,9 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   copies of its takes at the phase heard, MIDI copied (shared with `pooled: true`),
   and the 5 ms switches are item fades; an audio clip's own fades go on its pieces
   where they start or end a pass; a clip still playing in its fade-out when the capture
-  ends is laid to its pass's end, as you heard it. A piece that would start or end inside
+  ends is laid to its pass's end, as you heard it: the track's items under that tail are
+  removed and the next one split with a 5 ms fade-in, and the reply's `to` ends there. A
+  piece that would start or end inside
   a clip's fade (the capture began inside a fade-in, a loop wrap fell inside a fade, or a
   switch cut a fade-out that was finishing) is refused with `launch.commit.fade`; the
   performance is kept, so set the fades to 0 or capture again.

@@ -365,6 +365,8 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 (last.to < perf.frames && last.e->action == "clip" && !heldBy(last, last.to)) ||
                 to > last.to;
             SUPPLE_TRY(clear(stretches[i].from, to, fadeOut, fadeIn));
+            // The span it answers covers that tail (review round 135, L1).
+            done.to = std::max(done.to, beatAt(double(perf.start + to)));
             i = j + 1;
         }
 
@@ -471,8 +473,17 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                         if (ph0 > 0 && ph0 < Lin)
                             return refuse(f0, "would start inside its fade-in");
                         if (!standIn && !playsOut && Lout > 0 && !crossfades && ph1 > Pf - Lout &&
-                            ph1 < Pf)
-                            return refuse(f1, "would end inside its fade-out at a loop wrap");
+                            ph1 < Pf) {
+                            // How far in, so a rounding case shows as one (L2).
+                            const std::int64_t into = ph1 - (Pf - Lout);
+                            return refuse(
+                                f1, "would end inside its fade-out at a loop wrap, " +
+                                        std::to_string(into) +
+                                        (into == 1 ? " sample (" : " samples (") +
+                                        json::formatDouble(
+                                            std::round(double(into) * 100000.0 / rate) / 100.0) +
+                                        " ms) into it,");
+                        }
                         if (standIn) {
                             // Rule 5: a further switch while it sounds cuts it.
                             const std::int64_t standEnd = f0 + (Pf - ph0);

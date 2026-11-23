@@ -667,7 +667,9 @@ the same.*
   fade-out. A clip still playing at the capture's end inside its pass's
   fade-out played on live: its piece runs to the pass's end under its
   fade-out, past the capture's end, the arrangement under it cleared and
-  fading in after it (review round 135). An item's fade runs from its own
+  fading in after it, and the reply's `to` covers it (review round 135).
+  A loop wrap's refusal says how many samples (and ms) into the fade-out
+  the wrap falls, so a rounding case shows as one. An item's fade runs from its own
   edge, so what a piece would cut out of a clip's fade is refused with
   `launch.commit.fade`, naming the clip, the track and the beat, the
   performance kept (rule 7): a piece starting inside the fade-in (the
