@@ -52,7 +52,7 @@ Kind: `edit`. Exposure: `internal`.
 
 How a recording pass over an item is kept (stack_takes).
 
-stack_takes true: recording over an item makes a new take of it, heard where it was recorded (the rest of the item plays what it did; the item's extent does not change); false: every pass is laid as new items over what is there. A machine setting, not part of the project; nothing keeps it between runs yet (a client may keep it and set it at start).
+stack_takes true: recording over an item makes a new take of it, heard where it was recorded (the rest of the item plays what it did; the item's extent does not change); false: every pass is laid as new items over what is there. A machine setting, not part of the project, that the engine keeps while it runs; the GUI keeps its Preferences choice between runs and sets it at start, and a headless session keeps nothing.
 
 Kind: `query`. Exposure: `mcp-exec`.
 

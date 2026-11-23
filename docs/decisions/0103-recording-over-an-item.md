@@ -59,8 +59,9 @@ timeline start have clipped it).
 6. **The setting** is the engine's (`EngineApp::setStackRecordedTakes`, default true) and is read
    and set by agents with `record.get` and `record.set {stack_takes}` (a machine setting, not an
    undo step, not in the project). It lasts for the process. Keeping it between runs is a client's
-   job, to be built with the GUI's Preferences row (`stack_recorded_takes`); until then nothing
-   does, and a headless session always starts with the default. Off: every pass is laid as items,
+   job: the GUI's Preferences row (Record over an item: New take or Layer on top) keeps it as
+   `stack_recorded_takes` in its preferences file (supple.preferences/1.11) and sets it at start
+   and on each change. A headless session always starts with the default. Off: every pass is laid as items,
    as before.
 7. **Replays** do not read the setting. The decision is made at commit time and stored in
    `record.commit`'s arguments (`stack`); a history without it replays laid as items. A replay on a

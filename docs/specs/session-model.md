@@ -2982,8 +2982,9 @@ go on a lane that plays beside the following item's, never on one that replaces 
 they are a new lane outside the comp.
 
 **Recording over an item (ADR-0103).** With `stack_takes` on (the default; `record.get` and
-`record.set {stack_takes}`, a machine setting of the engine that lasts for the process; a client may
-keep it and set it at start, and none does yet), a pass becomes a take of an item instead of a new item. Per armed track and per
+`record.set {stack_takes}`, a machine setting of the engine that lasts for the process; the GUI keeps
+it as its Preferences row, `stack_recorded_takes`, and sets it at start, and a headless session keeps
+nothing), a pass becomes a take of an item instead of a new item. Per armed track and per
 placed span (the pass after the punch range and the timeline start clip it: one span per run, or one
 on the loop range with a take per pass):
 
