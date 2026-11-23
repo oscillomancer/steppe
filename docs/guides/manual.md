@@ -508,6 +508,20 @@ out as lanes inside the item: click a lane to hear that take, or drag across
 part of a lane to use that take for that stretch only. Ctrl-drag from below
 the name bar pulls a take out into an item of its own.
 
+Dragging across a lane makes a **comp**: the item is split where the take
+changes, and each seam between two takes gets a short crossfade (10 ms at
+first). A line with a small notch at its foot marks each seam. Drag the line
+to move the seam, or drag the top of it to make the crossfade longer or
+shorter; Ctrl+click there switches between an equal-power and a linear
+crossfade. One crossfade length and shape serves every seam of a comp, and
+the inspector shows it as **Crossfade** for a selected piece: type 0 for hard
+cuts. Clicking a lane of one piece switches just that piece. To make a comp
+one plain item again, select its pieces and use **Consolidate items**. An item
+whose Loop is on is comped with hard cuts (no crossfades) until you turn its
+Loop off, and so is an item on a track grouped for editing: dragging across
+its lane splits every item of the group there and switches the take on this
+one.
+
 ### Changing what the mouse does
 
 **Edit > Mouse modifiers…** lists these gestures (dragging an item, dragging
