@@ -1085,7 +1085,8 @@ class EngineApp : public cmd::Host {
                       std::vector<schema::Warning>* warnings);
     void harvestRan();
     Status moveScratchMedia(const std::filesystem::path& dest,
-                            const std::function<Status()>& publish);
+                            const std::function<Status()>& publish,
+                            std::vector<schema::Warning>* warnings);
     std::unique_ptr<SourcePreparation> sourcePreparation_;
     // File audition (ADR-0094): the decoder, the request it serves, the
     // engine's serial for the voice published (0: none), what plays.

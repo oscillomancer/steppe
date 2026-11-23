@@ -1302,6 +1302,61 @@ TEST_CASE("the first save closes the recording's hash reader before it removes t
     CHECK(openFilesNamed("Vocal-1.wav").empty());
 }
 
+#if !defined(_WIN32)
+TEST_CASE("a first save that cannot remove a scratch file says so and points at the moved copy") {
+    if (::geteuid() == 0) return;  // root removes a file whatever its folder allows
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    AppOptions o;
+    o.workdir = root.path / "work";
+    o.scratchDir = root.path / "unsaved-left";
+    o.chainDir = root.path / "chains";
+    o.templateDir = root.path / "templates";
+    o.projectTemplateDir = root.path / "project-templates";
+    o.pluginPath = {kFixture};
+    auto created = EngineApp::create(o, {.console9 = false});
+    REQUIRE(created);
+    auto app = std::move(*created);
+    cmd::Dispatcher d(registry, *app);
+    app->setupFixture(d, "recording_interrupted");
+    REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    const fs::path rec = o.scratchDir / "media" / "rec";
+    const fs::path scratchFile = rec / "Vocal-1.wav";
+    // A folder that cannot be written: its files cannot be removed.
+    fs::permissions(rec, fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
+    struct Restore {
+        fs::path rec;
+        ~Restore() {
+            std::error_code ec;
+            fs::permissions(rec, fs::perms::owner_all, fs::perm_options::replace, ec);
+        }
+    } restore{rec};
+    std::vector<schema::Warning> warnings;
+    const auto saved = app->save(root.path / "song" / "song.json", &warnings);
+    REQUIRE_MESSAGE(saved, (saved ? "" : saved.error().toString()));
+    const fs::path moved = root.path / "song" / "media" / "rec" / "Vocal-1.wav";
+    CHECK(fs::exists(moved));
+    CHECK(fs::exists(scratchFile));  // the leftover
+    // Every file that stays is named: the recording and the sidecar beside it.
+    std::set<std::string> named;
+    for (const auto& w : warnings)
+        if (w.code == "project.media_leftover") {
+            named.insert(w.path);
+            CHECK_FALSE(w.message.empty());
+            CHECK(fs::exists(w.path));
+        }
+    CHECK(named.contains(scratchFile.string()));
+    std::size_t left = 0;
+    for (const auto& entry : fs::directory_iterator(rec)) left += entry.is_regular_file() ? 1 : 0;
+    CHECK(named.size() == left);
+    // The project points at the moved copy: it plays from there.
+    REQUIRE(app->head().media.size() == 1);
+    CHECK(app->head().media.begin()->value->path == "rec/Vocal-1.wav");
+    CHECK(app->mediaDir() == root.path / "song" / "media");
+}
+#endif
+
 TEST_CASE("two armed tracks with one name record to two files (review round 8)") {
     Root root;
     cmd::Registry registry;

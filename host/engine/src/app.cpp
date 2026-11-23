@@ -993,7 +993,7 @@ Status EngineApp::save(const fs::path& where, std::vector<schema::Warning>* warn
                      "or save in place");
     std::vector<fs::path> createdMedia;  // what this save created in the new media folder
     if (fromScratch) {
-        SUPPLE_TRY(moveScratchMedia(media, publish));
+        SUPPLE_TRY(moveScratchMedia(media, publish, warnings));
     } else {
         // Saved as into another folder: that folder gets its own copy of the
         // media (the old project keeps its files).
@@ -4583,7 +4583,8 @@ Status EngineApp::deleteSession(const std::string& session) {
 
 // First save: stage and verify copies while the scratch originals remain.
 // Failed relocation/publication removes only files this operation created.
-Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Status()>& publish) {
+Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Status()>& publish,
+                                   std::vector<schema::Warning>* warnings) {
     std::lock_guard lock(recordingFinalizeMutex_);
     const fs::path from = options_.scratchDir / head().project->mediaDir;
     std::error_code ec;
@@ -4719,19 +4720,40 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
             reader->held = true;
             readers.held.emplace_back(reader, dest / reader->path.lexically_relative(from));
         }
+    // What stays is said, not ignored: the project already points at the copies.
+    std::set<fs::path> left;
     std::vector<fs::path> emptyDirs;
     for (const auto& rel : files) {
         ec.clear();
         fs::remove(from / rel, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory) {
+            left.insert(from / rel);
+            if (warnings)
+                warnings->push_back(
+                    {"project.media_leftover",
+                     "the recording was copied to " + (dest / rel).string() +
+                         ", which the project uses, but its scratch copy could not be removed: " +
+                         ec.message() + "; delete it by hand",
+                     (from / rel).string()});
+        }
         for (auto parent = (from / rel).parent_path(); parent != from && within(parent, from);
              parent = parent.parent_path())
             emptyDirs.push_back(parent);
     }
     std::sort(emptyDirs.begin(), emptyDirs.end(),
               [](const auto& a, const auto& b) { return a.native().size() > b.native().size(); });
+    emptyDirs.erase(std::unique(emptyDirs.begin(), emptyDirs.end()), emptyDirs.end());
+    auto holdsLeftover = [&](const fs::path& dir) {
+        return std::any_of(left.begin(), left.end(),
+                           [&](const fs::path& file) { return within(file, dir); });
+    };
     for (const auto& dir : emptyDirs) {
         ec.clear();
         fs::remove(dir, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory && !holdsLeftover(dir) && warnings)
+            warnings->push_back({"project.media_leftover",
+                                 "the scratch folder could not be removed: " + ec.message(),
+                                 dir.string()});
     }
     ec.clear();
     fs::remove(from, ec);
