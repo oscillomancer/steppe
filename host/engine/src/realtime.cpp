@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <thread>
 #include <type_traits>
 
+#include "supple/base/environment.h"
 #include "supple/base/thread.h"
 #include "supple/diagctx/table.h"
 #include "supple/host/clap_host.h"
@@ -1171,6 +1173,24 @@ Engine::MeterClock Engine::meterClock() const {
                  : 0;
     clock.heardStream = std::max<std::int64_t>(0, played - latency);
     return clock;
+}
+
+namespace {
+std::atomic<double> gTransportWaitSeconds{0};  // 0: the default or the environment's
+}  // namespace
+
+double transportWaitSeconds() {
+    if (const double set = gTransportWaitSeconds.load(std::memory_order_relaxed); set > 0)
+        return set;
+    static const double fromEnvironment = environmentFlagEnabled("SUPPLE_TRANSPORT_PATIENT")
+                                              ? kPatientTransportSeconds
+                                              : kTransportWaitSeconds;
+    return fromEnvironment;
+}
+
+void setTransportWaitSeconds(double seconds) {
+    gTransportWaitSeconds.store(std::isfinite(seconds) && seconds > 0 ? seconds : 0,
+                                std::memory_order_relaxed);
 }
 
 Status Engine::awaitTransport(double timeoutSeconds) {

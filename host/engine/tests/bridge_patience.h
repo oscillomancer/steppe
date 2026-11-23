@@ -27,6 +27,21 @@ class BridgeDeadline {
     int previous_;
 };
 
+// For a test of the transport wait's refusal itself (engine.transport): a
+// short bound meanwhile, where the binary is patient (bridge_patience.cpp).
+class TransportWait {
+  public:
+    explicit TransportWait(double seconds) : previous_(transportWaitSeconds()) {
+        setTransportWaitSeconds(seconds);
+    }
+    ~TransportWait() { setTransportWaitSeconds(previous_); }
+    TransportWait(const TransportWait&) = delete;
+    TransportWait& operator=(const TransportWait&) = delete;
+
+  private:
+    double previous_;
+};
+
 // A bridge deadline no healthy plug-in misses, however loaded the machine.
 // A late live block is silent by design, so a run compared bit for bit must
 // not have one: such tests also check bridgeLateCycles() is 0, so a late

@@ -565,6 +565,17 @@ struct PluginOutputs {
     bool droppedAll = false;
 };
 
+// The bound of Engine::awaitTransport() (main thread): 1 s, the time a
+// device that runs has to act on a transport request before the request is
+// refused with engine.transport. A test raises it, so a starved runner never
+// becomes a refusal (AGENTS.md: no pass or fail by wall-clock time):
+// setTransportWaitSeconds in its own process (0 restores the default), or
+// SUPPLE_TRANSPORT_PATIENT=1 (exactly "1": kPatientTransportSeconds) in the
+// environment of a process it starts.
+inline constexpr double kTransportWaitSeconds = 1.0, kPatientTransportSeconds = 60.0;
+double transportWaitSeconds();
+void setTransportWaitSeconds(double seconds);
+
 // Prepared main-thread rack timing, without instantiating plug-ins for queries.
 struct RackLatencyInfo {
     std::int64_t latency = 0;
@@ -699,7 +710,9 @@ class Engine {
     // Not acted on within the bound (a stalled device or a starved renderer):
     // `engine.transport`, and transport() may still report the old state; the
     // request stays queued and takes effect when the device runs again.
-    Status awaitTransport(double timeoutSeconds = 1.0);
+    // Bounded by transportWaitSeconds().
+    Status awaitTransport() { return awaitTransport(transportWaitSeconds()); }
+    Status awaitTransport(double timeoutSeconds);
     // Anticipative, main thread: waits until `frames` of the current
     // transport epoch are rendered ahead of the playhead (at most the
     // render-ahead amount; before the epoch is heard, at least the whole
