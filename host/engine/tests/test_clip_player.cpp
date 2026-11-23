@@ -1608,7 +1608,7 @@ TEST_CASE("a quantized capture end: on again cancels it, another replaces it, a 
         until(300000);
         CHECK(engine.launchCapture()->frames == capture->frames);
         // Without quantize (or with none) it ends at the position heard, as before.
-        engine.awaitTransport();
+        REQUIRE(engine.awaitTransport());
         until(310000);
         REQUIRE(engine.captureLaunches(true));
         until(320000);
