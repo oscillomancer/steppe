@@ -99,6 +99,67 @@ TEST_CASE("an audio clip's fades shape every pass of its period, as an item's fa
     CHECK(out[std::size_t(anchor + 12000 + 5000)] == rampAt(5000));
 }
 
+TEST_CASE("a clip's own fades stand in for a switch's: in at its launch, out inside its fade-out") {
+    // S3 step C, Q4 rules 3 and 4, on 0.25 s periods (12000 frames) of a
+    // ramp: cl_1 with a 0.05 s fade-in and a 0.1 s fade-out, cl_2 with none.
+    Project p;
+    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = p.ramp("ramp.wav", 48000).string();
+    p.runArgs("clip.add", args);  // cl_1
+    p.run("scene.add", "{}");     // sc_2
+    args["scene"] = "sc_2";
+    args["audio_file"] = p.ramp("ramp2.wav", 48000).string();
+    p.runArgs("clip.add", args);  // cl_2
+    p.run("clip.set", R"({"clip": "cl_1", "length": 0.25, "fade_in": 0.05, "fade_out": 0.1})");
+    p.run("clip.set", R"({"clip": "cl_2", "length": 0.25})");
+    const auto gain = [](std::int64_t phase) {
+        double g = 1.0;
+        if (phase < 2400) g *= double(phase) / 2400.0;
+        if (phase >= 12000 - 4800) g *= double(12000 - phase) / 4800.0;
+        return g;
+    };
+    const std::int64_t anchor = 2 * kBeat;
+    SUBCASE("rule 3: launched, its fade-in alone, no switch ramp on top") {
+        const auto out = p.render(1.5, {launch(anchor, "cl_1")});
+        for (std::int64_t t = anchor; t < anchor + 12000; ++t) {
+            const std::int64_t phase = t - anchor;
+            REQUIRE_MESSAGE(
+                out[std::size_t(t)] == static_cast<float>(double(rampAt(phase)) * gain(phase)),
+                "frame " << t);
+        }
+    }
+    SUBCASE("rule 4: switched away 9000 into a pass, it plays its fade-out to the pass's end") {
+        const std::int64_t to = anchor + 12000 + 9000;  // its fade-out began at 7200
+        const auto out = p.render(2.0, {launch(anchor, "cl_1"), launch(to, "cl_2")});
+        for (std::int64_t t = to; t < to + 3000 + 600; ++t) {
+            const std::int64_t a = t - anchor - 12000;  // cl_1's phase in its pass
+            const double x = std::clamp(double(t - to) / double(kFade), 0.0, 1.0);
+            const double expect =
+                double(rampAt(t - to)) * x + (a < 12000 ? double(rampAt(a)) * gain(a) : 0.0);
+            REQUIRE_MESSAGE(double(out[std::size_t(t)]) == doctest::Approx(expect).epsilon(1e-6),
+                            "frame " << t);
+        }
+        // The old way would have faded it out over 5 ms: by then it is still
+        // there, at its own fade's level.
+        const std::int64_t later = to + 2 * kFade;
+        CHECK(double(out[std::size_t(later)]) >
+              double(rampAt(later - to)) +
+                  0.5 * double(rampAt(later - anchor - 12000)) * gain(later - anchor - 12000));
+    }
+    SUBCASE("a switch on a pass's end: the next pass begun, a crossfade as before") {
+        const std::int64_t to = anchor + 2 * 12000;
+        const auto out = p.render(2.0, {launch(anchor, "cl_1"), launch(to, "cl_2")});
+        for (std::int64_t t = to; t < to + kFade + 100; ++t) {
+            const std::int64_t a = t - to;  // cl_1's new pass
+            const double x = std::clamp(double(t - to) / double(kFade), 0.0, 1.0);
+            const double expect =
+                double(rampAt(t - to)) * x + double(rampAt(a)) * gain(a) * (1.0 - x);
+            REQUIRE_MESSAGE(double(out[std::size_t(t)]) == doctest::Approx(expect).epsilon(1e-6),
+                            "frame " << t);
+        }
+    }
+}
+
 TEST_CASE("a loop clip keeps its phase when the song wraps back before its anchor" *
           doctest::description("rt")) {
     // A transport loop over bars 1-2 (0 to 4 s) and an audio clip of 0.75 s

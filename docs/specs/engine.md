@@ -708,6 +708,16 @@ the same.*
     frame's song position on the playrate path (as `playRateClip` fades an
     item), and after a clip chain, as an item's fades follow its take
     chain. A pass held on past the period's end reads 0 under a fade-out.
+  - *A clip's own fade stands in for a switch's* (Q4 rules 3 and 4): an
+    audio clip with a fade-in comes in at weight 1, shaped by its fade-in
+    from the switch, with no switch fade-in (`incomingStandsIn`); one
+    switched away inside its pass's fade-out (P − Lout ≤ phase < P, not on
+    the pass's end) plays on at weight 1 under its fade-out to the pass's
+    end and reads nothing after it (`outgoingEnd`, for the player, a clip
+    chain's input and its weight). What comes in fades in as usual or
+    stands in. A clip with fades switched exactly on a pass's end has
+    begun its next pass: it goes out over the crossfade in that pass, from
+    its fade-in (`heldPass`).
   - *Audio* reads through a tape converter per player reading
     (`PlayerReader`): positions are the frames' unwrapped song positions,
     and its source folds them over the loop and maps them by the player's
