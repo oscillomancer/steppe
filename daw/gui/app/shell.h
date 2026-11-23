@@ -101,7 +101,8 @@ class Shell {
     // app hands them over each pass: a record.error as recordingError, and the
     // record.warning events of a recording that ended, whoever or whatever
     // stopped it (a key, an agent, a MIDI controller, the engine), on the
-    // status line: each message once, joined by "; " (ADR-0103).
+    // status line: each message once, joined by "; " (ADR-0103), after a
+    // record.error of the same batch, which comes first.
     void engineEvents(const std::vector<std::pair<std::string, json::Value>>& events);
     // The TCP's output click hands the matrix its strip and popup anchor.
     std::function<void(const model::Id&, const ui::Rect&)> onRouting;

@@ -3583,8 +3583,10 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   whatever ended the recording: a key or button, an agent, a MIDI controller
   or the engine halting. The app hands each batch of engine events to
   `Shell::engineEvents`, which joins the messages of its `record.warning`
-  events, each once, by "; " (`Shell::statusNote`); while audio is being
-  prepared the line says so first, then the note.
+  events, each once, by "; " (`Shell::statusNote`). A `record.error` in the
+  same batch comes first ("Recording failed: …"), and the warnings follow it
+  after "; ": they never replace it. While audio is being prepared the line
+  says so first, then the note.
   **Copy imported audio** (1.4): On by default, saved as the
   boolean `copy_imported_media` (absent, and in older files, means true;
   other types report `preferences.copy_imported_media`) and applied to

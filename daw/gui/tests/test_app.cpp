@@ -1074,6 +1074,14 @@ TEST_CASE("the status line shows a recording's warnings, whoever stopped it") {
                         {"record.warning", warning("record.stack_skipped", "a new item")}});
     CHECK(shell.statusNote() == "a new item; past the end");
     CHECK(status().find(" · a new item; past the end") != std::string::npos);
+    // A recording error in the same batch comes first; the warnings follow, never replace it.
+    json::Value failure = json::Value::object();
+    failure["message"] = "short write";
+    failure["file"] = "rec/Vocal-1.wav";
+    shell.engineEvents({{"record.warning", warning("record.stack_skipped", "a new item")},
+                        {"record.error", failure}});
+    CHECK(shell.statusNote().rfind("Recording failed: short write", 0) == 0);
+    CHECK(shell.statusNote().find("; a new item") != std::string::npos);
 
     REQUIRE(a.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2},
                                {.anticipative = false}));
