@@ -296,9 +296,11 @@ TEST_CASE("a capture under a master playrate commits by the song positions heard
     // cl_2 again on bar 4, under a constant 0.75 and under the envelope
     // (tape): the performance holds the launches at song samples 96000,
     // 192000 and 288000, and the committed arrangement, rendered offline at
-    // the same rate, is exactly what played live away from the switches'
-    // crossfades, through cl_2's period wraps (0.75 s of a 1 s ramp, one item
-    // per period, at song 132000 and 168000).
+    // the same rate, is what played live to the rate-1 commit's standard:
+    // exact away from the switches' crossfades, through cl_2's period wraps
+    // (0.75 s of a 1 s ramp, one item per period, at song 132000 and
+    // 168000), and within 1e-6 through them, the float32 rounding of the
+    // switch gain (the live gain is a float, an item's fade a double).
     for (const bool envelope : {false, true})
         for (const std::uint32_t block : {128u, 512u})
             for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
@@ -350,21 +352,23 @@ TEST_CASE("a capture under a master playrate commits by the song positions heard
                 // 0.75, about 206800 under the envelope).
                 REQUIRE(end > 230000);
                 // Within a crossfade (240 song samples: at most 400 device
-                // frames at 0.6, and the latent gain's shift), or as near the
-                // capture's end as the tape kernel reads (128 song samples:
-                // the committed items end there, live read on), and away.
-                double fading = 0, away = 0;
+                // frames at 0.6, and the latent gain's shift), within the
+                // tape kernel's reach of the capture's end (128 song samples:
+                // the committed items end there, live read past it), and
+                // away from both.
+                double fading = 0, atEnd = 0, away = 0;
                 for (std::int64_t k = 0; k < end; ++k) {
                     const double d = std::fabs(double(heard[std::size_t(k + live.latency)]) -
                                                double(committed[std::size_t(k)]));
-                    bool near = k >= end - 640;
+                    bool near = false;
                     for (const LaunchLogEntry& e : log)
                         near = near || (k >= e.runningFrame - 256 && k < e.runningFrame + 768);
-                    double& worst = near ? fading : away;
+                    double& worst = near ? fading : k >= end - 640 ? atEnd : away;
                     worst = std::max(worst, d);
                 }
-                MESSAGE("worst within the crossfades and the end " << fading);
+                MESSAGE("worst within the crossfades " << fading << ", before the end " << atEnd);
                 CHECK(away == 0.0);
+                CHECK(fading <= 1e-6);  // the float32 rounding of the switch gain
                 CHECK(compare(heard, live.latency, plain, 0, end).first >= 0);
             }
 }

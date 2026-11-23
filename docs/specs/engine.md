@@ -683,13 +683,25 @@ the same.*
     from the start) reads each period alone, silent outside it, as that
     item does, so the converter does not read across a period's wrap; a
     quantum that crosses one is read again for its later frames
-    (`PlayerReader::later`). Under a playrate that keeps the pitch an audio clip has no
+    (`PlayerReader::later`). A switch's outgoing side reads nothing past
+    its crossfade, as the commit's pieces: the clip fading out (or a clip
+    chain's input going out) is silent from the anchor plus 240 song
+    samples, and the arrangement's tape items read nothing past it after a
+    switch away, nor before the anchor while a switch back fades them in
+    (`Clip::gateFrom`, set by `launchAudio`; a stretch converter is not
+    cut). Under a playrate that keeps the pitch an audio clip has no
     player yet (step 1b): compile warns and its launch is refused with
     `launch.playrate`.
   - *Capture* runs in song time (above): placement gives each launch its
     song frame, the boundary's unwrapped song sample, and the capture
     counts song samples from the published rate clock, so a commit lays
-    each launch on its song position whatever the rate did.
+    each launch on its song position whatever the rate did. The commit
+    meets the rate-1 commit's standard: exact away from the switches'
+    crossfades, within 1e-6 through them (the float32 switch gain). Within
+    the tape kernel's reach of the capture's end (128 song samples) it
+    cannot hold what live read past the end; under a pitch-keeping rate an
+    arrangement audio item cut at a switch is read by a stretch converter
+    whose history the commit does not reproduce.
   - *MIDI* (`rateLaunchMidi`, a clip chain's input, a rack's Notes feed):
     each event at the first frame whose song position reaches it; what is
     held ends where the song enters a new loop pass; a switch's first frame

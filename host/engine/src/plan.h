@@ -809,6 +809,7 @@ struct RateClipState {
     std::vector<std::array<float, kRateQuantum>> output;
     std::vector<float*> pointers;
     std::int64_t quantum = std::numeric_limits<std::int64_t>::min();
+    std::int64_t gateFrom = INT64_MIN, gateUntil = INT64_MAX;  // the quantum's (Clip::gateFrom)
     bool primed = false, failed = false;
     bool preserve = false;
     RateClipState(std::shared_ptr<const TapeTable> table, std::size_t channels, double rate,
@@ -831,6 +832,7 @@ struct ClipPlayer;
 // reader keeps no state between quanta).
 struct PlayerReader {
     std::unique_ptr<RateClipState> state;
+    std::int64_t until = INT64_MAX;  // the reading's (PlayerSource::until)
     // A quantum crossing a period of a ClipPlayer::periodItems clip: the
     // later period's reading, for its frames (playerQuantum).
     std::array<std::array<float, kRateQuantum>, 2> later{};
@@ -848,6 +850,11 @@ struct Clip {
     std::int64_t deviceShift = 0;
     std::int64_t offset = 0;  // source frame at the item start
     bool loop = false;
+    // The clip launcher's cut of the arrangement on the playrate path, song
+    // samples, set by launchAudio each block: a switch away's crossfade end,
+    // from which its tape source reads nothing, and a switch back's anchor,
+    // before which it reads nothing, as the commit's split items (S3 B).
+    std::int64_t gateFrom = INT64_MIN, gateUntil = INT64_MAX;
     model::ChannelMode mode = model::ChannelMode::Normal;
     double gainL = 1.0, gainR = 1.0;
     std::int64_t fadeIn = 0, fadeOut = 0;
@@ -1636,6 +1643,9 @@ struct ClipChainInput {
     std::int64_t anchorSample = 0;
     double anchorBeat = 0;
     bool unanchored = false;
+    // Going out on the playrate path: the song sample from which its audio
+    // reads nothing, the switch's crossfade end (S3 B).
+    std::int64_t until = INT64_MAX;
 };
 ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT;
 // The clock a switch's crossfade runs on (LaunchState::fadeStart) at the

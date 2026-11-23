@@ -925,14 +925,34 @@ the boundary.
   state, so a quantum crossing a period is read twice, into a second buffer
   held with the reader; nothing is allocated or primed at a wrap. A clip
   laid as one looped item reads across its wraps, as that item does.
+- **A switch's outgoing side reads nothing past its crossfade** on the
+  playrate path, always, as the commit's pieces: the clip fading out (its
+  player, or a clip chain's input going out) is silent from the anchor plus
+  240 song samples, where its committed piece ends, and the arrangement's
+  tape items read nothing past it after a switch away, nor before the
+  anchor while a switch back from a clip fades them in, where the commit
+  splits them (`Clip::gateFrom`, set by `launchAudio` each block). Without
+  it, the tape kernel read on past the cut and a commit differed by up to
+  7.7e-5 in each crossfade's last 128 song samples. A stretch converter is
+  not cut: its history runs on (see the limits).
+- **The standard is the rate-1 commit's** (test_clip_player.cpp): exact
+  away from the switches' crossfades, and within 1e-6 through them, the
+  float32 rounding of the live switch gain against an item's fade in
+  double. A capture under a master playrate meets the same standard.
 
 **Consequences.** A capture under a constant rate, an envelope, a rate edit
 over a loop wrap, a glide back to 1 and a clock chase commits every launch
-on its song sample, in both executors. Its commit, rendered offline, equals
-what played exactly (worst difference 0) away from the switches'
-crossfades, audio and MIDI, under a constant 0.75 and under an envelope, at
-blocks 128 and 512, in both executors, through a clip's period wraps. MIDI
-under a pitch-keeping rate commits equal to what played. The tests cover each, and the refusal and the
+on its song sample, in both executors. Its commit, rendered offline, meets
+the rate-1 standard, audio and MIDI, under a constant 0.75 and under an
+envelope, at blocks 128 and 512, in both executors, through a clip's period
+wraps: exact away from the crossfades, at most 1.5e-8 through them (bounded
+at 1e-6 in the test, which prints the worst). MIDI under a pitch-keeping
+rate commits equal to what played. Limits: within the tape kernel's reach
+of the capture's end (128 song samples) the commit cannot hold what live
+read past the end (2e-7 in the test, depending on the audio); and under a
+pitch-keeping rate a switch on a track whose arrangement holds audio cuts
+an item a stretch converter reads, which the commit cannot reproduce
+exactly. The tests cover each, and the refusal and the
 end for audio.
 
 ## Consequences
