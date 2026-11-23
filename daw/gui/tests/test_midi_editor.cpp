@@ -5535,6 +5535,21 @@ TEST_CASE("the roll names each note by its chord, as midi.get does") {
         CHECK(rollNames(f) == underE);
         CHECK(rollNames(f) == getNames(f, c.item));
     }
+    SUBCASE("looped and slipped past one period: the roll's frame differs from the source's") {
+        // Offset 9 in a source of 8 beats: the roll draws source beat b at
+        // b - 9 + 8 (frameShift 8), and names it at the song beat 10 + b - 9,
+        // as midi.get does: Ab4 at source beat 4 sounds at song beat 5, under Ab.
+        f.exec("item.set", R"({"item":")" + c.item + R"(","position":10,"loop":true})");
+        auto tx = f.app->beginTransaction(kTest, "slip past a period");
+        REQUIRE(tx);
+        f.app->txn().modify<model::Take>(*model::Id::parse(c.take),
+                                         [](model::Take& t) { t.startOffset = 9.0; });
+        REQUIRE(f.app->commitTransaction(*tx));
+        c.open();
+        REQUIRE(f.editor->state().frameShift == doctest::Approx(8.0));
+        CHECK(rollNames(f) == std::vector<std::string>{"E4", "G#4", "B4", "Ab4", "C5"});
+        CHECK(rollNames(f) == getNames(f, c.item));
+    }
     SUBCASE("a following take: written by its own context, phase and period") {
         f.exec("take.set", R"({"take":")" + c.take +
                                R"(","context":"1: key C major {E}:w\n2: {Ab}:w","follow":"key"})");
