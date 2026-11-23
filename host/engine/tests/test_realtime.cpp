@@ -3883,10 +3883,12 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     const auto session = t.commit().value();
     // The product's live deadline, not patient(): the first cycle must pass
     // its deadline with the start unanswered. So any later cycle may be late
-    // too on a loaded machine. A late block is silent by design and a late
-    // start leaves the stage passing audio through for that cycle; both are
-    // counted in bridgeLateCycles(), which bounds them here (CI 44147509934:
-    // the third cycle was late and silent).
+    // too on a loaded machine. A late block is silent by design and counted
+    // in bridgeLateCycles(), which bounds them here (CI 44147509934: the
+    // third cycle was late and silent). Until the bridge's answer to the
+    // start is seen, the stage passes audio through and those cycles are not
+    // late (ADR-0101): on a slow runner the answer came three cycles after
+    // the release (CI 45267253541), which this case once counted as late.
     constexpr int kCycles = 2048;  // a guard against a bridge that never answers
     auto pool = makePool();
     MediaCache media;
@@ -3897,8 +3899,6 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     gate->hide();              // the bridge has it; nothing else made later
     backend.run(1);            // the start is held past this cycle's deadline
     REQUIRE(gate->entered());  // the bridge is in the plug-in's start
-    gate->release();
-    REQUIRE(gate->wentOn());
     const auto& out = backend.capture().channels[0];
     CHECK(double(out[0]) == 0.5);  // not started yet: passed through, as a refused one is
     const auto lateBefore = engine.bridgeLateCycles();
@@ -3906,15 +3906,35 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     const auto at = [&](int cycle) {
         return double(out[static_cast<std::size_t>(cycle) * 128 + 64]);
     };
-    // Each cycle after the first until one is processed: passed through
-    // (a late start) or silent (a late block), never anything else.
-    int cycle = 1, unprocessed = 0;
+    host::Instance* instance = pool.find(fxId);
+    REQUIRE(instance);
+    // The start held over three more cycles, as a slow runner's answer came
+    // (CI 45267253541): each passes audio through and only looks for the
+    // answer, so none is late (ADR-0101).
+    constexpr int kHeld = 3;
+    int cycle = 1, unprocessed = 0, starting = 0;
+    for (; cycle <= kHeld; ++cycle) {
+        backend.run(1);  // on this thread: the instance is read after it
+        CHECK(at(cycle) == 0.5);
+        CHECK(instance->startUnanswered());
+        ++starting;
+    }
+    CHECK(engine.bridgeLateCycles() == lateBefore);
+    gate->release();
+    REQUIRE(gate->wentOn());
+    // Each cycle after those until one is processed: passed through while
+    // the bridge's answer is still unseen (not late), or silent or passed
+    // through otherwise (a late cycle), never anything else.
     for (; cycle < kCycles / 2; ++cycle) {
-        backend.run(1);
+        backend.run(1);  // on this thread: the instance is read after it
         if (at(cycle) == doctest::Approx(processed).epsilon(1e-4)) break;
         CHECK((at(cycle) == 0.5 || at(cycle) == 0.0));
-        ++unprocessed;
+        if (at(cycle) == 0.5 && instance->startUnanswered())
+            ++starting;
+        else
+            ++unprocessed;
     }
+    MESSAGE(starting << " cycles passed through awaiting the start's answer");
     REQUIRE_MESSAGE(cycle < kCycles / 2, "the started bridge never processed a block");
     // Once started, a cycle is processed or, late, silent: never passed through.
     for (int more = 0; more < 16; ++more) {
@@ -3924,10 +3944,8 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
         CHECK(at(cycle) == 0.0);
         ++unprocessed;
     }
-    // Every cycle that was not processed was a late one.
+    // Every other cycle that was not processed was a late one.
     CHECK(unprocessed <= static_cast<int>(engine.bridgeLateCycles() - lateBefore));
-    host::Instance* instance = pool.find(fxId);
-    REQUIRE(instance);
     CHECK_FALSE(instance->failed());
     CHECK(instance->processing());
     CHECK(engine.processErrors() == 0);
