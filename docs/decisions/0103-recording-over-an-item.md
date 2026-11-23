@@ -27,25 +27,33 @@ timeline start have clipped it).
    there is none. When the pass starts before an item and runs into it, or the target is locked,
    looped, or holds the other kind of material (MIDI under an audio pass), the new item carries a
    `record.stack_skipped` warning naming the item and why, so a doubling is never silent.
-2. **The item does not change.** Its position and length stay; the new take reads the recording by the
-   timeline mapping (`start_offset` negative when the pass starts after the item, so the first part
-   is silent; positive past the end of a short pass). What lies beyond the item stays in the file,
-   hidden, and the commit warns `record.take_beyond_item`.
+2. **The item's extent does not change.** Its position and length stay; the new take reads the
+   recording by the timeline mapping (`start_offset` negative when the pass starts after the item,
+   so the first part is silent; positive past the end of a short pass). What lies beyond the item
+   stays in the file, hidden, and the commit warns `record.take_beyond_item`.
 3. **A comp run** (adjacent pieces holding the same takes) gets the take on every piece, so it stays
-   take-compatible and `take.comp` keeps working; a piece the pass does not touch is silent there
-   and keeps its heard take. A locked piece makes the whole pass a new item.
-4. **Which take is heard**: on the pieces the pass touches, the newest whole pass, else the last (the
-   loop rule). The new take is heard also when the target's active take followed the context
-   (ADR-0098): the following take stays as another take, untouched, and `record.follow_kept` says so.
-   Loop passes are appended in order, one take per pass.
+   take-compatible and `take.comp` keeps working. A locked piece makes the whole pass a new item.
+4. **Which take is heard: where it was recorded, and nothing else.** (Decided 2026-11-23 on round
+   132, replacing "the new take is heard on every piece the pass touches", which left the rest of
+   the item silent: a pass over bar 5 of eight bars made bars 1-4 and 6-8 mute.) In the commit's
+   own transaction the pass's stretch is comped to the new take through `take.comp` (the default
+   crossfade for audio, hard cuts for MIDI, `bypass_groups`), and everything outside it keeps
+   playing what it played, in a comp as well: the item becomes the pieces before, the pass, and
+   after, as `take.comp` makes them (one undo step). A pass that covers the whole item or run
+   (or more) makes the new take heard whole with no comp. Loop passes are appended in order, one
+   take per pass, and the newest pass is heard over each stretch of the loop range, older passes
+   staying as takes. The new take is heard also when the target's active take followed the
+   context (ADR-0098): the following take stays as another take, untouched, over the rest, and
+   `record.follow_kept` says so. A comp the commit made carries `take.comp`'s own warnings.
 5. **MIDI**: the take is a new source with the played notes only, in a copy for each piece of a run.
    `midi_overdub` keeps its own rule (the played notes merged into the active take's, a new take),
    and its `record.follow_kept` leaves a following item alone as before.
-6. **The setting** lives in the app's preferences (`stack_recorded_takes`, default true), is pushed into
-   the engine (`EngineApp::setStackRecordedTakes`, default true) and is read and set by agents with
-   `record.get` and `record.set {stack_takes}` (a machine setting, not an undo step, not in the
-   project). A session with no preference file (headless, tests) uses the default for the process;
-   `record.set` lasts for the process. Off: every pass is laid as items, as before.
+6. **The setting** is the engine's (`EngineApp::setStackRecordedTakes`, default true) and is read
+   and set by agents with `record.get` and `record.set {stack_takes}` (a machine setting, not an
+   undo step, not in the project). It lasts for the process. Keeping it between runs is a client's
+   job, to be built with the GUI's Preferences row (`stack_recorded_takes`); until then nothing
+   does, and a headless session always starts with the default. Off: every pass is laid as items,
+   as before.
 7. **Replays** do not read the setting. The decision is made at commit time and stored in
    `record.commit`'s arguments (`stack`); a history without it replays laid as items. A replay on a
    session where the target is gone lays a new item. A recovery (`project.recover`) never stacks: it
@@ -55,8 +63,15 @@ timeline start have clipped it).
 
 - Recording a fix over a bar leaves one item with another take, ready for `take.comp` or
   `take.activate`; nothing needs muting.
-- A punch-in inside an item is heard as the new take for the whole item (silent outside the punch):
-  comp it with `take.comp`. The GUI step may add a comp of the punch range on top.
+- A punch-in inside an item is heard over the punch range and nowhere else: the item plays what it
+  did before and after it, with the new take in the middle, and `take.comp` or `take.activate`
+  can still choose differently.
+- **Edit groups.** Stacking is per recorded track. Recording only some tracks of an edit group
+  leaves their take counts out of step (the others get no take), so a later group `take.comp` that
+  plays the new index is refused with `comp.group_takes` naming the tracks that lack it; indices
+  they have still comp the group. This is a stated limit: the commit warns `record.stack_group`
+  naming the tracks left behind, and arming every track of the group keeps them level. (A silent
+  placeholder take on the others is a possible later answer.)
 - Existing recordings, projects and histories are unchanged; the default changes what a new
   recording over an item does, and `record.set {stack_takes: false}` restores the old behaviour.
 - The result of a recording lists `stacked: true` when the takes went into an existing item.

@@ -1387,9 +1387,11 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "How a recording pass over an item is kept (stack_takes).";
         c.description =
-            "stack_takes true: recording over an item makes a new take of it (the item's position "
-            "and length do not change; the new take is heard); false: every pass is laid as "
-            "new items over what is there. A machine setting, not part of the project.";
+            "stack_takes true: recording over an item makes a new take of it, heard where it was "
+            "recorded (the rest of the item plays what it did; the item's extent does not "
+            "change); false: every pass is laid as new items over what is there. A machine "
+            "setting, not part of the project; nothing keeps it between runs yet (a client may "
+            "keep it and set it at start).";
         c.tags = {"transport", "take"};
         c.args = schema::object<NoArgs>("no_args").build();
         c.result = recordSettingsSchema();
@@ -1407,12 +1409,14 @@ void registerTakeCommands(cmd::Registry& registry) {
         c.summary = "Choose whether recording over an item makes a take of it; returns it.";
         c.description =
             "stack_takes true (the default): a pass that starts inside an unlocked, non-looping "
-            "item of the track becomes a new, heard take of that item (a comp's pieces all get "
-            "it); false: every pass is laid as new items, layered over what is there. Not an undo "
-            "step and not saved in the project. The GUI keeps it with its preferences; a headless "
-            "session has no preference file, so the choice lasts for the process only. The "
-            "setting is read when a recording is committed and stored in that commit, so undo, "
-            "redo and merges do not depend on it later.";
+            "item of the track becomes a new take of that item, heard over the stretch the pass "
+            "covers while the rest of the item keeps playing what it did (a comp's pieces all "
+            "get it; a pass over the whole item is heard whole); false: every pass is laid as "
+            "new items, layered over what is there. Not an undo step and not saved in the "
+            "project. The setting lasts for the process; a client that keeps preferences may "
+            "store it and set it again at start (the GUI's Preferences row is not built yet), "
+            "and a headless session does not. It is read when a recording is committed and "
+            "stored in that commit, so undo, redo and merges do not depend on it later.";
         c.tags = {"transport", "take"};
         c.args = schema::object<RecordSetArgs>("record_set_args")
                      .field("stack_takes", &RecordSetArgs::stackTakes, schema::boolean())

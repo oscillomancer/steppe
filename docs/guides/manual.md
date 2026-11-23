@@ -510,12 +510,16 @@ the name bar pulls a take out into an item of its own.
 
 **Recording over an item** adds a take to it instead of laying a second item on top: arm the
 track, put the playhead (or a punch-in) inside the item and record, and the item keeps its place
-and length and gains a take, which you hear; the older takes stay and **Show all takes** (or
+and gains a take, which you hear where you recorded it: punch into bar 5 of an eight-bar item and
+bars 1 to 4 and 6 to 8 go on playing what they did, with the new take in bar 5 (the item is split
+into pieces there, with a short crossfade, as **take.comp** makes them; one undo puts it back). A
+pass over the whole item is heard whole. The older takes stay and **Show all takes** (or
 `take.comp`) lets you pick between them. A pass that starts before the item, or into a locked or
 looped item, still makes a new item, and the recording says so. If the pass runs past the item's
 end, the rest stays in the take, hidden; lengthen the item to hear it. If the item was a comp
-(several pieces of one set of takes), every piece gets the take. With a punch-in the new take is
-silent outside the punch, so comp it with the earlier take. Agents turn this off with
+(several pieces of one set of takes), every piece gets the take. If you record only some of the
+tracks of an edit group, the others do not get a take, and the recording says so: arm every track
+of the group to keep their takes level. Agents turn this off with
 `record.set {stack_takes: false}` (every pass is then laid as items, as in older versions);
 `record.get` reads it. The app's own Preferences row for it is not built yet; until then the
 setting lasts until Steppe quits.

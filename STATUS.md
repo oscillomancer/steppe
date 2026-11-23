@@ -1056,16 +1056,19 @@ instructions are in `docs/guides/installing.md`.
   render the selected items through their FX (MIDI to audio) in place, in
   place deleting the FX, or as a new take. Trims act on every selected item.
 - **Recording over an item** (ADR-0103, session-model "Recording over an item"): a pass that
-  starts inside an unlocked, non-looping item of the track is a new heard take of it (the item's
-  position and length stay; a comp's pieces all get it; a following take stays as another take;
-  loop passes append in order); a pass that starts before an item, or into a locked or looped
+  starts inside an unlocked, non-looping item of the track is a new take of it, heard where it was
+  recorded (the item's extent stays; the rest plays what it did, through a `take.comp` of the pass's
+  stretch made in the same commit, so a punch-in splits the item into before, the pass and after; a
+  pass over the whole item is heard whole; a comp's pieces all get the take; a following take
+  stays as another take; loop passes append in order, the newest heard over the loop); a pass that starts before an item, or into a locked or looped
   one, is a new item with `record.stack_skipped`; `record.get` / `record.set {stack_takes}` (default
   true, a machine setting that lasts for the process). The decision is stored in `record.commit`
   (`stack`), so replays do not read the setting; `project.recover` never stacks. Limits: the GUI's
-  Preferences row and its saving of the setting are not built (the setting is the engine's, default
-  true, and does not persist); a punch-in inside an item is heard as the new take for the whole
-  item (silent outside the punch) until `take.comp` or `take.activate` chooses; `midi_overdub` is
-  unchanged.
+  Preferences row and any keeping of the setting between runs are not built (the setting is the
+  engine's, default true, and a client may set it at start); recording only some tracks of an edit
+  group leaves the others' take counts behind, so a later group `take.comp` playing the new index is
+  refused with `comp.group_takes` (the commit warns `record.stack_group` naming them); `midi_overdub`
+  is unchanged.
 - **Comping** (session-model §1.5.1): `take.comp {item|items, spans, crossfade?,
   crossfade_shape?}` and `take.comp.get` make a comp from an item's takes (a loop
   recording's passes): the item is split where the take changes, every piece keeps all

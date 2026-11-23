@@ -12,6 +12,7 @@
 #include "source_preparation.h"
 #include "supple/model/comp.h"
 #include "supple/model/freeze.h"
+#include "supple/model/groups.h"
 #include "supple/model/numeric.h"
 #include "suspects.h"
 
@@ -26,6 +27,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <numbers>
 #include <set>
@@ -3212,7 +3214,17 @@ std::pair<std::int64_t, std::int64_t> itemSamples(const model::Session& s, const
 struct StackTarget {
     Id target;
     std::vector<Id> pieces;
+    std::int64_t coreStart = 0, coreEnd = 0;  // the run's extent, crossfades taken out
     std::optional<RecordingWarning> skipped;
+};
+
+// What stacking needs besides the transaction: take.comp, to make a partial pass heard where it
+// was recorded (it returns the command's warnings through its second argument), and the tracks this
+// commit records, to say when an edit group is left behind.
+using CompFn = std::function<Result<json::Value>(json::Value, std::vector<RecordingWarning>&)>;
+struct StackEnv {
+    CompFn comp;
+    std::vector<Id> recorded;
 };
 
 StackTarget stackTarget(const model::Session& s, const RecordedTake& r, const ItemPlan& ip,
@@ -3251,9 +3263,16 @@ StackTarget stackTarget(const model::Session& s, const RecordedTake& r, const It
                                                             : 0;
     };
     std::vector<Id> pieces{*target};
+    {
+        const auto [from, to] = itemSamples(s, *s.items.find(*target), rate);
+        out.coreStart = from;
+        out.coreEnd = to;
+    }
     if (auto run = model::compRun(s, *target, {}); run && run->size() > 1) {
         pieces.clear();
         for (const auto& p : *run) pieces.push_back(p.item);
+        out.coreStart = run->front().coreStart;
+        out.coreEnd = run->back().coreEnd;
     }
     for (Id piece : pieces) {
         const model::Item& it = *s.items.find(piece);
@@ -3290,45 +3309,170 @@ void warnBeyond(const model::Session& s, const RecordedTake& r, const ItemPlan& 
          "/item", "item.set {length} or item.trim reveals it", r.track.str(), r.file.string()});
 }
 
+// What a pass makes heard (ADR-0103): each pass over [lo, hi) of the timeline, a newer one over an
+// older one, cut to the run [from, to). A stretch no pass covers is not listed (it keeps what it
+// played); neighbours of one pass are one stretch.
+struct Heard {
+    std::int64_t lo, hi;
+    std::size_t pass;
+};
+
+std::vector<Heard> paintPasses(const std::vector<std::pair<std::int64_t, std::int64_t>>& passes,
+                               std::int64_t from, std::int64_t to) {
+    std::set<std::int64_t> cuts{from, to};
+    for (const auto& [lo, hi] : passes)
+        for (const std::int64_t at : {lo, hi})
+            if (at > from && at < to) cuts.insert(at);
+    std::vector<Heard> out;
+    for (auto it = cuts.begin(); std::next(it) != cuts.end(); ++it) {
+        const std::int64_t a = *it, b = *std::next(it);
+        std::optional<std::size_t> newest;
+        for (std::size_t k = 0; k < passes.size(); ++k)
+            if (passes[k].first <= a && b <= passes[k].second) newest = k;
+        if (!newest) continue;
+        if (!out.empty() && out.back().hi == a && out.back().pass == *newest)
+            out.back().hi = b;
+        else
+            out.push_back({a, b, *newest});
+    }
+    return out;
+}
+
+// Where the new takes are heard: over the whole run when a pass (or the newest pass over each
+// stretch) covers it, else through take.comp, so that the stretch the pass covers plays the new
+// take and everything outside it plays what it played before, crossfaded at the seams, in the same
+// transaction. `made[piece]` are the new takes of each piece in pass order, `base` the take count
+// before them (the index of the first).
+Result<std::size_t> hearPasses(const StackEnv& env, model::EditTxn& t, const model::Session& s,
+                               const StackTarget& st, const ItemPlan& ip,
+                               const std::vector<Run>& runs, double rate,
+                               const std::vector<std::vector<Id>>& made, std::size_t base,
+                               bool midi, std::vector<RecordingWarning>& warnings) {
+    std::vector<std::pair<std::int64_t, std::int64_t>> passes;
+    for (const TakePlan& plan : ip.takes) {
+        const Run& run = runs[plan.run];
+        passes.emplace_back(std::max(run.t0, ip.start),
+                            std::min(run.t0 + (run.to - run.from), ip.end));
+    }
+    const std::vector<Heard> heard = paintPasses(passes, st.coreStart, st.coreEnd);
+    std::size_t newest = 0;
+    for (const Heard& h : heard) newest = std::max(newest, h.pass);
+    if (heard.empty()) return ip.takes.size() - 1;
+    if (heard.size() == 1 && heard[0].lo <= st.coreStart && heard[0].hi >= st.coreEnd) {
+        for (std::size_t k = 0; k < st.pieces.size(); ++k)
+            t.modify<model::Item>(st.pieces[k],
+                                  [&](model::Item& x) { x.activeTake = made[k][heard[0].pass]; });
+        return heard[0].pass;
+    }
+    if (!env.comp) {  // no command bus: the whole run plays the newest pass heard
+        for (std::size_t k = 0; k < st.pieces.size(); ++k)
+            t.modify<model::Item>(st.pieces[k],
+                                  [&](model::Item& x) { x.activeTake = made[k][newest]; });
+        return newest;
+    }
+    auto args = json::Value::object();
+    args["item"] = st.target.str();
+    args["bypass_groups"] =
+        true;  // the pass is this track's; its group's other tracks are not comped
+    if (midi) args["crossfade"] = 0.0;
+    auto spans = json::Value::array();
+    for (const Heard& h : heard) {
+        auto span = json::Value::object();
+        span["from"] = s.timeMap->beatAt(static_cast<double>(h.lo) / rate);
+        span["to"] = s.timeMap->beatAt(static_cast<double>(h.hi) / rate);
+        span["index"] = static_cast<std::int64_t>(base + h.pass);
+        spans.push_back(std::move(span));
+    }
+    args["spans"] = std::move(spans);
+    auto done = env.comp(std::move(args), warnings);
+    if (!done) {
+        Error e = std::move(done).error();
+        e.message = "recording over " + st.target.str() + ": " + e.message;
+        return e;
+    }
+    return newest;
+}
+
+// A pass over a track of an edit group that other tracks of the group did not record: their take
+// counts are now one behind, so a group take.comp that plays the new index is refused.
+void warnGroup(const model::Session& s, const RecordedTake& r, const ItemPlan& ip,
+               const StackEnv& env, RecordedInfo& info) {
+    std::string behind;
+    for (const Id track : model::linkedTracks(s, r.track, "edit")) {
+        if (track == r.track ||
+            std::find(env.recorded.begin(), env.recorded.end(), track) != env.recorded.end())
+            continue;
+        const double rate = s.project->sampleRate;
+        const bool has = std::any_of(s.items.begin(), s.items.end(), [&](const auto& e) {
+            if (e.value->track != track || e.value->lane) return false;
+            const auto [from, to] = itemSamples(s, *e.value, rate);
+            return from < ip.end && to > ip.start;
+        });
+        if (!has) continue;
+        if (!behind.empty()) behind += ", ";
+        behind += track.str() + " (" + model::trackLabel(s, track) + ")";
+    }
+    if (behind.empty()) return;
+    if (!info.warnings) info.warnings.emplace();
+    info.warnings->push_back(
+        {"record.stack_group",
+         r.track.str() + " is in an edit group, and " + behind +
+             " did not record: their take counts are now one behind, so a group take.comp that "
+             "plays the new take index is refused (comp.group_takes)",
+         "/item",
+         "arm every track of the group to record them together, or comp the tracks one by one "
+         "with bypass_groups",
+         r.track.str(), r.file.string()});
+}
+
 // The pass as new takes of every piece of `st` (audio): each reads the recording by the same
 // timeline mapping, so before the pass starts and after it ends a take is silent, and the pieces of
-// a run still continue one another. A piece the pass touches plays the newest whole pass, else the
-// last; one it does not touch keeps its take.
-RecordedInfo stackAudio(model::EditTxn& t, const model::Session& s, const RecordedTake& r,
-                        const std::vector<Run>& runs, const ItemPlan& ip, double rate, Id source,
-                        const StackTarget& st) {
+// a run still continue one another. What the pass covers is then heard through those takes and
+// everything outside it keeps what it played (hearPasses).
+Result<RecordedInfo> stackAudio(model::EditTxn& t, const model::Session& s, const RecordedTake& r,
+                                const std::vector<Run>& runs, const ItemPlan& ip, double rate,
+                                Id source, const StackTarget& st, const StackEnv& env) {
     RecordedInfo info;
     info.warnings = recordingWarnings(r);
-    for (Id piece : st.pieces) {
+    const std::size_t base = s.items.find(st.target)->takes.size();
+    std::vector<std::vector<Id>> made(st.pieces.size());
+    for (std::size_t m = 0; m < st.pieces.size(); ++m) {
+        const Id piece = st.pieces[m];
         const model::Item& it = *s.items.find(piece);
         const auto [from, to] = itemSamples(s, it, rate);
-        std::vector<Id> made;
-        std::optional<Id> active;
+        (void)to;
         for (std::size_t k = 0; k < ip.takes.size(); ++k) {
             const Run& run = runs[ip.takes[k].run];
-            const std::int64_t end = run.t0 + (run.to - run.from);
             model::Take take;
             take.source = source;
             take.startOffset = static_cast<double>(run.from + (from - run.t0)) / rate;
             take.name = r.file.stem().string();
             if (ip.takes.size() > 1) take.name += " pass " + std::to_string(k + 1);
-            made.push_back(t.create(std::move(take)));
-            if (run.t0 <= from && end >= to) active = made.back();
+            made[m].push_back(t.create(std::move(take)));
         }
-        if (!active) active = made.back();
-        const bool touched = from < ip.end && to > ip.start;
         t.modify<model::Item>(piece, [&](model::Item& x) {
-            for (Id tk : made) x.takes.push_back(tk);
-            if (touched) x.activeTake = *active;
+            for (Id tk : made[m]) x.takes.push_back(tk);
         });
-        if (piece == st.target) {
-            info.item = piece.str();
-            info.takes.clear();
-            for (Id tk : made) info.takes.push_back(tk.str());
-            info.take = (touched ? *active : *it.activeTake).str();
+    }
+    std::vector<RecordingWarning> compWarnings;
+    auto newest = hearPasses(env, t, s, st, ip, runs, rate, made, base, false, compWarnings);
+    if (!newest) return std::move(newest).error();
+    if (!compWarnings.empty()) {
+        if (!info.warnings) info.warnings.emplace();
+        for (auto& w : compWarnings) {
+            w.track = r.track.str();
+            w.file = r.file.string();
+            info.warnings->push_back(std::move(w));
         }
     }
+    for (std::size_t m = 0; m < st.pieces.size(); ++m)
+        if (st.pieces[m] == st.target) {
+            info.item = st.target.str();
+            for (Id tk : made[m]) info.takes.push_back(tk.str());
+            info.take = made[m][*newest].str();
+        }
     warnBeyond(s, r, ip, rate, st, info);
+    warnGroup(s, r, ip, env, info);
     info.track = r.track.str();
     info.file = r.file.string();
     info.stacked = true;
@@ -3339,9 +3483,9 @@ RecordedInfo stackAudio(model::EditTxn& t, const model::Session& s, const Record
 
 // The same for a MIDI pass: a source with the played notes (from the start of the run, one copy for
 // each piece with its own start offset, as item.split leaves them), a take of each piece.
-RecordedInfo stackMidi(model::EditTxn& t, const model::Session& s, const RecordedTake& r,
-                       const std::vector<Run>& runs, const ItemPlan& ip, double rate,
-                       const StackTarget& st) {
+Result<RecordedInfo> stackMidi(model::EditTxn& t, const model::Session& s, const RecordedTake& r,
+                               const std::vector<Run>& runs, const ItemPlan& ip, double rate,
+                               const StackTarget& st, const StackEnv& env) {
     RecordedInfo info;
     info.warnings = recordingWarnings(r);
     const model::Track* tr = s.tracks.find(r.track);
@@ -3363,15 +3507,14 @@ RecordedInfo stackMidi(model::EditTxn& t, const model::Session& s, const Recorde
         played.push_back(std::move(seq));
     }
     bool followed = false;
-    for (Id piece : st.pieces) {
+    const std::size_t base = s.items.find(st.target)->takes.size();
+    std::vector<std::vector<Id>> made(st.pieces.size());
+    for (std::size_t m = 0; m < st.pieces.size(); ++m) {
+        const Id piece = st.pieces[m];
         const model::Item& it = *s.items.find(piece);
         const auto [from, to] = itemSamples(s, it, rate);
         const double shift = model::itemSpan(s, it).startBeat - runStart;
-        std::vector<Id> made;
-        std::optional<Id> active;
         for (std::size_t k = 0; k < played.size(); ++k) {
-            const Run& run = runs[ip.takes[k].run];
-            const std::int64_t end = run.t0 + (run.to - run.from);
             model::MidiSource src;
             src.sequence = played[k];
             model::Take take;
@@ -3379,35 +3522,45 @@ RecordedInfo stackMidi(model::EditTxn& t, const model::Session& s, const Recorde
             take.startOffset = shift;
             take.name = (tr && !tr->name.empty() ? tr->name : r.track.str()) + " MIDI";
             if (played.size() > 1) take.name += " pass " + std::to_string(k + 1);
-            made.push_back(t.create(std::move(take)));
-            if (run.t0 <= from && end >= to) active = made.back();
+            made[m].push_back(t.create(std::move(take)));
         }
-        if (!active) active = made.back();
         const bool touched = from < ip.end && to > ip.start;
         if (touched && it.activeTake)
             if (const model::Take* was = s.takes.find(*it.activeTake))
                 followed = followed || was->follow != model::ClipFollow::None;
         t.modify<model::Item>(piece, [&](model::Item& x) {
-            for (Id tk : made) x.takes.push_back(tk);
-            if (touched) x.activeTake = *active;
+            for (Id tk : made[m]) x.takes.push_back(tk);
         });
-        if (piece == st.target) {
-            info.item = piece.str();
-            for (Id tk : made) info.takes.push_back(tk.str());
-            info.take = (touched ? *active : *it.activeTake).str();
+    }
+    std::vector<RecordingWarning> compWarnings;
+    auto newest = hearPasses(env, t, s, st, ip, runs, rate, made, base, true, compWarnings);
+    if (!newest) return std::move(newest).error();
+    if (!compWarnings.empty()) {
+        if (!info.warnings) info.warnings.emplace();
+        for (auto& w : compWarnings) {
+            w.track = r.track.str();
+            w.file = r.file.string();
+            info.warnings->push_back(std::move(w));
         }
     }
+    for (std::size_t m = 0; m < st.pieces.size(); ++m)
+        if (st.pieces[m] == st.target) {
+            info.item = st.target.str();
+            for (Id tk : made[m]) info.takes.push_back(tk.str());
+            info.take = made[m][*newest].str();
+        }
     if (followed) {
         if (!info.warnings) info.warnings.emplace();
         info.warnings->push_back(
             {"record.follow_kept",
              "the item " + st.target.str() +
-                 " followed the project's context: the pass is its new take, heard now, and "
-                 "the following take stays as another take, untouched",
+                 " followed the project's context: the pass is its new take, heard where it was "
+                 "recorded, and the following take stays as another take, untouched",
              "/item", "take.activate the following take to hear it again", r.track.str(),
              r.file.string()});
     }
     warnBeyond(s, r, ip, rate, st, info);
+    warnGroup(s, r, ip, env, info);
     info.track = r.track.str();
     info.stacked = true;
     info.seconds = static_cast<double>(ip.end - ip.start) / rate;
@@ -3480,7 +3633,7 @@ Result<bool> overdubMidi(model::EditTxn& t, const model::Session& s, const Recor
 
 Status commitMidiTake(model::EditTxn& t, const model::Session& s, const RecordedTake& r,
                       const std::vector<Run>& runs, const std::vector<ItemPlan>& items, double rate,
-                      std::vector<RecordedInfo>& out, bool stack) {
+                      std::vector<RecordedInfo>& out, bool stack, const StackEnv& env) {
     const model::Track* tr = s.tracks.find(r.track);
     std::optional<Id> kept;  // a following item the overdub left alone
     if (tr && tr->record.mode == model::RecordMode::MidiOverdub) {
@@ -3497,7 +3650,9 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
         if (stacking) {
             StackTarget target = stackTarget(s, r, ip, rate, true);
             if (!target.pieces.empty()) {
-                out.push_back(stackMidi(t, s, r, runs, ip, rate, target));
+                auto stacked = stackMidi(t, s, r, runs, ip, rate, target, env);
+                if (!stacked) return std::move(stacked).error();
+                out.push_back(std::move(*stacked));
                 continue;
             }
             skipped = std::move(target.skipped);
@@ -3674,6 +3829,20 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
     std::vector<RecordedInfo> out;
     const bool live = pendingHashes != nullptr;  // else record.commit replays them
     const model::Session s = view();
+    // take.comp makes a pass that covers part of an item heard where it was recorded; the commit's
+    // own transaction is the one it writes into (ADR-0103).
+    StackEnv env;
+    for (const auto& r : takes) env.recorded.push_back(r.track);
+    if (stack && commands_ && commands_->registry().find("take.comp"))
+        env.comp = [this](json::Value args,
+                          std::vector<RecordingWarning>& warnings) -> Result<json::Value> {
+            cmd::Context ctx = makeContext({cmd::Origin::Type::Internal, "record", ""});
+            ctx.provide<const cmd::Registry>(commands_->registry());
+            auto done = commands_->registry().find("take.comp")->invoke(args, ctx);
+            for (const auto& w : ctx.warnings())
+                warnings.push_back({w.code, w.message, w.path, {}, {}, {}});
+            return done;
+        };
     if (!live)  // commitTakes checked them before its transaction
         for (const auto& r : takes) {
             if (r.frames <= 0) continue;
@@ -3751,7 +3920,7 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
         if (items.empty()) continue;
         if (r.isMidi) {
             if (!r.midi.empty())
-                SUPPLE_TRY(commitMidiTake(txn(), s, r, runs, items, rate, out, stack));
+                SUPPLE_TRY(commitMidiTake(txn(), s, r, runs, items, rate, out, stack, env));
             continue;
         }
         // Known hashes may reuse a source; freshly closed files commit now
@@ -3792,7 +3961,9 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
             if (stack) {
                 StackTarget target = stackTarget(s, r, ip, rate, false);
                 if (!target.pieces.empty()) {
-                    out.push_back(stackAudio(t, s, r, runs, ip, rate, source, target));
+                    auto stacked = stackAudio(t, s, r, runs, ip, rate, source, target, env);
+                    if (!stacked) return std::move(stacked).error();
+                    out.push_back(std::move(*stacked));
                     continue;
                 }
                 skipped = std::move(target.skipped);

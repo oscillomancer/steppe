@@ -2966,8 +2966,8 @@ go on a lane that plays beside the following item's, never on one that replaces 
 they are a new lane outside the comp.
 
 **Recording over an item (ADR-0103).** With `stack_takes` on (the default; `record.get` and
-`record.set {stack_takes}`, a machine setting kept with the app's preferences, `true` for a process
-that has none), a pass becomes a take of an item instead of a new item. Per armed track and per
+`record.set {stack_takes}`, a machine setting of the engine that lasts for the process; a client may
+keep it and set it at start, and none does yet), a pass becomes a take of an item instead of a new item. Per armed track and per
 placed span (the pass after the punch range and the timeline start clip it: one span per run, or one
 on the loop range with a take per pass):
 
@@ -2977,7 +2977,7 @@ on the loop range with a take per pass):
   new item and warns `record.stack_skipped` naming that item; so does a target that is locked,
   looped, or holds the other kind of material (a MIDI pass under audio, an audio pass under MIDI),
   or a comp piece that is locked.
-- The item's `position` and `length` never change. The new take (audio: the pass's media source,
+- The item's `position` and `length` never change by the pass itself. The new take (audio: the pass's media source,
   named `<file>` or `<file> pass n`; MIDI: a source with the played notes only, named `<track> MIDI`,
   `follow: none`, no context) reads the recording by the timeline mapping: `start_offset` is the
   file frame heard at the item's start, so it is negative when the pass starts after the item
@@ -2988,10 +2988,26 @@ on the loop range with a take per pass):
   take on every piece, each with the offset of its own start, so the run keeps its take count, names
   and source continuity and `take.comp` and `take.comp.get` still read it as one comp. MIDI pieces
   each get a copy of the played source with their own `start_offset`, as `item.split` leaves them.
-- Heard afterwards: on each piece the span touches, the newest whole pass (it covers the piece),
-  else the last pass; a piece it does not touch keeps its take. This holds also when the previous
-  heard take followed the context: the new take is heard, the following take stays as another take,
-  untouched, and `record.follow_kept` says so.
+- Heard afterwards (D1, round 132): **where it was recorded, and nowhere else.** Cut to the run's
+  extent (its crossfades taken out), each pass covers a stretch of the timeline, and a newer pass
+  hears over an older one. When one pass covers the whole run, that take is the active take of every
+  piece, no comp. Otherwise the commit calls `take.comp` on the target in the same transaction
+  (`bypass_groups`; the default crossfade for audio, `crossfade: 0` for MIDI, so no
+  `comp.crossfade_skipped`): a span for each stretch, playing the new take's index, and every
+  stretch outside the spans keeps the take its piece played (a comp keeps its pieces there). The
+  item thus becomes up to three pieces (before, the pass, after) for one pass, or more for a loop
+  or a comp, as `take.comp` makes them, and one undo step restores it. The warnings of that
+  `take.comp` (`comp.crossfade_clamped`, `comp.crossfade_skipped`) are part of the recording's
+  warnings. This holds also when the previous heard take followed the context: the new take is
+  heard over the pass, the following take stays as another take and plays elsewhere, untouched,
+  and `record.follow_kept` says so.
+- **Edit groups (a stated limit).** Stacking is per recorded track and takes `bypass_groups`:
+  recording only some tracks of an edit group leaves their take counts out of step with the
+  tracks that were not recorded, and a later group `take.comp` playing the new index is refused
+  with `comp.group_takes` naming those tracks (lower indices still comp the group; a track whose
+  items all have one take is skipped). The commit warns `record.stack_group`, naming the tracks of
+  the group that hold items over the pass and were not recorded; arming every track of the group
+  keeps them level.
 - `midi_overdub` is unchanged (the played notes merged into the active take's, as a new take).
 - The decision is made when a recording is committed and stored in `record.commit`'s arguments
   (`stack`, a boolean; absent in older histories: laid as items), so replays on other branches
