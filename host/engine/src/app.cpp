@@ -2154,7 +2154,13 @@ void EngineApp::retryRestart() {
         restarting_ = false;
         if (engine_) {
             engine_->seek(restartSeconds_);  // the transport position is restored
-            engine_->awaitTransport();       // ... before the tick returns
+            // ... before the tick returns, or the restart says it was not.
+            if (auto placed = engine_->awaitTransport(); !placed) {
+                auto ev = json::Value::object();
+                ev["reason"] = restartReason_;
+                ev["error"] = placed.error().message;
+                emit("engine.error", std::move(ev));
+            }
         }
         return;
     }
@@ -2713,7 +2719,7 @@ Result<TransportInfo> EngineApp::transport(std::string_view action, std::optiona
         SUPPLE_TRY(engine_->prepareSeek(seconds.value_or(0.0)));
         if (!engine_->transport().playing) playStart_ = seconds.value_or(0.0);
     }
-    if (action != "get") engine_->awaitTransport();
+    if (action != "get") SUPPLE_TRY(engine_->awaitTransport());
     engine_->service();
     checkFailures();
     const TransportState t = engine_->transport();

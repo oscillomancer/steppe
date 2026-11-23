@@ -56,6 +56,7 @@
 #include "plan.h"
 #include "realtime_support.h"
 #include "recording.h"
+#include "stalled_backend.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -1110,7 +1111,7 @@ TEST_CASE(
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
     REQUIRE(engine.load(synthSession(0.0)));
     engine.play();
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     CHECK(engine.transport().playing);
     CHECK(engine.transport().sample == 0);
     runAhead(engine, backend, 10, 256);
@@ -1126,15 +1127,15 @@ TEST_CASE(
     engine.pause();
     backend.run(1);  // the rendered audio is dropped: silent at once
     CHECK(peakOf(2560, 2816) == 0.0);
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     CHECK_FALSE(engine.transport().playing);
     CHECK(engine.transport().sample == 2560);  // the listener's position, not the renderer's
     engine.play();                             // resumes there
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     runAhead(engine, backend, 4, 256);
     CHECK(engine.transport().sample == 2560 + 1024);
     engine.seek(1.0);  // while playing
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     CHECK(engine.transport().sample == 48000);
     runAhead(engine, backend, 1, 256);
     CHECK(engine.transport().sample == 48000 + 256);
@@ -1255,7 +1256,7 @@ TEST_CASE("anticipative: a start and a locate are heard as soon as their first r
     runAhead(engine, backend, 10, 256);
     engine.holdRendererFrom(1024);  // each epoch's stream: the locate's first block
     engine.seek(1.0);
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     REQUIRE(engine.awaitRendered(1024));
     backend.run(1);
     CHECK(engine.transport().sample == 48000 + 256);
@@ -2436,7 +2437,7 @@ TEST_CASE("MIDI monitoring: a keyboard plays the instrument live, sample-accurat
             REQUIRE(engine.load(keyboardSession()));
             REQUIRE(engine.awaitPlan());  // everything is live: nothing renders ahead
             if (playing) engine.play();
-            if (playing) engine.awaitTransport();
+            if (playing) REQUIRE(engine.awaitTransport());
             backend.run(120);
             engine.stop();
             const auto& L = backend.capture().channels[0];
@@ -2463,7 +2464,7 @@ TEST_CASE("a live processing error silences the failed device block" * doctest::
         REQUIRE(engine.load(session));
         if (options.anticipative) REQUIRE(engine.awaitPlan());
         engine.play();
-        if (options.anticipative) engine.awaitTransport();
+        if (options.anticipative) REQUIRE(engine.awaitTransport());
         backend.run(2);
         // Inject a process error in the in-tree fixture on the manual audio thread.
         std::vector<std::pair<clap_plugin_t*, decltype(clap_plugin_t::process)>> processes;
@@ -2667,7 +2668,7 @@ TEST_CASE("MIDI recording: events land on the timeline where they were heard, pe
         REQUIRE(engine.startRecording({target}));
         REQUIRE(engine.awaitPlan());  // everything is live: nothing renders ahead
         engine.play();
-        engine.awaitTransport();
+        REQUIRE(engine.awaitTransport());
         backend.run(400);  // 102400 frames
         auto takes = engine.stopRecording();
         REQUIRE(takes);
@@ -2930,7 +2931,7 @@ TEST_CASE("monitoring off while playing: the track plays on live, with its insta
     REQUIRE(engine.load(monitored));
     REQUIRE(engine.awaitPlan());
     engine.play();
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     backend.run(100);  // 25600 frames, all live (nothing renders ahead)
     const Id fx = s.fx.begin()->id;
     host::Instance* const instance = pool.find(fx);
@@ -2979,7 +2980,7 @@ TEST_CASE("a transport write in progress never stalls the audio callback" *
         if (anticipative) REQUIRE(engine.awaitPlan());
         engine.setLoop(0.0, 1.0, true);
         engine.play();
-        engine.awaitTransport();
+        REQUIRE(engine.awaitTransport());
         backend.run(8);
         const std::uint64_t before = EngineTestAccess::epoch(engine);
         const LoopRange old = EngineTestAccess::rtLoop(engine);
@@ -3090,7 +3091,7 @@ TEST_CASE("a keyed plug-in plays in real time as offline, rendered ahead or live
                 if (options.anticipative && !monitored)
                     runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
                 else if (options.anticipative) {
-                    engine.awaitTransport();
+                    REQUIRE(engine.awaitTransport());
                     for (int i = 0; i < (48000 * 2 + 4096) / 128; i += 16) {
                         REQUIRE(engine.awaitRendered(4096));
                         backend.run(16);
@@ -3223,7 +3224,7 @@ TEST_CASE("auxiliary channels play in real time as offline, rendered ahead or li
             if (options.anticipative && !monitored)
                 runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
             else if (options.anticipative) {
-                engine.awaitTransport();
+                REQUIRE(engine.awaitTransport());
                 for (int i = 0; i < (48000 * 2 + 4096) / 128; i += 16) {
                     REQUIRE(engine.awaitRendered(4096));
                     backend.run(16);
@@ -3304,7 +3305,7 @@ TEST_CASE("a multi-out instrument's outputs play in real time as offline (ADR-00
             if (options.anticipative && !monitored)
                 runAhead(engine, backend, (48000 + 4096) / 128, 128);
             else if (options.anticipative) {
-                engine.awaitTransport();
+                REQUIRE(engine.awaitTransport());
                 for (int i = 0; i < (48000 + 4096) / 128; i += 16) {
                     REQUIRE(engine.awaitRendered(4096));
                     backend.run(16);
@@ -6929,4 +6930,24 @@ TEST_CASE(
         CHECK(pool.restarting(gain));  // the published plan leaves it off, as the request asks
         engine.stop();
     }
+}
+
+TEST_CASE("a transport request a stalled device never acts on is reported, not taken as done") {
+    // awaitTransport waits, bounded, for the renderer to act on the request;
+    // a device that stopped calling back never lets it, so the wait ends at
+    // its bound and says so (engine.transport, with a hint), and the callers
+    // refuse with it (transport.*, recording from stop under a playrate)
+    // rather than report a state the engine has not taken. The outcome does
+    // not depend on how long the wait took: no callback ever comes.
+    supple::engine::test::StalledBackend backend;
+    auto pool = makePool();
+    MediaCache media;
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    engine.play();
+    const auto waited = engine.awaitTransport(0.05);
+    REQUIRE_FALSE(waited);
+    CHECK(waited.error().code == "engine.transport");
+    CHECK(waited.error().hint.find("engine.status") != std::string::npos);
+    engine.stop();
 }

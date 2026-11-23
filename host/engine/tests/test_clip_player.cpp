@@ -1445,7 +1445,7 @@ TEST_CASE("a capture keeps what plays as it begins and ends at a relocation" *
         until(220000);
         REQUIRE(engine.captureLaunches(true));
         engine.seek(3.0);
-        engine.awaitTransport();  // as transport.seek does: the executor has placed it
+        REQUIRE(engine.awaitTransport());  // as transport.seek does: the executor has placed it
         until(230000);
         engine.play();
         stopped = false;

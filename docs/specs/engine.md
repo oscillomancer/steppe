@@ -2664,7 +2664,13 @@ harness. See the tooling README for schemas, limits and invocation details.
   64-frame request, 0 xruns, final callback on the JACK thread.
 - **Control:** `engine.start {backend: jack|dummy, block, rate, force_graph}`, `engine.stop`,
   `engine.status`, `transport.play|pause|stop|seek|get`. Transport actions
-  wait (≤ 1 s) for two audio cycles so their answer is the new state;
+  wait (≤ 1 s) for two audio cycles so their answer is the new state; if
+  the device has not run them by then (a stalled device, a starved
+  renderer), the action is refused with `engine.transport`, whose hint
+  points at `engine.status`, rather than answered with the old state. A
+  recording started from stop under a scheduled playrate waits the same
+  way for the renderer to take its start, and is refused alike; a restart
+  that cannot restore the position reports `engine.error`.
   `transport.stop` returns to where play started. `<slug>-engine play FILE`
   plays a project through the device from the CLI.
 - **Anticipative processing** (ADR-0012, `EngineOptions`, default on): a

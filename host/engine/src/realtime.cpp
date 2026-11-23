@@ -1173,22 +1173,35 @@ Engine::MeterClock Engine::meterClock() const {
     return clock;
 }
 
-void Engine::awaitTransport(double timeoutSeconds) {
-    if (!backend_) return;
+Status Engine::awaitTransport(double timeoutSeconds) {
+    if (!backend_) return okStatus();
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::duration<double>(timeoutSeconds);
+    // Whether it was done by the deadline: checked once more after it, so a
+    // wait that slept past it still counts what happened meanwhile.
     auto waitUntil = [&](auto done) {
-        while (!done() && std::chrono::steady_clock::now() < deadline)
+        while (!done()) {
+            if (std::chrono::steady_clock::now() >= deadline) return done();
             std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        return true;
     };
+    bool done = true;
     if (options_.anticipative) {
         const std::uint64_t e = epoch_.load();
         const bool want = wantPlaying_.load();
-        waitUntil([&] { return epochDone_.load() >= e && reportedPlaying_.load() == want; });
+        done = waitUntil([&] { return epochDone_.load() >= e && reportedPlaying_.load() == want; });
     } else if (backend_->ownsThread()) {
         const std::uint64_t before = cycles_.load();  // the first may have begun before
-        waitUntil([&] { return cycles_.load() >= before + 2; });
+        done = waitUntil([&] { return cycles_.load() >= before + 2; });
     }
+    if (done) return okStatus();
+    return Error("engine.transport",
+                 "the audio engine did not act on the transport request within " +
+                     std::to_string(timeoutSeconds) + " s",
+                 {},
+                 "the audio device may have stalled: check engine.status (callbacks, xruns), "
+                 "then try again or restart the engine");
 }
 
 bool Engine::awaitPlan(double timeoutSeconds) {
@@ -2505,7 +2518,9 @@ Status Engine::startRecording(std::vector<RecordTarget> targets, RecordedPunch p
     if (rateScheduling_.load(std::memory_order_acquire) && !(slaved && slaved->syncRate)) {
         if (!wantPlaying_.load(std::memory_order_acquire)) {
             SUPPLE_TRY(prepareSeek(transport().seconds));
-            if (backend_->ownsThread()) awaitTransport();
+            // Recording starts from where the renderer was placed: never from
+            // a position it has not taken.
+            if (backend_->ownsThread()) SUPPLE_TRY(awaitTransport());
         } else {
             const auto heard = readRateClock();
             const auto state =
