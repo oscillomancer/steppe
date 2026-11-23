@@ -218,6 +218,22 @@ bool joinablePieces(const Session& s, Id left, Id right) {
     return true;
 }
 
+CompCrossfade compCrossfade(const Session& s, std::span<const CompPiece> run) {
+    CompCrossfade out;
+    if (run.size() < 2) return out;
+    out.seconds = 0;
+    for (std::size_t i = 0; i + 1 < run.size(); ++i) {
+        const Fade& left = s.items.find(run[i].item)->fadeOut;
+        const Fade& right = s.items.find(run[i + 1].item)->fadeIn;
+        for (const Fade* fade : {&left, &right})
+            if (fade->length > out.seconds) {
+                out.seconds = fade->length;
+                out.shape = fade->shape == FadeShape::Linear ? FadeShape::Linear : FadeShape::Cos;
+            }
+    }
+    return out;
+}
+
 void setItemStartSeconds(const Session& s, Item& it, double startSec) {
     const time::TimeMap& tm = *s.timeMap;
     const ItemSpan span = itemSpan(s, it);
