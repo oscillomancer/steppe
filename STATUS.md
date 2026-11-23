@@ -1536,8 +1536,9 @@ Engine and hosting:
   - macOS: the clip player's take-chain launch case
     (`test_clip_player_live.cpp`) once showed a live/offline difference of
     0.2289 (native CI 45069703846), against real-time = offline. It is
-    unexplained and has not recurred: 120 repetitions of the case on macOS
-    (60 with heap scribbling), a run of every engine entry under parallel load,
+    unexplained and has not recurred: 320 repetitions of the case on macOS
+    (60 with heap scribbling, 200 on the fixed head in native CI
+    45100490939), a run of every engine entry under parallel load,
     a full macOS round, and local sanitizer and heap-perturbation runs all
     passed. The likeliest cause, two test processes sharing a fixture folder
     named by the clock alone, is fixed (folders are named by process and
