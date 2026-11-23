@@ -235,8 +235,16 @@ if(SUPPLE_BUILD_PLUGINS)
       # Again with its switches and choices moved too: a script whose default
       # state is a passthrough (an EQ with every band off) shows its state there.
       add_test(NAME plugin.${name}.reset-stepped COMMAND clap-reset-check "${clap}" ${id} --stepped)
+      # --stepped builds one more instance per switch and choice (Pollard 82, Marram 62), so it
+      # is the long one: about 20 s for Pollard and Marram in dev. ThreadSanitizer runs it seven
+      # to ten times slower, which measured 144 s alone and timed out at 180 s on a busy
+      # machine, so that preset gets room; the others keep 180 s.
+      set(reset_timeout 180)
+      if(SUPPLE_SANITIZE STREQUAL "thread")
+        set(reset_timeout 600)
+      endif()
       set_tests_properties(plugin.${name}.reset plugin.${name}.reset-stepped PROPERTIES
-        LABELS "rt;plugin-reset" TIMEOUT 180)
+        LABELS "rt;plugin-reset" TIMEOUT ${reset_timeout})
       # Bit-identical output in any host blocks, with every parameter automated.
       add_test(NAME plugin.${name}.blocks COMMAND clap-block-check "${clap}" ${id})
       set_tests_properties(plugin.${name}.blocks PROPERTIES LABELS rt TIMEOUT 180)
