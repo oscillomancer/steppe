@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
+#include <supple/harmony/harmony.h>
 #include <supple/notation/notation.h>
 
 #include <doctest/doctest.h>
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <limits>
 #include <random>
+#include <set>
 #include <sstream>
 
 using namespace supple::notation;
@@ -509,5 +511,103 @@ TEST_CASE("notation hands over the chord symbols as compiled (ADR-0098)") {
         REQUIRE(plain);
         CHECK(dump(withSymbol->sequence) == dump(plain->sequence));
         CHECK(plain->chords.empty());
+    }
+}
+
+TEST_CASE("every name harmony::spell produces for a chord place compiles back to its pitch") {
+    // For every root spelling, every quality, a few keys and every pitch 0..127: the name is
+    // one note of a bar and compiles to that pitch (doubles, `B#` and the octave edges included).
+    const std::vector<std::optional<supple::harmony::Key>> keys = {
+        std::nullopt, supple::harmony::Key{{'C', 0}, supple::harmony::Scale::Major},
+        supple::harmony::Key{{'G', 1}, supple::harmony::Scale::Minor},
+        supple::harmony::Key{{'G', -1}, supple::harmony::Scale::Major},
+        supple::harmony::Key{{'C', 1}, supple::harmony::Scale::Chromatic}};
+    std::set<std::pair<int, std::string>> seen;
+    for (const char letter : {'A', 'B', 'C', 'D', 'E', 'F', 'G'})
+        for (const int accidental : {-1, 0, 1})
+            for (const auto& [quality, intervals] : supple::harmony::chordQualities()) {
+                (void)intervals;
+                const supple::harmony::Chord chord{{letter, accidental}, quality, std::nullopt};
+                for (const auto& key : keys)
+                    for (int pitch = 0; pitch < 128; ++pitch)
+                        seen.insert({pitch, supple::harmony::spell(
+                                                pitch, supple::harmony::Place{key, chord})});
+            }
+    CHECK(seen.size() > 128);
+    for (const auto& [pitch, name] : seen) {
+        CAPTURE(name);
+        const auto compiled = compile("voice a\n1: " + name + ":q r:*\n");
+        REQUIRE(compiled);
+        REQUIRE(compiled->sequence.notes.size() == 1);
+        CHECK(compiled->sequence.notes[0].pitch == pitch);
+    }
+}
+
+TEST_CASE("decompile names each note by the place at its start") {
+    using supple::harmony::Chord;
+    using supple::harmony::Key;
+    using supple::harmony::Place;
+    using supple::harmony::Scale;
+    const auto chord = [](std::string_view symbol) { return *supple::harmony::parseChord(symbol); };
+    const Key cMajor{{'C', 0}, Scale::Major};
+    const auto contains = [](const std::string& text, std::string_view part) {
+        return text.find(part) != std::string::npos;
+    };
+    supple::midi::Sequence s;
+    s.length = 7680;
+    // Bar 1 under E, bar 2 under Ab; G#/Ab (68) is the third of E and the root of Ab.
+    s.notes = {{0, 960, 0, 64, 90, 0},
+               {960, 960, 0, 68, 90, 0},
+               {1920, 960, 0, 71, 90, 0},
+               {3840, 960, 0, 68, 90, 0},
+               {4800, 960, 0, 72, 90, 0}};
+    DecompileOptions options;
+    options.key = cMajor;  // placeAt wins over it
+    options.placeAt = [&](std::int64_t tick) {
+        return Place{cMajor, tick < 3840 ? chord("E") : chord("Ab")};
+    };
+    SUBCASE("a chord tone reads by its degree under each chord") {
+        const auto text = decompile(s, options);
+        REQUIRE(text);
+        CHECK(contains(*text, "G#4"));
+        CHECK(contains(*text, "Ab4"));
+        CHECK_FALSE(contains(*text, "A#"));
+        // Bar 1: E4 G#4 B4; bar 2: Ab4 C5 (C is Ab's third).
+        CHECK(contains(*text, "1: E4:q G#4:q B4:q"));
+        CHECK(contains(*text, "2: Ab4:q C5:q"));
+        const auto back = compile(*text);
+        REQUIRE(back);
+        s.canonicalize();
+        CHECK(back->sequence.notes == s.notes);
+    }
+    SUBCASE("with no place the key alone decides, as before") {
+        DecompileOptions keyOnly;
+        keyOnly.key = cMajor;
+        const auto text = decompile(s, keyOnly);
+        REQUIRE(text);
+        CHECK(contains(*text, "Ab4"));  // C major's direction table
+        CHECK_FALSE(contains(*text, "G#4"));
+        CHECK(*decompile(s) == *decompile(s, DecompileOptions{}));
+    }
+    SUBCASE("a tied continuation keeps its first piece's names") {
+        supple::midi::Sequence tied;
+        tied.length = 7680;
+        tied.notes = {{2880, 2880, 0, 68, 90, 0}};  // starts in bar 1 under E, runs into bar 2
+        const auto text = decompile(tied, options);
+        REQUIRE(text);
+        CHECK(contains(*text, "G#4:"));
+        CHECK_FALSE(contains(*text, "Ab4"));
+        CHECK(contains(*text, "~"));
+        const auto back = compile(*text);
+        REQUIRE(back);
+        CHECK(back->sequence.notes == tied.notes);
+    }
+    SUBCASE("a stacked chord is named by one place") {
+        supple::midi::Sequence stack;
+        stack.length = 3840;
+        stack.notes = {{0, 960, 0, 64, 90, 0}, {0, 960, 0, 68, 90, 0}, {0, 960, 0, 71, 90, 0}};
+        const auto text = decompile(stack, options);
+        REQUIRE(text);
+        CHECK(contains(*text, "[E4 G#4 B4]:q"));
     }
 }

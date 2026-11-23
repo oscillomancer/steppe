@@ -540,7 +540,10 @@ of a range as a lead sheet (one line per bar, such as `3: {Fm7}:h {G7}:h`),
 `context.write` writes one back as a diff over the bars it names, `context.at`
 says what holds at a bar, and `key.set` and `chord.set` change one point.
 The key also decides how notes are spelled: the same pitch reads as `Bb` in F
-major and `A#` in D major in the MIDI editor and in `midi.get`. The scale-aware
+major and `A#` in D major in the MIDI editor and in `midi.get`. Under a chord a
+chord tone is spelled by its degree instead (the third of E is `G#`, never `Ab`;
+the seventh of C7 is `Bb`; a diminished seventh on C has `Bbb`), in `midi.get`
+now and in the roll's note names in a later step. The scale-aware
 editing commands (`midi.edit` with `snap_to_scale`, `transpose_degrees` and
 `fit_to_chord`) read the key and chord at each note. A **section** is a region
 the song names (a verse, a chorus): `context.at` names the one that holds,

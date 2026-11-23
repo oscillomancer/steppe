@@ -115,7 +115,7 @@ command, by name, `count` being those commands (a command with several versions 
 and every exposure as before. A `group`, `kind` (`query`, `edit` or `action`) or `tag` that does
 not exist is an error, never an empty list: `command.unknown_group` at `/args/group` (also from
 `registry.groups`) or `command.invalid_args` at `/args/kind` or `/args/tag`, the hint naming the
-valid values. A search that matches nothing is an empty list carrying `filters` (the ones given)
+valid values. A search that matches nothing public (internal commands, which the list still shows, do not count) carries `filters` (the ones given)
 and, for a `text`, `groups`: the groups other than the `group` searched whose line has the word,
 for the wrong group is what the pointer is for. `Registry::groupInfos()` and `Registry::groups()` let a test
 say which prefix has no line and which line has no commands (each binary's tests fail on both).

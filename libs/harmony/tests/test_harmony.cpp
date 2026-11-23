@@ -711,3 +711,285 @@ TEST_CASE("follow allocates nothing, the first call included") {
     CHECK(sum > 0);
 }
 #endif
+
+// --- chord-tone spelling (specs/harmony.md §3.1) ------------------------------------------------
+
+namespace {
+
+Chord chord(std::string_view text) { return *parseChord(text); }
+
+// The tones of a chord by degree, space separated, root first; the slash bass is not a tone.
+std::string toneNames(std::string_view text) {
+    std::string out;
+    for (const ChordTone& t : chordTones(chord(text))) {
+        if (t.degree == "bass") continue;
+        if (!out.empty()) out += ' ';
+        out += printPitchClass(t.name);
+    }
+    return out;
+}
+
+// The 21 root spellings.
+std::vector<PitchClass> allRoots() {
+    std::vector<PitchClass> roots;
+    for (const char letter : {'A', 'B', 'C', 'D', 'E', 'F', 'G'})
+        for (const int accidental : {-1, 0, 1}) roots.push_back({letter, accidental});
+    return roots;
+}
+
+int degreeNumber(std::string_view degree) {
+    int n = 0;
+    for (const char c : degree)
+        if (c >= '0' && c <= '9') n = n * 10 + (c - '0');
+    return n;
+}
+
+}  // namespace
+
+TEST_CASE("a chord tone is named by its degree") {
+    CHECK(toneNames("E") == "E G# B");           // never Ab
+    CHECK(toneNames("C7") == "C E G Bb");        // the seventh is Bb
+    CHECK(toneNames("Bdim7") == "B D F Ab");     // A flat
+    CHECK(toneNames("Cdim7") == "C Eb Gb Bbb");  // B double flat
+    CHECK(toneNames("Cm") == "C Eb G");
+    CHECK(toneNames("Csus4") == "C F G");
+    CHECK(toneNames("Fsus2") == "F G C");
+    CHECK(toneNames("Bbsus4") == "Bb Eb F");
+    CHECK(toneNames("Cadd9") == "C E G D");
+    CHECK(toneNames("C6") == "C E G A");
+    CHECK(toneNames("Cm6") == "C Eb G A");
+    CHECK(toneNames("C5") == "C G");
+    CHECK(toneNames("Cmaj7") == "C E G B");
+    CHECK(toneNames("CmMaj7") == "C Eb G B");
+    CHECK(toneNames("Cm7b5") == "C Eb Gb Bb");
+    CHECK(toneNames("C7sus4") == "C F G Bb");
+    CHECK(toneNames("C9") == "C E G Bb D");
+    CHECK(toneNames("Cmaj9") == "C E G B D");
+    CHECK(toneNames("Cm9") == "C Eb G Bb D");
+    CHECK(toneNames("C11") == "C G Bb D F");  // no third
+    CHECK(toneNames("C13") == "C E Bb D A");  // no fifth
+    CHECK(toneNames("Caug") == "C E G#");
+    CHECK(toneNames("Cdim") == "C Eb Gb");
+    SUBCASE("altered ninths") {
+        CHECK(toneNames("C7b9") == "C E G Bb Db");
+        CHECK(toneNames("B7b9") == "B D# F# A C");
+        CHECK(toneNames("Ab7b9") == "Ab C Eb Gb Bbb");
+        CHECK(toneNames("C7#9") == "C E G Bb Eb");
+        // The sharp nine takes the b3 letter: G over E7#9, never F##.
+        CHECK(toneNames("E7#9") == "E G# B D G");
+        CHECK(toneNames("G7#9") == "G B D F Bb");
+    }
+    SUBCASE("the fifteen doubles of the twelve usual roots") {
+        CHECK(toneNames("Ebdim") == "Eb Gb Bbb");
+        CHECK(toneNames("Abdim") == "Ab Cb Ebb");
+        CHECK(toneNames("C#aug") == "C# E# G##");
+        CHECK(toneNames("F#aug") == "F# A# C##");
+        CHECK(toneNames("Baug") == "B D# F##");
+        CHECK(toneNames("Ebdim7") == "Eb Gb Bbb Dbb");
+        CHECK(toneNames("Fdim7") == "F Ab Cb Ebb");
+        CHECK(toneNames("Abdim7") == "Ab Cb Ebb Gbb");
+        CHECK(toneNames("Bbdim7") == "Bb Db Fb Abb");
+        CHECK(toneNames("Ebm7b5") == "Eb Gb Bbb Db");
+        CHECK(toneNames("Abm7b5") == "Ab Cb Ebb Gb");
+    }
+    SUBCASE("a root with an accidental") {
+        CHECK(toneNames("F#") == "F# A# C#");
+        CHECK(toneNames("Db7") == "Db F Ab Cb");
+        CHECK(toneNames("G#m7") == "G# B D# F#");
+    }
+}
+
+TEST_CASE("the three triples fall back, and no tone ever has three accidentals") {
+    // B#aug's fifth would be F###, Cbdim7's seventh Bbbb, Fbdim7's seventh Ebbb.
+    struct Case {
+        const char* symbol;
+        const char* degree;
+    };
+    for (const Case c : {Case{"B#aug", "#5"}, Case{"Cbdim7", "bb7"}, Case{"Fbdim7", "bb7"}}) {
+        int fallbacks = 0;
+        for (const ChordTone& t : chordTones(chord(c.symbol)))
+            if (!t.byDegree) {
+                ++fallbacks;
+                CHECK(t.degree == c.degree);
+                CHECK(t.name.accidental >= -1);  // the default table's: at most one accidental
+                CHECK(t.name.accidental <= 1);
+            }
+        CHECK(fallbacks == 1);
+    }
+    int total = 0;
+    for (const PitchClass& root : allRoots())
+        for (const auto& [quality, intervals] : chordQualities()) {
+            (void)intervals;
+            for (const ChordTone& t : chordTones(Chord{root, quality, std::nullopt}))
+                if (!t.byDegree) ++total;
+        }
+    // Each of the three symbols, once for every quality name that is its canonical or alias.
+    CHECK(total == 4);  // B#aug and B#+, Cbdim7, Fbdim7
+}
+
+TEST_CASE("every quality row's tones: degree, letter and class agree with the interval") {
+    static constexpr int kMajor[7] = {0, 2, 4, 5, 7, 9, 11};
+    for (const PitchClass& root : allRoots())
+        for (const auto& [quality, intervals] : chordQualities()) {
+            const Chord c{root, quality, std::nullopt};
+            const auto tones = chordTones(c);
+            REQUIRE(tones.size() == intervals.size());
+            std::set<int> classes;
+            for (std::size_t i = 0; i < tones.size(); ++i) {
+                const ChordTone& t = tones[i];
+                CAPTURE(printChord(c));
+                CAPTURE(t.degree);
+                CHECK(t.interval == intervals[i]);
+                // The degree's alteration against the major scale gives the interval.
+                const int number = degreeNumber(t.degree);
+                int alteration = 0;
+                for (const char ch : t.degree) alteration += ch == '#' ? 1 : (ch == 'b' ? -1 : 0);
+                const int major = kMajor[(number - 1) % 7] + ((number - 1) / 7) * 12;
+                CHECK(((major + alteration - intervals[i]) % 12) == 0);
+                const int cls = ((pitchClassSemitone(root) + intervals[i]) % 12 + 12) % 12;
+                CHECK(classes.insert(cls).second);  // no two tones share a class
+                if (t.byDegree) {
+                    CHECK(pitchClassNumber(t.name) == cls);
+                    CHECK(t.name.accidental >= -2);
+                    CHECK(t.name.accidental <= 2);
+                    // The letter is the root's letter moved by the degree; the sharp nine
+                    // takes the third's letter.
+                    const int offset = t.degree == "#9" ? 2 : (number - 1) % 7;
+                    CHECK(t.name.letter == char('A' + (root.letter - 'A' + offset) % 7));
+                }
+            }
+            // The tones, as classes, are chordPitchClasses.
+            std::vector<int> sorted(classes.begin(), classes.end());
+            CHECK(sorted == chordPitchClasses(c));
+        }
+}
+
+TEST_CASE("a chord tone's name does not depend on the key") {
+    const std::vector<std::string> chords = {"E",      "C7",    "Bdim7", "Cdim7",
+                                             "F#m7b5", "Abaug", "Bb7#9"};
+    for (const std::string& symbol : chords) {
+        const Chord c = chord(symbol);
+        for (const ChordTone& t : chordTones(c)) {
+            if (t.degree == "bass" || !t.byDegree) continue;
+            const int cls = pitchClassNumber(t.name);
+            const std::string want = printPitchClass(t.name);
+            CHECK(spellPitchClass(cls, Place{std::nullopt, c}) == want);
+            for (const Scale scale : allScales())
+                for (const PitchClass& tonic : allRoots()) {
+                    const Key k{tonic, scale};
+                    CHECK(spellPitchClass(cls, Place{k, c}) == want);
+                }
+        }
+    }
+}
+
+TEST_CASE("a slash bass as written wins for its class") {
+    CHECK(spellPitchClass(4, Place{std::nullopt, chord("C/E")}) == "E");
+    // The chord's own third is G#; the writer spelled the bass Ab.
+    CHECK(spellPitchClass(8, Place{std::nullopt, chord("E/Ab")}) == "Ab");
+    CHECK(spellPitchClass(8, Place{std::nullopt, chord("E")}) == "G#");
+    // A bass that is not a tone is as written and changes nothing else.
+    CHECK(spellPitchClass(2, Place{std::nullopt, chord("C/D")}) == "D");
+    CHECK(spellPitchClass(3, Place{std::nullopt, chord("C/D#")}) == "D#");
+    CHECK(spellPitchClass(7, Place{std::nullopt, chord("C/D#")}) == "G");
+    const auto tones = chordTones(chord("C/Eb"));
+    REQUIRE(tones.size() == 4);
+    CHECK(tones.back().degree == "bass");
+    CHECK(tones.back().interval == 3);
+    CHECK(printPitchClass(tones.back().name) == "Eb");
+}
+
+TEST_CASE("a note outside the chord: the key's scale first, then its step above the root") {
+    const Key cMajor = key("C", Scale::Major);
+    // The key's scale keeps its spelling: F is not E# over F#7.
+    CHECK(spellPitchClass(5, Place{cMajor, chord("F#7")}) == "F");
+    // Chromatic neighbours are named from the chord's root.
+    CHECK(spellPitchClass(3, Place{cMajor, chord("E")}) == "D#");   // the major seventh
+    CHECK(spellPitchClass(8, Place{cMajor, chord("Am")}) == "G#");  // the leading note
+    CHECK(spellPitchClass(1, Place{cMajor, chord("Dm")}) == "C#");
+    CHECK(spellPitchClass(8, Place{cMajor, chord("G7")}) == "Ab");  // the flat nine
+    CHECK(spellPitchClass(10, Place{cMajor, chord("C")}) == "Bb");
+    CHECK(spellPitchClass(6, Place{cMajor, chord("C7")}) == "F#");  // the sharp four
+    CHECK(spellPitchClass(6, Place{key("C", Scale::Minor), chord("Cm")}) == "Gb");  // the flat five
+    CHECK(spellPitchClass(8, Place{cMajor, chord("C")}) == "Ab");                   // the flat six
+    CHECK(spellPitchClass(1, Place{cMajor, chord("C")}) == "Db");                   // the flat nine
+    CHECK(spellPitchClass(3, Place{cMajor, chord("C")}) == "Eb");  // the flat third
+    // With no key the chord still names its neighbours.
+    CHECK(spellPitchClass(3, Place{std::nullopt, chord("E")}) == "D#");
+    CHECK(spellPitchClass(5, Place{std::nullopt, chord("F#7")}) == "E#");
+    // No chord: the key's rule or the default table, unchanged.
+    CHECK(spellPitchClass(3, Place{cMajor, std::nullopt}) == "Eb");
+    CHECK(spellPitchClass(3, Place{std::nullopt, std::nullopt}) == "Eb");
+    // A quality this build does not know holds no chord: callers pass none, and a chord
+    // with one names nothing by degree.
+    CHECK(spellPitchClass(8, Place{cMajor, Chord{{'E', 0}, "zzz", std::nullopt}}) == "Ab");
+    CHECK(chordTones(Chord{{'E', 0}, "zzz", std::nullopt}).empty());
+}
+
+TEST_CASE("a place spells a pitch with its octave and the octave stays in the compiler's range") {
+    CHECK(spell(68, Place{std::nullopt, chord("E")}) == "G#4");
+    CHECK(spell(70, Place{std::nullopt, chord("C7")}) == "Bb4");
+    CHECK(spell(57, Place{std::nullopt, chord("Cdim7")}) == "Bbb3");  // the pitch of A3
+    CHECK(spell(60, Place{std::nullopt, chord("B#aug")}) == "B#3");   // the root
+    CHECK(spell(68, Place{std::nullopt, chord("B#aug")}) == "Ab4");   // F###: the default table's
+    // B# at pitch 0 would be octave -2, which the notation refuses: the key's or the default
+    // table's name is used instead. B# is the third of G# major.
+    CHECK(spell(0, Place{std::nullopt, chord("G#")}) == "C-1");
+    CHECK(spell(12, Place{std::nullopt, chord("G#")}) == "B#-1");
+    CHECK(spell(60, Place{std::nullopt, chord("G#")}) == "B#3");
+    // The same octave rule holds for a key alone (it used to give B#-2).
+    CHECK(spell(0, key("C#", Scale::Major)) == "C-1");
+    CHECK(spell(60, key("C#", Scale::Major)) == "B#3");
+}
+
+TEST_CASE("pitch classes print with up to two accidentals") {
+    CHECK(printPitchClass({'F', 2}) == "F##");
+    CHECK(printPitchClass({'B', -2}) == "Bbb");
+    CHECK(printPitchClass({'C', 1}) == "C#");
+    CHECK(printPitchClass({'C', -1}) == "Cb");
+    CHECK(printPitchClass({'C', 0}) == "C");
+    CHECK(pitchClassSemitone({'F', 2}) == 7);
+    CHECK(pitchClassNumber({'B', -2}) == 9);
+    CHECK(pitchClassNumber({'C', -2}) == 10);
+    // Input still takes one accidental: roots and tonics are names a person writes.
+    CHECK_FALSE(parsePitchClass("F##"));
+    CHECK_FALSE(parsePitchClass("Bbb"));
+    CHECK_FALSE(parseChord("F##m"));
+    CHECK_FALSE(parseChord("C/Ebb"));
+}
+
+TEST_CASE(
+    "every name a place produces has a letter, at most two accidentals and an octave the notation "
+    "reads") {
+    // The notation's rule for a pitch name: a letter, up to two `#` or `b`, an octave -1..9, the
+    // result 0..127. The notation test compiles the same names.
+    const std::vector<std::optional<Key>> keys = {std::nullopt, key("C", Scale::Major),
+                                                  key("G#", Scale::Minor), key("Gb", Scale::Major),
+                                                  key("C#", Scale::Chromatic)};
+    for (const PitchClass& root : allRoots())
+        for (const auto& [quality, intervals] : chordQualities()) {
+            (void)intervals;
+            const Chord c{root, quality, std::nullopt};
+            for (const auto& k : keys)
+                for (int pitch = 0; pitch < 128; ++pitch) {
+                    const std::string text = spell(pitch, Place{k, c});
+                    CAPTURE(text);
+                    CAPTURE(printChord(c));
+                    CAPTURE(pitch);
+                    static constexpr int kSemitone[7] = {9, 11, 0, 2, 4, 5, 7};
+                    REQUIRE(text.size() >= 2);
+                    REQUIRE(text[0] >= 'A');
+                    REQUIRE(text[0] <= 'G');
+                    int semitone = kSemitone[text[0] - 'A'];
+                    std::size_t i = 1;
+                    int marks = 0;
+                    for (; i < text.size() && (text[i] == '#' || text[i] == 'b'); ++i, ++marks)
+                        semitone += text[i] == '#' ? 1 : -1;
+                    CHECK(marks <= 2);
+                    const int octave = std::stoi(text.substr(i));
+                    CHECK(octave >= -1);
+                    CHECK(octave <= 9);
+                    CHECK((octave + 1) * 12 + semitone == pitch);
+                }
+        }
+}

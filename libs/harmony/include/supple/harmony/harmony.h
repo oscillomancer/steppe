@@ -17,8 +17,9 @@
 
 namespace supple::harmony {
 
-// A spelled pitch class: `Eb` is not `D#`. `letter` is 'A'..'G', `accidental`
-// -1, 0 or +1.
+// A spelled pitch class: `Eb` is not `D#`. `letter` is 'A'..'G'. `accidental` is -2..+2: a
+// parsed name (a key's tonic, a chord's root or bass) has -1, 0 or +1, and only a spelling
+// (a chord tone's degree, `spell`) produces `##` and `bb`.
 struct PitchClass {
     char letter = 'C';
     int accidental = 0;
@@ -27,7 +28,7 @@ struct PitchClass {
 
 // A letter (either case) and at most one `#` or `b`, and nothing after.
 std::optional<PitchClass> parsePitchClass(std::string_view text);
-std::string printPitchClass(PitchClass pc);  // "Eb", "F#", "C"
+std::string printPitchClass(PitchClass pc);  // "Eb", "F#", "C", "F##", "Bbb"
 // Semitones above C with the accidental applied, not reduced: Cb is -1, B# is 12.
 int pitchClassSemitone(PitchClass pc);
 int pitchClassNumber(PitchClass pc);  // 0..11
@@ -90,9 +91,37 @@ Result<std::vector<int>> chordPitches(const Chord& chord, int octave);
 
 // --- spelling -----------------------------------------------------------------------------------
 
-// The name of a pitch class (0..11) or a MIDI pitch (with its octave, C4 = 60), by
-// the key's rule (specs/harmony.md §3), or the notation's default table with no key:
-// `C C# D Eb E F F# G Ab A Bb B`.
+// The key and chord that hold at a place; a part that does not hold, or that this build
+// cannot read, is absent.
+struct Place {
+    std::optional<Key> key;
+    std::optional<Chord> chord;
+};
+
+// The tones of a chord, each named by its degree (specs/harmony.md §3.1).
+struct ChordTone {
+    int interval = 0;         // semitones above the root, as the quality table has it
+    std::string_view degree;  // "1" "b3" "5" "b7" "9" "#5" "bb7"; "bass" for a slash bass
+    PitchClass name;          // letter = the root's letter moved by the degree; doubles allowed
+    // False when the degree would need three accidentals (B#aug's fifth, Cbdim7's seventh,
+    // Fbdim7's seventh): `name` is then the default table's, and `spell` names the class by the
+    // key's rule instead.
+    bool byDegree = true;
+};
+// The root first, then the quality's tones in table order, then the slash bass (interval:
+// its distance above the root, 0..11; name: as written). Empty for a quality this build
+// does not know.
+std::vector<ChordTone> chordTones(const Chord& chord);
+
+// The name of a pitch class (0..11) or a MIDI pitch (with its octave, C4 = 60) at a place, by
+// the rule in specs/harmony.md §3: a slash bass as written, a chord tone by its degree, a note
+// of the key's scale by the key, any other note by its step above the chord's root, else the
+// key's direction table, or the notation's default table with no key:
+// `C C# D Eb E F F# G Ab A Bb B`. The octave follows the letter; a name whose octave would
+// fall outside -1..9 (`B#` at pitch 0) is replaced by the key's or the default table's.
+std::string spellPitchClass(int pitchClass, const Place& place);
+std::string spell(int pitch, const Place& place);
+// With a key only: a place with no chord.
 std::string spellPitchClass(int pitchClass, const std::optional<Key>& key = std::nullopt);
 std::string spell(int pitch, const std::optional<Key>& key = std::nullopt);
 
@@ -118,12 +147,6 @@ std::optional<int> snapToPitchClasses(int pitch, std::span<const int> classes,
 
 // --- following (ADR-0098, specs/harmony.md §5) --------------------------------------------------
 
-// The key and chord that hold at a place; a part that does not hold, or that this
-// build cannot read, is absent.
-struct Place {
-    std::optional<Key> key;
-    std::optional<Chord> chord;
-};
 enum class FollowMode { Key, Chords };
 enum class FollowedBy { Transpose, Degree, Chords, Copy };
 struct Followed {
