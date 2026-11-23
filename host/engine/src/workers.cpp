@@ -96,8 +96,9 @@ void TaskGraph::build(const std::vector<std::vector<std::uint32_t>>& deps) {
 
 Workers::Workers(unsigned helpers) : Workers(helpers, Hooks{}) {}
 
-Workers::Workers(unsigned helpers, Hooks hooks, Backend* backend, std::optional<ThreadPolicy> self)
-    : startup_(helpers, backend, false, self),
+Workers::Workers(unsigned helpers, Hooks hooks, Backend* backend, std::optional<ThreadPolicy> self,
+                 unsigned extra)
+    : startup_(helpers + extra, backend, false, self, hooks.apply, hooks.context),
       nativeBackend_(backend),
       slots_(std::make_unique<Slot[]>(helpers)),
       hooks_(hooks) {
@@ -123,7 +124,7 @@ Workers::Workers(unsigned helpers, Hooks hooks, Backend* backend, std::optional<
         for (auto& thread : threads_) thread.join();
         throw;
     }
-    startupStatus_ = startup_.finish();
+    if (extra == 0) startupStatus_ = startup_.finish();
 }
 
 Workers::~Workers() {

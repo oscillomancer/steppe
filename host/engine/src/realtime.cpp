@@ -407,17 +407,15 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
                 request.want.kind == ThreadPolicy::Kind::High)
                 self = request.want;
 #endif
+        // The renderer joins the pool's barrier (`extra`), so one refusal leaves
+        // every background thread normal (ADR-0026 rule 3).
         workers_ = std::make_unique<detail::Workers>(backgroundHelpers, detail::Workers::Hooks{},
-                                                     native, self);
+                                                     native, self, self ? 1u : 0u);
         if (auto policy = workers_->startupStatus(); !policy && native)
             startWarnings_.push_back(policy.error().toString());
         if (!workers_->startupStatus()) native = nullptr;
         std::shared_ptr<detail::ThreadStartup> rendererStartup;
         if (native) rendererStartup = std::make_shared<detail::ThreadStartup>(1, native, false);
-        // The renderer follows the pool: elevated only if every helper was.
-        std::shared_ptr<detail::ThreadStartup> rendererSelf;
-        if (self && workers_->startupStatus())
-            rendererSelf = std::make_shared<detail::ThreadStartup>(1, nullptr, false, self);
         // The renderer's starting epoch is taken here, not on its thread: a
         // seek or pause issued before the thread runs must still be seen.
         const TransportSnapshot t = transportSnapshot();
@@ -430,20 +428,24 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         epochDone_.store(first, std::memory_order_release);
         rendererQuit_ = false;
         rendererWakeAt_.store(INT64_MAX);
-        renderer_ = std::thread([this, first, rendererStartup, rendererSelf, native] {
-            nameThread("audio-render");
-            (void)diagctx::registerThread(diagctx::ThreadRole::AudioRender);
-            rt::prefaultStack();  // ADR-0025
-            if (rendererSelf) (void)rendererSelf->enter(0);
-            const bool elevated = rendererStartup && rendererStartup->enter(0);
-            detail::ThreadStartup::Cleanup cleanup{elevated ? native : nullptr};
-            rendererLoop(first);
-        });
+        const bool rendererSelf = self.has_value();
+        try {
+            renderer_ = std::thread([this, first, rendererStartup, rendererSelf, native] {
+                nameThread("audio-render");
+                (void)diagctx::registerThread(diagctx::ThreadRole::AudioRender);
+                rt::prefaultStack();  // ADR-0025
+                if (rendererSelf) (void)workers_->enterStartup(workers_->helpers());
+                const bool elevated = rendererStartup && rendererStartup->enter(0);
+                detail::ThreadStartup::Cleanup cleanup{elevated ? native : nullptr};
+                rendererLoop(first);
+            });
+        } catch (...) {
+            if (rendererSelf) workers_->cancelStartup();  // the helpers wait for it
+            throw;
+        }
         auto rendererPolicy = rendererStartup ? rendererStartup->finish() : okStatus();
 #if defined(__APPLE__)
-        if (self)
-            selfApplied_ =
-                !workers_->startupStatus() ? workers_->startupStatus() : rendererSelf->finish();
+        if (self) selfApplied_ = workers_->finishStartup();
 #endif
         scheduling_.renderer = {
             native && rendererPolicy ? ThreadPolicy::Kind::High : ThreadPolicy::Kind::Normal, 0};

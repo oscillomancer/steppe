@@ -9,8 +9,10 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <latch>
+#include <mutex>
 #include <random>
 #include <semaphore>
 #include <thread>
@@ -300,4 +302,51 @@ TEST_CASE(
         CHECK(registered(role) == std::vector<unsigned>{1, 2, 3});
     }
     CHECK(registered(role).empty());  // the pool joined its threads, so their slots are free
+}
+
+// ADR-0026 rule 3 on macOS's self-applied path: the renderer joins the pool's
+// startup barrier as an extra thread, so a refusal by any one of them, the
+// renderer after every helper took the policy included, leaves all of them
+// normal (review round 111, E1). The OS call is replaced by a recorder.
+TEST_CASE("a self-applied startup with the renderer is all or none") {
+    using supple::ThreadPolicy;
+    struct Record {
+        std::mutex mutex;
+        std::array<ThreadPolicy::Kind, 3> last{};
+        std::array<unsigned, 3> calls{};
+        int refuse = -1;
+    };
+    constexpr unsigned kHelpers = 2, kRenderer = kHelpers;
+    for (const int refuse : {-1, static_cast<int>(kRenderer), 0}) {
+        CAPTURE(refuse);
+        Record record;
+        record.refuse = refuse;
+        Workers::Hooks hooks;
+        hooks.context = &record;
+        hooks.apply = [](void* context, unsigned index, ThreadPolicy policy) -> supple::Status {
+            auto& r = *static_cast<Record*>(context);
+            std::lock_guard lock(r.mutex);
+            ++r.calls[index];
+            if (policy.kind == ThreadPolicy::Kind::High && static_cast<int>(index) == r.refuse)
+                return supple::Error("thread.test", "forced refusal");
+            r.last[index] = policy.kind;
+            return supple::okStatus();
+        };
+        Workers workers(kHelpers, hooks, nullptr, ThreadPolicy{ThreadPolicy::Kind::High, 0}, 1);
+        std::atomic<bool> taken{false};
+        std::thread renderer([&] { taken = workers.enterStartup(kRenderer); });
+        const supple::Status status = workers.finishStartup();
+        renderer.join();
+        const bool all = refuse < 0;
+        CHECK(status.ok() == all);
+        CHECK(workers.startupStatus().ok() == all);
+        CHECK(taken == all);
+        // finishStartup returned after every thread took the policy or put itself back.
+        std::lock_guard lock(record.mutex);
+        for (unsigned i = 0; i < 3; ++i) {
+            CAPTURE(i);
+            CHECK(record.last[i] == (all ? ThreadPolicy::Kind::High : ThreadPolicy::Kind::Normal));
+            CHECK(record.calls[i] == (all ? 1u : 2u));  // a refusal: the try, then the rollback
+        }
+    }
 }

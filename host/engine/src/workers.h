@@ -73,13 +73,22 @@ class Workers {
     struct Hooks {
         void (*event)(void*, Event) = nullptr;
         void* context = nullptr;
+        // Sets `self` on the calling startup thread in place of the OS (ThreadStartup).
+        ThreadStartup::Apply apply = nullptr;
     };
     explicit Workers(unsigned helpers);
     // `self`: without a device `backend`, a policy each helper sets on itself as
     // it starts, all or none (ThreadStartup); startupStatus() says which.
+    // `extra` threads besides the helpers join the same barrier (the renderer:
+    // ADR-0026 rule 3 leaves every background thread normal if any refuses):
+    // each calls enterStartup(helpers() + k) on itself, and the main thread
+    // then finishStartup(). Without them the constructor finishes it.
     Workers(unsigned helpers, Hooks hooks, Backend* backend = nullptr,
-            std::optional<ThreadPolicy> self = std::nullopt);
+            std::optional<ThreadPolicy> self = std::nullopt, unsigned extra = 0);
     Status startupStatus() const { return startupStatus_; }
+    bool enterStartup(unsigned index) { return startup_.enter(index); }
+    Status finishStartup() { return startupStatus_ = startup_.finish(); }
+    void cancelStartup() { startup_.cancel(); }
     ~Workers();
     Workers(const Workers&) = delete;
     Workers& operator=(const Workers&) = delete;
