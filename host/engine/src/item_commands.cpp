@@ -9,6 +9,7 @@
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "heard_midi.h"
+#include "midi_context.h"
 #include "supple/model/context.h"
 #include "supple/model/follow.h"
 #include "supple/model/launcher.h"
@@ -1027,7 +1028,11 @@ void registerItemCommands(cmd::Registry& registry) {
                 const bool own = !clip && !heard && take->follow != model::ClipFollow::None;
                 // A source note sounds where `model::notePlace` puts it (the take's start offset
                 // and playrate), and reads the take's context at its own context beat (phase and
-                // period): the mapping the roll uses. A heard note is already in item time.
+                // period): the mapping the roll uses. A heard note is already in item time. A
+                // clip's note reads the clip beat it first sounds at, through the loop window,
+                // else where its content sits kept inside the clip, as midi.edit reads it
+                // (clipNoteContext). A place before the song's start, where nothing sounds,
+                // reads beat 0's context, as the roll does.
                 options.placeAt = [&s, clip, own, heard, take, start, ppq](std::int64_t tick) {
                     const double beat = static_cast<double>(tick) / ppq;
                     if (heard) {
@@ -1036,12 +1041,18 @@ void registerItemCommands(cmd::Registry& registry) {
                     }
                     const model::NotePlace where =
                         model::notePlace(*take, clip ? 0.0 : start, beat);
-                    if (clip)
-                        return harmony::Place{
-                            model::keyAt(*clip, where.songBeat + model::kPlaceSlack),
-                            model::chordAt(*clip, where.songBeat + model::kPlaceSlack)};
+                    if (clip) {
+                        const auto sounds =
+                            detail::clipSoundingBeats(*clip, *take, static_cast<int>(ppq), tick);
+                        const double at =
+                            (sounds.empty() ? std::clamp(where.songBeat, 0.0,
+                                                         std::max(0.0, clip->length - 1.0 / 960.0))
+                                            : sounds.front()) +
+                            model::kPlaceSlack;
+                        return harmony::Place{model::keyAt(*clip, at), model::chordAt(*clip, at)};
+                    }
                     if (own) return model::takePlaceAt(take->context, where.contextBeat, true);
-                    const double at = where.songBeat + model::kPlaceSlack;
+                    const double at = std::max(0.0, where.songBeat) + model::kPlaceSlack;
                     return harmony::Place{model::keyAt(s, at), model::chordAt(s, at)};
                 };
             }
