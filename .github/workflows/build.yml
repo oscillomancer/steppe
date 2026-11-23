@@ -12,6 +12,15 @@
 # Linux runs the full dev preset; macOS arm64 and Windows clang-cl run all
 # currently portable targets/tests. Port gates are listed in CONTRIBUTING.md.
 name: Build and test
+# A narrowed iteration run says so in its title, so it never reads as a full
+# run in `gh run list` or on the branch page (review round 111, E2).
+run-name: >-
+  ${{ github.event_name == 'push' && format('{0} {1}', github.workflow, github.ref_name)
+  || format('{0} ({1}){2}', github.workflow, inputs.platforms,
+  (inputs.targets != '' || inputs.tests != '' || inputs.repeat != '' || inputs.scribble)
+  && format(' ITERATION, not a merge gate: targets "{0}", tests "{1}", repeat "{2}", scribble {3}',
+  inputs.targets, inputs.tests, inputs.repeat, inputs.scribble)
+  || '') }}
 
 on:
   workflow_dispatch:
@@ -227,7 +236,16 @@ jobs:
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{ matrix.platform == 'macos' && '2' || '6' }}
           SUPPLE_CI_TARGETS: ${{ inputs.targets }}
+          SUPPLE_CI_TESTS: ${{ inputs.tests }}
+          SUPPLE_CI_REPEAT: ${{ inputs.repeat }}
+          SUPPLE_CI_SCRIBBLE: ${{ inputs.scribble }}
         run: |
+          if [[ -n "$SUPPLE_CI_TARGETS$SUPPLE_CI_TESTS$SUPPLE_CI_REPEAT" || "$SUPPLE_CI_SCRIBBLE" == true ]]; then
+            narrowed="targets '$SUPPLE_CI_TARGETS', tests '$SUPPLE_CI_TESTS', repeat '$SUPPLE_CI_REPEAT', scribble ${SUPPLE_CI_SCRIBBLE:-false}"
+            narrowed="${narrowed//[$'\r\n%']/ }"
+            echo "::warning title=Iteration run::not a merge gate: $narrowed"
+            printf '**Iteration run, not a merge gate:** %s\n' "$narrowed" >> "$GITHUB_STEP_SUMMARY"
+          fi
           build_log="$RUNNER_TEMP/native-build.log"
           target_args=()
           for target in $SUPPLE_CI_TARGETS; do target_args+=(--target "$target"); done

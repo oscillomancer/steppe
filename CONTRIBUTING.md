@@ -66,7 +66,9 @@ only these) and `-f tests='^engine\.tests\.test_app$'` (a CTest regex). To chase
 intermittent failure, `-f repeat=<n>` reruns each selected test until it
 fails, at most n times, and `-f scribble=true` junk-fills fresh and freed
 heap memory (`MallocPreScribble`/`MallocScribble` on macOS, `MALLOC_PERTURB_`
-on Linux; nothing on Windows). A run that gates a merge uses none of them.
+on Linux; nothing on Windows). A run that gates a merge uses none of them; a
+run that uses any says `ITERATION, not a merge gate` in its title, with a
+warning and a summary line naming the inputs.
 
 A deliberate CI tag also starts a run:
 
