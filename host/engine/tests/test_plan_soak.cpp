@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <numeric>
+#include "../../../tests/file_platform.h"
 #include "carry_matches.h"
 #include "rack_runtime.h"
 #include "realtime_common.h"
@@ -312,9 +313,7 @@ struct Soak {
                   .workers = 2,
                   .verifyPlans = true} {
         automaticCheckpoints = !explicitCheckpoints;
-        root = std::filesystem::temp_directory_path() /
-               ("supple-plan-soak-" +
-                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        root = supple::test::uniqueTempDir("supple-plan-soak-");
         const auto candidate = root;
         for (unsigned suffix = 0;; ++suffix) {
             root = candidate.string() + "-" + std::to_string(suffix);

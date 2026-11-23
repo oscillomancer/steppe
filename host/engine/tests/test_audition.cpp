@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "../../../tests/file_platform.h"
 #include "audition_loader.h"
 #include "realtime_common.h"
 #include "supple/audio/audio_file.h"
@@ -220,10 +221,7 @@ TEST_CASE("audition: a file's start plays at the device's rate on outputs 1/2, t
     // higher of the file's and the device's rates: a 44.1 kHz file plays the
     // cap's length in device frames, a 96 kHz one decodes no more than the
     // cap.
-    const fs::path root =
-        fs::temp_directory_path() /
-        ("supple-audition-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path root = supple::test::uniqueTempDir("supple-audition-");
     struct Cleanup {
         fs::path dir;
         ~Cleanup() { fs::remove_all(dir); }
@@ -380,10 +378,7 @@ TEST_CASE("audition: a cancel or a newer request ends the file's decode between 
     // read's first ask, so it lands mid-read whatever the timing. The read
     // must end at that ask and its result be dropped. One that read on would
     // ask three times and hand over the whole file.
-    const fs::path root =
-        fs::temp_directory_path() /
-        ("supple-audition-cancel-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path root = supple::test::uniqueTempDir("supple-audition-cancel-");
     fs::create_directories(root);
     struct Cleanup {
         fs::path dir;

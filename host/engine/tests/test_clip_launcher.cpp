@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <set>
 #include <span>
+#include "../../../tests/file_platform.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -35,9 +36,7 @@ model::Id id(const char* text) { return *model::Id::parse(text); }
 struct Launcher {
     // Unique per fixture without a platform call (several test processes
     // may run at once).
-    fs::path root = fs::temp_directory_path() /
-                    ("supple-clips-" +
-                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::path root = supple::test::uniqueTempDir("supple-clips-");
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;

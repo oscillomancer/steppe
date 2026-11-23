@@ -3,6 +3,7 @@
 #include <doctest/doctest.h>
 #include <chrono>
 
+#include "../../../tests/file_platform.h"
 #include "supple/engine/app.h"
 #include "supple/rack/instance.h"
 
@@ -14,9 +15,7 @@ TEST_CASE("rack levels: an unwatched oscillator and silent outputs in both execu
     for (const auto& options : {EngineOptions{.anticipative = false, .workers = 0},
                                 EngineOptions{.workers = 0}, EngineOptions{.workers = 2}}) {
         INFO("anticipative " << options.anticipative << ", workers " << options.workers);
-        auto dir = std::filesystem::temp_directory_path() /
-                   ("rack-levels-" +
-                    std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        auto dir = supple::test::uniqueTempDir("rack-levels-");
         DummyBackend backend({.mode = DummyBackend::Mode::Manual});  // outlives the app
         {
             AppOptions appOptions;

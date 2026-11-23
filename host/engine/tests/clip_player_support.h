@@ -17,6 +17,7 @@
 #include <tuple>
 #include <vector>
 
+#include "../../../tests/file_platform.h"
 #include "bridge_patience.h"
 #include "plan.h"
 #include "realtime_common.h"
@@ -41,9 +42,7 @@ inline model::Id id(const char* text) { return *model::Id::parse(text); }
 // A project at 120 BPM (a beat is 24000 samples) with channel tr_1 and
 // scenes sc_1 and sc_2, no Console 9.
 struct Project {
-    fs::path root = fs::temp_directory_path() /
-                    ("supple-player-" +
-                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::path root = supple::test::uniqueTempDir("supple-player-");
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <limits>
 
+#include "../../../tests/file_platform.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
 #include "supple/model/schemas.h"
@@ -19,9 +20,7 @@ namespace fs = std::filesystem;
 
 namespace {
 struct PlayrateHost {
-    fs::path root = fs::temp_directory_path() /
-                    ("supple-playrate-" +
-                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::path root = supple::test::uniqueTempDir("supple-playrate-");
     DummyBackend backend{
         DummyBackend::Options{.mode = DummyBackend::Mode::Manual, .captureFrames = 131072}};
     std::unique_ptr<EngineApp> app;

@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include "../../../tests/file_platform.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -29,9 +30,7 @@ model::Id id(const char* text) { return *model::Id::parse(text); }
 // Channels tr_1 "Bass" (it_1: four quarter notes over bar 1) and tr_2 "Pad",
 // and scenes sc_1 "Verse" and sc_2 "Chorus".
 struct Song {
-    fs::path root = fs::temp_directory_path() /
-                    ("supple-scene-" +
-                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::path root = supple::test::uniqueTempDir("supple-scene-");
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <mutex>
+#include "../../../tests/file_platform.h"
 #include "source_preparation.h"
 #include "stretch.h"
 #include "supple/engine/app.h"
@@ -15,10 +16,7 @@ using namespace supple;
 using namespace supple::engine;
 namespace {
 struct WarpHost {
-    std::filesystem::path root =
-        std::filesystem::temp_directory_path() /
-        ("supple-warp-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::path root = supple::test::uniqueTempDir("supple-warp-");
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
     std::unique_ptr<cmd::Dispatcher> bus;

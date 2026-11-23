@@ -107,8 +107,8 @@ TEST_CASE("live launches through the bridge play as the offline replay" *
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("looped " << bool(loop) << ", anticipative " << options.anticipative);
             const std::vector<Step> steps{{10, {request("tr_1", "cl_1")}}};
-            const Live live =
-                playLive(s, p.app->projectDir(), test::patient(options), 128, frames, steps, loop);
+            const Live live = playLive(s, p.app->projectDir(), engine::test::patient(options), 128,
+                                       frames, steps, loop);
             REQUIRE(live.log.size() == 1);
             InstancePool pool = makePool();
             OfflineSettings settings;
@@ -134,8 +134,8 @@ TEST_CASE("a clip chain through the bridge plays as the offline replay" *
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("looped " << bool(loop) << ", anticipative " << options.anticipative);
             const std::vector<Step> steps{{10, {request("tr_1", "cl_1")}}};
-            const Live live =
-                playLive(s, p.app->projectDir(), test::patient(options), 128, frames, steps, loop);
+            const Live live = playLive(s, p.app->projectDir(), engine::test::patient(options), 128,
+                                       frames, steps, loop);
             REQUIRE(live.log.size() == 1);
             InstancePool pool = makePool();
             OfflineSettings settings;
