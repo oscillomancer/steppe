@@ -593,7 +593,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `comp.take`: a span has no or both of take and index, or one not in the item Hint: give take (an id of the item) or index (0..takes-1); take.list lists them
 - `comp.loop`: a looped item Hint: comp an item that does not loop
 - `comp.group_mismatch`: a track of the edit group has items over the comp that do not form a run starting and ending where it does (the inner reason and hint are in the message) Hint: make its items span the same stretch, or comp it alone with bypass_groups
-- `comp.group_takes`: a track of the edit group has several takes but fewer than a span's index needs Hint: comp it alone with bypass_groups, or use indices it has
+- `comp.group_takes`: a track of the edit group has several takes but fewer than a span's index needs, or has a one-take item beside items with several (a track whose items all have one take is skipped instead) Hint: comp it alone with bypass_groups, give the item more takes (take.add), or use indices it has
 - `item.locked`: a piece is locked Hint: item.set {locked: false}
 - `item.kind`: a clip Hint: lay the clip on the timeline first (item.add {clip})
 

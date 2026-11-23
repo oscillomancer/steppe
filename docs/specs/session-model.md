@@ -358,7 +358,9 @@ are taken in track order, inside the one command and so one undo step.
 - **A track whose items cannot follow refuses the whole call**, before anything is written, with
   the member's track (`tr_2 (Second)`) in the message and the caller's piece it overlaps most in the
   path: `comp.group_takes` (an item with several takes but fewer than the highest
-  index a span plays needs; a track whose items have one take each is skipped instead), `comp.group_mismatch` (its items over the run do not form a run, or start
+  index a span plays needs; or a track with a one-take item beside items with several, which
+  `take.comp.get` lists in `differing_members`; a track whose items all have one take is skipped
+  instead), `comp.group_mismatch` (its items over the run do not form a run, or start
   or end elsewhere; the inner reason and hint of `compRun` are in the message and hint, for example
   a looped item), `item.locked` (a locked piece of any member). `bypass_groups: true` comps the named
   run alone in every case. `comp.linked`, which an item in an edit group used to get ("set

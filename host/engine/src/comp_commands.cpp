@@ -824,8 +824,11 @@ void registerCompCommands(cmd::Registry& registry) {
              "and ending where it does (the inner reason and hint are in the message)",
              "make its items span the same stretch, or comp it alone with bypass_groups"},
             {"comp.group_takes",
-             "a track of the edit group has several takes but fewer than a span's index needs",
-             "comp it alone with bypass_groups, or use indices it has"},
+             "a track of the edit group has several takes but fewer than a span's index needs, or "
+             "has a one-take item beside items with several (a track whose items all have one take "
+             "is skipped instead)",
+             "comp it alone with bypass_groups, give the item more takes (take.add), or use "
+             "indices it has"},
             {"item.locked", "a piece is locked", "item.set {locked: false}"},
             {"item.kind", "a clip", "lay the clip on the timeline first (item.add {clip})"}};
         c.examples = {{"Take the second take for bars 2 to 3",

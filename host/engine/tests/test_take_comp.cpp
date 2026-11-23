@@ -7,7 +7,6 @@
 #include <chrono>
 #include <cmath>
 #include <numbers>
-#include <tuple>
 #include "realtime_common.h"
 #include "supple/audio/audio_file.h"
 #include "supple/engine/app.h"
@@ -1154,12 +1153,16 @@ TEST_CASE("a group member with one take is skipped as one_take and left untouche
     // Drums with takes grouped with a one-take bass: ordinary, comps without bypass_groups.
     GroupFixture f(3, 1);  // tr_2's item has a single take
     const std::string bassItem = f.pieces(GroupFixture::track(2))[0].item.str();
+    // Byte for byte: the item's and its takes' canonical JSON, as the undo test compares them.
     auto describeItem = [&] {
-        const auto& it = *f.app->head().items.find(*model::Id::parse(bassItem));
-        return std::tuple(it.position, it.length, it.takes, it.activeTake, it.fadeIn.length,
-                          it.fadeOut.length);
+        const model::Session head = f.app->head();
+        const auto& it = *head.items.find(*model::Id::parse(bassItem));
+        std::string out = json::writeCanonical(model::toJson(it));
+        for (const auto& take : it.takes)
+            out += json::writeCanonical(model::toJson(*head.takes.find(take)));
+        return out;
     };
-    const auto bassBefore = describeItem();
+    const std::string bassBefore = describeItem();
     const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
     REQUIRE(got.find("skipped_tracks")->asArray().size() == 1);
     CHECK(got.find("skipped_tracks")->asArray()[0].find("track")->asString() == "tr_2");
@@ -1177,6 +1180,32 @@ TEST_CASE("a group member with one take is skipped as one_take and left untouche
     REQUIRE(f.pieces(GroupFixture::track(2)).size() == 1);
     CHECK(describeItem() == bassBefore);
     CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+}
+
+TEST_CASE("a member with a one-take item and a several-take item is refused, not skipped") {
+    GroupFixture f;  // tr_2's recording: three takes
+    f.run("item.split", R"({"item":"it_2","at":2,"bypass_groups":true})");
+    // Two items on tr_2 now; the later one keeps one take only.
+    std::vector<std::pair<double, model::Id>> byStart;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == GroupFixture::track(2)) byStart.emplace_back(e.value->position, e.id);
+    std::sort(byStart.begin(), byStart.end());
+    REQUIRE(byStart.size() == 2);
+    const std::vector<model::Id> takes = f.app->head().items.find(byStart[1].second)->takes;
+    REQUIRE(takes.size() == 3);
+    f.run("take.remove", R"({"take":")" + takes[1].str() + R"("})");
+    f.run("take.remove", R"({"take":")" + takes[2].str() + R"("})");
+    const std::string before = model::serializeProject(f.app->head());
+    auto result = f.call("take.comp", kGroupSpans);
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == "comp.group_takes");
+    CHECK(result.error().message.find("tr_2") != std::string::npos);
+    CHECK(model::serializeProject(f.app->head()) == before);
+    // take.comp.get does not refuse: the track is listed as differing, not skipped.
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    CHECK(got.find("skipped_tracks")->asArray().empty());
+    REQUIRE(got.find("differing_members")->asArray().size() == 1);
+    CHECK(got.find("differing_members")->asArray()[0].asString() == "tr_2");
 }
 
 TEST_CASE("a locked member refuses the whole call before anything is written") {
