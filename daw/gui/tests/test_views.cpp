@@ -1317,6 +1317,51 @@ TEST_CASE("golden: items with fades, muted items and multi-take items") {
     golden(root, "arrange-items.png");
 }
 
+// A comp (session-model §1.5.1): the middle third of a two-take item plays
+// its other take; each seam is a line across the pieces with a notch at its
+// foot, over the two crossfade curves. Undone after, for the other goldens.
+TEST_CASE("golden: a comp's seams") {
+    Gl& g = gl();
+    if (!g.ok) return;
+    Session& s = session6();
+    if (!s.app) return;
+    std::optional<model::Id> it;
+    for (const auto& e : s.app->head().items)
+        if (e.value->takes.size() == 2 && !e.value->locked && !it) it = e.id;
+    REQUIRE(it);
+    const model::Item item = *s.app->head().items.find(*it);
+    const std::size_t heard = static_cast<std::size_t>(
+        std::find(item.takes.begin(), item.takes.end(), *item.activeTake) - item.takes.begin());
+    json::Value args = json::Value::object();
+    args["item"] = it->str();
+    json::Value span = json::Value::object();
+    span["from"] = item.position + item.length / 3;
+    span["to"] = item.position + 2 * item.length / 3;
+    span["index"] = static_cast<std::int64_t>(1 - heard);
+    args["spans"] = json::Value::array();
+    args["spans"].push_back(span);
+    args["crossfade"] = 0.25;  // wide enough to see at this zoom
+    const cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
+    REQUIRE(s.dispatcher->execute({"take.comp", args, origin}));
+    {
+        ui::Root root(*g.window, g.fonts, ui::Theme::dark());
+        views::ArrangeView* arrange = mount(root);
+        arrange->installOverlay(root);
+        arrange->setFollow(views::Follow::Off);
+        const auto row = arrange->trackLayout().indexOf(item.track);
+        REQUIRE(row);
+        CHECK(arrange->lanes().compSeams(*row).size() == 2);
+        views::Viewport v;
+        v.startSeconds = s.app->head().timeMap->secondsAt(item.position) - 0.5;
+        v.pixelsPerSecond = 28;  // the whole item: both seams
+        arrange->setViewport(v);
+        settle(root, arrange->lanes());
+        golden(root, "arrange-comp.png");
+    }
+    REQUIRE(s.dispatcher->execute({"history.undo", json::Value::object(), origin}));
+    CHECK(s.app->head().items.find(*it));
+}
+
 TEST_CASE("a following take's body draws each heard note where it sounds, in the window") {
     Gl& g = gl();
     if (!g.ok) return;

@@ -192,6 +192,8 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     arrange_->gestures().onError = [this](const Error& e) {
         if (onError) onError(e.message);
     };
+    // A comp's warnings: the status line's note, until the next one.
+    arrange_->gestures().onNotice = [this](const std::string& notice) { setStatus(notice); };
     // The TCP talks to the app through these: selection state, commands (with
     // a drag's gesture) and the meters it pools with its rows.
     views::TcpCallbacks tcp;

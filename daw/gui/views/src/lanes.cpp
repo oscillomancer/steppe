@@ -247,6 +247,8 @@ Lanes::Lanes(peaks::PeakService& peaks, Resolve resolve, const TrackLayout& rowL
 void Lanes::rebuild() {
     sounding_.clear();
     soundingVersion_ = ~std::uint64_t{0};
+    seams_.clear();
+    seamsVersion_ = ~std::uint64_t{0};
     ++indexStats_.rebuilds;
     const model::Session& s = layout_.session();
     rowItems_.assign(layout_.rowCount(), {});
@@ -531,6 +533,21 @@ std::string Lanes::itemLabel(const model::Session& session, const model::Item& i
     return {};
 }
 
+const std::vector<CompSeam>& Lanes::compSeams(std::size_t row) const {
+    const model::Session& s = layout_.session();
+    if (s.version != seamsVersion_) {
+        seams_.clear();
+        seamsVersion_ = s.version;
+    }
+    auto it = seams_.find(row);
+    if (it == seams_.end())
+        it = seams_
+                 .emplace(row, row < rowItems_.size() ? views::compSeams(s, rowItems_[row])
+                                                      : std::vector<CompSeam>{})
+                 .first;
+    return it->second;
+}
+
 ui::Rect Lanes::envArea(const ui::Rect& row) {
     return {row.x, row.y + 4, row.w, std::max(1.0f, row.h - 8)};
 }
@@ -618,6 +635,25 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
                     drawMidi(inner, *item, *take, *src, note, noteBorder, id);
             }
             drawFades(fadeArea(r), *item, wave, shade);
+        }
+        // A comp's seams: a line across the pieces at the seam's core, in
+        // their outline colour, and a notch at its foot to take hold of.
+        for (const CompSeam& seam : compSeams(i)) {
+            const model::Item* left = s.items.find(seam.left);
+            if (!left) continue;
+            const float x = xAt(seam.seconds);
+            if (x < clip.x - 4 || x > clip.right() + 4) continue;
+            const ui::Rect r = itemRect(i, *left);
+            const std::uint32_t edge =
+                ui::packRgba(itemColor(t, *left, rowTrack, layout_.rows()[i].type).withAlpha(0.9f));
+            strips_->beginRun();
+            strips_->pair(x - 0.5f, r.y, r.bottom(), edge);
+            strips_->pair(x + 0.5f, r.y, r.bottom(), edge);
+            strips_->endRun();
+            strips_->beginRun();
+            strips_->pair(x - 3, r.bottom() - 4, r.bottom(), edge);
+            strips_->pair(x + 3, r.bottom() - 4, r.bottom(), edge);
+            strips_->endRun();
         }
     }
     bodies_->flush(frame);
