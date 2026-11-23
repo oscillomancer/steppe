@@ -232,16 +232,23 @@ TEST_CASE("a hold makes the peak worker let go of the files under a folder until
     std::filesystem::create_directories(media);
     const auto wav = media / "Vocal-1.wav";  // several 16384-frame chunks
     REQUIRE(writeFileAtomic(wav, std::span<const std::uint8_t>(*audio::encodeWav(tone(100000)))));
+    // The owner's loop: a posted task runs when the test takes it; it waits for
+    // the next one without a time limit (no wall-clock decision).
     std::mutex m;
+    std::condition_variable wake;
     std::vector<std::function<void()>> posted;
     auto post = [&](std::function<void()> f) {
-        std::lock_guard lock(m);
-        posted.push_back(std::move(f));
-    };
-    auto drain = [&] {
-        std::vector<std::function<void()>> now;
         {
             std::lock_guard lock(m);
+            posted.push_back(std::move(f));
+        }
+        wake.notify_all();
+    };
+    auto drain = [&](bool wait) {
+        std::vector<std::function<void()>> now;
+        {
+            std::unique_lock lock(m);
+            if (wait) wake.wait(lock, [&] { return !posted.empty(); });
             now.swap(posted);
         }
         for (auto& f : now) f();
@@ -285,19 +292,15 @@ TEST_CASE("a hold makes the peak worker let go of the files under a folder until
     REQUIRE(writeFileAtomic(media / "Vocal-2.wav",
                             std::span<const std::uint8_t>(*audio::encodeWav(tone(4800)))));
     CHECK(service.get("", media / "Vocal-2.wav") == nullptr);
-    // The hold ends: the owner hears of both, and asks again where they are now.
+    // The hold ends: the owner hears of both at once (release posts them), and
+    // asks again where they are now.
     release();
-    for (int i = 0; i < 500 && ready.size() < 2; ++i) {
-        drain();
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
-    }
+    drain(false);
     CHECK(ready.size() == 2);
     CHECK(service.stats().built == 0);
-    std::shared_ptr<const peaks::Pyramid> pyramid;
-    for (int i = 0; i < 500 && !pyramid; ++i) {
-        pyramid = service.get("", moved);
-        if (!pyramid) std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    CHECK(service.get("", moved) == nullptr);  // queued
+    while (ready.size() < 3) drain(true);      // built (or failed), then announced
+    const auto pyramid = service.get("", moved);
     REQUIRE(pyramid);
     CHECK(pyramid->frames() == 100000);
     CHECK(service.stats().built == 1);

@@ -392,8 +392,15 @@ class EngineApp : public cmd::Host {
     // after the project points at the copies and before it removes the files:
     // the reader lets go of every file under that folder (a file that is open
     // cannot be removed on Windows) and returns what the save calls when it is
-    // done with them. Register before the first save; the reader must outlive
-    // the app's saves.
+    // done with them.
+    // - Register every reader before the first save. A save holds the list's
+    //   mutex while it calls them, so registering from inside a reader (or
+    //   during a save) deadlocks; there is no removal.
+    // - The save calls the reader, and later what it returned, on the model
+    //   thread. In the GUI that is the main loop's thread, which also destroys
+    //   the reader's owner: a reader that checks whether its owner is still
+    //   there before using it relies on that, and would race if saves ran on
+    //   another thread.
     using ScratchReader = std::function<std::function<void()>(const std::filesystem::path& folder)>;
     void addScratchReader(ScratchReader reader);
     // Unsaved projects earlier runs left behind (ADR-0078), oldest first:

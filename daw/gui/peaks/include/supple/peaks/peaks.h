@@ -107,7 +107,10 @@ class PeakService {
     // scratch media it has moved). A read in progress there stops between two
     // chunks, without counting as a failure, and is asked for again when the
     // hold ends (onReady); get() queues nothing there meanwhile. Returns once
-    // the worker has let go. Any thread; holds may nest.
+    // the worker has let go. Any thread; holds may nest. The returned function
+    // does nothing once the service is gone, a check that holds only if it is
+    // called on the thread that destroys the service (the app's saves and its
+    // teardown share the GUI thread).
     [[nodiscard]] std::function<void()> holdUnder(const std::filesystem::path& dir);
     // Whether a hold is in place (tests wait for one).
     bool holding() const;
