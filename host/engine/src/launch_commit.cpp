@@ -330,6 +330,25 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             }
             return {};
         };
+        // A clip still playing at the capture's end, inside its pass's
+        // fade-out, played on live: its piece runs to the pass's end under
+        // its fade-out (review round 135, H2), as a stand-in does past the
+        // capture's end. Where it ends, in running frames.
+        const auto playsOutTo = [&](const Stretch& x) -> std::int64_t {
+            if (!x.e || x.e->action != "clip" || x.to != perf.frames) return x.to;
+            const model::Session s = app.view();
+            const model::Clip* c = s.clips.find(*Id::parse(*x.e->clip));
+            if (!c || c->kind == model::ClipKind::Midi) return x.to;
+            const std::int64_t Pf = time::samplesAt(c->length, rate);
+            const std::int64_t Lout = time::samplesAt(c->fadeOut.length, rate);
+            if (Pf <= 0 || Lout <= 0) return x.to;
+            std::int64_t g = x.from;  // the stretch's last span of song time
+            while (nextWrap(g) < x.to) g = nextWrap(g);
+            const std::int64_t q = song(g) + (x.to - g) - x.e->anchor;
+            if (c->mode == model::ClipMode::Once && (q <= 0 || q >= Pf)) return x.to;
+            const std::int64_t ph = positiveMod(q, Pf);
+            return ph > Pf - Lout && ph < Pf ? x.to + (Pf - ph) : x.to;
+        };
         // Each run of stretches away from the arrangement clears it.
         for (std::size_t i = 0; i < stretches.size();) {
             if (!stretches[i].e) {
@@ -340,9 +359,12 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             while (j + 1 < stretches.size() && stretches[j + 1].e) ++j;
             const Stretch& last = stretches[j];
             const bool fadeOut = stretches[i].from > 0;  // left the arrangement there
+            // Under a played-out tail too, the arrangement fading in after it.
+            const std::int64_t to = playsOutTo(last);
             const bool fadeIn =
-                last.to < perf.frames && last.e->action == "clip" && !heldBy(last, last.to);
-            SUPPLE_TRY(clear(stretches[i].from, last.to, fadeOut, fadeIn));
+                (last.to < perf.frames && last.e->action == "clip" && !heldBy(last, last.to)) ||
+                to > last.to;
+            SUPPLE_TRY(clear(stretches[i].from, to, fadeOut, fadeIn));
             i = j + 1;
         }
 
@@ -384,15 +406,17 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             // Rule 7: what an item's fades, each running from its own edge,
             // cannot write.
             const auto refuse = [&](std::int64_t frame, const std::string& what) {
-                return Error("launch.commit.fade",
-                             clipId.str() + " on " + track.str() + " " + what + " at beat " +
-                                 json::formatDouble(beatAt(double(perf.start + frame))) +
-                                 ", which an item's fades, each running from its own edge, cannot "
-                                 "write",
-                             path,
-                             "capture it again with its switches outside the clip's fades and the "
-                             "transport loop's wrap off them, or set the clip's fades to 0 "
-                             "(clip.set) first; the performance is kept");
+                return Error(
+                    "launch.commit.fade",
+                    clipId.str() + " on " + track.str() + " " + what + " at beat " +
+                        json::formatDouble(beatAt(double(perf.start + frame))) +
+                        ", which an item's fades, each running from its own edge, cannot "
+                        "write",
+                    path,
+                    "start the capture outside the clip's fade-in, keep the transport "
+                    "loop's wrap off its fades (end the loop on a pass's end of the clip), "
+                    "or keep a switch from cutting a fade-out that is playing out, or set "
+                    "the clip's fades to 0 (clip.set) first; the performance is kept");
             };
             // How the plan played this clip, after its budget (follow_tables.h): what each laid
             // take follows. A drum-only clip, one with no readable key, and audio follow nothing.
@@ -429,23 +453,26 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                     if (phase != 0) envelopePos = [phase](double b) { return b - phase; };
                 } else {
                     // The piece's phases at its edges, and how it ends: a switch
-                    // inside its pass's fade-out lets that fade stand in, to the
-                    // pass's end (rule 4); a switch on a pass's end goes out in
+                    // whose crossfade would reach its pass's fade-out lets that
+                    // fade stand in, to the pass's end (rule 4, widened by F in
+                    // review round 135, H1), as does the capture's end inside
+                    // the fade-out (H2); a switch on a pass's end goes out in
                     // the next pass, laid by the caller; else the switch's
                     // crossfade.
                     const auto ph0 = static_cast<std::int64_t>(phase);
                     const std::int64_t ph1 = ph0 + (f1 - f0);
                     const bool switched = lastOfStretch && fadeOut;
                     const bool standIn =
-                        fades && switched && Lout > 0 && ph1 >= Pf - Lout && ph1 < Pf;
+                        fades && switched && Lout > 0 && ph1 > 0 && ph1 + F > Pf - Lout && ph1 < Pf;
+                    const bool playsOut = fades && lastOfStretch && f1 == perf.frames &&
+                                          !switched && Lout > 0 && ph1 > Pf - Lout && ph1 < Pf;
                     const bool crossfades = switched && !standIn && !(fades && ph1 == Pf);
                     if (fades) {
                         if (ph0 > 0 && ph0 < Lin)
                             return refuse(f0, "would start inside its fade-in");
-                        if (!standIn && Lout > 0 &&
-                            (crossfades ? ph1 + F > Pf - Lout : ph1 > Pf - Lout && ph1 < Pf))
-                            return refuse(f1, crossfades ? "would fade out over its own fade-out"
-                                                         : "would end inside its fade-out");
+                        if (!standIn && !playsOut && Lout > 0 && !crossfades && ph1 > Pf - Lout &&
+                            ph1 < Pf)
+                            return refuse(f1, "would end inside its fade-out at a loop wrap");
                         if (standIn) {
                             // Rule 5: a further switch while it sounds cuts it.
                             const std::int64_t standEnd = f0 + (Pf - ph0);
@@ -458,7 +485,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                                               "would wrap while its fade-out stands in");
                         }
                     }
-                    if (standIn) end = perf.start + f0 + (Pf - ph0);
+                    if (standIn || playsOut) end = perf.start + f0 + (Pf - ph0);
                     if (crossfades) end += F;
                     const double startSec = double(perf.start + f0) / rate;
                     model::placeItemSeconds(now, item, startSec, double(end) / rate);
@@ -472,7 +499,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                         item.fadeIn = clip.fadeIn;
                     else if (firstOfStretch && fadeIn)
                         item.fadeIn = model::Fade{double(F) / rate, model::FadeShape::Linear, 0.0};
-                    if ((standIn || (ph1 == Pf && !crossfades)) && Lout > 0)
+                    if ((standIn || playsOut || (ph1 == Pf && !crossfades)) && Lout > 0)
                         item.fadeOut = clip.fadeOut;
                     else if (crossfades)
                         item.fadeOut = model::Fade{double(F) / rate, model::FadeShape::Linear, 0.0};

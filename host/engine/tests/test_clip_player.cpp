@@ -16,6 +16,9 @@
 
 #include "bridge_patience.h"
 #include "clip_player_support.h"
+
+#include <supple/json/write.h>
+#include <supple/model/schemas.h>
 #include "plan.h"
 #include "realtime_common.h"
 
@@ -1830,10 +1833,203 @@ TEST_CASE("a capture of clips with fades commits as heard: their fades stand in 
         }
 }
 
+// A capture's commit against what played: the AppLive harness, `perform`
+// driving it, the capture committed at `stop` and heard to `heardTo` (device
+// frames). Live is checked against the replay of its log, bit for bit, and
+// the commit against live by commitResidual, to the commit's end or
+// `compareTo` (a piece played out past it).
+struct FadesCommitted {
+    CommitResidual r;
+    std::vector<LaunchLogEntry> log;
+};
+template <typename Perform>
+FadesCommitted fadesCommitted(Project& p, const EngineOptions& options, std::uint32_t block,
+                              std::int64_t stop, std::int64_t heardTo, Perform&& perform,
+                              double seconds, std::int64_t compareTo = 0) {
+    AppLive live(p, options, block, heardTo + 16384);
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * block);
+    perform(live);
+    live.until(stop);
+    const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
+    const std::vector<float> replayed = replay(p, seconds, log, block);
+    // The engine stops before any failure is required: a running engine left
+    // behind by a failed REQUIRE hangs the harness.
+    auto committed = p.bus->execute({"launch.commit", j("{}"), kOrigin});
+    live.until(heardTo);
+    const std::vector<float> heard = live.stop();
+    REQUIRE_MESSAGE(committed, (committed ? std::string() : committed.error().toString()));
+    json::Value& done = *committed;
+    const std::int64_t played = live.cycles * block - std::int64_t(live.latency) - block;
+    CHECK(compare(heard, live.latency, replayed, 0, played).first == 0.0);
+    const std::int64_t to =
+        std::llround(p.app->head().timeMap->secondsAt(done["to"].asDouble()) * 48000);
+    const std::int64_t end = std::min(played, compareTo > 0 ? compareTo : to);
+    REQUIRE(end > 0);
+    return {commitResidual(heard, live.latency, arrangement(p, seconds, block), log, 0, end, 0),
+            log};
+}
+
+TEST_CASE("a switch quantized to a clip's fade-out plays it out at any tempo; live is the commit" *
+          doctest::description("rt")) {
+    // Review round 135, H1: at 130 bpm a 4-bar clip with a 1-bar fade-out,
+    // launched on bar 3 (song 177231) and switched away on bar 6 (443077),
+    // is 265846 into its pass, one sample before P - Lout (354462 - 88615):
+    // the tempo rounds the two apart. Rule 4 now reaches F before the
+    // fade-out, so it plays its fade-out to the pass's end (531693), and the
+    // commit lays that exactly.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        p.run("tempo.set", R"({"points": [{"beat": 0, "bpm": 130}]})");
+        auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+        args["audio_file"] = p.ramp("pad.wav", 400000).string();
+        p.runArgs("clip.add", args);  // cl_1
+        args["scene"] = "sc_2";
+        args["audio_file"] = p.ramp("other.wav", 400000).string();
+        p.runArgs("clip.add", args);  // cl_2
+        auto set = j(R"({"clip": "cl_1"})");
+        set["length"] = 16 * 60.0 / 130.0;
+        set["fade_out"] = 4 * 60.0 / 130.0;
+        p.runArgs("clip.set", set);
+        const auto [r, log] = fadesCommitted(
+            p, options, 512, 580000, 600000,
+            [&](AppLive& live) {
+                live.until(100000);                           // past bar 2
+                p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 3
+                live.until(360000);                           // past bar 5
+                p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 6
+            },
+            13.0);
+        REQUIRE(log.size() == 2);
+        CHECK(log[0].anchorSample == 177231);
+        CHECK(log[1].anchorSample == 443077);
+        MESSAGE("worst within the crossfades " << r.fading);
+        CHECK(r.away == 0.0);
+        CHECK(r.fading <= 1e-6);
+    }
+}
+
+TEST_CASE("a clip switched near its fade-out commits as a stand-in at every tempo") {
+    // H1's sweep, on performances given outright: a 4-bar clip with a 1-bar
+    // fade-out launched on a bar and switched away 3 bars later commits at
+    // each tempo, its piece ending on its pass's end under its fade-out,
+    // however the tempo rounds the switch against P - Lout.
+    for (int bpm = 60; bpm <= 200; bpm += 7)
+        for (const int bar : {1, 2, 3}) {
+            CAPTURE(bpm);
+            CAPTURE(bar);
+            Project p;
+            json::Value tempo = j(R"({"points": [{"beat": 0}]})");
+            tempo["points"].asArray()[0]["bpm"] = bpm;
+            p.runArgs("tempo.set", tempo);
+            auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+            args["audio_file"] = p.ramp("pad.wav", 48000).string();
+            p.runArgs("clip.add", args);
+            p.run("clip.add", R"({"track": "tr_1", "scene": "sc_2"})");  // cl_2, MIDI
+            const double beat = 60.0 / bpm;
+            auto set = j(R"({"clip": "cl_1"})");
+            set["length"] = 16 * beat;
+            set["fade_out"] = 4 * beat;
+            p.runArgs("clip.set", set);
+            const auto at = [&](double beats) { return std::llround(beats * beat * 48000); };
+            const double from = 4.0 * (bar - 1), to = from + 12.0;
+            json::Value perf = j(R"({"sample_rate": 48000, "start": 0})");
+            perf["frames"] = at(to + 8);
+            json::Value a = j(R"({"track": "tr_1", "action": "clip", "clip": "cl_1"})");
+            a["frame"] = at(from);
+            a["anchor"] = at(from);
+            a["anchor_beat"] = from;
+            json::Value b = j(R"({"track": "tr_1", "action": "clip", "clip": "cl_2"})");
+            b["frame"] = at(to);
+            b["anchor"] = at(to);
+            b["anchor_beat"] = to;
+            perf["launches"] = json::Value::array();
+            perf["launches"].asArray().push_back(a);
+            perf["launches"].asArray().push_back(b);
+            json::Value commit = json::Value::object();
+            commit["performance"] = perf;
+            p.runArgs("launch.commit", commit);
+            const std::int64_t passEnd = at(from) + std::llround(16 * beat * 48000);
+            bool standIn = false;
+            for (const auto& e : p.app->head().items) {
+                const model::ItemSpan span = model::itemSpan(p.app->head(), *e.value);
+                standIn = standIn || (std::llround(span.endSec * 48000) == passEnd &&
+                                      e.value->fadeOut.length > 0);
+            }
+            CHECK(standIn);
+        }
+}
+
+TEST_CASE("a capture ending inside a clip's fade-out commits its pass played out, as heard" *
+          doctest::description("rt")) {
+    // Review round 135, H2: cl_1 (fadingClips) launched on bar 2, the
+    // capture ended at once about 11000 into its sixth pass, inside its
+    // fade-out: live it played on, and the commit runs that piece to the
+    // pass's end (182400) under its fade-out, exact against what was heard.
+    for (const std::uint32_t block : {128u, 512u})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("block " << block << ", anticipative " << options.anticipative);
+            Project p;
+            fadingClips(p);
+            const auto r = fadesCommitted(
+                               p, options, block, 0, 200000,
+                               [&](AppLive& live) {
+                                   p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2
+                                   live.until(96000 + 5 * 14400 + 11000);
+                                   p.run("launch.capture", R"({"on": false})");
+                               },
+                               4.5, 182400)
+                               .r;
+            CHECK(r.away == 0.0);
+            CHECK(r.fading <= 1e-6);
+            bool playedOut = false;
+            for (const auto& e : p.app->head().items) {
+                const model::ItemSpan span = model::itemSpan(p.app->head(), *e.value);
+                playedOut = playedOut || (std::llround(span.endSec * 48000) == 182400 &&
+                                          e.value->fadeOut.length == 0.12);
+            }
+            CHECK(playedOut);
+        }
+}
+
+TEST_CASE("clips with fades longer than their period commit as heard" *
+          doctest::description("rt")) {
+    // Review round 135, N3: cl_1's fade-in 0.4 s and fade-out 0.5 s over its
+    // 0.3 s period overlap everywhere, the product of the two on both sides;
+    // every switch away from it but one on a pass's end stands in.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        fadingClips(p);
+        p.run("clip.set", R"({"clip": "cl_1", "fade_in": 0.4, "fade_out": 0.5})");
+        const auto r = fadesCommitted(
+                           p, options, 512, 420000, 440000,
+                           [&](AppLive& live) {
+                               std::size_t n = 0;
+                               fadingPerformance(p, [&](int k) {
+                                   if (k < 0) return live.until(-k);
+                                   while (p.app->engine()->launchLog().size() < std::size_t(k) &&
+                                          live.cycles * 512 < 48000 * 9)
+                                       live.until((live.cycles + 16) * 512);
+                                   n = p.app->engine()->launchLog().size();
+                                   REQUIRE(n == std::size_t(k));
+                               });
+                           },
+                           10.0)
+                           .r;
+        MESSAGE("worst within the crossfades " << r.fading);
+        CHECK(r.away == 0.0);
+        CHECK(r.fading <= 1e-6);
+    }
+}
+
 TEST_CASE("launch.commit refuses what an item's fades cannot write of a clip's fades") {
-    // S3 step C, Q4 rule 7, on performances given outright: cl_1 (fades,
-    // 14400-frame passes from bar 2) and cl_2. Each refusal names the clip,
-    // the track and the beat, and keeps the session.
+    // S3 step C, Q4 rule 7 (with review round 135's H1 and H2), on
+    // performances given outright: cl_1 (fades, 14400-frame passes from bar
+    // 2, its fade-out from phase 8640) and cl_2. Each refusal names the clip,
+    // the track and the beat, and leaves the project as it was.
     Project p;
     fadingClips(p);
     const auto commit = [&](const char* launches, std::int64_t frames, std::int64_t start = 0,
@@ -1850,46 +2046,84 @@ TEST_CASE("launch.commit refuses what an item's fades cannot write of a clip's f
         args["performance"] = perf;
         return p.bus->execute({"launch.commit", args, kOrigin});
     };
-    const std::size_t before = p.app->head().items.size();
-    const auto refused = [&](const Result<json::Value>& r, const char* what) {
+    // The project just before the refused commit, against it after.
+    const auto refused = [&](auto&& run, const char* what) {
+        const std::string before = model::serializeProject(p.app->head());
+        const Result<json::Value> r = run();
         REQUIRE_FALSE(r);
         CHECK(r.error().code == "launch.commit.fade");
         CHECK(r.error().message.find("cl_1 on tr_1 " + std::string(what)) == 0);
         CHECK(r.error().message.find(" at beat ") != std::string::npos);
-        CHECK(p.app->head().items.size() == before);
+        CHECK(model::serializeProject(p.app->head()) == before);
+    };
+    // cl_1's last piece: where it ends (song sample) and its fade-out.
+    const auto lastPiece = [&]() {
+        std::pair<std::int64_t, double> last{-1, 0};
+        for (const auto& e : p.app->head().items) {
+            const model::ItemSpan span = model::itemSpan(p.app->head(), *e.value);
+            const auto end = std::llround(span.endSec * 48000);
+            if (end > last.first) last = {end, e.value->fadeOut.length};
+        }
+        return last;
     };
     constexpr const char* kCl1 = R"([{"frame": 96000, "track": "tr_1", "action": "clip",
         "clip": "cl_1", "anchor": 96000, "anchor_beat": 4}])";
-    // Ended inside a fade-out: 3 passes and 12000 into the fourth.
-    refused(commit(kCl1, 96000 + 3 * 14400 + 12000), "would end inside its fade-out");
-    // Ended on a pass's end, or outside the fades: committed.
+    // Ended inside a fade-out: live it played on, so its piece runs to the
+    // pass's end under its fade-out (H2).
+    REQUIRE(commit(kCl1, 96000 + 3 * 14400 + 12000));
+    CHECK(lastPiece() == std::pair<std::int64_t, double>{96000 + 4 * 14400, 0.12});
+    p.run("history.undo", "{}");
+    // Ended on a pass's end, or before its fade-out: there.
     REQUIRE(commit(kCl1, 96000 + 3 * 14400));
+    CHECK(lastPiece() == std::pair<std::int64_t, double>{96000 + 3 * 14400, 0.12});
     p.run("history.undo", "{}");
     REQUIRE(commit(kCl1, 96000 + 3 * 14400 + 6000));
+    CHECK(lastPiece() == std::pair<std::int64_t, double>{96000 + 3 * 14400 + 6000, 0.0});
     p.run("history.undo", "{}");
+    // A switch whose crossfade would reach the fade-out, up to one sample
+    // before it: the clip plays its fade-out to the pass's end (H1).
+    for (const std::int64_t phase : {std::int64_t(8500), std::int64_t(8639), std::int64_t(8640)}) {
+        CAPTURE(phase);
+        json::Value launches = j(kCl1);
+        json::Value to = j(R"({"track": "tr_1", "action": "clip", "clip": "cl_2"})");
+        to["frame"] = 96000 + phase;
+        to["anchor"] = 96000 + phase;
+        to["anchor_beat"] = double(96000 + phase) / 24000.0;
+        launches.asArray().push_back(to);
+        const std::string text = json::writeCompact(launches);
+        REQUIRE(commit(text.c_str(), 192000));
+        bool standIn = false;
+        for (const auto& e : p.app->head().items) {
+            const model::ItemSpan span = model::itemSpan(p.app->head(), *e.value);
+            standIn = standIn || (std::llround(span.endSec * 48000) == 96000 + 14400 &&
+                                  e.value->fadeOut.length == 0.12);
+        }
+        CHECK(standIn);
+        p.run("history.undo", "{}");
+    }
     // Begun inside a fade-in: the capture began 2000 into a pass.
-    refused(commit(R"([{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+    refused(
+        [&] {
+            return commit(R"([{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
                         "anchor": 96000, "anchor_beat": 4}])",
-                   96000, 98000),
-            "would start inside its fade-in");
+                          96000, 98000);
+        },
+        "would start inside its fade-in");
     // A loop wrap inside a fade-out: the loop ends 10000 into the fourth pass.
-    refused(commit(kCl1, 192000, 0, 96000 + 3 * 14400 + 10000), "would end inside its fade-out");
-    // A switch whose crossfade would reach into the fade-out: 8500 into a pass.
-    refused(commit(R"([{"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_1",
-                        "anchor": 96000, "anchor_beat": 4},
-                       {"frame": 104500, "track": "tr_1", "action": "clip", "clip": "cl_2",
-                        "anchor": 104500, "anchor_beat": 4.354166666666667}])",
-                   192000),
-            "would fade out over its own fade-out");
+    refused([&] { return commit(kCl1, 192000, 0, 96000 + 3 * 14400 + 10000); },
+            "would end inside its fade-out at a loop wrap");
     // A stand-in cut: cl_2 at 9600 into a pass, the arrangement 2000 later.
-    refused(commit(R"([{"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_1",
+    refused(
+        [&] {
+            return commit(R"([{"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_1",
                         "anchor": 96000, "anchor_beat": 4},
                        {"frame": 105600, "track": "tr_1", "action": "clip", "clip": "cl_2",
                         "anchor": 105600, "anchor_beat": 4.4},
                        {"frame": 107600, "track": "tr_1", "action": "arrangement",
                         "anchor": 107600, "anchor_beat": 4.483333333333333}])",
-                   192000),
-            "would be cut while its fade-out stands in");
+                          192000);
+        },
+        "would be cut while its fade-out stands in");
     // Uncut, the stand-in commits.
     REQUIRE(commit(R"([{"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_1",
                         "anchor": 96000, "anchor_beat": 4},
@@ -1899,7 +2133,7 @@ TEST_CASE("launch.commit refuses what an item's fades cannot write of a clip's f
     p.run("history.undo", "{}");
     // With the fades off, every one of them commits.
     p.run("clip.set", R"({"clip": "cl_1", "fade_in": 0, "fade_out": 0})");
-    REQUIRE(commit(kCl1, 96000 + 3 * 14400 + 12000));
+    REQUIRE(commit(kCl1, 192000, 0, 96000 + 3 * 14400 + 10000));
 }
 
 TEST_CASE("a clip take's FX envelope commits as it was heard, pass after pass (C2)" *

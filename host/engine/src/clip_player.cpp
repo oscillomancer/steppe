@@ -493,11 +493,14 @@ bool incomingStandsIn(const Node& n) SUPPLE_RT {
 }
 
 // Q4 rule 4: the song sample where `player`, anchored at `anchor`, going out
-// at a switch on song sample `start`, ends. Where the switch falls inside
-// that pass's fade-out (P - Lout <= phase < P, phase not 0: on a pass's end
-// it has begun the next pass) it plays on at weight 1, under its own
-// fade-out, to the pass's end and reads nothing after it; else the switch's
-// crossfade ends it.
+// at a switch on song sample `start`, ends. Where the switch's crossfade
+// would reach that pass's fade-out (P - Lout - F < phase < P, phase not 0:
+// on a pass's end it has begun the next pass) it plays on at weight 1, under
+// its own fade-out, to the pass's end and reads nothing after it; else the
+// switch's crossfade ends it. The region reaches F before the fade-out
+// (review round 135, H1): a switch quantized to the fade-out's start lands a
+// sample either side of it as the tempo rounds, and it must play its fade
+// out either way, which no 5 ms fade on top of it could be committed as.
 std::int64_t outgoingEnd(const Node& n, int player, std::int64_t anchor,
                          std::int64_t start) SUPPLE_RT {
     const std::int64_t crossfade = start + n.launchFadeFrames;
@@ -507,7 +510,8 @@ std::int64_t outgoingEnd(const Node& n, int player, std::int64_t anchor,
     const std::int64_t q = start - anchor;
     if (q <= 0) return crossfade;
     const std::int64_t phase = q - passOf(pl, q) * pl.periodFrames;
-    if (phase == 0 || phase < pl.periodFrames - pl.audio.fadeOut) return crossfade;
+    if (phase == 0 || phase + n.launchFadeFrames <= pl.periodFrames - pl.audio.fadeOut)
+        return crossfade;
     return start + (pl.periodFrames - phase);
 }
 

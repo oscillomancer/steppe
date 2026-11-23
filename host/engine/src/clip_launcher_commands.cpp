@@ -506,14 +506,22 @@ Result<std::vector<Id>> layClipOnTimeline(model::EditTxn& t, const model::Sessio
     const double span = audio ? map->secondsAt(endBeat) - startSec : endBeat - startBeat;
     const double tolerance = 1e-9 * std::max(1.0, span);
     // An audio clip with a fade that repeats within the span: one item per
-    // pass, each faded as the pass is; a pass the span's end cuts keeps its
-    // fade-in, its fade-out falling past the cut (S3 step C, Q4 rule 2).
+    // pass, each faded as the pass is (S3 step C, Q4 rule 2). A pass the
+    // span's end cuts inside its fade-out plays that fade-out to the pass's
+    // end, past the span's end, as launch.commit lays a clip still playing at
+    // a capture's end (review round 135); cut before its fade-out it ends at
+    // the cut, keeping its fade-in. Never a hard cut through a fade.
     const bool fades = audio && (clip.fadeIn.length > 0 || clip.fadeOut.length > 0);
+    const auto playsOut = [&](double secs) {
+        return secs < clip.length - tolerance && clip.fadeOut.length > 0 &&
+               secs > clip.length - clip.fadeOut.length + tolerance;
+    };
     if (fades && clip.mode == model::ClipMode::Loop && clip.length < span - tolerance) {
         std::vector<Id> laid;
         for (std::int64_t k = 0; double(k) * clip.length < span - tolerance; ++k) {
             const double from = startSec + double(k) * clip.length;
-            const double secs = std::min(clip.length, span - double(k) * clip.length);
+            double secs = std::min(clip.length, span - double(k) * clip.length);
+            if (playsOut(secs)) secs = clip.length;
             const double beat = map->beatAt(from);
             auto pass = itemFromClip(s, clip, *active, clip.track, beat, path);
             if (!pass) return std::move(pass).error();
@@ -539,8 +547,9 @@ Result<std::vector<Id>> layClipOnTimeline(model::EditTxn& t, const model::Sessio
     double length = clip.length;
     if (clip.mode == model::ClipMode::Once) {
         length = std::min(clip.length, span);
+        if (audio && playsOut(length)) length = clip.length;
     } else if (clip.length >= span - tolerance) {
-        length = span;
+        length = audio && playsOut(span) ? clip.length : span;
     } else {
         // The clip repeats its period; one looping item reproduces that only when the
         // period is the content (loop off, length = content) or whole repeats of it (loop
@@ -565,7 +574,7 @@ Result<std::vector<Id>> layClipOnTimeline(model::EditTxn& t, const model::Sessio
         length = span;
     }
     if (std::abs(length - clip.length) > tolerance) {
-        // Cut short by the span: its fade-out would fall past the cut.
+        // Cut short by the span before its fade-out: it ends at the cut.
         if (length < clip.length) item.fadeOut = {};
         if (audio) {
             SUPPLE_TRY(model::checkedBeat(s, map->beatAt(startSec + length), path));

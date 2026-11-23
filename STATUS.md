@@ -289,11 +289,14 @@ instructions are in `docs/guides/installing.md`.
   - An audio clip's `fade_in` and `fade_out` (schema 2.22, S3 step C)
     fade every pass, at unity and under a playrate, and stand in for a
     switch's 5 ms fades: a launched clip with a fade-in starts with it
-    alone, and one switched away inside its fade-out plays it out to its
-    pass's end. `launch.commit` lays such a clip one item per pass with
-    its fades, as heard; what an item's fades cannot write (a piece
-    starting or ending inside a clip fade, a cut fade-out) is refused with
-    `launch.commit.fade`.
+    alone, and one switched away at or up to 5 ms before its fade-out
+    plays it out to its pass's end. `launch.commit` lays such a clip one
+    item per pass with its fades, as heard, a capture ending inside a
+    fade-out included (the piece plays out to its pass's end); what an
+    item's fades cannot write (a capture beginning inside a fade-in, a
+    loop wrap inside a fade, a fade-out cut by a further switch) is refused
+    with `launch.commit.fade`. A `clip.set` of a clip's length or
+    fade-out while its fade-out stands in moves the stand-in's end at once.
   - `launch.state` (and `Engine::launchState()` for the GUI) reports what
     each track plays as heard, the clip's position, and what is queued.
   - The engine logs every applied launch. The tests replay that log

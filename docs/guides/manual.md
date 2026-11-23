@@ -1840,11 +1840,12 @@ played a clip or was stopped, those stretches replace what the timeline had
 there; tracks that stayed on the arrangement are left alone. Each clip
 becomes copies of its takes, starting where the clip was in its loop, with
 the 5 ms switch crossfades as item fades, and an audio clip's own fades on
-the items where its passes start and end. When an item's fades cannot say
-what you heard (the capture began or ended inside a clip's fade, the loop
-jumped there, or a switch cut short a fade-out), the commit is refused with
-`launch.commit.fade` and the performance kept: set the clip's fades to 0,
-or capture it again. MIDI is copied, so editing the
+the items where its passes start and end. A clip still fading out when the
+capture ends is laid to the end of its pass, as you heard it. When an
+item's fades cannot say what you heard (the capture began inside a clip's
+fade-in, the loop jumped inside a fade, or a switch cut short a fade-out),
+the commit is refused with `launch.commit.fade` and the performance kept:
+set the clip's fades to 0, or capture it again. MIDI is copied, so editing the
 items leaves the clips alone; `launch.commit {pooled: true}` shares it
 instead. Stopping, seeking or changing the loop ends a capture, and
 committing again writes the same performance over itself.
