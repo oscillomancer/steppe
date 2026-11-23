@@ -146,25 +146,20 @@ json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::
     return compArgs(item, {span}, compCrossfade(s, comp));
 }
 
-Error compRefusal(Error error, const model::Session& s, model::Id item) {
+Error compRefusal(Error error) {
+    // The engine roots a group member's refusal at /args/members/<track>
+    // (/items/<item> after it for one item); the comped track's own refusals
+    // point into the call's arguments and keep the engine's hint.
+    if (!error.path.starts_with("/args/members/")) return error;
     constexpr std::string_view argument = "comp it alone with bypass_groups";
     constexpr std::string_view gesture = "hold Alt to comp this track alone";
     if (error.code == "item.locked") {
-        // The message starts with the locked item's id: a lock on another
-        // track is a group track's, which Alt passes by; one on this track
-        // keeps the engine's hint.
-        const model::Item* own = s.items.find(item);
-        const auto id = model::Id::parse(error.message.substr(0, error.message.find(' ')));
-        const model::Item* locked = id ? s.items.find(*id) : nullptr;
-        if (own && locked && locked->track != own->track)
-            error.hint = "unlock it, or " + std::string(gesture);
-        return error;
-    }
-    if (!error.code.starts_with("comp.group_")) return error;
-    if (const auto at = error.hint.find(argument); at != std::string::npos)
+        error.hint = "unlock it, or " + std::string(gesture);
+    } else if (const auto at = error.hint.find(argument); at != std::string::npos) {
         error.hint.replace(at, argument.size(), gesture);
-    else
+    } else {
         error.hint += error.hint.empty() ? std::string(gesture) : "; or " + std::string(gesture);
+    }
     return error;
 }
 

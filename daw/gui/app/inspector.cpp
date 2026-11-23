@@ -1177,7 +1177,7 @@ void Inspector::runComp(json::Value args, bool pick) {
     // A Takes pick a group track cannot follow: the hint says to hold Alt,
     // which a pick sends, not the argument. A typed Crossfade has no Alt, so
     // its refusal keeps the engine's words.
-    if (!r && pick && !ids_.empty()) r = views::compRefusal(r.error(), app_.head(), ids_.front());
+    if (!r && pick) r = views::compRefusal(r.error());
     // Its warnings (a crossfade clamped or skipped) go to the status line.
     if (r && actions_.onNotice)
         if (const std::string w = views::resultWarnings(*r); !w.empty()) actions_.onNotice(w);

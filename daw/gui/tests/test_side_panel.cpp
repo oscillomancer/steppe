@@ -1444,6 +1444,21 @@ TEST_CASE("inspector: a refused grouped comp names Alt for a Takes pick, not for
     REQUIRE(errors.size() == 2);
     CHECK(errors[1].find("unlock it, or hold Alt to comp this track alone") != std::string::npos);
     CHECK(f.app->head().version == version);
+    // A lock on the comped track's own piece: its path points into the call's
+    // arguments, not at a member, so Alt would not help and the hint is the
+    // engine's.
+    f.exec("item.set", R"({"item":")" + items[1] + R"(","locked":false,"bypass_groups":true})");
+    f.exec("item.set", R"({"item":")" + comp["pieces"].asArray()[0].find("item")->asString() +
+                           R"(","locked":true,"bypass_groups":true})");
+    f.pass();
+    const std::uint64_t locked = f.app->head().version;
+    list->select(1, true);
+    list->select(0, true);
+    f.pass();
+    REQUIRE(errors.size() == 3);
+    CHECK(errors[2].find("unlock it with item.set") != std::string::npos);
+    CHECK(errors[2].find("hold Alt") == std::string::npos);
+    CHECK(f.app->head().version == locked);
 }
 
 TEST_CASE("inspector: a grouped comp piece that differs from its group names the track") {

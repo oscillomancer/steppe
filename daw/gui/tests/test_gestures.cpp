@@ -1852,6 +1852,8 @@ TEST_CASE("a grouped comp a track cannot follow is refused with an Alt hint; Alt
     CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
     REQUIRE(errors.size() == 1);
     CHECK(errors[0].code == "item.locked");
+    // The engine names the member in the path, which is what the hint keys on.
+    CHECK(errors[0].path == "/args/members/" + b.other.str() + "/items/" + b.otherItem.str());
     CHECK(errors[0].hint == "unlock it, or hold Alt to comp this track alone");
     // Nothing changed: the same version, one whole item, no seams.
     CHECK(f.app->head().version == version);

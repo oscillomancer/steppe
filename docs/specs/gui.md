@@ -1107,10 +1107,11 @@ status line, and nothing changes. **Alt** held at the
 press of any comp gesture (a swipe, a lane click, the badge, a seam or its
 crossfade handle) or on a pick in the inspector's Takes list comps this track
 alone: `take.comp` with `bypass_groups`, as Alt on the TCP's fader and pan moves
-one track alone. A group refusal's hint says so ("hold Alt to comp this track
-alone", `views::compRefusal`) in place of the argument's name; a lock on another
-track's item reads "unlock it, or hold Alt to comp this track alone", and one on
-the track's own item keeps the engine's hint. The inspector's Crossfade field has
+one track alone. A refusal from a group member (its path is
+`/args/members/<track>[/items/<item>]`) says so in its hint ("hold Alt to comp this
+track alone", `views::compRefusal`) in place of the argument's name; a member's
+lock reads "unlock it, or hold Alt to comp this track alone". The comped track's
+own refusals keep the engine's hint. The inspector's Crossfade field has
 no Alt, so its refusals keep the engine's hint. A group track with nothing over the
 stretch, or only one-take items there (a bass beside drum takes), is passed over
 (`skipped_tracks`, `no_item` or `one_take`): left as it is, with nothing to show. `take.comp`'s warnings
