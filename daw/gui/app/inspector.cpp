@@ -604,8 +604,12 @@ std::unique_ptr<ui::Node> Inspector::build() {
             const auto at = item ? std::find(item->takes.begin(), item->takes.end(), takeIds_[i])
                                  : std::vector<model::Id>::const_iterator{};
             if (item && at != item->takes.end()) {
-                runComp(views::compPieceArgs(s, *comp, ids_.front(),
-                                             static_cast<std::size_t>(at - item->takes.begin())));
+                auto args = views::compPieceArgs(
+                    s, *comp, ids_.front(), static_cast<std::size_t>(at - item->takes.begin()));
+                // Alt on the pick comps this track alone, as on the lanes.
+                const bool alone = (takes_->selectModifiers() & ui::kAlt) != 0;
+                if (alone) args["bypass_groups"] = true;
+                runComp(std::move(args));
                 return;
             }
         }
@@ -1170,6 +1174,9 @@ void Inspector::setCrossfade(std::optional<double> seconds, std::optional<bool> 
 
 void Inspector::runComp(json::Value args) {
     auto r = dispatcher_.execute({"take.comp", std::move(args), kOrigin});
+    // A group track that cannot follow: the hint says to hold Alt (a pick
+    // here, or a gesture on the lanes), not the argument.
+    if (!r) r = views::compRefusal(r.error());
     // Its warnings (a crossfade clamped or skipped) go to the status line.
     if (r && actions_.onNotice)
         if (const std::string w = views::resultWarnings(*r); !w.empty()) actions_.onNotice(w);

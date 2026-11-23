@@ -1067,9 +1067,10 @@ instructions are in `docs/guides/installing.md`.
   top or in the inspector, keeping a comp's crossfade on every re-comp.
   Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
   a looped item's swipe splits and switches with hard cuts until its Loop is off;
-  on a track grouped for edits every comp gesture is the group's `take.comp`, and a
-  member that reads differently (`differing_members`) shows broken seam lines and an
-  inspector Group row, but only where it has seams of its own or is selected;
+  on a track grouped for edits every comp gesture is the group's `take.comp` (Alt
+  comps the track alone, past a group track that cannot follow), and a member that
+  reads differently (`differing_members`) shows broken seam lines and an inspector
+  Group row, but only where it has seams of its own or is selected;
   seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
   empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);

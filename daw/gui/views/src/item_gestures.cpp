@@ -851,6 +851,7 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
         free_ = (e.mods & ui::kShift) != 0;
         copy_ = false;
         cycleFade_ = false;
+        alone_ = (e.mods & ui::kAlt) != 0;
         marqueeAdd_ = false;
         mixed_ = false;
         state_ = State{};
@@ -1714,11 +1715,16 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
     const model::Session& s = view_.session();
     const model::Item* anchor =
         state_.anchor.kind == model::Kind::Item ? itemOf(s, state_.anchor) : nullptr;
-    auto runSteps = [&](const std::string& label, const std::vector<EditStep>& steps) {
+    auto runSteps = [&](const std::string& label, std::vector<EditStep> steps) {
         if (steps.empty() || !run) return;
+        // Alt at the press comps this track alone, as Alt on the fader moves
+        // it alone: take.comp with bypass_groups, past an edit group.
+        if (alone_)
+            for (EditStep& step : steps)
+                if (step.command == "take.comp") step.args["bypass_groups"] = true;
         auto r = run(label, steps);
         if (!r) {
-            if (onError) onError(r.error());
+            if (onError) onError(compRefusal(r.error()));
             return;
         }
         // take.comp's warnings say why a seam is shorter or hard, or a note

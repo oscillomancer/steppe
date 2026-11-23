@@ -521,7 +521,9 @@ track grouped for editing, every track of the group follows: a drag, a click
 on a lane or the take number comps each of them the same way. If one of them
 has been changed on its own since, its seam lines are drawn broken and the
 inspector's **Group** row says which track it differs from; comping again
-brings it back in step. An item whose Loop is on is comped with hard cuts (no
+brings it back in step. If a track of the group cannot follow (a looped item,
+or one with a single take), the status line says so and nothing changes: hold
+**Alt** while you drag, click or pick a take to comp this track alone. An item whose Loop is on is comped with hard cuts (no
 crossfades) until you turn its Loop off.
 
 ### Changing what the mouse does

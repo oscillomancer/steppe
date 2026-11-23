@@ -1101,8 +1101,14 @@ drawn or dragged there, the boundaries trim and fade as item edges do, and the
 inspector shows Fade in and Fade out, not Crossfade. The inspector shows the same
 for one selected piece (Crossfade, below). Flatten a comp with Consolidate on
 its pieces. Refusals (`item.locked`; `comp.group_mismatch` and `comp.group_takes`
-when a track of the group cannot follow) reach the status line; the GUI sends no
-`bypass_groups`. `take.comp`'s warnings
+when a track of the group cannot follow: a looped or one-take item, one over
+another stretch) reach the status line, and nothing changes. **Alt** held at the
+press of any comp gesture (a swipe, a lane click, the badge, a seam or its
+crossfade handle) or on a pick in the inspector's Takes list comps this track
+alone: `take.comp` with `bypass_groups`, as Alt on the TCP's fader and pan moves
+one track alone. A group refusal's hint says so ("hold Alt to comp this track
+alone", `views::compRefusal`) in place of the argument's name. A group track with
+nothing over the stretch is passed over (`skipped_tracks`), with nothing to show. `take.comp`'s warnings
 (`comp.crossfade_clamped`, `comp.crossfade_skipped`, `comp.midi_boundary`), from
 a gesture or the inspector, are the status line's transient note (their
 messages, joined), as a refusal is: never text on the lanes.

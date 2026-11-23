@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <set>
+#include <string_view>
 
 #include "supple/model/groups.h"
 
@@ -143,6 +144,17 @@ json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::
             span.to = beatOfSample(s, p.coreEnd);
         }
     return compArgs(item, {span}, compCrossfade(s, comp));
+}
+
+Error compRefusal(Error error) {
+    if (!error.code.starts_with("comp.group_")) return error;
+    constexpr std::string_view argument = "comp it alone with bypass_groups";
+    constexpr std::string_view gesture = "hold Alt to comp this track alone";
+    if (const auto at = error.hint.find(argument); at != std::string::npos)
+        error.hint.replace(at, argument.size(), gesture);
+    else
+        error.hint += error.hint.empty() ? std::string(gesture) : "; or " + std::string(gesture);
+    return error;
 }
 
 std::string resultWarnings(const json::Value& result) {

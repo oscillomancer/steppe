@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "supple/base/result.h"
 #include "supple/json/json.h"
 #include "supple/model/comp.h"
 #include "supple/model/session.h"
@@ -96,6 +97,11 @@ json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::
                           std::size_t index);
 // The take index piece `item` of `comp` plays.
 std::size_t compPieceIndex(const CompView& comp, model::Id item);
+
+// A take.comp refusal as the GUI shows it: a group track that cannot follow
+// (comp.group_takes, comp.group_mismatch) names the argument bypass_groups in
+// its hint, which a GUI user sends by holding Alt; the hint says that.
+Error compRefusal(Error error);
 
 // The warnings of a command's result, their messages joined for the status
 // line ("" when there are none).

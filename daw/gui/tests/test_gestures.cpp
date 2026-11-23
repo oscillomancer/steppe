@@ -1717,6 +1717,87 @@ TEST_CASE("an edit-grouped track comps every member with take.comp; a member tha
     for (const auto& seam : f.view->lanes().compSeams(roomRow)) CHECK_FALSE(seam.differs);
 }
 
+// Round 129 U1/U2: a group track that cannot follow (here a one-take bass
+// item over the stretch) refuses the group's take.comp; the refusal reaches the
+// status line with a hint to hold Alt, and nothing changes. With Alt the
+// gesture comps this track alone (bypass_groups), as Alt moves a fader alone.
+TEST_CASE("a grouped comp a track cannot follow is refused with an Alt hint; Alt comps alone") {
+    Fixture f;
+    if (!f.ok) return;
+    wireCompQuery(f);
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double position = f.item(it).position, length = f.item(it).length;
+    const auto other =
+        f.dispatcher->execute({"track.add", json::parse(R"({"name":"Bass"})").value(), kUi});
+    REQUIRE(other);
+    const model::Id bass = *model::Id::parse(other->find("track")->asString());
+    json::Value add = json::Value::object();
+    add["track"] = bass.str();
+    add["position"] = position;
+    add["notation"] = "1: C2:q r:*";
+    auto bassItem = f.dispatcher->execute({"item.add", add, kUi});
+    REQUIRE(bassItem);
+    json::Value len = json::Value::object();
+    len["item"] = bassItem->find("item")->asString();
+    len["length"] = length;
+    REQUIRE(f.dispatcher->execute({"item.set", len, kUi}));
+    json::Value group = json::Value::object();
+    group["name"] = "Band";
+    group["members"] = json::Value::array();
+    group["members"].push_back(track.str());
+    group["members"].push_back(bass.str());
+    auto made = f.dispatcher->execute({"group.add", group, kUi});
+    REQUIRE(made);
+    json::Value links = json::Value::object();
+    links["group"] = made->find("group")->asString();
+    links["links"] = json::Value::array();
+    links["links"].push_back("edit");
+    REQUIRE(f.dispatcher->execute({"group.set", links, kUi}));
+    f.sync();
+    std::vector<Error> errors;
+    f.view->gestures().onError = [&](const Error& e) { errors.push_back(e); };
+    auto& sent = recordSteps(f);
+    const std::uint64_t version = f.app->head().version;
+    const std::size_t row = *f.view->trackLayout().indexOf(track);
+    const ui::Rect r = f.rectOf(it);
+    // The swipe: one take.comp for the group, refused before anything is written.
+    f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].code == "comp.group_takes");
+    CHECK(errors[0].hint.find("hold Alt to comp this track alone") != std::string::npos);
+    CHECK(errors[0].hint.find("bypass_groups") == std::string::npos);
+    // Nothing changed: the same version, one whole item, no seams.
+    CHECK(f.app->head().version == version);
+    CHECK(piecesOf(f, track).size() == 1);
+    CHECK(heardOf(f.item(it)) == heard);
+    CHECK(f.view->lanes().compSeams(row).empty());
+    // A lane click on the whole item is refused the same way.
+    f.click(laneAt(r, 2, 1 - heard, r.x + r.w * 0.5f));
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[1].code == "comp.group_takes");
+    CHECK(f.app->head().version == version);
+    // With Alt the swipe comps this track alone; the bass item is untouched.
+    f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f),
+           ui::kAlt);
+    REQUIRE(sent.size() == 3);
+    const json::Value* bypass = sent[2][0].args.find("bypass_groups");
+    REQUIRE(bypass);
+    CHECK(bypass->asBool());
+    CHECK(errors.size() == 2);
+    const auto pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[1]) == 1 - heard);
+    std::size_t bassItems = 0;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == bass) ++bassItems;
+    CHECK(bassItems == 1);
+    CHECK(f.view->lanes().compSeams(row).size() == 2);
+}
+
 // Round 119 G4: take.comp's warnings reach the status line's note, and the
 // left piece's take badge keeps its press when a long crossfade brings it
 // within the seam's reach.
