@@ -126,6 +126,7 @@ void registerEngineGroups(cmd::Registry& registry) {
                            "The project: new, open, save, recover, templates and its settings.");
     registry.describeGroup("rack",
                            "Modular racks on channels: add, arrange, patch, levels, presets.");
+    registry.describeGroup("record", "How a recording pass over an item is kept (take or items).");
     registry.describeGroup("region", "Named regions in beats: add, list, set, remove.");
     registry.describeGroup("render", "Render the mix or stems: presets, queue, dry run, regions.");
     registry.describeGroup("route", "Sends, sidechain keys and MIDI routes between tracks.");

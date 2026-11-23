@@ -535,6 +535,10 @@ Kind: `action`. Exposure: `mcp-exec`.
               "type": "string"
             }
           },
+          "stacked": {
+            "type": "boolean",
+            "description": "The takes went into an existing item (ADR-0103)."
+          },
           "warnings": {
             "type": "array",
             "items": {
@@ -565,7 +569,7 @@ Kind: `action`. Exposure: `mcp-exec`.
             }
           }
         },
-        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes"],
+        "required": ["track", "item", "take", "file", "seconds", "lost_frames", "takes", "stacked"],
         "additionalProperties": false
       }
     },
@@ -621,7 +625,8 @@ Result:
       "file": "<any>",
       "seconds": 1.0,
       "lost_frames": 0,
-      "takes": ["tk_1"]
+      "takes": ["tk_1"],
+      "stacked": false
     }
   ]
 }
@@ -649,7 +654,8 @@ Result:
       "file": "<any>",
       "seconds": 1.0,
       "lost_frames": 0,
-      "takes": "<any>"
+      "takes": "<any>",
+      "stacked": false
     }
   ],
   "autosave": "autosave-1.json"

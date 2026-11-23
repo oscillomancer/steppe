@@ -35,6 +35,7 @@ Generated from the command registry. Read this index, then the file of the group
 | [`plugin`](plugin.md) | 4 | Scanned plug-ins: list, scan and override their metadata. |
 | [`project`](project.md) | 13 | The project: new, open, save, recover, templates and its settings. |
 | [`rack`](rack.md) | 15 | Modular racks on channels: add, arrange, patch, levels, presets. |
+| [`record`](record.md) | 2 | How a recording pass over an item is kept (take or items). |
 | [`region`](region.md) | 4 | Named regions in beats: add, list, set, remove. |
 | [`registry`](registry.md) | 3 | The command registry: list, describe and group the commands. |
 | [`render`](render.md) | 13 | Render the mix or stems: presets, queue, dry run, regions. |

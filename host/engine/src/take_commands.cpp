@@ -233,7 +233,20 @@ struct RecPunchArg {
 struct RecordCommitArgs {
     std::vector<RecTakeArg> takes;
     RecPunchArg punch;
+    bool stack = false;  // ADR-0103; absent in older histories: laid as items
 };
+
+struct RecordSettings {
+    bool stackTakes = true;
+};
+struct RecordSetArgs {
+    std::optional<bool> stackTakes;
+};
+schema::Schema<RecordSettings> recordSettingsSchema() {
+    return schema::object<RecordSettings>("record_settings")
+        .field("stack_takes", &RecordSettings::stackTakes, schema::boolean())
+        .build();
+}
 
 schema::Schema<RecordCommitArgs> recordCommitSchema() {
     // The bounds of a MIDI journal (ADR-0080): a replayed record.commit is
@@ -276,6 +289,9 @@ schema::Schema<RecordCommitArgs> recordCommitSchema() {
                    .field("start", &RecPunchArg::start, schema::number())
                    .field("end", &RecPunchArg::end, schema::number())
                    .build())
+        .field("stack", &RecordCommitArgs::stack,
+               schema::boolean().doc("A pass over an item becomes a take of it (ADR-0103)"))
+        .defaultValue(false)
         .build();
 }
 
@@ -1358,18 +1374,66 @@ void registerTakeCommands(cmd::Registry& registry) {
             punch.enabled = a.punch.enabled;
             punch.start = a.punch.start;
             punch.end = a.punch.end;
-            auto placed = engine.placeTakes(takes, punch, nullptr);
+            auto placed = engine.placeTakes(takes, punch, nullptr, a.stack);
             if (!placed) return std::move(placed).error();
             return json::Value::object();
         };
         addChecked(registry, std::move(c));
     }
+    [&] {
+        Command<NoArgs, RecordSettings> c;
+        c.name = "record.get";
+        c.kind = Kind::Query;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "How a recording pass over an item is kept (stack_takes).";
+        c.description =
+            "stack_takes true: recording over an item makes a new take of it (the item's position "
+            "and length do not change; the new take is heard); false: every pass is laid as "
+            "new items over what is there. A machine setting, not part of the project.";
+        c.tags = {"transport", "take"};
+        c.args = schema::object<NoArgs>("no_args").build();
+        c.result = recordSettingsSchema();
+        c.examples = {{"The default", j("{}"), j(R"({"stack_takes": true})"), "empty"}};
+        c.run = [](const NoArgs&, Context& ctx) -> Result<RecordSettings> {
+            return RecordSettings{app(ctx).stackRecordedTakes()};
+        };
+        addChecked(registry, std::move(c));
+    }();
+    [&] {
+        Command<RecordSetArgs, RecordSettings> c;
+        c.name = "record.set";
+        c.kind = Kind::Action;
+        c.exposure = cmd::Exposure::McpExec;
+        c.summary = "Choose whether recording over an item makes a take of it; returns it.";
+        c.description =
+            "stack_takes true (the default): a pass that starts inside an unlocked, non-looping "
+            "item of the track becomes a new, heard take of that item (a comp's pieces all get "
+            "it); false: every pass is laid as new items, layered over what is there. Not an undo "
+            "step and not saved in the project. The GUI keeps it with its preferences; a headless "
+            "session has no preference file, so the choice lasts for the process only. The "
+            "setting is read when a recording is committed and stored in that commit, so undo, "
+            "redo and merges do not depend on it later.";
+        c.tags = {"transport", "take"};
+        c.args = schema::object<RecordSetArgs>("record_set_args")
+                     .field("stack_takes", &RecordSetArgs::stackTakes, schema::boolean())
+                     .build();
+        c.result = recordSettingsSchema();
+        c.examples = {{"Layer passes as items again", j(R"({"stack_takes": false})"),
+                       j(R"({"stack_takes": false})"), "empty"}};
+        c.run = [](const RecordSetArgs& a, Context& ctx) -> Result<RecordSettings> {
+            EngineApp& engine = app(ctx);
+            if (a.stackTakes) engine.setStackRecordedTakes(*a.stackTakes);
+            return RecordSettings{engine.stackRecordedTakes()};
+        };
+        addChecked(registry, std::move(c));
+    }();
 }
 
 namespace detail {
 json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const TransportRange& punch,
-                             const fs::path& media) {
+                             const fs::path& media, bool stack) {
     RecordCommitArgs a;
+    a.stack = stack;
     for (const RecordedTake& r : takes) {
         RecTakeArg t;
         t.track = r.track.str();
