@@ -371,7 +371,8 @@ void MidiEventList::submit(const std::string& text) {
     } else if (column == Column::Pitch) {
         if (r.cc ? (!integer(text, pitch) || pitch < 0 || pitch > 127)
                  : !pitchNumber(text, pitch)) {
-            bad(r.cc ? "Use a CC number from 0 to 127." : "Use C#4 or a MIDI pitch from 0 to 127.");
+            bad(r.cc ? "Use a CC number from 0 to 127."
+                     : "Use C#4, F##4 or a MIDI pitch from 0 to 127.");
             return;
         }
         op["semitones"] = pitch - r.pitch;
