@@ -627,8 +627,10 @@ the same.*
   that leaves or returns to an arrangement with an audio item within
   reach of its boundary on the timeline (the converter's reach either
   side: 0.25 s of song, times the fastest master rate the plan plays
-  where that is above 1; under a transport loop the reach runs across the
-  wrap, as the converter does; round 128 W1), queued
+  where that is above 1, a sync chase's scale read from the compiled plan
+  rather than the live chase, which can drift a few percent from it, well
+  inside the reach's margin; under a transport loop the reach runs across
+  the wrap, as the converter does; round 128 W1), queued
   while the newest plan keeps the pitch (`captureBeforeStretchCut`, at
   placement and at each service), ends the capture on that switch's
   boundary, the launch not in it, with a warning naming the track; MIDI

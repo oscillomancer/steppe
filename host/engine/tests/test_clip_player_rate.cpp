@@ -741,17 +741,19 @@ TEST_CASE(
     //    0-5 s lies just past the wrap, where the converter runs on, and ends it;
     //  - at rate 2 an item ending 0.4 s before the switch on bar 4 (6 s) is
     //    within the reach, 0.25 s of song at most rate 1, scaled by the rate
-    //    above it.
+    //    above it: the scalar's, or an envelope's points over a scalar of
+    //    0.75 (round 128 N2).
     struct Case {
         const char* name;
         double rate, loopEnd, itemSeconds, launchSong;
-        bool quantizeBeat, ends;
+        bool quantizeBeat, ends, envelope = false;
     };
     for (const Case& c :
          {Case{"pass 2, audio at the anchor", 0.75, 6.0, 1.5, 8.2, false, true},
           Case{"pass 2, audio at the song frame", 0.75, 6.0, 9.0, 8.2, false, false},
           Case{"audio past the wrap", 0.75, 5.6, 0.0, 5.1, true, true},
-          Case{"rate 2, 0.4 s clear", 2.0, 0.0, 0.6, 4.4, false, true}}) {
+          Case{"rate 2, 0.4 s clear", 2.0, 0.0, 0.6, 4.4, false, true},
+          Case{"an envelope at 2, 0.4 s clear", 2.0, 0.0, 0.6, 4.4, false, true, true}}) {
         INFO(c.name);
         Project p;
         twoTracks(p);
@@ -770,8 +772,11 @@ TEST_CASE(
             p.runArgs("clip.set", q);
         }
         auto rate = j(R"({"preserve_pitch": true})");
-        rate["rate"] = c.rate;
+        rate["rate"] = c.envelope ? 0.75 : c.rate;
         p.runArgs("transport.playrate.set", rate);
+        if (c.envelope)  // it replaces the scalar: rate 2 throughout
+            p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                             R"({"beat": 0, "value": 2}, {"beat": 32, "value": 2}]})");
         if (c.loopEnd > 0) {
             auto loop = j(R"({"start_seconds": 0, "enabled": true})");
             loop["end_seconds"] = c.loopEnd;
