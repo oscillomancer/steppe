@@ -34,7 +34,7 @@ timeline start have clipped it).
    arming a frozen track, and freezing an armed one, are refused, so this is a backstop; decided
    2026-11-23, round 132). A commit that fails anywhere (a refused nested `take.comp` included) is
    rolled back whole: the project stays as it was and editable, and the recording is not in it
-   (its journals remain for recovery).
+   (its journals remain for recovery; the refusal's message says so and names project.recover).
 2. **The item's extent does not change.** Its position and length stay; the new take reads the
    recording by the timeline mapping (`start_offset` negative when the pass starts after the item,
    so the first part is silent; positive past the end of a short pass). What lies beyond the item

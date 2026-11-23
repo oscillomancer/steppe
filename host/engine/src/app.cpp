@@ -3778,6 +3778,21 @@ Status commitMidiTake(model::EditTxn& t, const model::Session& s, const Recorded
 
 Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<RecordedTake>& takes,
                                                          std::string_view label, bool mayStack) {
+    auto done = commitTakesNow(takes, label, mayStack);
+    // A refusal leaves the project as it was and the recordings where they are, with their
+    // journals: say so, and how to get them back.
+    if (!done && std::any_of(takes.begin(), takes.end(), [](const RecordedTake& r) {
+            return r.frames > 0 || !r.midi.empty();
+        })) {
+        Error e = std::move(done).error();
+        e.message += " (the recording is kept: project.recover places it)";
+        return e;
+    }
+    return done;
+}
+
+Result<std::vector<RecordedInfo>> EngineApp::commitTakesNow(const std::vector<RecordedTake>& takes,
+                                                            std::string_view label, bool mayStack) {
     // Decided once, here, and stored in record.commit's arguments, so that a replay (another
     // branch, redo, a merge) builds the same project whatever the setting is then (ADR-0103).
     const bool stack = mayStack && stackRecordedTakes_;

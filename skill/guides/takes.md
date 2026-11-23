@@ -38,7 +38,8 @@ a comp's pieces all get the new take. Recording only some tracks of an edit grou
 `record.stack_group`: the others get no take, so a group `take.comp` of the new index is refused
 (`comp.group_takes`); arm the whole group to keep them level. A frozen track takes no recording:
 its pass is left out with `record.frozen_skipped` (the recording is kept with its journal: unfreeze,
-then `project.recover` places it where it was played) and the others are placed. A pass inside a comp with hand-set seams makes
+then `project.recover` places it where it was played) and the others are placed. A refused commit
+says its recordings are kept (`project.recover`). A pass inside a comp with hand-set seams makes
 uniform and warns `record.comp_uniform`. A pass
 that starts before an item, or into a locked or looped one, makes a new item and warns
 `record.stack_skipped`; a pass that runs past the item's end keeps the rest hidden in the take

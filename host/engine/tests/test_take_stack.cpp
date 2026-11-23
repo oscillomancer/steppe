@@ -563,6 +563,9 @@ TEST_CASE("a refused commit leaves the session editable and the project as it wa
     auto done = f.app->commitTakes({f.pass("refused.wav", 0.5, 0.5)});
     REQUIRE_FALSE(done);
     CHECK_FALSE(done.error().code.empty());
+    // The error says the recording is kept and how to get it back.
+    CHECK(done.error().message.find("kept") != std::string::npos);
+    CHECK(done.error().message.find("project.recover") != std::string::npos);
     // Nothing of it is in the project, not even as a preview, and the next edit works.
     CHECK(model::serializeProject(f.app->view()) == before);
     CHECK(model::serializeProject(f.app->head()) == before);

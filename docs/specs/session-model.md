@@ -2989,8 +2989,9 @@ on the loop range with a take per pass):
   (`project.recover`, `record.commit` replays) follows the same rule. A pass inside a comp whose
   seams differed (hand-set lengths, shapes or hard cuts among crossfades) rebuilds all of them as
   the run's one crossfade, and warns `record.comp_uniform` so that does not happen silently. A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
-  the project is as it was and still editable, and the recording is not in it (its journals remain
-  for recovery).
+  the project is as it was and still editable, and the recording is not in it; the refusal's message
+  ends "(the recording is kept: project.recover places it)", the journals and files remaining for
+  recovery.
 - The item's `position` and `length` never change by the pass itself. The new take (audio: the pass's media source,
   named `<file>` or `<file> pass n`; MIDI: a source with the played notes only, named `<track> MIDI`,
   `follow: none`, no context) reads the recording by the timeline mapping: `start_offset` is the

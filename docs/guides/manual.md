@@ -848,7 +848,8 @@ channel cannot be armed (arming it says to unfreeze it first), and arming a grou
 members unarmed with a warning. If a channel is frozen while a recording is being made on it (an
 agent can do this behind the app's back), nothing is lost: the recording stops as usual, every other channel's takes are placed, and the frozen channel's
 recording is kept in the project's recordings folder, named in a `record.frozen_skipped` warning.
-Unfreeze the channel and `project.recover` places it where it was played, loop passes included.
+Unfreeze the channel and `project.recover` places it where it was played, loop passes included. A
+commit that is refused for any reason keeps the recordings the same way, and its error says so.
 V1 requires unity master playrate without an active rate envelope. Tempo, meter,
 project sample rate and master-rate edits name the frozen tracks that must be
 unfrozen first. Missing plugins or unavailable media must be repaired before
