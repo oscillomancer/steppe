@@ -1578,3 +1578,38 @@ TEST_CASE("midi clock output: engine stop sends Stop from a running cycle") {
     app.reset();
     fs::remove_all(dir);
 }
+
+TEST_CASE("sync: a clock chase leaves MIDI capture possible, on the song positions heard") {
+    // S3 B (the co-director's Q2): a chasing source plays through the rate
+    // path with the pitch kept (ADR-0071), here at 1 with no master yet. A
+    // capture of launched MIDI clips is allowed there and commits each
+    // launch at the song position it was heard at.
+    for (bool ahead : {false, true}) {
+        CAPTURE(ahead);
+        Rig rig(ahead);
+        rig.run("track.add", R"({"name": "Bass"})");  // tr_1
+        const std::string scene = rig.run("scene.add", R"({"name": "A"})")["id"].asString();
+        rig.run("clip.add", R"({"track": "tr_1", "scene": ")" + scene +
+                                R"(", "notation": "voice bass; 1: C3:q E3:q G3:h"})");
+        rig.run("sync.set", R"({"source": "mtc", "midi_input": "Clock In"})");
+        rig.run("launch.capture", R"({"on": true})");
+        rig.run("transport.play", "{}");
+        rig.seconds(0.2);
+        REQUIRE(rig.transport().playing);
+        const double at = rig.run("launch.clip", R"({"clip": "cl_1"})")["beat"].asDouble();
+        rig.seconds(4.5);
+        json::Value done = rig.run("launch.commit", "{}");
+        REQUIRE(done["tracks"].size() == 1);
+        // The launch at the song position it was heard at: its anchor, as
+        // song samples from the capture's start.
+        json::Value history = rig.run("log.list", R"({"limit": 1})");
+        const json::Value& last = history["entries"].at(history["entries"].size() - 1);
+        REQUIRE(last.find("command")->asString() == "launch.commit");
+        const json::Value& perf = *last.find("args")->find("performance");
+        const json::Value& launches = *perf.find("launches");
+        REQUIRE(launches.size() == 1);
+        CHECK(launches.at(0).find("frame")->asInt() ==
+              launches.at(0).find("anchor")->asInt() - perf.find("start")->asInt());
+        CHECK(launches.at(0).find("anchor_beat")->asDouble() == at);
+    }
+}

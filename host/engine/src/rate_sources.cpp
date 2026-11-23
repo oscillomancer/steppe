@@ -9,6 +9,9 @@ namespace {
 struct Source {
     const Clip& clip;
     const PlayrateTimeline& timeline;
+    // The clip launcher's cut (Clip::gateFrom), song samples; none on a
+    // stretch converter, whose history must run on.
+    std::int64_t gateFrom = INT64_MIN, gateUntil = INT64_MAX;
     const float* fetch(std::size_t channel, std::int64_t first,
                        std::span<float> scratch) const SUPPLE_RT {
         const auto& data = clip.data->channels[channel];
@@ -20,7 +23,9 @@ struct Source {
         // the item had ended there, as before the item on the first pass.
         auto frameAt = [&](std::int64_t frame) -> std::int64_t {
             const double project = double(frame - clip.offset + clip.start - clip.deviceShift);
-            frame += static_cast<std::int64_t>(std::llround(timeline.wrapped(project) - project));
+            const double song = timeline.wrapped(project);
+            if (song < double(gateFrom) || song >= double(gateUntil)) return -1;
+            frame += static_cast<std::int64_t>(std::llround(song - project));
             const auto k = frame - clip.offset;  // within the item
             if (k < 0 || k >= clip.length) return -1;
             if (clip.loop && size > 0) frame = (frame % size + size) % size;
@@ -53,6 +58,12 @@ double sourcePosition(const Clip& clip, const PlayrateTimeline& timeline,
 bool processQuantum(RateClipState& state, const Clip& clip, const PlayrateTimeline& timeline,
                     std::int64_t q) SUPPLE_RT {
     Source source{clip, timeline};
+    if (!state.preserve) {
+        source.gateFrom = clip.gateFrom;
+        source.gateUntil = clip.gateUntil;
+    }
+    state.gateFrom = source.gateFrom;
+    state.gateUntil = source.gateUntil;
     bool ok;
     if (state.preserve) {
         const double end =
@@ -332,6 +343,15 @@ void carryRateSources(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
     }
 }
 
+namespace {
+// A tape quantum read under another cut than the clip's now (a stretch
+// converter's is never read again: its history runs on).
+bool stale(const RateClipState& state, const Clip& clip) SUPPLE_RT {
+    return !state.preserve &&
+           (state.gateFrom != clip.gateFrom || state.gateUntil != clip.gateUntil);
+}
+}  // namespace
+
 void playRateClip(Plan& p, Clip& clip, Stereo& into, std::int64_t pos, std::uint32_t frames,
                   std::int64_t ahead, bool live) SUPPLE_RT {
     auto& selected = *clip.rateState;
@@ -344,7 +364,7 @@ void playRateClip(Plan& p, Clip& clip, Stereo& into, std::int64_t pos, std::uint
         const bool before = selected.previous && device < p.rateSwitchDevice;
         auto& state = before ? *selected.previous : selected;
         auto& trajectory = before ? *p.previousTimelines[live ? 1 : 0] : clock;
-        if (q != state.quantum) processQuantum(state, clip, trajectory, q);
+        if (q != state.quantum || stale(state, clip)) processQuantum(state, clip, trajectory, q);
         const double k = clock.absolutePosition(device) -
                          (double(clip.start - clip.deviceShift) + clock.origin());
         if (k < 0 || k >= double(clip.length)) continue;
@@ -352,7 +372,8 @@ void playRateClip(Plan& p, Clip& clip, Stereo& into, std::int64_t pos, std::uint
         float left = state.output[0][index], right = state.output[channels > 1 ? 1 : 0][index];
         if (!before && selected.previous && device < p.rateSwitchDevice + p.smoothFrames) {
             auto& old = *selected.previous;
-            if (q != old.quantum) processQuantum(old, clip, *p.previousTimelines[live ? 1 : 0], q);
+            if (q != old.quantum || stale(old, clip))
+                processQuantum(old, clip, *p.previousTimelines[live ? 1 : 0], q);
             const float mix =
                 static_cast<float>(double(device - p.rateSwitchDevice) / p.smoothFrames);
             left = old.output[0][index] + mix * (left - old.output[0][index]);

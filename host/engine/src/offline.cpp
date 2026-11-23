@@ -1159,7 +1159,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
                     else
-                        detail::applyLaunch(p, node, sw.action, sw.at + p.rateOrigin);
+                        detail::applyLaunch(node, sw.action);
                 }
                 auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(p.block, total - pos));
                 if (p.rateEnabled) n = std::min(n, static_cast<std::uint32_t>(64 - (pos & 63)));

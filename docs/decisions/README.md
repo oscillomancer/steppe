@@ -118,3 +118,4 @@ current state.
 | [0097](0097-clip-launcher.md) | Clip launcher: scenes and clips beside the arrangement | Proposed |
 | [0098](0098-clip-context.md) | Clips know the context | Accepted |
 | [0099](0099-three-step-describe-index.md) | A three-step describe index | Accepted |
+| [0100](0100-chord-tone-spelling.md) | Chord tones are spelled by their degree | Accepted |

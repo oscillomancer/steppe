@@ -344,6 +344,12 @@ struct LaunchLogEntry {
     // track's own launch, so a commit knows a scene was launched whole
     // without guessing from clips that started together (the replay ignores it).
     std::optional<model::Id> scene;
+    // The unwrapped song sample of the switch's boundary: its anchor plus
+    // the transport loop passes before it, on the song's own running count
+    // (the master playrate's timeline, or the song position at unity), so
+    // a capture measures song time between launches under a playrate too
+    // (S3 B). At unity it moves with runningFrame (the replay ignores it).
+    std::int64_t songFrame = 0;
     bool operator==(const LaunchLogEntry&) const = default;
 };
 

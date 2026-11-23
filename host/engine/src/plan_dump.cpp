@@ -360,9 +360,11 @@ void dumpTakeChain(Dump& d, std::string_view a, const TakeChain& tc) {
 }
 
 void dumpClip(Dump& d, std::string_view a, const Clip& c) {
+    // The launcher's gates are block state (launchAudio sets them), not the plan's.
     [[maybe_unused]] const auto& [item, take, rateState, data, start, length, deviceShift, offset,
-                                  loop, mode, gainL, gainR, fadeIn, fadeOut, fadeInShape,
-                                  fadeOutShape, fadeInCurve, fadeOutCurve, takeChain] = c;
+                                  loop, gateFrom, gateUntil, mode, gainL, gainR, fadeIn, fadeOut,
+                                  fadeInShape, fadeOutShape, fadeInCurve, fadeOutCurve, takeChain] =
+        c;
     d.put(a, "item", c.item);
     d.put(a, "take", c.take);
     d.put(a, "rateState", c.rateState != nullptr);

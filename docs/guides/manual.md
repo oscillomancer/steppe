@@ -540,7 +540,11 @@ of a range as a lead sheet (one line per bar, such as `3: {Fm7}:h {G7}:h`),
 `context.write` writes one back as a diff over the bars it names, `context.at`
 says what holds at a bar, and `key.set` and `chord.set` change one point.
 The key also decides how notes are spelled: the same pitch reads as `Bb` in F
-major and `A#` in D major in the MIDI editor and in `midi.get`. The scale-aware
+major and `A#` in D major in the MIDI editor and in `midi.get`. Under a chord a
+chord tone is spelled by its degree instead (the third of E is `G#`, never `Ab`;
+the seventh of C7 is `Bb`; a diminished seventh on C has `Bbb`), in `midi.get`
+and in the MIDI editor alike (the roll's note names, the notation panel and the
+event list, whose pitch cell takes `Bbb4` or `F##4` typed in). The scale-aware
 editing commands (`midi.edit` with `snap_to_scale`, `transpose_degrees` and
 `fit_to_chord`) read the key and chord at each note. A **section** is a region
 the song names (a verse, a chorus): `context.at` names the one that holds,
@@ -564,7 +568,8 @@ part plays, and under the numbers it names the song's chords over the part
 chord there to change it, or double-click between chords to add one, as in
 the ruler. When the song
 has a key, the rows of the notes outside its scale are drawn darker, and
-note names are spelled for the key (B-flat, not A-sharp, in F major). With
+note names are spelled for the key and chord where each note starts
+(B-flat, not A-sharp, in F major; G-sharp under an E chord). With
 no key the rows follow the black keys, as on a piano.
 
 The button in the header after **Quantize** names the key where the part
@@ -1727,8 +1732,8 @@ In the piano roll a clip starts at its own bar 1, and its end is marked
 "end", with the time after it shaded. It has no place in the
 song, so it keeps the key and chords it was written against, and the roll
 shows those: the key button names its key, its chords are in the strip over
-the roll (keys in a row under the chords), and the rows and note names
-follow its key. Drag a chord or key along the strip to move it (with Alt, a
+the roll (keys in a row under the chords), and the rows follow its key and
+the note names its key and chords. Drag a chord or key along the strip to move it (with Alt, a
 chord is copied). Right-click the strip
 to set its key (**Key…**), add a chord, remove one, take the song's key and
 chords at the playhead, or clear them; double-click a chord to change it.
@@ -1805,7 +1810,10 @@ queued, `followed`: what it follows by (`none`, `key` or `chords`).
 ### Capturing a performance
 
 `launch.capture {on: true}` starts keeping what you launch; `launch.capture
-{on: false}` stops. `launch.commit` then writes the performance onto the
+{on: false}` stops, at once, or with `quantize` (`"bar"`, `"beat"`, …) on
+that grid's next line, so the performance ends on the bar. The Capture
+button, turned off while playing, ends it on the project's launch quantize
+and commits it there. `launch.commit` then writes the performance onto the
 timeline as ordinary items, in one undo step. It is laid out as it ran:
 from where the capture began, each launch as many seconds later as it was
 heard, even if the transport loop jumped back meanwhile. On each track that
@@ -1822,9 +1830,11 @@ clip is playing. Not yet:
 - launching an audio clip while the master playrate keeps the pitch
   (`launch.playrate`); MIDI clips, and audio clips without it, follow
   the playrate;
-- capturing a performance while a master playrate is active, or while
-  the rate you hear is still gliding back to 1 after you set it there
-  (`transport.playrate.get` shows `effective_rate`).
+- capturing while a launched audio clip plays and the master playrate
+  keeps the pitch (`launch.playrate`): stop the clip or turn off preserve
+  pitch first. Otherwise a capture runs under any playrate and through
+  changes to it, and the commit plays the same song positions, not the
+  same durations, at another rate.
 
 A rack's Notes module that plays a track's notes follows that track's
 launches: it plays the clip, falls silent when the track stops, and

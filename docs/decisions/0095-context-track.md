@@ -2,6 +2,9 @@
 
 **Status:** Proposed, 2026-11-19.
 
+*(Note, 2026-11-22: [ADR-0100](0100-chord-tone-spelling.md) adds a chord to the inputs of `spell`:
+a chord tone is named by its degree and `PitchClass` holds up to two accidentals. The rule below is the rule for a place with no chord.)*
+
 Contracts: `specs/session-model.md` "Context track (schema 2.17)" (the model, the
 file, errors, describe), §1.10, §3, §7 (commands); `specs/harmony.md` (the library); `specs/notation.md`
 ("Chord symbols"). Part of the headline design in `designs/headline-core.md`

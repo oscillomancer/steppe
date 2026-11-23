@@ -119,7 +119,8 @@ class McpTools(unittest.TestCase):
                   ("describe", {"text": "zzzzq"}), ("describe", {"group": "fxx"}),
                   ("describe", {"text": "sidechain"}),
                   ("describe", {"group": "fx", "text": "sidechain"}),
-                  ("describe", {"group": "tempo", "kind": "query"})]
+                  ("describe", {"group": "tempo", "kind": "query"}),
+                  ("describe", {"text": "replayable"})]
         for options in [(), ("--tools", "core"), ("--tools", "all")]:
             with self.subTest(options=options):
                 lines = self.exchange(extra, *options)
@@ -225,6 +226,11 @@ class McpTools(unittest.TestCase):
                 self.assertNotIn("text searches", no_text)
                 self.assertIn("tempo", no_text)
                 self.assertIn("query", no_text)
+                # Internal commands (replay-only history edits) are hidden: a word only they say
+                # is an empty answer with the full hint, not a bare one.
+                internal_only = replies[base + 11]["structuredContent"]
+                self.assertEqual(internal_only["namespaces"], {})
+                self.assertIn("text replayable", internal_only["hint"])
 
     def test_registry_groups_on_the_command_line(self):
         groups = json.loads(subprocess.run([BINARY, "registry", "--groups"], capture_output=True,

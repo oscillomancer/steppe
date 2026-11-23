@@ -9,6 +9,7 @@
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "heard_midi.h"
+#include "midi_context.h"
 #include "supple/model/context.h"
 #include "supple/model/follow.h"
 #include "supple/model/launcher.h"
@@ -842,12 +843,13 @@ void registerItemCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpTool;
         c.summary = "Read an item's or clip's MIDI as notation, with its key and chords.";
         c.description =
-            "Pitch names follow the key that holds at the item's start (none: the default "
-            "spelling). context lists the key and the chords over the item's span, each from "
+            "Pitch names follow the key and chord that hold at each note's start (a chord tone "
+            "by its degree: G# over E, never Ab; none: the default spelling). context lists the "
+            "key and the chords over the item's span, each from "
             "the bar of the item (item_bar, the notation's) and of the project (project_bar) "
             "where it starts; the first of each is the one already holding at the item's "
             "start. Omitted when the project has no key or chords there. A clip has no place "
-            "in time: its pitch names follow its own key at its start, and its context is the "
+            "in time: its pitch names follow its own key and chords, and its context is the "
             "key and chords it was written against: runs by clip bar (item_bar, no "
             "project_bar) and beat from its start, and text, its lead sheet in clip bars "
             "(clip.set {context} takes it back). follow (none, key, chords) is a clip's.";
@@ -923,8 +925,10 @@ void registerItemCommands(cmd::Registry& registry) {
                              "/sounding",
                              "launch.state says how a launched clip follows; lay it on the "
                              "timeline (item.add {clip}) to read what sounds");
-            // A clip's names follow its own key at its start, never the project's.
-            options.key = clip ? model::keyAt(*clip, 0) : model::keyAt(s, start);
+            // Names follow the key and chord that hold at each note's start (ADR-0100), as the
+            // roll's do: a clip's own, never the project's; a following take's own when its
+            // written notes are shown; otherwise the song's at the note's beat. Set below, once
+            // the answer's notes are known.
             const midi::Sequence* shown = &s.midi.find(*take->source)->sequence;
             midi::Sequence heardSeq;  // what sounds, when asked (a following take only)
             MidiGetResult extra;      // the following-take fields
@@ -1017,6 +1021,32 @@ void registerItemCommands(cmd::Registry& registry) {
                                                                a.to.value_or(1e18))
                                         : firstPass(model::soundingNotes(s, *id, -1e18, 1e18)),
                        false, !(a.from || a.to));
+            }
+            {
+                const bool heard = shown == &heardSeq;
+                const double ppq = shown->ppq > 0 ? static_cast<double>(shown->ppq) : 960.0;
+                // A source note sounds where `model::notePlace` puts it (the take's start offset
+                // and playrate), and a following take's reads its own context at its context beat
+                // (phase and period). A heard note is already in item time. A clip's note reads
+                // the clip beat it first sounds at, through the loop window, else where its
+                // content sits kept inside the clip, as midi.edit reads it (clipNoteContext). A
+                // place before beat 0 reads beat 0's context. The roll's labels read the same
+                // functions (model::writtenNamePlace and the others).
+                options.placeAt = [&s, clip, heard, take, start, ppq](std::int64_t tick) {
+                    const double beat = static_cast<double>(tick) / ppq;
+                    if (heard) return model::songNamePlace(s, start + beat);
+                    if (clip) {
+                        const auto sounds =
+                            detail::clipSoundingBeats(*clip, *take, static_cast<int>(ppq), tick);
+                        const double content = model::notePlace(*take, 0.0, beat).songBeat;
+                        return model::clipNamePlace(
+                            *clip, sounds.empty()
+                                       ? std::clamp(content, 0.0,
+                                                    std::max(0.0, clip->length - 1.0 / 960.0))
+                                       : sounds.front());
+                    }
+                    return model::writtenNamePlace(s, *take, start, beat);
+                };
             }
             auto text = notation::decompile(*shown, options);
             if (!text) return std::move(text).error();
