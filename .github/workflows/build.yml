@@ -77,7 +77,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     # Native source-export conformance builds all thirteen projects serially.
     # Leave room for those tests without increasing compiler concurrency.
-    timeout-minutes: ${{ matrix.platform == 'macos' && 150 || matrix.platform == 'windows' && 120 || 90 }}
+    # Linux too: a slow runner's build took 36 min against the usual 25, and
+    # its job hit 90 (run 45077330993).
+    timeout-minutes: ${{ matrix.platform == 'macos' && 150 || 120 }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}

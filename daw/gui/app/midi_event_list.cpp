@@ -36,17 +36,19 @@ bool parts(std::string_view text, std::vector<int>& out, std::size_t count) {
     return out.size() == count;
 }
 
-std::string pitchName(int pitch) { return harmony::spell(pitch); }
-
 bool pitchNumber(std::string_view text, int& value) {
     if (integer(text, value)) return value >= 0 && value <= 127;
     if (text.size() < 2) return false;
     const auto note = std::string_view("C D EF G A B").find(text.front());
     if (note == std::string_view::npos || text.front() == ' ') return false;
     text.remove_prefix(1);
-    int sharp = 0;  // a sharp is +1, a flat -1: the names shown are the default spelling (Bb)
-    if (text.front() == '#' || text.front() == 'b') {
-        sharp = text.front() == '#' ? 1 : -1;
+    // A sharp is +1, a flat -1, up to two of one kind: a chord tone's
+    // spelling shows `##` and `bb` (ADR-0100), and the cell takes what it shows.
+    int sharp = 0;
+    const char sign = text.front();
+    while ((sign == '#' || sign == 'b') && !text.empty() && text.front() == sign &&
+           std::abs(sharp) < 2) {
+        sharp += sign == '#' ? 1 : -1;
         text.remove_prefix(1);
     }
     int octave = 0;
@@ -294,6 +296,12 @@ void MidiEventList::select(std::size_t row, unsigned mods) {
 MidiEventList::RowText MidiEventList::rowText(std::size_t row) const {
     if (row >= rows_.size()) return {};
     const Row& r = rows_[row];
+    // A note by the place the roll's label reads (ADR-0100): the written
+    // note's, as the list shows written notes.
+    const auto place = [this](const Row& at) {
+        const auto& s = editor_.state();
+        return s.writtenPlace ? s.writtenPlace(at.beat) : harmony::Place{};
+    };
     const auto& map = *app_.head().timeMap;
     auto p = map.barBeat(editor_.state().itemPosition + r.beat);
     auto ticks = std::llround(p.fraction * 960);
@@ -305,7 +313,7 @@ MidiEventList::RowText MidiEventList::rowText(std::size_t row) const {
     return {std::to_string(p.bar) + "." + std::to_string(p.beat) + "." + std::to_string(ticks),
             r.cc ? "CC " + std::to_string(r.pitch) : "Note",
             r.cc ? "" : std::to_string(length / 960) + "." + std::to_string(length % 960),
-            r.cc ? std::to_string(r.pitch) : pitchName(r.pitch),
+            r.cc ? std::to_string(r.pitch) : harmony::spell(r.pitch, place(r)),
             std::to_string(r.value),
             std::to_string(r.channel)};
 }
@@ -363,7 +371,8 @@ void MidiEventList::submit(const std::string& text) {
     } else if (column == Column::Pitch) {
         if (r.cc ? (!integer(text, pitch) || pitch < 0 || pitch > 127)
                  : !pitchNumber(text, pitch)) {
-            bad(r.cc ? "Use a CC number from 0 to 127." : "Use C#4 or a MIDI pitch from 0 to 127.");
+            bad(r.cc ? "Use a CC number from 0 to 127."
+                     : "Use C#4, F##4 or a MIDI pitch from 0 to 127.");
             return;
         }
         op["semitones"] = pitch - r.pitch;

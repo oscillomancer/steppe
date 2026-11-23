@@ -124,10 +124,12 @@ instructions are in `docs/guides/installing.md`.
   `chord.set`/`chord.remove`, `context.at` and `context.get`; regions are
   sections unless `section` is false; `session.describe` shows the key, the
   context and the later tempo and meter changes; `midi.get` returns the context
-  over an item and, with the piano roll, the event list, `midi.edit` readbacks
-  and `rack.probe`, spells notes by the key at the item's start (`libs/harmony`);
-  `midi.get` spells each note by the key and chord at its start (ADR-0100: a chord
-  tone by its degree, doubles where a degree needs them).
+  over an item. `midi.get` and the MIDI editor (the roll's note labels and
+  messages, the notation panel, the event list) spell each note by the key and
+  chord at its start, at the same place (ADR-0100: a chord tone by its degree,
+  doubles where a degree needs them; a place before beat 0 reads beat 0's
+  context); `midi.edit` readbacks and `rack.probe` spell by the key at the
+  item's start (`libs/harmony`).
   A file with a missing or low counter, a duplicate beat, an unknown scale or an
   unparsable chord symbol opens with a warning and keeps the point as data. The
   lead sheet (`context.get`'s `text`, `context.write` as a diff recorded as the
@@ -261,8 +263,9 @@ instructions are in `docs/guides/installing.md`.
   `scene.capture` (a following take's context becomes the clip's), `take.add`,
   a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
   `context.no_key` warning on every context edit, and `session.describe`. The
-  engine plays a take's `follow` (X4c, engine.md "Following at playback"). Not
-  built: `item.glue` is not registered. The GUI (X4e): a following
+  engine plays a take's `follow` (X4c, engine.md "Following at playback"). There
+  is no `item.glue`: `item.consolidate` renders and merges, `item.heal` rejoins
+  split pieces as an edit. The GUI (X4e): a following
   take's roll draws its notes where they sound with the written pitches outlined, and
   a Written cell; the strip shows the song's chords and the take's, whose row is edited
   as a clip's (`take.set {context}`); a degree drag steps the written pitch in the
@@ -623,7 +626,7 @@ instructions are in `docs/guides/installing.md`.
   Audio write errors retain the complete physical prefix and wake the model
   immediately; the GUI status line identifies the failure while healthy targets
   continue (ADR-0082). Recording file operations stay on the writer thread.
-- **Editing**: items, takes, comping lanes, fades and crossfades with shapes,
+- **Editing**: items, takes, comping (below), fades and crossfades with shapes,
   cursor splitting from the item right-click menu (shared with S) and an audio-only prior
   zero-crossing split (100 ms search, louder stereo channel, cursor fallback;
   agents use `item.split` with `snap: zero_crossing`),
@@ -1051,6 +1054,23 @@ instructions are in `docs/guides/installing.md`.
   explode onto tracks or along the track, delete one, Ctrl-drag one out, and
   render the selected items through their FX (MIDI to audio) in place, in
   place deleting the FX, or as a new take. Trims act on every selected item.
+- **Comping** (session-model §1.5.1): `take.comp {item|items, spans, crossfade?,
+  crossfade_shape?}` and `take.comp.get` make a comp from an item's takes (a loop
+  recording's passes): the item is split where the take changes, every piece keeps all
+  the takes, and each seam between takes is two overlapping pieces with a fade each
+  (10 ms, equal power by default, whole project samples), so nothing is new in the
+  engine or the audio path. Calling it again rebuilds the seams and changes nothing when
+  the arguments are the same; `take.activate {index}` on a piece keeps them. Nothing in
+  the file marks a comp: the run of pieces is found by adjacency and equal takes.
+  Limits: the GUI's swipe still makes hard cuts and has no crossfade setting or seam
+  drag (the GUI step); seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
+  empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
+  item is refused; fixed lanes are not built (`Item.lane` is stored and not played);
+  a record pass over an item still lays an overlapping item rather than a take of it;
+  after a tempo change a Beats-timebase seam's overlap and its fades (seconds) disagree
+  until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
+  stays, and between MIDI pieces of one take a held note sounds again there
+  (`comp.midi_boundary`).
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main
@@ -1513,13 +1533,10 @@ capacity reports retain their original revision/settings.
 ## Known limits
 
 Library boundaries:
-- Chord-tone spelling (ADR-0100) reaches `midi.get` only. The piano roll's note
-  names, its keyboard labels, the MIDI event list and its pitch cell, the notation
-  pane, MIDI-control names and the rack probe stay on the key's rule or the default
-  table: the roll follows in a later step, and the notation pane stays because its
-  conflict check compares the decompiled text, which a chord edit would change
-  without the MIDI changing. The event list's pitch cell reads one accidental, so
-  it could not take a name with `##` or `bb` if it showed one.
+- Chord-tone spelling (ADR-0100) reaches `midi.get` and the MIDI editor (the
+  roll's note labels and messages, the notation panel, the event list) only. The
+  roll's keyboard labels, MIDI-control names, `midi.edit` readbacks and the rack
+  probe stay on the key's rule or the default table.
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.
