@@ -119,3 +119,4 @@ current state.
 | [0098](0098-clip-context.md) | Clips know the context | Accepted |
 | [0099](0099-three-step-describe-index.md) | A three-step describe index | Accepted |
 | [0100](0100-chord-tone-spelling.md) | Chord tones are spelled by their degree | Accepted |
+| [0103](0103-recording-over-an-item.md) | Recording over an item makes a take of it | Accepted |

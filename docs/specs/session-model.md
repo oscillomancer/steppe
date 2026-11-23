@@ -2912,20 +2912,53 @@ its own context at each note's context beat, and answer `acts_on: "written"`
 when any note sounds otherwise; on any other take, the project's context at the
 note's place, as today.
 
-**Recording.** A recording pass never changes what a following take sounds, and
-never loses what was played. The rule holds where the pass is committed: a
-`midi_overdub` whose merge target (the MIDI item under its first heard position,
-ADR-0016) has an active take that follows does not merge into it. The played
-notes are committed as `midi_replace` commits them, as new items (one per run,
-or one on the loop with a take per pass), with `follow: none` and no context;
-overlapping MIDI items on a track are layered, so the following item sounds as
-before under them. The commit warns `record.follow_kept`, naming the item.
-Nothing is refused at `transport.record`. Fixed and comp lanes are not built
-(items carry a `lane` that playback does not read): the new items get no
-`lane`, as recorded items do today. When
-lanes are built, the new items go on a lane that plays beside the following
-item's, never on one that replaces it; in comp mode they are a new lane outside
-the comp.
+**Recording.** A recording pass never changes a following take: its notes, context and follow
+stay as they were, and it never loses what was played. Where the pass is committed: a
+`midi_overdub` whose merge target (the MIDI item under its first heard position, ADR-0016) has an
+active take that follows does not merge into it; the played notes are committed as `midi_replace`
+commits them, as new items (one per run, or one on the loop with a take per pass), with `follow:
+none` and no context; overlapping MIDI items on a track are layered, so the following item sounds
+as before under them. The commit warns `record.follow_kept`, naming the item. The other modes make
+a take of the item (ADR-0103, "Recording over an item" below): the new take is heard, the following
+take stays as another take, and `record.follow_kept` says so. Nothing is refused at
+`transport.record`. Fixed and comp lanes are not built (items carry a `lane` that playback does not
+read): the new items get no `lane`, as recorded items do today. When lanes are built, the new items
+go on a lane that plays beside the following item's, never on one that replaces it; in comp mode
+they are a new lane outside the comp.
+
+**Recording over an item (ADR-0103).** With `stack_takes` on (the default; `record.get` and
+`record.set {stack_takes}`, a machine setting kept with the app's preferences, `true` for a process
+that has none), a pass becomes a take of an item instead of a new item. Per armed track and per
+placed span (the pass after the punch range and the timeline start clip it: one span per run, or one
+on the loop range with a take per pass):
+
+- The **target** is the item of the track, on the main lane, whose span contains the span's first
+  heard sample; the lowest id when items are layered. No target: a new item, as before, with no
+  warning when the span overlaps no item. A span that starts before an item and runs into it makes a
+  new item and warns `record.stack_skipped` naming that item; so does a target that is locked,
+  looped, or holds the other kind of material (a MIDI pass under audio, an audio pass under MIDI),
+  or a comp piece that is locked.
+- The item's `position` and `length` never change. The new take (audio: the pass's media source,
+  named `<file>` or `<file> pass n`; MIDI: a source with the played notes only, named `<track> MIDI`,
+  `follow: none`, no context) reads the recording by the timeline mapping: `start_offset` is the
+  file frame heard at the item's start, so it is negative when the pass starts after the item
+  (silence first) and positive when the item starts after the pass starts. A pass longer than the
+  item leaves the rest in the file, hidden, and warns `record.take_beyond_item`. A MIDI take keeps
+  notes past the item's end in its source (length covers them).
+- A target that is a piece of a comp run (`compRun`: adjacent pieces with the same takes) gets the
+  take on every piece, each with the offset of its own start, so the run keeps its take count, names
+  and source continuity and `take.comp` and `take.comp.get` still read it as one comp. MIDI pieces
+  each get a copy of the played source with their own `start_offset`, as `item.split` leaves them.
+- Heard afterwards: on each piece the span touches, the newest whole pass (it covers the piece),
+  else the last pass; a piece it does not touch keeps its take. This holds also when the previous
+  heard take followed the context: the new take is heard, the following take stays as another take,
+  untouched, and `record.follow_kept` says so.
+- `midi_overdub` is unchanged (the played notes merged into the active take's, as a new take).
+- The decision is made when a recording is committed and stored in `record.commit`'s arguments
+  (`stack`, a boolean; absent in older histories: laid as items), so replays on other branches
+  (undo, redo, merges) do not read the setting. `project.recover` never stacks.
+- The recorded result of `transport.stop` and `project.recover` lists `stacked: true` when the takes
+  went into an existing item; `item` is then the target and `takes` the new takes.
 
 **Comps.** A comp's pieces keep their takes' own members; each piece plays by its
 active take, as a split does (§1.5.1).

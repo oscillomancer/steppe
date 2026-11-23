@@ -508,6 +508,18 @@ out as lanes inside the item: click a lane to hear that take, or drag across
 part of a lane to use that take for that stretch only. Ctrl-drag from below
 the name bar pulls a take out into an item of its own.
 
+**Recording over an item** adds a take to it instead of laying a second item on top: arm the
+track, put the playhead (or a punch-in) inside the item and record, and the item keeps its place
+and length and gains a take, which you hear; the older takes stay and **Show all takes** (or
+`take.comp`) lets you pick between them. A pass that starts before the item, or into a locked or
+looped item, still makes a new item, and the recording says so. If the pass runs past the item's
+end, the rest stays in the take, hidden; lengthen the item to hear it. If the item was a comp
+(several pieces of one set of takes), every piece gets the take. With a punch-in the new take is
+silent outside the punch, so comp it with the earlier take. Agents turn this off with
+`record.set {stack_takes: false}` (every pass is then laid as items, as in older versions);
+`record.get` reads it. The app's own Preferences row for it is not built yet; until then the
+setting lasts until Steppe quits.
+
 ### Changing what the mouse does
 
 **Edit > Mouse modifiers…** lists these gestures (dragging an item, dragging
