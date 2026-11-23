@@ -402,7 +402,8 @@ too; `crossfade` in seconds, `crossfade_shape` `cos` or `linear`): the longest
 seam-side fade of the run and that fade's shape, so a seam clamped by short pieces
 does not shrink it, and `take.comp` called with the read-back values and the spans
 `take.comp.get` gives rebuilds the same comp (byte for byte) when the run is uniform. A run with no seam (one
-piece) reads the default, 0.01 and `cos`; a run whose seams are all hard cuts reads 0;
+piece, or an item split in two: no seam between different takes) reads the default, 0.01 and `cos`;
+a run whose seams between takes are all hard cuts reads 0;
 a fade of a shape `take.comp` does not offer (a GUI-made one) reads as `cos`.
 
 **Uniform** (`model::compDifferingSeams`; `uniform` and `differing_seams: [{seam, at, left,

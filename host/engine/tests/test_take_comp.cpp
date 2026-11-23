@@ -1482,3 +1482,23 @@ TEST_CASE("an edit group member keeps its own seams and gives new ones its own c
     CHECK(member->find("fade_out")->asDouble() == doctest::Approx(0.08));
     CHECK(member->find("fade_out_shape")->asString() == "cos");
 }
+
+TEST_CASE(
+    "take.comp without a crossfade on a split item makes the default crossfade, not hard cuts") {
+    CompFixture f;
+    f.run("item.split", R"({"item":"it_1","at":2})");  // two pieces of one take: no seam to read
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("crossfade")->asDouble() ==
+          doctest::Approx(0.01));
+    const auto result =
+        f.run("take.comp", R"({"item":"it_1","spans":[{"from":0.5,"to":1.5,"index":1}]})");
+    const json::Value* seam = pieceEndingAt(result, 0.5);
+    REQUIRE(seam != nullptr);
+    CHECK(seam->find("fade_out")->asDouble() == doctest::Approx(0.01));
+    CHECK(seam->find("fade_out_shape")->asString() == "cos");
+    const json::Value* other = pieceEndingAt(result, 1.5);
+    REQUIRE(other != nullptr);
+    CHECK(other->find("fade_out")->asDouble() == doctest::Approx(0.01));
+    // And what the GUI and a recording pass read from the run says the same.
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("crossfade")->asDouble() ==
+          doctest::Approx(0.01));
+}

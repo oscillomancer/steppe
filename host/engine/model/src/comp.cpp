@@ -218,19 +218,33 @@ bool joinablePieces(const Session& s, Id left, Id right) {
     return true;
 }
 
+namespace {
+// The index of the take an item plays among its takes.
+std::ptrdiff_t playedIndex(const Item& item) {
+    const auto at = item.activeTake
+                        ? std::find(item.takes.begin(), item.takes.end(), *item.activeTake)
+                        : item.takes.end();
+    return at - item.takes.begin();
+}
+}  // namespace
+
 CompCrossfade compCrossfade(const Session& s, std::span<const CompPiece> run) {
     CompCrossfade out;
-    if (run.size() < 2) return out;
-    out.seconds = 0;
+    bool between = false;  // a seam between different takes: the only kind a crossfade belongs to
+    double longest = 0;
     for (std::size_t i = 0; i + 1 < run.size(); ++i) {
-        const Fade& left = s.items.find(run[i].item)->fadeOut;
-        const Fade& right = s.items.find(run[i + 1].item)->fadeIn;
-        for (const Fade* fade : {&left, &right})
-            if (fade->length > out.seconds) {
-                out.seconds = fade->length;
+        const Item& leftItem = *s.items.find(run[i].item);
+        const Item& rightItem = *s.items.find(run[i + 1].item);
+        if (playedIndex(leftItem) == playedIndex(rightItem)) continue;
+        between = true;
+        for (const Fade* fade : {&leftItem.fadeOut, &rightItem.fadeIn})
+            if (fade->length > longest) {
+                longest = fade->length;
                 out.shape = fade->shape == FadeShape::Linear ? FadeShape::Linear : FadeShape::Cos;
             }
     }
+    if (!between) return CompCrossfade{};  // no such seam (a split item): the default
+    out.seconds = longest;
     return out;
 }
 
@@ -241,12 +255,7 @@ std::vector<std::size_t> seamsOffFrom(const Session& s, std::span<const CompPiec
     std::vector<std::size_t> out;
     const double rate = s.project->sampleRate;
     const auto wanted = static_cast<std::int64_t>(std::llround(read.seconds * rate / 2.0));
-    auto indexOf = [&](const Item& item) {
-        const auto at = item.activeTake
-                            ? std::find(item.takes.begin(), item.takes.end(), *item.activeTake)
-                            : item.takes.end();
-        return at - item.takes.begin();
-    };
+    auto indexOf = [&](const Item& item) { return playedIndex(item); };
     for (std::size_t k = 0; k + 1 < run.size(); ++k) {
         const Item& left = *s.items.find(run[k].item);
         const Item& right = *s.items.find(run[k + 1].item);
