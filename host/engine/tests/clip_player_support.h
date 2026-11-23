@@ -317,4 +317,113 @@ inline void liveIsReplay(const model::Session& s, const fs::path& dir, const Liv
     CHECK(maxDiff(live.left, live.latency, *replays.plain, frames) > 0.0);
 }
 
+// --- Capturing a performance and committing it (ADR-0097 L4) ---
+
+// The app's own engine on a manual backend, driven cycle by cycle in
+// either executor, its service run after each stretch.
+struct AppLive {
+    Project& p;
+    EngineOptions options;
+    std::uint32_t block;
+    DummyBackend backend;
+    std::int64_t cycles = 0;
+    AppLive(Project& project, const EngineOptions& o, std::uint32_t b, std::int64_t frames)
+        : p(project),
+          options(o),
+          block(b),
+          backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames}) {
+        REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = block}, options));
+    }
+    // Runs until `frame` of the stream has played.
+    void until(std::int64_t frame) {
+        const std::int64_t n = frame / block - cycles;
+        if (n > 0) {
+            if (options.anticipative)
+                runAheadOnState(*p.app->engine(), backend, n, block);
+            else
+                backend.run(n);
+            cycles += n;
+        }
+        p.app->tick();
+    }
+    std::vector<float> stop() {
+        CHECK(p.app->engine()->anticipationMisses() == 0);
+        latency = p.app->engine()->outputLatency();
+        p.app->stopEngine();
+        return backend.capture().channels[0];
+    }
+    std::uint32_t latency = 0;
+};
+
+// The project's arrangement alone (no launches), from 0 for `seconds`.
+inline std::vector<float> arrangement(Project& p, double seconds, std::uint32_t block = 512) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = seconds;
+    settings.blockSize = block;
+    settings.projectDir = p.app->projectDir();
+    auto r = renderOffline(p.app->head(), pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    return r->audio.channels[0];
+}
+
+// The project's master offline, replaying `log`.
+inline std::vector<float> replay(Project& p, double seconds, std::vector<LaunchLogEntry> log,
+                                 std::uint32_t block = 512) {
+    InstancePool pool = makePool();
+    OfflineSettings settings;
+    settings.endSeconds = seconds;
+    settings.blockSize = block;
+    settings.projectDir = p.app->projectDir();
+    settings.launches = std::move(log);
+    auto r = renderOffline(p.app->head(), pool, settings);
+    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+    return r->audio.channels[0];
+}
+
+// The largest difference between live (its latency taken off) and
+// offline over [from, to), and the first frame past `tolerance`.
+inline std::pair<double, std::int64_t> compare(const std::vector<float>& live,
+                                               std::uint32_t latency,
+                                               const std::vector<float>& offline, std::int64_t from,
+                                               std::int64_t to, double tolerance = 0) {
+    double worst = 0;
+    std::int64_t first = -1;
+    for (std::int64_t k = from; k < to; ++k) {
+        const double d =
+            std::fabs(double(live[std::size_t(k + latency)]) - double(offline[std::size_t(k)]));
+        if (d > tolerance && first < 0) first = k;
+        worst = std::max(worst, d);
+    }
+    return {worst, first};
+}
+
+// A capture's commit against what played, over the capture's device frames
+// [start, end): the worst within a switch's crossfade (240 song samples,
+// with the latent gain's shift, from each launch's running frame), within
+// `reach` frames after the start and before the end, where the committed
+// items are cut while the performance went on (the tape converter's kernel
+// reaches 128 song samples across a cut), and away from both.
+struct CommitResidual {
+    double fading = 0, edges = 0, away = 0;
+};
+inline CommitResidual commitResidual(const std::vector<float>& heard, std::uint32_t latency,
+                                     const std::vector<float>& committed,
+                                     const std::vector<LaunchLogEntry>& log, std::int64_t start,
+                                     std::int64_t end, std::int64_t reach) {
+    CommitResidual r;
+    for (std::int64_t k = start; k < end; ++k) {
+        const double d =
+            std::fabs(double(heard[std::size_t(k + latency)]) - double(committed[std::size_t(k)]));
+        bool fading = false;
+        for (const LaunchLogEntry& e : log)
+            fading = fading || (k >= e.runningFrame - 256 && k < e.runningFrame + 768);
+        double& worst = fading                                  ? r.fading
+                        : k < start + reach || k >= end - reach ? r.edges
+                                                                : r.away;
+        worst = std::max(worst, d);
+    }
+    return r;
+}
+
 }  // namespace clip_player_test

@@ -1828,6 +1828,11 @@ void ArrangeView::setCaptureArmed(bool armed) {
     captureArmed_ = armed;
     if (launcherHeader_) launcherHeader_->invalidate();
 }
+void ArrangeView::setCaptureEnding(bool ending) {
+    if (ending == captureEnding_) return;
+    captureEnding_ = ending;
+    if (launcherHeader_) launcherHeader_->invalidate();
+}
 void ArrangeView::setLaunchState(LaunchViews views) {
     if (views == launchViews_) return;
     std::set<model::Id> held;

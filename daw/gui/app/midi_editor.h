@@ -240,6 +240,21 @@ struct RollState {
     // The take's own key at song beat `beat` (model::placeAt), which
     // midi.edit's degrees read on a following take; set with soundsAt.
     std::function<std::optional<harmony::Key>(double beat)> writtenKeyAt;
+    // The place a note is named by (ADR-0100), as midi.get names it, so the
+    // two spell it alike: `writtenPlace` at a written note's start in roll
+    // beats (model::writtenNamePlace for an item's take, at its unwrapped
+    // source beat; model::clipNamePlace for a clip, where the note first
+    // sounds), `songPlace` at a song beat (model::songNamePlace). Set at
+    // reload; unset, notes are named by the default table.
+    std::function<harmony::Place(double rollBeat)> writtenPlace;
+    std::function<harmony::Place(double songBeat)> songPlace;
+    // Note `i`, as `n`, in the view shown: the place it is named by. In the
+    // sounding view the song's where it sounds in the pass shown, else
+    // writtenPlace at its start.
+    harmony::Place namePlace(std::size_t i, const RollNote& n) const;
+    // A sounding pitch at roll beat `rollBeat` in the pass shown: the song's
+    // place there.
+    harmony::Place heardPlace(double rollBeat, double shift) const;
     // The key a degree step of note `i` counts in, at roll-project beat
     // `projectBeat` (itemPosition + start): a following take's own at the
     // note's place (writtenKeyAt, in the pass shown), else the view's.
@@ -452,7 +467,9 @@ class MidiEditor {
     // `submit`: the user pressed Ctrl+Enter, which also overwrites MIDI that
     // changed elsewhere while the draft was being typed.
     void compileText(bool write, bool submit = false);
-    std::optional<std::string> modelText() const;  // the item's MIDI, decompiled
+    // The item's MIDI, decompiled: by the default table, or `named` by the
+    // places the roll's labels read (RollState::writtenPlace).
+    std::optional<std::string> modelText(bool named = false) const;
     void refreshTitle();
     float maxHeight() const;
     void applyHeight();
@@ -523,8 +540,9 @@ class MidiEditor {
     std::string appliedText_;  // the text last compiled into the item
     std::string titleBase_;
     bool textDirty_ = false, compilePending_ = false;
-    bool textConflict_ = false;        // the MIDI changed under a draft: only Ctrl+Enter writes it
-    std::string baseText_;             // the item's MIDI, decompiled, when the text last matched it
+    bool textConflict_ = false;  // the MIDI changed under a draft: only Ctrl+Enter writes it
+    std::string baseText_;  // the item's MIDI, decompiled by the default table, when the text last
+                            // matched it
     std::uint64_t typingSession_ = 0;  // one undo step per focus of the notation panel
     // The first pass after the notation was last typed in: the pause before
     // it compiles counts from there. None: typed in since the last pass.

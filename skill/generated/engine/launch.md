@@ -103,7 +103,7 @@ Result:
 
 Start or end capturing launches for the timeline.
 
-While on, every applied launch is kept with the running time it applied at, and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there. A stop, a seek or a loop change ends a capture that has run; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats, laid out by running time. Refused while a master playrate is active, where running time is not song time, and while the rate heard is still gliding to 1 after one was set (effective_rate in transport.playrate.get); one that becomes active ends a running capture.
+While on, every applied launch is kept with the running time it applied at (song time: under a master playrate, the song samples played), and what each track played when the capture began. on: true begins at the position heard now (stopped: where playing starts); on: false ends it there, or with quantize (other than none, while playing) at that quantize's next boundary, where a launch of every track with clips (a scene launch) made now would land; one track's launch can land a boundary earlier, and is then in the capture. It captures until it hears that boundary, and launches from there on are not in it. ends_at (launch.state's capture_ends): the beat of the sample it ends on, which launch.commit's to will be, unless the transport loop wrapped meanwhile (then the song's beat in the loop, while to runs on by running time). on: true before then cancels the end; another on: false replaces it. A stop, a seek or a loop change ends a capture that has run, ending or not; one that has not run begins again at the new position. launch.commit writes the capture onto the timeline. from and to: its span on the timeline in beats so far, laid out by running time. It runs through master playrate edits: the committed arrangement plays the same song positions, not the same durations, at another rate. Refused while a launched audio clip plays and the master playrate keeps the pitch; a playrate that starts keeping it then ends a running capture, with a warning naming the clip. While the pitch is kept, a launch that takes a track whose arrangement holds audio off it, or back to it, ends the capture on that launch's boundary, with a warning.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -112,6 +112,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 | Field | Type | Unit | Range | Default | Description |
 | --- | --- | --- | --- | --- | --- |
 | `on` | boolean |  |  |  |  |
+| `quantize` | string |  |  |  | on: false only: end at this quantize's next boundary (none, or left out: now) One of: bar, beat, 1/2, 1/4, 1/8, 1/16, 1/32, none. |
 
 ### Result
 
@@ -127,6 +128,9 @@ Kind: `action`. Exposure: `mcp-exec`.
       "type": "number"
     },
     "to": {
+      "type": "number"
+    },
+    "ends_at": {
       "type": "number"
     },
     "warnings": {
@@ -145,7 +149,8 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: a master playrate is active, or still gliding to 1 Hint: set the master playrate to 1 and turn off its envelope, then capture once effective_rate is 1
+- `launch.playrate`: a launched audio clip plays while the master playrate keeps the pitch Hint: stop it (launch.stop or launch.arrangement), or turn off the master playrate's preserve pitch, then capture
+- `launch.later`: the transport is relocating, or the playrate is changing Hint: end the capture again in a moment
 
 ### Examples
 
@@ -275,7 +280,7 @@ Result:
 
 Write the captured performance onto the timeline as items.
 
-One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start. On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A scene launched whole (launch.scene: every clip that could play started on one boundary) also writes a section named after it, from that boundary until one of its tracks is launched again or the capture ends, as scene.insert does; clips launched singly write none. The notes are laid as written; each laid MIDI take carries its clip's context and the follow the plan used for that clip (none, key or chords, after the per-clip budget), so the committed timeline sounds as the performance did and moves with the context track as a launched clip does (take.bake writes the sounding pitches). A clip played as written warns context.mismatch once, when its key (or, in the same key, chord) is not the project's under it, however many periods it is laid as. A running capture ends first; the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
+One undo step. The capture (launch.capture) is laid out linearly from where it began, by running time, whatever the transport loop did: a launch heard s seconds into the capture lands s seconds after its start (under a master playrate, s seconds of song: the same song positions, not the same durations). On each track that left the arrangement, its clip, stopped and held stretches replace the arrangement there (its items are split, trimmed or removed); each clip becomes copies of its takes at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch crossfades become item fades. Tracks that followed the arrangement are untouched, and so is the arrangement a loop repeated. A scene launched whole (launch.scene: every clip that could play started on one boundary) also writes a section named after it, from that boundary until one of its tracks is launched again or the capture ends, as scene.insert does; clips launched singly write none. The notes are laid as written; each laid MIDI take carries its clip's context and the follow the plan used for that clip (none, key or chords, after the per-clip budget), so the committed timeline sounds as the performance did and moves with the context track as a launched clip does (take.bake writes the sounding pitches). A clip played as written warns context.mismatch once, when its key (or, in the same key, chord) is not the project's under it, however many periods it is laid as. A running capture ends first, unless a quantized end is pending (launch.capture.ending); the capture stays, so committing again writes it again over itself. performance is what history records: leave it out and launch.commit fills it from the capture.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -396,6 +401,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
 - `launch.capture`: nothing has been captured Hint: launch.capture {on: true}, play and launch clips, then launch.commit
+- `launch.capture.ending`: the capture ends on a boundary not heard yet Hint: commit once launch.state says capturing is false, or launch.capture {on: false} to end it now
 - `launch.commit`: a captured track or clip is gone Hint: undo the change, or capture the performance again
 - `item.locked`: a locked item is in the way Hint: unlock it with item.set first
 - `clip.unsupported`: a clip's loop window has no item equivalent Hint: set its loop to the whole content, or off
@@ -551,7 +557,7 @@ Result:
 
 What each track with clips plays, and what it has queued.
 
-plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. followed (none, key or chords) is what the clip it plays, else the one it has queued, follows by in the running plan (ADR-0098); follow_budget: true when the follow budget forced that (a chords clip by its key, or any as written). Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on.
+plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. followed (none, key or chords) is what the clip it plays, else the one it has queued, follows by in the running plan (ADR-0098); follow_budget: true when the follow budget forced that (a chords clip by its key, or any as written). Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on; capture_ends: the beat a quantized end (launch.capture {on: false, quantize}) ends it on, until it does.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -572,6 +578,9 @@ Kind: `query`. Exposure: `mcp-exec`.
     },
     "capturing": {
       "type": "boolean"
+    },
+    "capture_ends": {
+      "type": "number"
     },
     "tracks": {
       "type": "array",
