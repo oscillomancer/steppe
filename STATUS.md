@@ -391,7 +391,8 @@ instructions are in `docs/guides/installing.md`.
   items of a track, an item across or after the section's start, a warped
   take. MIDI is copied unless `pooled`. Limits: capture reads whole items
   only (it never splits or trims), a master's items are skipped with a
-  warning, and fades are not kept (as in the item and clip conversion). A clip
+  warning, and an audio item's fades are kept (schema 2.22; a repeating
+  audio clip with fades is laid one item per pass). A clip
   whose loop period is not its content (a gap after it, a length shorter than
   it) is refused with `scene.insert.period`: it is not laid out yet.
 - **Clip launcher, capture** (ADR-0097, step L4's engine half; engine.md

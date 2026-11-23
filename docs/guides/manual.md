@@ -1869,7 +1869,8 @@ made (`pooled: true` shares it instead), and they refuse rather than guess:
 - for `scene.capture`, a track with several items in the section, an item that
   crosses the section's edge or starts after its start, or a section with no
   item (`scene.capture.items`, `.edge`, `.offset`, `.empty`). Items on a master
-  are skipped with a warning, and fades are not kept.
+  are skipped with a warning. An audio item's fades go to its clip and back;
+  a looping audio clip with fades goes on the timeline as one item per pass.
 
 When you write notation into a clip with `midi.write`, the clip keeps its
 length: notation longer than the clip is kept but does not play, and the

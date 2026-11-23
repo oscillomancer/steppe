@@ -400,6 +400,9 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 auto shaped = itemFromClip(now, clip, take, track, pos, path);
                 if (!shaped) return std::move(shaped).error();
                 model::Item item = std::move(shaped->item);
+                // Each piece's fades are the commit's own (below), not the
+                // period item's that itemFromClip gives.
+                item.fadeIn = item.fadeOut = {};
                 std::function<double(double)> envelopePos;
                 std::int64_t end = perf.start + f1;
                 if (midi) {

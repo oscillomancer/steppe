@@ -353,17 +353,21 @@ Result<Segment> insertScene(Context& ctx, model::EditTxn& t, const model::Sessio
     seg.start = start;
     seg.end = end;
     for (const auto& [clipId, clip] : clips) {
-        auto item = layClipOnTimeline(t, s, *clip, start, end, pooled, base + "/scene");
-        if (!item) return std::move(item).error();
-        // The laid takes carry the clip's context and follow (ADR-0098): the notes sound as the
-        // context under the item says when asked to; otherwise as written, and context.mismatch
-        // says when the clip's key is not the project's.
-        std::vector<detail::ClipNote> notes;
-        auto followed =
-            detail::followPlacedItem(s, t, clipId, *clip, *item, follow, base + "/scene", notes);
-        if (!followed) return std::move(followed).error();
-        for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
-        seg.items.push_back({clipId.str(), item->str(), clip->track.str(), std::move(*followed)});
+        auto laid = layClipOnTimeline(t, s, *clip, start, end, pooled, base + "/scene");
+        if (!laid) return std::move(laid).error();
+        // An audio clip with fades that repeats is laid one item per pass.
+        for (const Id item : *laid) {
+            // The laid takes carry the clip's context and follow (ADR-0098): the notes sound as
+            // the context under the item says when asked to; otherwise as written, and
+            // context.mismatch says when the clip's key is not the project's.
+            std::vector<detail::ClipNote> notes;
+            auto followed =
+                detail::followPlacedItem(s, t, clipId, *clip, item, follow, base + "/scene", notes);
+            if (!followed) return std::move(followed).error();
+            for (const auto& n : notes) ctx.warn(n.code, n.message, n.path);
+            seg.items.push_back(
+                {clipId.str(), item.str(), clip->track.str(), std::move(*followed)});
+        }
     }
     model::Region region;
     region.start = start;
@@ -390,7 +394,9 @@ void registerSceneSectionCommands(cmd::Registry& registry) {
             "makes it: a once clip lasts its length or the span's if shorter; a loop clip lasts "
             "the span, as one looping item when it repeats within it, which needs its period to be "
             "its content: loop off with its length (as clip.add makes it), or loop on over the "
-            "whole content with a length of whole repeats (scene.insert.period otherwise). Takes "
+            "whole content with a length of whole repeats (scene.insert.period otherwise); an "
+            "audio clip with fades that repeats is laid one item per pass, each faded as its "
+            "pass. Takes "
             "are copied, MIDI with them unless pooled; an item takes its clip's name (its active "
             "take's) when the clip has one. follow (none, key or chords; default: each clip's own) "
             "is set on each laid MIDI take with the clip's context, so its notes sound as the key "

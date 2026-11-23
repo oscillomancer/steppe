@@ -2133,8 +2133,11 @@ and a clip"):
 - a MIDI clip's length is the item's length in beats, an audio clip's its
   length in seconds; the new item spans the clip's length from its position;
 - notes, audio, playrate, pitch, start offset and take FX copy as they
-  are; the item's gain, mute and colour become the clip's and back, and its
-  fades are not kept;
+  are; the item's gain, mute and colour become the clip's and back, and so
+  do an audio item's fades (schema 2.22; a MIDI item's play nothing and are
+  not kept); laid on the timeline, an audio clip with fades that repeats
+  becomes one item per pass, each faded as its pass, and a pass the span's
+  end cuts keeps its fade-in only;
 - an item's `loop` becomes a clip loop on, from 0, one content length long;
   back on the timeline only that loop, or none, converts (other windows:
   `clip.unsupported`);

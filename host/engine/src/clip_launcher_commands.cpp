@@ -350,6 +350,9 @@ Result<ClipItem> itemFromClip(const model::Session& s, const model::Clip& clip,
     item.gainDb = clip.gainDb;
     item.mute = clip.mute;
     item.color = clip.color;
+    // One period from its start: the clip's fades at its edges (S3 step C).
+    item.fadeIn = clip.fadeIn;
+    item.fadeOut = clip.fadeOut;
     if (clip.loop.on) {
         const double content = contentLength(s, take);
         const double tolerance = 1e-9 * std::max(1.0, content);
@@ -465,6 +468,12 @@ Result<model::Clip> clipFromItem(model::EditTxn& t, const model::Session& s, Id 
     clip.mute = it.mute;
     clip.gainDb = it.gainDb;
     clip.color = it.color;
+    // An audio item's fades become the clip's, shaping each pass (S3 step C);
+    // a MIDI item's play nothing, and a MIDI clip holds none.
+    if (clip.kind == model::ClipKind::Audio) {
+        clip.fadeIn = it.fadeIn;
+        clip.fadeOut = it.fadeOut;
+    }
     // An item's name is its active take's.
     if (it.activeTake)
         if (const model::Take* active = s.takes.find(*it.activeTake)) clip.name = active->name;
@@ -476,9 +485,9 @@ void nameItemFromClip(model::EditTxn& t, const model::Clip& clip, const model::I
     t.modify<model::Take>(*item.activeTake, [&](model::Take& k) { k.name = clip.name; });
 }
 
-Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const model::Clip& clip,
-                             double startBeat, double endBeat, bool pooled,
-                             const std::string& path) {
+Result<std::vector<Id>> layClipOnTimeline(model::EditTxn& t, const model::Session& s,
+                                          const model::Clip& clip, double startBeat, double endBeat,
+                                          bool pooled, const std::string& path) {
     const std::string name = "a clip of " + s.tracks.find(clip.track)->name;
     if (clip.takes.empty() || !clip.activeTake)
         return Error("item.source", name + " has no take to lay on the timeline", path,
@@ -496,6 +505,36 @@ Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const m
     const bool audio = clip.kind == model::ClipKind::Audio;
     const double span = audio ? map->secondsAt(endBeat) - startSec : endBeat - startBeat;
     const double tolerance = 1e-9 * std::max(1.0, span);
+    // An audio clip with a fade that repeats within the span: one item per
+    // pass, each faded as the pass is; a pass the span's end cuts keeps its
+    // fade-in, its fade-out falling past the cut (S3 step C, Q4 rule 2).
+    const bool fades = audio && (clip.fadeIn.length > 0 || clip.fadeOut.length > 0);
+    if (fades && clip.mode == model::ClipMode::Loop && clip.length < span - tolerance) {
+        std::vector<Id> laid;
+        for (std::int64_t k = 0; double(k) * clip.length < span - tolerance; ++k) {
+            const double from = startSec + double(k) * clip.length;
+            const double secs = std::min(clip.length, span - double(k) * clip.length);
+            const double beat = map->beatAt(from);
+            auto pass = itemFromClip(s, clip, *active, clip.track, beat, path);
+            if (!pass) return std::move(pass).error();
+            model::Item one = std::move(pass->item);
+            if (secs < clip.length - tolerance) {
+                SUPPLE_TRY(model::checkedBeat(s, map->beatAt(from + secs), path));
+                model::placeItemSeconds(s, one, from, from + secs);
+                one.fadeOut = {};
+            }
+            auto copied = copyTakesFor(t, s, clip.takes, pooled, pass->envelopePos, path,
+                                       fxEnvelopesFromClip(s, clip.kind, beat, 0, clip.length,
+                                                           std::min(secs, clip.length)));
+            if (!copied) return std::move(copied).error();
+            one.takes = *copied;
+            for (std::size_t i = 0; i < clip.takes.size(); ++i)
+                if (clip.activeTake == clip.takes[i]) one.activeTake = one.takes[i];
+            nameItemFromClip(t, clip, one);
+            laid.push_back(t.create(std::move(one)));
+        }
+        return laid;
+    }
     // How long the item lasts, in the clip's unit (ADR-0097 "Scene <-> section").
     double length = clip.length;
     if (clip.mode == model::ClipMode::Once) {
@@ -526,6 +565,8 @@ Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const m
         length = span;
     }
     if (std::abs(length - clip.length) > tolerance) {
+        // Cut short by the span: its fade-out would fall past the cut.
+        if (length < clip.length) item.fadeOut = {};
         if (audio) {
             SUPPLE_TRY(model::checkedBeat(s, map->beatAt(startSec + length), path));
             model::placeItemSeconds(s, item, startSec, startSec + length);
@@ -548,7 +589,7 @@ Result<Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s, const m
     for (std::size_t k = 0; k < clip.takes.size(); ++k)
         if (clip.activeTake == clip.takes[k]) item.activeTake = item.takes[k];
     nameItemFromClip(t, clip, item);
-    return t.create(std::move(item));
+    return std::vector<Id>{t.create(std::move(item))};
 }
 
 namespace {

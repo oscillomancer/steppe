@@ -348,6 +348,75 @@ TEST_CASE("clip.set fades an audio clip; a MIDI clip refuses a fade") {
     }
 }
 
+TEST_CASE("an audio item's fades go to its clip and back; a MIDI item's are not kept") {
+    // S3 step C: item -> clip -> item keeps both fades and their shapes,
+    // through a save and reopen.
+    Launcher l;
+    l.run("track.add", R"({"name": "Pad"})");  // tr_2
+    auto args = j(R"({"track": "tr_2", "bar": 3})");
+    args["audio_file"] = l.wav("pad.wav", 1.5).string();
+    const std::string item = l.runArgs("item.add", args)["item"].asString();
+    auto set = j(R"({"fade_in": 0.2, "fade_in_shape": "cos", "fade_out": 0.3,
+                     "fade_out_shape": "slow"})");
+    set["item"] = item;
+    l.runArgs("item.set", set);
+    auto add = j(R"({"track": "tr_2", "scene": "sc_1"})");
+    add["item"] = item;
+    const std::string clip = l.runArgs("clip.add", add)["clip"].asString();
+    const model::Clip& c = *l.head().clips.find(id(clip.c_str()));
+    CHECK(c.fadeIn == model::Fade{0.2, model::FadeShape::Cos, 0});
+    CHECK(c.fadeOut == model::Fade{0.3, model::FadeShape::Slow, 0});
+    auto back = j(R"({"track": "tr_2", "bar": 7})");
+    back["clip"] = clip;
+    const std::string again = l.runArgs("item.add", back)["item"].asString();
+    const model::Item& it = *l.head().items.find(id(again.c_str()));
+    CHECK(it.fadeIn == c.fadeIn);
+    CHECK(it.fadeOut == c.fadeOut);
+    auto reopened = model::parseProject(model::serializeProject(l.head()));
+    REQUIRE(reopened);
+    CHECK(reopened->clips.find(id(clip.c_str()))->fadeOut == c.fadeOut);
+    CHECK(reopened->items.find(id(again.c_str()))->fadeIn == c.fadeIn);
+    // A MIDI item's fades play nothing, and a MIDI clip holds none.
+    l.run("item.set", R"({"item": "it_1", "fade_in": 0.1})");
+    const std::string midi =
+        l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "item": "it_1"})")["clip"]
+            .asString();
+    CHECK(l.head().clips.find(id(midi.c_str()))->fadeIn.length == 0);
+}
+
+TEST_CASE("scene.insert lays a repeating audio clip with fades one item per pass") {
+    // S3 step C, Q4 rule 2: one looped item could only fade at its outer
+    // edges. A 0.75 s period over a 2 s bar: passes at 0, 0.75 and 1.5 s, the
+    // last cut at 0.5 s, keeping its fade-in, its fade-out past the cut.
+    Launcher l;
+    l.run("track.add", R"({"name": "Pad"})");  // tr_2
+    auto args = j(R"({"track": "tr_2", "scene": "sc_1"})");
+    args["audio_file"] = l.wav("pad.wav", 1.5).string();
+    const std::string clip = l.runArgs("clip.add", args)["clip"].asString();
+    auto set = j(R"({"length": 0.75, "fade_in": 0.05, "fade_out": 0.1})");
+    set["clip"] = clip;
+    l.runArgs("clip.set", set);
+    auto r = l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 1})");
+    std::vector<const model::Item*> laid;
+    for (const auto& e : l.head().items)
+        if (e.value->track == id("tr_2")) laid.push_back(e.value.get());
+    REQUIRE(laid.size() == 3);
+    std::sort(laid.begin(), laid.end(), [&](const model::Item* a, const model::Item* b) {
+        return model::itemSpan(l.head(), *a).startSec < model::itemSpan(l.head(), *b).startSec;
+    });
+    for (std::size_t k = 0; k < laid.size(); ++k) {
+        const model::ItemSpan span = model::itemSpan(l.head(), *laid[k]);
+        CHECK(span.startSec == doctest::Approx(16.0 + 0.75 * double(k)));
+        CHECK(laid[k]->fadeIn.length == 0.05);
+        CHECK_FALSE(laid[k]->loop);
+    }
+    CHECK(laid[0]->fadeOut.length == 0.1);
+    CHECK(laid[1]->fadeOut.length == 0.1);
+    CHECK(laid[2]->fadeOut.length == 0);  // cut at 0.5 s of its 0.75 s pass
+    CHECK(model::itemSpan(l.head(), *laid[2]).endSec == doctest::Approx(18.0));
+    CHECK(r["items"].size() == 3);
+}
+
 TEST_CASE("clip.move and clip.duplicate need an empty cell; a duplicate owns its takes") {
     Launcher l;
     l.run("track.add", R"({"name": "Keys"})");
