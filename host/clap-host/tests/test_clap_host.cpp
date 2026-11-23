@@ -2977,9 +2977,18 @@ TEST_CASE("a bridged start that misses its live deadline is unanswered, not refu
             CHECK(peer.instance->startUnanswered());
         }
         peer.release();
-        {
+        // Its answer is looked for, never waited for (ADR-0101): asked again
+        // until it is seen, the answer and not a second start. The bound
+        // only guards a bridge that died.
+        bool started = false;
+        for (int asked = 0; !started; ++asked) {
+            REQUIRE(asked < 60'000);
             Patient patient;
-            CHECK(peer.instance->startProcessing());  // its answer, not a second start
+            started = peer.instance->startProcessing();
+            if (!started) {
+                REQUIRE(peer.instance->startUnanswered());
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
         }
         CHECK_FALSE(peer.instance->startUnanswered());
         CHECK(peer.commands == std::vector{bridge::Cmd::StartProcessing});

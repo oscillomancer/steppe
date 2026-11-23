@@ -2371,12 +2371,23 @@ instance).
   answer comes, in the order reset, stop, flush; a reset drops the carried
   notes, which came before it. A start not answered by the deadline returns
   false with `startUnanswered()` set; asked again, it returns the answer
-  (no second start). A stop reaches such an instance too, and the bridge
+  (no second start). Until then the callback only looks for that answer (an
+  atomic load, no wait, so those cycles are not late), stop, reset and flush
+  are kept, and the start is not judged by the late rule: it fails as hung
+  once the lifecycle deadline (5/2 of the bridge deadline plus 2 s) has
+  passed since it was posted (ADR-0101). A stop reaches such an instance too, and the bridge
   stops an instance still processing before it deactivates it. `host::bridgeLateCalls()` counts late calls
   process-wide. Consecutive late calls spanning 50 ms fail the instance with
   the hung reason; the audio thread only sets the flag, and the main thread
   kills the process when it services the instance. Without a deadline the
   background rules below apply unchanged.
+  On Windows a timed wait waits on the done event together with a
+  high-resolution waitable timer the client creates with the instance, so it
+  ends by the deadline plus that timer's lateness, not a 15.6 ms timer tick
+  later (measured before: 15.7 ms against a 2.67 ms deadline). Without that
+  timer (before Windows 10 1803) it waits in whole milliseconds only while
+  more than two 16 ms ticks are left and spins on the done word, looking at
+  the event, for the rest, so it ends at the deadline (ADR-0102).
   Only the wake and each timed wait are inside `rt::ScopedSanctionedSyscall`,
   so the rtsan preset checks the rest of the path; the background wait
   (ADR-0013: `alive()`, kill) keeps one scope over its loop. The rtsan-only
@@ -2643,8 +2654,8 @@ harness. See the tooling README for schemas, limits and invocation details.
   refuses, so a retry that succeeds starts it clean; the next plan retries
   it. A bridged plug-in whose start is not answered by the live deadline
   (`Instance::startUnanswered()`, ADR-0081) has not refused: it is reset and
-  let go the same way, uncounted, and the next cycle asks again; one that
-  never answers fails as a hung bridge. Per-stage event storage is reserved for the most events any block-long
+  let go the same way, uncounted, and the next cycle looks again; one that
+  never answers fails as a hung bridge at the lifecycle deadline (ADR-0101). Per-stage event storage is reserved for the most events any block-long
   window holds, so a seek off the block grid never allocates. Plans share
   ownership of the session's TimeMap (a session version may be freed while
   its plan plays).
@@ -2726,7 +2737,13 @@ harness. See the tooling README for schemas, limits and invocation details.
   64-frame request, 0 xruns, final callback on the JACK thread.
 - **Control:** `engine.start {backend: jack|dummy, block, rate, force_graph}`, `engine.stop`,
   `engine.status`, `transport.play|pause|stop|seek|get`. Transport actions
-  wait (≤ 1 s) for two audio cycles so their answer is the new state;
+  wait (≤ 1 s) for two audio cycles so their answer is the new state; if
+  the device has not run them by then (a stalled device, a starved
+  renderer), the action is refused with `engine.transport`, whose hint
+  points at `engine.status`, rather than answered with the old state. A
+  recording started from stop under a scheduled playrate waits the same
+  way for the renderer to take its start, and is refused alike; a restart
+  that cannot restore the position reports `engine.error`.
   `transport.stop` returns to where play started. `<slug>-engine play FILE`
   plays a project through the device from the CLI.
 - **Anticipative processing** (ADR-0012, `EngineOptions`, default on): a

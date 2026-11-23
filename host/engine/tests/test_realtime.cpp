@@ -56,6 +56,7 @@
 #include "plan.h"
 #include "realtime_support.h"
 #include "recording.h"
+#include "stalled_backend.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -1110,7 +1111,7 @@ TEST_CASE(
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 256}));
     REQUIRE(engine.load(synthSession(0.0)));
     engine.play();
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     CHECK(engine.transport().playing);
     CHECK(engine.transport().sample == 0);
     runAhead(engine, backend, 10, 256);
@@ -1126,15 +1127,15 @@ TEST_CASE(
     engine.pause();
     backend.run(1);  // the rendered audio is dropped: silent at once
     CHECK(peakOf(2560, 2816) == 0.0);
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     CHECK_FALSE(engine.transport().playing);
     CHECK(engine.transport().sample == 2560);  // the listener's position, not the renderer's
     engine.play();                             // resumes there
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     runAhead(engine, backend, 4, 256);
     CHECK(engine.transport().sample == 2560 + 1024);
     engine.seek(1.0);  // while playing
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     CHECK(engine.transport().sample == 48000);
     runAhead(engine, backend, 1, 256);
     CHECK(engine.transport().sample == 48000 + 256);
@@ -1255,7 +1256,7 @@ TEST_CASE("anticipative: a start and a locate are heard as soon as their first r
     runAhead(engine, backend, 10, 256);
     engine.holdRendererFrom(1024);  // each epoch's stream: the locate's first block
     engine.seek(1.0);
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     REQUIRE(engine.awaitRendered(1024));
     backend.run(1);
     CHECK(engine.transport().sample == 48000 + 256);
@@ -2436,7 +2437,7 @@ TEST_CASE("MIDI monitoring: a keyboard plays the instrument live, sample-accurat
             REQUIRE(engine.load(keyboardSession()));
             REQUIRE(engine.awaitPlan());  // everything is live: nothing renders ahead
             if (playing) engine.play();
-            if (playing) engine.awaitTransport();
+            if (playing) REQUIRE(engine.awaitTransport());
             backend.run(120);
             engine.stop();
             const auto& L = backend.capture().channels[0];
@@ -2463,7 +2464,7 @@ TEST_CASE("a live processing error silences the failed device block" * doctest::
         REQUIRE(engine.load(session));
         if (options.anticipative) REQUIRE(engine.awaitPlan());
         engine.play();
-        if (options.anticipative) engine.awaitTransport();
+        if (options.anticipative) REQUIRE(engine.awaitTransport());
         backend.run(2);
         // Inject a process error in the in-tree fixture on the manual audio thread.
         std::vector<std::pair<clap_plugin_t*, decltype(clap_plugin_t::process)>> processes;
@@ -2667,7 +2668,7 @@ TEST_CASE("MIDI recording: events land on the timeline where they were heard, pe
         REQUIRE(engine.startRecording({target}));
         REQUIRE(engine.awaitPlan());  // everything is live: nothing renders ahead
         engine.play();
-        engine.awaitTransport();
+        REQUIRE(engine.awaitTransport());
         backend.run(400);  // 102400 frames
         auto takes = engine.stopRecording();
         REQUIRE(takes);
@@ -2930,7 +2931,7 @@ TEST_CASE("monitoring off while playing: the track plays on live, with its insta
     REQUIRE(engine.load(monitored));
     REQUIRE(engine.awaitPlan());
     engine.play();
-    engine.awaitTransport();
+    REQUIRE(engine.awaitTransport());
     backend.run(100);  // 25600 frames, all live (nothing renders ahead)
     const Id fx = s.fx.begin()->id;
     host::Instance* const instance = pool.find(fx);
@@ -2979,7 +2980,7 @@ TEST_CASE("a transport write in progress never stalls the audio callback" *
         if (anticipative) REQUIRE(engine.awaitPlan());
         engine.setLoop(0.0, 1.0, true);
         engine.play();
-        engine.awaitTransport();
+        REQUIRE(engine.awaitTransport());
         backend.run(8);
         const std::uint64_t before = EngineTestAccess::epoch(engine);
         const LoopRange old = EngineTestAccess::rtLoop(engine);
@@ -3090,7 +3091,7 @@ TEST_CASE("a keyed plug-in plays in real time as offline, rendered ahead or live
                 if (options.anticipative && !monitored)
                     runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
                 else if (options.anticipative) {
-                    engine.awaitTransport();
+                    REQUIRE(engine.awaitTransport());
                     for (int i = 0; i < (48000 * 2 + 4096) / 128; i += 16) {
                         REQUIRE(engine.awaitRendered(4096));
                         backend.run(16);
@@ -3223,7 +3224,7 @@ TEST_CASE("auxiliary channels play in real time as offline, rendered ahead or li
             if (options.anticipative && !monitored)
                 runAhead(engine, backend, (48000 * 2 + 4096) / 128, 128);
             else if (options.anticipative) {
-                engine.awaitTransport();
+                REQUIRE(engine.awaitTransport());
                 for (int i = 0; i < (48000 * 2 + 4096) / 128; i += 16) {
                     REQUIRE(engine.awaitRendered(4096));
                     backend.run(16);
@@ -3304,7 +3305,7 @@ TEST_CASE("a multi-out instrument's outputs play in real time as offline (ADR-00
             if (options.anticipative && !monitored)
                 runAhead(engine, backend, (48000 + 4096) / 128, 128);
             else if (options.anticipative) {
-                engine.awaitTransport();
+                REQUIRE(engine.awaitTransport());
                 for (int i = 0; i < (48000 + 4096) / 128; i += 16) {
                     REQUIRE(engine.awaitRendered(4096));
                     backend.run(16);
@@ -3923,6 +3924,124 @@ TEST_CASE("a bridged start answered after its live deadline is not taken for a r
     gate.reset();
 }
 
+TEST_CASE("a bridged start held over many cycles is not failed, and they are not late") {
+    // ADR-0101: the gain's start waits at a gate the test holds over 200
+    // cycles (each at least its period under the old rule, so more than its
+    // 50 ms of late calls). Only the first cycle, which posted the start,
+    // waited; the others looked for the answer, so they were not late, and
+    // the instance was not failed. Released, it starts and processes.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    std::optional<supple::test::LifecycleGate> gate(std::in_place,
+                                                    supple::test::GatedCall::StartProcessing);
+    REQUIRE(gate->mapped());
+    auto base = monitoring(synthSession(0, "com.suppleaudio.test.gain"));
+    model::EditTxn t(base, 2);
+    Id fxId;
+    for (const auto& fx : base.fx)
+        if (fx.value->plugin.id == "com.suppleaudio.test.gain") {
+            fxId = fx.id;
+            t.modify<model::FxInstance>(fx.id, [&](auto& f) {
+                f.isolation = model::Isolation::Dedicated;
+                f.patch = json::parse(R"({"schema":"supple.test-gain-patch/1.0",
+                    "params":{"gain":-12,"latency":"none"}})")
+                              .value();
+            });
+        }
+    const auto session = t.commit().value();
+    constexpr int kHeld = 200;
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(constantInput((kHeld + 4096) * 128));
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
+    REQUIRE(engine.load(session));
+    gate->hide();
+    backend.run(1);  // posts the start, held past this cycle's deadline
+    REQUIRE(gate->entered());
+    const auto lateFirst = engine.bridgeLateCycles();
+    CHECK(lateFirst <= 1);
+    host::Instance* instance = pool.find(fxId);
+    REQUIRE(instance);
+    backend.run(kHeld);
+    CHECK(engine.bridgeLateCycles() == lateFirst);  // looked at, never waited for
+    CHECK_FALSE(instance->failed());
+    CHECK_FALSE(instance->processing());
+    const auto& out = backend.capture().channels[0];
+    for (int cycle = 1; cycle <= kHeld; ++cycle)  // passed through meanwhile
+        CHECK(double(out[static_cast<std::size_t>(cycle) * 128 + 64]) == 0.5);
+    gate->release();
+    REQUIRE(gate->wentOn());
+    // Its answer follows the plug-in's start: the engine's outcome, started
+    // or failed, ends the wait (the room only guards a bridge that died).
+    int more = 0;
+    while (!instance->processing() && !instance->failed()) {
+        REQUIRE(more < 4000);
+        backend.run(1);
+        ++more;
+        if (!instance->processing()) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK_FALSE(instance->failed());
+    REQUIRE(instance->processing());
+    backend.run(4);
+    const double processed = .5 * 0.2511886;  // -12 dB on the 0.5 input
+    const auto last = static_cast<std::size_t>(kHeld + 1 + more + 3) * 128 + 64;
+    CHECK((double(out[last]) == doctest::Approx(processed).epsilon(1e-4) ||
+           double(out[last]) == 0.0));  // or a late, silent block
+    CHECK(engine.processErrors() == 0);
+    engine.stop();
+    gate.reset();
+}
+
+TEST_CASE("a bridged start never answered fails as hung at the lifecycle deadline") {
+    // ADR-0101: with a 1 ms bridge deadline the lifecycle deadline is 2002 ms.
+    // The gain's start is held at the gate until then: the instance fails as
+    // hung, its stage having passed audio through, and none of the cycles
+    // after the first was late.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    const supple::engine::test::BridgeDeadline deadline(1);
+    std::optional<supple::test::LifecycleGate> gate(std::in_place,
+                                                    supple::test::GatedCall::StartProcessing);
+    REQUIRE(gate->mapped());
+    auto base = monitoring(synthSession(0, "com.suppleaudio.test.gain"));
+    model::EditTxn t(base, 2);
+    Id fxId;
+    for (const auto& fx : base.fx)
+        if (fx.value->plugin.id == "com.suppleaudio.test.gain") {
+            fxId = fx.id;
+            t.modify<model::FxInstance>(
+                fx.id, [&](auto& f) { f.isolation = model::Isolation::Dedicated; });
+        }
+    const auto session = t.commit().value();
+    auto pool = makePool();
+    MediaCache media;
+    DummyBackend backend(constantInput(128 * 1024));
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128, .inputs = 2}));
+    REQUIRE(engine.load(session));
+    gate->hide();
+    backend.run(1);
+    REQUIRE(gate->entered());
+    const auto lateFirst = engine.bridgeLateCycles();
+    host::Instance* instance = pool.find(fxId);
+    REQUIRE(instance);
+    // Cycles 10 ms apart until it fails: about 200 (the room guards a hang).
+    int cycles = 0;
+    while (!instance->failed()) {
+        REQUIRE(cycles < 6000);
+        backend.run(1);
+        ++cycles;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK(instance->failure().find("stopped responding") != std::string::npos);
+    CHECK(engine.bridgeLateCycles() == lateFirst);
+    engine.service();
+    const auto failed = pool.failedErrors();
+    CHECK(
+        std::any_of(failed.begin(), failed.end(), [&](const auto& f) { return f.first == fxId; }));
+    engine.stop();
+    gate.reset();
+}
+
 TEST_CASE("a cycle late before its bridged call is not blamed on the bridge") {
     // ADR-0081 diagnostics: an in-process stage spends 20 ms, so the bridged
     // gain after it is posted past the cycle's deadline. The overrun is the
@@ -3991,19 +4110,24 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
         return std::pair(t.commit().value(), crash);
     };
     constexpr std::uint32_t kBlock = 128;
-    constexpr int kCycles = 200;  // 533 ms
+    constexpr int kCycles = 200;  // 533 ms, from its start
+    // Cycles of room before it starts, 10 ms apart: more than the lifecycle
+    // deadline (152 s with the tests' bridge deadline), so the engine's
+    // outcome, started or failed, ends the wait, not the room.
+    constexpr int kStartRoom = 16'000;
     Engine::BridgeOverruns overruns;
     host::BridgeTiming::Calls liveCalls;
     // The cycles until the hung plug-in had started, and the late cycles by
-    // then. Its start is asked in the callback with the live deadline, so a
-    // loaded machine can answer it cycles later; each cycle asks again
-    // (ADR-0081) and counts as late (CI 44201655657).
+    // then. Its start is asked in the callback with the live deadline; a
+    // loaded machine can answer it cycles later, and until then each cycle
+    // looks for the answer without waiting, so only the first is late
+    // (ADR-0101; CI 44201655657 and the Windows runs on 4809de6c).
     int started = 0;
     std::uint64_t lateBeforeHang = 0;
     auto run = [&](bool hung, InstancePool& pool, Engine*& out, std::uint64_t& late) {
         host::resetBridgeTiming();
         MediaCache media;
-        DummyBackend backend(constantInput(kCycles * kBlock + 1024));
+        DummyBackend backend(constantInput((kStartRoom + kCycles) * kBlock + 1024));
         Engine engine(pool, media, kInCallback);
         REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock, .inputs = 2}));
         const auto [session, crash] = build(hung);
@@ -4012,21 +4136,29 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
         if (hung) {
             // It plays once started; from the next block it hangs in process().
             REQUIRE(pool.find(crash));
-            while (started < kCycles / 2 && !pool.find(crash)->processing()) {
+            while (!pool.find(crash)->processing() && !pool.find(crash)->failed()) {
+                REQUIRE(started < kStartRoom);
                 backend.run(1);
                 ++started;
+                if (!pool.find(crash)->processing())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
+            // The longest live wait, against the deadline (the larger of the
+            // period, 2.67 ms, and 2 ms): a wait past it says the platform's
+            // timed wait overshoots (Windows' millisecond timer).
             REQUIRE_MESSAGE(pool.find(crash)->processing(),
                             "its start was never answered: "
                                 << started << " cycles, " << engine.bridgeLateCycles()
-                                << " late, failed: "
+                                << " late, longest live wait "
+                                << host::bridgeTiming().live.waitMaxNs << " ns, failed: "
                                 << (pool.find(crash)->failed() ? pool.find(crash)->failure()
                                                                : std::string("no")));
             lateBeforeHang = engine.bridgeLateCycles();
+            CHECK(lateBeforeHang <= 1);  // its first ask's cycle at most
             REQUIRE(pool.find(crash)->setParam(1, 2));
-            backend.run(kCycles - started);
-        } else {
             backend.run(kCycles);
+        } else {
+            backend.run(started + kCycles);
         }
         engine.service();
         CHECK(engine.processErrors() == 0);
@@ -4047,6 +4179,8 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     CHECK(overruns.lateWait <= late);
     CHECK(liveCalls.late + liveCalls.lateSettles >= late);
     CHECK(liveCalls.waitMaxNs >= 2'000'000);  // the deadline: at least 2 ms
+    MESSAGE("longest live wait " << liveCalls.waitMaxNs << " ns over " << late
+                                 << " late cycles (deadline 2.67 ms)");
     const Id crash = build(true).second;
     REQUIRE(pool.find(crash));
     CHECK(pool.find(crash)->failed());
@@ -4076,12 +4210,12 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
               played.channels[0], from,
               std::vector<float>(reference.channels[0].begin() + static_cast<std::ptrdiff_t>(from),
                                  reference.channels[0].end()),
-              kCycles * kBlock - from) == 0);
+              static_cast<std::size_t>(kCycles) * kBlock) == 0);
     CHECK(maxDiff(
               played.channels[1], from,
               std::vector<float>(reference.channels[1].begin() + static_cast<std::ptrdiff_t>(from),
                                  reference.channels[1].end()),
-              kCycles * kBlock - from) == 0);
+              static_cast<std::size_t>(kCycles) * kBlock) == 0);
 }
 
 // Linux only for now: it fails the header write by dup2-ing over the recorder's
@@ -6796,4 +6930,24 @@ TEST_CASE(
         CHECK(pool.restarting(gain));  // the published plan leaves it off, as the request asks
         engine.stop();
     }
+}
+
+TEST_CASE("a transport request a stalled device never acts on is reported, not taken as done") {
+    // awaitTransport waits, bounded, for the renderer to act on the request;
+    // a device that stopped calling back never lets it, so the wait ends at
+    // its bound and says so (engine.transport, with a hint), and the callers
+    // refuse with it (transport.*, recording from stop under a playrate)
+    // rather than report a state the engine has not taken. The outcome does
+    // not depend on how long the wait took: no callback ever comes.
+    supple::engine::test::StalledBackend backend;
+    auto pool = makePool();
+    MediaCache media;
+    Engine engine(pool, media, kInCallback);
+    REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+    engine.play();
+    const auto waited = engine.awaitTransport(0.05);
+    REQUIRE_FALSE(waited);
+    CHECK(waited.error().code == "engine.transport");
+    CHECK(waited.error().hint.find("engine.status") != std::string::npos);
+    engine.stop();
 }

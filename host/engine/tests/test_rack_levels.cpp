@@ -67,7 +67,7 @@ TEST_CASE("rack levels: an unwatched oscillator and silent outputs in both execu
                 app->engine()->stop();  // the app can still own a stopped Engine
             } else {
                 app->engine()->pause();
-                app->engine()->awaitTransport();
+                REQUIRE(app->engine()->awaitTransport());
                 backend.run(1);
             }
             CHECK(app->moduleOutputLevel(vco, "sub") == 0.0f);
