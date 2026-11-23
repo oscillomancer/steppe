@@ -134,21 +134,24 @@ endif()
 # host-smoke's instrument render rejects; its audio is checked below instead.
 set(excluded "")
 if (CASE STREQUAL "sampler")
-    list(APPEND excluded "host-smoke-")
+    list(APPEND excluded "^host-smoke-")
 endif()
 # The exported project's X11 and Win32 embedding probes open an editor in a window at a fixed spot
-# on the screen, as plugin.<name>.embedding's do (plugins/CMakeLists.txt): on a developer's desktop
-# they run only when SUPPLE_EDITOR_PROBE_TEST is exactly 1, which native CI sets on every
-# platform (Linux under Xvfb). The template's own tests are unchanged; this only selects which of
-# them the monorepo's run starts.
+# on the screen, as plugin.<name>.embedding's do (plugins/CMakeLists.txt, which passes their names
+# as ON_SCREEN: one copy): on a developer's desktop they run only when SUPPLE_EDITOR_PROBE_TEST is
+# exactly 1, which native CI sets on every platform (Linux under Xvfb). The template's own tests
+# are unchanged; this only selects which of them the monorepo's run starts.
 if (NOT "$ENV{SUPPLE_EDITOR_PROBE_TEST}" STREQUAL "1")
-    list(APPEND excluded "(x11-embedding|x11-embedding-overlapped|win32-embedding|win32-embedding-no-host-timer)$")
+    if (NOT ON_SCREEN)
+        message(FATAL_ERROR "pass -DON_SCREEN=<the editor probes' regex>")
+    endif()
+    list(APPEND excluded "${ON_SCREEN}")
     message(STATUS "${CASE}: editor probes skipped (SUPPLE_EDITOR_PROBE_TEST is not 1)")
 endif()
 set(skip "")
 if (excluded)
     string(REPLACE ";" "|" pattern "${excluded}")
-    set(skip -E "^(${pattern})")
+    set(skip -E "${pattern}")
 endif()
 run("${CASE}'s own tests" ${CMAKE_CTEST_COMMAND} --test-dir "${WORK}/build" --output-on-failure -j ${CONFIGURE_JOBS} ${skip})
 set(built "${WORK}/build/plugins/${plugin_name}.clap")

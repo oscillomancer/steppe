@@ -25,6 +25,10 @@ if(SUPPLE_BUILD_PLUGINS)
   include(ExternalProject)
   option(SUPPLE_PLUGIN_VST3 "Also build VST3 versions of the stock plugins" OFF)
   set(VST3_SDK_ROOT "" CACHE PATH "Complete VST3 SDK for opt-in stock-plugin builds")
+  # The template's X11 and Win32 editor probes open a real editor window on the screen (see
+  # supple_add_template_product): one copy of their names, for the products' own suites and for
+  # the exported projects' nested run (plugin.export.source).
+  set(on_screen "^(x11-embedding|x11-embedding-overlapped|win32-embedding|win32-embedding-no-host-timer)$")
   # supple_add_template_product(<name> <product> <artifact>): a product of
   # the plugin template at framework 1.16.1 or later, built from the template's
   # tree (plugins/template) with plugins/<product> as its product folder, as
@@ -131,7 +135,6 @@ if(SUPPLE_BUILD_PLUGINS)
       # has them (everywhere but macOS), so a renamed probe cannot pass silently.
       # SUPPLE_GUI_DISPLAY_TEST is not the switch: it also opens the daw/gui
       # and clap-host display tests, which CI leaves off (ADR-0040).
-      set(on_screen "^(x11-embedding|x11-embedding-overlapped|win32-embedding|win32-embedding-no-host-timer)$")
       add_test(NAME plugin.${name}.ctest
         COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${plugin_build}" --output-on-failure -E "${on_screen}")
       add_test(NAME plugin.${name}.embedding
@@ -214,6 +217,7 @@ if(SUPPLE_BUILD_PLUGINS)
               "-DPATCH={\"tilt\": 4.5, \"pivot\": 700, \"output\": -2}"
               -DWORK=${CMAKE_BINARY_DIR}/plugins/export-test -DTHIRD_PARTY=${CMAKE_SOURCE_DIR}/third_party
               -DCC=${CMAKE_C_COMPILER} -DCXX=${CMAKE_CXX_COMPILER} -DBUILD_TYPE=${CMAKE_BUILD_TYPE}
+              "-DON_SCREEN=${on_screen}"
               -DTOOLCHAIN=${CMAKE_TOOLCHAIN_FILE}
               -DDEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}
               -DARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}
@@ -235,10 +239,11 @@ if(SUPPLE_BUILD_PLUGINS)
       # Again with its switches and choices moved too: a script whose default
       # state is a passthrough (an EQ with every band off) shows its state there.
       add_test(NAME plugin.${name}.reset-stepped COMMAND clap-reset-check "${clap}" ${id} --stepped)
-      # --stepped builds one more instance per switch and choice (Pollard 82, Marram 62), so it
-      # is the long one: about 20 s for Pollard and Marram in dev. ThreadSanitizer runs it seven
-      # to ten times slower, which measured 144 s alone and timed out at 180 s on a busy
-      # machine, so that preset gets room; the others keep 180 s.
+      # --stepped builds one instance per switch and choice (Pollard 82, Marram 62; made once, for
+      # both block sizes), so it is the long one: about 8 s for Pollard and Marram in dev.
+      # ThreadSanitizer runs it seven to ten times slower (144 s alone, before the instances were
+      # shared, and a timeout at 180 s on a busy machine), so that preset gets room; the others
+      # keep 180 s.
       set(reset_timeout 180)
       if(SUPPLE_SANITIZE STREQUAL "thread")
         set(reset_timeout 600)
