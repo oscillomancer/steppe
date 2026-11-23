@@ -4016,10 +4016,14 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
                 backend.run(1);
                 ++started;
             }
+            // The longest live wait, against the deadline (the larger of the
+            // period, 2.67 ms, and 2 ms): a wait past it says the platform's
+            // timed wait overshoots (Windows' millisecond timer).
             REQUIRE_MESSAGE(pool.find(crash)->processing(),
                             "its start was never answered: "
                                 << started << " cycles, " << engine.bridgeLateCycles()
-                                << " late, failed: "
+                                << " late, longest live wait "
+                                << host::bridgeTiming().live.waitMaxNs << " ns, failed: "
                                 << (pool.find(crash)->failed() ? pool.find(crash)->failure()
                                                                : std::string("no")));
             lateBeforeHang = engine.bridgeLateCycles();
@@ -4047,6 +4051,8 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     CHECK(overruns.lateWait <= late);
     CHECK(liveCalls.late + liveCalls.lateSettles >= late);
     CHECK(liveCalls.waitMaxNs >= 2'000'000);  // the deadline: at least 2 ms
+    MESSAGE("longest live wait " << liveCalls.waitMaxNs << " ns over " << late
+                                 << " late cycles (deadline 2.67 ms)");
     const Id crash = build(true).second;
     REQUIRE(pool.find(crash));
     CHECK(pool.find(crash)->failed());
