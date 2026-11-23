@@ -1012,7 +1012,7 @@ action (the first selected item). See engine.md for what the file holds.
 **Takes.** An item with several takes shows each in a lane under its name
 bar when the row is tall enough (at least 14 units a lane), the heard one
 lit and each lane named; a click on a lane hears that take, a swipe comps it
-in, and the badge cycles takes. The menu bar's Item menu adds, for
+in (below), and the badge cycles takes. The menu bar's Item menu adds, for
 several takes: **Show all takes** (a check; UI state, saved in the project's
 UI file as `expanded_takes`): the item's row grows to the name bar plus one
 lane per take, each as tall as the row's own height, so every take can be
@@ -1039,6 +1039,49 @@ with them) and **Render with FX as a new take** (mode take). **Ctrl-drag** below
 bar of an item with several takes takes that take (the lane under the
 pointer, else the heard one) out into an item of its own, anywhere on any
 channel (take.extract, one undo step; elsewhere Ctrl-drag still copies).
+
+**Comping** (session-model §1.5.1). The GUI makes a comp with `take.comp`,
+the call an agent makes, so the two give the same pieces; each gesture is one
+undo step. A **swipe** across part of a take lane sends `take.comp {item,
+spans: [{from, to, index}]}` with the lane's take over the swiped beats (snapped;
+the mouse map's free modifier frees them), which may reach across the comp's
+seams to its outer ends ("Comp take"). A **click** on a lane of a lone item
+hears that take throughout (`take.activate`, which a looped item also takes);
+in a comp it re-comps the pressed piece alone, its core span with that take, so
+its seams are rebuilt and it joins a neighbour playing the same take (a
+`take.activate` would keep the old seam fades, and a piece switched to its
+neighbour's take would sum one source with itself through an equal-power
+crossfade). A click on the take a piece already plays sends nothing. Every
+re-comp keeps the comp's **crossfade**: `take.comp` gives every seam of a comp
+one length and shape, so the GUI sends the comp's own (`views::compCrossfade`:
+the longest seam-side fade among the seams between different takes, which a
+clamped seam does not shrink, and its shape, linear or else equal power; 0 for
+a hard-cut comp). Only a first comp, with no seam between different takes yet,
+sends none and takes `take.comp`'s 10 ms, equal power.
+
+The lanes draw each **seam** of a comp (`model::compRun`, cached per track and
+session version), only where the takes differ on its two sides: a one-unit line
+in the items' outline colour across the pieces at the seam's core, with a notch
+at its foot, over the two seam-side fade curves. No text. A seam takes the
+press six units either side across the pieces' height, in place of the pieces'
+trim edges there (a trim inside a comp would break it); the comp's outer ends
+trim and fade as any item's. **Dragging a seam** moves it ("Move comp seam"):
+one `take.comp` with the two stretches beside it as they are, their shared edge
+moved, and the comp's crossfade; it snaps (the free modifier frees it) and stops
+1/64 beat short of the seams beside it. The **top of a seam** (the fade
+handles' square) is the comp's crossfade: a drag sets its length, twice the
+distance from the seam since it is centred there, up to what the shorter side
+allows ("Comp crossfade"), showing the length beside the extent while it is
+dragged ("12 ms", "1.20 s"), as a stretch shows its rate; the fade handles'
+shape click (the mouse map's `fade` context, Ctrl by default) toggles equal
+power and linear ("Comp crossfade shape"). Each is one `take.comp` and applies
+to every seam of the comp; a hard cut is the length dragged or typed to 0, for
+the whole comp (per-seam lengths are not built). The inspector shows the same
+for one selected piece (Crossfade, below). Flatten a comp with Consolidate on
+its pieces. Refusals (`comp.loop`, `comp.linked`, `item.locked`) reach the
+status line; the GUI sends no `bypass_groups`, and `take.comp`'s warnings
+(`comp.crossfade_clamped`, `comp.crossfade_skipped`, `comp.midi_boundary`) are
+not shown.
 
 **The marquee.** A drag from empty space, or a right-drag anywhere in the
 lanes (on an automation lane: a right-drag, or a Ctrl-drag from empty
@@ -3328,7 +3371,7 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
 - **Mouse modifiers:** a map per context — item drag
   (move, copy, slip; each also off the grid), item edge (trim, stretch), item
   click (select, toggle, extend), automation item edge (stretch, loop), fade
-  handle (drag, cycle shape), empty-lane drag (select, add), automation lane
+  handle, the top of a comp's seam included (drag, cycle shape), empty-lane drag (select, add), automation lane
   (edit, toggle, delete), ruler markers/regions
   (move, remove), tempo points (toggle ramp), and the wheel over the TCP
   (`tcp.wheel`) and the arrangement's lanes and ruler (`arrange.wheel`):
