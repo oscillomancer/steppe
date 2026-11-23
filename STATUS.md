@@ -1900,7 +1900,8 @@ GUI:
   They run in every other preset that builds the GUI, and the DAW's own GUI
   tests run under `tsan`. They open a window on the screen, so they run only
   when `SUPPLE_EDITOR_PROBE_TEST=1` (set by native CI) and show as skipped on
-  a developer's machine otherwise; the macOS probe (`mac-embedding`) is not
+  a developer's machine otherwise (the exported projects `plugin.export.source` builds leave their
+  copies of the probes out of the nested run the same way); the macOS probe (`mac-embedding`) is not
   gated and still opens its own Cocoa window locally.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.

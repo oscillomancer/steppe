@@ -181,7 +181,8 @@ executables; it changes no system configuration and is not shipped. Linux
 reference PNGs are never updated on native systems. SUPPLE_GUI_DISPLAY_TEST
 still requires exactly `1` and CI leaves it off; CI does set
 `SUPPLE_EDITOR_PROBE_TEST=1` (workflow `env:`), which runs the stock plugins'
-on-screen editor probes (`plugin.<name>.embedding`; Linux under Xvfb) that are
+on-screen editor probes (`plugin.<name>.embedding`, and the same probes inside
+`plugin.export.source`'s exported projects; Linux under Xvfb) that are
 skipped everywhere else; ordinary tests do not open plug-in editors or
 real audio devices. DAW editor integration fixtures compile on all platforms;
 Linux pipe/poll injection fixtures run alongside the portable watcher coverage.
