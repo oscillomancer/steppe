@@ -687,7 +687,8 @@ struct ClipSetArgs {
     std::string clip;
     std::optional<std::string> name, color;
     std::optional<bool> mute;
-    std::optional<double> gainDb, length;
+    std::optional<double> gainDb, length, fadeIn, fadeOut;
+    std::optional<model::FadeShape> fadeInShape, fadeOutShape;
     std::optional<LoopArg> loop;
     std::optional<model::ClipMode> mode;
     std::optional<json::Value> quantize;  // null: the project's
@@ -764,6 +765,12 @@ schema::Schema<ClipSetArgs> clipSetArgsSchema() {
         .field("color", &ClipSetArgs::color, schema::string())
         .field("mute", &ClipSetArgs::mute, schema::boolean())
         .field("gain_db", &ClipSetArgs::gainDb, schema::number().range(model::kSilenceDb, 24))
+        .field("fade_in", &ClipSetArgs::fadeIn,
+               schema::number().min(0).doc("Seconds of take time, from each pass's start."))
+        .field("fade_in_shape", &ClipSetArgs::fadeInShape, fadeShapeSchema())
+        .field("fade_out", &ClipSetArgs::fadeOut,
+               schema::number().min(0).doc("Seconds of take time, to each pass's end."))
+        .field("fade_out_shape", &ClipSetArgs::fadeOutShape, fadeShapeSchema())
         .field("length", &ClipSetArgs::length, schema::number())
         .field("loop", &ClipSetArgs::loop, loop)
         .field("mode", &ClipSetArgs::mode, clipModeSchema())
@@ -1252,7 +1259,7 @@ void registerClipCommands(cmd::Registry& registry) {
         c.name = "clip.set";
         c.kind = Kind::Edit;
         c.exposure = cmd::Exposure::McpExec;
-        c.summary = "Set a clip's name, colour, mute, gain, length, loop, mode or quantize.";
+        c.summary = "Set a clip's name, colour, mute, gain, fades, length, loop, mode or quantize.";
         c.description =
             "length and loop are in the clip's unit: beats for MIDI, seconds of take time for "
             "audio. loop: {on, start?, length?}, the window that repeats inside the clip from "
@@ -1262,7 +1269,9 @@ void registerClipCommands(cmd::Registry& registry) {
             "(read from the project at a bar or beat) sets the key and chords the clip was "
             "written against, and follow (none, key, chords) how it is mapped when laid; "
             "shortening a clip drops the points past its end (clip.context_dropped), and a "
-            "context left with no key at the start resets follow to none (clip.follow_reset).";
+            "context left with no key at the start resets follow to none (clip.follow_reset). "
+            "fade_in and fade_out (audio clips) shape each pass of the period, as an item's "
+            "fades shape the item: in from the pass's start, out to its end.";
         c.tags = {"clip launcher", "clip"};
         c.args = clipSetArgsSchema();
         c.result = emptySchema();
@@ -1278,7 +1287,9 @@ void registerClipCommands(cmd::Registry& registry) {
                      "an audio clip's context is a key at the start of bar 1"},
                     {"clip.no_key", "follow without a key at the clip's start",
                      "give the clip a context with a key at its start"},
-                    {"clip.follow_audio", "follow on an audio clip", "follow is for MIDI clips"}};
+                    {"clip.follow_audio", "follow on an audio clip", "follow is for MIDI clips"},
+                    {"clip.unsupported", "a fade on a MIDI clip",
+                     "MIDI clips play no fades, as MIDI items play none"}};
         c.examples = {{"Play once, on the beat",
                        j(R"({"clip": "cl_1", "mode": "once", "quantize": "beat"})"), j("{}"),
                        "song_with_clip"}};
@@ -1302,6 +1313,19 @@ void registerClipCommands(cmd::Registry& registry) {
             if (a.color) clip.color = *a.color;
             if (a.mute) clip.mute = *a.mute;
             if (a.gainDb) clip.gainDb = *a.gainDb;
+            if (clip.kind == model::ClipKind::Midi)
+                for (const auto& [given, name] :
+                     {std::pair{a.fadeIn.has_value() || a.fadeInShape.has_value(), "fade_in"},
+                      std::pair{a.fadeOut.has_value() || a.fadeOutShape.has_value(), "fade_out"}})
+                    if (given)
+                        return Error("clip.unsupported", "a MIDI clip has no fades",
+                                     std::string("/") + name,
+                                     "MIDI clips play no fades, as MIDI items play none: fade "
+                                     "an audio clip");
+            if (a.fadeIn) clip.fadeIn.length = *a.fadeIn;
+            if (a.fadeOut) clip.fadeOut.length = *a.fadeOut;
+            if (a.fadeInShape) clip.fadeIn.shape = *a.fadeInShape;
+            if (a.fadeOutShape) clip.fadeOut.shape = *a.fadeOutShape;
             if (a.mode) clip.mode = *a.mode;
             // The clip's context and follow (ADR-0098): stated against the clip as it will be.
             auto stated =
@@ -1510,6 +1534,9 @@ std::string describeScenes(const model::Session& s) {
             if (clip.quantize)
                 line += " · quantize " + std::string(model::launchQuantizeName(*clip.quantize));
             if (clip.gainDb != 0.0) line += " · " + number(clip.gainDb) + " dB";
+            if (clip.fadeIn.length > 0) line += " · fade in " + number(clip.fadeIn.length) + " s";
+            if (clip.fadeOut.length > 0)
+                line += " · fade out " + number(clip.fadeOut.length) + " s";
             if (clip.mute) line += " · muted";
             if (clip.follow != model::ClipFollow::None)
                 line += clip.follow == model::ClipFollow::Key ? " · follows the key"

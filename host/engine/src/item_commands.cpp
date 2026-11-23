@@ -366,16 +366,6 @@ struct SplitResult {
     std::vector<std::string> linkedLeft, linkedRight;
 };
 
-schema::Schema<model::FadeShape> fadeShapeSchema() {
-    return schema::enumeration<model::FadeShape>({{model::FadeShape::Linear, "linear"},
-                                                  {model::FadeShape::Slow, "slow"},
-                                                  {model::FadeShape::Fast, "fast"},
-                                                  {model::FadeShape::SlowFast, "slow_fast"},
-                                                  {model::FadeShape::FastSlow, "fast_slow"},
-                                                  {model::FadeShape::Cos, "cos"},
-                                                  {model::FadeShape::Exp, "exp"}});
-}
-
 // item.add {clip}: a new item from a copy of the clip's takes, converted
 // at the tempo where it lands (ADR-0097 "Converting between an item and a
 // clip").

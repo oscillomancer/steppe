@@ -2349,20 +2349,22 @@ scenes has a lead sheet without writing it twice.
 
 **What `session.describe` prints.** After the tracks, one line per scene in
 order with its clips under it. Each clip line has its track, length in its
-unit, mode, content and flags (loop window, quantize, gain when not 0 dB, muted); no clip moves the project length:
+unit, mode, content and flags (loop window, quantize, gain when not 0 dB, fades, muted); no clip moves the project length:
 
 ```
 Scenes (2):
   sc_1 Verse
     tr_2 Bass: cl_1 "Bass line" 8 beats · loop 0–4 · MIDI mi_3, 12 notes
-    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · -6 dB · muted
+    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · -6 dB · fade in 0.5 s · muted
   sc_2 Chorus (no clips)
 ```
 
 ### Clip fades (schema 2.22, ADR-0097 S3 step C; the contract)
 
-*Built so far: the fields, the file and the checks. The commands, playback
-and the conversions follow in step C.*
+*Built so far: the fields, the file and the checks; `clip.set {fade_in,
+fade_in_shape, fade_out, fade_out_shape}` (a MIDI clip refuses them with
+`clip.unsupported`) and the `session.describe` line. Playback and the
+conversions follow in step C.*
 
 Writers emit `supple.project/2.22`. An audio clip gains `fade_in` and
 `fade_out`, each an item's fade: `{length, shape, curve}`, `length` in

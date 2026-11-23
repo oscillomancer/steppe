@@ -316,6 +316,38 @@ TEST_CASE("clip.set edits fields; a null quantize returns to the project's") {
           "clip.length");
 }
 
+TEST_CASE("clip.set fades an audio clip; a MIDI clip refuses a fade") {
+    // S3 step C: an audio clip's fades, as an item's (schema 2.22).
+    Launcher l;
+    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = l.wav("pad.wav", 1.5).string();
+    l.runArgs("clip.add", args);  // cl_1
+    l.run("clip.set", R"({"clip": "cl_1", "fade_in": 0.25, "fade_in_shape": "cos",
+                         "fade_out": 0.5, "fade_out_shape": "fast_slow"})");
+    const model::Clip& c = *l.head().clips.find(id("cl_1"));
+    CHECK(c.fadeIn.length == 0.25);
+    CHECK(c.fadeIn.shape == model::FadeShape::Cos);
+    CHECK(c.fadeOut.length == 0.5);
+    CHECK(c.fadeOut.shape == model::FadeShape::FastSlow);
+    const std::string text = l.run("session.describe", "{}")["text"].asString();
+    CHECK(text.find("fade in 0.25 s · fade out 0.5 s") != std::string::npos);
+    // The shape alone keeps the length.
+    l.run("clip.set", R"({"clip": "cl_1", "fade_in_shape": "linear"})");
+    CHECK(l.head().clips.find(id("cl_1"))->fadeIn ==
+          model::Fade{0.25, model::FadeShape::Linear, 0});
+    {
+        const Error e = l.fails("clip.set", R"({"clip": "cl_1", "fade_in": -1})");
+        CHECK(e.code == "command.invalid_args");  // the schema's minimum
+    }
+    l.run("clip.add", R"({"track": "tr_1", "scene": "sc_2"})");  // cl_2, MIDI
+    for (const char* bad :
+         {R"({"clip": "cl_2", "fade_out": 0.1})", R"({"clip": "cl_2", "fade_in_shape": "cos"})"}) {
+        const Error e = l.fails("clip.set", bad);
+        CHECK(e.code == "clip.unsupported");
+        CHECK(e.hint.find("audio clip") != std::string::npos);
+    }
+}
+
 TEST_CASE("clip.move and clip.duplicate need an empty cell; a duplicate owns its takes") {
     Launcher l;
     l.run("track.add", R"({"name": "Keys"})");
