@@ -3276,6 +3276,10 @@ StackTarget stackTarget(const model::Session& s, const RecordedTake& r, const It
     }
     for (Id piece : pieces) {
         const model::Item& it = *s.items.find(piece);
+        if (model::frozenOwner(s, piece)) {
+            skip(piece, "it is frozen");
+            return out;
+        }
         if (it.locked) {
             skip(piece, "it is locked");
             return out;
@@ -3736,6 +3740,17 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
     }
     auto txnId = beginTransaction({cmd::Origin::Type::Internal, "engine", ""}, label);
     if (!txnId) return std::move(txnId).error();
+    // Every error return below leaves the project as it was: an open transaction would answer
+    // history.nested to every later edit. (commitTransaction closes it itself, whatever it
+    // returns.)
+    struct Rollback {
+        EngineApp& app;
+        std::uint64_t id;
+        bool armed = true;
+        ~Rollback() {
+            if (armed) (void)app.rollbackTransaction(id);
+        }
+    } rollback{*this, *txnId};
     std::vector<RecordedInfo> out;
     // One undo step, with contiguous groups retaining each recording's punch.
     // record.commit already has a top-level punch: no argument/schema change.
@@ -3771,6 +3786,7 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
     if (takes.empty())
         record_.invocations.push_back(
             {"record.commit", detail::recordCommitArgs(takes, punch_, media, stack)});
+    rollback.armed = false;
     SUPPLE_TRY(commitTransaction(*txnId));
     // The takes are in the project now; owned journals go once a saved
     // file or autosave holds them (ADR-0080/0082).

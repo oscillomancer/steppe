@@ -45,7 +45,9 @@ struct StackFixture {
 
     // tr_1 "Audio" with one item (it_1, one take) of two seconds from position 0: four beats at
     // 120 bpm.
-    explicit StackFixture(double baseSeconds = 2.0) {
+    // `failingComp`: a take.comp version 2 that writes something and refuses, found before the real
+    // one (the registry answers the highest version), to see how a commit survives a refusal.
+    explicit StackFixture(double baseSeconds = 2.0, bool failingComp = false) {
         AppOptions options;
         options.workdir = dir;
         options.pluginPath = {FIXTURE_CLAP_PATH};
@@ -53,6 +55,21 @@ struct StackFixture {
         REQUIRE(created);
         app = std::move(*created);
         registerEngineCommands(registry);
+        if (failingComp) {
+            cmd::Command<cmd::NoArgs, cmd::NoArgs> fail;
+            fail.name = "take.comp";
+            fail.version = 2;
+            fail.kind = cmd::Kind::Edit;
+            fail.exposure = cmd::Exposure::Internal;
+            fail.args = schema::object<cmd::NoArgs>("test_comp_args").build();
+            fail.result = schema::object<cmd::NoArgs>("test_comp_result").build();
+            fail.run = [](const cmd::NoArgs&, cmd::Context& ctx) -> Result<cmd::NoArgs> {
+                ctx.service<EngineApp>().txn().modify<model::Track>(
+                    model::kMaster, [](auto& tr) { tr.name = "half done"; });
+                return Error("comp.span", "deliberate refusal after a write");
+            };
+            registry.add(std::move(fail));
+        }
         bus = std::make_unique<cmd::Dispatcher>(registry, *app);
         run("track.add", R"({"name":"Audio"})");
         const auto file = writeTone("base.wav", baseSeconds, 220.0);
@@ -423,6 +440,30 @@ TEST_CASE("a pass over an item at a pitch-keeping rate reads the new take by the
         peak = std::max(peak, double(std::fabs(mixed[n])));
     CHECK(peak > 0.1);
     CHECK(f.render(f.app->head(), 4.0) == mixed);  // deterministic
+}
+
+TEST_CASE("a refused commit leaves the session editable and the project as it was") {
+    StackFixture f(2.0, true);
+    const std::string before = model::serializeProject(f.app->view());
+    auto done = f.app->commitTakes({f.pass("refused.wav", 0.5, 0.5)});
+    REQUIRE_FALSE(done);
+    CHECK_FALSE(done.error().code.empty());
+    // Nothing of it is in the project, not even as a preview, and the next edit works.
+    CHECK(model::serializeProject(f.app->view()) == before);
+    CHECK(model::serializeProject(f.app->head()) == before);
+    auto next = f.call("track.add", R"({"name":"After"})");
+    CHECK_MESSAGE(next, (next ? "" : next.error().toString()));
+}
+
+TEST_CASE("a pass onto a frozen track is refused before anything changes") {
+    StackFixture f;
+    f.run("track.freeze", R"({"track":"tr_1"})");
+    const std::string before = model::serializeProject(f.app->view());
+    auto done = f.app->commitTakes({f.pass("frozen.wav", 0.5, 0.5)});
+    REQUIRE_FALSE(done);
+    CHECK(done.error().code == "track.frozen");
+    CHECK(model::serializeProject(f.app->view()) == before);
+    CHECK(f.call("track.add", R"({"name":"After"})"));  // still editable
 }
 
 TEST_CASE("an audio pass over a MIDI item is not stacked into, and says why") {

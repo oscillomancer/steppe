@@ -2975,8 +2975,10 @@ on the loop range with a take per pass):
   heard sample; the lowest id when items are layered. No target: a new item, as before, with no
   warning when the span overlaps no item. A span that starts before an item and runs into it makes a
   new item and warns `record.stack_skipped` naming that item; so does a target that is locked,
-  looped, or holds the other kind of material (a MIDI pass under audio, an audio pass under MIDI),
-  or a comp piece that is locked.
+  looped, frozen, or holds the other kind of material (a MIDI pass under audio, an audio pass under
+  MIDI), or a comp piece that is locked. A commit that fails anywhere (a refused nested `take.comp`
+  included) is rolled back whole: the project is as it was and still editable, and the recording
+  is not in it (its journals remain for recovery).
 - The item's `position` and `length` never change by the pass itself. The new take (audio: the pass's media source,
   named `<file>` or `<file> pass n`; MIDI: a source with the played notes only, named `<track> MIDI`,
   `follow: none`, no context) reads the recording by the timeline mapping: `start_offset` is the

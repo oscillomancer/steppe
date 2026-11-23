@@ -25,8 +25,11 @@ timeline start have clipped it).
 1. **The target** is the item of the track, on the main lane, whose span contains the span's first
    heard sample (the anchor `midi_overdub` uses). The pass is laid as a new item, as before, when
    there is none. When the pass starts before an item and runs into it, or the target is locked,
-   looped, or holds the other kind of material (MIDI under an audio pass), the new item carries a
-   `record.stack_skipped` warning naming the item and why, so a doubling is never silent.
+   looped, frozen, or holds the other kind of material (MIDI under an audio pass), the new item
+   carries a `record.stack_skipped` warning naming the item and why, so a doubling is never silent.
+   A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole: the
+   project stays as it was and editable, and the recording is not in it (its journals remain for
+   recovery).
 2. **The item's extent does not change.** Its position and length stay; the new take reads the
    recording by the timeline mapping (`start_offset` negative when the pass starts after the item,
    so the first part is silent; positive past the end of a short pass). What lies beyond the item
