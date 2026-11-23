@@ -1566,9 +1566,8 @@ Engine and hosting:
 - `engine.tests` cases that run on Linux only (CONTRIBUTING.md, "Temporary
   port gates"), each fenced with its reason: the JACK backend's (`test_jack`,
   `test_bench`, six JACK cases in `test_app`/`test_realtime`) and the Linux
-  protections (`test_runtime_protection`), by design; media identity's inode
-  and nanosecond checks (`test_offline`), recording header errors through a
-  `/proc/self/fd` fault and the OS thread role names (`test_realtime`), until
+  protections (`test_runtime_protection`), by design; recording header errors
+  through a `/proc/self/fd` fault and the OS thread role names (`test_realtime`), until
   native variants land; the restricted CPU mask (`test_realtime`,
   `test_workers`) and the `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` refusals
   (`test_realtime`). Not on Windows: the posix-fd part of the CLAP host
