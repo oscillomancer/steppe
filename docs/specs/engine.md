@@ -613,7 +613,7 @@ the same.*
   again where the transport goes. A capture armed while a launched clip's
   MIDI note sounds commits without the rest of that note, at any rate:
   the committed piece starts at the capture's start and does not chase
-  it (a stated limit, test_clip_player_rate.cpp); armed in a rest it is
+  it (a stated limit, test_clip_player_rate_armed.cpp); armed in a rest it is
   exact. A capture lives in one transport epoch
   (ADR-0097, revision 2026-11-22). It runs through master playrate edits;
   arming is refused with `launch.playrate` while a launched audio clip

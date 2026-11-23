@@ -976,14 +976,16 @@ cut there (measured up to 0.028 in the tests, in the last 120 to 180
 device frames, about 3 ms; bounded in each test at its measure); a
 commit's edge is a cut at any rate. Under a rate, a switch on a wrap of a
 clip laid per period differs within the kernel's reach before it (0.0027
-at 0.75, 0.011 under the envelope, bounded in the test). Tests (test_clip_player_rate.cpp):
+at 0.75, 0.011 under the envelope, bounded in the test). Tests: in test_clip_player_rate_commit.cpp
 the positions and the equality under 0.75 and the envelope ("a capture
-under a master playrate commits by the song positions heard"), a capture
-starting mid-pass ("a capture armed while clips play ..."), the held note
-("a capture armed while a launched clip's note sounds ..."), a clip with a
-take chain ("a capture of a clip with a take chain ..."), a switch on a
-period wrap at rate 1 and under a rate ("a switch on a period wrap ..."),
-MIDI with the
+under a master playrate commits by the song positions heard"); in
+test_clip_player_rate_armed.cpp a capture starting mid-pass ("a capture
+armed while clips play ..."), the held note ("a capture armed while a
+launched clip's note sounds ..."); in
+test_clip_player_rate_chain.cpp a clip with a take chain ("a capture of a
+clip with a take chain ..."); in test_clip_player_rate_wrap.cpp a switch
+on a period wrap at rate 1 and under a rate ("a switch on a period wrap
+..."); in test_clip_player_rate.cpp MIDI with the
 pitch kept ("under a pitch-keeping master playrate a MIDI capture commits
 as heard"), the end at a switch that cuts arrangement audio ("under a
 pitch-keeping rate a switch that cuts arrangement audio ends the capture
