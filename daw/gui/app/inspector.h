@@ -86,6 +86,11 @@ class Inspector {
     // The heard take's Follow (take.set {follow}, with the song's context
     // when it has none: takeFollowArgs) and its Bake (take.bake).
     void setFollow(const std::string& value);
+    // A comp's crossfade, at every seam (take.comp with the comp's spans):
+    // a new length, or a new shape (linear, else equal power).
+    void setCrossfade(std::optional<double> seconds, std::optional<bool> linear);
+    // One take.comp, its warnings to the status line (actions' onNotice).
+    void runComp(json::Value args);
     void bake();
     void run(const char* command, json::Value args);
     void finish(const Result<json::Value>& result);
@@ -116,10 +121,11 @@ class Inspector {
     std::map<std::string, Field> fields_;
     std::map<std::string, ui::Toggle*> states_;
     ui::Dropdown* timebase_ = nullptr;
-    ui::Label* writtenIn_ = nullptr;  // the heard take's own key (Written in)
-    ui::Dropdown* follow_ = nullptr;  // how the heard MIDI take sounds (take.set {follow})
-    ui::Button* bake_ = nullptr;      // take.bake, beside it
-    ui::Node* clipBox_ = nullptr;     // one launcher clip's fields (clip.set)
+    ui::Dropdown* crossfadeShape_ = nullptr;  // a comp piece's: the comp's crossfade shape
+    ui::Label* writtenIn_ = nullptr;          // the heard take's own key (Written in)
+    ui::Dropdown* follow_ = nullptr;          // how the heard MIDI take sounds (take.set {follow})
+    ui::Button* bake_ = nullptr;              // take.bake, beside it
+    ui::Node* clipBox_ = nullptr;             // one launcher clip's fields (clip.set)
     ui::Node* clipColors_ = nullptr;
     ui::Dropdown* clipMode_ = nullptr;
     ui::Dropdown* clipQuantize_ = nullptr;

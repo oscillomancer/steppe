@@ -28,6 +28,7 @@
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/comp_view.h"
 #include "supple/views/envelope_lane.h"
 #include "supple/views/lanes.h"
 #include "supple/views/launcher.h"
@@ -511,6 +512,17 @@ std::unique_ptr<ui::Node> Inspector::build() {
     field(box, "gain_db", "Gain");
     field(box, "fade_in", "Fade in");
     field(box, "fade_out", "Fade out");
+    // One piece of a comp (session-model §1.5.1): the comp's crossfade, one
+    // length and shape for every seam, in place of the fades at its seams.
+    field(box, "crossfade", "Crossfade");
+    crossfadeShape_ = &rows_["crossfade"]->emplace<ui::Dropdown>(
+        "inspector.crossfade_shape",
+        std::vector<ui::Choice>{{"cos", "Equal power"}, {"linear", "Linear"}});
+    crossfadeShape_->layout.width = ui::SizeRule::fraction();
+    crossfadeShape_->layout.height = ui::SizeRule::fixed(22);
+    crossfadeShape_->onChange = [this](const std::string& value) {
+        setCrossfade(std::nullopt, value == "linear");
+    };
     auto& states = formRow(box, "state", "State");
     state(states, "mute", "Mute", "mute");
     state(states, "loop", "Loop", "accent");
@@ -575,6 +587,20 @@ std::unique_ptr<ui::Node> Inspector::build() {
     };
     takes_->onSelect = [this](std::size_t i) {
         if (kind_ != InspectorSubject::Kind::Item || i >= takeIds_.size() || i == heard_) return;
+        // A piece of a comp switches as a lane click does: take.comp with its
+        // span, keeping the comp's crossfade (take.activate would keep the
+        // seam fades over what may now be one source).
+        const model::Session& s = app_.head();
+        if (const auto comp = views::compPieceOf(s, ids_.front())) {
+            const model::Item* item = s.items.find(ids_.front());
+            const auto at = item ? std::find(item->takes.begin(), item->takes.end(), takeIds_[i])
+                                 : std::vector<model::Id>::const_iterator{};
+            if (item && at != item->takes.end()) {
+                runComp(views::compPieceArgs(s, *comp, ids_.front(),
+                                             static_cast<std::size_t>(at - item->takes.begin())));
+                return;
+            }
+        }
         json::Value args = json::Value::object();
         args["item"] = ids_.front().str();
         args["take"] = takeIds_[i].str();
@@ -791,6 +817,21 @@ void Inspector::readItems(bool force) {
     show("gain_db", text([](const model::Item& i) { return i.gainDb; }, 1, "dB"), force);
     show("fade_in", text([](const model::Item& i) { return i.fadeIn.length; }, 3, "s"), force);
     show("fade_out", text([](const model::Item& i) { return i.fadeOut.length; }, 3, "s"), force);
+    // A comp piece: the comp's crossfade, and its own fades only at the
+    // comp's outer ends (the seams' fades are the crossfade's).
+    {
+        const auto comp = one ? views::compOf(s, itemId) : std::nullopt;
+        const bool inComp = comp && !comp->seams.empty();
+        rows_["crossfade"]->visible = inComp;
+        rows_["fade_in"]->visible = !inComp || comp->pieces.front().item == itemId;
+        rows_["fade_out"]->visible = !inComp || comp->pieces.back().item == itemId;
+        if (inComp) {
+            const auto crossfade = views::compCrossfade(s, *comp);
+            show("crossfade", fixed(crossfade->seconds, 3, "s"), force);
+            crossfadeShape_->setValue(crossfade->shape == model::FadeShape::Linear ? "linear"
+                                                                                   : "cos");
+        }
+    }
     const auto timebase = common(items, [](const model::Item& i) { return i.timebase; });
     timebase_->setValue(timebase ? timebaseName(*timebase) : "");
     // A cell is lit when every item has the state on.
@@ -809,6 +850,7 @@ void Inspector::readItems(bool force) {
         if (key.rfind("track.", 0) != 0 && key.rfind("clip.", 0) != 0)
             f.node->enabled = !locked && (key != "name" || take);
     timebase_->enabled = !locked;
+    crossfadeShape_->enabled = !locked;
     states_["mute"]->enabled = states_["loop"]->enabled = !locked;
     const std::string note = !locked ? std::string()
                              : one   ? "Locked. Turn Lock off to edit."
@@ -1092,6 +1134,26 @@ void Inspector::setFollow(const std::string& value) {
     run("take.set", std::move(*args));
 }
 
+void Inspector::setCrossfade(std::optional<double> seconds, std::optional<bool> linear) {
+    if (kind_ != InspectorSubject::Kind::Item || ids_.empty()) return;
+    const model::Session& s = app_.head();
+    const auto comp = views::compOf(s, ids_.front());
+    if (!comp || comp->seams.empty()) return;
+    model::CompCrossfade crossfade =
+        views::compCrossfade(s, *comp).value_or(model::CompCrossfade{});
+    if (seconds) crossfade.seconds = *seconds;
+    if (linear) crossfade.shape = *linear ? model::FadeShape::Linear : model::FadeShape::Cos;
+    runComp(views::compArgs(ids_.front(), views::compSpans(s, *comp), crossfade));
+}
+
+void Inspector::runComp(json::Value args) {
+    auto r = dispatcher_.execute({"take.comp", std::move(args), kOrigin});
+    // Its warnings (a crossfade clamped or skipped) go to the status line.
+    if (r && actions_.onNotice)
+        if (const std::string w = views::resultWarnings(*r); !w.empty()) actions_.onNotice(w);
+    finish(r);
+}
+
 void Inspector::bake() {
     if (kind_ != InspectorSubject::Kind::Item || ids_.empty()) return;
     auto r = bakeItems(dispatcher_, kOrigin, app_.head(), {ids_.front()});
@@ -1129,7 +1191,9 @@ void Inspector::commit(const std::string& key, const std::string& text) {
         fail(value.error().message);
         return;
     }
-    if (key == "playrate" || key == "pitch")
+    if (key == "crossfade")
+        setCrossfade(*value, std::nullopt);
+    else if (key == "playrate" || key == "pitch")
         setTake(key, *value);
     else if (key == "start")
         set("position", *value);
