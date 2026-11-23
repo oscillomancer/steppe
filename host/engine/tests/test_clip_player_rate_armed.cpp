@@ -151,6 +151,21 @@ TEST_CASE("a capture armed while a launched clip's note sounds commits it struck
             MESSAGE("the held note's rest: rms heard " << heardRest << ", committed "
                                                        << committedRest);
             CHECK(committedRest == doctest::Approx(heardRest).epsilon(0.02));
+            // The same pitch, which a level alone does not show (round 128):
+            // as many zero crossings after the new attack's first 2000 frames.
+            const auto crossings = [](const std::vector<float>& v, std::int64_t off, std::int64_t a,
+                                      std::int64_t b) {
+                int n = 0;
+                for (std::int64_t k = a + 1; k < b; ++k)
+                    if ((v[std::size_t(k - 1 + off)] < 0) != (v[std::size_t(k + off)] < 0)) ++n;
+                return n;
+            };
+            const int heardCrossings =
+                crossings(heard, std::int64_t(live.latency), start + 2000, noteEnd);
+            const int committedCrossings = crossings(committed, 0, start + 2000, noteEnd);
+            MESSAGE("the held note's rest: zero crossings heard "
+                    << heardCrossings << ", committed " << committedCrossings);
+            CHECK(std::abs(committedCrossings - heardCrossings) <= 2);
             // ...and after it the commit meets the standard.
             const std::vector<LaunchLogEntry> switches(log.begin() + 2, log.end());
             const CommitResidual r = commitResidual(heard, live.latency, committed, switches,
