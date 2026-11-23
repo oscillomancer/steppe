@@ -417,6 +417,38 @@ TEST_CASE("scene.insert lays a repeating audio clip with fades one item per pass
     CHECK(r["items"].size() == 3);
 }
 
+TEST_CASE("scene.insert plays out a pass its span's end cuts inside the clip's fade-out") {
+    // Review round 135, N1: as launch.commit lays a clip still playing at a
+    // capture's end, never a hard cut through a fade. A 0.75 s period with a
+    // 0.3 s fade-out (from 0.45 s) over a 2 s bar: the third pass, cut at
+    // 0.5 s, runs on to its end at 2.25 s under its fade-out.
+    Launcher l;
+    l.run("track.add", R"({"name": "Pad"})");  // tr_2
+    auto args = j(R"({"track": "tr_2", "scene": "sc_1"})");
+    args["audio_file"] = l.wav("pad.wav", 1.5).string();
+    const std::string clip = l.runArgs("clip.add", args)["clip"].asString();
+    auto set = j(R"({"length": 0.75, "fade_out": 0.3})");
+    set["clip"] = clip;
+    l.runArgs("clip.set", set);
+    l.run("scene.insert", R"({"scene": "sc_1", "bar": 9, "bars": 1})");
+    std::vector<model::ItemSpan> spans;
+    std::vector<double> fades;
+    for (const auto& e : l.head().items)
+        if (e.value->track == id("tr_2")) {
+            spans.push_back(model::itemSpan(l.head(), *e.value));
+            fades.push_back(e.value->fadeOut.length);
+        }
+    REQUIRE(spans.size() == 3);
+    double last = 0, lastFade = -1;
+    for (std::size_t k = 0; k < spans.size(); ++k)
+        if (spans[k].endSec > last) {
+            last = spans[k].endSec;
+            lastFade = fades[k];
+        }
+    CHECK(last == doctest::Approx(16.0 + 2.25));
+    CHECK(lastFade == 0.3);
+}
+
 TEST_CASE("clip.move and clip.duplicate need an empty cell; a duplicate owns its takes") {
     Launcher l;
     l.run("track.add", R"({"name": "Keys"})");

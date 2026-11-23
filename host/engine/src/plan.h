@@ -924,7 +924,7 @@ inline double clipFade(const ClipPlayer& pl, double phase) SUPPLE_RT {
                                 (double(pl.periodFrames) - phase) / double(c.fadeOut));
     return fade;
 }
-inline bool clipFades(const ClipPlayer& pl) {
+inline bool clipFades(const ClipPlayer& pl) SUPPLE_RT {
     return !pl.midi && (pl.audio.fadeIn > 0 || pl.audio.fadeOut > 0);
 }
 // What a channel plays (engine.md §1.4.2): transport state, carried across

@@ -660,17 +660,20 @@ the same.*
   each with the clip's fade-in where it starts on a pass's start and its
   fade-out where it ends on a pass's end. A switch's fades give way to
   them as live: a piece starting on a pass's start with a fade-in takes no
-  5 ms fade-in (rule 3); a switch inside the pass's fade-out runs the
-  piece on to the pass's end under the clip's fade-out, with no 5 ms
-  fade-out (rule 4); a switch exactly on a pass's end lays the next
-  pass's first 5 ms, with the clip's fade-in and the switch's fade-out.
-  An item's fade runs from its own edge, so what a piece would cut out of
-  a clip's fade is refused with `launch.commit.fade`, naming the clip,
-  the track and the beat, the performance kept (rule 7): a piece
-  starting inside the fade-in or ending inside the fade-out (the capture's
-  start or end, or a loop wrap, there), a switch whose 5 ms would reach
-  into the fade-out from before it, and a stand-in that a further switch
-  cuts (rule 5) or a loop wrap crosses.
+  5 ms fade-in (rule 3); a switch whose 5 ms would reach the pass's
+  fade-out runs the piece on to the pass's end under the clip's fade-out,
+  with no 5 ms fade-out (rule 4); a switch exactly on a pass's end lays
+  the next pass's first 5 ms, with the clip's fade-in and the switch's
+  fade-out. A clip still playing at the capture's end inside its pass's
+  fade-out played on live: its piece runs to the pass's end under its
+  fade-out, past the capture's end, the arrangement under it cleared and
+  fading in after it (review round 135). An item's fade runs from its own
+  edge, so what a piece would cut out of a clip's fade is refused with
+  `launch.commit.fade`, naming the clip, the track and the beat, the
+  performance kept (rule 7): a piece starting inside the fade-in (the
+  capture's start or a loop wrap there), one a loop wrap ends inside the
+  fade-out, and a stand-in that a further switch cuts (rule 5) or a loop
+  wrap crosses.
   A scene launched whole also writes a section. `launch.scene` logs each
   clip it starts with the scene's id, all on one running frame; the commit
   writes a section for a scene whose launches at a frame all still hold (a
@@ -726,13 +729,19 @@ the same.*
   - *A clip's own fade stands in for a switch's* (Q4 rules 3 and 4): an
     audio clip with a fade-in comes in at weight 1, shaped by its fade-in
     from the switch, with no switch fade-in (`incomingStandsIn`); one
-    switched away inside its pass's fade-out (P − Lout ≤ phase < P, not on
-    the pass's end) plays on at weight 1 under its fade-out to the pass's
-    end and reads nothing after it (`outgoingEnd`, for the player, a clip
-    chain's input and its weight). What comes in fades in as usual or
+    switched away where the crossfade would reach its pass's fade-out
+    (P − Lout − F < phase < P, not on the pass's end) plays on at weight 1
+    under its fade-out to the pass's end and reads nothing after it
+    (`outgoingEnd`, for the player, a clip chain's input and its weight).
+    The region reaches F before the fade-out because a switch quantized to
+    the fade-out's start lands a sample either side of it as the tempo
+    rounds (review round 135, H1). What comes in fades in as usual or
     stands in. A clip with fades switched exactly on a pass's end has
     begun its next pass: it goes out over the crossfade in that pass, from
-    its fade-in (`heldPass`).
+    its fade-in (`heldPass`). The stand-in's end is read from the playing
+    plan: an edit of the clip's length or fade-out while it stands in
+    (`clip.set`) moves it at once, and a shorter fade-out can end it at
+    once, as a clip edit changes a playing clip.
   - *Audio* reads through a tape converter per player reading
     (`PlayerReader`): positions are the frames' unwrapped song positions,
     and its source folds them over the loop and maps them by the player's

@@ -1027,23 +1027,30 @@ is a fade curve), so they cannot replace the refusals below.
   frame's song position under a playrate, as an item's fade, and after a
   clip chain. A clip with a fade is laid one item per pass.
 - **Its fades stand in for the switch's.** An incoming clip with a
-  fade-in takes no switch fade-in. A clip switched away inside its pass's
-  fade-out (P - Lout <= phase < P) takes no switch fade-out: it plays at
-  weight 1 under its fade-out to the pass's end and reads nothing after.
+  fade-in takes no switch fade-in. A clip switched away where the switch's
+  5 ms would reach its pass's fade-out (P - Lout - F < phase < P) takes no
+  switch fade-out: it plays at weight 1 under its fade-out to the pass's
+  end and reads nothing after. (Review round 135, H1: the region reaches
+  F before the fade-out, since a switch quantized to the fade-out's start
+  rounds to a sample either side of it with the tempo.)
   Switched exactly on a pass's end, it has begun the next pass and goes
   out over the 5 ms from its fade-in. A further switch while a stand-in
   sounds cuts it.
 - **The commit** lays each piece with the clip's fades on its pass edges
   and the switch's where they do not stand in, and refuses what an item's
   fades cannot write with `launch.commit.fade`, keeping the performance:
-  a piece starting inside the fade-in or ending inside the fade-out
-  (including a switch's 5 ms reaching into the fade-out), and a stand-in
-  cut by a switch or crossed by a loop wrap.
+  a piece starting inside the fade-in, one a loop wrap ends inside the
+  fade-out, and a stand-in cut by a switch or crossed by a loop wrap. A
+  clip still playing at the capture's end inside its fade-out played on
+  live, so its piece runs to its pass's end under its fade-out (review
+  round 135, H2); `scene.insert` and `arrangement.build` lay a pass their
+  span cuts inside its fade-out the same way.
 
 **Consequences.** A launched clip with a fade-in starts with its own fade,
 not the 5 ms ramp on it; a clip launched away during its fade-out
-finishes that fade-out over the incoming clip. Captures that end or wrap
-inside a clip's fade are refused rather than written wrong. Tests:
+finishes that fade-out over the incoming clip. Captures that begin inside
+a clip's fade-in or wrap inside a fade are refused rather than written
+wrong. Tests:
 test_clip_player.cpp ("an audio clip's fades shape every pass ...", "a
 clip's own fades stand in for a switch's ...", "a clip with a fade-in
 launched while stopped ...", "a capture of clips with fades commits as

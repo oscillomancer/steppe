@@ -207,10 +207,11 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   had there; tracks that stayed on the arrangement are untouched. Each clip becomes
   copies of its takes at the phase heard, MIDI copied (shared with `pooled: true`),
   and the 5 ms switches are item fades; an audio clip's own fades go on its pieces
-  where they start or end a pass. A piece that would start or end inside a clip's fade
-  (the capture began or ended there, a loop wrap fell there, a switch's 5 ms reached into
-  the fade-out, or a switch cut a fade-out that was finishing) is refused with
-  `launch.commit.fade`; the performance is kept, so set the fades to 0 or capture again.
+  where they start or end a pass; a clip still playing in its fade-out when the capture
+  ends is laid to its pass's end, as you heard it. A piece that would start or end inside
+  a clip's fade (the capture began inside a fade-in, a loop wrap fell inside a fade, or a
+  switch cut a fade-out that was finishing) is refused with `launch.commit.fade`; the
+  performance is kept, so set the fades to 0 or capture again.
   A scene launched whole (`launch.scene`, every
   clip that could play started on one boundary) also writes a **section** named after
   the scene, from that boundary until one of its tracks is launched again or the capture

@@ -2138,8 +2138,10 @@ and a clip"):
   are; the item's gain, mute and colour become the clip's and back, and so
   do an audio item's fades (schema 2.22; a MIDI item's play nothing and are
   not kept); laid on the timeline, an audio clip with fades that repeats
-  becomes one item per pass, each faded as its pass, and a pass the span's
-  end cuts keeps its fade-in only;
+  becomes one item per pass, each faded as its pass; a pass the span's end
+  cuts inside its fade-out plays on to its pass's end under it (past the
+  span, over what follows), and one cut before its fade-out ends at the
+  cut without it;
 - an item's `loop` becomes a clip loop on, from 0, one content length long;
   back on the timeline only that loop, or none, converts (other windows:
   `clip.unsupported`);
