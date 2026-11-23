@@ -4063,9 +4063,11 @@ TEST_CASE("a cycle late before its bridged call is not blamed on the bridge") {
     t.modify<model::Track>(live, [&](auto& tr) { tr.chain.push_back(gainId); });
     const auto session = t.commit().value();
     constexpr std::uint32_t kBlock = 128;
+    // Cycles of room for the gain's start, 10 ms apart (as the hung case).
+    constexpr int kStartRoom = 16'000;
     auto pool = makePool();
     MediaCache media;
-    DummyBackend backend(constantInput(16 * kBlock));
+    DummyBackend backend(constantInput((kStartRoom + 16) * kBlock));
     Engine engine(pool, media, kInCallback);
     REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock, .inputs = 2}));
     REQUIRE(engine.load(session));
@@ -4075,6 +4077,17 @@ TEST_CASE("a cycle late before its bridged call is not blamed on the bridge") {
     REQUIRE(pool.find(gainId)->isolated());
     REQUIRE(pool.find(crash));
     REQUIRE_FALSE(pool.find(crash)->isolated());
+    // Until the gain has started: a start the live deadline passed is
+    // answered on a later cycle, and until then no process call is posted,
+    // so nothing could be blamed (ADR-0101; Windows CI 45186989443 measured
+    // the two cycles below before it had started).
+    for (int cycles = 0; !pool.find(gainId)->processing(); ++cycles) {
+        REQUIRE_MESSAGE(cycles < kStartRoom, "the gain's start was never answered");
+        REQUIRE_FALSE(pool.find(gainId)->failed());
+        backend.run(1);
+        if (!pool.find(gainId)->processing())
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     const auto before = engine.bridgeOverruns();
     const auto lateBefore = engine.bridgeLateCycles();
     REQUIRE(pool.find(crash)->setParam(1, 3));  // 20 ms in every block from now
