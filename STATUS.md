@@ -310,8 +310,15 @@ instructions are in `docs/guides/installing.md`.
     - under a master playrate clips play on the playrate path, live as
       the replay (ADR-0097, revision 2026-11-21), but while it keeps the
       pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
-      clips can); `launch.capture` is refused while one is active, and
-      one becoming active ends a capture; there a frozen track's print
+      clips can); a capture runs in song time under one, refused (or
+      ended, with a warning) while a launched audio clip plays and the
+      playrate keeps the pitch, and ended on its boundary by a switch that
+      cuts arrangement audio while the pitch is kept; its commit meets the
+      rate-1 standard except within 128 song samples of the capture's
+      first and last samples (up to the level of the audio cut there),
+      and within 128 song samples before a switch that lands on the wrap
+      of a clip laid per period (up to 0.011 in the test);
+      there a frozen track's print
       cuts in without the crossfade, and launched audio does not crossfade
       between trajectories when a plan swap changes the rate;
     - freezing, or removing the playing clip, crossfades an audio clip
@@ -321,9 +328,13 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
-    - a capture ends at a seek, a loop change or a stop, by design
+    - a capture ends at a seek, a loop change or a stop, by design (one
+      ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
       wraps at the loop as live does, but not under a master playrate;
+    - a capture armed while a launched clip's note sounds commits
+      without the rest of that note, at any rate (the item does not
+      chase it); armed in a rest it is exact;
     - right after a pause, in the anticipative executor, the reported
       position can be up to one device period short when the pause lands
       while a device cycle is in flight, so a launch made while stopped,

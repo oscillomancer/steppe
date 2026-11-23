@@ -2905,8 +2905,15 @@ same heights, scroll and colours.
   keeps the launches while the transport runs. When a stop, a seek or a
   loop change ends the capture, the app commits it (`launch.commit`, one
   undo step, as a recording is committed at stop) and, still lit, arms the
-  next one; a click on the lit cell ends the capture, commits it and turns
-  it off. A capture in which every track followed the arrangement writes
+  next one; a click on the lit cell turns it off and ends the capture:
+  while playing on the next boundary of the project's launch quantize
+  (`launch.capture {on: false, quantize}`, as a scene launch made then would
+  land), the cell staying lit, outlined dashed as a queued cell, until the
+  engine has heard it, then commits it (`CaptureControl::ending`,
+  `ArrangeView::setCaptureEnding`); stopped, at once. A second click before
+  that boundary ends the capture at once (`launch.capture {on: false}`)
+  and commits it: an impatient click means stop. (An agent cancels the end
+  with `launch.capture {on: true}`.) A capture in which every track followed the arrangement writes
   nothing and makes no undo step. A refusal (no engine running, a locked
   item in the way) shows its message in the status line. A commit that
   laid clips as written under another key (the answer's `mismatches`, with
@@ -2923,7 +2930,11 @@ same heights, scroll and colours.
 - **The cell follows the engine's capture**, whoever armed it: an agent's
   `launch.capture` lights it too (`CaptureControl::lit`). A click on a cell
   lit that way ends that capture and commits it, as the toggle's own; at
-  stop the app commits only a capture its toggle armed.
+  stop the app commits only a capture its toggle armed. An end the agent
+  asked for (`launch.capture {on: false, quantize}`) shows as the toggle's
+  does, dashed until its boundary (the engine's pending end,
+  `EngineApp::launchCaptureEnding`), and a click then ends the capture at
+  once and commits it, as a second click does.
 - **A refused commit keeps the performance.** When `launch.commit` refuses
   (a locked item under a track that left the arrangement, a clip loop with
   no item equivalent, a captured track or clip deleted meanwhile), nothing
@@ -3137,7 +3148,12 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   again and still kept, then after unlocking a click committing it in one
   undo step and arming; refused twice, a third click drops it. After a
   commit at stop the tracks are back on the arrangement, or queued to it.
-  An agent's capture lights the cell, and a click on it ends and commits it.
+  An agent's capture lights the cell, and a click on it while playing ends
+  it on the next launch quantize boundary, the cell lit until then, and
+  commits it. Off while playing ends on the next bar, then commits; the
+  cell is dashed meanwhile, and a second click ends it at once and commits.
+  An agent's quantized end dashes the cell too, and a click then ends the
+  capture at once and commits it.
 - A master playrate: at a rate that moves the pitch nothing dims; keeping
   the pitch, the audio clip and its scene's ▶ dim and nothing else (golden
   `launcher-refused-dark.png`), its ▶ click is refused with

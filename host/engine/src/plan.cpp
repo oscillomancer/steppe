@@ -3402,8 +3402,7 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
         st.blockEvents.clear();
         st.outEvents.clear();
     }
-    const std::int64_t song0 = pos - node.timelineShift;
-    const std::int64_t clock0 = launchClock(p, node, pos);
+    const double clock0 = launchClock(p, node, pos);
     const ClipChainInput in =
         transport.playing ? clipChainInput(node, tc.player) : ClipChainInput{};
     if (!transport.playing || (!in.on && !clipChainHeard(node, tc.player, clock0))) {
@@ -3477,14 +3476,12 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
             std::swap(r, tc.delay.r[tc.delayAt]);
             tc.delayAt = tc.delayAt + 1 == d ? 0 : tc.delayAt + 1;
         }
-        double g = launchWeight(node, tc.player, clock0 + i);
+        // The song position heard at this frame (fractional under a rate).
+        const double song = launchClock(p, node, pos + i);
+        double g = launchWeight(node, tc.player, song);
         if (g == 0.0) continue;
         double gl = tc.gainL, gr = tc.gainR;
         std::int64_t ticks = 0;
-        // The song position heard at this frame (fractional under a rate).
-        const double song =
-            p.rateEnabled ? p.timelines[node.live ? 1 : 0]->position(pos + i - node.timelineShift)
-                          : double(song0 + i);
         if (enveloped && clipChainTicks(p, node, tc.player, song, ticks)) {
             if (tc.volume.active()) g *= dbToGain(tc.volume.at(ticks));
             if (tc.mute.active() && tc.mute.at(ticks) >= .5) g = 0.0;
@@ -4630,8 +4627,9 @@ void carryMix(Plan& from, Plan& to, int toClass, int fromClass) SUPPLE_RT {
         if (!counterpart) continue;
         Node& old = *counterpart;
         carryLaunch(old, n);  // what the channel plays, by clip (ADR-0097)
-        // A switch's crossfade runs on the song or the device clock
-        // (launchClock): across a change of path it is over.
+        // A switch's crossfade runs on whole song samples or the rate
+        // timeline's position (launchClock): across a change of path it is
+        // over.
         if (from.rateEnabled != to.rateEnabled && n.launch.fadeStart != kFadeAtNext)
             n.launch.fadeFrom = -2;
         // A locate may still be waiting for pooled module ownership.

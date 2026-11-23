@@ -1810,7 +1810,10 @@ queued, `followed`: what it follows by (`none`, `key` or `chords`).
 ### Capturing a performance
 
 `launch.capture {on: true}` starts keeping what you launch; `launch.capture
-{on: false}` stops. `launch.commit` then writes the performance onto the
+{on: false}` stops, at once, or with `quantize` (`"bar"`, `"beat"`, …) on
+that grid's next line, so the performance ends on the bar. The Capture
+button, turned off while playing, ends it on the project's launch quantize
+and commits it there. `launch.commit` then writes the performance onto the
 timeline as ordinary items, in one undo step. It is laid out as it ran:
 from where the capture began, each launch as many seconds later as it was
 heard, even if the transport loop jumped back meanwhile. On each track that
@@ -1827,9 +1830,11 @@ clip is playing. Not yet:
 - launching an audio clip while the master playrate keeps the pitch
   (`launch.playrate`); MIDI clips, and audio clips without it, follow
   the playrate;
-- capturing a performance while a master playrate is active, or while
-  the rate you hear is still gliding back to 1 after you set it there
-  (`transport.playrate.get` shows `effective_rate`).
+- capturing while a launched audio clip plays and the master playrate
+  keeps the pitch (`launch.playrate`): stop the clip or turn off preserve
+  pitch first. Otherwise a capture runs under any playrate and through
+  changes to it, and the commit plays the same song positions, not the
+  same durations, at another rate.
 
 A rack's Notes module that plays a track's notes follows that track's
 launches: it plays the clip, falls silent when the track stops, and
