@@ -4603,8 +4603,20 @@ Status EngineApp::moveScratchMedia(const fs::path& dest, const std::function<Sta
                   : publish();
     if (fs::equivalent(from, dest, ec)) return publish();
     ec.clear();
-    // What an earlier project's first save could not remove is not this project's.
+    // What an earlier project's first save could not remove is not this project's, unless a
+    // version of this project names it (media imported in place, say): that is copied.
+    std::set<std::string> referenced;
+    versions_->forEachVersion([&](const model::Version& v) {
+        for (const auto& e : v.session->media) {
+            const fs::path named = e.value->path;
+            referenced.insert(named.is_absolute() ? named.lexically_normal().generic_string()
+                                                  : named.generic_string());
+        }
+    });
     auto leftover = [&](const fs::path& file) {
+        if (referenced.count(file.lexically_relative(from).generic_string()) ||
+            referenced.count(file.lexically_normal().generic_string()))
+            return false;
         std::error_code error;
         const auto size = fs::file_size(file, error);
         const auto time = fs::last_write_time(file, error);

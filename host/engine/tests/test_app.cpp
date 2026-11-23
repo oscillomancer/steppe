@@ -1358,13 +1358,20 @@ TEST_CASE("AuditionLoader: waitIdle returns when a cancelled read has let go of 
     } unblock{release};
     loader.request({file, 48000, 48000});
     inRead.wait(false);
-    CHECK_FALSE(openFilesNamed("audition-held.wav").empty());  // Linux: the read has it open
+#if defined(__linux__)
+    // The read has the file open (openFilesNamed lists descriptors on Linux only).
+    CHECK_FALSE(openFilesNamed("audition-held.wav").empty());
+#endif
     loader.cancel();
+    std::atomic<bool> letGo{false};
     std::thread waiter([&] {
         loader.waitIdle();
+        // Not before the read was let go: waitIdle waited for it, on every platform.
+        CHECK(letGo.load());
         idle.store(true);
         idle.notify_all();
     });
+    letGo.store(true);
     release.store(true);
     release.notify_all();
     idle.wait(false);
@@ -1378,7 +1385,6 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
     std::mutex mutex;
     std::vector<double> served;
     std::atomic<int> entered{0}, woken{0};
-    std::atomic<bool> gate{false};  // request 1 holds on this and ignores a cancel
     const auto session = model::Session::create(model::Project{});
     auto prepare = [&](const model::Session&, const fs::path&, double rate,
                        const std::function<bool()>& cancelled) {
@@ -1388,11 +1394,8 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
         }
         entered.fetch_add(1);
         entered.notify_all();
-        if (rate == 1) {  // runs until it is cancelled
+        if (rate == 1 || rate == 2)  // runs until pause() cancels it
             while (!cancelled()) std::this_thread::yield();
-        } else if (rate == 2) {  // runs until the test lets it go
-            gate.wait(false);
-        }
         return Result<std::shared_ptr<const PreparedSources>>(
             std::make_shared<const PreparedSources>());
     };
@@ -1407,13 +1410,6 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
     auto waitEntered = [&](int count) {
         for (int value = entered.load(); value < count; value = entered.load()) entered.wait(value);
     };
-    struct Open {
-        std::atomic<bool>& gate;
-        ~Open() {
-            gate.store(true);
-            gate.notify_all();
-        }
-    } open{gate};
     SUBCASE("pause returns once the running request is cancelled, and drops its result") {
         auto sp = make();
         sp->request(session, {}, 1);
@@ -1429,14 +1425,12 @@ TEST_CASE("SourcePreparation: pause cancels the running request and drops the pe
     }
     SUBCASE("a request pending at pause is not run, and one after resume is served") {
         auto sp = make();
-        sp->request(session, {}, 2);  // running, held on the gate: it does not see a cancel
+        sp->request(session, {}, 2);  // running, until the pause cancels it
         waitEntered(1);
         sp->request(session, {}, 4);  // pending behind it
-        std::thread pauser([&] { sp->pause(); });
-        // Let the held request go: pause() returns when the worker has left the decode.
-        gate.store(true);
-        gate.notify_all();
-        pauser.join();
+        // pause() drops 4 and cancels 2 under one lock, so when 2 sees the cancel 4 is gone and
+        // the worker cannot start it: it returns when the worker has left the decode.
+        sp->pause();
         sp->resume();
         sp->request(session, {}, 3);
         waitEntered(2);
@@ -1589,9 +1583,10 @@ TEST_CASE("a first save asks the readers outside the engine to let go of the scr
     CHECK_FALSE(fs::exists(o.scratchDir));
 }
 
+namespace {
 // A first save that left a file behind (the folder cannot be written), then another unsaved
 // project in the same scratch folder: its first save does not carry the file into its media.
-TEST_CASE("a scratch file the first save could not remove does not go with the next project") {
+void nextProjectAfterLeftover(bool namesStray) {
     Root root;
     cmd::Registry registry;
     registerEngineCommands(registry);
@@ -1612,8 +1607,10 @@ TEST_CASE("a scratch file the first save could not remove does not go with the n
     REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
     const fs::path stray = rec / "Stray.wav";
     {
-        std::ofstream out(stray, std::ios::binary);
-        out << "project A's";
+        audio::AudioData wav;
+        wav.sampleRate = 48000;
+        wav.channels.assign(2, std::vector<float>(480, 0.25f));
+        REQUIRE(audio::writeWav(stray, wav));
     }
     // The stray file cannot be removed by project A's first save (a folder that cannot be
     // written takes the recording's files with it; on Windows only the file that is held).
@@ -1630,12 +1627,27 @@ TEST_CASE("a scratch file the first save could not remove does not go with the n
     REQUIRE(app->newProject(model::Project{}));
     app->setupFixture(d, "recording_interrupted");
     REQUIRE(d.execute({"project.recover", j("{}"), kTest}));
+    if (namesStray) {  // B uses the very file: imported in place, unchanged
+        REQUIRE(d.execute({"track.add", j(R"({"name":"Uses it"})"), kTest}));
+        auto add = *json::parse(R"({"track":"tr_2","position":0})");
+        add["audio_file"] = stray.string();
+        REQUIRE(d.execute({"item.add", add, kTest}));
+    }
     REQUIRE(app->save(root.path / "b" / "b.json"));
     CHECK(fs::exists(root.path / "b" / "media" / "rec" / "Vocal-1.wav"));
-    CHECK_FALSE(fs::exists(root.path / "b" / "media" / "rec" / "Stray.wav"));
-    // The leftover could be removed this time, so it was, and the scratch folder is gone.
-    CHECK_FALSE(fs::exists(stray));
-    CHECK_FALSE(fs::exists(o.scratchDir));
+    // A file B's project names goes with it; one it does not, does not.
+    CHECK(fs::exists(root.path / "b" / "media" / "rec" / "Stray.wav") == namesStray);
+    if (!namesStray) {
+        // The leftover could be removed this time, so it was, and the scratch folder is gone.
+        CHECK_FALSE(fs::exists(stray));
+        CHECK_FALSE(fs::exists(o.scratchDir));
+    }
+}
+}  // namespace
+
+TEST_CASE("a scratch file the first save could not remove does not go with the next project") {
+    SUBCASE("B does not use it") { nextProjectAfterLeftover(false); }
+    SUBCASE("B names that very file: it is copied") { nextProjectAfterLeftover(true); }
 }
 
 TEST_CASE("two armed tracks with one name record to two files (review round 8)") {
