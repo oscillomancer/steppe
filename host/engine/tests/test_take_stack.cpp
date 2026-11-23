@@ -731,6 +731,31 @@ TEST_CASE("a partial pass that makes hand-set seams uniform says so") {
               ->asBool());
 }
 
+TEST_CASE("a pass over a whole comp joins its seams away and warns of no uniforming") {
+    StackFixture f;
+    f.run("take.add", R"({"item":"it_1","from":"tk_1"})");
+    f.run("take.comp",
+          R"({"item":"it_1","crossfade":0.04,"crossfade_shape":"linear","spans":[
+              {"from":0,"to":1,"index":0},{"from":1,"to":3,"index":1},{"from":3,"to":4,"index":0}]})");
+    const auto ids = f.pieces();
+    REQUIRE(ids.size() == 3);
+    f.run("item.set", R"({"item":")" + ids[1].str() + R"(","fade_in":0.02})");
+    REQUIRE_FALSE(
+        f.run("take.comp.get", R"({"item":")" + ids[0].str() + R"("})").find("uniform")->asBool());
+    SUBCASE("a pass over all of it") {
+        auto done = f.app->commitTakes({f.pass("whole.wav", 0.0, 3.0)});
+        REQUIRE(done);
+        CHECK_FALSE(StackFixture::warned((*done)[0], "record.comp_uniform"));
+    }
+    SUBCASE("a pass over the differing seam leaves none to warn about") {
+        // Beats 1 and 3 are 0.5 s and 1.5 s: the pass covers 0.25 s to 0.75 s only; the other
+        // seam (a hand-set fade-in on the middle piece) is the one at 0.5 s, and it is covered.
+        auto done = f.app->commitTakes({f.pass("seam.wav", 0.25, 0.5)});
+        REQUIRE(done);
+        CHECK_FALSE(StackFixture::warned((*done)[0], "record.comp_uniform"));
+    }
+}
+
 TEST_CASE("an audio pass over a MIDI item is not stacked into, and says why") {
     StackFixture f;
     f.run("track.add", R"({"name":"Keys"})");

@@ -40,7 +40,7 @@ a comp's pieces all get the new take. Recording only some tracks of an edit grou
 its pass is left out with `record.frozen_skipped` (the recording is kept with its journal: unfreeze,
 then `project.recover` places it where it was played) and the others are placed. A refused commit
 says its recordings are kept (`project.recover`). A pass inside a comp with hand-set seams makes
-uniform and warns `record.comp_uniform`. A pass
+those it leaves in place uniform and warns `record.comp_uniform`. A pass
 that starts before an item, or into a locked or looped one, makes a new item and warns
 `record.stack_skipped`; a pass that runs past the item's end keeps the rest hidden in the take
 (`record.take_beyond_item`). The recorded result says `stacked: true` when the takes went into an

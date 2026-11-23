@@ -2987,8 +2987,10 @@ on the loop range with a take per pass):
   `freeze.unsupported`, and arming an edit group skips frozen members with a `track.frozen`
   warning, so the leave-out is a backstop for a freeze made behind the app's back. Recovery
   (`project.recover`, `record.commit` replays) follows the same rule. A pass inside a comp whose
-  seams differed (hand-set lengths, shapes or hard cuts among crossfades) rebuilds all of them as
-  the run's one crossfade, and warns `record.comp_uniform` so that does not happen silently. A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
+  seams differed (hand-set lengths, shapes or hard cuts among crossfades) rebuilds those the pass
+  leaves in place as the run's one crossfade, and warns `record.comp_uniform` so that does not
+  happen silently (seams the pass covers are joined away, and a pass over a whole comp warns of
+  none). A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
   the project is as it was and still editable, and the recording is not in it; the refusal's message
   ends "(the recording is kept: project.recover places it)", the journals and files remaining for
   recovery.

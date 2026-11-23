@@ -843,10 +843,11 @@ metadata; `session.describe` marks frozen channels. Work on other tracks can
 continue during a freeze. Completion refuses if the source sound, input files,
 project/branch or latency schedule changed; submit the freeze again.
 
-Disarm the channel and remove external audio, sidechain/key or MIDI inputs first. A frozen
-channel cannot be armed (arming it says to unfreeze it first), and arming a group leaves its frozen
-members unarmed with a warning. If a channel is frozen while a recording is being made on it (an
-agent can do this behind the app's back), nothing is lost: the recording stops as usual, every other channel's takes are placed, and the frozen channel's
+Disarm the channel and remove external audio, sidechain/key or MIDI inputs first. Arming needs an
+unfrozen channel (arming a frozen one says to unfreeze it first), and an armed channel cannot be
+frozen, so a recording does not normally meet a frozen channel; arming a group leaves its frozen
+members unarmed, with a warning. Should a channel be frozen under a recording anyway, nothing is
+lost: the recording stops as usual, every other channel's takes are placed, and the frozen channel's
 recording is kept in the project's recordings folder, named in a `record.frozen_skipped` warning.
 Unfreeze the channel and `project.recover` places it where it was played, loop passes included. A
 commit that is refused for any reason keeps the recordings the same way, and its error says so.
