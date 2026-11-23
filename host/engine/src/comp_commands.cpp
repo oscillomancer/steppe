@@ -65,6 +65,11 @@ struct MemberOut {
     bool uniform = true;
     std::vector<SeamOut> differing;
 };
+// A group track the comp leaves alone: nothing over the run ("no_item"), or only one-take items,
+// which have nothing to comp ("one_take").
+struct SkippedOut {
+    std::string track, reason;
+};
 struct CompResult {
     std::vector<PieceOut> pieces;
     double crossfade = model::kDefaultCompCrossfade;
@@ -73,7 +78,7 @@ struct CompResult {
     std::vector<SeamOut> differing;
     std::vector<MemberOut> members;
     std::vector<std::string> differingMembers;
-    std::vector<std::string> skippedTracks;  // group tracks with no item over the comp
+    std::vector<SkippedOut> skippedTracks;
 };
 
 schema::Schema<PieceOut> pieceSchema() {
@@ -96,6 +101,17 @@ schema::Schema<SeamOut> seamSchema() {
         .field("right", &SeamOut::right, schema::string())
         .build();
 }
+schema::Schema<SkippedOut> skippedSchema() {
+    return schema::object<SkippedOut>("comp_skipped")
+        .field("track", &SkippedOut::track, schema::string())
+        .field("reason", &SkippedOut::reason,
+               schema::enumeration<std::string>({{"no_item", "no_item"}, {"one_take", "one_take"}})
+                   .doc("no_item: the track has no item over the comp. one_take: its items over "
+                        "the comp have one take each, so there is nothing to comp; they are left "
+                        "as they are."))
+        .build();
+}
+
 schema::Schema<MemberOut> memberSchema() {
     return schema::object<MemberOut>("comp_member")
         .field("track", &MemberOut::track, schema::string())
@@ -118,7 +134,7 @@ schema::Schema<CompResult> resultSchema() {
         .field("members", &CompResult::members, schema::arrayOf(memberSchema()))
         .field("differing_members", &CompResult::differingMembers,
                schema::arrayOf(schema::string()))
-        .field("skipped_tracks", &CompResult::skippedTracks, schema::arrayOf(schema::string()))
+        .field("skipped_tracks", &CompResult::skippedTracks, schema::arrayOf(skippedSchema()))
         .build();
 }
 
@@ -553,10 +569,12 @@ struct Member {
 // over the run that do not form such a run (compRun refuses them, or they start or end elsewhere)
 // is refused (comp.group_mismatch, comp.group_takes for too few takes); with `off`, those tracks go
 // into it instead and the rest are returned (take.comp.get). A track with no item over the run is
-// not a member and not an error: it goes into `empty`, and the reply names it (skipped_tracks).
+// not a member and not an error, and neither is one whose items over the run all have a single take
+// (nothing to comp): they go into `skipped` with their reason, and the reply names them
+// (skipped_tracks).
 Result<std::vector<Member>> groupMembers(const model::Session& s,
                                          const std::vector<model::CompPiece>& run,
-                                         std::vector<Id>* off, std::vector<Id>* empty,
+                                         std::vector<Id>* off, std::vector<SkippedOut>* skipped,
                                          const std::vector<std::string>& paths) {
     const model::Item& leadItem = *s.items.find(run.front().item);
     const Id lead = leadItem.track;
@@ -572,7 +590,15 @@ Result<std::vector<Member>> groupMembers(const model::Session& s,
             if (from < runEnd && to > runStart) items.push_back(e.id);
         }
         if (items.empty()) {
-            if (empty) empty->push_back(track);
+            if (skipped) skipped->push_back({track.str(), "no_item"});
+            continue;
+        }
+        // One take each: nothing to comp, and a bass or a DI beside takes of drums is ordinary.
+        // The items stay as they are. (An item with several takes but fewer than a span plays is
+        // comp.group_takes, below.)
+        if (std::all_of(items.begin(), items.end(),
+                        [&](Id id) { return s.items.find(id)->takes.size() < 2; })) {
+            if (skipped) skipped->push_back({track.str(), "one_take"});
             continue;
         }
         const std::string who = trackNamed(s, track);
@@ -661,12 +687,10 @@ Result<CompResult> compGroup(const CompArgs& a, Context& ctx) {
     auto run = model::compRun(s, which->first, which->second);
     if (!run) return std::move(run).error();
     const auto paths = piecePaths(a.anyPiece.has_value(), which->second, *run);
-    std::vector<Id> empty;  // group tracks with nothing over the run: skipped, and named
-    auto members = groupMembers(s, *run, nullptr, &empty, paths);
+    std::vector<SkippedOut> left;  // group tracks the comp leaves alone, named in the reply
+    auto members = groupMembers(s, *run, nullptr, &left, paths);
     if (!members) return std::move(members).error();
-    auto skipped = [&](CompResult& r) {
-        for (Id track : empty) r.skippedTracks.push_back(track.str());
-    };
+    auto skipped = [&](CompResult& r) { r.skippedTracks = left; };
     if (members->empty()) {
         auto alone = compOne(a, ctx, "");
         if (alone) skipped(*alone);
@@ -754,8 +778,11 @@ void registerCompCommands(cmd::Registry& registry) {
             "beside a split lead is comped to the spans too); the result lists them under "
             "members, each with its track and pieces. A track whose items over the comp do not "
             "form a run starting and ending where it does (comp.group_mismatch, with the inner "
-            "reason and hint), or that lacks a take index (comp.group_takes), refuses the whole "
-            "call before anything changes. bypass_groups true comps only the named item.";
+            "reason and hint), or that has several takes but lacks a take index a span plays "
+            "(comp.group_takes), or is locked, refuses the whole call before anything changes. "
+            "A track with no item over the comp, or whose items over it have one take each (a "
+            "bass grouped with drums), is left alone and named in skipped_tracks with its reason "
+            "(no_item, one_take). bypass_groups true comps only the named item.";
         c.tags = {"take"};
         auto spanSchema =
             schema::object<SpanArg>("take_comp_span")
@@ -797,7 +824,7 @@ void registerCompCommands(cmd::Registry& registry) {
              "and ending where it does (the inner reason and hint are in the message)",
              "make its items span the same stretch, or comp it alone with bypass_groups"},
             {"comp.group_takes",
-             "a track of the edit group has an item with too few takes for a span's index",
+             "a track of the edit group has several takes but fewer than a span's index needs",
              "comp it alone with bypass_groups, or use indices it has"},
             {"item.locked", "a piece is locked", "item.set {locked: false}"},
             {"item.kind", "a clip", "lay the clip on the timeline first (item.add {clip})"}};
@@ -831,8 +858,9 @@ void registerCompCommands(cmd::Registry& registry) {
             "the items). For an item in an edit group, members reads every other track of the "
             "group that has items over the same stretch like the item's own comp, "
             "differing_members lists tracks whose comp reads differently or cannot follow, and "
-            "skipped_tracks the group tracks with nothing there (they do not affect uniform, "
-            "which is false while a member differs or is not uniform itself). An item with several "
+            "skipped_tracks the group tracks it leaves alone, each with a reason: no_item, or "
+            "one_take (they do not affect uniform, which is false while a member differs or "
+            "is not uniform itself). An item with several "
             "takes and no seams is a comp of one piece.";
         c.tags = {"take"};
         c.args = schema::object<WhichArgs>("take_comp_get_args")
@@ -856,15 +884,16 @@ void registerCompCommands(cmd::Registry& registry) {
             CompResult out = describe(s, *run);
             // The other members of its edit group, read the same way; one that does not line up
             // is listed in differing_members.
-            std::vector<Id> off, empty;
-            auto members = groupMembers(s, *run, &off, &empty,
+            std::vector<Id> off;
+            std::vector<SkippedOut> left;
+            auto members = groupMembers(s, *run, &off, &left,
                                         piecePaths(a.anyPiece.has_value(), which->second, *run));
             if (!members) return std::move(members).error();
             for (const Member& m : *members)
                 out.members.push_back(memberOf(s, m.track, describe(s, m.run)));
             std::vector<std::string> notLikeIt;
             for (Id track : off) notLikeIt.push_back(track.str());
-            for (Id track : empty) out.skippedTracks.push_back(track.str());
+            out.skippedTracks = left;
             finishGroup(out, std::move(notLikeIt));
             return out;
         };
