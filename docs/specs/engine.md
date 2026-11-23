@@ -2971,7 +2971,14 @@ status line while recording continues for healthy targets.
 A committed recording may carry a `warnings` array with structured
 `code`, `message`, `path`, `hint`, `track` and `file` fields.
 `recording.loop_runs_full` is forwarded to `transport.stop` / pause callers
-and the `record.warning` event while retained passes still commit.
+and the `record.warning` event while retained passes still commit. Every
+warning a commit itself adds (where a take went: `record.stack_skipped`,
+`record.stack_group` and the other `record.*` warnings of take stacking,
+ADR-0103, and those of the `take.comp` it makes) also goes out as a
+`record.warning` event, in the same shape, once the commit has succeeded,
+whatever stopped the recording (a command from any client, or the engine
+halting, whose commit has no caller to answer); each warning once per
+commit, a pass's own warnings not again.
 `project.recoverable` and `project.recover` expose skipped invalid-sidecar
 diagnostics in the same optional `warnings` shape (`record.sidecar`, and
 `record.journal` for a MIDI journal whose header does not read). Their

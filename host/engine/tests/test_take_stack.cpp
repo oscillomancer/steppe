@@ -827,3 +827,34 @@ TEST_CASE("midi_overdub keeps its own rule: a take with the played notes added")
     // Overdub: the old notes (C4) and the played one (E4) together.
     CHECK(f.notes(item.takes[1]).notes.size() == 2);
 }
+
+// Round 134 G3/G4: a commit's own warnings go out as record.warning events once the takes are in
+// the project, so a client that did not stop the recording (the GUI, when an agent, a MIDI
+// controller or the engine stopped it) still sees where each take went; once each, and none for a
+// commit that adds none.
+TEST_CASE("a commit's warnings are record.warning events, once each, after the commit") {
+    SUBCASE("a pass into a locked item") {
+        StackFixture f;
+        f.run("item.set", R"({"item":"it_1","locked":true})");
+        (void)f.app->takeEvents();
+        auto done = f.app->commitTakes({f.pass("p.wav", 0.5, 0.5)});
+        REQUIRE(done);
+        REQUIRE(StackFixture::warned((*done)[0], "record.stack_skipped"));
+        std::vector<json::Value> warnings;
+        for (auto& [topic, payload] : f.app->takeEvents())
+            if (topic == "record.warning") warnings.push_back(payload);
+        REQUIRE(warnings.size() == 1);
+        CHECK(warnings[0].find("code")->asString() == "record.stack_skipped");
+        CHECK(warnings[0].find("message")->asString() == (*done)[0].warnings->front().message);
+        CHECK(warnings[0].find("track")->asString() == "tr_1");
+        CHECK_FALSE(warnings[0].find("hint")->asString().empty());
+    }
+    SUBCASE("a pass into an item that takes it says nothing") {
+        StackFixture f;
+        (void)f.app->takeEvents();
+        auto done = f.app->commitTakes({f.pass("p.wav", 0.5, 0.5)});
+        REQUIRE(done);
+        CHECK((*done)[0].stacked);
+        for (auto& [topic, payload] : f.app->takeEvents()) CHECK(topic != "record.warning");
+    }
+}

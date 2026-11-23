@@ -35,6 +35,7 @@
 #include <set>
 #include <string_view>
 #include <thread>
+#include <tuple>
 
 #include "supple/audio/audio_file.h"
 #include "supple/audio/wav_stream.h"
@@ -3837,6 +3838,30 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
             {"record.commit", detail::recordCommitArgs(takes, punch_, media, stack)});
     rollback.armed = false;
     SUPPLE_TRY(commitTransaction(*txnId));
+    // A pass's own warnings went out as record.warning events as it was placed. The commit's
+    // (where a take went: take stacking's, the take.comp's it made) follow now that the takes are
+    // in the project, so a client sees every one whatever stopped the recording: a command from
+    // any client, or the engine halting (ADR-0103).
+    {
+        std::set<std::tuple<std::string, std::string, std::string>> sent;
+        for (const RecordedTake& r : takes)
+            for (const Error& e : r.warnings) sent.insert({r.track.str(), e.code, e.message});
+        for (const RecordedInfo& info : out) {
+            if (!info.warnings) continue;
+            for (const RecordingWarning& w : *info.warnings) {
+                const std::string track = w.track.empty() ? info.track : w.track;
+                if (!sent.insert({track, w.code, w.message}).second) continue;
+                json::Value ev = json::Value::object();
+                ev["code"] = w.code;
+                ev["message"] = w.message;
+                ev["path"] = w.path;
+                ev["hint"] = w.hint;
+                ev["track"] = track;
+                ev["file"] = w.file.empty() ? info.file : w.file;
+                emit("record.warning", std::move(ev));
+            }
+        }
+    }
     // The takes are in the project now; owned journals go once a saved
     // file or autosave holds them (ADR-0080/0082).
     for (const RecordedTake& r : takes)
