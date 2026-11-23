@@ -308,12 +308,12 @@ instructions are in `docs/guides/installing.md`.
       the replay (ADR-0097, revision 2026-11-21), but while it keeps the
       pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
       clips can); a capture runs in song time under one, refused (or
-      ended, with a warning) only while a launched audio clip plays and
-      the playrate keeps the pitch, and its commit meets the rate-1
-      standard except within 128 song samples of the capture's first and
-      last samples (up to the level of the audio cut there), and
-      under a pitch-keeping rate where a switch cuts an arrangement audio
-      item (its stretch history); there a frozen track's print
+      ended, with a warning) while a launched audio clip plays and the
+      playrate keeps the pitch, and ended on its boundary by a switch that
+      cuts arrangement audio while the pitch is kept; its commit meets the
+      rate-1 standard except within 128 song samples of the capture's
+      first and last samples (up to the level of the audio cut there);
+      there a frozen track's print
       cuts in without the crossfade, and launched audio does not crossfade
       between trajectories when a plan swap changes the rate;
     - freezing, or removing the playing clip, crossfades an audio clip

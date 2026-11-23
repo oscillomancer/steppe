@@ -901,7 +901,14 @@ the boundary.
   arrangement plays the same song positions, not the same durations, at
   another rate.
 - **Pitch kept** (S3, Q2 b): a capture is allowed and stays exact for MIDI,
-  also under a sync chase, which forces the pitch kept. Arming is refused
+  also under a sync chase, which forces the pitch kept, except where a
+  switch cuts arrangement audio: a switch that leaves or returns to an
+  arrangement holding audio, queued while the newest plan keeps the pitch,
+  ends the capture on its boundary, that launch not in it, with a warning
+  naming the track (review round 113 T2: the stretch converter reads on
+  past the cut live, where the commit splits the item; measured, the
+  commit differed for 5664 device frames before a switch away and by up to
+  0.37 after a return). Arming is refused
   with `launch.playrate` while a launched audio clip plays and the newest
   plan keeps the pitch (no committed item reads a stretch converter's
   history), naming the clip, with the hint to stop it or turn off preserve
@@ -947,17 +954,23 @@ the rate-1 standard, audio and MIDI, under a constant 0.75 and under an
 envelope, at blocks 128 and 512, in both executors, through a clip's period
 wraps: exact away from the crossfades, at most 1.5e-8 through them (bounded
 at 1e-6 in the test, which prints the worst). MIDI under a pitch-keeping
-rate commits equal to what played. Limits: within the tape converter's
+rate commits equal to what played, and a capture ended at a switch that
+cuts arrangement audio commits exactly to its end. Limits: within the tape converter's
 kernel reach of the capture's first and last samples (128 song samples
 each), where the committed items begin or end while the performance went
 on, the commit differs from what played by up to the level of the audio
 cut there (measured up to 0.028 in the tests, in the last 120 to 180
 device frames, about 3 ms; bounded in each test at its measure); a
-commit's edge is a cut at any rate. And under a
-pitch-keeping rate a switch on a track whose arrangement holds audio cuts
-an item a stretch converter reads, which the commit cannot reproduce
-exactly. The tests cover each, and the refusal and the
-end for audio.
+commit's edge is a cut at any rate. Tests (test_clip_player_rate.cpp):
+the positions and the equality under 0.75 and the envelope ("a capture
+under a master playrate commits by the song positions heard"), a capture
+starting mid-pass ("a capture armed while clips play ..."), the held note
+("a capture armed while a launched clip's note sounds ..."), MIDI with the
+pitch kept ("under a pitch-keeping master playrate a MIDI capture commits
+as heard"), the end at a switch that cuts arrangement audio ("under a
+pitch-keeping rate a switch that cuts arrangement audio ends the capture
+there"), the refusal and the end for audio clips ("a launched audio clip
+under a pitch-keeping rate ..."); test_sync.cpp the clock chase.
 
 ## Consequences
 

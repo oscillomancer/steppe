@@ -616,7 +616,12 @@ the same.*
   arming is refused with `launch.playrate` while a launched audio clip
   plays and the newest plan keeps the pitch, and such a plan arriving ends
   a running capture with a warning naming the clip (the stretch converter
-  reading it has no committed equivalent).
+  reading it has no committed equivalent). For the same reason a switch
+  that leaves or returns to an arrangement holding audio, queued while the
+  newest plan keeps the pitch (`captureBeforeStretchCut`, at placement and
+  at each service), ends the capture on that switch's boundary, the
+  launch not in it, with a warning naming the track; MIDI launches on
+  other tracks are captured.
 - **Committing it.** `launch.commit` lays the capture out linearly: a
   launch at running frame f lands at the capture's start plus f, whatever
   the loop did. On each track that left the arrangement, the stretches
@@ -705,9 +710,9 @@ the same.*
     the tape kernel's reach of the capture's first and last samples (128
     song samples each), where its items begin or end while the performance
     went on, it differs by up to the level of the audio cut there (a stated
-    limit, measured and bounded by the tests); under a pitch-keeping rate an
-    arrangement audio item cut at a switch is read by a stretch converter
-    whose history the commit does not reproduce.
+    limit, measured and bounded by the tests). Under a pitch-keeping rate a
+    switch that cuts an arrangement audio item, which a stretch converter
+    reads on past the cut live, ends the capture on its boundary (below).
   - *MIDI* (`rateLaunchMidi`, a clip chain's input, a rack's Notes feed):
     each event at the first frame whose song position reaches it; what is
     held ends where the song enters a new loop pass; a switch's first frame

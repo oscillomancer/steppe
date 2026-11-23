@@ -366,7 +366,10 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
     for (int attempt = 0;; ++attempt) {
         bool missed = false;
         auto placed = publishLaunch(requests, quantize, missed);
-        if (!placed || !missed || attempt == 2) return placed;
+        if (!placed || !missed || attempt == 2) {
+            if (placed) captureBeforeStretchCut();
+            return placed;
+        }
     }
 }
 
@@ -794,6 +797,7 @@ void Engine::serviceLaunches() {
                             "'s queued launch was dropped: the edit left nothing to play");
     }
     placeLaunchesAgain();
+    captureBeforeStretchCut();
 }
 
 void Engine::placeLaunchesAgain() {
@@ -959,6 +963,58 @@ std::optional<model::Id> Engine::audioUnderStretch() const {
         if (clip && clip->kind != model::ClipKind::Midi) return e.clip;
     }
     return std::nullopt;
+}
+
+bool Engine::cutsArrangementAudio(const LaunchRequest& r) const {
+    if (!latest_) return false;
+    bool audio = false;
+    for (const auto& e : latest_->items) {
+        const model::Item& item = *e.value;
+        if (item.track != r.track || !item.activeTake) continue;
+        const model::Take* take = latest_->takes.find(*item.activeTake);
+        audio = take && take->source && take->source->kind != model::Kind::Midi;
+        if (audio) break;
+    }
+    if (!audio) return false;
+    // On the arrangement: no launch yet, the newest returned it, or a plan
+    // that lacks its clip did.
+    bool arrangement = true;
+    for (std::size_t i = launchLog_.size(); i-- > 0;)
+        if (launchLog_[i].track == r.track) {
+            const auto reset = launchReset_.find(r.track);
+            arrangement = launchLog_[i].action == LaunchLogEntry::Action::Arrangement ||
+                          (reset != launchReset_.end() && reset->second > i);
+            break;
+        }
+    return arrangement != (r.action == LaunchLogEntry::Action::Arrangement);
+}
+
+void Engine::captureBeforeStretchCut() {
+    if (!capture_.on || capture_.pending || !latest_) return;
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    if (!plan || !plan->rateStretch) return;
+    // The stretch converter reads on past the switch live (its lookahead,
+    // its history), where the commit cuts the item: up to 0.37 for tens of
+    // ms in the test. Ended on the switch's boundary, the track never leaves
+    // the arrangement within the capture, and what it holds is exact.
+    for (LaunchSlot& s : *launchSlots_) {
+        const std::uint64_t st = s.state.load(std::memory_order_acquire);
+        if ((status(st) != LaunchSlot::kPending && status(st) != LaunchSlot::kCommitted) ||
+            s.epoch.load() != capture_.epoch)
+            continue;
+        const std::int64_t song = s.songFrame.load();
+        if (song <= capture_.startSong || (capture_.ending && capture_.endSong <= song) ||
+            !cutsArrangementAudio(s.request))
+            continue;
+        capture_.ending = true;
+        capture_.endSong = song;
+        capture_.endBeat =
+            latest_->timeMap->beatAt(double(s.anchorSample.load()) / config_.sampleRate);
+        warnings_.push_back("launch: the capture ends at " + s.request.track.str() +
+                            "'s switch: its arrangement holds audio, which a capture cannot write "
+                            "as heard where a switch cuts it while the master playrate keeps the "
+                            "pitch");
+    }
 }
 
 std::int64_t Engine::captureHeard() const {

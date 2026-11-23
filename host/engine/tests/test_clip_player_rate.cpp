@@ -698,6 +698,70 @@ TEST_CASE("under a pitch-keeping master playrate a MIDI capture commits as heard
     }
 }
 
+TEST_CASE("under a pitch-keeping rate a switch that cuts arrangement audio ends the capture there" *
+          doctest::description("rt")) {
+    // Round 113 T2: tr_2's arrangement holds audio, read by the stretch
+    // converter while the pitch is kept. A MIDI clip launched on it cuts
+    // that item where the commit splits it, but the converter reads on live
+    // (measured: the commit differed for 5664 frames before the switch,
+    // and by up to 0.37 after a return). So a switch away from, or back to,
+    // such an arrangement ends a capture on its boundary, with a warning
+    // naming the track, and what was captured until then commits exactly.
+    // A MIDI launch on tr_1, whose arrangement is MIDI, does not.
+    for (const bool back : {false, true})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("back " << back << ", anticipative " << options.anticipative);
+            Project p;
+            twoTracks(p);
+            p.run("scene.add", "{}");  // sc_2
+            const std::string clip = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
+                                                       R"("notation": "voice v; 1: C4:w"})")["clip"]
+                                         .asString();
+            auto launchIt = j(R"({})");
+            launchIt["clip"] = clip;
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+            AppLive live(p, options, 128, 48000 * 9 + 16384);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            if (back) {  // tr_2 on its MIDI clip from bar 2, before the capture
+                p.runArgs("launch.clip", launchIt);
+                live.until(128000 + 8000);
+            }
+            const double from = p.run("launch.capture", R"({"on": true})")["from"].asDouble();
+            p.run("launch.clip", R"({"clip": "cl_1"})");  // tr_1, bar 2 or 3: no end
+            live.until((back ? 256000 : 128000) + 8000);
+            CHECK(p.run("launch.state", "{}")["capturing"].asBool());
+            CHECK_FALSE(p.run("launch.state", "{}").find("capture_ends"));
+            // The switch on tr_2, one bar later, ends it there.
+            if (back)
+                p.run("launch.arrangement", R"({"track": "tr_2"})");  // bar 4: song 288000
+            else
+                p.runArgs("launch.clip", launchIt);  // bar 3: song 192000
+            const double bar = back ? 12.0 : 8.0;
+            json::Value state = p.run("launch.state", "{}");
+            CHECK(state["capturing"].asBool());
+            REQUIRE(state.find("capture_ends"));
+            CHECK(state["capture_ends"].asDouble() == bar);
+            const auto& w = p.app->engine()->warnings();
+            CHECK(std::any_of(w.begin(), w.end(), [](const std::string& m) {
+                return m.find("the capture ends at tr_2's switch") != std::string::npos;
+            }));
+            live.until(std::llround(bar * double(kBeat) / 0.75) + 8000);
+            CHECK_FALSE(p.run("launch.state", "{}")["capturing"].asBool());
+            json::Value done = p.run("launch.commit", "{}");
+            CHECK(done["from"].asDouble() == from);
+            CHECK(done["to"].asDouble() == bar);
+            const std::vector<float> heard = live.stop();
+            const std::vector<float> committed = arrangement(p, 9.0, 128);
+            const std::int64_t start = std::llround(from * double(kBeat) / 0.75);
+            const std::int64_t end = std::llround(bar * double(kBeat) / 0.75);
+            REQUIRE(end + std::int64_t(live.latency) <= std::int64_t(heard.size()));
+            const auto [worst, first] = compare(heard, live.latency, committed, start, end);
+            CHECK(worst == 0.0);
+            CHECK(first == -1);
+        }
+}
+
 TEST_CASE("a launched audio clip under a pitch-keeping rate: a capture ends, arming is refused" *
           doctest::description("rt")) {
     // S3 B, Q2 (b): a capture cannot write launched audio as heard while the

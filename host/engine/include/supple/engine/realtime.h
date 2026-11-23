@@ -1384,6 +1384,13 @@ class Engine {
     // Main thread: a launched audio clip that plays (by the log) while the
     // newest plan keeps the pitch under a master playrate (S3 B, Q2).
     std::optional<model::Id> audioUnderStretch() const;
+    // Main thread: whether `r` leaves or returns to an arrangement that holds
+    // audio (round 113 T2), by the log.
+    bool cutsArrangementAudio(const LaunchRequest& r) const;
+    // Main thread: under a pitch-keeping plan, ends a running capture on the
+    // boundary of a queued switch that cuts arrangement audio (that launch
+    // not in it), with a warning naming the track.
+    void captureBeforeStretchCut();
     std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
     // Whether a refused playrate move was pending when the deferral began:
     // the restore puts it back with rateDeferredFrom_ (review 37c F1).
