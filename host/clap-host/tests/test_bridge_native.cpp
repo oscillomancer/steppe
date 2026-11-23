@@ -1075,3 +1075,39 @@ TEST_CASE(
     CHECK(r.u16() == 5);
     CHECK(r.u64() == 0x7f0000001000ULL);
 }
+
+#if defined(_WIN32)
+TEST_CASE("a Windows bridge wait ends at its timeout or its wake, with or without the timer") {
+    // ADR-0102. Outcomes only: a wait nothing wakes times out, a woken one
+    // returns before its long timeout. How late a timed wait ends is
+    // measured on native CI (the hung-bridge case prints it), not asserted.
+    struct Restore {
+        ~Restore() { bridge::SharedSignals::withoutHighResolutionTimer = false; }
+    } restore;
+    for (const bool sliced : {false, true}) {
+        INFO("without the high-resolution timer " << sliced);
+        bridge::SharedSignals::withoutHighResolutionTimer = sliced;
+        bridge::SharedSignals signals;
+        REQUIRE(signals.create());
+        CHECK(signals.highResolution() == !sliced);
+        std::atomic<std::uint32_t> word{0};
+        for (const long long timeoutNs : {3'000'000LL, 40'000'000LL}) {  // spun; sliced, then spun
+            INFO("timeout " << timeoutNs << " ns");
+            errno = 0;
+            CHECK(signals.waitNs(word, 0, timeoutNs, true) == -1);
+            CHECK(errno == ETIMEDOUT);
+        }
+        std::thread waker([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            word.store(1, std::memory_order_release);
+            signals.wake(word, true);
+        });
+        errno = 0;
+        const long woken = signals.waitNs(word, 0, 30'000'000'000LL, true);
+        const int why = errno;
+        waker.join();
+        // Woken, or the word had moved before it waited; never timed out.
+        CHECK((woken == 0 || (woken == -1 && why == EAGAIN)));
+    }
+}
+#endif
