@@ -62,6 +62,10 @@ struct DecompileOptions {
     // Spells pitch names by this key (harmony::spell). Unset: the default table,
     // which is what the output has always used.
     std::optional<harmony::Key> key;
+    // The key and chord at an item tick (ADR-0100). When set it names each note by the place at
+    // the note's start, a tied continuation by its first piece's, and `key` is not read. A
+    // `lane poly` line is named by the key at its first point.
+    std::function<harmony::Place(std::int64_t tick)> placeAt;
 };
 
 Result<std::string> decompile(const midi::Sequence& sequence, const DecompileOptions& options = {});

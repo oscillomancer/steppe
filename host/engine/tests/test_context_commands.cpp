@@ -230,13 +230,64 @@ TEST_CASE("midi.get spells by the key at the item and lists the key and chords o
     CHECK(ctx["chords"].at(1).find("what")->asString() == "C7");
     CHECK(ctx["chords"].at(1).find("item_bar")->asInt() == 2);
     CHECK(ctx["chords"].at(1).find("project_bar")->asInt() == 4);
-    // In a sharp key the same pitch is spelled with a sharp, and the text compiles back.
+    // In a sharp key the same pitch is spelled with a sharp, and the text compiles back. (The
+    // chords would name Bb and Db by their degree: take them away to read the key alone.)
+    b.run("chord.remove", R"({"at":8})");
+    b.run("chord.remove", R"({"at":12})");
+    b.run("chord.remove", R"({"at":40})");
     b.run("key.set", R"({"at":0,"tonic":"D","scale":"major"})");
     auto inD = b.run("midi.get", R"({"item":"it_1"})");
     CHECK(has(inD["text"].asString(), "A#3"));
     CHECK(has(inD["text"].asString(), "C#4"));
     b.run("midi.write", R"({"item":"it_1","notation":)" + json::writeCompact(inD["text"]) + "}");
     CHECK(b.run("midi.get", R"({"item":"it_1"})")["text"].asString() == inD["text"].asString());
+}
+
+TEST_CASE(
+    "midi.get names each note by the key and chord at its start, and a saved project reads alike") {
+    Bus b;
+    b.run("track.add", R"({"name":"Keys"})");
+    // Bar 1 under E (G# is its third), bar 2 under Ab (Ab is its root), bar 3 under Bbdim7
+    // (Fb is its flat five, Db its flat third).
+    b.run(
+        "item.add",
+        R"({"track":"tr_1","bar":1,"notation":"voice a; 1: E4:q Ab4:q B4:q r:*; 2: Ab4:q C5:q r:*; 3: Bb3:q Db4:q Fb4:q r:*"})");
+    const auto text = [&] { return b.run("midi.get", R"({"item":"it_1"})")["text"].asString(); };
+    // No context: the default table.
+    CHECK(has(text(), "1: E4:q Ab4:q B4:q"));
+    b.run("key.set", R"({"at":0,"tonic":"C","scale":"major"})");
+    b.run("chord.set", R"({"at":0,"symbol":"E"})");
+    b.run("chord.set", R"({"at":4,"symbol":"Ab"})");
+    b.run("chord.set", R"({"at":8,"symbol":"Bbdim7"})");
+    const std::string named = text();
+    CHECK(has(named, "1: E4:q G#4:q B4:q"));  // the third of E, never Ab
+    CHECK(has(named, "2: Ab4:q C5:q"));
+    CHECK(has(named, "3: Bb3:q Db4:q Fb4:q"));
+    // Names are display: the text compiles back to the same notes.
+    b.run("midi.write", R"({"item":"it_1","notation":)" +
+                            json::writeCompact(b.run("midi.get", R"({"item":"it_1"})")["text"]) +
+                            "}");
+    CHECK(text() == named);
+    // A saved project reads alike.
+    auto save = json::Value::object();
+    save["path"] = (b.dir.path / "spelling.steppe").string();
+    REQUIRE(b.bus.execute({"project.save", save, kOrigin}));
+    REQUIRE(b.bus.execute({"project.open", save, kOrigin}));
+    CHECK(text() == named);
+    // A chord that ends at the item's end leaves later notes with no chord: the key's rule.
+    b.run("chord.set", R"({"at":8,"symbol":""})");
+    CHECK(has(text(), "3: Bb3:q C#4:q E4:q"));
+}
+
+TEST_CASE("midi.get follows a key change inside the item") {
+    Bus b;
+    b.run("track.add", R"({"name":"Keys"})");
+    b.run("item.add", R"({"track":"tr_1","bar":1,"notation":"voice a; 1: Bb3:w; 2: Bb3:w"})");
+    b.run("key.set", R"({"at":0,"tonic":"F","scale":"major"})");
+    b.run("key.set", R"({"at":4,"tonic":"D","scale":"major"})");
+    const auto text = b.run("midi.get", R"({"item":"it_1"})")["text"].asString();
+    CHECK(has(text, "1: Bb3:w"));
+    CHECK(has(text, "2: A#3:w"));
 }
 
 TEST_CASE("context points undo and merge by command replay") {

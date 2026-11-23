@@ -679,6 +679,150 @@ TEST_CASE("midi.get on a clip spells by the clip's own key, and lists its contex
     CHECK_FALSE(item.find("follow"));
 }
 
+TEST_CASE("midi.get names each note by its own place: a clip's chords, a following take's key") {
+    Launcher l;
+    l.run(
+        "clip.add",
+        R"({"track": "tr_1", "scene": "sc_1", "notation": "voice a; 1: E4:q Ab4:q B4:q r:*; 2: Ab4:q C5:q r:*"})");
+    l.run("clip.set", R"({"clip": "cl_1", "context": "1: key C major {E}:w\n2: {Ab}:w"})");
+    // The project's chord is not read by a clip: Dm would not name Ab as a G#.
+    l.run("chord.set", R"({"at": 0, "symbol": "Dm"})");
+    const auto clipText = l.run("midi.get", R"({"item": "cl_1"})")["text"].asString();
+    CHECK(clipText.find("1: E4:q G#4:q B4:q") != std::string::npos);  // the third of E
+    CHECK(clipText.find("2: Ab4:q C5:q") != std::string::npos);       // the root of Ab
+    // A following item: written notes by the take's own key, what sounds by the song's.
+    l.run("key.set", R"({"at": 0, "tonic": "F", "scale": "major"})");
+    l.run("item.add", R"({"track": "tr_1", "bar": 9, "notation": "voice a; 1: Bb3:w"})");
+    const model::Id take = l.head().items.find(id("it_2"))->takes[0];
+    auto args = json::parse(R"({"context": "1: key D major ~:w", "follow": "key"})").value();
+    args["take"] = take.str();
+    l.runArgs("take.set", args);
+    const auto written = l.run("midi.get", R"({"item": "it_2"})")["text"].asString();
+    CHECK(written.find("A#3") != std::string::npos);  // D major has sharps
+    const auto heard =
+        l.run("midi.get", R"({"item": "it_2", "sounding": true})")["text"].asString();
+    CAPTURE(heard);
+    // As it sounds, in the song's place: F major under Dm, where pitch 61 is the major seventh.
+    CHECK(heard.find("C#4") != std::string::npos);
+    CHECK(heard.find("A#3") == std::string::npos);
+}
+
+// Chords E | Ab | E over C major; an item "E4 Ab4 B4 | Ab4 C5" at bar 1 reads G# under E and Ab
+// under Ab. The cases below move the notes against the song (a split, a trim, a rate, an own
+// context with a phase and a period): each note is named by the chord it sounds under, the
+// place `model::notePlace` gives it, not by its source beat (round 108 S1).
+namespace {
+struct Placed {
+    Launcher l;
+    Placed() {
+        l.run("track.add", R"({"name": "Keys"})");
+        l.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+        l.run("chord.set", R"({"at": 0, "symbol": "E"})");
+        l.run("chord.set", R"({"at": 4, "symbol": "Ab"})");
+        l.run("chord.set", R"({"at": 8, "symbol": "E"})");
+    }
+    struct Added {
+        std::string item, take;
+    };
+    Added add() {
+        auto r = l.run(
+            "item.add",
+            R"({"track": "tr_2", "bar": 1, "notation": "voice a; 1: E4:q Ab4:q B4:q r:*; 2: Ab4:q C5:q r:*"})");
+        return {r["item"].asString(), r["take"].asString()};
+    }
+    std::string text(const std::string& item, bool sounding = false) {
+        return l
+            .run("midi.get", R"({"item": ")" + item + R"(", "sounding": )" +
+                                 (sounding ? "true" : "false") + "}")["text"]
+            .asString();
+    }
+};
+bool has(const std::string& text, std::string_view part) {
+    return text.find(part) != std::string::npos;
+}
+}  // namespace
+
+TEST_CASE("midi.get names the notes of a split item by the chord they sound under") {
+    Placed p;
+    const auto whole = p.add();
+    CHECK(has(p.text(whole.item), "1: E4:q G#4:q B4:q"));
+    CHECK(has(p.text(whole.item), "2: Ab4:q C5:q"));
+    p.l.run("item.split", R"({"item": ")" + whole.item + R"(", "at": 4})");
+    std::string right;
+    for (const auto& e : p.l.head().items)
+        if (e.id != id("it_1") && e.id != id(whole.item.c_str())) right = e.id.str();
+    REQUIRE_FALSE(right.empty());
+    // The right half starts at beat 4 with source beat 4: its second source bar sounds first,
+    // under Ab; its first source bar lies before the item, under what holds there (E).
+    const auto written = p.text(right);
+    CAPTURE(written);
+    CHECK(has(written, "1: E4:q G#4:q B4:q"));
+    CHECK(has(written, "2: Ab4:q C5:q"));
+    // What sounds says the same of the note that sounds under Ab.
+    CHECK(has(p.text(right, true), "Ab4"));
+}
+
+TEST_CASE("midi.get names the notes of a trimmed item by where they sound") {
+    Placed p;
+    const auto trimmed = p.add();
+    p.l.run("take.set", R"({"take": ")" + trimmed.take + R"(", "start_offset": 4})");
+    const auto written = p.text(trimmed.item);
+    CAPTURE(written);
+    // Source beat 4 sounds at beat 0, under E; the notes before it lie before the item, where no
+    // key or chord holds (the default table).
+    CHECK(has(written, "1: E4:q Ab4:q B4:q"));
+    CHECK(has(written, "2: G#4:q C5:q"));
+}
+
+TEST_CASE("midi.get names the notes of a rate-changed take by where they sound") {
+    Placed p;
+    const auto fast = p.add();
+    p.l.run("take.set", R"({"take": ")" + fast.take + R"(", "playrate": 2})");
+    const auto written = p.text(fast.item);
+    CAPTURE(written);
+    // At twice the rate source beat 4 sounds at beat 2, still under E.
+    CHECK(has(written, "1: E4:q G#4:q B4:q"));
+    CHECK(has(written, "2: G#4:q C5:q"));
+}
+
+TEST_CASE("midi.get names a following take's written notes by its own context, phase and period") {
+    Placed p;
+    const auto own = p.add();
+    const model::Id take = id(own.take.c_str());
+    const auto setContext = [&] {
+        p.l.run("take.set",
+                R"({"take": ")" + own.take +
+                    R"(", "context": "1: key C major {E}:w\n2: {Ab}:w", "follow": "key"})");
+    };
+    SUBCASE("a phase: the trimmed item's lead sheet starts at its first sounding note") {
+        // The offset first, so the context's bar 1 is the item's first sounding bar.
+        p.l.run("take.set", R"({"take": ")" + own.take + R"(", "start_offset": 4})");
+        setContext();
+        REQUIRE(p.l.head().takes.find(take)->contextPhase == -4.0);
+        const auto written = p.text(own.item);
+        CAPTURE(written);
+        // Context beat = phase + source beat: the notes before the offset read the first points.
+        CHECK(has(written, "1: E4:q G#4:q B4:q"));
+        CHECK(has(written, "2: G#4:q C5:q"));
+    }
+    SUBCASE("a period wraps the context: phase 4 and period 8 swap the two halves") {
+        setContext();
+        auto tx = p.l.app->beginTransaction(kOrigin, "period and phase");
+        REQUIRE(tx);
+        p.l.app->txn().modify<model::Take>(take, [](model::Take& t) {
+            t.contextPeriod = 8.0;
+            t.contextPhase = 4.0;
+        });
+        REQUIRE(p.l.app->commitTransaction(*tx));
+        const auto written = p.text(own.item);
+        CAPTURE(written);
+        // The first source bar sits at context beats 4..8 (under Ab: E and B stay, Ab is its
+        // root), the second at 0..4 (under E: Ab is its third).
+        CHECK(has(written, "1: E4:q Ab4:q B4:q"));
+        CHECK(has(written, "2: G#4:q C5:q"));
+    }
+}
+
 TEST_CASE("take.list, take.add, take.activate and take.remove take a clip") {
     Launcher l;
     l.run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C2:w"})");

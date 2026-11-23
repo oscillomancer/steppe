@@ -33,7 +33,7 @@ Content commands take a clip as they take an item: `midi.get`, `midi.write`,
 its length under `midi.write`**: notation longer than it is kept but never plays,
 and the warning `midi.beyond_length` says so; set `clip.set {length}` first. A
 clip has no place in time, so its `midi.get` spells pitches by the clip's own
-key (see "A clip knows its key and chords" below) and its `context` is the clip's.
+key and chords (see "A clip knows its key and chords" below) and its `context` is the clip's.
 
 Timeline commands refuse a clip with `item.kind` (`item.set`, `item.remove` …) and say
 which command to use instead. A clip take has its own FX chain (`fx.add {take}`) and
@@ -63,7 +63,7 @@ keeps the harmony at a place. Say it when you make the clip:
   (`clip.no_key`, `clip.follow_audio`). Laying it on the timeline maps its notes
   (see "Following when a clip is laid").
 - `midi.get` on a clip answers `context` (its runs by clip bar and beat, and `text`, the
-  lead sheet) and `follow`, and spells pitch names by the clip's own key.
+  lead sheet) and `follow`, and spells pitch names by the clip's own key and chords.
   `session.describe` shows `cl_3 "Break bass" in D minor …`.
 - `midi.edit`'s `snap_to_scale`, `transpose_degrees` and `fit_to_chord` on a clip read
   **the clip's** key and chord, never the project's: a bass line written in D minor

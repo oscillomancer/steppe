@@ -509,6 +509,28 @@ TEST_CASE("an empty answer inside a group points at other groups, and fits the f
     CHECK(hint.find("text searches") != std::string::npos);
     CHECK(hint.find("zzzz") != std::string::npos);
 }
+TEST_CASE("a search that matches only internal commands is an empty answer with its hint") {
+    auto registry = makeRegistry();
+    registry.describeGroup("toy", "A counter that tests add to; runs a safe action.");
+    FakeHost host;
+    Dispatcher dispatcher(registry, host);
+    // toy.safe is Internal ("Run a safe action."): registry.list still lists it, the index does
+    // not.
+    json::Value args = json::Value::object();
+    args["text"] = "a safe action";
+    auto listed = call(dispatcher, "registry.list", args);
+    REQUIRE(listed);
+    REQUIRE(listed->find("commands")->size() == 1);
+    CHECK(listed->find("commands")->asArray().at(0).find("exposure")->asString() == "internal");
+    REQUIRE(listed->find("filters"));
+    CHECK(listed->find("filters")->find("text")->asString() == "a safe action");
+    const auto shaped = rowIndex(*listed);
+    CHECK(shaped.find("namespaces")->size() == 0);
+    const auto hint = shaped.find("hint")->asString();
+    CHECK(hint.find("No command matches text a safe action") != std::string::npos);
+    CHECK(hint.find("Groups whose line mentions it: toy") != std::string::npos);
+    CHECK(hint.find("text searches") != std::string::npos);
+}
 TEST_CASE("an unknown command or group points at the walk through the groups") {
     auto registry = makeRegistry();
     FakeHost host;
