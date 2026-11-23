@@ -161,7 +161,7 @@ double contentLength(const model::Session& s, const model::Take& take);
 
 // Whether launch.commit lays a stretch of `clip` (its active take `take`) as
 // one looped item: its period is its content's pass, from the start, with no
-// loop window inside it. Otherwise it lays one item per period, and the
+// loop window inside it and no fade. Otherwise it lays one item per period, and the
 // launched player on a playrate plan reads each period as that item does.
 bool clipLaysAsOneItem(const model::Session& s, const model::Clip& clip, const model::Take& take);
 

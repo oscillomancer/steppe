@@ -2363,8 +2363,9 @@ Scenes (2):
 
 *Built so far: the fields, the file and the checks; `clip.set {fade_in,
 fade_in_shape, fade_out, fade_out_shape}` (a MIDI clip refuses them with
-`clip.unsupported`) and the `session.describe` line. Playback and the
-conversions follow in step C.*
+`clip.unsupported`) and the `session.describe` line; playback, every pass
+shaped (engine.md, players). The switch rules, the conversions and the
+commit follow in step C.*
 
 Writers emit `supple.project/2.22`. An audio clip gains `fade_in` and
 `fade_out`, each an item's fade: `{length, shape, curve}`, `length` in

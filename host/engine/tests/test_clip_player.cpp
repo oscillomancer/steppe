@@ -68,6 +68,37 @@ TEST_CASE("a once clip plays its period and falls silent; a loop window repeats 
     }
 }
 
+TEST_CASE("an audio clip's fades shape every pass of its period, as an item's fades its item") {
+    // S3 step C, Q4 rule 1: the gain at each frame is an item's fade at
+    // k = the phase, on an item one period long (0.25 s, 12000 frames): a
+    // 0.05 s cos fade-in from each pass's start and a 0.1 s fade-out to its
+    // end. From the second pass, past the launch's own crossfade.
+    Project p;
+    auto args = j(R"({"track": "tr_1", "scene": "sc_1"})");
+    args["audio_file"] = p.ramp("ramp.wav", 48000).string();
+    p.runArgs("clip.add", args);
+    p.run("clip.set", R"({"clip": "cl_1", "length": 0.25, "fade_in": 0.05, "fade_in_shape": "cos",
+                         "fade_out": 0.1})");
+    const std::int64_t anchor = 2 * kBeat;
+    const auto out = p.render(2.0, {launch(anchor, "cl_1")});
+    const auto gain = [](std::int64_t phase) {
+        double g = 1.0;
+        if (phase < 2400) g *= model::fadeGain(model::FadeShape::Cos, 0, double(phase) / 2400.0);
+        if (phase >= 12000 - 4800)
+            g *= model::fadeGain(model::FadeShape::Linear, 0, double(12000 - phase) / 4800.0);
+        return g;
+    };
+    for (std::int64_t t = anchor + 12000; t < 96000; ++t) {
+        const std::int64_t phase = (t - anchor) % 12000;
+        REQUIRE_MESSAGE(
+            out[std::size_t(t)] == static_cast<float>(double(rampAt(phase)) * gain(phase)),
+            "frame " << t << ", phase " << phase);
+    }
+    // Silent at each pass's start, whole between the fades.
+    CHECK(out[std::size_t(anchor + 12000)] == 0.0f);
+    CHECK(out[std::size_t(anchor + 12000 + 5000)] == rampAt(5000));
+}
+
 TEST_CASE("a loop clip keeps its phase when the song wraps back before its anchor" *
           doctest::description("rt")) {
     // A transport loop over bars 1-2 (0 to 4 s) and an audio clip of 0.75 s

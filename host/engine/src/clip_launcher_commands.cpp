@@ -81,7 +81,10 @@ bool clipLaysAsOneItem(const model::Session& s, const model::Clip& clip, const m
     const double content = contentLength(s, take);
     const bool wholeLoop = clip.loop.on && std::abs(clip.loop.start) <= 1e-9 * P &&
                            std::abs(clip.loop.length - content) <= 1e-9 * std::max(1.0, P);
-    return clip.mode != model::ClipMode::Once && take.startOffset == 0 &&
+    // A clip with a fade shapes every pass, which one looped item cannot (its
+    // fades are at its outer edges only): laid as copies (S3 step C, Q4 rule 2).
+    const bool fades = clip.fadeIn.length > 0 || clip.fadeOut.length > 0;
+    return clip.mode != model::ClipMode::Once && take.startOffset == 0 && !fades &&
            std::abs(P - content) <= 1e-9 * std::max(1.0, P) && (!clip.loop.on || wholeLoop);
 }
 

@@ -650,7 +650,7 @@ the same.*
   stretch becomes copies of the clip's takes, split where a loop wrap
   moved the song, each piece starting at the phase the song gave it (the
   take's start offset): one looped item when the clip's period is its
-  content's whole pass, else one item per period. An audio piece starting
+  content's whole pass and it has no fade, else one item per period. An audio piece starting
   at a switch from the arrangement or a clip fades in over 5 ms; one
   ending at a switch runs 5 ms on and fades out, the crossfade as items.
   The arrangement a loop repeated is not copied. What it writes plays as
@@ -701,14 +701,22 @@ the same.*
     its handover; service places them again. A launch whose every slot was
     missed while it was placed is placed again at once (`launch()`, up to
     three tries).
+  - *An audio clip's fades* (S3 step C, Q4 rule 1) shape every pass: the
+    output frame's gain is an item's fades at k = its phase in the pass,
+    on an item one period long (`clipFade`), after the reading: in
+    `playerFrame` on the unity path, on the tape converter's output at the
+    frame's song position on the playrate path (as `playRateClip` fades an
+    item), and after a clip chain, as an item's fades follow its take
+    chain. A pass held on past the period's end reads 0 under a fade-out.
   - *Audio* reads through a tape converter per player reading
     (`PlayerReader`): positions are the frames' unwrapped song positions,
     and its source folds them over the loop and maps them by the player's
     phase rule. It keeps no state between quanta, so a launch primes
     nothing. A clip that a commit lays one item per period
     (`clipLaysAsOneItem` false: its period is not its content's whole pass
-    from the start) reads each period alone, silent outside it, as that
-    item does, so the converter does not read across a period's wrap; a
+    from the start, or it has a fade) reads each period alone, silent
+    outside it, as that item does, so the converter does not read across a
+    period's wrap; a
     quantum that crosses one is read again for its later frames
     (`PlayerReader::later`). A switch's outgoing side reads nothing past
     its crossfade, as the commit's pieces: the clip fading out (or a clip

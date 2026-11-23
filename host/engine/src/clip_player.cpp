@@ -287,6 +287,13 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
                     const auto [pl_, pr] = balanceSides(take->pan / 100.0);
                     c.gainL = g * pl_;
                     c.gainR = g * pr;
+                    // Its own fades, shaping each pass (S3 step C).
+                    c.fadeIn = time::samplesAt(clip.fadeIn.length, p.rate);
+                    c.fadeOut = time::samplesAt(clip.fadeOut.length, p.rate);
+                    c.fadeInShape = clip.fadeIn.shape;
+                    c.fadeOutShape = clip.fadeOut.shape;
+                    c.fadeInCurve = clip.fadeIn.curve;
+                    c.fadeOutCurve = clip.fadeOut.curve;
                 }
             }
             // A period that is not whole beats drifts from the bar grid.
@@ -493,6 +500,8 @@ void playerFrame(const ClipPlayer& pl, std::int64_t anchor, bool unanchored, std
     const auto fi = static_cast<std::size_t>(f);
     const std::size_t right = ch.size() > 1 ? 1 : 0;
     float l = ch[0][fi], r = ch[right][fi];
+    // Its own fades by the phase (S3 step C); a clip chain's apply after it.
+    if (!raw && clipFades(pl)) weight *= clipFade(pl, double(phase));
     switch (c.mode) {
         case model::ChannelMode::Normal:
             break;
@@ -633,10 +642,22 @@ void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPl
     const PlayrateTimeline& timeline = *p.timelines[n.live ? 1 : 0];
     // The output's loop pass: a later one read ahead plays before the anchor.
     const std::int64_t pass = timeline.cycle(timeline.phase(pos - n.timelineShift));
+    const bool fades = !raw && clipFades(pl);
+    const std::int64_t held = heldPass(pl, anchor, hold);
     for (std::uint32_t i = 0; i < frames; ++i) {
-        const double w = weight(i);
+        double w = weight(i);
         if (w == 0.0) continue;
         const std::int64_t device = pos + i + ahead - n.timelineShift;
+        if (fades) {
+            // Its own fades at the frame's song position in its pass, as a
+            // committed item's (rate_sources.cpp, playRateClip) from the
+            // pass's start (S3 step C).
+            const double absolute = timeline.absolutePosition(device);
+            const auto s = static_cast<std::int64_t>(std::floor(absolute - timeline.origin()));
+            const std::int64_t k = held != INT64_MIN && s >= hold ? held : passOf(pl, s - anchor);
+            w *=
+                clipFade(pl, absolute - (double(anchor + k * pl.periodFrames) + timeline.origin()));
+        }
         const std::int64_t q = quantumAt(p, device);
         const RateClipState& st =
             playerQuantum(reader, pl, anchor, unanchored, pass, timeline, q, until, hold);
@@ -1176,6 +1197,22 @@ bool clipChainTicks(const Plan& p, const Node& n, int player, double song,
         anchorBeat + std::floor((beat - anchorBeat) / pl.periodBeats) * pl.periodBeats;
     ticks = std::llround((beat - base) * kClipBeatTicks);
     return true;
+}
+
+double clipChainFade(const Node& n, int player, double song) SUPPLE_RT {
+    if (player < 0) return 1.0;
+    const ClipPlayer& pl = n.players[static_cast<std::size_t>(player)];
+    if (!clipFades(pl) || pl.periodFrames <= 0) return 1.0;
+    const LaunchState& L = n.launch;
+    std::int64_t anchor = 0;
+    if (L.kind == LaunchState::Kind::Clip && L.player == player)
+        anchor = L.anchorSample;
+    else if (L.fadeFrom == player)
+        anchor = L.fadeAnchorSample;
+    else
+        return 1.0;
+    const auto q = static_cast<std::int64_t>(std::floor(song - double(anchor)));
+    return clipFade(pl, song - double(anchor + passOf(pl, q) * pl.periodFrames));
 }
 
 bool clipLanePosition(const ClipLaneSource& c, std::uint32_t frame, std::int64_t& at) SUPPLE_RT {
