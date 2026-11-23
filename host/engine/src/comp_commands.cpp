@@ -831,8 +831,9 @@ void registerCompCommands(cmd::Registry& registry) {
             "the items). For an item in an edit group, members reads every other track of the "
             "group that has items over the same stretch like the item's own comp, "
             "differing_members lists tracks whose comp reads differently or cannot follow, and "
-            "skipped_tracks the group tracks with nothing there; uniform is then false while "
-            "any of that is. An item with several takes and no seams is a comp of one piece.";
+            "skipped_tracks the group tracks with nothing there (they do not affect uniform, "
+            "which is false while a member differs or is not uniform itself). An item with several "
+            "takes and no seams is a comp of one piece.";
         c.tags = {"take"};
         c.args = schema::object<WhichArgs>("take_comp_get_args")
                      .field("item", &WhichArgs::anyPiece, timelineItemArg())
