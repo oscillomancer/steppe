@@ -46,7 +46,8 @@ const MeterReading* find(const std::vector<MeterReading>& readings, model::Id id
 }  // namespace
 
 TEST_CASE("a full meter ring drops entries and counts them") {
-    MeterBank bank;
+    auto owned = std::make_unique<MeterBank>();  // too large for Windows' 1 MB stack
+    MeterBank& bank = *owned;
     bank.beginPlan();
     const std::uint16_t slot = bank.slotFor(track(1));
     REQUIRE(slot != MeterBank::kNoSlot);
@@ -104,7 +105,8 @@ TEST_CASE("the meter ring wraps under a producer and a consumer thread") {
 }
 
 TEST_CASE("a slot a plan drops is reused only after another plan has been compiled") {
-    MeterBank bank;
+    auto owned = std::make_unique<MeterBank>();  // too large for Windows' 1 MB stack
+    MeterBank& bank = *owned;
     bank.beginPlan();  // plan 1: tracks 1 and 2
     const std::uint16_t a = bank.slotFor(track(1));
     const std::uint16_t b = bank.slotFor(track(2));
@@ -137,7 +139,8 @@ TEST_CASE("a slot a plan drops is reused only after another plan has been compil
 }
 
 TEST_CASE("a meter reading covers only the audio heard since the last call") {
-    MeterBank bank;
+    auto owned = std::make_unique<MeterBank>();  // too large for Windows' 1 MB stack
+    MeterBank& bank = *owned;
     bank.beginPlan();
     const std::uint16_t sine = bank.slotFor(track(1));
     const std::uint16_t quiet = bank.slotFor(track(2));
@@ -177,7 +180,8 @@ TEST_CASE("a meter reading covers only the audio heard since the last call") {
 }
 
 TEST_CASE("meter entries of an older epoch are dropped, newer ones wait") {
-    MeterBank bank;
+    auto owned = std::make_unique<MeterBank>();  // too large for Windows' 1 MB stack
+    MeterBank& bank = *owned;
     bank.beginPlan();
     const std::uint16_t slot = bank.slotFor(track(1));
     bank.endPlan();
@@ -200,7 +204,8 @@ TEST_CASE("meter entries of an older epoch are dropped, newer ones wait") {
 }
 
 TEST_CASE("a strip the newest plan no longer has is not reported") {
-    MeterBank bank;
+    auto owned = std::make_unique<MeterBank>();  // too large for Windows' 1 MB stack
+    MeterBank& bank = *owned;
     bank.beginPlan();
     const std::uint16_t slot = bank.slotFor(track(1));
     bank.endPlan();
@@ -214,7 +219,8 @@ TEST_CASE("a strip the newest plan no longer has is not reported") {
 }
 
 TEST_CASE("rapid plans reject queued entries from a reused meter generation") {
-    MeterBank bank;
+    auto owned = std::make_unique<MeterBank>();  // too large for Windows' 1 MB stack
+    MeterBank& bank = *owned;
     bank.beginPlan();
     const auto oldSlot = bank.slotFor(track(1));
     bank.endPlan();

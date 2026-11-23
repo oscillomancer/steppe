@@ -540,11 +540,27 @@ const std::vector<CompSeam>& Lanes::compSeams(std::size_t row) const {
         seamsVersion_ = s.version;
     }
     auto it = seams_.find(row);
-    if (it == seams_.end())
-        it = seams_
-                 .emplace(row, row < rowItems_.size() ? views::compSeams(s, rowItems_[row])
-                                                      : std::vector<CompSeam>{})
-                 .first;
+    if (it == seams_.end()) {
+        auto seams =
+            row < rowItems_.size() ? views::compSeams(s, rowItems_[row]) : std::vector<CompSeam>{};
+        // Asked once per comp (its first seam's left piece stands for it) and
+        // session version: the engine's read-back, through the app.
+        if (compQuery) {
+            std::map<model::Id, bool> asked;
+            for (CompSeam& seam : seams) {
+                const auto comp = compOf(s, seam.left);
+                if (!comp) continue;
+                const model::Id first = comp->pieces.front().item;
+                auto found = asked.find(first);
+                if (found == asked.end())
+                    found =
+                        asked.emplace(first, compDiffersFrom(s, seam.left, compQuery).has_value())
+                            .first;
+                seam.differs = found->second;
+            }
+        }
+        it = seams_.emplace(row, std::move(seams)).first;
+    }
     return it->second;
 }
 
@@ -646,10 +662,21 @@ void Lanes::paintGl(const ui::GlFrame& frame) {
             const ui::Rect r = itemRect(i, *left);
             const std::uint32_t edge =
                 ui::packRgba(itemColor(t, *left, rowTrack, layout_.rows()[i].type).withAlpha(0.9f));
-            strips_->beginRun();
-            strips_->pair(x - 0.5f, r.y, r.bottom(), edge);
-            strips_->pair(x + 0.5f, r.y, r.bottom(), edge);
-            strips_->endRun();
+            if (seam.differs) {
+                // Its comp differs from its edit group's (the engine's
+                // read-back): the line is broken, every other 4 units.
+                for (float y = r.y; y < r.bottom() - 4; y += 8) {
+                    strips_->beginRun();
+                    strips_->pair(x - 0.5f, y, std::min(y + 4, r.bottom() - 4), edge);
+                    strips_->pair(x + 0.5f, y, std::min(y + 4, r.bottom() - 4), edge);
+                    strips_->endRun();
+                }
+            } else {
+                strips_->beginRun();
+                strips_->pair(x - 0.5f, r.y, r.bottom(), edge);
+                strips_->pair(x + 0.5f, r.y, r.bottom(), edge);
+                strips_->endRun();
+            }
             strips_->beginRun();
             strips_->pair(x - 3, r.bottom() - 4, r.bottom(), edge);
             strips_->pair(x + 3, r.bottom() - 4, r.bottom(), edge);

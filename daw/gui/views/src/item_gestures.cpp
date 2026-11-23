@@ -851,6 +851,7 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
         free_ = (e.mods & ui::kShift) != 0;
         copy_ = false;
         cycleFade_ = false;
+        alone_ = (e.mods & ui::kAlt) != 0;
         marqueeAdd_ = false;
         mixed_ = false;
         state_ = State{};
@@ -1714,11 +1715,17 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
     const model::Session& s = view_.session();
     const model::Item* anchor =
         state_.anchor.kind == model::Kind::Item ? itemOf(s, state_.anchor) : nullptr;
-    auto runSteps = [&](const std::string& label, const std::vector<EditStep>& steps) {
+    auto runSteps = [&](const std::string& label, std::vector<EditStep> steps) {
         if (steps.empty() || !run) return;
+        // Alt at the press comps this track alone, as Alt on the fader moves
+        // it alone: take.comp with bypass_groups, past an edit group.
+        if (alone_)
+            for (EditStep& step : steps)
+                if (step.command == "take.comp") step.args["bypass_groups"] = true;
         auto r = run(label, steps);
         if (!r) {
-            if (onError) onError(r.error());
+            if (onError)
+                onError(steps.back().command == "take.comp" ? compRefusal(r.error()) : r.error());
             return;
         }
         // take.comp's warnings say why a seam is shorter or hard, or a note
@@ -1799,8 +1806,10 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
         // take.comp, as an agent would call it (session-model §1.5.1): a
         // swipe paints its range with the lane's take, a click in a comp
         // that piece; a re-comp keeps the comp's crossfade, a first one takes
-        // take.comp's default. A click on a lone item hears that take
-        // throughout (take.activate, which a looped item also takes).
+        // take.comp's default. On an edit-grouped track take.comp comps every
+        // member with it. A click on a lone item hears that take throughout:
+        // take.activate (which a looped item also takes), or take.comp over
+        // the whole item in an edit group, so the members follow.
         const bool takeComp = compsWithTakeComp(s, state_.anchor);
         const auto comp = compOf(s, state_.anchor);
         const bool inComp = takeComp && comp && comp->pieces.size() > 1;
@@ -1813,6 +1822,11 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             if (anchor->activeTake && state_.takeLane < anchor->takes.size() &&
                 anchor->takes[state_.takeLane] == *anchor->activeTake)
                 return;
+            if (const auto lone = takeComp ? compPieceOf(s, state_.anchor) : std::nullopt) {
+                runSteps("Switch take",
+                         {{"take.comp", compPieceArgs(s, *lone, state_.anchor, state_.takeLane)}});
+                return;
+            }
             json::Value activate = json::Value::object();
             activate["index"] = static_cast<std::int64_t>(state_.takeLane);
             activate["item"] = state_.anchor.str();
@@ -1820,11 +1834,10 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             return;
         }
         if (!takeComp) {
-            // take.comp refuses a looped item, and an item edited together
-            // with others (a track group): the swipe splits it at the range
-            // (item.split splits the group's items too) and hears that take
-            // there, with hard cuts, as it did before take.comp (an agent can
-            // do the same with item.split and take.activate).
+            // take.comp refuses a looped item (comp.loop): the swipe splits it
+            // at the range and hears that take there, with hard cuts, as it
+            // did before take.comp (an agent can do the same with item.split
+            // and take.activate).
             std::vector<EditStep> steps;
             std::string target = state_.anchor.str();
             if (state_.compFrom > start + 1e-9) {
@@ -1979,7 +1992,8 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             auto at = std::find(takes.begin(), takes.end(), *anchor->activeTake);
             const model::Id next =
                 (at == takes.end() || at + 1 == takes.end()) ? takes.front() : *(at + 1);
-            // A piece of a comp switches as a lane click does: take.comp.
+            // A piece of a comp, or a lone item of an edit group, switches as a
+            // lane click does: take.comp (the group's members follow).
             if (const auto comp = compPieceOf(s, state_.anchor)) {
                 const auto index = static_cast<std::size_t>(
                     std::find(takes.begin(), takes.end(), next) - takes.begin());

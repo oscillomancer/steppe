@@ -91,6 +91,9 @@ class Lanes : public ui::Node {
     // for the session version they were found at. Each is drawn as a line
     // across the pieces with a notch at the foot; a drag there moves it.
     const std::vector<CompSeam>& compSeams(std::size_t row) const;
+    // take.comp.get, for a comp on an edit-grouped track: whether it differs
+    // from its group (CompSeam::differs). Set by the app; unset, none differs.
+    CompQuery compQuery;
 
     void arrange(const ui::Canvas& canvas, const ui::Rect& bounds) override;
     void paint(ui::Canvas& canvas) override;

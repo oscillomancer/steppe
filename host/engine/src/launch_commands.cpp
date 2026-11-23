@@ -564,7 +564,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "(its items are split, trimmed or removed); each clip becomes copies of its takes "
             "at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch "
             "crossfades become item fades; an audio clip's own fades go on its pieces' pass "
-            "edges, standing in for a switch's as they did live. Tracks that followed the "
+            "edges, standing in for a switch's as they did live; a clip still fading out at the "
+            "capture's end is laid to its pass's end, the track's items under that tail removed "
+            "and the next one split with a 5 ms fade-in, and to says where it ends. Tracks that "
+            "followed the "
             "arrangement are untouched, "
             "and so is the arrangement a loop repeated. A scene launched whole (launch.scene: "
             "every clip that could play started on one boundary) also writes a section named "
@@ -615,7 +618,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
                                   "Each launched stretch of a MIDI clip copied under a key that "
                                   "is not the clip's, as its context.mismatch warning says it."))
                        .field("from", &CommitDone::from, schema::number())
-                       .field("to", &CommitDone::to, schema::number())
+                       .field("to", &CommitDone::to,
+                              schema::number().doc(
+                                  "The capture's end, or later where a clip still fading out at "
+                                  "it plays out to its pass's end."))
                        .build();
         c.errors = {
             {"engine.stopped", "the engine is not running", "engine.start first"},

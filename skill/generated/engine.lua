@@ -1162,7 +1162,7 @@ q = nil
 ---@field sections table[]
 ---@field mismatches? table[] Each launched stretch of a MIDI clip copied under a key that is not the clip's, as its context.mismatch warning says it.
 ---@field from number
----@field to number
+---@field to number The capture's end, or later where a clip still fading out at it plays out to its pass's end.
 ---@field warnings? table[]
 
 ---@class Steppe.launch_scene_args
@@ -2163,6 +2163,11 @@ q = nil
 ---@field pieces table[]
 ---@field crossfade number Seconds.
 ---@field crossfade_shape "cos"|"linear"
+---@field uniform boolean
+---@field differing_seams table[]
+---@field members table[]
+---@field differing_members string[]
+---@field skipped_tracks table[]
 ---@field warnings? table[]
 
 ---@class Steppe.take_comp_get_args
@@ -2173,6 +2178,11 @@ q = nil
 ---@field pieces table[]
 ---@field crossfade number Seconds.
 ---@field crossfade_shape "cos"|"linear"
+---@field uniform boolean
+---@field differing_seams table[]
+---@field members table[]
+---@field differing_members string[]
+---@field skipped_tracks table[]
 ---@field warnings? table[]
 
 ---@class Steppe.take_extract_args

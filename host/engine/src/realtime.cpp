@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <thread>
 #include <type_traits>
 
+#include "supple/base/environment.h"
 #include "supple/base/thread.h"
 #include "supple/diagctx/table.h"
 #include "supple/host/clap_host.h"
@@ -396,9 +398,22 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
                 "background audio threads run at normal priority: the pool "
                 "must leave two usable CPUs free; lower Audio processing threads and restart");
         }
-        workers_ =
-            std::make_unique<detail::Workers>(backgroundHelpers, detail::Workers::Hooks{}, native);
-        if (auto policy = workers_->startupStatus(); !policy)
+        // macOS takes a thread's QoS only from the thread itself, so without a
+        // device policy the pool and the renderer set the background policy on
+        // themselves as they start; elsewhere scheduleBackground() sets it.
+        std::optional<ThreadPolicy> self;
+#if defined(__APPLE__)
+        selfApplied_ = okStatus();
+        if (!backend.nativeThreadPolicy())
+            if (const auto request = backgroundRequest(backgroundHelpers);
+                request.want.kind == ThreadPolicy::Kind::High)
+                self = request.want;
+#endif
+        // The renderer joins the pool's barrier (`extra`), so one refusal leaves
+        // every background thread normal (ADR-0026 rule 3).
+        workers_ = std::make_unique<detail::Workers>(backgroundHelpers, detail::Workers::Hooks{},
+                                                     native, self, self ? 1u : 0u);
+        if (auto policy = workers_->startupStatus(); !policy && native)
             startWarnings_.push_back(policy.error().toString());
         if (!workers_->startupStatus()) native = nullptr;
         std::shared_ptr<detail::ThreadStartup> rendererStartup;
@@ -415,15 +430,25 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         epochDone_.store(first, std::memory_order_release);
         rendererQuit_ = false;
         rendererWakeAt_.store(INT64_MAX);
-        renderer_ = std::thread([this, first, rendererStartup, native] {
-            nameThread("audio-render");
-            (void)diagctx::registerThread(diagctx::ThreadRole::AudioRender);
-            rt::prefaultStack();  // ADR-0025
-            const bool elevated = rendererStartup && rendererStartup->enter(0);
-            detail::ThreadStartup::Cleanup cleanup{elevated ? native : nullptr};
-            rendererLoop(first);
-        });
+        const bool rendererSelf = self.has_value();
+        try {
+            renderer_ = std::thread([this, first, rendererStartup, rendererSelf, native] {
+                nameThread("audio-render");
+                (void)diagctx::registerThread(diagctx::ThreadRole::AudioRender);
+                rt::prefaultStack();  // ADR-0025
+                if (rendererSelf) (void)workers_->enterStartup(workers_->helpers());
+                const bool elevated = rendererStartup && rendererStartup->enter(0);
+                detail::ThreadStartup::Cleanup cleanup{elevated ? native : nullptr};
+                rendererLoop(first);
+            });
+        } catch (...) {
+            if (rendererSelf) workers_->cancelStartup();  // the helpers wait for it
+            throw;
+        }
         auto rendererPolicy = rendererStartup ? rendererStartup->finish() : okStatus();
+#if defined(__APPLE__)
+        if (self) selfApplied_ = workers_->finishStartup();
+#endif
         scheduling_.renderer = {
             native && rendererPolicy ? ThreadPolicy::Kind::High : ThreadPolicy::Kind::Normal, 0};
         if (!rendererPolicy) startWarnings_.push_back(rendererPolicy.error().toString());
@@ -440,18 +465,13 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
     return okStatus();
 }
 
-void Engine::scheduleBackground() {
+Engine::BackgroundRequest Engine::backgroundRequest(unsigned helpers) const {
     using Kind = ThreadPolicy::Kind;
-    if (backend_->nativeThreadPolicy()) {
-        scheduling_.background = workers_->policy();
-        host::setBridgeAudioPolicy(scheduling_.renderer);
-        return;
-    }
     using Background = EngineOptions::Background;
     const ThreadPolicy callback = scheduling_.callback;
-    const ThreadPolicy normal{Kind::Normal, 0};
-    ThreadPolicy want = normal;
-    std::string refused;  // why a real-time policy was not applied
+    BackgroundRequest request;
+    ThreadPolicy& want = request.want;
+    std::string& refused = request.refused;
     if (options_.background == Background::Auto ? callback.realtime()
                                                 : options_.background != Background::Normal) {
         int priority = options_.background != Background::Auto && options_.backgroundPriority > 0
@@ -460,7 +480,7 @@ void Engine::scheduleBackground() {
         if (callback.realtime()) priority = std::min(priority, callback.priority - 1);
         priority = realtimePriorityLimit(priority);
         const int cpus = static_cast<int>(allowedCpuCount());
-        const int threads = static_cast<int>(workers_->helpers()) + 1;
+        const int threads = static_cast<int>(helpers) + 1;
         if (priority < 1)
             refused =
                 "no real-time priority is available below the callback's and within "
@@ -478,7 +498,25 @@ void Engine::scheduleBackground() {
             want = {Kind::High, 0};
 #endif
     }
+    return request;
+}
+
+void Engine::scheduleBackground() {
+    using Kind = ThreadPolicy::Kind;
+    if (backend_->nativeThreadPolicy()) {
+        scheduling_.background = workers_->policy();
+        host::setBridgeAudioPolicy(scheduling_.renderer);
+        return;
+    }
+    const ThreadPolicy normal{Kind::Normal, 0};
+    auto [want, refused] = backgroundRequest(workers_->helpers());  // why none, if so
     if (want != normal) {
+#if defined(__APPLE__)
+        // Set by each thread on itself as it started (start()), all or none
+        // across the pool, the renderer only after it.
+        const Status applied = selfApplied_;
+        if (!applied) refused = applied.error().message + "; " + applied.error().hint;
+#else
         Status applied = workers_->setPolicy(want);
         if (applied) applied = setThreadPolicy(renderer_.native_handle(), want);
         if (!applied) {  // all or nothing: a slower straggler would delay every job
@@ -486,6 +524,7 @@ void Engine::scheduleBackground() {
             (void)setThreadPolicy(renderer_.native_handle(), normal);
             refused = applied.error().message + "; " + applied.error().hint;
         }
+#endif
     }
     if (!refused.empty())
         startWarnings_.push_back("background audio threads run at normal priority: " + refused);
@@ -1136,22 +1175,55 @@ Engine::MeterClock Engine::meterClock() const {
     return clock;
 }
 
-void Engine::awaitTransport(double timeoutSeconds) {
-    if (!backend_) return;
+namespace {
+std::atomic<double> gTransportWaitSeconds{0};  // 0: the default or the environment's
+}  // namespace
+
+double transportWaitSeconds() {
+    if (const double set = gTransportWaitSeconds.load(std::memory_order_relaxed); set > 0)
+        return set;
+    static const double fromEnvironment = environmentFlagEnabled("SUPPLE_TRANSPORT_PATIENT")
+                                              ? kPatientTransportSeconds
+                                              : kTransportWaitSeconds;
+    return fromEnvironment;
+}
+
+void setTransportWaitSeconds(double seconds) {
+    gTransportWaitSeconds.store(std::isfinite(seconds) && seconds > 0 ? seconds : 0,
+                                std::memory_order_relaxed);
+}
+
+Status Engine::awaitTransport(double timeoutSeconds) {
+    if (!backend_) return okStatus();
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::duration<double>(timeoutSeconds);
+    // Whether it was done by the deadline: checked once more after it, so a
+    // wait that slept past it still counts what happened meanwhile.
     auto waitUntil = [&](auto done) {
-        while (!done() && std::chrono::steady_clock::now() < deadline)
+        while (!done()) {
+            if (std::chrono::steady_clock::now() >= deadline) return done();
             std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        return true;
     };
+    bool done = true;
     if (options_.anticipative) {
         const std::uint64_t e = epoch_.load();
         const bool want = wantPlaying_.load();
-        waitUntil([&] { return epochDone_.load() >= e && reportedPlaying_.load() == want; });
+        done = waitUntil([&] { return epochDone_.load() >= e && reportedPlaying_.load() == want; });
     } else if (backend_->ownsThread()) {
         const std::uint64_t before = cycles_.load();  // the first may have begun before
-        waitUntil([&] { return cycles_.load() >= before + 2; });
+        done = waitUntil([&] { return cycles_.load() >= before + 2; });
     }
+    if (done) return okStatus();
+    return Error("engine.transport",
+                 "the audio engine did not act on the transport request within " +
+                     std::to_string(timeoutSeconds) +
+                     " s; it stays queued and takes effect when the device runs again",
+                 {},
+                 "the audio device may have stalled: check engine.status (callbacks, xruns); do "
+                 "not repeat the request, which is still queued, and restart the engine if the "
+                 "device does not recover");
 }
 
 bool Engine::awaitPlan(double timeoutSeconds) {
@@ -1612,8 +1684,9 @@ void Engine::startFree(std::vector<host::Instance*>& owned,
             in->reset();
             if (in->startUnanswered()) {
                 // Not refused: a bridge that has not answered by the live
-                // deadline (ADR-0081). Asked again next cycle; one that never
-                // answers fails within 50 ms like any late bridge.
+                // deadline (ADR-0081). Looked at again next cycle, without a
+                // wait; one that never answers fails at the lifecycle
+                // deadline, as a start off the callback (ADR-0101).
                 in->setOwner(nullptr);
                 continue;
             }
@@ -2467,7 +2540,9 @@ Status Engine::startRecording(std::vector<RecordTarget> targets, RecordedPunch p
     if (rateScheduling_.load(std::memory_order_acquire) && !(slaved && slaved->syncRate)) {
         if (!wantPlaying_.load(std::memory_order_acquire)) {
             SUPPLE_TRY(prepareSeek(transport().seconds));
-            if (backend_->ownsThread()) awaitTransport();
+            // Recording starts from where the renderer was placed: never from
+            // a position it has not taken.
+            if (backend_->ownsThread()) SUPPLE_TRY(awaitTransport());
         } else {
             const auto heard = readRateClock();
             const auto state =

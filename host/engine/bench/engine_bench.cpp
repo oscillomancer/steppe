@@ -522,7 +522,10 @@ int main(int argc, char** argv) {
         return fail(Error("bench.prepare", "plan adoption timed out"));
     }
     engine->play();
-    engine->awaitTransport();
+    if (auto playing = engine->awaitTransport(); !playing) {
+        (*app)->stopEngine();
+        return fail(playing.error());
+    }
     auto service = [&](double duration) {
         const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(duration);
         while (std::chrono::steady_clock::now() < end) {

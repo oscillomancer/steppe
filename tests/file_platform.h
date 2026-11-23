@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #pragma once
+#include <atomic>
 #include <cstdlib>
+#include <filesystem>
+#include <string>
 #if defined(_WIN32)
 #include <process.h>
 #else
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <atomic>
-#include <filesystem>
 #include <thread>
 #endif
 namespace supple::test {
@@ -19,6 +20,19 @@ inline int processId() {
 #else
     return static_cast<int>(::getpid());
 #endif
+}
+// A temporary directory for a test fixture, unique to this process and this
+// call: `prefix`, the process id and a counter. A name from the clock alone
+// repeats when two test processes ask within one tick (ctest runs them in
+// parallel), and then they share, and delete, each other's files. Anything
+// already there was left by an earlier process with the same id: it is removed.
+inline std::filesystem::path uniqueTempDir(const std::string& prefix) {
+    static std::atomic<unsigned> next{0};
+    auto path = std::filesystem::temp_directory_path() /
+                (prefix + std::to_string(processId()) + "-" + std::to_string(next.fetch_add(1)));
+    std::error_code ignored;
+    std::filesystem::remove_all(path, ignored);
+    return path;
 }
 inline int environment(const char* name, const char* value) {
 #if defined(_WIN32)

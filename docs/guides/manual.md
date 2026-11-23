@@ -142,7 +142,13 @@ keeps a copy of the old one beside it as `<file>.pre-branches.bak`.
 
 Until a project is saved, its recordings go to a folder of its own under the
 data folder (below), in `unsaved/<start time>-<pid>/media/rec`. The first
-save moves them into `media/` beside the project file. While a recording runs, a
+save moves them into `media/` beside the project file; a file that could not be removed from
+the unsaved folder afterwards stays there, and the save warns with its path (the project
+already uses the copy; delete the old one by hand). On Windows that is a file something still
+has open: the waveform display of a recording you saved at once, a render or freeze still
+running, or another program. After you quit and start Steppe again,
+that file is in the earlier run's unsaved folder, which the list of unsaved projects to recover
+shows; recover it or delete it there. While a recording runs, a
 project cannot be saved for the first time, or saved as into another
 folder: stop recording first, and its files move or are copied then.
 Saving in place works while recording. Quitting, or starting
@@ -516,11 +522,17 @@ shorter; Ctrl+click there switches between an equal-power and a linear
 crossfade. One crossfade length and shape serves every seam of a comp, and
 the inspector shows it as **Crossfade** for a selected piece: type 0 for hard
 cuts. Clicking a lane of one piece switches just that piece. To make a comp
-one plain item again, select its pieces and use **Consolidate items**. An item
-whose Loop is on is comped with hard cuts (no crossfades) until you turn its
-Loop off, and so is an item on a track grouped for editing: dragging across
-its lane splits every item of the group there and switches the take on this
-one.
+one plain item again, select its pieces and use **Consolidate items**. On a
+track grouped for editing, every track of the group follows: a drag, a click
+on a lane or the take number comps each of them the same way. If one of them
+has been changed on its own since, its seam lines are drawn broken and the
+inspector's **Group** row says which track it differs from; comping again
+brings it back in step. A track of the group with a single take there (a bass beside
+the drum takes) is left as it is. If a track cannot follow (a looped or locked
+item, or one that starts or ends elsewhere), the status line says so and nothing
+changes: hold **Alt** while you drag, click or pick a take to comp this track
+alone. An item whose Loop is on is comped with hard cuts (no
+crossfades) until you turn its Loop off.
 
 ### Changing what the mouse does
 
@@ -1841,7 +1853,9 @@ there; tracks that stayed on the arrangement are left alone. Each clip
 becomes copies of its takes, starting where the clip was in its loop, with
 the 5 ms switch crossfades as item fades, and an audio clip's own fades on
 the items where its passes start and end. A clip still fading out when the
-capture ends is laid to the end of its pass, as you heard it. When an
+capture ends is laid to the end of its pass, as you heard it; on that
+track the items under that tail are removed and the next one starts with a
+5 ms fade-in, and the commit's reply ends there. When an
 item's fades cannot say what you heard (the capture began inside a clip's
 fade-in, the loop jumped inside a fade, or a switch cut short a fade-out),
 the commit is refused with `launch.commit.fade` and the performance kept:

@@ -25,6 +25,7 @@
 #include "supple/gui/process.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -386,6 +387,18 @@ int frontendMain(int argc, char** argv) {
         std::fprintf(stderr, "no plugin bridge found: isolated fx will not start\n");
     peaks::PeakService peaks(peaks::defaultCacheDir(product::kSlug),
                              [&](std::function<void()> f) { loop.post(std::move(f)); });
+    // The waveform worker reads a fresh recording from the scratch folder: a
+    // first save has it let go of those files before it removes them (Windows
+    // cannot remove an open file). The app outlives `peaks`, so the reader
+    // stops answering once `peaks` is going.
+    auto peaksAlive = std::make_shared<std::atomic<bool>>(true);
+    (*app)->addScratchReader([&peaks, peaksAlive](const std::filesystem::path& folder) {
+        return peaksAlive->load() ? peaks.holdUnder(folder) : std::function<void()>{};
+    });
+    struct PeaksGoing {
+        std::shared_ptr<std::atomic<bool>> alive;
+        ~PeaksGoing() { alive->store(false); }
+    } peaksGoing{peaksAlive};
     // One meter feed for both views (the TCP and the mixer), filled from what
     // the engine heard since the last poll, once per pass.
     gui::MeterFeed meterFeed([&] {

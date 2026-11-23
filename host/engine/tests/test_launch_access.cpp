@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 // What test_clip_player.cpp takes from the engine's private state, through EngineTestAccess
-// (engine_test_access.h). Its own file so that it is built on every platform, where
-// test_realtime.cpp (Linux only) is not.
+// (engine_test_access.h), in a file of its own.
 //
 // The file has a test case of its own because engine.tests is SPLIT: each source file gets a
 // ctest entry that runs the test cases of that file and fails when there are none.

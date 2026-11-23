@@ -59,6 +59,9 @@ class List : public Node {
     std::size_t count() const { return count_; }
     void select(std::optional<std::size_t> row, bool notify = false);
     std::optional<std::size_t> selected() const { return selected_; }
+    // The modifiers of the press that made the selection onSelect reports
+    // (ui::kAlt...); 0 when keys moved it.
+    unsigned selectModifiers() const { return selectMods_; }
     void scrollTo(std::size_t row);  // minimal scroll that shows it
     float scroll() const { return scroll_; }
     std::size_t rowsPainted() const { return painted_; }
@@ -75,6 +78,7 @@ class List : public Node {
     std::optional<std::size_t> rowAt(Point p) const;
     std::size_t count_ = 0;
     std::optional<std::size_t> selected_;
+    unsigned selectMods_ = 0;
     float scroll_ = 0;
     std::size_t painted_ = 0;
     ScrollBar* bar_ = nullptr;

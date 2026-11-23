@@ -297,12 +297,68 @@ void PeakService::revalidate() {
     pathKeys_.clear();
 }
 
+namespace {
+// The path as a hold compares it: absolute and normal, symlinks resolved where
+// the file system has them (a scratch folder under a linked home, macOS's /var).
+std::filesystem::path held(const std::filesystem::path& p) {
+    std::error_code ec;
+    auto out = std::filesystem::weakly_canonical(p, ec);
+    return ec ? p.lexically_normal() : out;
+}
+bool within(const std::filesystem::path& file, const std::filesystem::path& dir) {
+    const auto rel = file.lexically_relative(dir);
+    return !rel.empty() && *rel.begin() != "..";
+}
+}  // namespace
+
+bool PeakService::heldLocked(const std::filesystem::path& media) const {
+    return std::any_of(held_.begin(), held_.end(),
+                       [&](const std::filesystem::path& dir) { return within(media, dir); });
+}
+
+bool PeakService::holding() const {
+    std::lock_guard lock(mutex_);
+    return !held_.empty();
+}
+
+std::function<void()> PeakService::holdUnder(const std::filesystem::path& dir) {
+    const auto at = held(dir);
+    std::unique_lock lock(mutex_);
+    held_.push_back(at);
+    idle_.wait(lock, [&] { return reading_.empty() || !within(reading_, at); });
+    return [this, at, alive = std::weak_ptr<int>(alive_)] {
+        if (!alive.lock()) return;
+        std::vector<std::string> again;
+        {
+            std::lock_guard guard(mutex_);
+            const auto it = std::find(held_.begin(), held_.end(), at);
+            if (it != held_.end()) held_.erase(it);
+            if (held_.empty()) again.swap(stopped_);
+        }
+        // The owner asks for them again (they may be somewhere else now).
+        if (post_)
+            for (auto& key : again)
+                post_([this, alive, key = std::move(key)] {
+                    if (alive.lock() && onReady) onReady(key);
+                });
+    };
+}
+
 std::shared_ptr<const Pyramid> PeakService::get(const std::string& hash,
                                                 const std::filesystem::path& media) {
     const std::string key = this->key(hash, media);
+    const bool holding = [&] {
+        std::lock_guard lock(mutex_);
+        return !held_.empty();
+    }();
+    const auto where = holding ? held(media) : std::filesystem::path{};
     std::lock_guard lock(mutex_);
     if (auto it = ready_.find(key); it != ready_.end()) return it->second;
     if (failed_.count(key) || pending_.count(key)) return nullptr;
+    if (!held_.empty() && heldLocked(holding ? where : held(media))) {
+        stopped_.push_back(key);  // asked for again when the hold ends
+        return nullptr;
+    }
     pending_[key] = true;
     queue_.push_back({key, hash, media});
     wake_.notify_one();
@@ -333,6 +389,26 @@ void PeakService::run(supple::StopToken stop) {
             queue_.pop_front();
         }
         const auto& [key, hash, media] = job;
+        const std::filesystem::path where = held(media);
+        {
+            std::lock_guard lock(mutex_);
+            if (heldLocked(where)) {  // not opened while held: asked for again after
+                pending_.erase(key);
+                stopped_.push_back(key);
+                continue;
+            }
+            reading_ = where;
+        }
+        struct Done {
+            PeakService& service;
+            ~Done() {
+                {
+                    std::lock_guard lock(service.mutex_);
+                    service.reading_.clear();
+                }
+                service.idle_.notify_all();
+            }
+        } done{*this};
         const std::filesystem::path cached = cacheDir_ / cacheName(hash, media);
         std::shared_ptr<const Pyramid> pyramid;
         std::optional<Error> error;
@@ -343,8 +419,26 @@ void PeakService::run(supple::StopToken stop) {
                 loaded = true;
             }
         }
+        bool stopped = false;
         if (!pyramid) {
-            auto audio = audio::readAudio(media);
+            // A chunk at a time, so a hold (holdUnder) can stop the read and
+            // close the file between two chunks; whole-file reads for the
+            // formats only readAudio knows (none of them a recording).
+            audio::HeadOptions read;
+            read.stop = [&] {
+                if (readHook) readHook(media);
+                std::lock_guard lock(mutex_);
+                stopped = stop.stop_requested() || heldLocked(where);
+                return stopped;
+            };
+            auto audio = audio::readAudioHead(media, read);
+            if (!audio && audio.error().code == "audio.format") audio = audio::readAudio(media);
+            if (!audio && stopped) {
+                std::lock_guard lock(mutex_);
+                pending_.erase(key);
+                stopped_.push_back(key);
+                continue;  // not a failure: asked for again when the hold ends
+            }
             if (!audio) {
                 error = audio.error();
             } else {

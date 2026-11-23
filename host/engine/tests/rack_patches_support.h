@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 
+#include "../../../tests/file_platform.h"
 #include "supple/engine/app.h"
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
@@ -27,10 +28,7 @@ constexpr double kCeilingDbfs = 1.0;   // no factory patch peaks above this
 constexpr double kSilentDbfs = -50.0;  // one whose peak is below this is silent
 
 struct Fixture {
-    std::filesystem::path dir =
-        std::filesystem::temp_directory_path() /
-        ("rack-patches-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::path dir = supple::test::uniqueTempDir("rack-patches-");
     cmd::Registry registry;
     std::unique_ptr<EngineApp> app;
     std::unique_ptr<cmd::Dispatcher> bus;

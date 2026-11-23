@@ -1581,22 +1581,56 @@ TEST_CASE("a swipe on a looped item splits it and switches the middle, with hard
 // Round 119 G3: take.comp refuses an item edited with a group (comp.linked),
 // so on an edit-grouped track the swipe keeps its older path: item.split,
 // which splits the group's items too, and take.activate of the middle.
-TEST_CASE("a swipe on an edit-grouped track splits and switches, as before take.comp") {
+namespace {
+// The lanes' read-back (the shell gives the app's): take.comp.get on the bus.
+void wireCompQuery(Fixture& f) {
+    f.view->lanes().compQuery = [&f](const json::Value& args) -> std::optional<json::Value> {
+        auto r = f.dispatcher->execute({"take.comp.get", args, kUi});
+        if (!r) return std::nullopt;
+        return std::move(*r);
+    };
+}
+model::Id idOf(Fixture& f, const model::Item* item) {
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == item) return e.id;
+    return {};
+}
+}  // namespace
+
+// take.comp on an edit group comps every member (session-model §1.5.1, Edit
+// groups): the grouped swipe, click and badge send it as for a lone track,
+// and a member whose comp no longer reads like the group's breaks its seams.
+TEST_CASE("an edit-grouped track comps every member with take.comp; a member that differs shows") {
     Fixture f;
     if (!f.ok) return;
+    wireCompQuery(f);
     auto [it, heard] = twoTakeItem(f);
     const model::Id track = f.item(it).track;
     const double position = f.item(it).position, length = f.item(it).length;
-    // A track grouped with it for edits, holding an item over the same span.
+    // A track grouped with it for edits (made after it, so its id is later:
+    // the lead's track is the group's reference), holding a copy of the item
+    // over the same span (the same takes, so take.comp gives both the same
+    // crossfades).
     const auto other =
         f.dispatcher->execute({"track.add", json::parse(R"({"name":"Room"})").value(), kUi});
     REQUIRE(other);
-    const std::string room = other->find("track")->asString();
+    const model::Id room = *model::Id::parse(other->find("track")->asString());
+    json::Value copy = json::Value::object();
+    copy["item"] = it.str();
+    copy["to"] = position + length + 8;
+    const auto copied = f.dispatcher->execute({"item.duplicate", copy, kUi});
+    REQUIRE(copied);
+    json::Value move = json::Value::object();
+    REQUIRE(copied->find("id"));
+    move["item"] = copied->find("id")->asString();
+    move["track"] = room.str();
+    move["position"] = position;
+    REQUIRE(f.dispatcher->execute({"item.move", move, kUi}));
     json::Value group = json::Value::object();
     group["name"] = "Kit";
     group["members"] = json::Value::array();
     group["members"].push_back(track.str());
-    group["members"].push_back(room);
+    group["members"].push_back(room.str());
     auto made = f.dispatcher->execute({"group.add", group, kUi});
     REQUIRE(made);
     json::Value links = json::Value::object();
@@ -1604,53 +1638,247 @@ TEST_CASE("a swipe on an edit-grouped track splits and switches, as before take.
     links["links"] = json::Value::array();
     links["links"].push_back("edit");
     REQUIRE(f.dispatcher->execute({"group.set", links, kUi}));
-    json::Value add = json::Value::object();
-    add["track"] = room;
-    add["position"] = position;
-    add["notation"] = "1: C4:q r:*";
-    auto peer = f.dispatcher->execute({"item.add", add, kUi});
-    REQUIRE(peer);
-    json::Value len = json::Value::object();
-    len["item"] = peer->find("item")->asString();
-    len["length"] = length;
-    REQUIRE(f.dispatcher->execute({"item.set", len, kUi}));
     f.sync();
     REQUIRE(model::linkedItems(f.app->head(), it).size() == 2);
     auto& sent = recordSteps(f);
+    // A click on the whole item: take.comp over it (take.activate would switch
+    // it alone), so the member follows.
+    {
+        const ui::Rect r = f.rectOf(it);
+        f.click(laneAt(r, 2, 1 - heard, r.x + r.w * 0.5f));
+        REQUIRE(sent.size() == 1);
+        REQUIRE(sent[0].size() == 1);
+        CHECK(sent[0][0].command == "take.comp");
+        CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
+        CHECK(heardOf(f.item(it)) == 1 - heard);
+        const auto roomPieces = piecesOf(f, room);
+        REQUIRE(roomPieces.size() == 1);
+        CHECK(heardOf(*roomPieces[0]) == 1 - heard);
+        REQUIRE(f.dispatcher->execute({"history.undo", json::Value::object(), kUi}));
+        f.sync();
+    }
+    // A swipe: one take.comp, which comps both tracks alike.
     const ui::Rect r = f.rectOf(it);
     f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f));
-    REQUIRE(sent.size() == 1);
-    REQUIRE(sent[0].size() == 3);
-    CHECK(sent[0][2].command == "take.activate");
+    REQUIRE(sent.size() == 2);
+    REQUIRE(sent[1].size() == 1);
+    CHECK(sent[1][0].command == "take.comp");
     const auto pieces = piecesOf(f, track);
     REQUIRE(pieces.size() == 3);
     CHECK(heardOf(*pieces[1]) == 1 - heard);
-    CHECK(pieces[0]->fadeOut.length == 0);
-    std::size_t roomItems = 0;  // the group's item was split too
-    for (const auto& e : f.app->head().items)
-        if (e.value->track.str() == room) ++roomItems;
-    CHECK(roomItems == 3);
-    // Round 122 H1: no comp there (take.comp would refuse every seam gesture):
-    // no seams, and the boundary between two pieces trims as an item edge.
-    const std::size_t row = *f.view->trackLayout().indexOf(track);
-    CHECK(f.view->lanes().compSeams(row).empty());
+    const auto roomPieces = piecesOf(f, room);
+    REQUIRE(roomPieces.size() == 3);
+    CHECK(heardOf(*roomPieces[1]) == 1 - heard);
+    // Both are comps: seams on both rows, none differing yet; the boundary
+    // is the seam's, not a trim edge.
+    const std::size_t leadRow = *f.view->trackLayout().indexOf(track);
+    const std::size_t roomRow = *f.view->trackLayout().indexOf(room);
     {
-        model::Id second{};
-        for (const auto& e : f.app->head().items)
-            if (e.value.get() == pieces[1]) second = e.id;
-        const ui::Rect b = f.rectOf(second);
-        const auto edge = f.view->gestures().hit({b.x + 2, b.y + b.h / 2});
+        const auto leadSeams = f.view->lanes().compSeams(leadRow);
+        const auto roomSeams = f.view->lanes().compSeams(roomRow);
+        REQUIRE(leadSeams.size() == 2);
+        REQUIRE(roomSeams.size() == 2);
+        for (const auto& seam : leadSeams) CHECK_FALSE(seam.differs);
+        for (const auto& seam : roomSeams) CHECK_FALSE(seam.differs);
+        const ui::Rect b = f.rectOf(idOf(f, pieces[1]));
+        const auto edge = f.view->gestures().hit({b.x + 2, b.y + b.h * 0.6f});
         REQUIRE(edge);
-        CHECK(edge->zone == views::ItemGestures::Drag::TrimLeft);
+        CHECK(edge->zone == views::ItemGestures::Drag::Seam);
     }
-    // A lane click on a piece there still switches it with take.activate.
-    model::Id first{};
-    for (const auto& e : f.app->head().items)
-        if (e.value.get() == pieces[0]) first = e.id;
-    const ui::Rect p = f.rectOf(first);
+    // A fade of the member's middle piece set for it alone (bypass_groups, as
+    // an agent can): its comp no longer reads like the group's (take.comp.get
+    // lists it in differing_members), and its seams, only its, are broken.
+    json::Value fade = json::Value::object();
+    fade["item"] = idOf(f, roomPieces[1]).str();
+    fade["fade_in"] = 0.3;
+    fade["bypass_groups"] = true;
+    REQUIRE(f.dispatcher->execute({"item.set", fade, kUi}));
+    f.sync();
+    {
+        json::Value ask = json::Value::object();
+        ask["item"] = it.str();
+        const auto back = f.dispatcher->execute({"take.comp.get", ask, kUi});
+        REQUIRE(back);
+        const json::Value* differing = back->find("differing_members");
+        REQUIRE(differing);
+        REQUIRE(differing->asArray().size() == 1);
+        CHECK(differing->asArray()[0].asString() == room.str());
+        const auto leadSeams = f.view->lanes().compSeams(leadRow);
+        const auto roomSeams = f.view->lanes().compSeams(roomRow);
+        REQUIRE(roomSeams.size() == 2);
+        for (const auto& seam : leadSeams) CHECK_FALSE(seam.differs);
+        for (const auto& seam : roomSeams) CHECK(seam.differs);
+    }
+    // A lane click on a lead piece re-comps the group: the member is in step again.
+    const ui::Rect p = f.rectOf(idOf(f, pieces[0]));
     f.click(laneAt(p, 2, 1 - heard, p.x + p.w * 0.5f));
-    REQUIRE(sent.size() == 2);
-    CHECK(sent[1][0].command == "take.activate");
+    REQUIRE(sent.size() == 3);
+    CHECK(sent[2][0].command == "take.comp");
+    for (const auto& seam : f.view->lanes().compSeams(roomRow)) CHECK_FALSE(seam.differs);
+}
+
+// A two-take item on a new track and a second track grouped with it for edits:
+// with `locked`, the second track holds a locked copy of the item (a member
+// that cannot follow); otherwise a one-take bass item over the same stretch.
+namespace {
+
+struct Band {
+    model::Id it, track, other, otherItem;
+    std::size_t heard = 0;
+};
+
+Band bandOf(Fixture& f, bool locked) {
+    Band b;
+    auto [it, heard] = twoTakeItem(f);
+    b.it = it;
+    b.heard = heard;
+    b.track = f.item(it).track;
+    const double position = f.item(it).position, length = f.item(it).length;
+    const auto other = f.dispatcher->execute(
+        {"track.add", json::parse(locked ? R"({"name":"Room"})" : R"({"name":"Bass"})").value(),
+         kUi});
+    REQUIRE(other);
+    b.other = *model::Id::parse(other->find("track")->asString());
+    if (locked) {
+        json::Value copy = json::Value::object();
+        copy["item"] = it.str();
+        copy["to"] = position + length + 8;
+        const auto copied = f.dispatcher->execute({"item.duplicate", copy, kUi});
+        REQUIRE(copied);
+        b.otherItem = *model::Id::parse(copied->find("id")->asString());
+        json::Value move = json::Value::object();
+        move["item"] = b.otherItem.str();
+        move["track"] = b.other.str();
+        move["position"] = position;
+        REQUIRE(f.dispatcher->execute({"item.move", move, kUi}));
+        json::Value lock = json::Value::object();
+        lock["item"] = b.otherItem.str();
+        lock["locked"] = true;
+        REQUIRE(f.dispatcher->execute({"item.set", lock, kUi}));
+    } else {
+        json::Value add = json::Value::object();
+        add["track"] = b.other.str();
+        add["position"] = position;
+        add["notation"] = "1: C2:q r:*";
+        auto bass = f.dispatcher->execute({"item.add", add, kUi});
+        REQUIRE(bass);
+        b.otherItem = *model::Id::parse(bass->find("item")->asString());
+        json::Value len = json::Value::object();
+        len["item"] = b.otherItem.str();
+        len["length"] = length;
+        REQUIRE(f.dispatcher->execute({"item.set", len, kUi}));
+    }
+    json::Value group = json::Value::object();
+    group["name"] = "Band";
+    group["members"] = json::Value::array();
+    group["members"].push_back(b.track.str());
+    group["members"].push_back(b.other.str());
+    auto made = f.dispatcher->execute({"group.add", group, kUi});
+    REQUIRE(made);
+    json::Value links = json::Value::object();
+    links["group"] = made->find("group")->asString();
+    links["links"] = json::Value::array();
+    links["links"].push_back("edit");
+    REQUIRE(f.dispatcher->execute({"group.set", links, kUi}));
+    f.sync();
+    return b;
+}
+
+std::size_t itemsOn(Fixture& f, model::Id track) {
+    std::size_t n = 0;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == track) ++n;
+    return n;
+}
+
+}  // namespace
+
+// Round 129: a one-take member (a bass beside drum takes) is passed over by the
+// group's take.comp (skipped_tracks, one_take), so the drums comp without Alt
+// and the bass is left as it was.
+TEST_CASE("a grouped comp passes over a one-take member: the drums comp without Alt") {
+    Fixture f;
+    if (!f.ok) return;
+    wireCompQuery(f);
+    const Band b = bandOf(f, false);
+    std::vector<Error> errors;
+    f.view->gestures().onError = [&](const Error& e) { errors.push_back(e); };
+    auto& sent = recordSteps(f);
+    const model::Item bassBefore = f.item(b.otherItem);
+    const std::size_t row = *f.view->trackLayout().indexOf(b.track);
+    const ui::Rect r = f.rectOf(b.it);
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f),
+           laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
+    CHECK(errors.empty());
+    const auto pieces = piecesOf(f, b.track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[1]) == 1 - b.heard);
+    CHECK(f.view->lanes().compSeams(row).size() == 2);
+    // The bass: one item, where and as long as it was, with its one take.
+    REQUIRE(itemsOn(f, b.other) == 1);
+    const model::Item& bass = f.item(b.otherItem);
+    CHECK(bass.position == bassBefore.position);
+    CHECK(bass.length == bassBefore.length);
+    CHECK(bass.takes == bassBefore.takes);
+    // A member passed over does not read as differing.
+    CHECK(f.view->lanes().compSeams(*f.view->trackLayout().indexOf(b.other)).empty());
+    for (const auto& seam : f.view->lanes().compSeams(row)) CHECK_FALSE(seam.differs);
+}
+
+// Round 129 U1/U2: a group track that cannot follow (here a locked copy of the
+// item) refuses the group's take.comp before anything is written; the refusal
+// reaches the status line with a hint to hold Alt, and nothing changes. With
+// Alt the gesture comps this track alone (bypass_groups), as Alt moves a fader
+// alone.
+TEST_CASE("a grouped comp a track cannot follow is refused with an Alt hint; Alt comps alone") {
+    Fixture f;
+    if (!f.ok) return;
+    wireCompQuery(f);
+    const Band b = bandOf(f, true);
+    std::vector<Error> errors;
+    f.view->gestures().onError = [&](const Error& e) { errors.push_back(e); };
+    auto& sent = recordSteps(f);
+    const std::uint64_t version = f.app->head().version;
+    const std::size_t row = *f.view->trackLayout().indexOf(b.track);
+    const ui::Rect r = f.rectOf(b.it);
+    // The swipe: one take.comp for the group, refused before anything is written.
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f),
+           laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].code == "item.locked");
+    // The engine names the member in the path, which is what the hint keys on.
+    CHECK(errors[0].path == "/args/members/" + b.other.str() + "/items/" + b.otherItem.str());
+    CHECK(errors[0].hint == "unlock it, or hold Alt to comp this track alone");
+    // Nothing changed: the same version, one whole item, no seams.
+    CHECK(f.app->head().version == version);
+    CHECK(piecesOf(f, b.track).size() == 1);
+    CHECK(heardOf(f.item(b.it)) == b.heard);
+    CHECK(f.view->lanes().compSeams(row).empty());
+    // A lane click on the whole item is refused the same way.
+    f.click(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.5f));
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[1].code == "item.locked");
+    CHECK(f.app->head().version == version);
+    // With Alt the swipe comps this track alone; the locked copy is untouched.
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f),
+           ui::kAlt);
+    REQUIRE(sent.size() == 3);
+    const json::Value* bypass = sent[2][0].args.find("bypass_groups");
+    REQUIRE(bypass);
+    CHECK(bypass->asBool());
+    CHECK(errors.size() == 2);
+    const auto pieces = piecesOf(f, b.track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[1]) == 1 - b.heard);
+    CHECK(itemsOn(f, b.other) == 1);
+    CHECK(f.item(b.otherItem).locked);
+    CHECK(f.view->lanes().compSeams(row).size() == 2);
 }
 
 // Round 119 G4: take.comp's warnings reach the status line's note, and the
