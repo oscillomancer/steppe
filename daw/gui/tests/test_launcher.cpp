@@ -1189,6 +1189,64 @@ TEST_CASE("launcher: a pitch-keeping master playrate dims the audio clips the en
     f.exec("engine.stop", "{}");
 }
 
+TEST_CASE(
+    "launcher: an audio clip's cell draws its fades where there is room; a MIDI clip's none") {
+    LauncherFixture f;
+    f.song();
+    audio::AudioData tone;
+    tone.sampleRate = 48000;
+    tone.channels.assign(1, std::vector<float>(96000));
+    for (std::size_t i = 0; i < tone.channels[0].size(); ++i)
+        tone.channels[0][i] = 0.6f * static_cast<float>(std::sin(static_cast<double>(i) * 0.03));
+    const auto wav = f.dir / "pad.wav";
+    REQUIRE(audio::writeWav(wav, tone));
+    json::Value add = json::Value::object();
+    add["track"] = "tr_3";
+    add["scene"] = "sc_3";
+    add["audio_file"] = wav.string();
+    const std::string pad = f.exec("clip.add", *json::write(add))["clip"].asString();
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","name":"Pad"})");
+    views::LauncherPane& pane = f.view->launcherPane();
+    // Frames until the waveform's peaks are in (a deadline: the worker can be slow).
+    auto draw = [&] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        do {
+            f.root->damageAll();
+            f.root->frame(false);
+            if (pane.stats.pending == 0) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        } while (std::chrono::steady_clock::now() < deadline);
+        FAIL("peaks never became ready");
+    };
+    draw();
+    CHECK(pane.stats.fades == 0);  // none yet; the MIDI clips have none
+    f.exec("clip.set",
+           R"({"clip":")" + pad + R"(","fade_in":0.5,"fade_out":0.75,"fade_out_shape":"cos"})");
+    draw();
+    CHECK(pane.stats.columns > 0);
+    CHECK(pane.stats.fades == 2);
+    f.golden("launcher-fades-dark.png");
+    // One fade, one curve.
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","fade_out":0})");
+    draw();
+    CHECK(pane.stats.fades == 1);
+    // A fade under 2 units wide is not drawn (a 2 s period across 64 units).
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","fade_in":0.04})");
+    draw();
+    CHECK(pane.stats.fades == 0);
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","fade_in":0.5})");
+    draw();
+    CHECK(pane.stats.fades == 1);
+    // A body too low for them shows none.
+    f.view->trackLayout().setTrackHeight(*model::Id::parse("tr_3"), 26);
+    f.sync();
+    draw();
+    REQUIRE(views::LauncherPane::bodyRect(pane.cellRect(f.row("tr_3"), 2)).h <
+            views::LauncherPane::kFadeRoom);
+    CHECK(pane.stats.fades == 0);
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inserts it") {
     LauncherFixture f;
     f.song();
