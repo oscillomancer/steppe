@@ -107,9 +107,10 @@ struct StackFixture {
         return *result;
     }
     // A pass of `seconds` heard from `from` seconds on, one run.
-    RecordedTake pass(const std::string& name, double from, double seconds, double hz = 440.0) {
+    RecordedTake pass(const std::string& name, double from, double seconds, double hz = 440.0,
+                      model::Id track = model::Id{model::Kind::Track, 1}) {
         RecordedTake r;
-        r.track = model::Id{model::Kind::Track, 1};
+        r.track = track;
         r.file = writeTone(name, seconds, hz);
         r.sampleRate = kRate;
         r.frames = static_cast<std::int64_t>(seconds * kRate);
@@ -546,15 +547,112 @@ TEST_CASE("a refused commit leaves the session editable and the project as it wa
     CHECK_MESSAGE(next, (next ? "" : next.error().toString()));
 }
 
-TEST_CASE("a pass onto a frozen track is refused before anything changes") {
+namespace {
+// Three channels with an item each (tr_2 and tr_3 beside the fixture's tr_1), tr_2 frozen.
+void threeTracksMiddleFrozen(StackFixture& f) {
+    for (const char* name : {"Room", "Bass"}) {
+        f.run("track.add", std::string(R"({"name":")") + name + R"("})");
+    }
+    for (const char* track : {"tr_2", "tr_3"}) {
+        auto add = *json::parse(std::string(R"({"position":0,"track":")") + track + R"("})");
+        add["audio_file"] = (f.app->mediaDir() / "base.wav").string();
+        f.run("item.add", json::writeCompact(add));
+    }
+    f.run("track.freeze", R"({"track":"tr_2"})");
+}
+}  // namespace
+
+TEST_CASE("a recording on a frozen track is kept out, and every other track's is placed") {
     StackFixture f;
-    f.run("track.freeze", R"({"track":"tr_1"})");
-    const std::string before = model::serializeProject(f.app->view());
-    auto done = f.app->commitTakes({f.pass("frozen.wav", 0.5, 0.5)});
-    REQUIRE_FALSE(done);
-    CHECK(done.error().code == "track.frozen");
-    CHECK(model::serializeProject(f.app->view()) == before);
-    CHECK(f.call("track.add", R"({"name":"After"})"));  // still editable
+    threeTracksMiddleFrozen(f);
+    const model::Id tr2{model::Kind::Track, 2}, tr3{model::Kind::Track, 3};
+    const auto frozenBefore = f.pieces(tr2).size();
+    std::vector<RecordedInfo> infos;
+    SUBCASE("stacking") {
+        auto done = f.app->commitTakes({f.pass("one.wav", 0.5, 0.5),
+                                        f.pass("two.wav", 0.5, 0.5, 440.0, tr2),
+                                        f.pass("three.wav", 0.5, 0.5, 440.0, tr3)});
+        REQUIRE_MESSAGE(done, (done ? "" : done.error().toString()));
+        infos = *done;
+        CHECK(f.pieces().size() == 3);  // a punch-in: before, the pass, after
+        CHECK(f.pieces(tr3).size() == 3);
+        CHECK(f.pieces(tr2).size() == frozenBefore);  // nothing placed on the frozen track
+    }
+    SUBCASE("recovery lays items, and follows the same rule") {
+        auto done = f.app->commitTakes(
+            {f.pass("one.wav", 0.5, 0.5), f.pass("two.wav", 0.5, 0.5, 440.0, tr2),
+             f.pass("three.wav", 0.5, 0.5, 440.0, tr3)},
+            "recover", false);
+        REQUIRE_MESSAGE(done, (done ? "" : done.error().toString()));
+        infos = *done;
+        CHECK(f.pieces().size() == 2);  // laid as new items
+        CHECK(f.pieces(tr3).size() == 2);
+        CHECK(f.pieces(tr2).size() == frozenBefore);
+    }
+    REQUIRE(infos.size() == 3);
+    // The frozen track's file is named by a warning and kept: in the project's media, as a source.
+    REQUIRE(StackFixture::warned(infos[1], "record.frozen_skipped"));
+    const RecordingWarning& w = infos[1].warnings->back();
+    CHECK(w.track == "tr_2");
+    CHECK(w.message.find("two.wav") != std::string::npos);
+    CHECK(fs::exists(w.file));
+    CHECK(fs::path(w.file).filename() == "two.wav");
+    const model::Session after = f.app->head();
+    CHECK(std::any_of(after.media.begin(), after.media.end(), [&](const auto& e) {
+        return fs::path(e.value->path).filename() == "two.wav";
+    }));
+    CHECK_FALSE(StackFixture::warned(infos[0], "record.frozen_skipped"));
+    CHECK_FALSE(StackFixture::warned(infos[2], "record.frozen_skipped"));
+    // Unfrozen, it is placed by hand from the file the warning names.
+    f.run("track.unfreeze", R"({"track":"tr_2"})");
+    auto add = *json::parse(R"({"track":"tr_2","position":0.5})");
+    add["audio_file"] = w.file;
+    CHECK(f.call("item.add", json::writeCompact(add)));
+}
+
+TEST_CASE("a commit of a frozen track's recording alone leaves its items as they were") {
+    StackFixture f;
+    threeTracksMiddleFrozen(f);
+    const model::Id tr2{model::Kind::Track, 2};
+    const auto items = f.app->head().items.size();
+    auto done = f.app->commitTakes({f.pass("only.wav", 0.5, 0.5, 440.0, tr2)});
+    REQUIRE(done);
+    REQUIRE(done->size() == 1);
+    CHECK(StackFixture::warned((*done)[0], "record.frozen_skipped"));
+    CHECK(f.app->head().items.size() == items);
+    CHECK(f.call("track.add", R"({"name":"After"})"));  // the session stays editable
+}
+
+TEST_CASE("a frozen track cannot be armed, and an armed track cannot be frozen") {
+    StackFixture f;
+    SUBCASE("arming a frozen track") {
+        f.run("track.freeze", R"({"track":"tr_1"})");
+        auto armed = f.call("track.set", R"({"track":"tr_1","armed":true})");
+        REQUIRE_FALSE(armed);
+        CHECK(armed.error().code == "track.frozen");
+        CHECK_FALSE(armed.error().hint.empty());
+        CHECK_FALSE(f.app->head().tracks.find(model::Id{model::Kind::Track, 1})->record.armed);
+    }
+    SUBCASE("freezing an armed track") {
+        f.run("track.set", R"({"track":"tr_1","armed":true})");
+        auto frozen = f.call("track.freeze", R"({"track":"tr_1"})");
+        REQUIRE_FALSE(frozen);
+        CHECK(frozen.error().code == "freeze.unsupported");
+        CHECK_FALSE(f.app->head().tracks.find(model::Id{model::Kind::Track, 1})->freeze);
+    }
+    SUBCASE("a frozen member is left out when its group is armed") {
+        f.run("track.add", R"({"name":"Room"})");
+        auto add = *json::parse(R"({"track":"tr_2","position":0})");
+        add["audio_file"] = (f.app->mediaDir() / "base.wav").string();
+        f.run("item.add", json::writeCompact(add));
+        f.run("group.add", R"({"name":"Pair","members":["tr_1","tr_2"],"links":["armed"]})");
+        f.run("track.freeze", R"({"track":"tr_2"})");
+        auto armed = f.call("track.set", R"({"track":"tr_1","armed":true})");
+        REQUIRE_MESSAGE(armed, (armed ? "" : armed.error().toString()));
+        const model::Session s = f.app->head();
+        CHECK(s.tracks.find(model::Id{model::Kind::Track, 1})->record.armed);
+        CHECK_FALSE(s.tracks.find(model::Id{model::Kind::Track, 2})->record.armed);
+    }
 }
 
 TEST_CASE("an audio pass over a MIDI item is not stacked into, and says why") {

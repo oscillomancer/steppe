@@ -3586,6 +3586,33 @@ Result<RecordedInfo> stackMidi(model::EditTxn& t, const model::Session& s, const
     return info;
 }
 
+// A recording on a frozen track is not placed: a frozen track takes no new items. The warning names
+// the file, which stays (audio: also as a source of the project's media, so a first save moves it
+// with the project); the other tracks of the commit are placed as usual.
+RecordedInfo frozenSkipped(const model::Session& s, const RecordedTake& r,
+                           std::optional<Id> source) {
+    RecordedInfo info;
+    info.warnings = recordingWarnings(r);
+    if (!info.warnings) info.warnings.emplace();
+    const std::string track = r.track.str() + " (" + model::trackLabel(s, r.track) + ")";
+    info.warnings->push_back(
+        {"record.frozen_skipped",
+         track + " is frozen, so its recording was not placed; the file is kept: " +
+             r.file.string() + (source ? " (media source " + source->str() + ")" : std::string()),
+         "/track",
+         source ? "track.unfreeze " + r.track.str() + ", then item.add {track: \"" + r.track.str() +
+                      "\", audio_file: \"" + r.file.string() + "\"} places it"
+                : "its journal is kept: track.unfreeze " + r.track.str() +
+                      ", then project.recover places it",
+         r.track.str(), r.file.string()});
+    info.track = r.track.str();
+    info.file = r.file.string();
+    const double rate = r.sampleRate > 0 ? r.sampleRate : s.project->sampleRate;
+    info.seconds = static_cast<double>(r.frames) / rate;
+    info.lostFrames = static_cast<std::int64_t>(r.overflowFrames);
+    return info;
+}
+
 // midi_overdub (ADR-0016): the recording merges into the MIDI item under its
 // first heard position, as a new take (the old one stays for undo and take
 // switching). False when there is no such item (a new item is made then), or when its active
@@ -3805,7 +3832,10 @@ Result<std::vector<RecordedInfo>> EngineApp::commitTakes(const std::vector<Recor
     // The takes are in the project now; owned journals go once a saved
     // file or autosave holds them (ADR-0080/0082).
     for (const RecordedTake& r : takes)
-        if (r.isMidi && !r.file.empty())
+        if (const model::Track* tr = initial.tracks.find(r.track); tr && tr->freeze && r.isMidi)
+            continue;  // not placed (record.frozen_skipped): its journal is all that holds the
+                       // notes
+        else if (r.isMidi && !r.file.empty())
             recordingJournalsPending_.push_back(r.file);
         else if (!r.isMidi && !r.journal.empty())
             recordingJournalsPending_.push_back(r.journal);
@@ -3862,7 +3892,9 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
     // take.comp makes a pass that covers part of an item heard where it was recorded; the commit's
     // own transaction is the one it writes into (ADR-0103).
     StackEnv env;
-    for (const auto& r : takes) env.recorded.push_back(r.track);
+    for (const auto& r : takes)
+        if (const model::Track* tr = s.tracks.find(r.track); tr && !tr->freeze)
+            env.recorded.push_back(r.track);
     if (stack && commands_ && commands_->registry().find("take.comp"))
         env.comp = [this](json::Value args,
                           std::vector<RecordingWarning>& warnings) -> Result<json::Value> {
@@ -3884,6 +3916,42 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
     // Relative to the media folder when there is one (a saved project's or the
     // scratch folder), so a first save can move the files and keep the paths.
     const fs::path media = projectDir().empty() ? fs::path() : projectDir() / s.project->mediaDir;
+    // The project's media source for a recorded file. Known hashes may reuse a source; freshly
+    // closed files commit now with an empty hash and complete their metadata in the background.
+    auto sourceOf = [&](const RecordedTake& r, double rate) {
+        model::EditTxn& t = txn();
+        // Replayed before its hash was known here: the branch's own source
+        // for the file may have it by now.
+        std::string hash = r.hash;
+        std::error_code relError;
+        const fs::path relative =
+            media.empty() ? fs::path() : fs::relative(r.file, media, relError);
+        const std::string mediaPath = !relError && !relative.empty() && *relative.begin() != ".."
+                                          ? relative.generic_string()
+                                          : r.file.string();
+        if (!live && hash.empty())
+            versions_->forEachVersion([&](const model::Version& v) {
+                for (const auto& e : v.session->media)
+                    if (hash.empty() && e.value->path == mediaPath) hash = e.value->hash;
+            });
+        Id source;
+        if (const auto known = model::mediaSourceWithHash(s, hash)) {
+            source = *known;
+        } else {
+            model::MediaSource md;
+            md.path = mediaPath;
+            md.hash = hash;
+            md.format = "wav";
+            md.sampleRate = rate;  // the device's (resampled to the plan's rate on playback)
+            md.channels = 0;
+            if (auto head = audio::inspectWavStream(r.file))
+                md.channels = static_cast<int>(head->channels);
+            md.frames = r.frames;
+            source = t.create(std::move(md));
+            if (hash.empty() && commands_ && live) pendingHashes->emplace_back(source, r);
+        }
+        return source;
+    };
     for (const RecordedTake& r : takes) {
         if (live)
             for (const Error& e : r.warnings) {
@@ -3901,6 +3969,12 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
                 {r.track, r.file, r.failure.value_or(Error("record.write", r.error))});
         const double rate = r.sampleRate > 0 ? r.sampleRate : s.project->sampleRate;
         if (r.frames <= 0 || !s.tracks.find(r.track)) continue;
+        // A frozen track takes no new items (validateFrozenTransition refuses the whole commit):
+        // leave its recording out with a warning, keep the file, and place every other track's.
+        if (s.tracks.find(r.track)->freeze) {
+            out.push_back(frozenSkipped(s, r, r.isMidi ? std::optional<Id>{} : sourceOf(r, rate)));
+            continue;
+        }
         // The runs on the timeline (ADR-0015): one per loop pass, or one.
         std::vector<RecordedSegment> segs = r.segments;
         if (segs.empty()) segs.push_back({0, r.startSample});
@@ -3953,39 +4027,8 @@ Result<std::vector<RecordedInfo>> EngineApp::placeTakes(
                 SUPPLE_TRY(commitMidiTake(txn(), s, r, runs, items, rate, out, stack, env));
             continue;
         }
-        // Known hashes may reuse a source; freshly closed files commit now
-        // with an empty hash and complete their metadata in the background.
         model::EditTxn& t = txn();
-        // Replayed before its hash was known here: the branch's own source
-        // for the file may have it by now.
-        std::string hash = r.hash;
-        std::error_code relError;
-        const fs::path relative =
-            media.empty() ? fs::path() : fs::relative(r.file, media, relError);
-        const std::string mediaPath = !relError && !relative.empty() && *relative.begin() != ".."
-                                          ? relative.generic_string()
-                                          : r.file.string();
-        if (!live && hash.empty())
-            versions_->forEachVersion([&](const model::Version& v) {
-                for (const auto& e : v.session->media)
-                    if (hash.empty() && e.value->path == mediaPath) hash = e.value->hash;
-            });
-        Id source;
-        if (const auto known = model::mediaSourceWithHash(s, hash)) {
-            source = *known;
-        } else {
-            model::MediaSource md;
-            md.path = mediaPath;
-            md.hash = hash;
-            md.format = "wav";
-            md.sampleRate = rate;  // the device's (resampled to the plan's rate on playback)
-            md.channels = 0;
-            if (auto head = audio::inspectWavStream(r.file))
-                md.channels = static_cast<int>(head->channels);
-            md.frames = r.frames;
-            source = t.create(std::move(md));
-            if (hash.empty() && commands_ && live) pendingHashes->emplace_back(source, r);
-        }
+        const Id source = sourceOf(r, rate);
         for (const ItemPlan& ip : items) {
             std::optional<RecordingWarning> skipped;
             if (stack) {

@@ -2976,7 +2976,16 @@ on the loop range with a take per pass):
   warning when the span overlaps no item. A span that starts before an item and runs into it makes a
   new item and warns `record.stack_skipped` naming that item; so does a target that is locked,
   looped, frozen, or holds the other kind of material (a MIDI pass under audio, an audio pass under
-  MIDI), or a comp piece that is locked. A commit that fails anywhere (a refused nested `take.comp`
+  MIDI), or a comp piece that is locked. A **frozen track takes no recording at all** (a new item
+  would break its print, and the transaction would be refused whole): its recording is left out with
+  a `record.frozen_skipped` warning (`track`, `file`; the hint names `track.unfreeze` and
+  `item.add`), every other track's takes of the commit are placed, and the file stays in the
+  project's media (a source for audio, which a save carries; a MIDI recording's journal is kept for
+  `project.recover`). `track.set {armed: true}` on a frozen track fails with `track.frozen` (the
+  frozen-track rule of §freeze: arming is a sound edit), `track.freeze` of an armed track fails with
+  `freeze.unsupported`, and arming an edit group skips frozen members with a `track.frozen`
+  warning, so the leave-out is a backstop for a freeze made behind the app's back. Recovery
+  (`project.recover`, `record.commit` replays) follows the same rule. A commit that fails anywhere (a refused nested `take.comp`
   included) is rolled back whole: the project is as it was and still editable, and the recording
   is not in it (its journals remain for recovery).
 - The item's `position` and `length` never change by the pass itself. The new take (audio: the pass's media source,
