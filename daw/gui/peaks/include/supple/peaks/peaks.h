@@ -101,6 +101,19 @@ class PeakService {
     };
     Stats stats() const;
 
+    // Lets go of every media file under `dir` and opens none there until the
+    // returned function is called (a file that is open cannot be removed on
+    // Windows: the engine's first save calls this before it removes the
+    // scratch media it has moved). A read in progress there stops between two
+    // chunks, without counting as a failure, and is asked for again when the
+    // hold ends (onReady); get() queues nothing there meanwhile. Returns once
+    // the worker has let go. Any thread; holds may nest.
+    [[nodiscard]] std::function<void()> holdUnder(const std::filesystem::path& dir);
+    // Whether a hold is in place (tests wait for one).
+    bool holding() const;
+    // Tests: called on the worker between two chunks of a media read.
+    std::function<void(const std::filesystem::path& media)> readHook;
+
   private:
     void run(supple::StopToken stop);
     std::string key(const std::string& hash, const std::filesystem::path& media) const;
@@ -120,6 +133,13 @@ class PeakService {
     std::map<std::string, Error> failed_;
     std::map<std::string, bool> pending_;
     Stats stats_;
+    // holdUnder: the folders held, the media being read now (empty: none) and
+    // the keys a hold stopped or turned away, to announce when it ends.
+    std::vector<std::filesystem::path> held_;
+    std::filesystem::path reading_;
+    std::condition_variable_any idle_;
+    std::vector<std::string> stopped_;
+    bool heldLocked(const std::filesystem::path& media) const;
     // Notifications posted to the owner check this first: the service may be
     // gone by the time the owner's loop runs them.
     std::shared_ptr<int> alive_ = std::make_shared<int>(0);
