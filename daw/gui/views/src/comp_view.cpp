@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <set>
+#include <string_view>
 
 #include "supple/model/groups.h"
 
@@ -25,10 +26,9 @@ double beatOfSample(const model::Session& s, std::int64_t sample) {
 
 std::optional<CompView> compOf(const model::Session& s, model::Id item) {
     const model::Item* it = s.items.find(item);
-    // A looped item, or one edited with a group, is comped with hard cuts by
-    // split and take.activate (compsWithTakeComp): no comp, so no seams, seam
-    // drags or Crossfade, which take.comp would refuse; its pieces keep their
-    // trim edges and fades.
+    // A looped item is comped with hard cuts by split and take.activate
+    // (compsWithTakeComp): no comp, so no seams, seam drags or Crossfade,
+    // which take.comp would refuse; its pieces keep their trim edges and fades.
     if (!it || it->takes.size() < 2 || !compsWithTakeComp(s, item)) return std::nullopt;
     auto run = model::compRun(s, item, {});
     if (!run) return std::nullopt;
@@ -77,14 +77,56 @@ std::optional<model::CompCrossfade> compCrossfade(const model::Session& s, const
 
 bool compsWithTakeComp(const model::Session& s, model::Id item) {
     const model::Item* it = s.items.find(item);
-    return it && !it->loop && model::linkedItems(s, item).size() <= 1;
+    return it && !it->loop;
+}
+
+bool compsGroup(const model::Session& s, model::Id item) {
+    const model::Item* it = s.items.find(item);
+    return it && model::linkedTracks(s, it->track, "edit").size() > 1;
 }
 
 std::optional<CompView> compPieceOf(const model::Session& s, model::Id item) {
     if (!compsWithTakeComp(s, item)) return std::nullopt;
     auto comp = compOf(s, item);
-    if (!comp || comp->pieces.size() < 2) return std::nullopt;
+    if (!comp || (comp->pieces.size() < 2 && !compsGroup(s, item))) return std::nullopt;
     return comp;
+}
+
+std::optional<model::Id> compDiffersFrom(const model::Session& s, model::Id item,
+                                         const CompQuery& query) {
+    if (!query) return std::nullopt;
+    const model::Item* it = s.items.find(item);
+    const auto comp = compOf(s, item);
+    if (!it || !comp) return std::nullopt;
+    const std::vector<model::Id> tracks = model::linkedTracks(s, it->track, "edit");
+    if (tracks.size() < 2) return std::nullopt;
+    // The run's extent, and the group's first track (in the order take.comp
+    // takes its members, model::linkedTracks's) with a run on the lane over
+    // it: the reference.
+    const std::int64_t from = comp->pieces.front().coreStart, to = comp->pieces.back().coreEnd;
+    for (const model::Id track : tracks) {
+        if (track == it->track) return std::nullopt;  // the reference itself
+        for (const auto& e : s.items) {
+            const model::Item& other = *e.value;
+            if (other.track != track || other.lane != it->lane) continue;
+            auto run = model::compRun(s, e.id, {});
+            if (!run) continue;
+            // The other track's run must overlap this one (any of its pieces).
+            const bool overlaps = run->front().coreStart < to && run->back().coreEnd > from;
+            if (!overlaps) continue;
+            json::Value args = json::Value::object();
+            args["item"] = e.id.str();
+            const auto got = query(args);
+            if (!got) return std::nullopt;
+            const json::Value* differing =
+                got->isObject() ? got->find("differing_members") : nullptr;
+            if (!differing || !differing->isArray()) return std::nullopt;
+            for (const json::Value& t : differing->asArray())
+                if (t.isString() && t.asString() == it->track.str()) return track;
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
 }
 
 std::size_t compPieceIndex(const CompView& comp, model::Id item) {
@@ -102,6 +144,23 @@ json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::
             span.to = beatOfSample(s, p.coreEnd);
         }
     return compArgs(item, {span}, compCrossfade(s, comp));
+}
+
+Error compRefusal(Error error) {
+    // The engine roots a group member's refusal at /args/members/<track>
+    // (/items/<item> after it for one item); the comped track's own refusals
+    // point into the call's arguments and keep the engine's hint.
+    if (!error.path.starts_with("/args/members/")) return error;
+    constexpr std::string_view argument = "comp it alone with bypass_groups";
+    constexpr std::string_view gesture = "hold Alt to comp this track alone";
+    if (error.code == "item.locked") {
+        error.hint = "unlock it, or " + std::string(gesture);
+    } else if (const auto at = error.hint.find(argument); at != std::string::npos) {
+        error.hint.replace(at, argument.size(), gesture);
+    } else {
+        error.hint += error.hint.empty() ? std::string(gesture) : "; or " + std::string(gesture);
+    }
+    return error;
 }
 
 std::string resultWarnings(const json::Value& result) {

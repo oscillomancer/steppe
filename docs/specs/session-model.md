@@ -337,13 +337,66 @@ seam beats and `take` the piece's active take id. `take.comp.get {item | items}`
 (query) returns the same for an existing comp, with each piece's current fades,
 and the run's take names.
 
+**Edit groups** (`take.comp` without `bypass_groups`). The run of the named item is comped
+as before; then every other track of its edit group (`linkedTracks`, attribute `edit`) that has
+items on the lead's lane over the run's extent is comped with the same spans in beats, the same
+take indices (a `take` id names the index on the named run) and the same crossfade and shape,
+each through the same code as a single run, so a member equals the comp made on its own. Members
+are taken in track order, inside the one command and so one undo step.
+
+- **A member is matched by the run's extent**, not by item spans (a comp's crossfades widen its
+  pieces, so those never agree): the track's items over the extent form a run of their own
+  (`compRun`) whose first core sample and last core sample are the named run's. How the track is
+  cut inside, its crossfades, its start offsets and play rates do not matter: a member that is
+  still whole beside a split lead is comped to the spans (a region no span covers keeps the take
+  the member's own piece plays there, as for any run), and so is one whose crossfade differs.
+- **A track the comp leaves alone** is skipped and named in the reply, not refused:
+  `skipped_tracks: [{track, reason}]`, with `reason` `no_item` (no item over the run) or `one_take`
+  (every item of the track over the run has a single take, so there is nothing to comp: a bass or a
+  DI grouped with takes of drums is ordinary). A skipped track is not a member, is not touched
+  (byte for byte) and does not count against `uniform`.
+- **A track whose items cannot follow refuses the whole call**, before anything is written, with
+  the member's track (`tr_2 (Second)`) in the message and the member in the `path` (below):
+  `comp.group_takes` (an item with several takes but fewer than the highest
+  index a span plays needs; or a track with a one-take item beside items with several, which
+  `take.comp.get` lists in `differing_members`; a track whose items all have one take is skipped
+  instead), `comp.group_mismatch` (its items over the run do not form a run, or start
+  or end elsewhere; the inner reason and hint of `compRun` are in the message and hint, for example
+  a looped item), `item.locked` (a locked piece of any member). `bypass_groups: true` comps the named
+  run alone in every case. `comp.linked`, which an item in an edit group used to get ("set
+  bypass_groups"), is retired: a call that retries with `bypass_groups` still works, and without it
+  now comps the group.
+- A member's warnings are prefixed `on <track>: `.
+- The result keeps `pieces`, `crossfade`, `crossfade_shape`, `uniform` and `differing_seams` for the
+  named run and adds `members: [{track, pieces, crossfade, crossfade_shape, uniform,
+  differing_seams}]` (empty with `bypass_groups`, or when no other track has items there),
+  `skipped_tracks` and `differing_members`. `take.comp.get` returns the same for an existing comp
+  and never refuses: a track whose items cannot form a matching run is listed in
+  `differing_members` and not in `members`; a member whose spans, takes, crossfade or shape read
+  differently from the named run is listed there too, and `uniform` of the whole is false while any
+  of that, or any member's own `uniform`, is false.
+
 **The crossfade a run reads back as** (`model::compCrossfade`, which the GUI calls
 too; `crossfade` in seconds, `crossfade_shape` `cos` or `linear`): the longest
 seam-side fade of the run and that fade's shape, so a seam clamped by short pieces
 does not shrink it, and `take.comp` called with the read-back values and the spans
-`take.comp.get` gives rebuilds the same comp (byte for byte). A run with no seam (one
+`take.comp.get` gives rebuilds the same comp (byte for byte) when the run is uniform. A run with no seam (one
 piece) reads the default, 0.01 and `cos`; a run whose seams are all hard cuts reads 0;
 a fade of a shape `take.comp` does not offer (a GUI-made one) reads as `cos`.
+
+**Uniform** (`model::compDifferingSeams`; `uniform` and `differing_seams: [{seam, at, left,
+right}]` on `take.comp.get` and `take.comp`): `take.comp` writes every seam with one length
+and shape, so a seam fade edited by hand (another length or shape, a hard cut among crossfaded
+seams, a fade on one side only) is something a re-comp overwrites, and the byte-for-byte claim
+above holds only for a uniform run. The rule: `differing_seams` lists the seams that `take.comp`
+called with the reported `crossfade` and `crossfade_shape` (the longest seam fade and its shape,
+above) and the run's spans would rewrite, so it is exactly what a rebuild with the read-back
+changes. A seam between two takes should have on both sides the fade 2h samples long, h =
+min(crossfade in samples / 2, half of each piece's core), in that shape (a seam clamped by short
+pieces fits); a seam inside one take should have none. `seam` 0 is between the first two pieces
+and `at` is in beats. A comp as `take.comp` made it is uniform; one piece, or hard cuts only, is
+uniform. A hand-lengthened fade raises the reported crossfade, so the seams that change are then
+the others.
 
 Refusals, each with a code, a message, a path (`/args/item`, `/args/spans/1/from`) and a hint: `comp.item` (neither or both of `item`
 and `items`, or an empty `items`), `comp.takes` (fewer than two takes),
@@ -352,10 +405,21 @@ the run),
 `comp.span` (a span empty, unordered, overlapping or outside the run),
 `comp.take` (a span without exactly one of `take` and `index`, or one not in
 the item), `comp.loop` (a looped item: comp an item that does not loop, or
-`item.set {loop: false}` first), `comp.linked` (the item has linked
-peers: `bypass_groups` comps it alone), `item.locked` (any piece locked),
+`item.set {loop: false}` first), `comp.group_mismatch` and `comp.group_takes` (a track of the
+item's edit group that cannot follow: see Edit groups below; `comp.linked` is retired),
+`item.locked` (any piece locked, a member's too),
 `item.kind` (a clip). Per-item refusals with `items` name the piece in the path
-(`/args/items/2`); with `item`, `/args/item`.
+(`/args/items/2`); with `item`, `/args/item`. A refusal that comes from another member of the
+item's edit group (`comp.group_mismatch`, `comp.group_takes`, `item.locked` for a member's piece)
+points at that member instead of at the call's arguments, since the member's items are not in them:
+the handler's path is `/members/<track id>` with `/items/<item id>` after it when one item is the
+cause (`/members/tr_2/items/it_5`; the extent not matching names only the track), shaped like the
+reply's `members`, and the bus roots it at `/args` as it does every handler path
+(`/args/members/tr_2/items/it_5`). It is a locator, not a pointer that resolves in the call's input;
+no generic consumer resolves an error's path against the input (the bus, the control protocol, the
+Lua bindings and the MCP layer carry it as text; the GUI render dialog strips `/args` to print it),
+so a caller reads the track and item from the path instead of from the message. The lead's own
+refusals (its pieces locked or looped) keep `/args/item` or `/args/items/<i>`.
 
 Playback and offline render read the stored items, so real time equals
 offline in both executors; there is no audio-path code. Old files load
@@ -378,7 +442,8 @@ boundary, and for MIDI the call warns `comp.midi_boundary`;
 MIDI and warped takes give hard seams with `comp.crossfade_skipped`;
 `take.comp.get` after a save and reopen, and its `crossfade` and `crossfade_shape` (a comp
 with one seam clamped reads back the requested length, a hard-cut run 0, one piece the default;
-`take.comp` with the read-back values and spans is byte for byte the comp); one undo step; and
+`take.comp` with the read-back values and spans is byte for byte the comp; `uniform` and the seams a hand-set length,
+shape or hard cut lists); an edit group (whole unsplit members, members with other start offsets or play rates, a one-take member: skipped as `one_take`, untouched, not counted against `uniform`; a member with too few takes for a span or a run that does not line up: nothing changes, a missing member entry in the read-back, `bypass_groups` for one item); one undo step; and
 every refusal.
 
 ### 1.6 Sources

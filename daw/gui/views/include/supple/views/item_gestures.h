@@ -392,6 +392,8 @@ class ItemGestures {
     State state_;
     ui::Point press_{};
     bool moved_ = false, free_ = false, copy_ = false, cycleFade_ = false, marqueeAdd_ = false;
+    // Alt at the press: a comp gesture comps this track alone (bypass_groups).
+    bool alone_ = false;
     std::size_t pressRow_ = 0;
     ui::Root::OverlayHandle overlay_;
     std::shared_ptr<ItemGestures*> alive_;  // the overlay's ghost checks it

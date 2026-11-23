@@ -62,7 +62,11 @@ tool (or as `args` through `exec`).
    `"${name.field}"`.
 5. **Read errors; they tell you the fix.** Every error has a `path` and a
    `hint` (valid range, closest valid name, an example). Fix exactly what it
-   says and retry once; don't guess around it.
+   says and retry once; don't guess around it. A `path` is usually a pointer
+   into your arguments; some errors give a locator that does not resolve there
+   (`take.comp` names the edit-group member that stopped it as
+   `/args/members/tr_2/items/it_5`): read it as where, not as a place in your
+   call.
 6. **Taste is the human's.** Descriptors say whether you hit a target, not
    whether it sounds good. When a result matters, say what you aimed for,
    what the numbers show, and ask the human to listen. In the DAW, propose

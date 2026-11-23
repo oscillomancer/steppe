@@ -194,6 +194,13 @@ std::unique_ptr<ui::Node> Shell::build(ui::Root& root, AppActions& actions) {
     };
     // A comp's warnings: the status line's note, until the next one.
     arrange_->gestures().onNotice = [this](const std::string& notice) { setStatus(notice); };
+    // Whether a comp on an edit-grouped track differs from its group, as the
+    // engine reads it back (the lanes break its seam lines).
+    arrange_->lanes().compQuery = [this](const json::Value& args) -> std::optional<json::Value> {
+        auto r = dispatcher_.execute({"take.comp.get", args, {cmd::Origin::Type::Ui, "gui", {}}});
+        if (!r) return std::nullopt;
+        return std::move(*r);
+    };
     // The TCP talks to the app through these: selection state, commands (with
     // a drag's gesture) and the meters it pools with its rows.
     views::TcpCallbacks tcp;

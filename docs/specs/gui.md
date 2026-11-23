@@ -1079,20 +1079,42 @@ dragged ("12 ms", "1.20 s"), as a stretch shows its rate; the fade handles'
 shape click (the mouse map's `fade` context, Ctrl by default) toggles equal
 power and linear ("Comp crossfade shape"). Each is one `take.comp` and applies
 to every seam of the comp; a hard cut is the length dragged or typed to 0, for
-the whole comp (per-seam lengths are not built). A **looped item**, and an item
-on a track grouped for edits (`model::linkedItems`), keep the swipe they had
-before `take.comp`, which refuses both (`comp.loop`, `comp.linked`):
-`item.split` at the swipe's ends (which splits the group's items too) and
-`take.activate` of the middle, with hard cuts; a looped item until its Loop is
-turned off, a grouped one until `take.comp` comps every item of an edit group.
-Their lane clicks, badge and Takes list switch with `take.activate`
-(`views::compsWithTakeComp`), and their pieces are no comp to the GUI: no seams
-are drawn or dragged there, the boundaries trim and fade as item edges do, and
-the inspector shows Fade in and Fade out, not Crossfade. The inspector shows the same
+the whole comp (per-seam lengths are not built). **On a track grouped for
+edits** (`model::linkedTracks`, attribute `edit`) every one of these is the same
+`take.comp`, which comps every other track of the group with items over the
+stretch alike (session-model §1.5.1, Edit groups); a click on a lone item there,
+its badge and the Takes list send `take.comp` over the whole item rather than
+`take.activate` (which would switch it alone), so the members follow
+(`views::compPieceOf`). A member whose comp the engine reads as differing from
+the group's (`take.comp.get`'s `differing_members`, asked for the group's first
+track in the order `take.comp` takes members, `views::compDiffersFrom`: other
+spans, takes, crossfade or shape, from an edit that bypassed the group) draws its
+seam lines broken, every other 4 units, and the inspector shows a **Group** row,
+"Differs from Close", for one selected piece of it; any comp gesture on the group
+brings it back in step. A member's comp with no seam of its own shows the
+difference only in the inspector. A **looped item** keeps the swipe it had before
+`take.comp`, which refuses it (`comp.loop`): `item.split` at the swipe's ends and
+`take.activate` of the middle, with hard cuts, until its Loop is turned off. Its
+lane clicks, badge and Takes list switch with `take.activate`
+(`views::compsWithTakeComp`), and its pieces are no comp to the GUI: no seams are
+drawn or dragged there, the boundaries trim and fade as item edges do, and the
+inspector shows Fade in and Fade out, not Crossfade. The inspector shows the same
 for one selected piece (Crossfade, below). Flatten a comp with Consolidate on
-its pieces. Refusals (`item.locked`; `comp.linked` from a seam drag on a comp an
-agent made on a grouped track) reach the
-status line; the GUI sends no `bypass_groups`. `take.comp`'s warnings
+its pieces. Refusals (`item.locked`; `comp.group_mismatch` and `comp.group_takes`
+when a track of the group cannot follow: a looped item, one over another
+stretch, one with fewer takes than a span plays, or a locked one) reach the
+status line, and nothing changes. **Alt** held at the
+press of any comp gesture (a swipe, a lane click, the badge, a seam or its
+crossfade handle) or on a pick in the inspector's Takes list comps this track
+alone: `take.comp` with `bypass_groups`, as Alt on the TCP's fader and pan moves
+one track alone. A refusal from a group member (its path is
+`/args/members/<track>[/items/<item>]`) says so in its hint ("hold Alt to comp this
+track alone", `views::compRefusal`) in place of the argument's name; a member's
+lock reads "unlock it, or hold Alt to comp this track alone". The comped track's
+own refusals keep the engine's hint. The inspector's Crossfade field has
+no Alt, so its refusals keep the engine's hint. A group track with nothing over the
+stretch, or only one-take items there (a bass beside drum takes), is passed over
+(`skipped_tracks`, `no_item` or `one_take`): left as it is, with nothing to show. `take.comp`'s warnings
 (`comp.crossfade_clamped`, `comp.crossfade_skipped`, `comp.midi_boundary`), from
 a gesture or the inspector, are the status line's transient note (their
 messages, joined), as a refusal is: never text on the lanes.
@@ -2869,6 +2891,7 @@ inspector adds no command:
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s"; for a comp piece only at the comp's outer ends (its first piece's fade in, its last's fade out) | A number, with or without "s" | `fade_in`, `fade_out` |
 | Crossfade (`inspector.crossfade`, `inspector.crossfade_shape`) | One selected piece of a comp with a seam between takes (session-model §1.5.1): the comp's crossfade, "0.010 s" (`views::compCrossfade`), and its shape, Equal power or Linear | A number, with or without "s" (0: a hard cut), or a choice | `take.comp` with the comp's spans (`views::compSpans`) and the new length or shape, for every seam; one undo step |
+| Group (`inspector.group`) | One selected comp piece on a track grouped for edits whose comp the engine reads as differing from the group's (`views::compDiffersFrom`): "Differs from Close", the group's first track; no row when it is in step | read only | (a comp gesture brings it back in step) |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 | Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |

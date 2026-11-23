@@ -1068,9 +1068,10 @@ instructions are in `docs/guides/installing.md`.
   top or in the inspector, keeping a comp's crossfade on every re-comp.
   Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
   a looped item's swipe splits and switches with hard cuts until its Loop is off;
-  on a track grouped for edits the swipe also keeps that path (split every member,
-  switch one) until `take.comp` comps every member of an edit group with the same
-  spans and take, which is asked of the builder; the GUI switches to it then;
+  on a track grouped for edits every comp gesture is the group's `take.comp` (Alt
+  comps the track alone, past a group track that cannot follow), and a member that
+  reads differently (`differing_members`) shows broken seam lines and an inspector
+  Group row, but only where it has seams of its own or is selected;
   seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
   empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);
@@ -1078,7 +1079,19 @@ instructions are in `docs/guides/installing.md`.
   after a tempo change a Beats-timebase seam's overlap and its fades (seconds) disagree
   until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
   stays, and between MIDI pieces of one take a held note sounds again there
-  (`comp.midi_boundary`).
+  (`comp.midi_boundary`); a seam fade edited by hand (another length or shape) is overwritten
+  by the next `take.comp`, which gives every seam one length and shape: `take.comp.get` says
+  `uniform: false` and lists the seams a rebuild with the read-back would rewrite. An item in an
+  edit group is comped with every other track of the group that has items over the same stretch
+  (matched by the run's extent: however it is cut or crossfaded, a whole item beside a split lead
+  is comped to the spans; same spans and take indices, one undo step, `members` in the result;
+  a group track with nothing there (`no_item`) or only one-take items (`one_take`, a bass with
+  drum takes) is left untouched and named in `skipped_tracks` with its reason; `bypass_groups` for
+  the item alone); a track whose items cannot follow refuses the call before anything is written
+  (`comp.group_takes` for too few takes for a span, `comp.group_mismatch` with the inner reason,
+  `item.locked`), the error's path naming the member (`/args/members/<track>[/items/<item>]`). `comp.linked`
+  is retired (it meant "set bypass_groups"; the call now comps the group). The GUI comps a
+  grouped track through it.
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main
