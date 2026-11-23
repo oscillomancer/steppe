@@ -2441,7 +2441,9 @@ is 0.001 linear (-60 dB); sub-floor readings do not wake main. Moving meters
 use GUI frame deadlines and remain disarmed; there is no per-block meter wake.
 
 `engine.restarting {reason}` announces restart; exhaustion emits
-`engine.error {reason, error}`.
+`engine.error {reason, error}`. A restart whose device has not taken the
+restored position within 1 s emits `engine.error {reason, restarted: true,
+error}`: the engine runs, and the position stays queued.
 The backend kind, block/options, transport position and loop are restored;
 playback stays stopped. There is no global main-thread safety poll.
 
@@ -2675,10 +2677,13 @@ harness. See the tooling README for schemas, limits and invocation details.
   wait (≤ 1 s) for two audio cycles so their answer is the new state; if
   the device has not run them by then (a stalled device, a starved
   renderer), the action is refused with `engine.transport`, whose hint
-  points at `engine.status`, rather than answered with the old state. A
+  points at `engine.status`, rather than answered with the old state. The
+  request stays queued and takes effect when the device runs again, so it
+  is not to be repeated. A
   recording started from stop under a scheduled playrate waits the same
   way for the renderer to take its start, and is refused alike; a restart
-  that cannot restore the position reports `engine.error`.
+  whose device has not taken the restored position reports `engine.error`
+  with `restarted: true` (below).
   `transport.stop` returns to where play started. `<slug>-engine play FILE`
   plays a project through the device from the CLI.
 - **Anticipative processing** (ADR-0012, `EngineOptions`, default on): a
