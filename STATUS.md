@@ -327,6 +327,9 @@ instructions are in `docs/guides/installing.md`.
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
       wraps at the loop as live does, but not under a master playrate;
+    - a capture armed while a launched clip's note sounds commits
+      without the rest of that note, at any rate (the item does not
+      chase it); armed in a rest it is exact;
     - right after a pause, in the anticipative executor, the reported
       position can be up to one device period short when the pause lands
       while a device cycle is in flight, so a launch made while stopped,

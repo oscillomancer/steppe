@@ -436,6 +436,66 @@ TEST_CASE("a capture armed while clips play under a master playrate commits from
         }
 }
 
+TEST_CASE("a capture armed while a launched clip's note sounds commits without the rest of it" *
+          doctest::description("rt")) {
+    // Round 113 (a), a stated limit at any rate: armed at song 112500, while
+    // tr_1's clip holds E3 (beats 4.5 to 5, song 108000 to 120000), the
+    // commit's MIDI piece starts at the capture's start without that note,
+    // so until the note's end what played is not in the commit; after it the
+    // commit meets the standard, and armed in a rest it is exact (the case
+    // above). It is the same at rate 1 and under a rate.
+    for (const double rate : {1.0, 0.75})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("rate " << rate << ", anticipative " << options.anticipative);
+            constexpr std::uint32_t block = 128;
+            Project p;
+            twoTracks(p);
+            if (rate != 1.0) underRate(p, false);
+            AppLive live(p, options, block, 48000 * 9 + 16384);
+            const auto logged = [&](std::size_t n) {
+                while (p.app->engine()->launchLog().size() < n && live.cycles * block < 48000 * 8)
+                    live.until((live.cycles + 16) * block);
+                REQUIRE(p.app->engine()->launchLog().size() == n);
+            };
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * block);
+            p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2
+            logged(2);
+            live.until(std::llround(112500 / rate));
+            const double from = p.run("launch.capture", R"({"on": true})")["from"].asDouble();
+            CHECK(from * double(kBeat) > 108000);
+            CHECK(from * double(kBeat) < 120000);
+            p.run("launch.arrangement", R"({"track": "tr_1"})");  // bar 3
+            logged(3);
+            live.until((live.cycles + 200) * block);
+            const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
+            json::Value done = p.run("launch.commit", "{}");
+            live.until((live.cycles + 20) * block);
+            const std::vector<float> heard = live.stop();
+            const std::vector<float> committed = arrangement(p, 9.0, block);
+            const std::int64_t start = std::llround(from * double(kBeat) / rate);
+            const std::int64_t noteEnd = std::llround(120000 / rate);
+            const std::int64_t end = std::llround(done["to"].asDouble() * double(kBeat) / rate);
+            REQUIRE(end + std::int64_t(live.latency) <= std::int64_t(heard.size()));
+            REQUIRE(end <= std::int64_t(committed.size()));
+            const std::int64_t reach = rate == 1.0 ? 0 : std::llround(128 / rate) + 64;
+            // The rest of the held note is missing from the commit...
+            const auto [gap, firstGap] =
+                compare(heard, live.latency, committed, start, noteEnd + reach);
+            MESSAGE("the held note's rest: worst " << gap << " over " << (noteEnd - start)
+                                                   << " frames");
+            CHECK(firstGap == start);
+            CHECK(gap > 0.05);
+            // ...and after it the commit meets the standard.
+            const std::vector<LaunchLogEntry> switches(log.begin() + 2, log.end());
+            const CommitResidual r = commitResidual(heard, live.latency, committed, switches,
+                                                    noteEnd + reach, end, reach);
+            CHECK(r.away == 0.0);
+            CHECK(r.fading <= 1e-6);
+            CHECK(r.edges <= 0.03);
+        }
+}
+
 TEST_CASE("under a master playrate a switch crossfades over 240 song samples, by song position") {
     // S3 B (ADR-0097, note 2026-11-22): at 0.75 bar 2 (song 96000) is device
     // frame 128000. The crossfade runs over the next 240 song samples (320
