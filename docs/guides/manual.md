@@ -518,7 +518,9 @@ the inspector shows it as **Crossfade** for a selected piece: type 0 for hard
 cuts. Clicking a lane of one piece switches just that piece. To make a comp
 one plain item again, select its pieces and use **Consolidate items**. An item
 whose Loop is on is comped with hard cuts (no crossfades) until you turn its
-Loop off.
+Loop off, and so is an item on a track grouped for editing: dragging across
+its lane splits every item of the group there and switches the take on this
+one.
 
 ### Changing what the mouse does
 

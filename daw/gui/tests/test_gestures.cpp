@@ -22,6 +22,7 @@
 #include "supple/gui/window.h"
 #include "supple/json/write.h"
 #include "supple/midi/midi.h"
+#include "supple/model/groups.h"
 #include "supple/model/schemas.h"
 #include "supple/peaks/peaks.h"
 #include "supple/ui/list.h"
@@ -1566,6 +1567,68 @@ TEST_CASE("a swipe on a looped item splits it and switches the middle, with hard
     CHECK(pieces[0]->fadeOut.length == 0);  // hard cuts
     CHECK(pieces[1]->fadeIn.length == 0);
     CHECK(pieces[1]->loop);
+}
+
+// Round 119 G3: take.comp refuses an item edited with a group (comp.linked),
+// so on an edit-grouped track the swipe keeps its older path: item.split,
+// which splits the group's items too, and take.activate of the middle.
+TEST_CASE("a swipe on an edit-grouped track splits and switches, as before take.comp") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double position = f.item(it).position, length = f.item(it).length;
+    // A track grouped with it for edits, holding an item over the same span.
+    const auto other =
+        f.dispatcher->execute({"track.add", json::parse(R"({"name":"Room"})").value(), kUi});
+    REQUIRE(other);
+    const std::string room = other->find("track")->asString();
+    json::Value group = json::Value::object();
+    group["name"] = "Kit";
+    group["members"] = json::Value::array();
+    group["members"].push_back(track.str());
+    group["members"].push_back(room);
+    auto made = f.dispatcher->execute({"group.add", group, kUi});
+    REQUIRE(made);
+    json::Value links = json::Value::object();
+    links["group"] = made->find("group")->asString();
+    links["links"] = json::Value::array();
+    links["links"].push_back("edit");
+    REQUIRE(f.dispatcher->execute({"group.set", links, kUi}));
+    json::Value add = json::Value::object();
+    add["track"] = room;
+    add["position"] = position;
+    add["notation"] = "1: C4:q r:*";
+    auto peer = f.dispatcher->execute({"item.add", add, kUi});
+    REQUIRE(peer);
+    json::Value len = json::Value::object();
+    len["item"] = peer->find("item")->asString();
+    len["length"] = length;
+    REQUIRE(f.dispatcher->execute({"item.set", len, kUi}));
+    f.sync();
+    REQUIRE(model::linkedItems(f.app->head(), it).size() == 2);
+    auto& sent = recordSteps(f);
+    const ui::Rect r = f.rectOf(it);
+    f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    REQUIRE(sent[0].size() == 3);
+    CHECK(sent[0][2].command == "take.activate");
+    const auto pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[1]) == 1 - heard);
+    CHECK(pieces[0]->fadeOut.length == 0);
+    std::size_t roomItems = 0;  // the group's item was split too
+    for (const auto& e : f.app->head().items)
+        if (e.value->track.str() == room) ++roomItems;
+    CHECK(roomItems == 3);
+    // A lane click on a piece there still switches it with take.activate.
+    model::Id first{};
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == pieces[0]) first = e.id;
+    const ui::Rect p = f.rectOf(first);
+    f.click(laneAt(p, 2, 1 - heard, p.x + p.w * 0.5f));
+    REQUIRE(sent.size() == 2);
+    CHECK(sent[1][0].command == "take.activate");
 }
 
 namespace {

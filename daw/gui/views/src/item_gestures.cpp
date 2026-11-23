@@ -935,7 +935,8 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
             if (state_.drag == Drag::Comp && pressed) {  // a swipe reaches across the comp
                 state_.compLo = startBeat(s, *pressed);
                 state_.compHi = startBeat(s, *pressed) + lengthBeats(s, *pressed);
-                if (const auto comp = compOf(s, h->item)) {
+                if (const auto comp =
+                        compsWithTakeComp(s, h->item) ? compOf(s, h->item) : std::nullopt) {
                     const auto spans = compSpans(s, *comp);
                     state_.compLo = spans.front().from;
                     state_.compHi = spans.back().to;
@@ -1777,8 +1778,9 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
         // that piece; a re-comp keeps the comp's crossfade, a first one takes
         // take.comp's default. A click on a lone item hears that take
         // throughout (take.activate, which a looped item also takes).
+        const bool takeComp = compsWithTakeComp(s, state_.anchor);
         const auto comp = compOf(s, state_.anchor);
-        const bool inComp = comp && comp->pieces.size() > 1;
+        const bool inComp = takeComp && comp && comp->pieces.size() > 1;
         const double start = startBeat(s, *anchor),
                      end = startBeat(s, *anchor) + lengthBeats(s, *anchor);
         const bool click = !moved_ || state_.compTo - state_.compFrom < kMinLength;
@@ -1794,11 +1796,12 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             runSteps("Switch take", {{"take.activate", std::move(activate)}});
             return;
         }
-        if (anchor->loop) {
-            // take.comp refuses a looped item: the swipe splits it at the
-            // range and hears that take there, with hard cuts, as it did
-            // before take.comp (an agent can do the same with item.split and
-            // take.activate).
+        if (!takeComp) {
+            // take.comp refuses a looped item, and an item edited together
+            // with others (a track group): the swipe splits it at the range
+            // (item.split splits the group's items too) and hears that take
+            // there, with hard cuts, as it did before take.comp (an agent can
+            // do the same with item.split and take.activate).
             std::vector<EditStep> steps;
             std::string target = state_.anchor.str();
             if (state_.compFrom > start + 1e-9) {
