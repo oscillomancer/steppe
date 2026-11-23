@@ -98,10 +98,12 @@ json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::
 // The take index piece `item` of `comp` plays.
 std::size_t compPieceIndex(const CompView& comp, model::Id item);
 
-// A take.comp refusal as the GUI shows it: a group track that cannot follow
-// (comp.group_takes, comp.group_mismatch) names the argument bypass_groups in
-// its hint, which a GUI user sends by holding Alt; the hint says that.
-Error compRefusal(Error error);
+// A take.comp refusal on `item` as the GUI shows it: a group track that cannot
+// follow (comp.group_takes, comp.group_mismatch, or item.locked on another
+// track) names the argument bypass_groups, or only unlocking, in its hint; a
+// GUI user sends it by holding Alt, which the hint says. Other refusals, and a
+// lock on the item's own track, are returned as they are.
+Error compRefusal(Error error, const model::Session& s, model::Id item);
 
 // The warnings of a command's result, their messages joined for the status
 // line ("" when there are none).

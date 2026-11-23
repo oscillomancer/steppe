@@ -1176,7 +1176,7 @@ void Inspector::runComp(json::Value args) {
     auto r = dispatcher_.execute({"take.comp", std::move(args), kOrigin});
     // A group track that cannot follow: the hint says to hold Alt (a pick
     // here, or a gesture on the lanes), not the argument.
-    if (!r) r = views::compRefusal(r.error());
+    if (!r && !ids_.empty()) r = views::compRefusal(r.error(), app_.head(), ids_.front());
     // Its warnings (a crossfade clamped or skipped) go to the status line.
     if (r && actions_.onNotice)
         if (const std::string w = views::resultWarnings(*r); !w.empty()) actions_.onNotice(w);

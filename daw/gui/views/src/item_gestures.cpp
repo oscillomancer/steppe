@@ -1724,7 +1724,10 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
                 if (step.command == "take.comp") step.args["bypass_groups"] = true;
         auto r = run(label, steps);
         if (!r) {
-            if (onError) onError(compRefusal(r.error()));
+            if (onError)
+                onError(steps.back().command == "take.comp"
+                            ? compRefusal(r.error(), view_.session(), state_.anchor)
+                            : r.error());
             return;
         }
         // take.comp's warnings say why a seam is shorter or hard, or a note

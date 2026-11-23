@@ -1717,36 +1717,62 @@ TEST_CASE("an edit-grouped track comps every member with take.comp; a member tha
     for (const auto& seam : f.view->lanes().compSeams(roomRow)) CHECK_FALSE(seam.differs);
 }
 
-// Round 129 U1/U2: a group track that cannot follow (here a one-take bass
-// item over the stretch) refuses the group's take.comp; the refusal reaches the
-// status line with a hint to hold Alt, and nothing changes. With Alt the
-// gesture comps this track alone (bypass_groups), as Alt moves a fader alone.
-TEST_CASE("a grouped comp a track cannot follow is refused with an Alt hint; Alt comps alone") {
-    Fixture f;
-    if (!f.ok) return;
-    wireCompQuery(f);
+// A two-take item on a new track and a second track grouped with it for edits:
+// with `locked`, the second track holds a locked copy of the item (a member
+// that cannot follow); otherwise a one-take bass item over the same stretch.
+namespace {
+
+struct Band {
+    model::Id it, track, other, otherItem;
+    std::size_t heard = 0;
+};
+
+Band bandOf(Fixture& f, bool locked) {
+    Band b;
     auto [it, heard] = twoTakeItem(f);
-    const model::Id track = f.item(it).track;
+    b.it = it;
+    b.heard = heard;
+    b.track = f.item(it).track;
     const double position = f.item(it).position, length = f.item(it).length;
-    const auto other =
-        f.dispatcher->execute({"track.add", json::parse(R"({"name":"Bass"})").value(), kUi});
+    const auto other = f.dispatcher->execute(
+        {"track.add", json::parse(locked ? R"({"name":"Room"})" : R"({"name":"Bass"})").value(),
+         kUi});
     REQUIRE(other);
-    const model::Id bass = *model::Id::parse(other->find("track")->asString());
-    json::Value add = json::Value::object();
-    add["track"] = bass.str();
-    add["position"] = position;
-    add["notation"] = "1: C2:q r:*";
-    auto bassItem = f.dispatcher->execute({"item.add", add, kUi});
-    REQUIRE(bassItem);
-    json::Value len = json::Value::object();
-    len["item"] = bassItem->find("item")->asString();
-    len["length"] = length;
-    REQUIRE(f.dispatcher->execute({"item.set", len, kUi}));
+    b.other = *model::Id::parse(other->find("track")->asString());
+    if (locked) {
+        json::Value copy = json::Value::object();
+        copy["item"] = it.str();
+        copy["to"] = position + length + 8;
+        const auto copied = f.dispatcher->execute({"item.duplicate", copy, kUi});
+        REQUIRE(copied);
+        b.otherItem = *model::Id::parse(copied->find("id")->asString());
+        json::Value move = json::Value::object();
+        move["item"] = b.otherItem.str();
+        move["track"] = b.other.str();
+        move["position"] = position;
+        REQUIRE(f.dispatcher->execute({"item.move", move, kUi}));
+        json::Value lock = json::Value::object();
+        lock["item"] = b.otherItem.str();
+        lock["locked"] = true;
+        REQUIRE(f.dispatcher->execute({"item.set", lock, kUi}));
+    } else {
+        json::Value add = json::Value::object();
+        add["track"] = b.other.str();
+        add["position"] = position;
+        add["notation"] = "1: C2:q r:*";
+        auto bass = f.dispatcher->execute({"item.add", add, kUi});
+        REQUIRE(bass);
+        b.otherItem = *model::Id::parse(bass->find("item")->asString());
+        json::Value len = json::Value::object();
+        len["item"] = b.otherItem.str();
+        len["length"] = length;
+        REQUIRE(f.dispatcher->execute({"item.set", len, kUi}));
+    }
     json::Value group = json::Value::object();
     group["name"] = "Band";
     group["members"] = json::Value::array();
-    group["members"].push_back(track.str());
-    group["members"].push_back(bass.str());
+    group["members"].push_back(b.track.str());
+    group["members"].push_back(b.other.str());
     auto made = f.dispatcher->execute({"group.add", group, kUi});
     REQUIRE(made);
     json::Value links = json::Value::object();
@@ -1755,46 +1781,101 @@ TEST_CASE("a grouped comp a track cannot follow is refused with an Alt hint; Alt
     links["links"].push_back("edit");
     REQUIRE(f.dispatcher->execute({"group.set", links, kUi}));
     f.sync();
+    return b;
+}
+
+std::size_t itemsOn(Fixture& f, model::Id track) {
+    std::size_t n = 0;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == track) ++n;
+    return n;
+}
+
+}  // namespace
+
+// Round 129: a one-take member (a bass beside drum takes) is passed over by the
+// group's take.comp (skipped_tracks, one_take), so the drums comp without Alt
+// and the bass is left as it was.
+TEST_CASE("a grouped comp passes over a one-take member: the drums comp without Alt") {
+    Fixture f;
+    if (!f.ok) return;
+    wireCompQuery(f);
+    const Band b = bandOf(f, false);
+    std::vector<Error> errors;
+    f.view->gestures().onError = [&](const Error& e) { errors.push_back(e); };
+    auto& sent = recordSteps(f);
+    const model::Item bassBefore = f.item(b.otherItem);
+    const std::size_t row = *f.view->trackLayout().indexOf(b.track);
+    const ui::Rect r = f.rectOf(b.it);
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f),
+           laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f));
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
+    CHECK(errors.empty());
+    const auto pieces = piecesOf(f, b.track);
+    REQUIRE(pieces.size() == 3);
+    CHECK(heardOf(*pieces[1]) == 1 - b.heard);
+    CHECK(f.view->lanes().compSeams(row).size() == 2);
+    // The bass: one item, where and as long as it was, with its one take.
+    REQUIRE(itemsOn(f, b.other) == 1);
+    const model::Item& bass = f.item(b.otherItem);
+    CHECK(bass.position == bassBefore.position);
+    CHECK(bass.length == bassBefore.length);
+    CHECK(bass.takes == bassBefore.takes);
+    // A member passed over does not read as differing.
+    CHECK(f.view->lanes().compSeams(*f.view->trackLayout().indexOf(b.other)).empty());
+    for (const auto& seam : f.view->lanes().compSeams(row)) CHECK_FALSE(seam.differs);
+}
+
+// Round 129 U1/U2: a group track that cannot follow (here a locked copy of the
+// item) refuses the group's take.comp before anything is written; the refusal
+// reaches the status line with a hint to hold Alt, and nothing changes. With
+// Alt the gesture comps this track alone (bypass_groups), as Alt moves a fader
+// alone.
+TEST_CASE("a grouped comp a track cannot follow is refused with an Alt hint; Alt comps alone") {
+    Fixture f;
+    if (!f.ok) return;
+    wireCompQuery(f);
+    const Band b = bandOf(f, true);
     std::vector<Error> errors;
     f.view->gestures().onError = [&](const Error& e) { errors.push_back(e); };
     auto& sent = recordSteps(f);
     const std::uint64_t version = f.app->head().version;
-    const std::size_t row = *f.view->trackLayout().indexOf(track);
-    const ui::Rect r = f.rectOf(it);
+    const std::size_t row = *f.view->trackLayout().indexOf(b.track);
+    const ui::Rect r = f.rectOf(b.it);
     // The swipe: one take.comp for the group, refused before anything is written.
-    f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f));
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f),
+           laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f));
     REQUIRE(sent.size() == 1);
     CHECK(sent[0][0].command == "take.comp");
     CHECK_FALSE(sent[0][0].args.find("bypass_groups"));
     REQUIRE(errors.size() == 1);
-    CHECK(errors[0].code == "comp.group_takes");
-    CHECK(errors[0].hint.find("hold Alt to comp this track alone") != std::string::npos);
-    CHECK(errors[0].hint.find("bypass_groups") == std::string::npos);
+    CHECK(errors[0].code == "item.locked");
+    CHECK(errors[0].hint == "unlock it, or hold Alt to comp this track alone");
     // Nothing changed: the same version, one whole item, no seams.
     CHECK(f.app->head().version == version);
-    CHECK(piecesOf(f, track).size() == 1);
-    CHECK(heardOf(f.item(it)) == heard);
+    CHECK(piecesOf(f, b.track).size() == 1);
+    CHECK(heardOf(f.item(b.it)) == b.heard);
     CHECK(f.view->lanes().compSeams(row).empty());
     // A lane click on the whole item is refused the same way.
-    f.click(laneAt(r, 2, 1 - heard, r.x + r.w * 0.5f));
+    f.click(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.5f));
     REQUIRE(errors.size() == 2);
-    CHECK(errors[1].code == "comp.group_takes");
+    CHECK(errors[1].code == "item.locked");
     CHECK(f.app->head().version == version);
-    // With Alt the swipe comps this track alone; the bass item is untouched.
-    f.drag(laneAt(r, 2, 1 - heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - heard, r.x + r.w * 0.6f),
+    // With Alt the swipe comps this track alone; the locked copy is untouched.
+    f.drag(laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.3f), laneAt(r, 2, 1 - b.heard, r.x + r.w * 0.6f),
            ui::kAlt);
     REQUIRE(sent.size() == 3);
     const json::Value* bypass = sent[2][0].args.find("bypass_groups");
     REQUIRE(bypass);
     CHECK(bypass->asBool());
     CHECK(errors.size() == 2);
-    const auto pieces = piecesOf(f, track);
+    const auto pieces = piecesOf(f, b.track);
     REQUIRE(pieces.size() == 3);
-    CHECK(heardOf(*pieces[1]) == 1 - heard);
-    std::size_t bassItems = 0;
-    for (const auto& e : f.app->head().items)
-        if (e.value->track == bass) ++bassItems;
-    CHECK(bassItems == 1);
+    CHECK(heardOf(*pieces[1]) == 1 - b.heard);
+    CHECK(itemsOn(f, b.other) == 1);
+    CHECK(f.item(b.otherItem).locked);
     CHECK(f.view->lanes().compSeams(row).size() == 2);
 }
 
