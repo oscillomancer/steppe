@@ -7,6 +7,10 @@
 // cause, made such a render differ (review round 26, item 2). Every test in
 // this binary gets a deadline no healthy plug-in misses; a test of the
 // deadline itself sets the default back (BridgeDeadline in bridge_patience.h).
+// Likewise the engine waits for a device to act on a transport request (1 s,
+// then engine.transport): on a starved runner a healthy dummy device took
+// longer (Windows CI 45186989443), so the tests wait kPatientTransportSeconds,
+// and a test of the refusal sets a short bound (TransportWait).
 #include <doctest/doctest.h>
 
 #include "bridge_patience.h"
@@ -14,6 +18,7 @@
 namespace {
 const bool kPatient = [] {
     supple::host::setBridgeDeadlineMs(supple::engine::test::kPatientBridgeMs);
+    supple::engine::setTransportWaitSeconds(supple::engine::kPatientTransportSeconds);
     return true;
 }();
 }  // namespace
@@ -21,4 +26,5 @@ const bool kPatient = [] {
 TEST_CASE("engine tests wait for bridged calls past any stall of a loaded machine") {
     CHECK(kPatient);
     CHECK(supple::host::bridgeDeadlineMs() == supple::engine::test::kPatientBridgeMs);
+    CHECK(supple::engine::transportWaitSeconds() == supple::engine::kPatientTransportSeconds);
 }

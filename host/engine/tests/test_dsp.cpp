@@ -5,7 +5,7 @@
 // its patch, an instrument playing a track's notes -- and its mistakes come
 // back with hints.
 #include <doctest/doctest.h>
-#include <unistd.h>
+#include "../../../tests/file_platform.h"
 
 #include <filesystem>
 #include <fstream>
@@ -24,7 +24,8 @@ const fs::path kStock = STOCK_CLAP_DIR;
 const cmd::Origin kTest{cmd::Origin::Type::Test, "unit", ""};
 
 struct Root {
-    fs::path path = fs::temp_directory_path() / ("supple-engine-dsp-" + std::to_string(::getpid()));
+    fs::path path = fs::temp_directory_path() /
+                    ("supple-engine-dsp-" + std::to_string(supple::test::processId()));
     Root() { fs::remove_all(path); }
     ~Root() { fs::remove_all(path); }
 };

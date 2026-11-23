@@ -5,8 +5,8 @@
 // find longjmp buf"), so the label tsan-skip keeps it out of that preset while
 // engine.tests keeps its TSan coverage.
 #include <doctest/doctest.h>
+#include "../../../tests/file_platform.h"
 
-#include <unistd.h>
 #include <filesystem>
 
 #include <supple/engine/app.h>
@@ -17,8 +17,8 @@ namespace fs = std::filesystem;
 
 namespace {
 struct Workdir {
-    fs::path path =
-        fs::temp_directory_path() / ("supple-engine-scripts-" + std::to_string(::getpid()));
+    fs::path path = fs::temp_directory_path() /
+                    ("supple-engine-scripts-" + std::to_string(supple::test::processId()));
     Workdir() {
         fs::remove_all(path);
         fs::create_directories(path);

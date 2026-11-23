@@ -5,6 +5,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <mutex>
+#include "../../../tests/file_platform.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
 #include "supple/model/freeze.h"
@@ -15,10 +16,7 @@ namespace {
 const model::Id track{model::Kind::Track, 1};
 const cmd::Origin origin{cmd::Origin::Type::Test, "freeze", ""};
 struct Fixture {
-    std::filesystem::path dir =
-        std::filesystem::temp_directory_path() /
-        ("freeze-tests-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::path dir = supple::test::uniqueTempDir("freeze-tests-");
     cmd::Registry registry;
     std::unique_ptr<EngineApp> app;
     std::unique_ptr<cmd::Dispatcher> bus;

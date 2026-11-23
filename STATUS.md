@@ -25,14 +25,23 @@ protocol and standalone MCP/proxy have native coverage on both platforms
 Both native platforms enable and test audio-file I/O, recording recovery,
 engine/CLI, dummy/offline rendering and sandbox. PortAudio builds CoreAudio on
 macOS and WASAPI/ASIO on Windows; fake-device tests verify RT/offline equivalence
-in both executors. Actual hardware trials remain opt-in and unmeasured. The
+in both executors. Actual hardware trials remain opt-in and unmeasured. `engine.tests`
+builds one source list on all three platforms (the real-time = offline null
+tests, `test_app.cpp` with the command-example test, `test_commands.cpp`
+among them); the cases still Linux-only are listed under Known limits. The
 GUI gate is lifted (ADR-0039), with native editor embedding (ADR-0040);
 the combined native DAW builds and hermetic tests pass CI on both platforms.
 Portable libraries, the session model, stock DSP cores
 and the script suite build independently of those services; see
 CONTRIBUTING.md for the complete gate list. On Windows, a save blocked by
 another program that holds the file open (no delete sharing) retries for about
-a second, then reports which file and what to close.
+a second, then reports which file and what to close. A first save closes the recording
+hash reader, pauses the media decode worker, cancels a file audition's decode and has the GUI's
+waveform (peak) worker let go of the files before it removes the scratch media. What it does not
+hold, on Windows: render, freeze, consolidate and analysis jobs that started before the save and
+are still decoding the scratch files (each holds a file only while it decodes it). Another program, or a folder that cannot be written, does too.
+A scratch file that still cannot be removed stays and the save names it in a
+`project.media_leftover` warning (the project uses the copy).
 
 The bridge port implements native macOS shared memory/address wakes and Windows
 mapping/event handle transfer, notifications and process isolation (ADR-0037).
@@ -1080,9 +1089,10 @@ instructions are in `docs/guides/installing.md`.
   top or in the inspector, keeping a comp's crossfade on every re-comp.
   Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
   a looped item's swipe splits and switches with hard cuts until its Loop is off;
-  on a track grouped for edits the swipe also keeps that path (split every member,
-  switch one) until `take.comp` comps every member of an edit group with the same
-  spans and take, which is asked of the builder; the GUI switches to it then;
+  on a track grouped for edits every comp gesture is the group's `take.comp` (Alt
+  comps the track alone, past a group track that cannot follow), and a member that
+  reads differently (`differing_members`) shows broken seam lines and an inspector
+  Group row, but only where it has seams of its own or is selected;
   seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
   empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);
@@ -1090,7 +1100,19 @@ instructions are in `docs/guides/installing.md`.
   after a tempo change a Beats-timebase seam's overlap and its fades (seconds) disagree
   until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
   stays, and between MIDI pieces of one take a held note sounds again there
-  (`comp.midi_boundary`).
+  (`comp.midi_boundary`); a seam fade edited by hand (another length or shape) is overwritten
+  by the next `take.comp`, which gives every seam one length and shape: `take.comp.get` says
+  `uniform: false` and lists the seams a rebuild with the read-back would rewrite. An item in an
+  edit group is comped with every other track of the group that has items over the same stretch
+  (matched by the run's extent: however it is cut or crossfaded, a whole item beside a split lead
+  is comped to the spans; same spans and take indices, one undo step, `members` in the result;
+  a group track with nothing there (`no_item`) or only one-take items (`one_take`, a bass with
+  drum takes) is left untouched and named in `skipped_tracks` with its reason; `bypass_groups` for
+  the item alone); a track whose items cannot follow refuses the call before anything is written
+  (`comp.group_takes` for too few takes for a span, `comp.group_mismatch` with the inner reason,
+  `item.locked`), the error's path naming the member (`/args/members/<track>[/items/<item>]`). `comp.linked`
+  is retired (it meant "set bypass_groups"; the call now comps the group). The GUI comps a
+  grouped track through it.
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main
@@ -1574,6 +1596,33 @@ Library boundaries:
   while its backlog has room.
 
 Engine and hosting:
+- `engine.tests` cases that run on Linux only (CONTRIBUTING.md, "Temporary
+  port gates"), each fenced with its reason: the JACK backend's (`test_jack`,
+  `test_bench`, six JACK cases in `test_app`/`test_realtime`) and the Linux
+  protections (`test_runtime_protection`), by design; recording header errors
+  through a `/proc/self/fd` fault (`test_realtime`; checked everywhere through
+  the writer's I/O seam too); the `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` refusals
+  (`test_realtime`). Not on macOS, which has no CPU affinity: the restricted
+  CPU mask (`test_realtime`, `test_workers`). Not on Windows: the posix-fd
+  part of the CLAP host services case (`test_app`: CLAP's posix-fd extension
+  is not offered on Windows, which the case checks).
+- Open in `engine.tests` off Linux:
+  - macOS: the clip player's take-chain launch case
+    (`test_clip_player_live.cpp`) once showed a live/offline difference of
+    0.2289 (native CI 45069703846), against real-time = offline. It is
+    unexplained and has not recurred: 320 repetitions of the case on macOS
+    (60 with heap scribbling, 200 on the fixed head in native CI
+    45100490939), a run of every engine entry under parallel load,
+    a full macOS round, and local sanitizer and heap-perturbation runs all
+    passed. The likeliest cause, two test processes sharing a fixture folder
+    named by the clock alone, is fixed (folders are named by process and
+    counter). If it recurs, the case prints the first differing frame, its
+    counters, the offline render's warnings and whether the media still exist.
+  - Windows: the first save of an unsaved project leaves the recording in the
+    scratch folder (`test_app`), being fixed. A bridged plug-in's slow start
+    on a loaded runner (`test_realtime`) is no longer failed by the late rule
+    (ADR-0101), and its live waits end at the cycle's deadline, not a
+    15.6 ms timer tick past it (ADR-0102).
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue

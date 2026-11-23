@@ -5,12 +5,14 @@
 #include <supple/diagnostics/reports.h>
 #include <supple/engine/app.h>
 #include <filesystem>
+
+#include "../../../tests/file_platform.h"
 using namespace supple;
 using namespace supple::engine;
 namespace fs = std::filesystem;
 namespace {
 struct Root {
-    fs::path path = fs::temp_directory_path() / "supple-crash-commands";
+    fs::path path = supple::test::uniqueTempDir("supple-crash-commands-");
     Root() { fs::remove_all(path); }
     ~Root() { fs::remove_all(path); }
 };

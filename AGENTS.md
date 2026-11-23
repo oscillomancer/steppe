@@ -54,8 +54,9 @@ same change, and say what you found.
    and waiting for a bridged plug-in's answer: with a failure deadline on
    background threads (ADR-0013), and in the device callback only until the
    cycle's bridge deadline, its start plus its period or 2 ms, whichever is
-   larger (ADR-0081); and a live helper's wait within a job while one of the
-   job's bridged calls blocks (ADR-0085).
+   larger (ADR-0081), plus the OS timer's lateness (ADR-0102); and a live
+   helper's wait within a job while one of the job's bridged calls blocks
+   (ADR-0085).
 3. **The product name lives in one place.** `cmake/Product.cmake` defines
    it, and C++ reads it from the generated `supple/product.h`
    (`supple::product::kName`, `kSlug`, …). Never hard-code "Steppe" or

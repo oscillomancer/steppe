@@ -63,6 +63,12 @@ class AuditionLoader {
         request_.reset();
         done_.reset();
     }
+    // Returns when the worker is not reading a file (after cancel(), when the read it was in
+    // has seen the cancel and let go): for a first save that removes the file it reads.
+    void waitIdle() {
+        std::unique_lock lock(mutex_);
+        idle_.wait(lock, [&] { return !busy_; });
+    }
     // Reads that a newer request or cancel() overtook: their result dropped.
     std::uint64_t discarded() const { return discarded_.load(std::memory_order_acquire); }
     std::optional<Done> take() {
@@ -98,6 +104,7 @@ class AuditionLoader {
                 if (stopping_) return;
                 request = std::move(request_);
                 request_.reset();
+                busy_ = true;
             }
             const auto serial = request->second;
             auto voice = load(request->first, [&] {
@@ -106,6 +113,8 @@ class AuditionLoader {
             });
             {
                 std::lock_guard lock(mutex_);
+                busy_ = false;
+                idle_.notify_all();
                 if (stopping_) return;
                 if (generation_.load() != serial) {
                     discarded_.fetch_add(1, std::memory_order_release);
@@ -120,8 +129,8 @@ class AuditionLoader {
     std::function<void(std::uint64_t)> stopCheck_;
     std::atomic<std::uint64_t> discarded_{0};
     std::mutex mutex_;
-    std::condition_variable changed_;
-    bool stopping_ = false;
+    std::condition_variable changed_, idle_;
+    bool stopping_ = false, busy_ = false;
     std::atomic<std::uint64_t> generation_{0};
     std::optional<std::pair<Request, std::uint64_t>> request_;
     std::optional<Done> done_;

@@ -21,6 +21,7 @@
 #include "supple/engine/realtime.h"
 #include "supple/model/session.h"
 
+#include "../../../tests/file_platform.h"
 #include "../../clap-host/src/platform.h"
 
 using namespace supple;
@@ -495,10 +496,7 @@ TEST_CASE("a write hold plays the static level over the curve until it is releas
 namespace {
 // An app with one track whose volume has an envelope in `mode`, playing.
 struct WriteHost {
-    std::filesystem::path root =
-        std::filesystem::temp_directory_path() /
-        ("supple-mix-" +
-         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::path root = supple::test::uniqueTempDir("supple-mix-");
     DummyBackend backend{DummyBackend::Options{.mode = DummyBackend::Mode::Manual}};
     std::unique_ptr<EngineApp> app;
     cmd::Registry registry;
@@ -1284,9 +1282,7 @@ TEST_CASE("wet and bypass edits on input and take chains sound like a compiled r
     // chain on a rendered audio item and an input chain on the monitored
     // vocal, each a -12 dB gain.
     const Wet w = wetSession();
-    const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-stages-" +
-                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto dir = supple::test::uniqueTempDir("supple-stages-");
     audio::AudioData saw;
     saw.sampleRate = 48000;
     saw.channels.assign(2, std::vector<float>(96000));

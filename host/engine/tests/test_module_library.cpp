@@ -15,6 +15,7 @@
 #include <semaphore>
 #include <thread>
 
+#include "../../../tests/file_platform.h"
 #include "live_workers.h"
 #include "plan.h"
 #include "rack_runtime.h"
@@ -54,9 +55,7 @@ struct Level : Module {
 )";
 
 std::filesystem::path freshDir(const char* what) {
-    return std::filesystem::temp_directory_path() /
-           (std::string(what) + "-" +
-            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    return supple::test::uniqueTempDir(std::string(what) + "-");
 }
 
 struct Fixture {

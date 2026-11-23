@@ -50,7 +50,7 @@ if(SUPPLE_BUILD_TESTS)
   target_link_libraries(host-child-fixture PRIVATE supple::clap-host)
   supple_target_defaults(host-child-fixture)
   # Hermetic CLAP fixtures for the host tests.
-  add_library(clap-host-fixtures MODULE tests/fixture_plugins.cpp)
+  add_library(clap-host-fixtures MODULE tests/fixture_plugins.cpp tests/shared_page.cpp)
   target_link_libraries(clap-host-fixtures PRIVATE supple::core-params supple::core-patch
                         supple::semantic-params-abi)
   if(WIN32)

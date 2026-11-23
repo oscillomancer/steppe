@@ -1949,21 +1949,21 @@ TEST_CASE("record.commit refuses clocks and runs no recording can have") {
         REQUIRE(args);
         return d.execute({"record.commit", *args, kUnit});
     };
-    const std::string far = "4611686018427387904", farBack = "-4611686018427387904";  // 2^62
-    const std::string past = "281474976710657";                                       // 2^48 + 1
+    const std::string huge = "4611686018427387904", hugeBack = "-4611686018427387904";  // 2^62
+    const std::string past = "281474976710657";                                         // 2^48 + 1
     const std::vector<std::pair<Field, std::string>> cases = {
-        {{"start_sample", far}, "/args/takes/0/start_sample"},
-        {{"start_sample", farBack}, "/args/takes/0/start_sample"},
+        {{"start_sample", huge}, "/args/takes/0/start_sample"},
+        {{"start_sample", hugeBack}, "/args/takes/0/start_sample"},
         {{"frames", past}, "/args/takes/0/frames"},
-        {{"loop_start", far}, "/args/takes/0/loop_start"},
-        {{"loop_end", far}, "/args/takes/0/loop_end"},
+        {{"loop_start", huge}, "/args/takes/0/loop_start"},
+        {{"loop_end", huge}, "/args/takes/0/loop_end"},
         {{"loop_start", "-1"}, "/args/takes/0/loop_start"},
-        {{"overflow_frames", far}, "/args/takes/0/overflow_frames"},
+        {{"overflow_frames", huge}, "/args/takes/0/overflow_frames"},
         {{"sample_rate", "0"}, "/args/takes/0/sample_rate"},
-        {{"file_frame", far}, "/args/takes/0/segments/0/file_frame"},
-        {{"segment_timeline", farBack}, "/args/takes/0/segments/0/timeline"},
-        {{"timeline", far}, "/args/takes/0/events/0/timeline"},
-        {{"timeline", farBack}, "/args/takes/0/events/0/timeline"},
+        {{"file_frame", huge}, "/args/takes/0/segments/0/file_frame"},
+        {{"segment_timeline", hugeBack}, "/args/takes/0/segments/0/timeline"},
+        {{"timeline", huge}, "/args/takes/0/events/0/timeline"},
+        {{"timeline", hugeBack}, "/args/takes/0/events/0/timeline"},
         {{"run", "4294967296"}, "/args/takes/0/events/0/run"},  // 2^32 was run 0
     };
     for (const auto& [bad, path] : cases) {

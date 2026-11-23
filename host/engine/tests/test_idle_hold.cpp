@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "../../../tests/file_platform.h"
 #include "runtime_protection.h"
 #include "supple/engine/app.h"
 
@@ -117,9 +118,7 @@ TEST_CASE("an automatic idle-latency hold that fails says why, and is no warning
 
 TEST_CASE("EngineApp holds the idle-latency request while a bridged effect plays live") {
     host::setBridgeExecutable(BRIDGE_PATH);
-    const auto dir = std::filesystem::temp_directory_path() /
-                     ("supple-idle-hold-" +
-                      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto dir = supple::test::uniqueTempDir("supple-idle-hold-");
     std::filesystem::create_directories(dir);
     FakeLatency fake;
     {
