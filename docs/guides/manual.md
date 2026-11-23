@@ -843,7 +843,13 @@ metadata; `session.describe` marks frozen channels. Work on other tracks can
 continue during a freeze. Completion refuses if the source sound, input files,
 project/branch or latency schedule changed; submit the freeze again.
 
-Disarm the channel and remove external audio, sidechain/key or MIDI inputs first.
+Disarm the channel and remove external audio, sidechain/key or MIDI inputs first. A frozen
+channel cannot be armed (arming it says to unfreeze it first), and arming a group leaves its frozen
+members unarmed with a warning. If a channel is frozen while a recording is being made on it (an
+agent can do this behind the app's back), nothing is lost: the recording stops as usual, every other
+channel's takes are placed, and the frozen channel's recording is kept as a file in the project's
+media, named in a `record.frozen_skipped` warning. Unfreeze the channel and place the file with
+`item.add {"track":"tr_1","audio_file":"<the file>"}`; a recovered recording follows the same rule.
 V1 requires unity master playrate without an active rate envelope. Tempo, meter,
 project sample rate and master-rate edits name the frozen tracks that must be
 unfrozen first. Missing plugins or unavailable media must be repaired before
