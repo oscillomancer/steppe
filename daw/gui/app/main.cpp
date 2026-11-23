@@ -360,8 +360,9 @@ int frontendMain(int argc, char** argv) {
     gui::Shell* eventShell = nullptr;
     gui::SideBrowser* eventBrowser = nullptr;
     auto publish = [&] {
-        for (auto& [topic, payload] : (*app)->takeEvents()) {
-            if (eventShell && topic == "record.error") eventShell->recordingError(payload);
+        auto events = (*app)->takeEvents();
+        if (eventShell) eventShell->engineEvents(events);  // record.error and record.warning
+        for (auto& [topic, payload] : events) {
             if (eventBrowser && topic == "audition.error") eventBrowser->auditionFailed(payload);
             if (server) server->publish(topic, payload);
         }

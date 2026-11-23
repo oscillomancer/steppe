@@ -3568,11 +3568,15 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   `EngineApp::setStackRecordedTakes` (what `record.set {stack_takes}` sets)
   when the dialog is made at start-up and on each choice. The engine keeps
   it only while it runs, so the GUI is its keeper. The row shows the engine's
-  setting: an agent's `record.set` appears there and is not saved. A stop or
-  pause that ends a recording, from any action (Space, the transport bar,
-  a menu, the actions list), puts its `record.stack_skipped` and
-  `record.stack_group` warnings on the status line (`gui::recordingNotice`,
-  each message once, joined by "; ").
+  setting: an agent's `record.set` appears there and is not saved.
+  Every warning of a recording's commit (`record.stack_skipped`,
+  `record.stack_group`, `record.take_beyond_item`, and any other the engine
+  sends as a `record.warning` event, ADR-0103) goes on the status line,
+  whatever ended the recording: a key or button, an agent, a MIDI controller
+  or the engine halting. The app hands each batch of engine events to
+  `Shell::engineEvents`, which joins the messages of its `record.warning`
+  events, each once, by "; " (`Shell::statusNote`); while audio is being
+  prepared the line says so first, then the note.
   **Copy imported audio** (1.4): On by default, saved as the
   boolean `copy_imported_media` (absent, and in older files, means true;
   other types report `preferences.copy_imported_media`) and applied to

@@ -737,33 +737,9 @@ actions::Context AppActions::context(std::vector<std::string> sections) const {
     return c;
 }
 
-std::string recordingNotice(const json::Value& result) {
-    const json::Value* recorded = result.isObject() ? result.find("recorded") : nullptr;
-    if (!recorded || !recorded->isArray()) return {};
-    std::string out;
-    for (const json::Value& take : recorded->asArray()) {
-        const json::Value* warnings = take.isObject() ? take.find("warnings") : nullptr;
-        if (!warnings || !warnings->isArray()) continue;
-        for (const json::Value& w : warnings->asArray()) {
-            const json::Value* code = w.isObject() ? w.find("code") : nullptr;
-            const json::Value* message = w.isObject() ? w.find("message") : nullptr;
-            if (!code || !code->isString() || !message || !message->isString()) continue;
-            if (code->asString() != "record.stack_skipped" &&
-                code->asString() != "record.stack_group")
-                continue;
-            if (out.find(message->asString()) != std::string::npos) continue;  // once each
-            if (!out.empty()) out += "; ";
-            out += message->asString();
-        }
-    }
-    return out;
-}
-
 Result<json::Value> AppActions::run(const actions::Action& action, const json::Value& prompted) {
     auto r = runner_.run(action, context(), prompted);
     if (!r && onError) onError(action.name + ": " + r.error().message);
-    if (r && onNotice)
-        if (const std::string note = recordingNotice(*r); !note.empty()) onNotice(note);
     return r;
 }
 
@@ -780,8 +756,6 @@ void AppActions::invoke(const actions::Action& action) {
         return;
     }
     if (!r && onError) onError(action.name + ": " + r.error().message);
-    if (r && onNotice)
-        if (const std::string note = recordingNotice(*r); !note.empty()) onNotice(note);
 }
 
 void AppActions::invoke(std::string_view id) {

@@ -550,8 +550,8 @@ of the group to keep their takes level. Agents turn this off with
 `record.get` reads it. In the app it is **Edit > Preferences > Recording and import > Record over
 an item**: **New take** (the default) or **Layer on top**, kept with your other preferences; an
 agent's change shows there and lasts until Steppe quits. When a pass became a new item instead of a
-take, or other tracks of an edit group were left without a take, the status line says so when you
-stop.
+take, or other tracks of an edit group were left without a take, the status line says so when the
+recording stops, whether you stopped it, an agent did or the audio engine did.
 
 ### Changing what the mouse does
 

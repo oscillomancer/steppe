@@ -44,6 +44,20 @@ void Shell::recordingError(const json::Value& payload) {
               (file && file->isString() ? " (" + file->asString() + ")" : ""));
 }
 
+void Shell::engineEvents(const std::vector<std::pair<std::string, json::Value>>& events) {
+    std::string warnings;
+    for (const auto& [topic, payload] : events) {
+        if (topic == "record.error") recordingError(payload);
+        if (topic != "record.warning") continue;
+        const json::Value* message = payload.isObject() ? payload.find("message") : nullptr;
+        if (!message || !message->isString() || message->asString().empty()) continue;
+        if (warnings.find(message->asString()) != std::string::npos) continue;  // once each
+        if (!warnings.empty()) warnings += "; ";
+        warnings += message->asString();
+    }
+    if (!warnings.empty()) setStatus(warnings);
+}
+
 void Shell::setStatus(const std::string& text) {
     editStatus_ = text;
     ++noteSerial_;

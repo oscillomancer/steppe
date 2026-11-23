@@ -1043,27 +1043,43 @@ TEST_CASE("file actions: a late recording renews the discard decision before sav
     a.app->stopEngine();
 }
 
-// ADR-0103: a stop that ends a recording passes on where its takes went. A pass
-// into a locked item is a new item (record.stack_skipped), and the status line
-// says so; the other warnings of the reply are not this note's.
-TEST_CASE("app actions: a recording stopped over a locked item says so in the status line") {
-    CHECK(gui::recordingNotice(json::Value::object()).empty());
-    const auto reply = json::parse(R"({"recorded":[
-        {"warnings":[{"code":"record.stack_skipped","message":"the pass is a new item"},
-                     {"code":"recording.loop_runs_full","message":"a loop note"}]},
-        {"warnings":[{"code":"record.stack_group","message":"tr_2 did not record"},
-                     {"code":"record.stack_skipped","message":"the pass is a new item"}]}]})")
-                           .value();
-    CHECK(gui::recordingNotice(reply) == "the pass is a new item; tr_2 did not record");
-
+// ADR-0103, round 134 G3/G4: a recording's commit warnings reach the status line from the
+// engine's record.warning events, whoever stopped it: here an agent's transport.stop, then the
+// engine halting with nobody's command to answer. Every record.warning shows, each message once.
+TEST_CASE("the status line shows a recording's warnings, whoever stopped it") {
     engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
     App a;
     REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    auto status = [&] {
+        shell.sync();
+        a.root->frame(false);
+        const auto* node = a.root->find("status");
+        REQUIRE(node);
+        return node->valueText();
+    };
+    // Every record.warning, whatever its code, each message once; other topics are not its.
+    auto warning = [](const char* code, const char* message) {
+        json::Value w = json::Value::object();
+        w["code"] = code;
+        w["message"] = message;
+        return w;
+    };
+    shell.engineEvents({{"record.warning", warning("record.stack_skipped", "a new item")},
+                        {"record.warning", warning("record.take_beyond_item", "past the end")},
+                        {"session.changed", json::Value::object()},
+                        {"record.warning", warning("record.stack_skipped", "a new item")}});
+    CHECK(shell.statusNote() == "a new item; past the end");
+    CHECK(status().find(" · a new item; past the end") != std::string::npos);
+
     REQUIRE(a.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2},
                                {.anticipative = false}));
+    const cmd::Origin agent{cmd::Origin::Type::Agent, "agent", {}};
     auto exec = [&](const char* name, const std::string& args) {
-        auto result = a.dispatcher->execute(
-            {name, json::parse(args).value(), {cmd::Origin::Type::Ui, "gui", {}}});
+        auto result = a.dispatcher->execute({name, json::parse(args).value(), agent});
         REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
         return *result;
     };
@@ -1079,20 +1095,26 @@ TEST_CASE("app actions: a recording stopped over a locked item says so in the st
     add["position"] = 0;
     const std::string item = exec("item.add", json::writeCompact(add))["item"].asString();
     exec("item.set", R"({"item":")" + item + R"(","locked":true})");
-    exec("transport.seek", R"({"seconds":0.5})");
-    std::vector<std::string> notes;
-    a.actions->onNotice = [&](const std::string& note) { notes.push_back(note); };
-    REQUIRE(a.actions->run("transport.record"));
-    backend.run(8);
-    a.root->frame(false);
-    CHECK(notes.empty());
-    REQUIRE(a.actions->run("transport.toggle"));  // Space: stop, which commits the pass
-    CHECK_FALSE(a.app->engine()->recording());
-    CHECK(a.app->head().items.size() == 2);  // laid as a new item beside the locked one
-    REQUIRE(notes.size() == 1);
-    CHECK(notes[0].find("not a take of " + item) != std::string::npos);
-    CHECK(notes[0].find("locked") != std::string::npos);
-    a.app->stopEngine();
+    for (const bool halt : {false, true}) {
+        CAPTURE(halt);
+        shell.setStatus("");
+        exec("transport.seek", R"({"seconds":0.5})");
+        exec("transport.record", "{}");
+        backend.run(8);
+        shell.engineEvents(a.app->takeEvents());
+        CHECK(shell.statusNote().empty());  // nothing while it records
+        if (halt)
+            a.app->stopEngine();  // the engine's own stop: no command, no reply
+        else
+            exec("transport.stop", "{}");         // an agent's: the GUI did not ask
+        shell.engineEvents(a.app->takeEvents());  // what the app does each pass
+        // The note, which the status line shows once the new item's audio is prepared.
+        const std::string text = shell.statusNote();
+        CHECK(text.find("not a take of " + item) != std::string::npos);
+        CHECK(text.find("locked") != std::string::npos);
+        if (halt) break;
+    }
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
 TEST_CASE("file actions: changed versions and branches renew the discard decision") {

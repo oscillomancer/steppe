@@ -1075,8 +1075,9 @@ instructions are in `docs/guides/installing.md`.
   true, a machine setting that lasts for the process). The decision is stored in `record.commit`
   (`stack`), so replays do not read the setting; `project.recover` never stacks. The GUI keeps it
   as Preferences > Recording and import > Record over an item (New take / Layer on top,
-  `stack_recorded_takes`, applied at start and on change), and a stop that ends a recording puts
-  `record.stack_skipped` and `record.stack_group` on the status line; a headless session keeps no
+  `stack_recorded_takes`, applied at start and on change), and every warning of a recording's commit
+  (each a `record.warning` event) reaches its status line, whatever stopped the recording; a
+  headless session keeps no
   setting between runs. Limits: recording only some tracks of an edit
   group leaves the others' take counts behind, so a later group `take.comp` playing the new index is
   refused with `comp.group_takes` (the commit warns `record.stack_group` naming them); `midi_overdub`
