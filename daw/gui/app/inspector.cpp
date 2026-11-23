@@ -587,6 +587,21 @@ std::unique_ptr<ui::Node> Inspector::build() {
     };
     takes_->onSelect = [this](std::size_t i) {
         if (kind_ != InspectorSubject::Kind::Item || i >= takeIds_.size() || i == heard_) return;
+        // A piece of a comp switches as a lane click does: take.comp with its
+        // span, keeping the comp's crossfade (take.activate would keep the
+        // seam fades over what may now be one source).
+        const model::Session& s = app_.head();
+        if (const auto comp = views::compPieceOf(s, ids_.front())) {
+            const model::Item* item = s.items.find(ids_.front());
+            const auto at = item ? std::find(item->takes.begin(), item->takes.end(), takeIds_[i])
+                                 : std::vector<model::Id>::const_iterator{};
+            if (item && at != item->takes.end()) {
+                run("take.comp",
+                    views::compPieceArgs(s, *comp, ids_.front(),
+                                         static_cast<std::size_t>(at - item->takes.begin())));
+                return;
+            }
+        }
         json::Value args = json::Value::object();
         args["item"] = ids_.front().str();
         args["take"] = takeIds_[i].str();

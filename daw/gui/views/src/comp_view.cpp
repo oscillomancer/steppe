@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <set>
 
+#include "supple/model/groups.h"
+
 namespace supple::views {
 namespace {
 
@@ -67,6 +69,35 @@ std::vector<CompSpan> compSpans(const model::Session& s, const CompView& comp) {
 std::optional<model::CompCrossfade> compCrossfade(const model::Session& s, const CompView& comp) {
     if (comp.seams.empty()) return std::nullopt;
     return model::compCrossfade(s, comp.pieces);
+}
+
+bool compsWithTakeComp(const model::Session& s, model::Id item) {
+    const model::Item* it = s.items.find(item);
+    return it && !it->loop && model::linkedItems(s, item).size() <= 1;
+}
+
+std::optional<CompView> compPieceOf(const model::Session& s, model::Id item) {
+    if (!compsWithTakeComp(s, item)) return std::nullopt;
+    auto comp = compOf(s, item);
+    if (!comp || comp->pieces.size() < 2) return std::nullopt;
+    return comp;
+}
+
+std::size_t compPieceIndex(const CompView& comp, model::Id item) {
+    for (std::size_t i = 0; i < comp.pieces.size(); ++i)
+        if (comp.pieces[i].item == item) return comp.index[i];
+    return 0;
+}
+
+json::Value compPieceArgs(const model::Session& s, const CompView& comp, model::Id item,
+                          std::size_t index) {
+    CompSpan span{0, 0, index};
+    for (const auto& p : comp.pieces)
+        if (p.item == item) {
+            span.from = beatOfSample(s, p.coreStart);
+            span.to = beatOfSample(s, p.coreEnd);
+        }
+    return compArgs(item, {span}, compCrossfade(s, comp));
 }
 
 json::Value compArgs(model::Id item, const std::vector<CompSpan>& spans,

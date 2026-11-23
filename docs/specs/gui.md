@@ -1051,7 +1051,8 @@ in a comp it re-comps the pressed piece alone, its core span with that take, so
 its seams are rebuilt and it joins a neighbour playing the same take (a
 `take.activate` would keep the old seam fades, and a piece switched to its
 neighbour's take would sum one source with itself through an equal-power
-crossfade). A click on the take a piece already plays sends nothing. Every
+crossfade). A click on the take a piece already plays sends nothing. The take
+badge and the inspector's Takes list switch a piece of a comp the same way. Every
 re-comp keeps the comp's **crossfade**: `take.comp` gives every seam of a comp
 one length and shape, so the GUI sends the comp's own, the value
 `take.comp.get` reads back (`model::compCrossfade`: the longest seam-side fade,

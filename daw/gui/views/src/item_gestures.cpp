@@ -1794,17 +1794,13 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             runSteps("Switch take", {{"take.activate", std::move(activate)}});
             return;
         }
-        CompSpan span{state_.compFrom, state_.compTo, state_.takeLane};
         if (click) {
-            const auto at = std::find_if(comp->pieces.begin(), comp->pieces.end(),
-                                         [&](const auto& p) { return p.item == state_.anchor; });
-            if (at == comp->pieces.end()) return;
-            const auto i = static_cast<std::size_t>(at - comp->pieces.begin());
-            if (comp->index[i] == state_.takeLane) return;
-            const double rate = s.project->sampleRate;
-            span.from = s.timeMap->beatAt(static_cast<double>(at->coreStart) / rate);
-            span.to = s.timeMap->beatAt(static_cast<double>(at->coreEnd) / rate);
+            if (compPieceIndex(*comp, state_.anchor) == state_.takeLane) return;
+            runSteps("Comp take",
+                     {{"take.comp", compPieceArgs(s, *comp, state_.anchor, state_.takeLane)}});
+            return;
         }
+        const CompSpan span{state_.compFrom, state_.compTo, state_.takeLane};
         const auto crossfade = comp ? compCrossfade(s, *comp) : std::nullopt;
         runSteps("Comp take", {{"take.comp", compArgs(state_.anchor, {span}, crossfade)}});
         return;
@@ -1929,6 +1925,14 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             auto at = std::find(takes.begin(), takes.end(), *anchor->activeTake);
             const model::Id next =
                 (at == takes.end() || at + 1 == takes.end()) ? takes.front() : *(at + 1);
+            // A piece of a comp switches as a lane click does: take.comp.
+            if (const auto comp = compPieceOf(s, state_.anchor)) {
+                const auto index = static_cast<std::size_t>(
+                    std::find(takes.begin(), takes.end(), next) - takes.begin());
+                runSteps("Switch take",
+                         {{"take.comp", compPieceArgs(s, *comp, state_.anchor, index)}});
+                return;
+            }
             json::Value args = json::Value::object();
             args["item"] = state_.anchor.str();
             args["take"] = next.str();

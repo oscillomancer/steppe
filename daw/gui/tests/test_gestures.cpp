@@ -1491,6 +1491,51 @@ TEST_CASE("a comp's seam: found and hit where the take changes, dragged with tak
     CHECK(f.view->lanes().compSeams(row).size() == 2);
 }
 
+// Round 119 G1: the badge switches a comp piece as a lane click does, with
+// take.comp; take.activate would leave its seam fades over one source.
+TEST_CASE("a comp piece's take badge switches it with take.comp, joining its neighbours") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double start = f.item(it).position, length = f.item(it).length;
+    json::Value args = json::Value::object();
+    args["item"] = it.str();
+    json::Value span = json::Value::object();
+    span["from"] = start + length / 3;
+    span["to"] = start + 2 * length / 3;
+    span["index"] = static_cast<std::int64_t>(1 - heard);
+    args["spans"] = json::Value::array();
+    args["spans"].push_back(span);
+    REQUIRE(f.dispatcher->execute({"take.comp", args, kUi}));
+    f.sync();
+    auto pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 3);
+    model::Id middle{};
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == pieces[1]) middle = e.id;
+    auto& sent = recordSteps(f);
+    // The middle piece's badge, at the right of its name bar: its next take
+    // is the one either side plays, so the three join into one item.
+    const ui::Rect r = f.rectOf(middle);
+    f.click({r.right() - 16, r.y + 8});
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    pieces = piecesOf(f, track);
+    REQUIRE(pieces.size() == 1);
+    CHECK(heardOf(*pieces[0]) == heard);
+    CHECK(f.view->lanes().compSeams(*f.view->trackLayout().indexOf(track)).empty());
+    // A lone item's badge still switches its take with take.activate.
+    model::Id whole{};
+    for (const auto& e : f.app->head().items)
+        if (e.value.get() == pieces[0]) whole = e.id;
+    const ui::Rect w = f.rectOf(whole);
+    f.click({w.right() - 16, w.y + 8});
+    REQUIRE(sent.size() == 2);
+    CHECK(sent[1][0].command == "take.activate");
+    CHECK(heardOf(f.item(whole)) == 1 - heard);
+}
+
 namespace {
 // The generated item with two takes, given two more: four in all.
 model::Id fourTakeItem(Fixture& f) {

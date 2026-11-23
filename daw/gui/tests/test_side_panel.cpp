@@ -844,6 +844,27 @@ TEST_CASE("inspector: a comp piece's crossfade, length and shape, for every seam
     CHECK_FALSE(f.inView("inspector.crossfade"));
     CHECK(f.inView("inspector.fade_in"));
     CHECK(errors.empty());
+
+    // The Takes list switches a piece as a lane click does (take.comp): the
+    // middle piece back to the first take joins the three into one item,
+    // with no seam left to bump.
+    f.ui.selectedItems = {pieces[1]};
+    f.pass();
+    auto* list = dynamic_cast<ui::List*>(f.node("inspector.takes"));
+    REQUIRE(list);
+    before = f.steps();
+    list->select(0, true);
+    f.pass();
+    CHECK(f.steps() == before + 1);
+    std::size_t left = 0;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track.str() == track && e.value->takes.size() == 2) {
+            ++left;
+            CHECK(e.value->fadeOut.length == 0);  // the comp's end: no fade
+            CHECK(e.value->fadeIn.length == 0);
+        }
+    CHECK(left == 1);
+    CHECK(errors.empty());
 }
 
 TEST_CASE("inspector: an audio take's speed and pitch, and the choice of the take heard") {
