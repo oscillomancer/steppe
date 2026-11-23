@@ -1798,11 +1798,14 @@ TEST_CASE("a capture of clips with fades commits as heard: their fades stand in 
             CHECK(log[1].anchorSample == 192000);
             CHECK(log[3].anchorSample == 360000);
             live.until(420000);
+            const std::vector<float> replayed = replay(p, 10.0, log, block);
             json::Value done = p.run("launch.commit", "{}");
             const std::vector<float> heard = live.stop();
             const std::int64_t end = std::min(std::int64_t(done["to"].asDouble() * double(kBeat)),
                                               live.cycles * block - std::int64_t(live.latency));
             REQUIRE(end > 380000);
+            // Live is the replay of its log, bit for bit.
+            CHECK(compare(heard, live.latency, replayed, 0, end).first == 0.0);
             // The stand-in's piece ends at its pass's end with cl_1's fade-out;
             // the piece of the next pass is the crossfade long, from its fade-in.
             bool standIn = false, nextPass = false;

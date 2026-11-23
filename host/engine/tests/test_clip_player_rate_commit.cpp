@@ -133,6 +133,7 @@ TEST_CASE("a capture of clips with fades under a playrate commits as heard" *
                 CHECK(log[1].anchorSample == 192000);
                 CHECK(log[3].anchorSample == 360000);
                 live.until(log.back().runningFrame + 200 * std::int64_t(block));
+                const std::vector<float> replayed = replay(p, 14.0, log, block);
                 json::Value done = p.run("launch.commit", "{}");
                 live.until((live.cycles + 20) * block);  // past the capture's end
                 const std::vector<float> heard = live.stop();
@@ -142,6 +143,8 @@ TEST_CASE("a capture of clips with fades under a playrate commits as heard" *
                     std::llround((done["to"].asDouble() * double(kBeat) - 360000.0) / rate);
                 REQUIRE(end + std::int64_t(live.latency) <= std::int64_t(heard.size()));
                 REQUIRE(end <= std::int64_t(committed.size()));
+                // Live is the replay of its log, bit for bit.
+                CHECK(compare(heard, live.latency, replayed, 0, end).first == 0.0);
                 const CommitResidual r = commitResidual(heard, live.latency, committed, log, 0, end,
                                                         std::llround(128 / rate) + 64);
                 MESSAGE("worst within the crossfades " << r.fading << ", at the capture's end "
