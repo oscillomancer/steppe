@@ -7,6 +7,7 @@
 #include "clip_launcher.h"
 #include "command_helpers.h"
 #include "launch_commit.h"
+#include "supple/json/write.h"
 #include "supple/model/launcher.h"
 
 namespace supple::engine {
@@ -47,14 +48,16 @@ struct LaunchTrackState {
 };
 struct LaunchStateResult {
     bool playing = false, capturing = false;
+    std::optional<double> captureEnds;
     std::vector<LaunchTrackState> tracks;
 };
 struct CaptureArg {
     bool on = true;
+    std::optional<model::LaunchQuantize> quantize;
 };
 struct CaptureDone {
     bool on = false;
-    std::optional<double> from, to;
+    std::optional<double> from, to, endsAt;
 };
 struct CommitArgs {
     bool pooled = false;
@@ -173,6 +176,7 @@ CaptureDone captureDone(EngineApp& app, Engine& engine) {
     const time::TimeMap& tm = *app.view().timeMap;
     out.from = tm.beatAt(double(capture->startSample) / rate);
     out.to = tm.beatAt(double(capture->startSample + capture->frames) / rate);
+    out.endsAt = capture->endsBeat;
     return out;
 }
 
@@ -415,7 +419,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "plays, else the one it has queued, follows by in the running plan (ADR-0098); "
             "follow_budget: true when the follow budget forced that (a chords clip by its key, "
             "or any as written). Tracks without clips always follow the arrangement and are not "
-            "listed. capturing: launch.capture is on.";
+            "listed. capturing: launch.capture is on; capture_ends: the beat a quantized "
+            "end (launch.capture {on: false, quantize}) ends it on, until it does.";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto queued = schema::object<LaunchQueued>("launch_queued")
@@ -440,6 +445,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.result = schema::object<LaunchStateResult>("launch_state")
                        .field("playing", &LaunchStateResult::playing, schema::boolean())
                        .field("capturing", &LaunchStateResult::capturing, schema::boolean())
+                       .field("capture_ends", &LaunchStateResult::captureEnds, schema::number())
                        .field("tracks", &LaunchStateResult::tracks, schema::arrayOf(track))
                        .build();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"}};
@@ -455,6 +461,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
             out.playing = (*engine)->transport().playing;
             const auto capture = (*engine)->launchCapture();
             out.capturing = capture && capture->on;
+            if (capture) out.captureEnds = capture->endsBeat;
             for (const TL& t : (*engine)->launchState()) {
                 LaunchTrackState e;
                 e.track = t.track.str();
@@ -485,35 +492,56 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Start or end capturing launches for the timeline.";
         c.description =
-            "While on, every applied launch is kept with the running time it applied at, and "
-            "what each track played when the capture began. on: true begins at the position "
-            "heard now (stopped: where playing starts); on: false ends it there. A stop, a seek "
-            "or a loop change ends a capture that has run; one that has not run begins again "
-            "at the new position. launch.commit writes the capture onto the timeline. from and "
-            "to: its span on the timeline in beats, laid out by running time. Refused while a "
-            "master playrate is active, where running time is not song time, and while the rate "
-            "heard is still gliding to 1 after one was set (effective_rate in "
-            "transport.playrate.get); one that becomes active ends a running capture.";
+            "While on, every applied launch is kept with the running time it applied at (song "
+            "time: under a master playrate, the song samples played), and what each track "
+            "played when the capture began. on: true begins at the position "
+            "heard now (stopped: where playing starts); on: false ends it there, or with "
+            "quantize (other than none, while playing) at that quantize's next boundary, where "
+            "a launch of every track with clips (a scene launch) made now would land; one "
+            "track's launch can land a boundary earlier, and is then in the capture. It "
+            "captures until it hears that boundary, and "
+            "launches from there on are not in it. ends_at (launch.state's capture_ends): the "
+            "beat of the sample it ends on, which launch.commit's to will be, unless the "
+            "transport loop wrapped meanwhile (then the song's beat in the loop, while to runs "
+            "on by running time). "
+            "on: true before then cancels the end; another on: false replaces it. A stop, a "
+            "seek or a loop change ends a capture that has run, ending or not; one that has "
+            "not run begins again at the new position. launch.commit writes the capture onto "
+            "the timeline. from and to: its span on the timeline in beats so far, laid out by "
+            "running time. It runs through master playrate edits: the committed arrangement plays "
+            "the same song positions, not the same durations, at another rate. Refused while a "
+            "launched audio clip plays and the master playrate keeps the pitch; a playrate that "
+            "starts keeping it then ends a running capture, with a warning naming the clip. "
+            "While the pitch is kept, a launch that takes a track whose arrangement holds audio "
+            "off it, or back to it, ends the capture on that launch's boundary, with a warning.";
         c.tags = {"clip launcher", "transport", "recording"};
         c.args = schema::object<CaptureArg>("launch_capture_args")
                      .field("on", &CaptureArg::on, schema::boolean())
+                     .field("quantize", &CaptureArg::quantize,
+                            model::launchQuantizeSchema().doc(
+                                "on: false only: end at this quantize's next boundary (none, or "
+                                "left out: now)"))
                      .build();
         c.result = schema::object<CaptureDone>("launch_capture")
                        .field("on", &CaptureDone::on, schema::boolean())
                        .field("from", &CaptureDone::from, schema::number())
                        .field("to", &CaptureDone::to, schema::number())
+                       .field("ends_at", &CaptureDone::endsAt, schema::number())
                        .build();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
-                    {"launch.playrate", "a master playrate is active, or still gliding to 1",
-                     "set the master playrate to 1 and turn off its envelope, then capture once "
-                     "effective_rate is 1"}};
+                    {"launch.playrate",
+                     "a launched audio clip plays while the master playrate keeps the pitch",
+                     "stop it (launch.stop or launch.arrangement), or turn off the master "
+                     "playrate's preserve pitch, then capture"},
+                    {"launch.later", "the transport is relocating, or the playrate is changing",
+                     "end the capture again in a moment"}};
         c.examples = {{"While stopped", j(R"({"on": true})"),
                        j(R"({"on": true, "from": 0, "to": 0})"), "song_with_clip_running"}};
         c.run = [](const CaptureArg& a, Context& ctx) -> Result<CaptureDone> {
             EngineApp& app = engine::app(ctx);
             auto engine = runningEngine(app);
             if (!engine) return std::move(engine).error();
-            SUPPLE_TRY((*engine)->captureLaunches(a.on));
+            SUPPLE_TRY((*engine)->captureLaunches(a.on, a.on ? std::nullopt : a.quantize));
             return captureDone(app, **engine);
         };
         addChecked(registry, std::move(c));
@@ -527,7 +555,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.description =
             "One undo step. The capture (launch.capture) is laid out linearly from where it "
             "began, by running time, whatever the transport loop did: a launch heard s seconds "
-            "into the capture lands s seconds after its start. On each track that left the "
+            "into the capture lands s seconds after its start (under a master playrate, s "
+            "seconds of song: the same song positions, not the same durations). On each track that "
+            "left the "
             "arrangement, its clip, stopped and held stretches replace the arrangement there "
             "(its items are split, trimmed or removed); each clip becomes copies of its takes "
             "at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch "
@@ -543,7 +573,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "written warns context.mismatch once, when its key (or, in the same "
             "key, chord) is not the project's under it, however many periods it is laid as. "
             "A running "
-            "capture ends first; the "
+            "capture ends first, unless a quantized end is pending (launch.capture.ending); the "
             "capture stays, so committing again writes it again over itself. performance is "
             "what history records: leave it out and launch.commit fills it from the capture.";
         c.tags = {"clip launcher", "recording", "item"};
@@ -583,14 +613,18 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("from", &CommitDone::from, schema::number())
                        .field("to", &CommitDone::to, schema::number())
                        .build();
-        c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
-                    {"launch.capture", "nothing has been captured",
-                     "launch.capture {on: true}, play and launch clips, then launch.commit"},
-                    {"launch.commit", "a captured track or clip is gone",
-                     "undo the change, or capture the performance again"},
-                    {"item.locked", "a locked item is in the way", "unlock it with item.set first"},
-                    {"clip.unsupported", "a clip's loop window has no item equivalent",
-                     "set its loop to the whole content, or off"}};
+        c.errors = {
+            {"engine.stopped", "the engine is not running", "engine.start first"},
+            {"launch.capture", "nothing has been captured",
+             "launch.capture {on: true}, play and launch clips, then launch.commit"},
+            {"launch.capture.ending", "the capture ends on a boundary not heard yet",
+             "commit once launch.state says capturing is false, or launch.capture {on: false} to "
+             "end it now"},
+            {"launch.commit", "a captured track or clip is gone",
+             "undo the change, or capture the performance again"},
+            {"item.locked", "a locked item is in the way", "unlock it with item.set first"},
+            {"clip.unsupported", "a clip's loop window has no item equivalent",
+             "set its loop to the whole content, or off"}};
         c.examples = {
             {"A captured bar of cl_1",
              j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,
@@ -605,6 +639,14 @@ void registerLaunchCommands(cmd::Registry& registry) {
             auto engine = runningEngine(app);
             if (!engine) return std::move(engine).error();
             auto capture = (*engine)->launchCapture();
+            if (capture && capture->on && capture->endsBeat)
+                return Error("launch.capture.ending",
+                             "the capture ends at beat " + json::formatDouble(*capture->endsBeat) +
+                                 ", which has not been heard yet",
+                             "",
+                             "commit once launch.state says capturing is false, or launch.capture "
+                             "{on: false} to "
+                             "end it now");
             if (capture && capture->on) {
                 (void)(*engine)->captureLaunches(false);
                 capture = (*engine)->launchCapture();

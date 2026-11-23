@@ -73,6 +73,7 @@ struct CompResult {
     std::vector<SeamOut> differing;
     std::vector<MemberOut> members;
     std::vector<std::string> differingMembers;
+    std::vector<std::string> skippedTracks;  // group tracks with no item over the comp
 };
 
 schema::Schema<PieceOut> pieceSchema() {
@@ -117,6 +118,7 @@ schema::Schema<CompResult> resultSchema() {
         .field("members", &CompResult::members, schema::arrayOf(memberSchema()))
         .field("differing_members", &CompResult::differingMembers,
                schema::arrayOf(schema::string()))
+        .field("skipped_tracks", &CompResult::skippedTracks, schema::arrayOf(schema::string()))
         .build();
 }
 
@@ -512,6 +514,12 @@ Result<CompResult> compOne(const CompArgs& a, Context& ctx, const std::string& w
     return describe(engine.view(), *final);
 }
 
+std::pair<std::int64_t, std::int64_t> itemSamples(const model::Session& s, const model::Item& it,
+                                                  double rate) {
+    const model::ItemSpan span = model::itemSpan(s, it);
+    return {time::samplesAt(span.startSec, rate), time::samplesAt(span.endSec, rate)};
+}
+
 // "tr_2 (Second)": the id the commands take and the name the user sees.
 std::string trackNamed(const model::Session& s, Id track) {
     return track.str() + " (" + model::trackLabel(s, track) + ")";
@@ -537,74 +545,72 @@ struct Member {
     std::vector<model::CompPiece> run;
 };
 
-// The other tracks of the run's edit group that have an item beside each of its pieces
-// (linkedItems: the same span on the same lane), as runs of their own, in track order. A track with
-// an item beside only some of the pieces, a run that does not line up with the named one in
-// samples, or two items beside one piece is refused (comp.group_mismatch, comp.linked); with `off`,
-// those tracks go into it instead and the rest are returned (take.comp.get). A track with no item
-// beside any piece is not a member.
+// The other tracks of the run's edit group that hold items over the run, each as a run of its own,
+// in track order. A member is a track whose items on the lead's lane over the run's extent form a
+// run (compRun) with the same first and last core sample as the named run; how it is cut inside
+// does not matter (take.comp rebuilds it from the spans, as for any run), so a member that is still
+// whole beside a split lead counts, and so does one whose crossfades differ. A track with items
+// over the run that do not form such a run (compRun refuses them, or they start or end elsewhere)
+// is refused (comp.group_mismatch, comp.group_takes for too few takes); with `off`, those tracks go
+// into it instead and the rest are returned (take.comp.get). A track with no item over the run is
+// not a member and not an error: it goes into `empty`, and the reply names it (skipped_tracks).
 Result<std::vector<Member>> groupMembers(const model::Session& s,
                                          const std::vector<model::CompPiece>& run,
-                                         std::vector<Id>* off,
+                                         std::vector<Id>* off, std::vector<Id>* empty,
                                          const std::vector<std::string>& paths) {
-    const Id lead = s.items.find(run.front().item)->track;
-    std::map<Id, std::vector<std::optional<Id>>> beside;
-    std::set<Id> ambiguous;
-    for (std::size_t k = 0; k < run.size(); ++k)
-        for (Id peer : model::linkedItems(s, run[k].item)) {
-            const Id track = s.items.find(peer)->track;
-            if (track == lead) continue;
-            auto& slots = beside[track];
-            slots.resize(run.size());
-            if (slots[k]) ambiguous.insert(track);
-            slots[k] = peer;
-        }
+    const model::Item& leadItem = *s.items.find(run.front().item);
+    const Id lead = leadItem.track;
+    const double rate = s.project->sampleRate;
+    const std::int64_t runStart = run.front().coreStart, runEnd = run.back().coreEnd;
     std::vector<Member> out;
-    for (auto& [track, slots] : beside) {
-        const std::string who = trackNamed(s, track);
-        std::optional<Error> problem;
-        if (ambiguous.contains(track))
-            problem =
-                Error("comp.linked", who + " has two items beside one piece of the comp", paths[0],
-                      "set bypass_groups true to comp it alone, or take the extra item "
-                      "away");
+    for (const Id track : model::linkedTracks(s, lead, "edit")) {
+        if (track == lead) continue;
         std::vector<Id> items;
-        // The piece it sits beside, for the error's path.
+        for (const auto& e : s.items) {
+            if (e.value->track != track || e.value->lane != leadItem.lane) continue;
+            const auto [from, to] = itemSamples(s, *e.value, rate);
+            if (from < runEnd && to > runStart) items.push_back(e.id);
+        }
+        if (items.empty()) {
+            if (empty) empty->push_back(track);
+            continue;
+        }
+        const std::string who = trackNamed(s, track);
+        // The lead's piece it overlaps most, for the error's path.
         std::size_t named = 0;
-        while (named < slots.size() && !slots[named]) ++named;
-        for (std::size_t k = 0; k < slots.size() && !problem; ++k) {
-            if (slots[k]) {
-                items.push_back(*slots[k]);
-            } else {
-                problem = Error("comp.group_mismatch",
-                                who + " has an item beside only some of the pieces of the comp",
-                                paths[named],
-                                "comp it alone with bypass_groups, or make its pieces line up "
-                                "with " +
-                                    run[k].item.str());
+        {
+            const auto [from, to] = itemSamples(s, *s.items.find(items.front()), rate);
+            std::int64_t best = -1;
+            for (std::size_t k = 0; k < run.size(); ++k) {
+                const std::int64_t overlap =
+                    std::min(to, run[k].coreEnd) - std::max(from, run[k].coreStart);
+                if (overlap > best) {
+                    best = overlap;
+                    named = k;
+                }
             }
         }
+        std::optional<Error> problem;
         Member m{track, {}};
-        if (!problem) {
-            auto theirs = model::compRun(s, std::nullopt, items);
-            if (!theirs) {
-                problem =
-                    Error("comp.group_mismatch", who + ": " + theirs.error().message, paths[0],
-                          "comp it alone with bypass_groups, or fix its pieces first");
-            } else {
-                bool same = theirs->size() == run.size();
-                for (std::size_t k = 0; same && k < run.size(); ++k)
-                    same = (*theirs)[k].coreStart == run[k].coreStart &&
-                           (*theirs)[k].coreEnd == run[k].coreEnd;
-                if (!same)
-                    problem =
-                        Error("comp.group_mismatch",
-                              who + "'s comp does not line up with this one in samples", paths[0],
-                              "comp it alone with bypass_groups, or comp the group again "
-                              "from the pieces that line up");
-                else
-                    m.run = std::move(*theirs);
-            }
+        auto theirs = model::compRun(s, std::nullopt, items);
+        if (!theirs) {
+            const Error& inner = theirs.error();
+            if (inner.code == "comp.takes")
+                problem = Error("comp.group_takes", who + " has an item with fewer than two takes",
+                                paths[named], inner.hint + "; or comp it alone with bypass_groups");
+            else
+                problem = Error("comp.group_mismatch", who + ": " + inner.message, paths[named],
+                                inner.hint + "; or comp it alone with bypass_groups");
+        } else if (theirs->front().coreStart != runStart || theirs->back().coreEnd != runEnd) {
+            problem = Error("comp.group_mismatch",
+                            who +
+                                "'s items do not cover the same stretch as the comp (they start "
+                                "or end elsewhere)",
+                            paths[named],
+                            "make its items span the same stretch, or comp it alone with "
+                            "bypass_groups");
+        } else {
+            m.run = std::move(*theirs);
         }
         if (problem) {
             if (!off) return *problem;
@@ -655,9 +661,17 @@ Result<CompResult> compGroup(const CompArgs& a, Context& ctx) {
     auto run = model::compRun(s, which->first, which->second);
     if (!run) return std::move(run).error();
     const auto paths = piecePaths(a.anyPiece.has_value(), which->second, *run);
-    auto members = groupMembers(s, *run, nullptr, paths);
+    std::vector<Id> empty;  // group tracks with nothing over the run: skipped, and named
+    auto members = groupMembers(s, *run, nullptr, &empty, paths);
     if (!members) return std::move(members).error();
-    if (members->empty()) return compOne(a, ctx, "");
+    auto skipped = [&](CompResult& r) {
+        for (Id track : empty) r.skippedTracks.push_back(track.str());
+    };
+    if (members->empty()) {
+        auto alone = compOne(a, ctx, "");
+        if (alone) skipped(*alone);
+        return alone;
+    }
     // The take each span plays, as an index (every member plays the same index).
     const std::size_t leadTakes = s.items.find(run->front().item)->takes.size();
     std::vector<std::optional<std::int64_t>> indices;
@@ -703,6 +717,7 @@ Result<CompResult> compGroup(const CompArgs& a, Context& ctx) {
         lead->members.push_back(memberOf(s, m.track, *got));
     }
     finishGroup(*lead, {});
+    skipped(*lead);
     return lead;
 }
 
@@ -733,13 +748,14 @@ void registerCompCommands(cmd::Registry& registry) {
             "MIDI ones that cannot be, where a held note sounds again). "
             "take.activate {index} on a piece changes its take and keeps the seams. "
             "One undo step. Returns the pieces in time order. An item in an edit group (a "
-            "multitrack "
-            "recording, drums): without bypass_groups the same spans, take indices and crossfade "
-            "apply to the run of every other member of the group, matched by span (the same call "
-            "as item.split); the result lists them under members, each with its track and "
-            "pieces. A member that cannot follow (comp.group_mismatch, or comp.group_takes for a "
-            "take index it lacks) refuses the whole call before anything changes. "
-            "bypass_groups true comps only the named item.";
+            "multitrack recording, drums): without bypass_groups the same spans, take indices "
+            "and crossfade apply to the run of every other track of the group that has items over "
+            "the same stretch (however they are cut, however long their crossfades: a whole item "
+            "beside a split lead is comped to the spans too); the result lists them under "
+            "members, each with its track and pieces. A track whose items over the comp do not "
+            "form a run starting and ending where it does (comp.group_mismatch, with the inner "
+            "reason and hint), or that lacks a take index (comp.group_takes), refuses the whole "
+            "call before anything changes. bypass_groups true comps only the named item.";
         c.tags = {"take"};
         auto spanSchema =
             schema::object<SpanArg>("take_comp_span")
@@ -776,20 +792,20 @@ void registerCompCommands(cmd::Registry& registry) {
             {"comp.take", "a span has no or both of take and index, or one not in the item",
              "give take (an id of the item) or index (0..takes-1); take.list lists them"},
             {"comp.loop", "a looped item", "comp an item that does not loop"},
-            {"comp.linked", "two items of one group track sit beside one piece",
-             "set bypass_groups true to comp it alone, or take the extra item away"},
             {"comp.group_mismatch",
-             "a member of the edit group has items beside only some of the pieces, or a run "
-             "that does not line up in samples",
-             "comp it alone with bypass_groups, or fix its pieces first"},
-            {"comp.group_takes", "a member of the edit group lacks a take index a span plays",
+             "a track of the edit group has items over the comp that do not form a run starting "
+             "and ending where it does (the inner reason and hint are in the message)",
+             "make its items span the same stretch, or comp it alone with bypass_groups"},
+            {"comp.group_takes",
+             "a track of the edit group has an item with too few takes for a span's index",
              "comp it alone with bypass_groups, or use indices it has"},
             {"item.locked", "a piece is locked", "item.set {locked: false}"},
             {"item.kind", "a clip", "lay the clip on the timeline first (item.add {clip})"}};
         c.examples = {{"Take the second take for bars 2 to 3",
                        j(R"({"item":"it_1","crossfade":0,"spans":[{"from":1,"to":3,"index":1}]})"),
                        j(R"({"pieces":"<any>","crossfade":0,"crossfade_shape":"cos","uniform":true,
-                          "differing_seams":[],"members":[],"differing_members":[]})"),
+                          "differing_seams":[],"members":[],"differing_members":[],
+                          "skipped_tracks":[]})"),
                        "song_with_takes"}};
         c.run = [](const CompArgs& a, Context& ctx) -> Result<CompResult> {
             return a.allowLinked ? compOne(a, ctx, "") : compGroup(a, ctx);
@@ -809,11 +825,15 @@ void registerCompCommands(cmd::Registry& registry) {
             "run's own: its longest seam fade (seconds) and that fade's shape, which a seam "
             "shortened by short pieces does not shrink, so take.comp with them rebuilds the same "
             "comp (the default 0.01 and cos for one piece, 0 for hard seams), as long as uniform "
-            "is "
-            "true: when a seam fade was set by hand to another length or shape, uniform is false "
-            "and differing_seams lists those seams (seam 0 is between the first two pieces; at "
-            "in beats; left and right the items), and a take.comp would give every seam the one "
-            "length and shape. An item with several takes and no seams is a comp of one piece.";
+            "is true. When a seam fade was set by hand to another length or shape, uniform is "
+            "false and differing_seams lists the seams a take.comp with those crossfade values "
+            "would rewrite (seam 0 is between the first two pieces; at in beats; left and right "
+            "the items). For an item in an edit group, members reads every other track of the "
+            "group that has items over the same stretch like the item's own comp, "
+            "differing_members lists tracks whose comp reads differently or cannot follow, and "
+            "skipped_tracks the group tracks with nothing there (they do not affect uniform, "
+            "which is false while a member differs or is not uniform itself). An item with several "
+            "takes and no seams is a comp of one piece.";
         c.tags = {"take"};
         c.args = schema::object<WhichArgs>("take_comp_get_args")
                      .field("item", &WhichArgs::anyPiece, timelineItemArg())
@@ -824,7 +844,8 @@ void registerCompCommands(cmd::Registry& registry) {
         c.examples = {
             {"Read a comp", j(R"({"item":"it_1"})"),
              j(R"({"pieces":"<any>","crossfade":0.01,"crossfade_shape":"cos","uniform":true,
-                          "differing_seams":[],"members":[],"differing_members":[]})"),
+                          "differing_seams":[],"members":[],"differing_members":[],
+                          "skipped_tracks":[]})"),
              "song_with_takes"}};
         c.run = [](const WhichArgs& a, Context& ctx) -> Result<CompResult> {
             const model::Session s = app(ctx).view();
@@ -835,14 +856,15 @@ void registerCompCommands(cmd::Registry& registry) {
             CompResult out = describe(s, *run);
             // The other members of its edit group, read the same way; one that does not line up
             // is listed in differing_members.
-            std::vector<Id> off;
-            auto members = groupMembers(s, *run, &off,
+            std::vector<Id> off, empty;
+            auto members = groupMembers(s, *run, &off, &empty,
                                         piecePaths(a.anyPiece.has_value(), which->second, *run));
             if (!members) return std::move(members).error();
             for (const Member& m : *members)
                 out.members.push_back(memberOf(s, m.track, describe(s, m.run)));
             std::vector<std::string> notLikeIt;
             for (Id track : off) notLikeIt.push_back(track.str());
+            for (Id track : empty) out.skippedTracks.push_back(track.str());
             finishGroup(out, std::move(notLikeIt));
             return out;
         };

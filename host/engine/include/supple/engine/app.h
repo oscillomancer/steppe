@@ -505,6 +505,7 @@ class EngineApp : public cmd::Host {
     }
     // Whether launch.capture is on (L4).
     bool launchCapturing() const { return engine_ && engine_->launchCapturing(); }
+    bool launchCaptureEnding() const { return engine_ && engine_->launchCaptureEnding(); }
     MediaCache& media() { return media_; }
     // The plugin's semantic schema (null for plugins without the extension).
     Result<json::Value> fxSchema(const model::FxInstance& fx);

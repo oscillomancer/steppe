@@ -124,10 +124,12 @@ instructions are in `docs/guides/installing.md`.
   `chord.set`/`chord.remove`, `context.at` and `context.get`; regions are
   sections unless `section` is false; `session.describe` shows the key, the
   context and the later tempo and meter changes; `midi.get` returns the context
-  over an item and, with the piano roll, the event list, `midi.edit` readbacks
-  and `rack.probe`, spells notes by the key at the item's start (`libs/harmony`);
-  `midi.get` spells each note by the key and chord at its start (ADR-0100: a chord
-  tone by its degree, doubles where a degree needs them).
+  over an item. `midi.get` and the MIDI editor (the roll's note labels and
+  messages, the notation panel, the event list) spell each note by the key and
+  chord at its start, at the same place (ADR-0100: a chord tone by its degree,
+  doubles where a degree needs them; a place before beat 0 reads beat 0's
+  context); `midi.edit` readbacks and `rack.probe` spell by the key at the
+  item's start (`libs/harmony`).
   A file with a missing or low counter, a duplicate beat, an unknown scale or an
   unparsable chord symbol opens with a warning and keeps the point as data. The
   lead sheet (`context.get`'s `text`, `context.write` as a diff recorded as the
@@ -309,8 +311,15 @@ instructions are in `docs/guides/installing.md`.
     - under a master playrate clips play on the playrate path, live as
       the replay (ADR-0097, revision 2026-11-21), but while it keeps the
       pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
-      clips can); `launch.capture` is refused while one is active, and
-      one becoming active ends a capture; there a frozen track's print
+      clips can); a capture runs in song time under one, refused (or
+      ended, with a warning) while a launched audio clip plays and the
+      playrate keeps the pitch, and ended on its boundary by a switch that
+      cuts arrangement audio while the pitch is kept; its commit meets the
+      rate-1 standard except within 128 song samples of the capture's
+      first and last samples (up to the level of the audio cut there),
+      and within 128 song samples before a switch that lands on the wrap
+      of a clip laid per period (up to 0.011 in the test);
+      there a frozen track's print
       cuts in without the crossfade, and launched audio does not crossfade
       between trajectories when a plan swap changes the rate;
     - freezing, or removing the playing clip, crossfades an audio clip
@@ -320,9 +329,13 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
-    - a capture ends at a seek, a loop change or a stop, by design
+    - a capture ends at a seek, a loop change or a stop, by design (one
+      ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
       wraps at the loop as live does, but not under a master playrate;
+    - a capture armed while a launched clip's note sounds commits
+      without the rest of that note, at any rate (the item does not
+      chase it); armed in a rest it is exact;
     - right after a pause, in the anticipative executor, the reported
       position can be up to one device period short when the pause lands
       while a device cycle is in flight, so a launch made while stopped,
@@ -1070,10 +1083,15 @@ instructions are in `docs/guides/installing.md`.
   stays, and between MIDI pieces of one take a held note sounds again there
   (`comp.midi_boundary`); a seam fade edited by hand (another length or shape) is overwritten
   by the next `take.comp`, which gives every seam one length and shape: `take.comp.get` says
-  `uniform: false` and lists the seams that differ. An item in an edit group is comped with
-  every member (same spans and take indices, one undo step, `members` in the result;
-  `bypass_groups` for the item alone); a member with fewer takes or a run that does not line
-  up refuses the call (`comp.group_takes`, `comp.group_mismatch`).
+  `uniform: false` and lists the seams a rebuild with the read-back would rewrite. An item in an
+  edit group is comped with every other track of the group that has items over the same stretch
+  (matched by the run's extent: however it is cut or crossfaded, a whole item beside a split lead
+  is comped to the spans; same spans and take indices, one undo step, `members` in the result;
+  a group track with nothing there is named in `skipped_tracks`; `bypass_groups` for the item
+  alone); a track whose items cannot follow refuses the call before anything is written
+  (`comp.group_takes`, `comp.group_mismatch` with the inner reason, `item.locked`). `comp.linked`
+  is retired (it meant "set bypass_groups"; the call now comps the group). The GUI's comp still
+  refuses linked items (`compsWithTakeComp`) and can use the group comp.
   The FX chain selects several effects (Ctrl/Shift+click) to bypass, offline
   or remove together; a double click opens an effect's editor. FX chains and
   the routing matrix use separate resizable utility windows owned by the main
@@ -1536,13 +1554,10 @@ capacity reports retain their original revision/settings.
 ## Known limits
 
 Library boundaries:
-- Chord-tone spelling (ADR-0100) reaches `midi.get` only. The piano roll's note
-  names, its keyboard labels, the MIDI event list and its pitch cell, the notation
-  pane, MIDI-control names and the rack probe stay on the key's rule or the default
-  table: the roll follows in a later step, and the notation pane stays because its
-  conflict check compares the decompiled text, which a chord edit would change
-  without the MIDI changing. The event list's pitch cell reads one accidental, so
-  it could not take a name with `##` or `bb` if it showed one.
+- Chord-tone spelling (ADR-0100) reaches `midi.get` and the MIDI editor (the
+  roll's note labels and messages, the notation panel, the event list) only. The
+  roll's keyboard labels, MIDI-control names, `midi.edit` readbacks and the rack
+  probe stay on the key's rule or the default table.
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.

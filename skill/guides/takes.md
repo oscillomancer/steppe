@@ -66,14 +66,19 @@ What to know:
 - A looped item is refused (`comp.loop`); an item with one take has nothing to comp
   (`comp.takes`); a locked item is refused (`item.locked`). An item that is edited
   together with others (an edit group, drums say) is comped together with them: the same
-  spans, take indices and crossfade apply to the run of every other member, matched by span
-  like `item.split`'s peers, and `members` in the result gives each one's `track` and `pieces`.
-  A member that cannot follow refuses the whole call and changes nothing: `comp.group_takes`
-  (it lacks a take index a span plays), `comp.group_mismatch` (its items sit beside only some
-  of the pieces, or its run does not line up in samples; other start offsets or play rates are
-  fine), `comp.linked` (two of its items beside one piece). `bypass_groups: true` comps only the
+  spans, take indices and crossfade apply to the run of every other member, and `members` in the result gives each one's `track`
+  and `pieces`.
+  A track is a member when its items over the comp form a run that starts and ends where the
+  comp does (however it is cut inside, whatever its crossfades, start offsets or play rates: a
+  whole item beside a split one is comped to the spans too); a group track with nothing there is
+  skipped and named in `skipped_tracks`. A track that cannot follow refuses the whole call and changes
+  nothing: `comp.group_takes` (an item with too few takes), `comp.group_mismatch` (its items do not
+  form a matching run; the message carries the reason, such as a looped item), `item.locked`.
+  (`comp.linked` is retired: it used to mean "set `bypass_groups`".) `bypass_groups: true` comps only the
   item you name. `take.comp.get` reads the members too, and `differing_members` lists a member
   that reads differently from the one you named (or does not line up), with `uniform` false.
+  `differing_seams` lists the seams a `take.comp` with the reported `crossfade` and shape would
+  rewrite.
 - **Flatten a comp** with `item.consolidate` on its pieces: it renders the seam fades
   and layers the overlaps into one item. `item.heal` is for pieces of one source, not
   a comp.

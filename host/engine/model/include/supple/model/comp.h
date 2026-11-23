@@ -51,12 +51,12 @@ struct CompCrossfade {
     FadeShape shape = FadeShape::Cos;
 };
 CompCrossfade compCrossfade(const Session&, std::span<const CompPiece> run);
-// The seams (0 = between the first two pieces) that are not like the others: the run's fades fit
-// one crossfade (length and shape, as take.comp writes them: a seam between two takes has on both
-// sides the fade 2h samples long, h = min(crossfade in samples / 2, half of each piece's core); a
-// seam inside one take has none), and these seams do not. The crossfade taken is the one that fits
-// most seams (the first seam's on a tie). Empty: take.comp with compCrossfade's values and the
-// run's spans rebuilds the run byte for byte.
+// The seams (0 = between the first two pieces) that `take.comp` called with compCrossfade's values
+// (the longest seam fade and its shape, as the read-back reports them) and the run's spans would
+// rewrite: a seam between two takes has, on both sides, the fade 2h samples long, h = min(that
+// crossfade in samples / 2, half of each piece's core), in that shape; a seam inside one take has
+// none. A hand-set length or shape, or a hard cut among crossfaded seams, is listed. Empty: that
+// rebuild gives the run byte for byte.
 std::vector<std::size_t> compDifferingSeams(const Session&, std::span<const CompPiece> run);
 
 // Moves an item's start (end) to a time, keeping its end (start), in the item's own domain.

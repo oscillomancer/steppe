@@ -270,25 +270,7 @@ std::vector<std::size_t> seamsOffFrom(const Session& s, std::span<const CompPiec
 
 std::vector<std::size_t> compDifferingSeams(const Session& s, std::span<const CompPiece> run) {
     if (run.size() < 2) return {};
-    // The crossfade that fits most seams: each fade found on a seam is tried, and the one that
-    // leaves the fewest seams off wins (the first seam's, on a tie). A comp as take.comp made it
-    // has one that fits all.
-    std::vector<std::size_t> best;
-    bool first = true;
-    auto consider = [&](const Fade& fade) {
-        CompCrossfade candidate;
-        candidate.seconds = fade.length;
-        candidate.shape = fade.shape == FadeShape::Linear ? FadeShape::Linear : FadeShape::Cos;
-        auto off = seamsOffFrom(s, run, candidate);
-        if (first || off.size() < best.size()) best = std::move(off);
-        first = false;
-    };
-    consider(Fade{});  // hard cuts, tried first on no seam fade at all
-    for (std::size_t k = 0; k + 1 < run.size(); ++k) {
-        consider(s.items.find(run[k].item)->fadeOut);
-        consider(s.items.find(run[k + 1].item)->fadeIn);
-    }
-    return best;
+    return seamsOffFrom(s, run, compCrossfade(s, run));
 }
 
 void setItemStartSeconds(const Session& s, Item& it, double startSec) {

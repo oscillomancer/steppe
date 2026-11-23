@@ -798,7 +798,12 @@ revision records step 1 as built.
 - **The 5 ms switch crossfade is in device frames, as heard.** On a
   playrate plan `LaunchState::fadeStart` is the node's frame at the switch
   (`launchClock`). A crossfade in progress when a plan changes between the
-  unity and playrate paths ends there.
+  unity and playrate paths ends there. *(Note 2026-11-22, S3 step B: no
+  longer. The crossfade is 240 song samples on the playrate path too, from
+  the anchor, each frame's share by its song position, so it is heard as
+  5 ms divided by the rate, always, whether or not a capture runs; a
+  committed item's fade, in song time, then equals it. See the revision
+  "S3 step B".)*
 - **Clip time (C2).** Clip-time lanes and a clip chain's take envelopes
   are not bound to the rate timeline. They read the clip position from the
   song position, now fractional.
@@ -808,7 +813,8 @@ revision records step 1 as built.
   playrate to 1 and turn off its envelope, then capture". A playrate that
   becomes active ends a running capture, with a warning. Committing a
   capture by the song positions heard (S3, Q2) needs the scalar history
-  logged with it, and is left for later.
+  logged with it, and is left for later. *(2026-11-22: a capture runs in
+  song time under a master playrate; see the revision "S3 step B" below.)*
 - **Still refused:** a looped replay under a master playrate
   (`render.loop`). The replay does not wrap on the playrate path.
 
@@ -827,6 +833,164 @@ revision records step 1 as built.
   - when a plan swap changes the trajectory, launched audio reads the new
     one at once, where timeline clips crossfade between the two;
   - a looped transport under a playrate has no replay to compare with.
+
+## Revision (2026-11-22, S3 design A): a capture can end on a quantize boundary
+
+**Context.** `launch.capture {on: false}` ended a capture at the position
+heard when it arrived, so a performance ended wherever the caller happened
+to be: a script polling every 20 ms ended it one to three blocks past the
+bar it meant, and the commit's last item was cut there.
+
+**Decision.**
+- `launch.capture {on: false, quantize}` with a quantize other than `none`,
+  while playing, ends the capture on that quantize's next boundary. The
+  boundary is placed as a launch of every track with clips made at that
+  moment would be (the same floors, the loop fold and, on a playrate plan,
+  the rate placement), so a scene launch made with it lands on the same
+  boundary. One track's launch can land a boundary earlier when its floor
+  is nearer than the latest of them (a live track in the anticipative
+  engine, or one whose clip chains take less lead); it is then in the
+  capture.
+- The end is main-thread state: the capture runs until the heard position
+  reaches the boundary's stream frame, then service closes it there. Its
+  running time ends exactly on the boundary, and a launch applied on or
+  after it is not in the performance. Nothing changes on the audio path.
+- Before the boundary, `on: true` cancels the end, another `on: false`
+  replaces it, and a relocation (a seek, a stop, a loop change) ends the
+  capture at once, as before. Stopped, or without `quantize` (or with
+  `none`), it ends at once, as before.
+- It ends on the sample a launch on the boundary switches on (the nearest
+  to the boundary). `ends_at` is that sample's beat, the same number as the
+  commit's `to`: the boundary's own beat when it falls on a whole sample,
+  otherwise within half a sample of it (at 117 BPM, 7.99999… for beat 8).
+  After a transport loop wrap, `ends_at` is the song's beat in the loop,
+  while the commit lays out by running time, so its `to` is further on.
+- `launch.commit` while an end is pending is refused with
+  `launch.capture.ending`; the capture is kept.
+- The GUI's Capture toggle, turned off while playing, ends the capture on
+  the project's launch quantize and commits it once the end is heard.
+
+**Consequences.** A performance can end on the grid it was launched on, and
+its commit ends on the sample a launch on that bar switches on, with `to`
+equal to the `ends_at` it was given, in both executors at any block size. The tests end a capture on bar 3 with a launch placed on the same
+boundary (left out), and cover cancelling, replacing and a seek first.
+
+## Revision (2026-11-22, S3 step B): a capture under a master playrate runs in song time
+
+**Context.** Step 1 refused a capture under a master playrate: the capture
+counted stream frames, which at another rate are not song time, so a commit
+would lay launches at the wrong song positions. The rate timeline already
+gives every frame's unwrapped song position, and placement integrates it to
+the boundary.
+
+**Decision.**
+- **Each launch carries its song frame.** Placement computes the
+  boundary's sample on the song's unwrapped running count
+  (`LaunchLogEntry::songFrame`): on a unity plan the epoch's start plus the
+  target's stream frame, on a playrate plan the rate timeline's unwrapped
+  phase at the boundary. It travels through the slot and the executor's
+  acknowledgement into the log. Nothing on the audio path changes, and the
+  replay ignores it.
+- **A capture counts song samples.** Its start, its heard position and a
+  quantized end are read on that count, from the rate clock the executors
+  publish (its timeline word; at unity the epoch's start plus the stream).
+  A launch's running frame in the capture is its song frame less the
+  start. At unity this is the stream count it was.
+- **It runs through rate edits** (S3, Q1): a scalar edit, an envelope or a
+  rate still gliding to 1 no longer refuses or ends it. The committed
+  arrangement plays the same song positions, not the same durations, at
+  another rate.
+- **Pitch kept** (S3, Q2 b): a capture is allowed and stays exact for MIDI,
+  also under a sync chase, which forces the pitch kept, except where a
+  switch cuts arrangement audio: a switch that leaves or returns to an
+  arrangement holding audio, queued while the newest plan keeps the pitch,
+  ends the capture on its boundary, that launch not in it, with a warning
+  naming the track (review round 113 T2: the stretch converter reads on
+  past the cut live, where the commit splits the item; measured, the
+  commit differed for 5664 device frames before a switch away and by up to
+  0.37 after a return). Arming is refused
+  with `launch.playrate` while a launched audio clip plays and the newest
+  plan keeps the pitch (no committed item reads a stretch converter's
+  history), naming the clip, with the hint to stop it or turn off preserve
+  pitch. Such a plan arriving while one plays ends a running capture where
+  it was heard, with a warning naming the clip. (An audio launch under a
+  pitch-keeping rate is refused until step D; then the launch goes ahead
+  and the capture ends at its switch.)
+- **The switch crossfade is 240 song samples** under a master playrate
+  as at unity, each frame's share by its song position (`launchClock`),
+  live always and not only in a capture: a committed item's fade runs in
+  song time, and live must not depend on whether a capture is armed. It is
+  heard as 5 ms divided by the rate. At rate 1 nothing changes. (Step 1
+  ran it over 240 device frames; at 0.75 a commit then differed from what
+  played by up to 0.023 through each switch.) D's and C's clip fades
+  follow the same rule.
+- **A clip laid one item per period reads each period alone** on the
+  playrate path, always: its tape converter's source is silent outside the
+  output frame's period, as that period's committed item is outside its
+  span, so after a wrap it no longer reads the previous pass's end (which
+  rang for about 160 frames, up to 0.0034, at 0.75). The converter keeps no
+  state, so a quantum crossing a period is read twice, into a second buffer
+  held with the reader; nothing is allocated or primed at a wrap. A clip
+  laid as one looped item reads across its wraps, as that item does.
+- **A switch's outgoing side reads nothing past its crossfade** on the
+  playrate path, always, as the commit's pieces: the clip fading out (its
+  player, or a clip chain's input going out) is silent from the anchor plus
+  240 song samples, where its committed piece ends, and the arrangement's
+  tape items read nothing past it after a switch away, nor before the
+  anchor while a switch back from a clip fades them in, where the commit
+  splits them (`Clip::gateFrom`, set by `launchAudio` each block). Without
+  it, the tape kernel read on past the cut and a commit differed by up to
+  7.7e-5 in each crossfade's last 128 song samples. A stretch converter is
+  not cut: its history runs on (see the limits).
+
+  *Note 2026-11-22 (review round 113):* a clip laid one item per period
+  that fades out at a switch reads on in the pass it was in from the
+  switch's song sample, as its committed piece does (the stretch's last
+  item runs 240 song samples past the switch, into the take beyond the
+  period's end), instead of jumping to the period's start where a wrap
+  falls inside the fade-out. At any rate, rate 1 included: the output at
+  unity changes in exactly that case, which differed from the commit by
+  0.011 there, and the jump was a step inside the fade. Under a playrate,
+  within the tape kernel's reach before such a switch (128 song samples)
+  live still read the pass's end gated at the wrap, since the switch
+  reaches the node only at its frame: a stated limit with the kernel
+  edges, 0.0027 at 0.75 and 0.011 under the envelope in the test.
+- **The standard is the rate-1 commit's** (test_clip_player.cpp): exact
+  away from the switches' crossfades, and within 1e-6 through them, the
+  float32 rounding of the live switch gain against an item's fade in
+  double. A capture under a master playrate meets the same standard.
+
+**Consequences.** A capture under a constant rate, an envelope, a rate edit
+over a loop wrap, a glide back to 1 and a clock chase commits every launch
+on its song sample, in both executors. Its commit, rendered offline, meets
+the rate-1 standard, audio and MIDI, under a constant 0.75 and under an
+envelope, at blocks 128 and 512, in both executors, through a clip's period
+wraps: exact away from the crossfades, at most 1.5e-8 through them (bounded
+at 1e-6 in the test, which prints the worst). MIDI under a pitch-keeping
+rate commits equal to what played, and a capture ended at a switch that
+cuts arrangement audio commits exactly to its end. Limits: within the tape converter's
+kernel reach of the capture's first and last samples (128 song samples
+each), where the committed items begin or end while the performance went
+on, the commit differs from what played by up to the level of the audio
+cut there (measured up to 0.028 in the tests, in the last 120 to 180
+device frames, about 3 ms; bounded in each test at its measure); a
+commit's edge is a cut at any rate. Under a rate, a switch on a wrap of a
+clip laid per period differs within the kernel's reach before it (0.0027
+at 0.75, 0.011 under the envelope, bounded in the test). Tests: in test_clip_player_rate_commit.cpp
+the positions and the equality under 0.75 and the envelope ("a capture
+under a master playrate commits by the song positions heard"); in
+test_clip_player_rate_armed.cpp a capture starting mid-pass ("a capture
+armed while clips play ..."), the held note ("a capture armed while a
+launched clip's note sounds ..."); in
+test_clip_player_rate_chain.cpp a clip with a take chain ("a capture of a
+clip with a take chain ..."); in test_clip_player_rate_wrap.cpp a switch
+on a period wrap at rate 1 and under a rate ("a switch on a period wrap
+..."); in test_clip_player_rate.cpp MIDI with the
+pitch kept ("under a pitch-keeping master playrate a MIDI capture commits
+as heard"), the end at a switch that cuts arrangement audio ("under a
+pitch-keeping rate a switch that cuts arrangement audio ends the capture
+there"), the refusal and the end for audio clips ("a launched audio clip
+under a pitch-keeping rate ..."); test_sync.cpp the clock chase.
 
 ## Consequences
 

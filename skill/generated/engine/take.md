@@ -280,7 +280,7 @@ Result:
 
 Comp an item's takes: each span plays one take, crossfaded at the seams.
 
-item (any piece, or an item with several takes to start one) or items (the pieces, in any order). Spans {from, to, take|index} (beats; index is the take's 0-based place in the item's take order) choose which take plays; what no span covers keeps its take. The item is split where the take changes into pieces that each keep all the takes, and a crossfade (seconds, default 0.01; shape cos is equal power, linear for phase-coherent material) is centred on every seam between different takes: the pieces overlap and fade, so nothing new reaches the audio path. Call it again on any piece (or items: the pieces) to move seams: the crossfades are rebuilt for the whole run, and the same call twice changes nothing. Audio only: a seam is a hard cut, with the warning comp.crossfade_skipped, when a take is MIDI or empty, warped or has envelopes. Pieces of one take beside each other are joined (comp.midi_boundary warns of MIDI ones that cannot be, where a held note sounds again). take.activate {index} on a piece changes its take and keeps the seams. One undo step. Returns the pieces in time order. An item in an edit group (a multitrack recording, drums): without bypass_groups the same spans, take indices and crossfade apply to the run of every other member of the group, matched by span (the same call as item.split); the result lists them under members, each with its track and pieces. A member that cannot follow (comp.group_mismatch, or comp.group_takes for a take index it lacks) refuses the whole call before anything changes. bypass_groups true comps only the named item.
+item (any piece, or an item with several takes to start one) or items (the pieces, in any order). Spans {from, to, take|index} (beats; index is the take's 0-based place in the item's take order) choose which take plays; what no span covers keeps its take. The item is split where the take changes into pieces that each keep all the takes, and a crossfade (seconds, default 0.01; shape cos is equal power, linear for phase-coherent material) is centred on every seam between different takes: the pieces overlap and fade, so nothing new reaches the audio path. Call it again on any piece (or items: the pieces) to move seams: the crossfades are rebuilt for the whole run, and the same call twice changes nothing. Audio only: a seam is a hard cut, with the warning comp.crossfade_skipped, when a take is MIDI or empty, warped or has envelopes. Pieces of one take beside each other are joined (comp.midi_boundary warns of MIDI ones that cannot be, where a held note sounds again). take.activate {index} on a piece changes its take and keeps the seams. One undo step. Returns the pieces in time order. An item in an edit group (a multitrack recording, drums): without bypass_groups the same spans, take indices and crossfade apply to the run of every other track of the group that has items over the same stretch (however they are cut, however long their crossfades: a whole item beside a split lead is comped to the spans too); the result lists them under members, each with its track and pieces. A track whose items over the comp do not form a run starting and ending where it does (comp.group_mismatch, with the inner reason and hint), or that lacks a take index (comp.group_takes), refuses the whole call before anything changes. bypass_groups true comps only the named item.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -543,6 +543,12 @@ Kind: `edit`. Exposure: `mcp-exec`.
         "type": "string"
       }
     },
+    "skipped_tracks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -557,7 +563,8 @@ Kind: `edit`. Exposure: `mcp-exec`.
     "uniform",
     "differing_seams",
     "members",
-    "differing_members"
+    "differing_members",
+    "skipped_tracks"
   ],
   "additionalProperties": false
 }
@@ -572,9 +579,8 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `comp.span`: a span is empty, out of order, overlapping or outside the comp Hint: give from before to, inside the comp, in time order without overlap
 - `comp.take`: a span has no or both of take and index, or one not in the item Hint: give take (an id of the item) or index (0..takes-1); take.list lists them
 - `comp.loop`: a looped item Hint: comp an item that does not loop
-- `comp.linked`: two items of one group track sit beside one piece Hint: set bypass_groups true to comp it alone, or take the extra item away
-- `comp.group_mismatch`: a member of the edit group has items beside only some of the pieces, or a run that does not line up in samples Hint: comp it alone with bypass_groups, or fix its pieces first
-- `comp.group_takes`: a member of the edit group lacks a take index a span plays Hint: comp it alone with bypass_groups, or use indices it has
+- `comp.group_mismatch`: a track of the edit group has items over the comp that do not form a run starting and ending where it does (the inner reason and hint are in the message) Hint: make its items span the same stretch, or comp it alone with bypass_groups
+- `comp.group_takes`: a track of the edit group has an item with too few takes for a span's index Hint: comp it alone with bypass_groups, or use indices it has
 - `item.locked`: a piece is locked Hint: item.set {locked: false}
 - `item.kind`: a clip Hint: lay the clip on the timeline first (item.add {clip})
 
@@ -607,7 +613,8 @@ Result:
   "uniform": true,
   "differing_seams": [],
   "members": [],
-  "differing_members": []
+  "differing_members": [],
+  "skipped_tracks": []
 }
 
 ```
@@ -616,7 +623,7 @@ Result:
 
 List the pieces of a comp: spans, takes and fades.
 
-The pieces of the comp that item belongs to (or items), in time order: from and to are the seams in beats (crossfades taken out), take and index the take each plays, fade_in and fade_out the crossfades in seconds. crossfade and crossfade_shape are the run's own: its longest seam fade (seconds) and that fade's shape, which a seam shortened by short pieces does not shrink, so take.comp with them rebuilds the same comp (the default 0.01 and cos for one piece, 0 for hard seams), as long as uniform is true: when a seam fade was set by hand to another length or shape, uniform is false and differing_seams lists those seams (seam 0 is between the first two pieces; at in beats; left and right the items), and a take.comp would give every seam the one length and shape. An item with several takes and no seams is a comp of one piece.
+The pieces of the comp that item belongs to (or items), in time order: from and to are the seams in beats (crossfades taken out), take and index the take each plays, fade_in and fade_out the crossfades in seconds. crossfade and crossfade_shape are the run's own: its longest seam fade (seconds) and that fade's shape, which a seam shortened by short pieces does not shrink, so take.comp with them rebuilds the same comp (the default 0.01 and cos for one piece, 0 for hard seams), as long as uniform is true. When a seam fade was set by hand to another length or shape, uniform is false and differing_seams lists the seams a take.comp with those crossfade values would rewrite (seam 0 is between the first two pieces; at in beats; left and right the items). For an item in an edit group, members reads every other track of the group that has items over the same stretch like the item's own comp, differing_members lists tracks whose comp reads differently or cannot follow, and skipped_tracks the group tracks with nothing there (they do not affect uniform, which is false while a member differs or is not uniform itself). An item with several takes and no seams is a comp of one piece.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -871,6 +878,12 @@ Kind: `query`. Exposure: `mcp-exec`.
         "type": "string"
       }
     },
+    "skipped_tracks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -885,7 +898,8 @@ Kind: `query`. Exposure: `mcp-exec`.
     "uniform",
     "differing_seams",
     "members",
-    "differing_members"
+    "differing_members",
+    "skipped_tracks"
   ],
   "additionalProperties": false
 }
@@ -913,7 +927,8 @@ Result:
   "uniform": true,
   "differing_seams": [],
   "members": [],
-  "differing_members": []
+  "differing_members": [],
+  "skipped_tracks": []
 }
 
 ```

@@ -132,6 +132,21 @@ std::optional<PlaceReading> placeAt(const Session& s, Id item, Id take, double s
 // places already read. A take that does not follow, and channel 10, give the note as written.
 harmony::Followed soundsAt(const PlaceReading& place, int channel, int key);
 
+// The place a note is named by (harmony::spell, ADR-0100): the key and chord holding where it
+// starts. midi.get's text and the roll's labels and messages read it here, so the two name a
+// note alike. A place before beat 0 (of the song, or of a clip) reads beat 0's context: nothing
+// sounds there, and the first point holds before itself.
+//
+// The song's key and chord at `songBeat` (a heard note, or a take that does not follow).
+harmony::Place songNamePlace(const Session& s, double songBeat);
+// A clip's own at clip beat `clipBeat`: the beat the note first sounds at, as midi.edit's
+// clipNoteContext reads it (the caller maps the note through the loop window).
+harmony::Place clipNamePlace(const Clip& clip, double clipBeat);
+// A source note of an item's take, at its unwrapped source beat (`notePlace`): a following
+// take's own context at the note's context beat, else the song's at its song beat.
+harmony::Place writtenNamePlace(const Session& s, const Take& take, double itemStartBeat,
+                                double unwrappedSourceBeat);
+
 // Stores the take's `start_offset` inside one source period, [0, sourceBeats), the amount
 // removed (a whole number of periods) added to `context_phase`, so no note's context beat
 // moves. A command that stores a looped item's slip wrapped (a split's right part) calls this;

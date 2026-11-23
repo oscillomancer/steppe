@@ -816,6 +816,7 @@ class Engine {
         std::uint64_t epoch = 0;
         std::int64_t stream = 0, anchorSample = 0;
         double anchorBeat = 0;
+        std::int64_t songFrame = 0;  // LaunchLogEntry::songFrame
     };
     // Main thread: queues the requests at the next `quantize` boundary at or
     // after the latest of their tracks' floors (none: the floor; stopped: the
@@ -865,29 +866,48 @@ class Engine {
     static constexpr std::size_t kLaunchSlots = 256;
     // Capturing a performance (ADR-0097 L4, engine.md §1.4.2). A capture
     // runs from the song sample where it began for `frames` of running
-    // time, under the transport loop it ran with. `launches` holds first,
-    // at running frame 0, what each track that was not following the
-    // arrangement played as it began (its own anchor kept), then each
-    // launch applied within it, its runningFrame counted from the start.
+    // time, under the transport loop it ran with. Running time is the
+    // song's, in samples (S3 B): stream frames at unity, the song samples
+    // played under a master playrate. `launches` holds first, at running
+    // frame 0, what each track that was not following the arrangement
+    // played as it began (its own anchor kept), then each launch applied
+    // within it, its runningFrame the song samples from the start to its
+    // boundary.
     struct LaunchCapture {
         bool on = false;  // still capturing: frames grows
         std::int64_t startSample = 0, frames = 0;
         LoopRange loop;
         std::vector<LaunchLogEntry> launches;
+        // A quantized end not reached yet: its running frame, and the beat
+        // of the sample it ends on (the commit's `to`; after a loop wrap the
+        // song's beat in the loop).
+        std::optional<std::int64_t> endsFrame;
+        std::optional<double> endsBeat;
     };
     // Main thread: starts a capture at the heard position (stopped: the
-    // play position, where playing starts), or ends the running one at the
-    // heard position. A relocation (a seek, a stop, a loop change) ends a
-    // capture that has run any frames; one that has not starts again where
-    // the transport goes. Starting is refused while a master playrate is
-    // active (`launch.playrate`; ADR-0097, dated revision 2026-11-21): its
-    // running time is not song time. One that becomes active ends a running
-    // capture (service).
-    Status captureLaunches(bool on);
+    // play position, where playing starts), or ends the running one. With
+    // no quantize, or None, or stopped, it ends at the heard position;
+    // with another, at that quantize's next boundary, placed as a launch
+    // of every track with clips made now would be (so a scene launch made
+    // with it lands on the same boundary; one track's launch, with a nearer
+    // floor, can land a boundary earlier), and launches applied from there
+    // on are not in it. On again before that boundary cancels the end; a
+    // second end replaces it. A relocation (a seek, a stop, a loop change)
+    // ends a capture that has run any frames, ending or not; one that has
+    // not starts again where the transport goes. Under a master playrate it
+    // runs on the song's count, through rate edits (S3 B). Starting is
+    // refused while a launched audio clip plays and the newest plan keeps
+    // the pitch (`launch.playrate`), and such a plan arriving ends a
+    // running capture with a warning (service): that audio could not be
+    // written as heard.
+    Status captureLaunches(bool on, std::optional<model::LaunchQuantize> quantize = std::nullopt);
     // Main thread: the running capture, else the last one; none before the
     // first. Collects the executors' acknowledgements first.
     std::optional<LaunchCapture> launchCapture();
     bool launchCapturing() const { return capture_.on; }  // main thread
+    // Main thread: a running capture waits for a quantized end's boundary
+    // (launch.state's capture_ends), whoever asked for it.
+    bool launchCaptureEnding() const { return capture_.on && capture_.ending; }
 
     std::uint32_t outputLatency() const;
     void setMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs);
@@ -1228,7 +1248,7 @@ class Engine {
         std::atomic<std::uint64_t> track{0}, clip{0}, epoch{0};
         std::atomic<std::uint64_t> scene{0};  // a scene launch's scene id number; 0: none
         std::atomic<std::uint8_t> action{0}, done{0}, required{0};
-        std::atomic<std::int64_t> target{0}, anchorSample{0};
+        std::atomic<std::int64_t> target{0}, anchorSample{0}, songFrame{0};
         std::atomic<double> anchorBeat{0};
         // Main thread only: what to re-place after a miss or a new epoch.
         LaunchRequest request;
@@ -1237,7 +1257,7 @@ class Engine {
     struct LaunchAck {
         std::uint64_t track = 0, clip = 0, epoch = 0, scene = 0;
         std::uint8_t action = 0;
-        std::int64_t stream = 0, anchorSample = 0;
+        std::int64_t stream = 0, anchorSample = 0, songFrame = 0;
         double anchorBeat = 0;
     };
     std::unique_ptr<std::array<LaunchSlot, kLaunchSlots>> launchSlots_ =
@@ -1317,14 +1337,23 @@ class Engine {
     // not placed yet (relocating, or a relocation before it ran).
     struct CaptureState {
         bool on = false, any = false, pending = false;
+        // A quantized end (captureLaunches): it ends at endSong once heard
+        // there (service).
+        bool ending = false;
+        double endBeat = 0;
         std::uint64_t epoch = 0;
-        std::int64_t startFrame = 0, endFrame = 0, startSample = 0;
+        // Its start and end on the song's running count (heardSong), and the
+        // song sample it began at.
+        std::int64_t startSong = 0, endSong = 0, startSample = 0;
         LoopRange loop;
     };
     CaptureState capture_;
-    void placeCapture();                // a pending start, once the clock reads
-    void captureRelocating();           // writeTransport: a relocation is coming
-    std::int64_t captureHeard() const;  // the capture epoch's heard stream
+    void placeCapture();       // a pending start, once the clock reads
+    void captureRelocating();  // writeTransport: a relocation is coming
+    // A quantized end heard: it ends there. Service runs it, and so do
+    // captureRelocating and captureLaunches first.
+    void captureEnding();
+    std::int64_t captureHeard() const;  // the capture epoch's song count heard
     Result<LaunchPlaced> placeLaunch(std::span<const LaunchRequest> requests,
                                      model::LaunchQuantize quantize) const;
     // launch()'s one attempt: placed, published and decided; `missed` when
@@ -1340,9 +1369,28 @@ class Engine {
     // target lies at or past device frame `device` of the running rate
     // timeline (a control edit from there), for service to place again.
     void voidRateLaunches(std::int64_t device);
-    // Main thread: whether the newest plan plays at a master playrate other
-    // than a steady 1 (a rate, an envelope or a sync chase).
-    bool rateActive() const;
+    // Main thread: the song's running count as the executors last published
+    // it in `epoch` (LaunchLogEntry::songFrame's unit), with the stream it
+    // was heard at and the loop it wraps by; none before the epoch played.
+    struct HeardSong {
+        double song = 0;
+        std::int64_t stream = 0, loopStart = 0, loopEnd = 0;
+        bool looping = false;
+    };
+    std::optional<HeardSong> heardSong(std::uint64_t epoch) const;
+    // Main thread, on a unity plan: the song count at stream 0 of `clock`'s
+    // epoch (it moves with the stream there).
+    std::int64_t unitySongBase(const LaunchClock& clock) const;
+    // Main thread: a launched audio clip that plays (by the log) while the
+    // newest plan keeps the pitch under a master playrate (S3 B, Q2).
+    std::optional<model::Id> audioUnderStretch() const;
+    // Main thread: whether `r` leaves or returns to an arrangement that holds
+    // audio (round 113 T2), by the log.
+    bool cutsArrangementAudio(const LaunchRequest& r) const;
+    // Main thread: under a pitch-keeping plan, ends a running capture on the
+    // boundary of a queued switch that cuts arrangement audio (that launch
+    // not in it), with a warning naming the track.
+    void captureBeforeStretchCut();
     std::optional<std::shared_ptr<const model::Session>> rateDeferredFrom_;
     // Whether a refused playrate move was pending when the deferral began:
     // the restore puts it back with rateDeferredFrom_ (review 37c F1).
