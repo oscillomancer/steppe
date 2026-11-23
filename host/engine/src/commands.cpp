@@ -49,6 +49,7 @@ void registerConsolidateCommands(cmd::Registry& registry);
 void registerExportCommands(cmd::Registry& registry);
 void registerMixCommands(cmd::Registry& registry);
 void registerHealCommands(cmd::Registry& registry);
+void registerCompCommands(cmd::Registry& registry);
 void registerSyncCommands(cmd::Registry& registry);
 void registerLearnCommands(cmd::Registry& registry);
 void registerControlLearnCommands(cmd::Registry& registry);
@@ -166,6 +167,7 @@ void registerEngineCommands(cmd::Registry& registry) {
     registerExportCommands(registry);
     registerMixCommands(registry);
     registerHealCommands(registry);
+    registerCompCommands(registry);
     registerSyncCommands(registry);
     registerLearnCommands(registry);
     registerControlLearnCommands(registry);

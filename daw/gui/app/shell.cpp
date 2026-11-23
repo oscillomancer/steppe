@@ -415,6 +415,7 @@ void Shell::sync(bool event) {
     // toggle shows whether it is armed.
     capture_.service();
     arrange_->setCaptureArmed(capture_.lit());
+    arrange_->setCaptureEnding(capture_.ending());
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);

@@ -154,8 +154,19 @@ A frozen track plays its print: `launch.clip` refuses it (`track.frozen`) and
 `launch.scene` skips it with a warning. `launch.stop` on a track with no clips is
 `launch.track`; `launch.scene` on a scene nothing can play is `launch.scene`. A
 master playrate (`transport.playrate.set`) does not stop launches, but while it keeps the pitch an audio clip's
-launch is refused (`launch.playrate`), and `launch.capture` is refused under any active
-playrate, and while the rate heard (`effective_rate`) is still gliding back to 1. A clip's FX and envelopes play through its own chain; a rack's Notes module
+launch is refused (`launch.playrate`). `launch.capture` runs in song time under a playrate,
+through rate edits: the committed arrangement plays the same song positions, not the same
+durations, at another rate. It is refused while a launched audio clip plays and the playrate
+keeps the pitch (stop that clip first), and a playrate that starts keeping the pitch then ends
+a running capture with a warning naming the clip. While the pitch is kept, a launch that takes
+a track off its arrangement, or back to it, where that arrangement holds audio ends the capture
+on the launch's boundary (the launch is not in it), with a warning naming the track; MIDI
+launches on other tracks are captured. A switch's 5 ms crossfade is 5 ms of song
+(240 samples at 48 kHz): under a playrate you hear it as 5 ms divided by the rate. Under a
+playrate the commit also differs from what you heard in the first and last 128 song samples
+of the capture (under 3 ms at 48 kHz), by up to the level of the audio there: the commit
+cuts its items at the capture's edges, where the performance went on; and in the 128 song
+samples before a switch that lands exactly where a clip's period starts again. A clip's FX and envelopes play through its own chain; a rack's Notes module
 and the track's MIDI sends follow launches.
 
 Two things to expect when polling. A launch given just as the transport started (the
@@ -171,8 +182,18 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
 
 - `launch.capture {on: true}` keeps every launch with the running time it applied at
   (from where playing starts, when stopped); `{on: false}` ends it and answers
-  `{on, from, to}`, the span in beats. A stop, a seek or a loop change ends a capture
-  that has run. `launch.state` has `capturing`: whether one is on.
+  `{on, from, to}`, the span in beats. To end on the grid, send `{on: false, quantize:
+  "bar"}` (or another launch quantize) while playing: it answers `{on: true, ends_at}`
+  and captures until that boundary is heard, where it ends, on the sample a scene launch
+  made with it would switch on (that launch is not in it; one track's launch can land a
+  boundary earlier, and is then in the capture). `ends_at` is that sample's beat,
+  which `launch.commit`'s `to` will be; if the loop wrapped meanwhile it is the song's
+  beat in the loop, and `to` runs on by running time. Wait for `launch.state`'s
+  `capturing` to turn false (`capture_ends` says the beat meanwhile), then commit:
+  `launch.commit` before then is `launch.capture.ending`. `{on: true}` before the
+  boundary cancels the end. A stop, a seek or a loop change ends a capture that has
+  run, ending or not. Arm it between notes: armed while a launched clip's note sounds,
+  the commit leaves out the rest of that note.
 - `launch.commit {pooled?}` lays the capture on the timeline as items, in one undo
   step, by running time from `from`: a launch heard s seconds in lands s seconds after
   it, however the transport loop jumped meanwhile. On each track that left the

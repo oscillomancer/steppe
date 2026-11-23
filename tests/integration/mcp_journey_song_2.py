@@ -483,7 +483,7 @@ def poll(what, condition, limit=TIMEOUT):
 
 def live(j):
     """A launch while the transport runs under a master playrate lands on a bar and plays;
-    a capture is refused until the rate is 1."""
+    a capture runs there too, in song time (ADR-0097, revision "S3 step B")."""
     j.exec("engine.start", {"backend": "dummy"}, "Start the dummy backend.")
     before = j.exec("transport.playrate.set", {"rate": 1.25}, "A master playrate of 1.25.")
     assert before["requested_rate"] == 1.25, before
@@ -497,13 +497,14 @@ def live(j):
     assert warnings == [], launched  # the clips follow live (ADR-0098 X4a), within budget
     followed = [r.get("followed", "none") for r in j.state().values()]
     assert any(f != "none" for f in followed), followed
-    error = j.refused("launch.capture", {"on": True}, "launch.playrate",
-                      "A capture is refused under a playrate.")
-    assert "playrate" in error["hint"], error
+    began = j.exec("launch.capture", {"on": True}, "A capture runs under a playrate.")
+    assert began["on"], began
+    ended = j.exec("launch.capture", {"on": False}, "End it.")
+    assert not ended["on"] and ended["to"] >= ended["from"], ended
     j.exec("launch.stop", {}, "Stop the clips.")
     j.exec("transport.playrate.set", {"rate": 1.0}, "Back to 1.")
-    # The audible rate follows the requested one over about a second of playing; a capture
-    # begun before it has arrived would lay its launches off the bar lines.
+    # The audible rate follows the requested one over about a second of playing; the next
+    # part times its launches at 1.
     poll("the audible rate reaches 1",
          lambda: abs(j.exec("transport.playrate.get", {}, "The rate heard now.")
                      ["effective_rate"] - 1.0) < 1e-4)

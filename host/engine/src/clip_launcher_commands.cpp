@@ -76,6 +76,15 @@ double contentLength(const model::Session& s, const model::Take& take) {
     return static_cast<double>(md->frames) / md->sampleRate / rate;
 }
 
+bool clipLaysAsOneItem(const model::Session& s, const model::Clip& clip, const model::Take& take) {
+    const double P = clip.length;
+    const double content = contentLength(s, take);
+    const bool wholeLoop = clip.loop.on && std::abs(clip.loop.start) <= 1e-9 * P &&
+                           std::abs(clip.loop.length - content) <= 1e-9 * std::max(1.0, P);
+    return clip.mode != model::ClipMode::Once && take.startOffset == 0 &&
+           std::abs(P - content) <= 1e-9 * std::max(1.0, P) && (!clip.loop.on || wholeLoop);
+}
+
 Status checkClipTakeUnwarped(const model::Session& s, Id take, const std::string& path) {
     const model::Take* tk = s.takes.find(take);
     if (tk && (!tk->stretchMarkers.empty() || !tk->warpPeers.empty() || model::activeWarp(*tk)))

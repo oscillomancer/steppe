@@ -4,6 +4,7 @@
 
 #include <utility>
 
+#include "supple/model/schemas.h"
 #include "supple/views/launcher.h"
 
 namespace supple::gui {
@@ -49,14 +50,35 @@ Status CaptureControl::set(bool on) {
         }
         json::Value args = json::Value::object();
         args["on"] = true;
-        auto r = run("launch.capture", std::move(args));
+        auto r = run("launch.capture", std::move(args));  // also cancels a pending end
         if (!r) return std::move(r).error();
         armed_ = true;
+        ending_ = false;
         capturing_ = app_.launchCapturing();
         return {};
     }
+    // Playing, the capture ends on the project's launch quantize boundary,
+    // as a scene launch made now would land, and is committed once heard there
+    // (service). Off again while it is ending ends it now (commit), also
+    // when the end was another caller's.
+    engine::Engine* engine = app_.engine();
+    const auto transport = app_.transport("get");
+    if (!ending() && engine && engine->launchCapturing() && transport && transport->playing) {
+        json::Value args = json::Value::object();
+        args["on"] = false;
+        args["quantize"] =
+            model::launchQuantizeSchema().encode(app_.head().project->launchQuantize);
+        auto r = run("launch.capture", std::move(args));
+        if (!r) return std::move(r).error();
+        armed_ = capturing_ = false;
+        if (engine->launchCapturing()) {
+            ending_ = true;
+            return {};
+        }
+    }
     armed_ = false;
     capturing_ = false;
+    ending_ = false;
     if (auto st = commit(); !st) return keep(std::move(st).error());
     return {};
 }
@@ -92,6 +114,18 @@ Status CaptureControl::commit() {
 }
 
 void CaptureControl::service() {
+    if (ending_) {
+        // Turned off while playing: committed once the engine has heard the
+        // boundary, or as soon as a stop or a seek ended it first.
+        if (app_.engine() && app_.launchCapturing()) return;
+        ending_ = false;
+        if (!app_.engine()) return;
+        if (auto st = commit(); !st) {
+            Error refusal = keep(std::move(st).error());
+            if (onError) onError(refusal);
+        }
+        return;
+    }
     if (!armed_) return;
     if (!app_.engine()) {  // the engine stopped: the capture went with it
         armed_ = capturing_ = false;

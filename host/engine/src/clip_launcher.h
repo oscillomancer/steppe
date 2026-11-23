@@ -159,6 +159,12 @@ void convertTakeEnvelopes(model::EditTxn& t, const model::Session& s, model::Id 
 // 0 when it has none.
 double contentLength(const model::Session& s, const model::Take& take);
 
+// Whether launch.commit lays a stretch of `clip` (its active take `take`) as
+// one looped item: its period is its content's pass, from the start, with no
+// loop window inside it. Otherwise it lays one item per period, and the
+// launched player on a playrate plan reads each period as that item does.
+bool clipLaysAsOneItem(const model::Session& s, const model::Clip& clip, const model::Take& take);
+
 // Refuses a take whose audio is warped: the clip player does not warp
 // (clip.unsupported).
 Status checkClipTakeUnwarped(const model::Session& s, model::Id take, const std::string& path);

@@ -1158,70 +1158,6 @@ TEST_CASE("a launch onto a track with a clip chain waits the chain's latency lon
 
 namespace {
 
-// The app's own engine on a manual backend, driven cycle by cycle in
-// either executor, its service run after each stretch.
-struct AppLive {
-    Project& p;
-    EngineOptions options;
-    std::uint32_t block;
-    DummyBackend backend;
-    std::int64_t cycles = 0;
-    AppLive(Project& project, const EngineOptions& o, std::uint32_t b, std::int64_t frames)
-        : p(project),
-          options(o),
-          block(b),
-          backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames}) {
-        REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = block}, options));
-    }
-    // Runs until `frame` of the stream has played.
-    void until(std::int64_t frame) {
-        const std::int64_t n = frame / block - cycles;
-        if (n > 0) {
-            if (options.anticipative)
-                runAheadOnState(*p.app->engine(), backend, n, block);
-            else
-                backend.run(n);
-            cycles += n;
-        }
-        p.app->tick();
-    }
-    std::vector<float> stop() {
-        CHECK(p.app->engine()->anticipationMisses() == 0);
-        latency = p.app->engine()->outputLatency();
-        p.app->stopEngine();
-        return backend.capture().channels[0];
-    }
-    std::uint32_t latency = 0;
-};
-
-// The project's arrangement alone (no launches), from 0 for `seconds`.
-std::vector<float> arrangement(Project& p, double seconds, std::uint32_t block = 512) {
-    InstancePool pool = makePool();
-    OfflineSettings settings;
-    settings.endSeconds = seconds;
-    settings.blockSize = block;
-    settings.projectDir = p.app->projectDir();
-    auto r = renderOffline(p.app->head(), pool, settings);
-    REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
-    return r->audio.channels[0];
-}
-
-// The largest difference between live (its latency taken off) and
-// offline over [from, to), and the first frame past `tolerance`.
-std::pair<double, std::int64_t> compare(const std::vector<float>& live, std::uint32_t latency,
-                                        const std::vector<float>& offline, std::int64_t from,
-                                        std::int64_t to, double tolerance = 0) {
-    double worst = 0;
-    std::int64_t first = -1;
-    for (std::int64_t k = from; k < to; ++k) {
-        const double d =
-            std::fabs(double(live[std::size_t(k + latency)]) - double(offline[std::size_t(k)]));
-        if (d > tolerance && first < 0) first = k;
-        worst = std::max(worst, d);
-    }
-    return {worst, first};
-}
-
 std::vector<std::string> itemsOn(const model::Session& s, const char* track) {
     std::vector<std::string> out;
     for (const auto& e : s.items)
@@ -1453,6 +1389,231 @@ TEST_CASE("a capture keeps what plays as it begins and ends at a relocation" *
         capture = engine.launchCapture();
         CHECK(capture->on);
         CHECK(capture->startSample == 144000);
+        engine.stop();
+    }
+}
+
+TEST_CASE("a capture ended on a quantize boundary ends exactly there, without its launches" *
+          doctest::description("rt")) {
+    // launch.capture {on: false, quantize: bar} on bar 2 ends the capture on
+    // bar 3, placed as a launch made then is: what launches on that boundary
+    // is not in it, the commit ends on the bar's beat, and what it lays
+    // plays as it was heard up to there.
+    for (const std::uint32_t block : {128u, 512u})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("block " << block << ", anticipative " << options.anticipative);
+            Project p;
+            twoTracks(p);
+            AppLive live(p, options, block, 48000 * 5 + 16384);
+            p.run("launch.capture", R"({"on": true})");
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * block);
+            p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2
+            live.until(150000);
+            json::Value ending = p.run("launch.capture", R"({"on": false, "quantize": "bar"})");
+            CHECK(ending["on"].asBool());
+            CHECK(ending["ends_at"].asDouble() == 8.0);  // bar 3
+            // A launch made with it lands on the same boundary.
+            CHECK(p.run("launch.arrangement", R"({"track": "tr_1"})")["beat"].asDouble() == 8.0);
+            json::Value state = p.run("launch.state", "{}");
+            CHECK(state["capturing"].asBool());
+            CHECK(state["capture_ends"].asDouble() == 8.0);
+            const auto refused = p.bus->execute({"launch.commit", j("{}"), kOrigin});
+            REQUIRE_FALSE(refused);
+            CHECK(refused.error().code == "launch.capture.ending");
+            live.until(192000 - 4 * block);
+            CHECK(p.run("launch.state", "{}")["capturing"].asBool());
+            live.until(200000);
+            state = p.run("launch.state", "{}");
+            CHECK_FALSE(state["capturing"].asBool());
+            CHECK_FALSE(state.find("capture_ends"));
+            json::Value done = p.run("launch.commit", "{}");
+            CHECK(done["from"].asDouble() == 0.0);
+            CHECK(done["to"].asDouble() == 8.0);
+            json::Value history = p.run("log.list", R"({"limit": 1})");
+            const json::Value& last = history["entries"].at(history["entries"].size() - 1);
+            REQUIRE(last.find("command")->asString() == "launch.commit");
+            const json::Value& perf = *last.find("args")->find("performance");
+            CHECK(perf.find("frames")->asInt() == 192000);
+            const json::Value& launches = *perf.find("launches");
+            REQUIRE(launches.size() == 2);  // the scene's two, not tr_1's return
+            for (std::size_t k = 0; k < 2; ++k)
+                CHECK(launches.at(k).find("action")->asString() == "clip");
+            const std::vector<float> heard = live.stop();
+            const std::vector<float> committed = arrangement(p, 5.0, block);
+            const auto [worst, first] = compare(heard, live.latency, committed, 0, 192000, 1e-6);
+            CHECK_MESSAGE(first < 0, "first difference at frame " << first << ", " << worst);
+        }
+}
+
+TEST_CASE("a quantized capture end's ends_at is the commit's to; past a loop wrap the song's beat" *
+          doctest::description("rt")) {
+    // Review round 104 Y2. At 117 BPM bar 3 (beat 8) falls between samples
+    // (196923.08): the capture ends on the sample a launch there switches on
+    // (196923), and ends_at is that sample's beat, the same number as the
+    // commit's to. Under a loop over bars 1-2 an end in its second pass is
+    // on bar 2 of the song (ends_at about 4), while to runs on by running
+    // time (about 12).
+    const double bar = 4 * 60.0 / 117;             // seconds
+    const double sample = 1.0 / 48000 * 117 / 60;  // a sample, in beats
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}})
+        for (const bool wrap : {false, true}) {
+            INFO("anticipative " << options.anticipative << ", wrap " << wrap);
+            Project p;
+            twoTracks(p);
+            p.run("tempo.set", R"({"points": [{"beat": 0, "bpm": 117}]})");
+            if (wrap) {
+                auto loop = j(R"({"start_seconds": 0, "enabled": true})");
+                loop["end_seconds"] = 2 * bar;
+                p.runArgs("transport.loop", loop);
+            }
+            AppLive live(p, options, 128, 48000 * 8 + 16384);
+            p.run("launch.capture", R"({"on": true})");
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            p.run("launch.scene", R"({"scene": "sc_1"})");  // bar 2
+            const std::int64_t loopEnd = 196923;            // bar 3's sample
+            live.until(wrap ? loopEnd + 20000 : 150000);
+            json::Value ending = p.run("launch.capture", R"({"on": false, "quantize": "bar"})");
+            REQUIRE(ending["on"].asBool());
+            const double endsAt = ending["ends_at"].asDouble();
+            const double song = wrap ? 4.0 : 8.0;
+            CHECK(endsAt != song);  // not a whole sample
+            CHECK(std::fabs(endsAt - song) < sample);
+            CHECK(p.run("launch.state", "{}")["capture_ends"].asDouble() == endsAt);
+            live.until(wrap ? loopEnd + 98462 + 8000 : loopEnd + 8000);
+            REQUIRE_FALSE(p.run("launch.state", "{}")["capturing"].asBool());
+            json::Value done = p.run("launch.commit", "{}");
+            if (wrap) {
+                CHECK(std::fabs(done["to"].asDouble() - 12.0) < sample);  // by running time
+            } else {
+                CHECK(done["to"].asDouble() == endsAt);
+            }
+            live.stop();
+        }
+}
+
+TEST_CASE(
+    "a quantized capture end heard before a service ends on its boundary whatever comes next" *
+    doctest::description("rt")) {
+    // Review round 104 Y1: the boundary is heard, and before the next
+    // service a seek, an end now or another quantized end arrives. Each
+    // finds the capture over, on the boundary: a launch landing there is not
+    // in it, and no second boundary is waited for.
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}})
+        for (const int next : {0, 1, 2}) {  // a seek, an end now, another quantized end
+            INFO("anticipative " << options.anticipative << ", next " << next);
+            InstancePool pool = makePool();
+            MediaCache media;
+            DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 6});
+            Engine engine(pool, media, options);
+            REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+            REQUIRE(engine.load(s, p.app->projectDir()));
+            std::int64_t played = 0;
+            const auto until = [&](std::int64_t frame, bool service) {
+                const std::int64_t n = frame / 128 - played;
+                if (options.anticipative)
+                    runAheadOnState(engine, backend, n, 128);
+                else
+                    backend.run(n);
+                played += n;
+                if (service) engine.service();
+            };
+            engine.play();
+            until(1280, true);
+            REQUIRE(engine.captureLaunches(true));
+            until(110000, true);
+            REQUIRE(engine.captureLaunches(false, model::LaunchQuantize::Bar));  // bar 3
+            const Engine::LaunchRequest r = request("tr_1", "cl_1");
+            auto placed = engine.launch(std::span(&r, 1), model::LaunchQuantize::Bar);
+            REQUIRE(placed);
+            CHECK(placed->anchorSample == 192000);
+            until(200000, false);  // heard, not serviced
+            if (next == 0)
+                engine.seek(1.0);
+            else if (next == 1)
+                REQUIRE(engine.captureLaunches(false));
+            else
+                REQUIRE(engine.captureLaunches(false, model::LaunchQuantize::Bar));
+            const auto capture = engine.launchCapture();
+            REQUIRE(capture);
+            CHECK_FALSE(capture->on);
+            CHECK_FALSE(capture->endsFrame);
+            CHECK(capture->frames == 192000 - capture->startSample);
+            CHECK(capture->launches.empty());  // cl_1 switched on the boundary
+            CHECK(engine.launchLog().size() == 1);
+            engine.stop();
+        }
+}
+
+TEST_CASE("a quantized capture end: on again cancels it, another replaces it, a seek comes first" *
+          doctest::description("rt")) {
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000 * 8});
+        Engine engine(pool, media, options);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        std::int64_t played = 0;
+        const auto until = [&](std::int64_t frame) {
+            const std::int64_t n = frame / 128 - played;
+            if (options.anticipative)
+                runAheadOnState(engine, backend, n, 128);
+            else
+                backend.run(n);
+            played += n;
+            engine.service();
+        };
+        engine.play();
+        until(1280);
+        REQUIRE(engine.captureLaunches(true));
+        until(110000);
+        // Ending on bar 3; on again before it: the capture runs on.
+        REQUIRE(engine.captureLaunches(false, model::LaunchQuantize::Bar));
+        auto capture = engine.launchCapture();
+        REQUIRE(capture);
+        CHECK(capture->on);
+        REQUIRE(capture->endsFrame);
+        CHECK(*capture->endsFrame == 192000 - capture->startSample);
+        CHECK(capture->endsBeat == 8.0);
+        REQUIRE(engine.captureLaunches(true));
+        capture = engine.launchCapture();
+        CHECK(capture->on);
+        CHECK_FALSE(capture->endsFrame);
+        until(200000);
+        CHECK(engine.launchCapture()->on);
+        // Ending on the next beat, then on the next bar instead.
+        REQUIRE(engine.captureLaunches(false, model::LaunchQuantize::Beat));
+        CHECK(engine.launchCapture()->endsBeat == 9.0);
+        REQUIRE(engine.captureLaunches(false, model::LaunchQuantize::Bar));
+        CHECK(engine.launchCapture()->endsBeat == 12.0);
+        until(230000);
+        CHECK(engine.launchCapture()->on);
+        // A seek before the boundary ends it there, as heard.
+        const std::int64_t frames = engine.launchCapture()->frames;
+        engine.seek(1.0);
+        capture = engine.launchCapture();
+        CHECK_FALSE(capture->on);
+        CHECK_FALSE(capture->endsFrame);
+        CHECK(capture->frames >= frames);
+        CHECK(capture->frames < 288000 - capture->startSample);
+        until(300000);
+        CHECK(engine.launchCapture()->frames == capture->frames);
+        // Without quantize (or with none) it ends at the position heard, as before.
+        engine.awaitTransport();
+        until(310000);
+        REQUIRE(engine.captureLaunches(true));
+        until(320000);
+        REQUIRE(engine.captureLaunches(false, model::LaunchQuantize::None));
+        CHECK_FALSE(engine.launchCapture()->on);
         engine.stop();
     }
 }
