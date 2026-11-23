@@ -4,10 +4,6 @@
 // whatever the thread count.
 #include <doctest/doctest.h>
 
-#if defined(__linux__)
-#include <sched.h>
-#endif
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -18,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include "native_cpus.h"
 #include "supple/diagctx/table.h"
 #include "workers.h"
 
@@ -259,26 +256,20 @@ TEST_CASE("a fan-out after a serial prefix wakes every parked participant") {
     CHECK(fanout.calls == 10);
 }
 
-// Linux only: it restricts a thread with sched_setaffinity. macOS has no CPU
-// affinity; Windows counts the process mask (core-base allowedCpuCount).
-#if defined(__linux__)
-TEST_CASE("the default helper count follows the calling thread's allowed CPUs") {
-    cpu_set_t all;
-    CPU_ZERO(&all);
-    REQUIRE(::sched_getaffinity(0, sizeof(all), &all) == 0);
-    std::vector<int> cpus;
-    for (int c = 0; c < CPU_SETSIZE; ++c)
-        if (CPU_ISSET(c, &all)) cpus.push_back(c);
-    // On a scratch thread restricted to the first `n` allowed CPUs (its mask
-    // only; the test thread's is unchanged).
+// Not on macOS, which has no CPU affinity. Linux restricts the calling
+// thread, Windows the process: what core-base's allowedCpuCount reads on each.
+#if defined(__linux__) || defined(_WIN32)
+TEST_CASE("the default helper count follows the allowed CPUs (the thread's or the process's)") {
+    const std::vector<int> cpus = supple::test::allowedCpuList();
+    REQUIRE_FALSE(cpus.empty());
+    // On a scratch thread restricted to the first `n` allowed CPUs, for its
+    // life (on Linux its mask only; on Windows the process's, restored after).
     auto helpersOn = [&](std::size_t n) {
         unsigned helpers = 999;
         bool restricted = false;
         std::thread([&] {
-            cpu_set_t some;
-            CPU_ZERO(&some);
-            for (std::size_t i = 0; i < n; ++i) CPU_SET(cpus[i], &some);
-            restricted = ::sched_setaffinity(0, sizeof(some), &some) == 0;
+            const supple::test::CpuRestriction only(cpus, n);
+            restricted = only.ok();
             helpers = Workers::defaultHelpers();
         }).join();
         REQUIRE(restricted);

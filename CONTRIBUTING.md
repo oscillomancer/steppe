@@ -156,7 +156,8 @@ These gates are explicit, with no no-op RT implementations:
 | `engine.tests` cases: recording header errors through an operating-system fault, thread role names (`test_realtime`) | macOS, Windows | Linux mechanisms (a `/proc/self/fd` fault, `/proc/self/task` names); the header error is also checked on every platform through the writer's I/O seam; native thread names to follow |
 | `engine.tests` checks inside the first-save and audition cases (`test_app`): no open descriptor on a scratch file (`openFilesNamed`, `/proc/self/fd`) | macOS, Windows | a removed file that is still open is listed only on Linux; the same cases check on every platform that the scratch folder is gone and no warning came, which an open handle fails on Windows |
 | `engine.tests` cases: the first save that cannot remove a scratch file (`test_app`) | none (two mechanisms) | `HoldFile`: Windows opens the file with no delete sharing; elsewhere the folder is made read-only (not as root, where the case returns) |
-| `engine.tests` cases: the restricted CPU mask (`test_realtime`, `test_workers`) and elevation refusals (`test_realtime`) | macOS, Windows | Linux CPU affinity and `RLIMIT_RTPRIO`/`RLIMIT_RTTIME` |
+| `engine.tests` cases: the restricted CPU mask (`test_realtime`, `test_workers`) | macOS | macOS has no CPU affinity; Linux restricts the thread and Windows the process (`native_cpus.h`), as `allowedCpuCount` reads them |
+| `engine.tests` case: elevation refusals (`test_realtime`) | macOS, Windows | Linux's `RLIMIT_RTPRIO`/`RLIMIT_RTTIME`, which the other platforms do not have |
 | `engine.tests` case: CLAP posix-fd service (`test_app`) | Windows | CLAP's posix-fd extension is not offered on Windows, which the test checks |
 
 Research GUI spikes and host fuzzers reject configuration on non-Linux

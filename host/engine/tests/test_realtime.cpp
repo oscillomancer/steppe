@@ -55,6 +55,7 @@
 #include "../../../tests/wav_stream_test_support.h"
 #include "live_workers.h"
 #include "meters.h"
+#include "native_cpus.h"
 #include "plan.h"
 #include "realtime_support.h"
 #include "recording.h"
@@ -6136,19 +6137,20 @@ bool mayElevate(int threads, int priority) {
 }
 // The policy the background pool and renderer ask for at `priority`.
 ThreadPolicy elevated(int priority) { return {Kind::Fifo, priority}; }
-bool warnsNormal(const Engine& engine, std::string_view because) {
-    for (const auto& w : engine.warnings())
-        if (w.find("background audio threads run at normal priority") != std::string::npos &&
-            w.find(because) != std::string::npos)
-            return true;
-    return false;
-}
 #else
 // Off Linux the pool asks for the platform's high policy, with no priority
 // levels or rlimits (Engine::start): only the two-free-CPUs rule refuses it.
 bool mayElevate(int threads, int) { return threads + 2 <= static_cast<int>(allowedCpuCount()); }
 ThreadPolicy elevated(int) { return {Kind::High, 0}; }
 #endif
+// Whether the engine warned that its background threads run normal, `because`.
+[[maybe_unused]] bool warnsNormal(const Engine& engine, std::string_view because) {
+    for (const auto& w : engine.warnings())
+        if (w.find("background audio threads run at normal priority") != std::string::npos &&
+            w.find(because) != std::string::npos)
+            return true;
+    return false;
+}
 }  // namespace
 
 TEST_CASE("background threads run real-time below a real-time callback (ADR-0026)") {
@@ -6269,16 +6271,11 @@ TEST_CASE("default pools run real-time below a real-time callback with three CPU
     CHECK(engine.scheduling().renderer == ThreadPolicy{});
 }
 
-// Linux only: CPU affinity through sched_setaffinity (none on macOS; Windows
-// counts the process mask).
-#if defined(__linux__)
+// Not on macOS, which has no CPU affinity. Linux restricts the starting
+// thread, Windows the process (native_cpus.h): what allowedCpuCount reads.
+#if defined(__linux__) || defined(_WIN32)
 TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-time") {
-    cpu_set_t all;
-    CPU_ZERO(&all);
-    REQUIRE(::sched_getaffinity(0, sizeof(all), &all) == 0);
-    std::vector<int> cpus;
-    for (int c = 0; c < CPU_SETSIZE; ++c)
-        if (CPU_ISSET(c, &all)) cpus.push_back(c);
+    const std::vector<int> cpus = supple::test::allowedCpuList();
     if (cpus.size() < 4) {
         MESSAGE("fewer than four allowed CPUs: no smaller mask to try");
         return;
@@ -6292,10 +6289,8 @@ TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-ti
     unsigned live = 0;
     ThreadPolicy renderer, background;
     std::thread([&] {
-        cpu_set_t some;
-        CPU_ZERO(&some);
-        for (std::size_t i = 0; i < n; ++i) CPU_SET(cpus[i], &some);
-        restricted = ::sched_setaffinity(0, sizeof(some), &some) == 0;
+        const supple::test::CpuRestriction only(cpus, n);
+        restricted = only.ok();
         ReportingBackend backend({Kind::Fifo, 83});
         Engine engine(pool, media);  // default (Automatic) pools
         started = engine.start(backend, {.blockSize = 128}).ok();
@@ -6312,7 +6307,7 @@ TEST_CASE("under a restricted CPU mask the default pools fit it and stay real-ti
     CHECK(live <= n - 1);
     CHECK_FALSE(capWarning);
     if (elevated) {
-        CHECK(renderer == ThreadPolicy{Kind::Fifo, Engine::kBackgroundPriority});
+        CHECK(renderer == ::elevated(Engine::kBackgroundPriority));
         CHECK(background == renderer);
     }
 }
