@@ -908,7 +908,10 @@ the boundary.
   naming the track (review round 113 T2: the stretch converter reads on
   past the cut live, where the commit splits the item; measured, the
   commit differed for 5664 device frames before a switch away and by up to
-  0.37 after a return). Arming is refused
+  0.37 after a return). *Note 2026-11-23 (review round 117 W1):* only
+  where an audio item of the track lies within 0.25 s of the switch's song
+  position, the converter's reach either side; a switch clear of the
+  track's audio is captured, and its commit is exact. Arming is refused
   with `launch.playrate` while a launched audio clip plays and the newest
   plan keeps the pitch (no committed item reads a stretch converter's
   history), naming the clip, with the hint to stop it or turn off preserve

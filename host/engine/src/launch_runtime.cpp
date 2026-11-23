@@ -972,14 +972,22 @@ std::optional<model::Id> Engine::audioUnderStretch() const {
     return std::nullopt;
 }
 
-bool Engine::cutsArrangementAudio(const LaunchRequest& r) const {
+bool Engine::cutsArrangementAudio(const LaunchRequest& r, std::int64_t song) const {
     if (!latest_) return false;
+    // The stretch converter's reach either side of the switch: the history it
+    // primes from and its lookahead (about 0.12 s measured, round 113 T2).
+    // An item clear of it is neither read on past the cut nor primed from.
+    constexpr double kStretchReachSeconds = 0.25;
+    const double reach = kStretchReachSeconds * config_.sampleRate;  // song samples
     bool audio = false;
     for (const auto& e : latest_->items) {
         const model::Item& item = *e.value;
-        if (item.track != r.track || !item.activeTake) continue;
+        if (item.track != r.track || !item.activeTake || item.mute) continue;
         const model::Take* take = latest_->takes.find(*item.activeTake);
-        audio = take && take->source && take->source->kind != model::Kind::Midi;
+        if (!take || !take->source || take->source->kind == model::Kind::Midi) continue;
+        const model::ItemSpan span = model::itemSpan(*latest_, item);
+        audio = span.startSec * config_.sampleRate - reach < double(song) &&
+                span.endSec * config_.sampleRate + reach > double(song);
         if (audio) break;
     }
     if (!audio) return false;
@@ -1011,16 +1019,16 @@ void Engine::captureBeforeStretchCut() {
             continue;
         const std::int64_t song = s.songFrame.load();
         if (song <= capture_.startSong || (capture_.ending && capture_.endSong <= song) ||
-            !cutsArrangementAudio(s.request))
+            !cutsArrangementAudio(s.request, song))
             continue;
         capture_.ending = true;
         capture_.endSong = song;
         capture_.endBeat =
             latest_->timeMap->beatAt(double(s.anchorSample.load()) / config_.sampleRate);
         warnings_.push_back("launch: the capture ends at " + s.request.track.str() +
-                            "'s switch: its arrangement holds audio, which a capture cannot write "
-                            "as heard where a switch cuts it while the master playrate keeps the "
-                            "pitch");
+                            "'s switch: its arrangement plays audio there, which a capture cannot "
+                            "write as heard where a switch cuts it while the master playrate keeps "
+                            "the pitch");
     }
 }
 

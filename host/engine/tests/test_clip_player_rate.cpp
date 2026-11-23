@@ -556,6 +556,8 @@ TEST_CASE("under a pitch-keeping rate a switch that cuts arrangement audio ends 
             INFO("back " << back << ", anticipative " << options.anticipative);
             Project p;
             twoTracks(p);
+            // tr_2's item (5 s) from beat 4: it sounds at both switches.
+            p.run("item.move", R"({"item": "it_2", "position": 4})");
             p.run("scene.add", "{}");  // sc_2
             const std::string clip = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
                                                        R"("notation": "voice v; 1: C4:w"})")["clip"]
@@ -602,6 +604,61 @@ TEST_CASE("under a pitch-keeping rate a switch that cuts arrangement audio ends 
             const auto [worst, first] = compare(heard, live.latency, committed, start, end);
             CHECK(worst == 0.0);
             CHECK(first == -1);
+        }
+}
+
+TEST_CASE(
+    "under a pitch-keeping rate a switch clear of the track's audio does not end the capture" *
+    doctest::description("rt")) {
+    // Review round 117 W1: only a switch within the stretch converter's reach
+    // of the track's arrangement audio ends a capture. tr_2's item (5 s of a
+    // ramp) ends 0.1 s or 1 s before tr_2's switch to a MIDI clip on bar 4
+    // (song 288000). Within the reach the capture ends there, as before;
+    // clear of it the capture runs on, and its commit is exact to its last
+    // sample: the converter reads nothing of the item there.
+    for (const double gap : {0.1, 1.0})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("gap " << gap << " s, anticipative " << options.anticipative);
+            const bool near = gap < 0.25;
+            Project p;
+            twoTracks(p);
+            auto move = j(R"({"item": "it_2"})");  // 240000 samples: it ends at 288000 - gap
+            move["position"] = (288000.0 - gap * 48000 - 240000) / double(kBeat);
+            p.runArgs("item.move", move);
+            p.run("scene.add", "{}");  // sc_2
+            const std::string clip = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
+                                                       R"("notation": "voice v; 1: C4:w"})")["clip"]
+                                         .asString();
+            auto launchIt = j(R"({})");
+            launchIt["clip"] = clip;
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+            AppLive live(p, options, 128, 48000 * 9 + 16384);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            const double from = p.run("launch.capture", R"({"on": true})")["from"].asDouble();
+            live.until(256000 + 8000);           // into bar 3
+            p.runArgs("launch.clip", launchIt);  // bar 4: song 288000
+            json::Value state = p.run("launch.state", "{}");
+            CHECK(state["capturing"].asBool());
+            CHECK(bool(state.find("capture_ends")) == near);
+            live.until(std::llround(12.0 * double(kBeat) / 0.75) + 40000);
+            CHECK(p.run("launch.state", "{}")["capturing"].asBool() == !near);
+            json::Value done = p.run("launch.commit", "{}");
+            CHECK(done["from"].asDouble() == from);
+            const double to = done["to"].asDouble();
+            if (near)
+                CHECK(to == 12.0);
+            else
+                CHECK(to > 12.5);
+            live.until(live.cycles * 128 + 20 * 128);
+            const std::vector<float> heard = live.stop();
+            const std::vector<float> committed = arrangement(p, 9.0, 128);
+            const std::int64_t start = std::llround(from * double(kBeat) / 0.75);
+            const std::int64_t end = std::llround(to * double(kBeat) / 0.75);
+            REQUIRE(end + std::int64_t(live.latency) <= std::int64_t(heard.size()));
+            REQUIRE(end <= std::int64_t(committed.size()));
+            const auto [worst, first] = compare(heard, live.latency, committed, start, end);
+            CHECK_MESSAGE(worst == 0.0, "differs by " << worst << " from frame " << first);
         }
 }
 

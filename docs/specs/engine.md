@@ -621,11 +621,13 @@ the same.*
   the pitch, and such a plan arriving ends
   a running capture with a warning naming the clip (the stretch converter
   reading it has no committed equivalent). For the same reason a switch
-  that leaves or returns to an arrangement holding audio, queued while the
-  newest plan keeps the pitch (`captureBeforeStretchCut`, at placement and
-  at each service), ends the capture on that switch's boundary, the
-  launch not in it, with a warning naming the track; MIDI launches on
-  other tracks are captured.
+  that leaves or returns to an arrangement with an audio item within
+  0.25 s of its song position (the converter's reach either side), queued
+  while the newest plan keeps the pitch (`captureBeforeStretchCut`, at
+  placement and at each service), ends the capture on that switch's
+  boundary, the launch not in it, with a warning naming the track; MIDI
+  launches on other tracks, and switches clear of a track's audio, are
+  captured (round 117 W1).
 - **Committing it.** `launch.commit` lays the capture out linearly: a
   launch at running frame f lands at the capture's start plus f, whatever
   the loop did. On each track that left the arrangement, the stretches
