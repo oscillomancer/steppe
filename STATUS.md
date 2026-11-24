@@ -1960,7 +1960,8 @@ Session and editing:
   off the audio executors while playback/monitoring continues. Clock windows
   reserve four additional seconds for latency changes; history exhaustion or late
   preparation recovers automatically through a prepared locate at the consumed
-  position, with the same state reset/preroll as a seek. Moving a compensated
+  position, with the same state reset/preroll as a seek; like a seek, it
+  ends a running launch capture there (ADR-0097 L4). Moving a compensated
   stretch source uses this recovery too, preserving phase alignment. Under
   read-ahead PDC, inserting track latency can move sibling sources and trigger
   this same recovery, even when the clock window itself has enough history.
