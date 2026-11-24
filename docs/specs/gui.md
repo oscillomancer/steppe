@@ -3874,7 +3874,8 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   to do ("Choose another device, or Refresh once it is connected."). A
   command name or the engine's hint, written for command callers, never
   shows; the full error with its hint goes to the log (`onLog`: stderr), once
-  until a start succeeds. Each choice is saved, then a
+  until a start succeeds. The status lines wrap at plain spaces only; a number and
+  its unit are joined by a no-break space ("48000 Hz", "0.0 ms"). Each choice is saved, then a
   running engine (or one whose start failed) restarts with it at once; a
   stopped one stays stopped. A restart keeps the fallback the last start had:
   after the app came up on the defaults, a choice the device refuses (the

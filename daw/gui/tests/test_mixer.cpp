@@ -2667,12 +2667,19 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     REQUIRE(runs > 0);
     REQUIRE(runs != 96000);
     char note[80];
-    std::snprintf(note, sizeof note, "running on the default device at %.0f Hz.", runs);
+    // The number keeps its unit: a no-break space between (U+00A0).
+    std::snprintf(note, sizeof note, "running on the default device at %.0f\xC2\xA0Hz.", runs);
     REQUIRE(errors.size() == 1);
     CHECK(errors[0].find(note) != std::string::npos);
     CHECK(fallback.lastError().find(note) != std::string::npos);
     CHECK(fallback.settings().rate == 96000);
     CHECK(f.node("audio.rate.set")->valueText() == "96000 Hz");  // the saved choice
+    // The status lines wrap at plain spaces only: no line starts with a unit.
+    for (int i = 0; i < 3; ++i) {
+        const std::string line = f.node("audio.status." + std::to_string(i))->valueText();
+        CHECK_FALSE(line.starts_with("Hz"));
+        CHECK_FALSE(line.starts_with("ms"));
+    }
     starts.clear();
     REQUIRE(fallback.rescan());
     CHECK(f.app->backend() != nullptr);  // still running, on the defaults

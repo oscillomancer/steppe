@@ -65,6 +65,10 @@ std::string hz(double rate) {
     return text;
 }
 
+// A no-break space (U+00A0): the status lines break only at plain spaces,
+// so a number keeps its unit ("48000 Hz").
+constexpr const char* kNoBreak = "\xC2\xA0";
+
 std::string frames(unsigned block, double rate) {
     char text[48];
     std::snprintf(text, sizeof text, "%u frames (%.1f ms)", block, 1000.0 * block / rate);
@@ -344,7 +348,11 @@ Status AudioDeviceDialog::start(bool fallback) {
             std::string note =
                 explain(st.error(), true) + " Audio is running on the default device";
             const double rate = app_.engineStatus().sampleRate;
-            if (settings_.rate > 0 && rate > 0 && rate != settings_.rate) note += " at " + hz(rate);
+            if (settings_.rate > 0 && rate > 0 && rate != settings_.rate) {
+                char at[48];
+                std::snprintf(at, sizeof at, " at %.0f%sHz", rate, kNoBreak);
+                note += at;
+            }
             lastError_ = note + ". The choice is kept for when it returns.";
             if (onError) onError("audio device: " + lastError_);
             const std::string missing = missingDevice(st.error());
@@ -728,14 +736,14 @@ void AudioDeviceDialog::refresh() {
         const std::string name = status.backend == "jack"        ? "JACK"
                                  : status.backend == "portaudio" ? resolvedHost(running_, devices_)
                                                                  : status.backend;
-        char line[160];
-        std::snprintf(line, sizeof line,
-                      "Running: %s at %.0f Hz, block %lld, device period %lld, output %.1f ms.",
-                      name.c_str(), status.sampleRate, static_cast<long long>(status.block),
-                      static_cast<long long>(status.period),
-                      status.sampleRate > 0
-                          ? 1000.0 * double(status.deviceLatency) / status.sampleRate
-                          : 0.0);
+        char line[192];
+        std::snprintf(
+            line, sizeof line,
+            "Running: %s at %.0f%sHz, block %lld, device period %lld, output %.1f%sms.",
+            name.c_str(), status.sampleRate, kNoBreak, static_cast<long long>(status.block),
+            static_cast<long long>(status.period),
+            status.sampleRate > 0 ? 1000.0 * double(status.deviceLatency) / status.sampleRate : 0.0,
+            kNoBreak);
         text = line;
         if (status.restartNeeded) text += " The device changed or went away: Restart audio.";
         if (!lastError_.empty()) text += " " + lastError_;
