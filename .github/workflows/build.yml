@@ -356,6 +356,11 @@ jobs:
         run: |
           free -m
           df -h / "$GITHUB_WORKSPACE"
+      # The compiler caches are saved whatever Build and the tests did (always()),
+      # so a seed run on main (CONTRIBUTING.md) saves even when its test entry
+      # fails; only an exact hit on the commit's own key skips the save. The
+      # dependency cache is saved earlier and only after its steps passed, so a
+      # failed install never leaves a half-filled .deps under the exact key.
       - name: Save Linux compiler cache
         if: always() && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
