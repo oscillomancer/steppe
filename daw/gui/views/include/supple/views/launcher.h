@@ -239,12 +239,19 @@ class LauncherPane : public ui::Node {
         std::optional<model::Id> scene, clip;
     };
     Hit hitAt(ui::Point p) const;
-    // Items dragged from the lanes over the pane (ItemGestures): the cell
-    // under `at` is outlined as a drop that takes the pressed item, or
-    // refuses it, and so is the cell of each other selected item, at its row
-    // offset from the pressed one (`others`). An offset past the rows, or
-    // onto an automation lane, outlines the cell under `at` as refused.
-    void showDrop(std::optional<ui::Point> at, std::vector<std::ptrdiff_t> others = {});
+    // Where one dragged item would become a clip, from the cell under the
+    // pointer: rows down (a move's row offset) and scenes along (its place in
+    // its track's run).
+    struct DropCell {
+        std::ptrdiff_t row = 0, scene = 0;
+    };
+    // Items dragged from the lanes over the pane (ItemGestures): each item's
+    // cell (`cells`, from the cell under `at`) outlined as it would take its
+    // clip (empty, on a channel) or not. A cell past the rows or the scenes,
+    // or on an automation lane, or `refused` (an item on a hidden track),
+    // refuses the whole drop: the cell under `at` is outlined so.
+    void showDrop(std::optional<ui::Point> at, std::vector<DropCell> cells = {},
+                  bool refused = false);
     ui::Rect arrRect(std::size_t row) const;
     LauncherColumns columns() const;
     // What the last paint drew (tests).
@@ -254,6 +261,7 @@ class LauncherPane : public ui::Node {
         std::vector<std::string> keys;   // their key marks as drawn ("Dm"; "" for none)
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
+        bool dropTakes = false;  // the cell under a drop outlined as taking it (focus)
         int refused = 0;  // clips drawn dimmed: a press is refused (ArrangeView::launchRefusals)
         std::vector<model::Id> refusedClips;  // those clips, in drawing order
         std::size_t notes = 0, columns = 0, pending = 0, fades = 0;  // the last paintGl's
@@ -282,7 +290,8 @@ class LauncherPane : public ui::Node {
     };
     std::optional<Drag> drag_;
     std::optional<ui::Point> dropAt_;
-    std::vector<std::ptrdiff_t> dropOthers_;
+    std::vector<DropCell> dropCells_;
+    bool dropRefused_ = false;
     bool dropAllowed(const Hit& over) const;
     // The clip's copy on the lanes under `p` (a channel's own row), if any.
     std::optional<ItemGestures::ClipGhost> timelineGhost(model::Id clip, ui::Point p,

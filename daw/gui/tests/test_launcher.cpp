@@ -742,6 +742,171 @@ TEST_CASE("launcher: selected items dragged into a cell make a clip each, in one
     CHECK(f.app->head().clips.size() == clips);
 }
 
+TEST_CASE("launcher: items on one track dropped into cells take the scenes after, in time order") {
+    LauncherFixture f;
+    f.song();  // Intro, Verse, Chorus; Bass's Verse holds Root
+    f.view->gestures().run = [&f](const std::string& label,
+                                  const std::vector<views::EditStep>& steps) {
+        return f.dispatcher->transact(label, kLauncherUi, [&]() -> Result<json::Value> {
+            json::Value last = json::Value::object();
+            for (const views::EditStep& step : steps) {
+                f.commands.push_back(step.command);
+                auto r = f.dispatcher->execute({step.command, step.args, kLauncherUi});
+                if (!r) return r;
+                last = std::move(*r);
+            }
+            return last;
+        });
+    };
+    // Items told apart by length: 2, 4 and 6 beats.
+    auto itemAt = [&](const char* track, double position, double length) {
+        json::Value args = json::Value::object();
+        args["track"] = track;
+        args["position"] = position;
+        args["length"] = length;
+        args["notation"] = "1: C4:q r:*";
+        const json::Value made = f.exec("item.add", *json::write(args));
+        return *model::Id::parse(made.find("item")->asString());
+    };
+    const model::Id keys = *model::Id::parse("tr_3"), bass = *model::Id::parse("tr_2");
+    const model::Id intro = *model::Id::parse("sc_1"), verse = *model::Id::parse("sc_2"),
+                    chorus = *model::Id::parse("sc_3");
+    const model::Id early = itemAt("tr_3", 8, 2), middle = itemAt("tr_3", 16, 4),
+                    late = itemAt("tr_3", 24, 6), onBass = itemAt("tr_2", 8, 2);
+    f.sync();
+    views::LauncherPane& pane = f.view->launcherPane();
+    auto beatX = [&](double beat) { return f.view->xAt(f.app->head().timeMap->secondsAt(beat)); };
+    auto lengthIn = [&](model::Id track, model::Id scene) {
+        const auto clip = views::clipIn(f.app->head(), track, scene);
+        return clip ? f.app->head().clips.find(*clip)->length : -1.0;
+    };
+    // `press`: the item pressed (at its start); `at`: the point in the cell.
+    auto drop = [&](std::vector<model::Id> selection, model::Id press, double beat, std::size_t row,
+                    std::size_t column, bool centre, const char* shot = nullptr) {
+        f.commands.clear();
+        f.errors.clear();
+        f.view->gestures().setSelection(selection);
+        const model::Item* it = f.app->head().items.find(press);
+        REQUIRE(it);
+        const ui::Rect lane = f.view->rowRect(f.row(it->track.str().c_str()));
+        const ui::Point grab{beatX(beat + 0.5), lane.y + lane.h / 2};
+        const ui::Rect cell = pane.cellRect(row, column);
+        const ui::Point into = centre ? ui::Point{cell.x + cell.w / 2, cell.y + cell.h / 2}
+                                      : ui::Point{cell.x + 8, cell.bottom() - 8};
+        f.pointer(Pointer::Down, grab);
+        f.pointer(Pointer::Move, {grab.x - 20, grab.y});
+        f.pointer(Pointer::Move, into);
+        f.sync();
+        const auto held = std::pair{pane.stats.dropShown, pane.stats.dropTakes};
+        if (shot) f.snapshot(shot);
+        f.pointer(Pointer::Up, into);
+        f.sync();
+        return held;
+    };
+    const std::size_t clips = f.app->head().clips.size();
+    // Two on Keys, the later one pressed, dropped on Keys's Intro: the earlier
+    // takes Intro, the later Verse, both outlined while held.
+    auto held = drop({early, middle}, middle, 16, f.row("tr_3"), 0, false);
+    CHECK(held == std::pair<std::size_t, bool>{2, true});
+    CHECK(f.errors.empty());
+    CHECK(lengthIn(keys, intro) == doctest::Approx(2));
+    CHECK(lengthIn(keys, verse) == doctest::Approx(4));
+    CHECK(f.app->head().clips.size() == clips + 2);
+    f.exec("history.undo", "{}");
+    f.sync();
+    // Three on Keys and one on Bass, dropped on Keys's Intro: Keys's run
+    // takes all three scenes, Bass's its own from Intro, one row up.
+    held = drop({early, middle, late, onBass}, early, 8, f.row("tr_3"), 0, false,
+                "launcher-items-run.png");
+    CHECK(held == std::pair<std::size_t, bool>{4, true});
+    CHECK(f.errors.empty());
+    CHECK(f.commands.size() == 4);
+    CHECK(lengthIn(keys, intro) == doctest::Approx(2));
+    CHECK(lengthIn(keys, verse) == doctest::Approx(4));
+    CHECK(lengthIn(keys, chorus) == doctest::Approx(6));
+    CHECK(lengthIn(bass, intro) == doctest::Approx(2));
+    CHECK(f.app->head().clips.size() == clips + 4);
+    f.exec("history.undo", "{}");
+    f.sync();
+    CHECK(f.app->head().clips.size() == clips);
+    // Too few scenes: three on Keys from Verse need three, and there are two.
+    // Refused before anything is sent; the cell under the pointer says so.
+    held = drop({early, middle, late}, early, 8, f.row("tr_3"), 1, false);
+    CHECK(held == std::pair<std::size_t, bool>{2, false});
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "gui.launcher.drop");
+    CHECK(f.errors[0].message == "Keys's 3 items need 3 scenes from Verse, and there are 2");
+    CHECK(f.errors[0].hint == "add 1 scene after the last, or drop further left");
+    CHECK(f.commands.empty());
+    CHECK(f.app->head().clips.size() == clips);
+    // A taken cell in a run refuses the whole drop with clip.add's answer:
+    // two on Bass from Intro reach Verse, which holds Root.
+    const model::Id bassLater = itemAt("tr_2", 16, 4);
+    f.sync();
+    held = drop({onBass, bassLater}, onBass, 8, f.row("tr_2"), 0, false);
+    CHECK(held == std::pair<std::size_t, bool>{2, true});  // Verse's outline says no
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "clip.occupied");
+    CHECK(f.errors[0].message.find("Root") != std::string::npos);
+    CHECK_FALSE(views::clipIn(f.app->head(), bass, intro));  // rolled back
+    // The centre of an empty cell (its stop square) takes a drop as the rest
+    // of the cell does: outlined as taking, and a clip made.
+    held = drop({}, early, 8, f.row("tr_3"), 2, true);
+    CHECK(held == std::pair<std::size_t, bool>{1, true});
+    CHECK(f.errors.empty());
+    CHECK(lengthIn(keys, chorus) == doctest::Approx(2));
+}
+
+TEST_CASE("launcher: an item on a hidden track refuses a drop of the selection into cells") {
+    LauncherFixture f;
+    f.song();
+    f.exec("track.add", R"({"type":"channel","name":"Strings"})");  // tr_5
+    f.exec("item.add",
+           R"({"track":"tr_2","position":8,"length":4,"notation":"1: C4:q r:*"})");  // it_1
+    f.exec("item.add",
+           R"({"track":"tr_5","position":8,"length":4,"notation":"1: C4:q r:*"})");  // it_2
+    // Strings hidden from the track panel, as an imported project can have it.
+    const auto path = f.dir / ("hidden." + std::string(product::kSlug));
+    json::Value save = json::Value::object();
+    save["path"] = path.string();
+    f.exec("project.save", *json::write(save));
+    std::stringstream text;
+    {
+        std::ifstream in(path);
+        text << in.rdbuf();
+    }
+    auto doc = json::parse(text.str()).value();
+    doc["tracks"]["tr_5"]["hidden_tcp"] = true;
+    {
+        std::ofstream out(path, std::ios::trunc);
+        out << json::writeCanonical(doc);
+    }
+    f.exec("project.open", *json::write(save));
+    f.sync();
+    REQUIRE_FALSE(f.view->trackLayout().indexOf(*model::Id::parse("tr_5")));
+    const model::Id onBass = *model::Id::parse("it_1"), hidden = *model::Id::parse("it_2");
+    REQUIRE(f.app->head().items.find(hidden));
+    f.commands.clear();
+    f.view->gestures().setSelection({onBass, hidden});
+    views::LauncherPane& pane = f.view->launcherPane();
+    const ui::Rect lane = f.view->rowRect(f.row("tr_2"));
+    const ui::Point grab{f.view->xAt(f.app->head().timeMap->secondsAt(8.5)), lane.y + lane.h / 2};
+    const ui::Rect cell = pane.cellRect(f.row("tr_2"), 2);
+    const ui::Point into{cell.x + 8, cell.bottom() - 8};
+    f.pointer(Pointer::Down, grab);
+    f.pointer(Pointer::Move, {grab.x - 20, grab.y});
+    f.pointer(Pointer::Move, into);
+    f.sync();
+    CHECK_FALSE(pane.stats.dropTakes);  // refused while held
+    f.pointer(Pointer::Up, into);
+    f.sync();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "gui.launcher.drop");
+    CHECK(f.errors[0].message.find("is on a hidden track") != std::string::npos);
+    CHECK(f.commands.empty());
+    CHECK_FALSE(views::clipIn(f.app->head(), *model::Id::parse("tr_2"), *model::Id::parse("sc_3")));
+}
+
 TEST_CASE("launcher: Stop all, Arrangement and Capture share one row; narrow, they are glyphs") {
     LauncherFixture f;
     f.song();

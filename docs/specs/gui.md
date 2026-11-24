@@ -3250,18 +3250,31 @@ same heights, scroll and colours.
   clip from a copy of the pressed item's takes (`clip.add {item}`); the item
   stays where it was, the new clip is selected, and the cell is outlined
   while the item is over it (an occupied one in `meter-clip`, refusing it).
-  With other items selected, each makes a clip in the same scene, on the
-  row at its offset from the pressed item's, as a move offsets rows: one
-  `clip.add` each, in one transaction (one undo step, "Clips from items"),
-  ordered by row and position, and every cell is outlined while held
-  (`LauncherPane::showDrop`'s offsets). The new clips are selected
+  With other items selected, each makes a clip on the row at its offset
+  from the pressed item's, as a move offsets rows. Items on one track
+  take the scenes from the dropped one in time order (the first in time
+  the dropped scene, the next the scene after it, each track's run its
+  own; the pressed item need not be first). One `clip.add` each, in one
+  transaction (one undo step, "Clips from items"), ordered by row and
+  position, and every target cell is outlined while held, `focus` if it
+  would take its clip (empty, on a channel; the centre's stop square of an
+  empty cell counts as empty) and `meter-clip` if not
+  (`LauncherPane::showDrop`'s cells). The new clips are selected
   (`ArrangeView::selectClipsIn`, at the next sync). A refusal of any
   (a taken cell, `clip.occupied`; a row whose track holds no clips) refuses
-  them all with `clip.add`'s message. An offset that lands above the first
-  row, below the last or on an automation lane refuses the drop before
-  anything is sent (`gui.launcher.drop`, naming the item), and the pressed
-  item's cell is outlined in `meter-clip`. A drop on any cell of a scene
-  column, taken or not, goes to `clip.add`. A refused drop shows the
+  them all with `clip.add`'s message. These refuse the drop before
+  anything is sent (`gui.launcher.drop`), and the cell under the pointer
+  is outlined in `meter-clip`:
+  - an offset that lands above the first row, below the last or on an
+    automation lane (naming the item);
+  - a track's run longer than the scenes from the dropped one ("Keys's 3
+    items need 3 scenes from Verse, and there are 2", the hint saying how
+    many to add); a drop creates no scenes;
+  - a selected item on a track without a row, a collapsed folder's child
+    or a hidden track ("<item> is on a hidden track"), as such an item
+    refuses a move.
+
+  A drop on any cell of a scene column, taken or not, goes to `clip.add`. A refused drop shows the
   error's message in the status line (a warped take, `clip.unsupported`).
 - **What laying did with the keys.** A clip or scene laid on the timeline
   from the pane (a drag, Lay on timeline at playhead, Insert at playhead or

@@ -733,10 +733,12 @@ LauncherPane::Hit LauncherPane::hitAt(ui::Point p) const {
     return hit;
 }
 
-void LauncherPane::showDrop(std::optional<ui::Point> at, std::vector<std::ptrdiff_t> others) {
+void LauncherPane::showDrop(std::optional<ui::Point> at, std::vector<DropCell> cells,
+                            bool refused) {
     if (!at && !dropAt_) return;
     dropAt_ = at;
-    dropOthers_ = at ? std::move(others) : std::vector<std::ptrdiff_t>{};
+    dropCells_ = at ? std::move(cells) : std::vector<DropCell>{};
+    dropRefused_ = at && refused;
     invalidate();
 }
 
@@ -909,29 +911,49 @@ void LauncherPane::paint(ui::Canvas& c) {
     if (dropAt_) over = hitAt(*dropAt_);
     if (over && over->scene) {
         const auto col = std::find(cols.scenes.begin(), cols.scenes.end(), *over->scene);
-        if (col != cols.scenes.end()) {
-            const auto column = static_cast<std::size_t>(col - cols.scenes.begin());
-            // The other items' cells, at their row offsets: each outlined as
-            // it would take its clip; one off the rows refuses the drop.
-            bool allIn = true;
-            for (const std::ptrdiff_t off : dropOthers_) {
-                const std::ptrdiff_t row = static_cast<std::ptrdiff_t>(over->row) + off;
+        if (col != cols.scenes.end() && dropAt_) {
+            // Items: each one's cell, outlined as it would take its clip (an
+            // empty cell on a channel; the centre's stop square of an empty
+            // cell counts as empty). One past the rows or the scenes, or on a
+            // lane, refuses the drop, and the cell under the pointer says so.
+            const auto column = static_cast<std::ptrdiff_t>(col - cols.scenes.begin());
+            bool allIn = !dropRefused_;
+            bool pointerTakes = !clipIn(s, tracks.rows()[over->row].track, *over->scene) &&
+                                tracks.rows()[over->row].type == model::StripType::Channel &&
+                                !tracks.rows()[over->row].lane();
+            for (const DropCell& at : dropCells_) {
+                const std::ptrdiff_t row = static_cast<std::ptrdiff_t>(over->row) + at.row;
+                const std::ptrdiff_t scene = column + at.scene;
                 if (row < 0 || static_cast<std::size_t>(row) >= tracks.rowCount() ||
-                    tracks.rows()[static_cast<std::size_t>(row)].lane()) {
+                    tracks.rows()[static_cast<std::size_t>(row)].lane() ||
+                    static_cast<std::size_t>(scene) >= cols.scenes.size()) {
                     allIn = false;
                     continue;
                 }
                 const TrackRow& target = tracks.rows()[static_cast<std::size_t>(row)];
-                const bool takes = target.type == model::StripType::Channel &&
-                                   !clipIn(s, target.track, *over->scene);
-                c.strokeRect(cellRect(static_cast<std::size_t>(row), column).inset(2),
-                             takes ? t.color("focus") : t.color("meter-clip"), 1.5f);
+                const model::Id sceneId = cols.scenes[static_cast<std::size_t>(scene)];
+                const bool takes =
+                    target.type == model::StripType::Channel && !clipIn(s, target.track, sceneId);
+                if (at.row == 0 && at.scene == 0) {
+                    pointerTakes = takes;  // drawn last, with the drop's verdict
+                    continue;
+                }
+                c.strokeRect(
+                    cellRect(static_cast<std::size_t>(row), static_cast<std::size_t>(scene))
+                        .inset(2),
+                    takes ? t.color("focus") : t.color("meter-clip"), 1.5f);
                 ++stats.dropShown;
             }
-            const ui::Rect cell = cellRect(over->row, column);
-            c.strokeRect(cell.inset(2),
-                         allIn && dropAllowed(*over) ? t.color("focus") : t.color("meter-clip"),
-                         1.5f);
+            stats.dropTakes = allIn && pointerTakes;
+            c.strokeRect(cellRect(over->row, static_cast<std::size_t>(column)).inset(2),
+                         stats.dropTakes ? t.color("focus") : t.color("meter-clip"), 1.5f);
+            ++stats.dropShown;
+        } else if (col != cols.scenes.end()) {
+            // A clip in hand: the cell under it takes it or refuses it.
+            const auto column = static_cast<std::size_t>(col - cols.scenes.begin());
+            stats.dropTakes = dropAllowed(*over);
+            c.strokeRect(cellRect(over->row, column).inset(2),
+                         stats.dropTakes ? t.color("focus") : t.color("meter-clip"), 1.5f);
             ++stats.dropShown;
         }
     }

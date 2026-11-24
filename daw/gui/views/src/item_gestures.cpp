@@ -92,26 +92,45 @@ constexpr double kMinLength = 1.0 / 64;  // beats
 
 const model::Item* itemOf(const model::Session& s, model::Id id) { return s.items.find(id); }
 
-// The items a drop on the launcher pane makes clips of: the pressed one
-// first, then each other selected item, ordered by row and position, each
-// with its track row's offset from the pressed item's (a move's offset).
-std::vector<std::pair<model::Id, std::ptrdiff_t>> launcherDropItems(
-    const model::Session& s, const TrackLayout& layout, model::Id anchor,
-    const std::vector<model::Id>& selection) {
-    std::vector<std::pair<model::Id, std::ptrdiff_t>> out;
+// The items a drop on the launcher pane makes clips of: the pressed one and
+// each other selected item, each with its cell from the cell dropped on: its
+// track row's offset from the pressed item's (a move's offset), and its
+// place in its track's run, in time order (the first item on a track takes
+// the dropped scene, the next the scene after, each track's run its own).
+// Ordered by row, then time. `hidden`: the first selected item on a track
+// without a row (a collapsed folder's child, a hidden track), which refuses
+// the drop as it refuses a move.
+struct LauncherDrop {
+    struct Entry {
+        model::Id item;
+        LauncherPane::DropCell cell;
+    };
+    std::vector<Entry> entries;
+    std::optional<model::Id> hidden;
+};
+LauncherDrop launcherDropItems(const model::Session& s, const TrackLayout& layout, model::Id anchor,
+                               const std::vector<model::Id>& selection) {
+    LauncherDrop out;
     const model::Item* pressed = itemOf(s, anchor);
     const auto from = pressed ? layout.indexOf(pressed->track) : std::nullopt;
     if (!from) return out;
-    out.emplace_back(anchor, 0);
-    std::vector<std::tuple<std::size_t, double, model::Id>> others;
+    std::vector<std::tuple<std::size_t, double, model::Id>> all{{*from, pressed->position, anchor}};
     for (model::Id id : selection) {
         const model::Item* it = id == anchor ? nullptr : itemOf(s, id);
-        const auto row = it ? layout.indexOf(it->track) : std::nullopt;
-        if (row) others.emplace_back(*row, it->position, id);
+        if (!it) continue;
+        if (const auto row = layout.indexOf(it->track))
+            all.emplace_back(*row, it->position, id);
+        else if (!out.hidden)
+            out.hidden = id;
     }
-    std::sort(others.begin(), others.end());
-    for (const auto& [row, position, id] : others)
-        out.emplace_back(id, static_cast<std::ptrdiff_t>(row) - static_cast<std::ptrdiff_t>(*from));
+    std::sort(all.begin(), all.end());
+    std::ptrdiff_t place = 0;
+    for (std::size_t i = 0; i < all.size(); ++i) {
+        const auto& [row, position, id] = all[i];
+        place = i > 0 && std::get<0>(all[i - 1]) == row ? place + 1 : 0;
+        out.entries.push_back(
+            {id, {static_cast<std::ptrdiff_t>(row) - static_cast<std::ptrdiff_t>(*from), place}});
+    }
     return out;
 }
 const model::Take* activeTake(const model::Session& s, const model::Item& it) {
@@ -1126,13 +1145,13 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                 // in, each selected item's at its row offset from the pressed one.
                 if (view_.launcherShown()) {
                     LauncherPane& pane = view_.launcherPane();
-                    std::vector<std::ptrdiff_t> others;
-                    for (const auto& [id, off] :
-                         launcherDropItems(s, view_.trackLayout(), state_.anchor, selection_))
-                        if (id != state_.anchor) others.push_back(off);
+                    const LauncherDrop drop =
+                        launcherDropItems(s, view_.trackLayout(), state_.anchor, selection_);
+                    std::vector<LauncherPane::DropCell> cells;
+                    for (const auto& entry : drop.entries) cells.push_back(entry.cell);
                     pane.showDrop(
                         pane.bounds().contains(e.pos) ? std::optional(e.pos) : std::nullopt,
-                        std::move(others));
+                        std::move(cells), drop.hidden.has_value());
                 }
                 break;
             }
@@ -2069,12 +2088,14 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             // Dropped in a launcher cell: a clip from a copy of the pressed
             // item's takes (clip.add {item}); an occupied cell is refused by
             // clip.add, whose message goes to the status line, and the item
-            // stays. With other items selected, one clip each in the
-            // same scene, each at its row offset from the pressed item's cell,
-            // in one transaction (one undo step): a refusal of any (a taken
-            // cell, a track that holds no clips) refuses them all with
-            // clip.add's message, and an offset past the rows or onto an
-            // automation lane refuses the drop before anything is sent.
+            // stays. With other items selected, one clip each, each at its
+            // row offset from the pressed item's cell, items on one track in
+            // the scenes from the dropped one in time order, in one
+            // transaction (one undo step): a refusal of any (a taken cell, a
+            // track that holds no clips) refuses them all with clip.add's
+            // message; an offset past the rows or onto an automation lane, a
+            // run past the last scene, or an item on a hidden track refuses
+            // the drop before anything is sent.
             if (view_.launcherShown()) {
                 LauncherPane& pane = view_.launcherPane();
                 pane.showDrop(std::nullopt);
@@ -2085,9 +2106,27 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
                     if (!over.scene || over.kind == LauncherPane::Hit::Kind::None ||
                         over.kind == LauncherPane::Hit::Kind::Arr)
                         return;
-                    const auto dropped =
+                    const LauncherDrop drop =
                         launcherDropItems(s, view_.trackLayout(), state_.anchor, selection_);
-                    if (dropped.size() <= 1 || !run) {
+                    auto refuse = [&](std::string message, std::string hint) {
+                        const Error refused = launcherNames(
+                            s, Error("gui.launcher.drop", std::move(message), {}, std::move(hint)));
+                        if (const auto& onRefused = view_.launcherCallbacks().onError)
+                            onRefused(refused);
+                        else if (onError)
+                            onError(refused);
+                    };
+                    auto nameOf = [&](model::Id id) {
+                        const model::Item* it = itemOf(s, id);
+                        std::string name = it ? Lanes::itemLabel(s, *it) : std::string();
+                        return name.empty() ? std::string("An item") : name;
+                    };
+                    if (drop.hidden) {
+                        refuse(nameOf(*drop.hidden) + " is on a hidden track",
+                               "show its track (open its folder) or leave it out of the selection");
+                        return;
+                    }
+                    if (drop.entries.size() <= 1 || !run) {
                         json::Value args = json::Value::object();
                         args["track"] = over.track.str();
                         args["scene"] = over.scene->str();
@@ -2099,36 +2138,47 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
                         return;
                     }
                     const TrackLayout& layout = view_.trackLayout();
+                    const std::vector<model::Id> scenes = pane.columns().scenes;
+                    const auto column = static_cast<std::ptrdiff_t>(
+                        std::find(scenes.begin(), scenes.end(), *over.scene) - scenes.begin());
                     std::vector<EditStep> steps;
                     std::vector<ArrangeView::Cell> cells;
-                    for (const auto& [id, off] : dropped) {
-                        const std::ptrdiff_t row = static_cast<std::ptrdiff_t>(over.row) + off;
+                    for (const auto& [id, at] : drop.entries) {
+                        const std::ptrdiff_t row = static_cast<std::ptrdiff_t>(over.row) + at.row;
                         if (row < 0 || static_cast<std::size_t>(row) >= layout.rowCount() ||
                             layout.rows()[static_cast<std::size_t>(row)].lane()) {
-                            const model::Item* it = itemOf(s, id);
-                            std::string name = it ? Lanes::itemLabel(s, *it) : std::string();
-                            if (name.empty()) name = id.str();
-                            const Error refused(
-                                "gui.launcher.drop",
-                                name + " would land " +
-                                    (row < 0 ? std::string("above the first track")
-                                     : static_cast<std::size_t>(row) >= layout.rowCount()
-                                         ? std::string("below the last track")
-                                         : std::string("on an automation lane")),
-                                {}, "drop the items where each one's row offset lands on a track");
-                            if (const auto& onRefused = view_.launcherCallbacks().onError)
-                                onRefused(refused);
-                            else if (onError)
-                                onError(refused);
+                            refuse(nameOf(id) + " would land " +
+                                       (row < 0 ? std::string("above the first track")
+                                        : static_cast<std::size_t>(row) >= layout.rowCount()
+                                            ? std::string("below the last track")
+                                            : std::string("on an automation lane")),
+                                   "drop the items where each one's row offset lands on a track");
                             return;
                         }
                         const model::Id track = layout.rows()[static_cast<std::size_t>(row)].track;
+                        if (column + at.scene >= static_cast<std::ptrdiff_t>(scenes.size())) {
+                            // The track's whole run, against the scenes from the dropped one.
+                            std::ptrdiff_t length = 0;
+                            for (const auto& other : drop.entries)
+                                if (other.cell.row == at.row) ++length;
+                            const auto left = static_cast<std::ptrdiff_t>(scenes.size()) - column;
+                            refuse(track.str() + "'s " + std::to_string(length) + " items need " +
+                                       std::to_string(length) + " scenes from " +
+                                       over.scene->str() + ", and there " +
+                                       (left == 1 ? std::string("is 1")
+                                                  : "are " + std::to_string(left)),
+                                   "add " + std::to_string(length - left) +
+                                       (length - left == 1 ? " scene" : " scenes") +
+                                       " after the last, or drop further left");
+                            return;
+                        }
+                        const model::Id scene = scenes[static_cast<std::size_t>(column + at.scene)];
                         json::Value args = json::Value::object();
                         args["track"] = track.str();
-                        args["scene"] = over.scene->str();
+                        args["scene"] = scene.str();
                         args["item"] = id.str();
                         steps.push_back({"clip.add", std::move(args)});
-                        cells.push_back({track, *over.scene});
+                        cells.push_back({track, scene});
                     }
                     auto r = run("Clips from items", steps);
                     if (!r) {
