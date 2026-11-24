@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <mutex>
 #include <semaphore>
@@ -429,6 +430,65 @@ TEST_CASE("rack.probe: names follow a tempo change and a playrate envelope insid
         {"beat": 0.0008333333333333334, "value": 2, "shape": "square"},
         {"beat": 0.002, "value": 0.5}]})");
     CHECK(probe("voice v; 1: r:2t C#4:e r:3358t", 1) == std::vector<std::string>{"Db4"});
+}
+
+TEST_CASE("rack.probe: the listeners' memory has a budget that what worked before fits in") {
+    using supple::engine::detail::kProbeBudgetBytes;
+    using supple::engine::detail::probeListenerBytes;
+    CHECK(kProbeBudgetBytes == (std::size_t{512} << 20));
+    // The most a probe held before the playrate fix: 8 ports of 10.01 s at the schema's top rate.
+    CHECK(probeListenerBytes(8, 10.01, 384000) <= kProbeBudgetBytes);
+    // The most at 48 kHz now: 8 ports of 40.01 s, 10 s of song at the lowest master rate, 0.25.
+    CHECK(probeListenerBytes(8, 40.01, 48000) <= kProbeBudgetBytes);
+    // The largest accepted at 384 kHz and 0.25 is two ports; a third is refused.
+    CHECK(probeListenerBytes(2, 40.01, 384000) <= kProbeBudgetBytes);
+    CHECK(probeListenerBytes(3, 40.01, 384000) > kProbeBudgetBytes);
+    // At 192 kHz four ports fit, five do not; at 96 kHz all eight fit.
+    CHECK(probeListenerBytes(4, 40.01, 192000) <= kProbeBudgetBytes);
+    CHECK(probeListenerBytes(5, 40.01, 192000) > kProbeBudgetBytes);
+    CHECK(probeListenerBytes(8, 40.01, 96000) <= kProbeBudgetBytes);
+}
+
+TEST_CASE("rack.probe: a window that would need gigabytes is refused with a hint") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                    // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");  // mo_2
+    // A project at the schema's top sample rate: saved, edited, opened again.
+    json::Value where = json::Value::object();
+    where["path"] = (f.dir / "rate.json").string();
+    REQUIRE(f.call("project.save", where));
+    std::string text;
+    {
+        std::ifstream in(f.dir / "rate.json", std::ios::binary);
+        text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    // The default rate is not written: set it on the project object.
+    auto doc = json::parse(text);
+    REQUIRE(doc);
+    (*doc)["project"]["sample_rate"] = 384000.0;
+    text = json::writeCanonical(*doc);
+    {
+        std::ofstream out(f.dir / "rate.json", std::ios::binary);
+        out << text;
+    }
+    REQUIRE(f.call("project.open", where));
+    REQUIRE(f.app->head().project->sampleRate == 384000.0);
+    // At a quarter of the speed 10 s of song is 40 s of device time: 8 ports would hold 2 GB.
+    f.run("transport.playrate.set", R"({"rate": 0.25})");
+    auto refused = f.call("rack.probe", *json::parse(R"({"rack": "rk_1", "seconds": 10,
+        "ports": ["mo_2.pitch", "mo_2.gate", "mo_2.velocity", "mo_2.pitch", "mo_2.gate",
+                  "mo_2.velocity", "mo_2.pitch", "mo_2.gate"]})"));
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "rack.probe_size");
+    CHECK(refused.error().path == "/args/seconds");
+    CHECK(refused.error().hint.find("probe fewer ports") != std::string::npos);
+    CHECK(refused.error().message.find("limit is 512 MiB") != std::string::npos);
+    // The same at unity is what worked before: 8 ports of 10.01 s at 384 kHz hold 492 MB.
+    f.run("transport.playrate.set", R"({"rate": 1})");
+    json::Value ok = f.run("rack.probe", R"({"rack": "rk_1", "seconds": 1,
+        "ports": ["mo_2.pitch", "mo_2.gate"], "notes": "voice v; 1: C4:q r:q r:h"})");
+    CHECK(ok["ports"].asArray().size() == 2);
 }
 
 TEST_CASE("rack.probe: an audio port's note is named by the context where it was measured") {

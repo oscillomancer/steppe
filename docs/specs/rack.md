@@ -753,7 +753,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.set` | edit | `{rack, name?, track?}` |
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, node/per-Out `latency_samples`, `note_outs`, problems |
-| `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes. Note names (a pitch port's `notes`, an audio port's `pitch.note`, and the description) are spelled by `harmony::spell` at the key and chord of the context track that hold at the project beat they were heard at (ADR-0100; §7.2 "Probe names") |
+| `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes; refused with `rack.probe_size` when the listeners would need more than 512 MiB (§7.2 "Probe names"). Note names (a pitch port's `notes`, an audio port's `pitch.note`, and the description) are spelled by `harmony::spell` at the key and chord of the context track that hold at the project beat they were heard at (ADR-0100; §7.2 "Probe names") |
 | `rack.capture` | action | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?, async?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
 | `rack.levels` | query | `{rack}` → `{modules: {mo_N: {port: level}}}`: every module and known output port, latest block's linear peak across all channels; stopped or silent reads zero, missing types have an empty port object |
 | `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
@@ -937,9 +937,15 @@ integrates the rate (a scalar or an envelope). The render reads the clock at eve
 block and keeps a row wherever the position bends, so a step of the rate inside a 64-frame block,
 or two bends in one block, is followed and an event at a step is named by the key holding at its
 own frame; at unity it is `from_beat` plus the frames over the sample rate. The listener
-holds the whole render: it is sized for `seconds` over the lowest rate the window plays at (the
-project's rate, or the lowest point of the active rate envelope; 0.25 at the least, so up to 40
-device seconds), and the answer's gate counts, rates and pitch window cover all of it. Gate
+holds the whole render: it is sized for `seconds` over the lowest rate the master plays at in the
+project (the project's rate, or the lowest point of the active rate envelope anywhere in it, not
+only in the window; 0.25 at the least, so up to 40 device seconds), and the answer's gate counts,
+rates and pitch window cover all of it. The listeners of all the ports hold at most 512 MiB
+(`rack.probe_size`, path `/args/seconds`, hint: shorten `seconds` or probe fewer ports): each port
+reserves four float channels of the device seconds it needs at the project's sample rate, so a
+window of 10 s at the lowest rate (40 s of device time) takes at most 2 ports at 384 kHz, 4 at
+192 kHz and all 8 at 96 kHz and below. 512 MiB is a little more than the most a probe held before the playrate fix,
+8 ports of 10.01 s at 384 kHz (492 MB), so every probe that worked then still works. Gate
 `per_second` and `per_beat` divide by song time, so a source that runs on the device clock (a
 free-running LFO) reads off by the rate. A pitch port's `notes` entry is named at the frame its list gained it (a pitch
 heard again later is named at that later time), an audio port's `pitch.note` at the middle of

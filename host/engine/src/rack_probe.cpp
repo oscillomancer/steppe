@@ -394,7 +394,9 @@ void registerRackProbe(cmd::Registry& registry) {
         "(a poly cable's first 4 voices summed); gates counted over the voices, per beat, "
         "and how long any is high; the notes the voices' pitches visit; a CV's range and "
         "speed (voice 1). notes: notation (as midi.write takes it) the rack's "
-        "Notes modules play from from_beat, besides what their tracks hold. Note names "
+        "Notes modules play from from_beat, besides what their tracks hold. A low master "
+        "playrate lengthens what the listeners hold (seconds over the rate), and one that "
+        "would need more than 512 MiB in all is refused: rack.probe_size. Note names "
         "follow the key and chord of the context track at the beat each note is heard "
         "(G# or Ab), the default names with none. Nothing is changed; playback is not "
         "disturbed.";
@@ -413,7 +415,9 @@ void registerRackProbe(cmd::Registry& registry) {
                  .build();
     c.result = schema::any();
     c.errors = {{"rack.unknown", "no such rack", "rack.list"},
-                {"rack.port", "not an output of a module in the rack", "rack.get lists them"}};
+                {"rack.port", "not an output of a module in the rack", "rack.get lists them"},
+                {"rack.probe_size", "the listeners would hold more than 512 MiB",
+                 "shorten seconds or probe fewer ports"}};
     c.examples = {{"Listen to Notes' gate and the VCA while a chord plays",
                    j(R"({"rack": "rk_1", "ports": ["mo_2.gate", "mo_3.out"], "seconds": 1,
                "notes": "voice v; 1: [C4 E4 G4]:h r:h"})"),
@@ -425,6 +429,20 @@ void registerRackProbe(cmd::Registry& registry) {
         if (!rack || !s.racks.contains(*rack))
             return Error("rack.unknown", "no rack " + a.rack, "/rack", "rack.list");
         const double seconds = a.seconds.value_or(2.0), fromBeat = a.fromBeat.value_or(0.0);
+        // The listeners hold the render in device time: seconds over the lowest rate.
+        const double deviceSeconds = seconds / lowestPlayrate(s) + 0.01;
+        const std::size_t bytes =
+            detail::probeListenerBytes(a.ports.size(), deviceSeconds, s.project->sampleRate);
+        if (bytes > detail::kProbeBudgetBytes)
+            return Error("rack.probe_size",
+                         "this probe's listeners would hold " + std::to_string(bytes >> 20) +
+                             " MiB (" + std::to_string(a.ports.size()) + " ports, " +
+                             fixed(deviceSeconds, 1) + " s of device time at " +
+                             fixed(s.project->sampleRate, 0) + " Hz); the limit is " +
+                             std::to_string(detail::kProbeBudgetBytes >> 20) + " MiB",
+                         "/seconds",
+                         "shorten seconds or probe fewer ports; a low master playrate "
+                         "lengthens what the listeners hold (seconds over the rate)");
         model::EditTxn t(s, s.version + 1);
         std::vector<std::pair<Id, const sd::PortModel*>> probes;
         for (std::size_t k = 0; k < a.ports.size(); ++k) {
@@ -436,8 +454,7 @@ void registerRackProbe(cmd::Registry& registry) {
             probe.type = std::string(detail::kProbeModule);
             probe.version = "1.0.0";
             probe.params = json::Value::object();
-            // Device seconds: the render lasts `seconds` over the lowest playrate.
-            probe.params["seconds"] = seconds / lowestPlayrate(s) + 0.01;
+            probe.params["seconds"] = deviceSeconds;
             const Id id = t.create(probe);
             t.create(model::Cable{end->first, {id, "in"}, std::nullopt, ""});
             probes.emplace_back(id, end->second);

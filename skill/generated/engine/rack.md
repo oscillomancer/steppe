@@ -788,7 +788,7 @@ Result:
 
 Listen to a rack's ports: level, pitch, gate rate, notes, a CV's range.
 
-Renders the project offline from from_beat (default 0) for seconds (default 2, at most 10) with a listener on each port ("mo_N.<output key>", at most 8) and describes what each carried: audio's peak and rms (dB) and its pitch when periodic (a poly cable's first 4 voices summed); gates counted over the voices, per beat, and how long any is high; the notes the voices' pitches visit; a CV's range and speed (voice 1). notes: notation (as midi.write takes it) the rack's Notes modules play from from_beat, besides what their tracks hold. Note names follow the key and chord of the context track at the beat each note is heard (G# or Ab), the default names with none. Nothing is changed; playback is not disturbed.
+Renders the project offline from from_beat (default 0) for seconds (default 2, at most 10) with a listener on each port ("mo_N.<output key>", at most 8) and describes what each carried: audio's peak and rms (dB) and its pitch when periodic (a poly cable's first 4 voices summed); gates counted over the voices, per beat, and how long any is high; the notes the voices' pitches visit; a CV's range and speed (voice 1). notes: notation (as midi.write takes it) the rack's Notes modules play from from_beat, besides what their tracks hold. A low master playrate lengthens what the listeners hold (seconds over the rate), and one that would need more than 512 MiB in all is refused: rack.probe_size. Note names follow the key and chord of the context track at the beat each note is heard (G# or Ab), the default names with none. Nothing is changed; playback is not disturbed.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -813,6 +813,7 @@ Kind: `query`. Exposure: `mcp-exec`.
 
 - `rack.unknown`: no such rack Hint: rack.list
 - `rack.port`: not an output of a module in the rack Hint: rack.get lists them
+- `rack.probe_size`: the listeners would hold more than 512 MiB Hint: shorten seconds or probe fewer ports
 
 ### Examples
 
