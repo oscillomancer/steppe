@@ -2458,6 +2458,128 @@ std::vector<engine::AudioDevice> fakeDevices() {
 }
 }  // namespace
 
+TEST_CASE("audio device: each start error reads as gui.md's table says, per audio system") {
+    Fixture f;
+    if (!f.ok) return;
+    const std::vector<engine::AudioDevice> mac{
+        {"Core Audio", "MacBook Pro Speakers", 0, 2, 48000, false, true},
+        {"Core Audio", "MacBook Pro Microphone", 1, 0, 48000, true, false}};
+    struct Case {
+        const char* what;
+        gui::AudioDeviceSettings settings;
+        std::vector<engine::AudioDevice> devices;
+        Error error;
+        std::string words;
+        std::string output = {}, input = {};  // the rows, where they matter
+    };
+    auto settings = [](const char* backend, const char* host = "", const char* output = "",
+                       const char* input = "", double rate = 0) {
+        gui::AudioDeviceSettings s;
+        s.backend = backend;
+        s.hostApi = host;
+        s.outputDevice = output;
+        s.inputDevice = input;
+        s.rate = rate;
+        return s;
+    };
+    const char* hint = "a hint for command callers";
+    const std::vector<Case> cases{
+        // JACK (Linux): the server, the library; never another device or system.
+        {"jack library",
+         settings("jack"),
+         {},
+         Error("backend.unavailable", "JACK is not available: libjack.so.0: cannot open", {}, hint),
+         "The JACK library was not found. Install PipeWire's JACK support (pipewire-jack) or "
+         "JACK, then Restart audio."},
+        {"jack symbols",
+         settings("jack"),
+         {},
+         Error("backend.unavailable", "libjack.so.0 lacks JACK symbols: jack_activate", {}, hint),
+         "The JACK library found is incomplete. Install PipeWire's JACK support (pipewire-jack) "
+         "or JACK, then Restart audio."},
+        {"jack server",
+         settings("jack"),
+         {},
+         Error("backend.open", "could not connect to the JACK server (failure, server failed)", {},
+               hint),
+         "The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), "
+         "or a JACK server, then Restart audio."},
+        {"jack ports",
+         settings("jack"),
+         {},
+         Error("backend.open", "JACK: cannot activate the client", {}, hint),
+         "JACK refused the connection (cannot activate the client). Restart audio; if it fails "
+         "again, restart PipeWire or the JACK server."},
+        {"jack other",
+         settings("jack"),
+         {},
+         Error("backend.config", "invalid requested graph rate", "/rate", hint),
+         "Invalid requested graph rate."},
+        // Windows WASAPI (shared mode).
+        {"wasapi busy", settings("portaudio"), fakeDevices(),
+         Error("backend.open", "Device unavailable", "/backend", hint),
+         "The device is unavailable. Another app may be using it in exclusive mode: close that "
+         "app, then Restart audio."},
+        {"wasapi rate", settings("portaudio", "", "", "", 96000), fakeDevices(),
+         Error("backend.open", "Invalid sample rate", "/rate", hint),
+         "The device refused the sample rate. Choose another sample rate, or the device's own "
+         "rate."},
+        {"wasapi input", settings("portaudio", "", "", "Microphone 2"), fakeDevices(),
+         Error("backend.device", "device was not found", "/input_device", hint),
+         "The input device \"Microphone 2\" was not found. Choose another device, or Refresh "
+         "once it is connected.",
+         "System default", "Microphone 2 (not found)"},
+        {"wasapi host", settings("portaudio", "Windows DirectSound"), fakeDevices(),
+         Error("backend.device", "host API was not found", "/host_api", hint),
+         "The audio system \"Windows DirectSound\" was not found. Choose another audio system."},
+        {"wasapi other", settings("portaudio"), fakeDevices(),
+         Error("backend.open", "Unanticipated host error", "/backend", hint),
+         "Unanticipated host error."},
+        // Windows ASIO: one device for input and output (round 165 re-check 3 F2).
+        {"asio missing", settings("portaudio", "ASIO", "Focusrite USB ASIO"), fakeDevices(),
+         Error("backend.device", "device was not found", "/input_device", hint),
+         "The device \"Focusrite USB ASIO\" was not found. Choose another device, or Refresh "
+         "once it is connected.",
+         "Focusrite USB ASIO (not found)", "Same device as output"},
+        {"asio busy", settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices(),
+         Error("backend.open", "Device unavailable", "/backend", hint),
+         "The ASIO driver is unavailable. An ASIO driver serves one app at a time: close the "
+         "other app using it, then Restart audio."},
+        // macOS Core Audio: the only audio system, so never "another" one.
+        {"coreaudio busy", settings("portaudio"), mac,
+         Error("backend.open", "Device unavailable", "/backend", hint),
+         "The device is unavailable. Another app may have taken it over: close that app, then "
+         "Restart audio."},
+        {"coreaudio host", settings("portaudio", "Core Audio"), mac,
+         Error("backend.device", "host API was not found", "/host_api", hint),
+         "The audio system \"Core Audio\" was not found."},
+        {"coreaudio channels", settings("portaudio", "", "", "MacBook Pro Microphone"), mac,
+         Error("backend.config", "device has too few channels", "/inputs", hint),
+         "The input device has too few channels. Choose another input device, or None (playback "
+         "only)."},
+    };
+    for (const Case& c : cases) {
+        CAPTURE(c.what);
+        std::vector<std::string> errors, logs;
+        gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, c.settings, {});
+        audio.enumerate = [&] { return Result<std::vector<engine::AudioDevice>>(c.devices); };
+        audio.startEngine = [&](const json::Value&) -> Result<json::Value> { return c.error; };
+        audio.stopEngine = [] {};
+        audio.onError = [&](const std::string& e) { errors.push_back(e); };
+        audio.onLog = [&](const std::string& e) { logs.push_back(e); };
+        audio.open();
+        CHECK_FALSE(audio.start());
+        CHECK(audio.lastError() == c.words);
+        // The hint is for command callers: in the log, not the dialog.
+        CHECK(audio.lastError().find(hint) == std::string::npos);
+        REQUIRE(logs.size() == 1);
+        CHECK(logs[0].find(hint) != std::string::npos);
+        if (!c.output.empty()) CHECK(f.node("audio.output.set")->valueText() == c.output);
+        if (!c.input.empty()) CHECK(f.node("audio.input.set")->valueText() == c.input);
+        f.root->closePopups();
+    }
+}
+
 TEST_CASE("audio device: settings become engine.start arguments") {
     const auto devices = fakeDevices();
     auto args = [&](const gui::AudioDeviceSettings& s) {
@@ -2654,7 +2776,7 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     REQUIRE(errors.size() == 1);
     CHECK(errors[0].find("running on the default device.") != std::string::npos);
     CHECK(fallback.lastError().find("running on the default device.") != std::string::npos);
-    CHECK(fallback.lastError().find(" Hz") == std::string::npos);  // no rate chosen
+    CHECK(fallback.lastError().find("Hz") == std::string::npos);  // no rate chosen
     CHECK(f.node("audio.output.set")->valueText() == "Interface (not found)");
     // A chosen rate the fallback does not run at: the note names the
     // engine's rate, not the choice, which stays saved for the device.

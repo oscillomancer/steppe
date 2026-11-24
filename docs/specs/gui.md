@@ -3868,10 +3868,10 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   why in the dialog's status and the status line, the
   engine left stopped and the dialog open with the fresh list. Every error
   the dialog shows (a refused start, a choice, Restart audio, Refresh, the
-  native device list) is in the dialog's own words: the engine's message as
-  a sentence, the device or audio system by its name ("The output device
-  "Interface" was not found."), and where that alone gives no next step, what
-  to do ("Choose another device, or Refresh once it is connected."). A
+  native device list) is in the dialog's own words, by the table of audio
+  device errors below: what went wrong, and what to do next where that alone
+  gives no step, chosen by the audio system and the error's code and path.
+  An error with no row shows the engine's message alone, as a sentence. A
   command name or the engine's hint, written for command callers, never
   shows; the full error with its hint goes to the log (`onLog`: stderr), once
   until a start succeeds. The status lines wrap at plain spaces only; a number and
@@ -3884,18 +3884,47 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   and the status line say it in the dialog's own words, as sentences, never
   with a command name or an agent's hint: "The output device "Interface" was
   not found. Audio is running on the default device. The choice is kept for
-  when it returns." (a refusal other than a missing device: "The saved choice
-  was refused: <message>."). The defaults leave the rate to the device: when
+  when it returns." (a case of the table says its cause there; any other
+  refusal: "The saved choice was refused: <message>."). The defaults leave the rate to the device: when
   the engine runs at another rate than the one chosen, the note names the
   engine's rate, "… on the default device at 48000 Hz.", and the chosen rate
   stays saved for when the device returns. The rows show the saved choice;
-  the missing device's row reads "Interface (not found)" while the fallback
-  runs. The native input opens all its channels up to
+  the row a missing device's error points at reads "Interface (not found)"
+  ("System default (not found)" for a missing default; an ASIO driver's
+  input error marks the output row, its one device) until a start finds it.
+  With both named devices missing, the input is reported: it opens first. The native input opens all its channels up to
   32. At app start a refused saved choice retries the backend's defaults; the
   saved choice is kept. A failed start, or that fallback, opens the dialog,
   whose status says why (stderr is not seen from Finder or a desktop entry). engine.start receives the mapping
   (`engineStartArgs`): an explicit rate, or for the native device the output
   device's own rate; for JACK, `force_graph` only when forcing.
+
+**Audio device errors** (`errorWords`, audio_device.cpp). The audio systems
+are JACK (Linux, through PipeWire), Core Audio (macOS), WASAPI in shared mode
+and ASIO (Windows), and Dummy, which opens no device and has no rows; no ALSA
+and no WASAPI exclusive mode are built. "Choose another audio system" is
+said only when the Audio system menu lists another one with devices, never
+for Dummy alone. *X* is the device or audio system asked for.
+
+| Audio system | Engine error (code, path, message) | The dialog says |
+|---|---|---|
+| JACK | `backend.unavailable`, "JACK is not available: …" | The JACK library was not found. Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart audio. |
+| JACK | `backend.unavailable`, "… lacks JACK symbols: …" | The JACK library found is incomplete. Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart audio. |
+| JACK | `backend.open`, "could not connect to the JACK server (…)" | The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), or a JACK server, then Restart audio. |
+| JACK | `backend.open`, "JACK: *what*" (ports, activation) | JACK refused the connection (*what*). Restart audio; if it fails again, restart PipeWire or the JACK server. |
+| Core Audio, WASAPI | `backend.device`, `/output_device`, "device was not found" | The output device "*X*" was not found (a default: The default output device was not found). Choose another device, or Refresh once it is connected. |
+| Core Audio, WASAPI | `backend.device`, `/input_device`, "device was not found" | The input device "*X*" was not found (or: The default input device …). Choose another device, or Refresh once it is connected. |
+| ASIO | `backend.device`, `/output_device` or `/input_device`, "device was not found" | The device "*X*" was not found. Choose another device, or Refresh once it is connected. |
+| Core Audio, WASAPI, ASIO | `backend.device`, a device path, "device name is ambiguous" | More than one device is named "*X*". Rename one in the system's sound settings, or choose another device. |
+| Core Audio, WASAPI, ASIO | `backend.device`, `/host_api` | The audio system "*X*" was not found. (Choose another audio system., when another is listed) |
+| Core Audio, WASAPI, ASIO | `backend.open`, `/rate` (the rate not supported) | The device refused the sample rate. (Choose another sample rate, or the device's own rate., when a rate was chosen) |
+| WASAPI | `backend.open`, `/backend`, "Device unavailable" | The device is unavailable. Another app may be using it in exclusive mode: close that app, then Restart audio. |
+| ASIO | `backend.open`, `/backend`, "Device unavailable" | The ASIO driver is unavailable. An ASIO driver serves one app at a time: close the other app using it, then Restart audio. |
+| Core Audio | `backend.open`, `/backend`, "Device unavailable" | The device is unavailable. Another app may have taken it over: close that app, then Restart audio. |
+| Core Audio, WASAPI, ASIO | `backend.config`, `/inputs`, "device has too few channels" | The input device has too few channels. Choose another input device, or None (playback only). |
+| Core Audio, WASAPI, ASIO | `backend.config`, `/outputs`, "device has too few channels" | The output device has too few channels. Choose another output device. |
+| Core Audio, WASAPI, ASIO | `backend.config`, `/rate`, "device returned an invalid stream rate" | The device reported an invalid sample rate. Choose another device or sample rate. |
+| any | anything else (other PortAudio errors, such as "Unanticipated host error", the device monitor, `engine.*`) | The message alone, as a sentence ("Unanticipated host error."). |
 
 
 
