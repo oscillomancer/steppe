@@ -108,11 +108,16 @@ namespace {
 // Scripted peers bypass the production launcher and retain their own PID owner.
 struct ScriptedChild {
     pid_t pid;
-    ~ScriptedChild() {
+    // Ends it now: a process that watches this child waits for its exit when
+    // it is destroyed, so the child must be gone before that, not after.
+    void stop() {
+        if (pid <= 0) return;
         ::kill(pid, SIGKILL);
         while (::waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {
         }
+        pid = -1;
     }
+    ~ScriptedChild() { stop(); }
 };
 bool rtBlock(Instance& g, const ProcessBlock& b, OutputEvents& out) SUPPLE_RT {
     return g.process(b, &out);
@@ -1841,6 +1846,9 @@ TEST_CASE("oversized acknowledged bridge output count fails silently without are
         CHECK_MESSAGE(query.error().message.find("protocol") != std::string::npos,
                       "message: " << query.error().message);
         CHECK_FALSE(query.error().hint.empty());
+        // Before the instance and its process go: ~BridgeProcess waits for a
+        // living child (2 s, then 5 s) that its own kill cannot reach.
+        child.stop();
     }
 }
 
