@@ -419,6 +419,16 @@ TEST_CASE("rack.probe: names follow a tempo change and a playrate envelope insid
     f.run("key.remove", R"({"at": 2})");
     f.run("key.set", R"({"at": 2.5, "tonic": "Ab", "scale": "major"})");
     CHECK(probe("voice v; 1: r:h r:e C#4:e r:q", 4) == std::vector<std::string>{"Db4"});
+    // The rate is 0.5, doubles to 2 at song sample 20 and falls back to 0.5 at sample 48, all
+    // inside one 64-frame block; the note is at tick 2 (song sample 50, device frame 58), where
+    // the key changes. The clock is read at every frame, so both opposite bends are found.
+    f.run("key.remove", R"({"at": 2.5})");
+    f.run("key.set", R"({"at": 0.0020833333333333333, "tonic": "Ab", "scale": "major"})");
+    f.run("env.points.set", R"({"env": "en_1", "points": [
+        {"beat": 0, "value": 0.5, "shape": "square"},
+        {"beat": 0.0008333333333333334, "value": 2, "shape": "square"},
+        {"beat": 0.002, "value": 0.5}]})");
+    CHECK(probe("voice v; 1: r:2t C#4:e r:3358t", 1) == std::vector<std::string>{"Db4"});
 }
 
 TEST_CASE("rack.probe: an audio port's note is named by the context where it was measured") {

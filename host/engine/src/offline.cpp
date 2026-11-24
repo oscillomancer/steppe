@@ -799,23 +799,32 @@ namespace {
 // The rows OfflineSettings::songClock gets for a block that has just been processed: its first
 // frame and its last, and, between them, the frames where the clock bends. A step in a playrate
 // envelope falls at any frame, not at a block start, and the song position is straight between
-// two rows, so a row goes wherever the middle of a stretch is off the straight line by more than
-// kClockTolerance song seconds (a tenth of a millionth of a beat at 120 bpm, a fifth of the
-// slack a note's place has). The block's frames are still in the timeline's history.
-constexpr double kClockTolerance = 5e-8;
+// two rows. So every frame of a stretch is read and compared with the straight line between its
+// ends (at most 62 reads), and the stretch is split at the frame that is furthest off while that
+// is more than kClockTolerance song seconds: far above float noise and a fiftieth of the slack a
+// note's place has at 120 bpm. Splitting at the worst frame, not at the middle, finds two
+// opposite bends in one stretch too. The block's frames are still in the timeline's history.
+// Unity is straight by construction (no reads), and a constant rate adds nothing.
+constexpr double kClockTolerance = 1e-8;
 template <class At>
 void refineClock(std::vector<std::pair<std::int64_t, double>>& rows, const At& at, std::int64_t lo,
                  double from, std::int64_t hi, double to) {
-    if (hi - lo > 1) {
-        const std::int64_t mid = lo + (hi - lo) / 2;
-        const double heard = at(mid);
+    std::int64_t worst = lo;
+    double worstSeconds = 0, worstOff = 0;
+    for (std::int64_t frame = lo + 1; frame < hi; ++frame) {
+        const double heard = at(frame);
         const double straight =
-            from + (to - from) * static_cast<double>(mid - lo) / static_cast<double>(hi - lo);
-        if (std::abs(heard - straight) > kClockTolerance) {
-            refineClock(rows, at, lo, from, mid, heard);
-            refineClock(rows, at, mid, heard, hi, to);
-            return;
+            from + (to - from) * static_cast<double>(frame - lo) / static_cast<double>(hi - lo);
+        if (std::abs(heard - straight) > worstOff) {
+            worst = frame;
+            worstSeconds = heard;
+            worstOff = std::abs(heard - straight);
         }
+    }
+    if (worstOff > kClockTolerance) {
+        refineClock(rows, at, lo, from, worst, worstSeconds);
+        refineClock(rows, at, worst, worstSeconds, hi, to);
+        return;
     }
     rows.emplace_back(hi, to);
 }
@@ -824,7 +833,11 @@ void appendSongClock(std::vector<std::pair<std::int64_t, double>>& rows, const d
     const auto at = [&](std::int64_t frame) { return p.rateSeconds(song + (frame - pos)); };
     const double first = at(pos);
     rows.emplace_back(pos, first);
-    if (n > 1) refineClock(rows, at, pos, first, pos + n - 1, at(pos + n - 1));
+    if (n < 2) return;
+    if (p.rateEnabled)
+        refineClock(rows, at, pos, first, pos + n - 1, at(pos + n - 1));
+    else
+        rows.emplace_back(pos + n - 1, at(pos + n - 1));
 }
 
 }  // namespace

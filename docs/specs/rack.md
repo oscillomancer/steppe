@@ -933,10 +933,10 @@ note is heard at, the default table where none holds (a place before beat 0 read
 That beat is the song position the recorded frame plays, through the tempo map. The render keeps
 the master playrate, so a frame is device time (`seconds` is song time and the render lasts
 `seconds` over the rate) and its song position is read from the render's own clock, which
-integrates the rate (a scalar or an envelope) and is straight to within 5e-8 song seconds
-between its rows, a row going wherever the position bends, so a step of the rate inside a
-64-frame block is followed too (an event at the step is named by the key holding at its own
-frame); at unity it is `from_beat` plus the frames over the sample rate. The listener
+integrates the rate (a scalar or an envelope). The render reads the clock at every frame of a
+block and keeps a row wherever the position bends, so a step of the rate inside a 64-frame block,
+or two bends in one block, is followed and an event at a step is named by the key holding at its
+own frame; at unity it is `from_beat` plus the frames over the sample rate. The listener
 holds the whole render: it is sized for `seconds` over the lowest rate the window plays at (the
 project's rate, or the lowest point of the active rate envelope; 0.25 at the least, so up to 40
 device seconds), and the answer's gate counts, rates and pitch window cover all of it. Gate
