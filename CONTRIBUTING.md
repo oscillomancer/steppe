@@ -87,7 +87,7 @@ Use `ci/<branch>-<n>` with a new number each time. Annotate with
 `platforms=linux`, `platforms=macos` or `platforms=windows` to target only
 one platform; unannotated tags run all. Superseded builds cancel per branch
 and platform, including across different tag numbers. Delete remote CI tags
-once their runs finish. Dependencies and the Linux and macOS compiler output are cached;
+once their runs finish. Dependencies and the compiler output (ccache, on all three platforms) are cached;
 run only the platforms needed for the change.
 
 GitHub lets a ref read only its own caches and the default branch's. A new
@@ -132,7 +132,10 @@ AppleClang's advisory `-Wperf-constraint-implies-noexcept` is suppressed
 when supported for the existing RT signatures; `nonblocking` annotations
 and the other warnings remain enabled.
 Windows (`windows-2022`, x64) uses clang-cl, Ninja
-and the Windows SDK, with vcpkg SDL3/zlib and a binary cache. Windows
+and the Windows SDK, with vcpkg SDL3/zlib and a binary cache. CI builds it with
+ccache and embedded debug information (`-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded`,
+`/Z7`, which clang-cl already treats `/Zi` as), so that ccache can cache the
+objects; the `windows` preset is unchanged. Windows
 10 1903 is the minimum (ADR-0044: every executable runs with the UTF-8 code page). No packaging or installers run here. Local platform
 commands are `cmake --workflow --preset macos` or `windows`; the latter
 requires `VCPKG_ROOT` and an initialized Windows SDK environment.

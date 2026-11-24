@@ -183,6 +183,22 @@ jobs:
           validator=$(tools/validator/build.sh)
           echo "CLAP_VALIDATOR_BIN=$validator" >> "$GITHUB_ENV"
 
+      # ccache for clang-cl, from Chocolatey (preinstalled on the runner image). A failed
+      # install leaves the build uncached, not broken: Configure checks for it.
+      - name: Windows ccache
+        if: matrix.platform == 'windows'
+        continue-on-error: true
+        run: |
+          choco install ccache -y --no-progress --limit-output
+          ccache --version
+      - name: Restore Windows compiler cache
+        if: matrix.platform == 'windows'
+        id: windows-compiler-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .compiler-cache
+          key: clangcl-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: clangcl-${{ runner.arch }}-
       # Shared core libraries are compiled in several isolated plugin builds.
       - name: Restore Linux compiler cache
         if: matrix.platform == 'linux'
@@ -228,7 +244,20 @@ jobs:
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CCACHE_MAXSIZE=1G" >> "$GITHUB_ENV"
             cmake --preset macos -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          elif [[ '${{ matrix.platform }}' == windows ]] && command -v ccache > /dev/null; then
+            echo "CCACHE_DIR=$(cygpath -m "$GITHUB_WORKSPACE/.compiler-cache")" >> "$GITHUB_ENV"
+            echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
+            echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+            echo "CCACHE_MAXSIZE=1G" >> "$GITHUB_ENV"
+            # ccache cannot cache an object whose debug information goes to a PDB at
+            # compile time (/Zi); /Z7 embeds it, and clang-cl treats /Zi as /Z7 already, so
+            # the objects are the same. CI only: the windows preset is unchanged, and the
+            # isolated plugin builds (60% of the compiles) take the setting from here.
+            cmake --preset windows -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
           else
+            echo "::warning title=No ccache::ccache is not installed; this Windows build is uncached"
             cmake --preset ${{ matrix.preset }}
           fi
       # Preserve expensive dependencies even when the compiler/test stage fails.
@@ -271,7 +300,6 @@ jobs:
       # ccache keeps its counters in the cache directory, so a restored cache
       # carries the last run's: zero them to read this run's hit rate.
       - name: Compiler cache statistics reset
-        if: matrix.platform != 'windows'
         continue-on-error: true
         run: ccache --zero-stats
       - name: Build
@@ -320,7 +348,7 @@ jobs:
             echo "last ten:"; tail -n 10 "$RUNNER_TEMP/memavail.log"
           fi
       - name: Compiler cache statistics after Build
-        if: always() && matrix.platform != 'windows'
+        if: always()
         continue-on-error: true
         run: |
           ccache --show-stats --verbose
@@ -381,6 +409,12 @@ jobs:
         with:
           path: .compiler-cache
           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+      - name: Save Windows compiler cache
+        if: always() && matrix.platform == 'windows' && steps.windows-compiler-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .compiler-cache
+          key: ${{ steps.windows-compiler-cache.outputs.cache-primary-key }}
       - name: Save macOS compiler cache
         if: always() && matrix.platform == 'macos' && steps.macos-compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
