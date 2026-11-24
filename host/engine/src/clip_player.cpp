@@ -777,6 +777,7 @@ void stretchSeek(PlayerReader& r, const ClipPlayer& pl, std::int64_t anchor, boo
 }
 
 std::atomic<std::uint64_t> gStretchPrimes{0};
+std::array<std::atomic<std::int64_t>, 256> gStretchPrimeFrames{};
 
 // Up to `budget` more of its primes; true once it is ready, its output
 // running from its start quantum.
@@ -788,7 +789,9 @@ bool stretchPrime(PlayerReader& r, const PlayrateTimeline& timeline,
     const PlayerSource source = stretchSource(r, *r.player, timeline);
     while (r.primes < quanta && budget-- > 0) {
         ++r.primes;
-        gStretchPrimes.fetch_add(1, std::memory_order_relaxed);
+        const std::uint64_t counted = gStretchPrimes.fetch_add(1, std::memory_order_relaxed) + 1;
+        gStretchPrimeFrames[counted % gStretchPrimeFrames.size()].store(r.startQuantum,
+                                                                        std::memory_order_relaxed);
         const std::int64_t at = r.startQuantum - std::int64_t(quanta) * kRateQuantum +
                                 std::int64_t(r.primes) * kRateQuantum + latency;
         if (!st.stretch->primeTo({&source, PlayerSource::read, 2},
@@ -1383,6 +1386,9 @@ std::int64_t switchCycle(const Node& n, const PlayrateTimeline& timeline) SUPPLE
 }
 
 std::uint64_t stretchPrimes() noexcept { return gStretchPrimes.load(std::memory_order_relaxed); }
+std::int64_t stretchPrimeFrame(std::uint64_t n) noexcept {
+    return gStretchPrimeFrames[n % gStretchPrimeFrames.size()].load(std::memory_order_relaxed);
+}
 
 void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
     const PlayrateTimeline& timeline = *p.timelines[n.live ? 1 : 0];

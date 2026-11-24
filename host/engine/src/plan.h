@@ -1728,6 +1728,10 @@ std::int64_t switchCycle(const Node& n, const PlayrateTimeline& timeline) SUPPLE
 // Stretch converter primes since the process began (a relaxed count, for
 // the tests' per-block bound).
 std::uint64_t stretchPrimes() noexcept;
+// The start quantum (device frame) of the reading the `n`th prime counted by
+// stretchPrimes was for, among the last 256: where a cold start's burst
+// begins, whatever the executor's lead (a test seam, written relaxed).
+std::int64_t stretchPrimeFrame(std::uint64_t n) noexcept;
 // What a clip chain's input reads in this block: the player's anchor on the
 // input side, or nothing (`on` false).
 struct ClipChainInput {
