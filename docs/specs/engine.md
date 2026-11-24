@@ -1956,7 +1956,9 @@ first use, and no plug-in code runs early to warm it.
   when present (ADR-0014/0082). Repair checks both RIFF and data byte
   counts against the whole frames physically present, including a torn size
   whose rounded-down frame count already matches; partial trailing frames are
-  not included in either repaired size. Punch in/out and loop recording (one take per pass); MIDI recording
+  not included in either repaired size. Punch in/out and loop recording (one take per pass; a pass over an existing item is a take of
+  it, heard where it was recorded through a `take.comp` made in the commit's transaction,
+  ADR-0103: `record.commit` carries `stack`); MIDI recording
   into MIDI takes, each journaled for crash recovery (below). Audio ring overflow becomes equal-length silence at its file
   position and is still reported; loop run positions remain in file-time units.
   Disk and periodic header errors stop only the failing target and retain that
@@ -2969,7 +2971,14 @@ status line while recording continues for healthy targets.
 A committed recording may carry a `warnings` array with structured
 `code`, `message`, `path`, `hint`, `track` and `file` fields.
 `recording.loop_runs_full` is forwarded to `transport.stop` / pause callers
-and the `record.warning` event while retained passes still commit.
+and the `record.warning` event while retained passes still commit. Every
+warning a commit itself adds (where a take went: `record.stack_skipped`,
+`record.stack_group` and the other `record.*` warnings of take stacking,
+ADR-0103, and those of the `take.comp` it makes) also goes out as a
+`record.warning` event, in the same shape, once the commit has succeeded,
+whatever stopped the recording (a command from any client, or the engine
+halting, whose commit has no caller to answer); each warning once per
+commit, a pass's own warnings not again.
 `project.recoverable` and `project.recover` expose skipped invalid-sidecar
 diagnostics in the same optional `warnings` shape (`record.sidecar`, and
 `record.journal` for a MIDI journal whose header does not read). Their
@@ -4690,6 +4699,24 @@ same preferences file; embedded hosts may provide their own persistence.
 
 The engine and GUI share `engine::kPreferencesSchema` for the current machine
 preferences schema, including a new engine-owned preferences file.
+
+A newer version's file is never destroyed (round 134 G2, for every future
+bump). `engine::preferencesSchemaNewer` says whether a label is newer than
+this build's (a higher minor of 1, or a higher major; an absent or malformed
+label is not). Before every write over the file, the engine's MIDI records
+writer and the GUI's `Preferences::save` call `engine::keepNewerPreferences`:
+a file whose schema is newer is first copied, as it is, to the first free
+name of `<file>.<label, '/' as '-'>.bak`, `….2.bak`, `….3.bak`
+(`preferences.json.supple.preferences-1.12.bak`, `newerPreferencesBackup`).
+A backup is never overwritten, so going newer, older, newer, older keeps
+each round the newer version left. No copy is made when a backup of that
+label already holds the same bytes, or when the file holds what this writer
+last wrote there: the engine's writer then keeps the newer label and members,
+as before, so its own writes still read as newer, and it remembers its last
+write (`EngineApp`'s, per file) to tell them from the newer version's. A failed
+copy refuses the write (`preferences.backup`). The newer version reads only
+`preferences.json`: its user renames a backup back to use it. Reading a newer minor's settings is a separate decision,
+not made.
 
 MIDI preference records have one writer, EngineApp. Generic GUI preference
 saves preserve the latest records on disk and ask the engine to persist its

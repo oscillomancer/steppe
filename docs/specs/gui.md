@@ -3472,13 +3472,22 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   Saved `zoom_height` bindings are ignored on load, retaining current defaults
   and unrelated customizations without changing the mouse file schema.
 - **Preferences** (Edit > Preferences…): app-wide settings, never project
-  state. The default monitoring of new channels (off, on — the default — or
+  state. A preferences file from a newer version (`engine::preferencesSchemaNewer`)
+  is not read: `Preferences::load` refuses it as `preferences.newer` (path
+  `/schema`), the app starts on the defaults, and it says so in the status line
+  at start and in a line above the settings (`prefs.file.note`,
+  `PreferencesDialog::fileNotice`), as well as on stderr; the hint says to
+  rename the backup back to `preferences.json` to use it in the newer version.
+  The file is kept beside itself as `preferences.json.<label, '/' as '-'>.bak`
+  (a later, different copy as `….2.bak` and on; never overwritten) before a
+  save writes this version's (`engine::keepNewerPreferences`; engine.md). The default monitoring of new channels (off, on — the default — or
   auto; `preferences.json`, supple.preferences/1.6, sets
   `EngineApp::defaultMonitor`, so the agents' track.add follows it too), and
   a way into the mouse modifiers.
   The dialog is in sections, each a heading over a rule
   (`prefs.section.<name>.title`): **Audio** (the audio device), **Recording
-  and import** (Input monitoring on new tracks, Copy imported audio),
+  and import** (Input monitoring on new tracks, Record over an item, Copy
+  imported audio),
   **Plug-ins** (Third-party plug-ins run), **Editing** (Mouse modifiers) and
   **Advanced** (Audio processing threads, Lock memory, Keep CPUs out of deep
   idle). Advanced (`prefs.advanced`) is closed until its **Show** is clicked
@@ -3558,6 +3567,26 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   (absent, and in older files, false; other types report
   `preferences.render_open_folder`), set from the render dialog's After
   render section.
+  **Record over an item** (1.11, ADR-0103; `prefs.stack.set`): **New take**
+  (the default: a pass that starts inside an item is a take of it, heard where
+  it was recorded) or **Layer on top** (laid as a new item), from a menu
+  (`prefs.stack.menu`); saved as the boolean `stack_recorded_takes` (absent,
+  and in older files, true; other types report
+  `preferences.stack_recorded_takes`) and applied to
+  `EngineApp::setStackRecordedTakes` (what `record.set {stack_takes}` sets)
+  when the dialog is made at start-up and on each choice. The engine keeps
+  it only while it runs, so the GUI is its keeper. The row shows the engine's
+  setting: an agent's `record.set` appears there and is not saved.
+  Every warning of a recording's commit (`record.stack_skipped`,
+  `record.stack_group`, `record.take_beyond_item`, and any other the engine
+  sends as a `record.warning` event, ADR-0103) goes on the status line,
+  whatever ended the recording: a key or button, an agent, a MIDI controller
+  or the engine halting. The app hands each batch of engine events to
+  `Shell::engineEvents`, which joins the messages of its `record.warning`
+  events, each once, by "; " (`Shell::statusNote`). A `record.error` in the
+  same batch comes first ("Recording failed: …"), and the warnings follow it
+  after "; ": they never replace it. While audio is being prepared the line
+  says so first, then the note.
   **Copy imported audio** (1.4): On by default, saved as the
   boolean `copy_imported_media` (absent, and in older files, means true;
   other types report `preferences.copy_imported_media`) and applied to

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #pragma once
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -8,7 +9,24 @@
 #include "supple/json/value.h"
 namespace supple::engine {
 // Shared current machine-preferences schema for engine and GUI writers.
-inline constexpr char kPreferencesSchema[] = "supple.preferences/1.10";
+inline constexpr char kPreferencesSchema[] = "supple.preferences/1.11";
+// Whether `label` names a preferences schema newer than kPreferencesSchema: a
+// higher minor of 1, or a major above 1. An absent or malformed label is not.
+bool preferencesSchemaNewer(std::string_view label);
+// Where a newer build's preferences file is kept before this build writes
+// over it: <file>.<label, '/' as '-'>.bak (n 1), then .2.bak, .3.bak: so
+// preferences.json.supple.preferences-1.12.bak, then
+// preferences.json.supple.preferences-1.12.2.bak.
+std::filesystem::path newerPreferencesBackup(const std::filesystem::path& file,
+                                             std::string_view label, int n = 1);
+// Before every write over `file` (the GUI's preferences, the engine's MIDI
+// records): when it holds a newer schema, copy it to the first free
+// newerPreferencesBackup name, unless a backup of that label already holds the
+// same bytes, or the file holds `ownBytes` (what this writer last wrote there:
+// the engine's writer keeps a newer label, so its own writes still read as
+// newer). A backup is never overwritten. A file that is absent, does not read
+// as a JSON object or is not newer needs none.
+Status keepNewerPreferences(const std::filesystem::path& file, std::string_view ownBytes = {});
 // Machine preferences, keyed by the backend's immutable port name. The JSON
 // record is retained, so members a later version adds survive edits. One
 // record per port carries everything it does: routing (ADR-0072) owns

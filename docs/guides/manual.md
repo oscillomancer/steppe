@@ -78,6 +78,13 @@ process audio, locking memory, keeping CPUs out of deep idle) is under
 Locking memory and the CPU idle setting work on Linux only, and are listed
 only there.
 In a low window the settings scroll under the dialog's heading.
+If your preferences file was written by a newer version of Steppe, this
+version does not read it: it uses its defaults and says so at the top of the
+dialog. The first time you change a setting it keeps the newer file beside the
+new one, as `preferences.json.supple.preferences-<version>.bak` (a later copy
+gets a number, `….2.bak`; none is ever overwritten). The newer version reads
+only `preferences.json`: to use its settings there again, rename the `.bak`
+file back to `preferences.json`.
 
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client
@@ -534,6 +541,27 @@ changes: hold **Alt** while you drag, click or pick a take to comp this track
 alone. An item whose Loop is on is comped with hard cuts (no
 crossfades) until you turn its Loop off.
 
+**Recording over an item** adds a take to it instead of laying a second item on top: arm the
+track, put the playhead (or a punch-in) inside the item and record, and the item keeps its place
+and gains a take, which you hear where you recorded it: punch into bar 5 of an eight-bar item and
+bars 1 to 4 and 6 to 8 go on playing what they did, with the new take in bar 5 (the item is split
+into pieces there, with a short crossfade, as **take.comp** makes them; one undo puts it back). A
+pass over the whole item is heard whole. The older takes stay and **Show all takes** (or
+`take.comp`) lets you pick between them. A pass that starts before the item, or into a locked or
+looped item, still makes a new item, and the recording says so. If the pass runs past the item's
+end, the rest stays in the take, hidden; lengthen the item to hear it. If the item was a comp
+(several pieces of one set of takes), every piece gets the take. If you record only some of the
+tracks of an edit group, the others do not get a take, and the recording says so: arm every track
+of the group to keep their takes level. If the item was a comp whose seams you had set to different
+lengths or shapes, a pass inside it makes them all alike again (the comp's own length and shape) and
+the recording says so (`record.comp_uniform`); a comp whose seams are already alike keeps them. Agents turn this off with
+`record.set {stack_takes: false}` (every pass is then laid as items, as in older versions);
+`record.get` reads it. In the app it is **Edit > Preferences > Recording and import > Record over
+an item**: **New take** (the default) or **Layer on top**, kept with your other preferences; an
+agent's change shows there and lasts until Steppe quits. When a pass became a new item instead of a
+take, or other tracks of an edit group were left without a take, the status line says so when the
+recording stops, whether you stopped it, an agent did or the audio engine did.
+
 ### Changing what the mouse does
 
 **Edit > Mouse modifiers…** lists these gestures (dragging an item, dragging
@@ -837,7 +865,14 @@ metadata; `session.describe` marks frozen channels. Work on other tracks can
 continue during a freeze. Completion refuses if the source sound, input files,
 project/branch or latency schedule changed; submit the freeze again.
 
-Disarm the channel and remove external audio, sidechain/key or MIDI inputs first.
+Disarm the channel and remove external audio, sidechain/key or MIDI inputs first. Arming needs an
+unfrozen channel (arming a frozen one says to unfreeze it first), and an armed channel cannot be
+frozen, so a recording does not normally meet a frozen channel; arming a group leaves its frozen
+members unarmed, with a warning. Should a channel be frozen under a recording anyway, nothing is
+lost: the recording stops as usual, every other channel's takes are placed, and the frozen channel's
+recording is kept in the project's recordings folder, named in a `record.frozen_skipped` warning.
+Unfreeze the channel and `project.recover` places it where it was played, loop passes included. A
+commit that is refused for any reason keeps the recordings the same way, and its error says so.
 V1 requires unity master playrate without an active rate envelope. Tempo, meter,
 project sample rate and master-rate edits name the frozen tracks that must be
 unfrozen first. Missing plugins or unavailable media must be repaired before

@@ -794,6 +794,13 @@ void registerTrackCommands(cmd::Registry& registry) {
                             continue;
                         if (attribute == "pan" && !a.pan && old.type == model::StripType::Master)
                             continue;
+                        if (attribute == "armed" && *a.armed && old.freeze) {
+                            ctx.warn("track.frozen",
+                                     old.name + " (" + member.str() +
+                                         ") is frozen, so it was not armed with the group",
+                                     "/armed");
+                            continue;
+                        }
                         app.txn().modify<model::Track>(member, [&](auto& tr) { change(tr, old); });
                         const auto tr = *app.view().tracks.find(member);
                         if (attribute == "volume")

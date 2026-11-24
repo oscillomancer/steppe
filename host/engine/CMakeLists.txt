@@ -57,7 +57,8 @@ if(SUPPLE_PLATFORM_LINUX AND NOT SUPPLE_TEST_PORTABLE_ONLY)
   set(_engine_linux_tests ON)
 endif()
 set(_engine_test_sources
-  tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_take_comp.cpp tests/test_audio_warp.cpp
+  tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_take_comp.cpp tests/test_take_stack.cpp
+  tests/test_audio_warp.cpp
   tests/test_offline.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp
   tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp
   tests/test_realtime.cpp tests/test_audition.cpp tests/test_realtime_arming.cpp

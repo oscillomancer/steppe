@@ -142,8 +142,9 @@ Result<MidiCapture> readMidiJournal(const std::filesystem::path& file,
 // moves the project (ADR-0076).
 Status validateRecordingPunch(RecordedPunch punch);
 
+// `stack`: the commit made takes of the items under the passes (ADR-0103); a replay does the same.
 json::Value recordCommitArgs(const std::vector<RecordedTake>& takes, const TransportRange& punch,
-                             const std::filesystem::path& media);
+                             const std::filesystem::path& media, bool stack);
 
 std::filesystem::path sidecarPath(const std::filesystem::path& wav);
 Status writeSidecar(const std::filesystem::path& wav, const RecordingInfo& info);
