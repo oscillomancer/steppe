@@ -31,7 +31,7 @@ namespace supple::views {
 //   N", "the meter change at bar N", "the key (chord) at bar N";
 // - a plug-in: its label, else the plug-in's name;
 // - a send: "the send from <track> to <track>";
-// - a group: its name, else "an unnamed group";
+// - a group: its name, else "Group N" by its place among the groups;
 // - a rack: model::rackLabel; a module: its label, else its plug-in's name
 //   or its type's name; a cable: "the cable from <module> to <module>";
 // - a modulation route: "the modulation of <target>";

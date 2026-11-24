@@ -449,7 +449,7 @@ everywhere:
 | Tempo, meter, key or chord point | "the tempo change (meter change, key, chord) at bar *N*" |
 | Plug-in | its plug-in's name |
 | Send | "the send from *track* to *track*" |
-| Group | "an unnamed group" |
+| Group | "Group *N*", by its place among the groups |
 | Rack, module | its rack's label; its plug-in's or type's name |
 | Cable, modulation route | "the cable from *module* to *module*"; "the modulation of *parameter*" |
 | Media file | its file name |
@@ -459,8 +459,10 @@ the FX window's, the event list's, the render dialog's, the rack window's)
 says each whole id in what it shows by `views::objectNames`, so a
 command's refusal names what it is about; the rest of its words are kept.
 A message that already gives the name with the id in parentheses ("Bass
-(tr_2) is frozen") says the name once ("Bass is frozen"); a different name
-before it stays ("Old (Bass)").
+(tr_2) is frozen") says the name once ("Bass is frozen"): the name must stand
+whole, at the start or after a separator or a lower-case word ("track
+Bass"). A different name before it stays ("Old (Bass)", and "Sub Bass
+(Bass)" for a track now named Bass).
 Commands, their errors and what agents see keep their ids; the command log
 (§4.10) shows commands as they ran.
 

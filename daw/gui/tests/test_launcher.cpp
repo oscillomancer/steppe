@@ -1074,6 +1074,12 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     // 165 F4: freeze.cpp's "Bass (tr_2) is frozen"); another name stays.
     CHECK(views::objectNames(s, "Bass (tr_2) is frozen") == "Bass is frozen");
     CHECK(views::objectNames(s, "Old (tr_2) is frozen") == "Old (Bass) is frozen");
+    // Only a whole name collapses (round 165 re-check 4): a longer name that
+    // ends in the id's is another name, and keeps both.
+    CHECK(views::objectNames(s, "Sub Bass (tr_2) is frozen") == "Sub Bass (Bass) is frozen");
+    CHECK(views::objectNames(s, "SubBass (tr_2)") == "SubBass (Bass)");
+    CHECK(views::objectNames(s, "track Bass (tr_2): kept") == "track Bass: kept");
+    CHECK(views::objectNames(s, "Drums (tr_1), Bass (tr_2)") == "Drums, Bass");
     // The Error form: the message, the hint and each listed error; the code
     // and path stay as the command gave them.
     Error e("clip.occupied", "cl_3 is in sc_2", "/clip", "move cl_3 out of tr_2 first");
@@ -1157,6 +1163,17 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     CHECK(views::objectNames(more, "fx_99 and mo_99") == "a removed plug-in and a removed module");
     // Not an id: an unknown prefix, upper case, or no digits.
     CHECK(views::objectNames(more, "zz_3, TR_1 and tr_x") == "zz_3, TR_1 and tr_x");
+    {  // Unnamed groups by their place, as tracks (round 165 re-check 3).
+        const std::string first = last(f.app->head().groups);
+        f.exec("group.add", R"({"name":"Pads"})");
+        const std::string second = last(f.app->head().groups);
+        f.exec("group.set", R"({"group":")" + first + R"(","name":""})");
+        f.exec("group.set", R"({"group":")" + second + R"(","name":""})");
+        const model::Session& unnamed = f.app->head();
+        CHECK(views::objectNames(unnamed, first + " and " + second) == "Group 1 and Group 2");
+        for (int i = 0; i < 3; ++i) f.exec("history.undo", "{}");
+        CHECK(views::objectNames(f.app->head(), first) == "Rhythm");
+    }
     // An unnamed item draws no name on its lane, never its id.
     f.root->damageAll();
     f.root->frame(false);

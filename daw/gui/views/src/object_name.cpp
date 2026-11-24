@@ -15,6 +15,22 @@ namespace supple::views {
 
 namespace {
 
+// Whether the name that ends `out` at `p` (its first character) starts
+// there as a whole name: at the start, after a separator ("(Bass", ", Bass",
+// ": Bass"), or after a lower-case word ("track Bass"); not inside a longer
+// name ("Sub Bass", "SubBass"), which is another name than the id's.
+bool wholeNameAt(const std::string& out, std::size_t p) {
+    auto word = [&](std::size_t k) {
+        return std::isalnum(static_cast<unsigned char>(out[k])) || out[k] == '_';
+    };
+    if (p == 0) return true;
+    if (out[p - 1] != ' ') return !word(p - 1);
+    if (p == 1 || !word(p - 2)) return true;
+    std::size_t w = p - 1;
+    while (w > 0 && word(w - 1)) --w;
+    return std::islower(static_cast<unsigned char>(out[w])) != 0;
+}
+
 std::string barWords(const model::Session& s, double beat) {
     return "bar " + std::to_string(s.timeMap->barBeat(std::max(0.0, beat)).bar);
 }
@@ -150,7 +166,14 @@ std::string objectName(const model::Session& s, model::Id id) {
         case model::Kind::Group: {
             const model::TrackGroup* g = s.groups.find(id);
             if (!g) return "a removed group";
-            return g->name.empty() ? std::string("an unnamed group") : g->name;
+            if (!g->name.empty()) return g->name;
+            // "Group 2" by its place among the groups, as a track's label.
+            std::size_t place = 1;
+            for (const auto& e : s.groups) {
+                if (e.id == id) break;
+                ++place;
+            }
+            return "Group " + std::to_string(place);
         }
         case model::Kind::Rack:
             return s.racks.find(id) ? model::rackLabel(s, id) : std::string("a removed rack");
@@ -210,11 +233,13 @@ std::string objectNames(const model::Session& s, std::string_view text) {
                 if (const auto id = model::Id::parse(text.substr(i, end - i))) {
                     const std::string name = objectName(s, *id);
                     // "Bass (tr_2)": a message that gives the name already
-                    // says it once, not "Bass (Bass)".
+                    // says it once, not "Bass (Bass)"; "Sub Bass (tr_2)"
+                    // gives another name, and keeps both.
                     const std::string given = name + " (";
                     if (i > 0 && text[i - 1] == '(' && end < text.size() && text[end] == ')' &&
                         out.size() >= given.size() &&
-                        out.compare(out.size() - given.size(), given.size(), given) == 0) {
+                        out.compare(out.size() - given.size(), given.size(), given) == 0 &&
+                        wholeNameAt(out, out.size() - given.size())) {
                         out.resize(out.size() - 2);
                         i = end + 1;
                         continue;
