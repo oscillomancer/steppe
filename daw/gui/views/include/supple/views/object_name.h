@@ -19,7 +19,8 @@ namespace supple::views {
 // - a track: model::trackLabel ("Bass", else "Track 3", "Bus 2");
 // - a scene: its name, else "Scene N" by its place in the launcher pane;
 // - a clip: its name, else "<track>'s clip in <scene>";
-// - an item: its label (Lanes::itemLabel), else "<track>'s item at bar N";
+// - an item: its label (Lanes::itemLabel), else "<track>'s item at bar N"
+//   (", beat B" after it when another item of the track starts in that bar);
 // - a take: its name, else as its item or clip;
 // - an envelope: "<track or take>'s <param> automation", else "the <param>
 //   automation";

@@ -1115,6 +1115,16 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
           "Keys's item at bar 5 is in the way");
     CHECK(views::objectNames(now, it->activeTake->str() + " is warped") ==
           "Keys's item at bar 5 is warped");
+    {  // Another unnamed item in bar 5: each says its beat (round 165 S1).
+        const json::Value other = f.exec(
+            "item.add", R"({"track":"tr_3","position":18,"length":1,"notation":"1: E4:q r:*"})");
+        const model::Session& two = f.app->head();
+        CHECK(views::objectNames(two, item.str()) == "Keys's item at bar 5, beat 1");
+        CHECK(views::objectNames(two, other.find("item")->asString()) ==
+              "Keys's item at bar 5, beat 3");
+        f.exec("history.undo", "{}");
+        CHECK(views::objectNames(f.app->head(), item.str()) == "Keys's item at bar 5");
+    }
     const json::Value env = f.exec("env.add", R"({"track":"tr_2","param":"volume"})");
     CHECK(
         views::objectNames(f.app->head(), env.find("env")->asString() + " has automation items") ==

@@ -74,8 +74,18 @@ std::string objectName(const model::Session& s, model::Id id) {
             const model::Item* it = s.items.find(id);
             if (!it) return "a removed item";
             if (std::string label = Lanes::itemLabel(s, *it); !label.empty()) return label;
-            return objectName(s, it->track) + "'s item at " +
-                   barWords(s, model::itemSpan(s, *it).startBeat);
+            // The bar, and the beat when another item of the track starts in
+            // that bar too, so two unnamed ones read apart.
+            const double start = std::max(0.0, model::itemSpan(s, *it).startBeat);
+            const auto at = s.timeMap->barBeat(start);
+            bool shared = false;
+            for (const auto& e : s.items)
+                if (e.id != id && e.value->track == it->track &&
+                    s.timeMap->barBeat(std::max(0.0, model::itemSpan(s, *e.value).startBeat)).bar ==
+                        at.bar)
+                    shared = true;
+            return objectName(s, it->track) + "'s item at bar " + std::to_string(at.bar) +
+                   (shared ? ", beat " + std::to_string(at.beat) : std::string());
         }
         case model::Kind::Take: {
             const model::Take* tk = s.takes.find(id);

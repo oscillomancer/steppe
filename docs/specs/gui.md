@@ -440,7 +440,7 @@ everywhere:
 | Track | its label (`model::trackLabel`: "Track 3", "Bus 2") |
 | Scene | "Scene *N*", by its place in the launcher pane |
 | Clip | "*track*'s clip in *scene*" |
-| Item | "*track*'s item at bar *N*" (named by its take or file, §4.3) |
+| Item | "*track*'s item at bar *N*", with ", beat *B*" when another item of the track starts in that bar (named by its take or file, §4.3) |
 | Take | as its item or clip |
 | Envelope | "*track or take*'s *param* automation" ("the *param* automation" on a route or module) |
 | Automation item | "*envelope* item at bar *N*" |
