@@ -778,6 +778,7 @@ void stretchSeek(PlayerReader& r, const ClipPlayer& pl, std::int64_t anchor, boo
 
 std::atomic<std::uint64_t> gStretchPrimes{0};
 std::array<std::atomic<std::int64_t>, 256> gStretchPrimeFrames{};
+std::atomic<std::uint64_t> gStretchQuanta{0};
 
 // Up to `budget` more of its primes; true once it is ready, its output
 // running from its start quantum.
@@ -822,7 +823,12 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
     constexpr std::int64_t kCatchUp = 32 * kRateQuantum;
     const bool keyed =
         r.player == &pl && r.anchor == anchor && r.startQuantum != INT64_MIN && q >= r.startQuantum;
-    if (!keyed || (st.primed && (q < st.quantum || q - st.quantum > kCatchUp))) {
+    // The last quantum it has run; an unprimed reading (one carried across a
+    // trajectory change, seeked for S and primed at its first use: S3 step
+    // D4) counts from its start, so a first use long after it starts again
+    // there too instead of running every quantum since in one block.
+    const std::int64_t ran = st.primed ? st.quantum : r.startQuantum - kRateQuantum;
+    if (!keyed || q < ran || q - ran > kCatchUp) {
         const bool fromSwitch = switchQ != INT64_MIN && q >= switchQ && q - switchQ <= kCatchUp;
         r.previousLive = false;  // a fresh reading (S3 step D4)
         stretchSeekCycle(r, pl, anchor, unanchored,
@@ -835,6 +841,7 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
         const std::int64_t next = st.quantum + kRateQuantum;
         const double end = timeline.phase(next + kRateQuantum + st.stretch->lookahead()) +
                            st.stretch->analysisLookahead();
+        gStretchQuanta.fetch_add(1, std::memory_order_relaxed);
         if (!st.stretch->process({&source, PlayerSource::read, 2}, end, st.pointers)) {
             st.failed = true;
             for (auto& channel : st.output) channel.fill(0);
@@ -1395,6 +1402,7 @@ std::int64_t switchCycle(const Node& n, const PlayrateTimeline& timeline) SUPPLE
 }
 
 std::uint64_t stretchPrimes() noexcept { return gStretchPrimes.load(std::memory_order_relaxed); }
+std::uint64_t stretchQuanta() noexcept { return gStretchQuanta.load(std::memory_order_relaxed); }
 std::int64_t stretchPrimeFrame(std::uint64_t n) noexcept {
     return gStretchPrimeFrames[n % gStretchPrimeFrames.size()].load(std::memory_order_relaxed);
 }

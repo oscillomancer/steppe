@@ -851,7 +851,10 @@ the same.*
       reader for output from S, and it is primed at its first use, on the
       audio thread: at most a warm-up's primes per reader in one callback
       (45 at 48 kHz), so a callback holding S primes 45 for each track
-      with launched audio under stretch. A warm-up switching after S
+      with launched audio under stretch; one first read more than the
+      catch-up (32 quanta) after S starts again where it is read, as a
+      primed reading does, rather than running every quantum since S in
+      one block. A warm-up switching after S
       starts again on the new trajectory, primed as far as it had come, in
       the adoption's block; only a warm-up switching at or before S goes on
       in `previous`, and the reader rotated onto reader 2 at a switch drops
