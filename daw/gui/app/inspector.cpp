@@ -32,6 +32,7 @@
 #include "supple/views/envelope_lane.h"
 #include "supple/views/lanes.h"
 #include "supple/views/launcher.h"
+#include "supple/views/object_name.h"
 #include "take_follow.h"
 
 namespace supple::gui {
@@ -307,11 +308,10 @@ InspectorSubject inspectorSubject(const model::Session& s, const UiState& select
         const auto& [id, clip] = clips.front();
         out.kind = InspectorSubject::Kind::Clip;
         out.ids = {id};
-        out.title = clip->name.empty() ? id.str() : clip->name;
-        const model::Scene* scene = s.scenes.find(clip->scene);
+        out.title = views::objectName(s, id);
         out.detail = std::string(clip->kind == model::ClipKind::Midi ? "MIDI clip" : "Audio clip") +
-                     " on " + model::trackLabel(s, clip->track) +
-                     (scene && !scene->name.empty() ? ", " + scene->name : std::string());
+                     " on " + model::trackLabel(s, clip->track) + ", " +
+                     views::objectName(s, clip->scene);
         out.color = views::clipColor(theme, s, *clip);
     } else if (clips.size() > 1) {
         out.title = std::to_string(clips.size()) + " clips";
@@ -333,8 +333,7 @@ InspectorSubject inspectorSubject(const model::Session& s, const UiState& select
         const model::Track* track = s.tracks.find(item->track);
         out.kind = InspectorSubject::Kind::Item;
         out.ids = {id};
-        out.title = views::Lanes::itemLabel(s, *item);
-        if (out.title.empty()) out.title = id.str();
+        out.title = views::objectName(s, id);
         const model::Take* take = item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
         const char* what = !take || !take->source                   ? "Empty item"
                            : s.media.find(*take->source) != nullptr ? "Audio item"

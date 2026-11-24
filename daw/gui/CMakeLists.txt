@@ -64,7 +64,7 @@ target_include_directories(gui-actions PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/action
 # Views (gui.md §4): the arrange view (ruler, lanes, TCP column) now; mixer,
 # editors follow.
 supple_add_library(gui-views SOURCES views/src/lanes.cpp views/src/item_body.cpp views/src/track_layout.cpp
-                                        views/src/arrange.cpp views/src/item_gestures.cpp views/src/comp_view.cpp views/src/tcp.cpp views/src/envelope_lane.cpp views/src/envelope_edit.cpp views/src/mouse_map.cpp views/src/chord_field.cpp views/src/launcher.cpp
+                                        views/src/arrange.cpp views/src/item_gestures.cpp views/src/comp_view.cpp views/src/tcp.cpp views/src/envelope_lane.cpp views/src/envelope_edit.cpp views/src/mouse_map.cpp views/src/chord_field.cpp views/src/launcher.cpp views/src/object_name.cpp
   DEPS supple::gui-ui supple::gui-peaks supple::model supple::timeline supple::core-params SDL3::SDL3)
 target_include_directories(gui-views PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/views/include)
 

@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include "mixer.h"
 
+#include "supple/views/object_name.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -74,7 +76,7 @@ std::string sendText(const model::Session& session, const model::Route& route) {
     std::string to = "?";
     if (route.to.track && session.tracks.find(*route.to.track))
         to = model::trackLabel(session, *route.to.track);
-    if (route.to.fx) to = route.to.fx->str() + " key";
+    if (route.to.fx) to = views::objectName(session, *route.to.fx) + " key";
     return "→ " + to + " " + dbText(route.volumeDb);
 }
 

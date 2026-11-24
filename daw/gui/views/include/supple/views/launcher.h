@@ -29,6 +29,7 @@
 #include "supple/ui/node.h"
 #include "supple/ui/theme.h"
 #include "supple/views/item_gestures.h"
+#include "supple/views/object_name.h"
 
 namespace supple::views {
 
@@ -137,23 +138,6 @@ int barAtOrAfter(const time::TimeMap& map, double beat);
 // The bar after the arrangement: the first bar line at or after the end of
 // its last item or section (bar 1 when it is empty).
 int barAfterArrangement(const model::Session& session);
-
-// What the launcher calls an object (gui.md §4.15), the same in the pane and
-// in its refusals, never an id: a scene's name, else "Scene N" by its place
-// in the pane; a track's, else "an unnamed track"; a clip's, else "<track>'s
-// clip in <scene>"; an item's label, else "<track>'s item at bar N"; a take's
-// name, else its item's or clip's words; an envelope as "<track or take>'s
-// <param> automation" ("the <param> automation" on another object); a
-// section's name, else "the section at bar N"; "a removed …" for one that
-// is gone. Another kind of id is said as its id.
-std::string launcherName(const model::Session& session, model::Id id);
-// A launcher refusal as the user reads it: each scene, clip, track, item,
-// take, envelope and section id in the text (sc_3, cl_2, tr_1, it_4, tk_7,
-// en_3, rg_2) said by launcherName, so no such id reaches the user. The rest
-// of the command's words are kept. The Error form does the message, the
-// hint and each listed error.
-std::string launcherNames(const model::Session& session, std::string_view text);
-Error launcherNames(const model::Session& session, Error error);
 
 // What a command that laid clips on the timeline did with their keys, in a
 // few words for the status line (gui.md §4.15), read from the answer's

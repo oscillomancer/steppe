@@ -1040,20 +1040,20 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     f.exec("scene.add", "{}");
     f.exec("clip.add", R"({"track":"tr_3","scene":"sc_4","notation":"1: C4:w"})");
     const model::Session& s = f.app->head();
-    CHECK(views::launcherNames(s, "cl_3 is already in tr_2's sc_2") ==
+    CHECK(views::objectNames(s, "cl_3 is already in tr_2's sc_2") ==
           "Root is already in Bass's Verse");
-    CHECK(views::launcherNames(s, "sc_4 is empty") == "Scene 4 is empty");
-    CHECK(views::launcherNames(s, "cl_4 can't play") == "Keys's clip in Scene 4 can't play");
-    CHECK(views::launcherNames(s, "sc_9 and cl_9 and tr_9") ==
+    CHECK(views::objectNames(s, "sc_4 is empty") == "Scene 4 is empty");
+    CHECK(views::objectNames(s, "cl_4 can't play") == "Keys's clip in Scene 4 can't play");
+    CHECK(views::objectNames(s, "sc_9 and cl_9 and tr_9") ==
           "a removed scene and a removed clip and a removed track");
     // Only whole ids: part of a word, or a prefix with no number, stays.
-    CHECK(views::launcherNames(s, "disc_3, tr_2x, sc_ and (tr_1)") ==
+    CHECK(views::objectNames(s, "disc_3, tr_2x, sc_ and (tr_1)") ==
           "disc_3, tr_2x, sc_ and (Drums)");
     // The Error form: the message, the hint and each listed error; the code
     // and path stay as the command gave them.
     Error e("clip.occupied", "cl_3 is in sc_2", "/clip", "move cl_3 out of tr_2 first");
     e.details.push_back(Error("x", "sc_1 has none", "/scene", "add one to sc_1"));
-    const Error named = views::launcherNames(s, e);
+    const Error named = views::objectNames(s, e);
     CHECK(named.code == "clip.occupied");
     CHECK(named.path == "/clip");
     CHECK(named.message == "Root is in Verse");
@@ -1086,23 +1086,48 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     REQUIRE(it);
     REQUIRE(it->activeTake);
     const model::Session& now = f.app->head();
-    CHECK(views::launcherNames(now, item.str() + " is in the way") ==
+    CHECK(views::objectNames(now, item.str() + " is in the way") ==
           "Keys's item at bar 5 is in the way");
-    CHECK(views::launcherNames(now, it->activeTake->str() + " is warped") ==
+    CHECK(views::objectNames(now, it->activeTake->str() + " is warped") ==
           "Keys's item at bar 5 is warped");
     const json::Value env = f.exec("env.add", R"({"track":"tr_2","param":"volume"})");
-    CHECK(views::launcherNames(f.app->head(),
-                               env.find("env")->asString() + " has automation items") ==
-          "Bass's volume automation has automation items");
+    CHECK(
+        views::objectNames(f.app->head(), env.find("env")->asString() + " has automation items") ==
+        "Bass's volume automation has automation items");
     f.exec("region.add", R"({"start":8,"end":16})");
     f.exec("region.add", R"({"start":16,"end":20,"name":"Bridge"})");
     std::vector<std::string> regions;
     for (const auto& entry : f.app->head().regions) regions.push_back(entry.id.str());
     REQUIRE(regions.size() == 2);
-    CHECK(views::launcherNames(f.app->head(), regions[0] + " and " + regions[1]) ==
+    CHECK(views::objectNames(f.app->head(), regions[0] + " and " + regions[1]) ==
           "the section at bar 3 and Bridge");
-    CHECK(views::launcherNames(f.app->head(), "it_99, tk_99, en_99, rg_99") ==
+    CHECK(views::objectNames(f.app->head(), "it_99, tk_99, en_99, rg_99") ==
           "a removed item, a removed take, a removed envelope, a removed section");
+    // The other kinds the GUI refers to: a marker, a meter change and a send
+    // without names of their own, a group; any whole id of a known kind.
+    f.exec("marker.add", R"({"pos":8})");
+    f.exec("timesig.set", R"({"bar":9,"meter":"3/4"})");
+    f.exec("route.add", R"({"from":"tr_1","to":"tr_4"})");
+    f.exec("group.add", R"({"name":"Rhythm","members":["tr_1","tr_2"]})");
+    auto last = [](const auto& map) {
+        std::string id;
+        for (const auto& e : map) id = e.id.str();
+        return id;
+    };
+    const model::Session& more = f.app->head();
+    CHECK(views::objectNames(more, last(more.markers)) == "the marker at bar 3");
+    CHECK(views::objectNames(more, last(more.meters)) == "the meter change at bar 9");
+    CHECK(views::objectNames(more, last(more.routes)) == "the send from Drums to Verb");
+    CHECK(views::objectNames(more, last(more.groups)) == "Rhythm");
+    CHECK(views::objectNames(more, "fx_99 and mo_99") == "a removed plug-in and a removed module");
+    // Not an id: an unknown prefix, upper case, or no digits.
+    CHECK(views::objectNames(more, "zz_3, TR_1 and tr_x") == "zz_3, TR_1 and tr_x");
+    // An unnamed item draws no name on its lane, never its id.
+    f.root->damageAll();
+    f.root->frame(false);
+    const auto& labels = f.view->lanes().stats().labels;
+    CHECK(std::find(labels.begin(), labels.end(), std::string()) != labels.end());
+    for (const std::string& label : labels) CHECK(label.find("it_") == std::string::npos);
     // The header draws what refusals say: an unnamed scene as "Scene 4".
     f.root->damageAll();
     f.root->frame(false);
@@ -2232,7 +2257,7 @@ TEST_CASE("launcher: the scene menu's checks say how scenes are laid; Lay out sc
     REQUIRE(f.root->find("launcher.layout"));
     ui::Node* status = f.root->find("launcher.layout.status");
     REQUIRE(status);
-    // Names, not ids, in what reaches the user (launcherNames).
+    // Names, not ids, in what reaches the user (objectNames).
     CHECK(f.errors[0].message.find("sc_") == std::string::npos);
     CHECK(f.errors[0].message.find("Chorus") != std::string::npos);
     CHECK(status->valueText().find("sc_") == std::string::npos);

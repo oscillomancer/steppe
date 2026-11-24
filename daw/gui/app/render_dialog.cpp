@@ -23,6 +23,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -479,7 +480,7 @@ void RenderDialog::markDirty() {
 }
 
 void RenderDialog::setStatus(std::string message) {
-    statusText_ = std::move(message);
+    statusText_ = views::objectNames(app_.head(), message);
     if (status_) status_->setText(statusText_);
 }
 
@@ -650,10 +651,8 @@ void RenderDialog::buildSource(ui::Node& body) {
     // Several masters (ADR-0056): which of them the mix renders, a file each.
     if (current == Source::Master && s.project->masters.size() > 1) {
         std::vector<Choice> masters;
-        for (model::Id id : s.project->masters) {
-            const model::Track* t = s.tracks.find(id);
-            masters.push_back({id.str(), t && !t->name.empty() ? t->name : id.str()});
-        }
+        for (model::Id id : s.project->masters)
+            masters.push_back({id.str(), views::objectName(s, id)});
         std::vector<std::string> on;
         if (const auto* list = settings_.find("masters"); list && list->isArray())
             for (const auto& m : list->asArray())
@@ -678,7 +677,7 @@ void RenderDialog::buildSource(ui::Node& body) {
         std::vector<Choice> tracks;
         for (const auto& e : s.tracks)
             if (e.value->parent == model::kMaster)
-                tracks.push_back({e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name});
+                tracks.push_back({e.id.str(), views::objectName(s, e.id)});
         const json::Value& stems = member("stems");
         std::vector<std::string> on;
         if (const auto* list = stems.find("tracks"); list && list->isArray())
@@ -724,8 +723,7 @@ void RenderDialog::buildSource(ui::Node& body) {
     }
     if (current == Source::Regions) {
         std::vector<Choice> regions;
-        for (const auto& e : s.regions)
-            regions.push_back({e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name});
+        for (const auto& e : s.regions) regions.push_back({e.id.str(), views::objectName(s, e.id)});
         auto& list = body.emplace<ui::Checklist>("render.regions.list");
         std::vector<std::string> on;
         for (const auto& r : regions)
@@ -1380,12 +1378,11 @@ void RenderDialog::openExisting(const json::Value& existing) {
 void RenderDialog::openMatrix() {
     const model::Session& s = app_.head();
     std::vector<std::pair<std::string, std::string>> rows{{"project", "Project"}};
-    for (const auto& e : s.regions)
-        rows.emplace_back(e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name);
+    for (const auto& e : s.regions) rows.emplace_back(e.id.str(), views::objectName(s, e.id));
     std::vector<std::pair<std::string, std::string>> columns;
     for (const auto& e : s.tracks)
         if (e.value->type == model::StripType::Master || e.value->parent == model::kMaster)
-            columns.emplace_back(e.id.str(), e.value->name.empty() ? e.id.str() : e.value->name);
+            columns.emplace_back(e.id.str(), views::objectName(s, e.id));
     auto panel = std::make_unique<ui::Node>("render.matrix.panel");
     panel->layout.dir = ui::Layout::Dir::Column;
     panel->layout.width = ui::SizeRule::fixed(

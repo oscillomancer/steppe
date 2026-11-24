@@ -770,7 +770,7 @@ class Ruler : public ui::Node {
                         // Its refusal names what is in the way, as the pane's do.
                         if (auto r = callbacks.run("scene.capture", std::move(args));
                             !r && callbacks.onError)
-                            callbacks.onError(launcherNames(view_.session(), r.error()));
+                            callbacks.onError(objectNames(view_.session(), r.error()));
                     });
                 break;
             }
@@ -1829,9 +1829,9 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
         command == "item.add" || command == "scene.insert" || command == "arrangement.build";
     const json::Value asked = lays ? args : json::Value();
     auto r = launcherCallbacks_.run(command, std::move(args));
-    // Refusals reach the user with names, not ids (launcherNames).
+    // Refusals reach the user with names, not ids (objectNames).
     if (!r && launcherCallbacks_.onError)
-        launcherCallbacks_.onError(launcherNames(session(), r.error()));
+        launcherCallbacks_.onError(objectNames(session(), r.error()));
     if (r && lays && launcherCallbacks_.onNotice)
         if (const auto notice = followNotice(session(), command, asked, *r))
             launcherCallbacks_.onNotice(*notice);

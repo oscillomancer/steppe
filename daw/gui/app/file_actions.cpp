@@ -19,6 +19,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/item_gestures.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -720,7 +721,8 @@ void FileActions::exportItem(model::Id item, std::function<void(const std::strin
     const model::Take* take = it && it->activeTake ? s.takes.find(*it->activeTake) : nullptr;
     if (!take || !take->source) return status("Export: the item has no material");
     const bool midi = take->source->kind == model::Kind::Midi;
-    std::string name = take->name.empty() ? item.str() : take->name;
+    // The file is named as the item is referred to (views::objectName).
+    std::string name = take->name.empty() ? views::objectName(s, item) : take->name;
     for (char& c : name)
         if (std::string_view("/\\:*?\"<>|").find(c) != std::string_view::npos) c = '-';
     std::filesystem::path folder = app_.projectPath().empty() ? mediaHome() : app_.projectDir();

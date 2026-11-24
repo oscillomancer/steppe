@@ -289,13 +289,14 @@ TEST_CASE("MIDI editor: notes take their item's colour; the title names the item
     CHECK(same(f.editor->state().color(theme),
                views::Lanes::itemColor(theme, *now, f.app->head().tracks.find(now->track),
                                        model::StripType::Channel)));
-    // The title names the item as the arrangement does: its id only while
-    // it has no name.
+    // The title names the item as the arrangement does; while it has no
+    // name, by its track and bar (views::objectName), never its id.
     auto title = [&] { return f.root->find("midi.title")->valueText(); };
     f.editor->sync(f.now);
     f.frame();
     CHECK(title().find("Keys") != std::string::npos);
-    CHECK(title().find(f.item) != std::string::npos);
+    CHECK(title().find("item at bar") != std::string::npos);
+    CHECK(title().find(f.item) == std::string::npos);
     f.exec("item.set", R"({"item":")" + f.item + R"(","name":"Chords"})");
     f.editor->sync(f.now);
     f.frame();

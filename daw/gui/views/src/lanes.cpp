@@ -70,14 +70,16 @@ class LaneLabels : public ui::Node {
                 const bool barShown = full.y >= bounds().y - 0.5f;
                 const model::Take* take =
                     item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+                // An unnamed item draws no name on its lane (its place says
+                // where it is); elsewhere views::objectName says it.
                 std::string name = Lanes::itemLabel(s, *item);
-                if (name.empty()) name = id.str();
                 if (take && std::abs(take->playrate - 1.0) > 1e-6) {  // a stretched take says so
                     char rate[48];
-                    std::snprintf(rate, sizeof rate, "  \u00b7 %.3gx%s", take->playrate,
-                                  take->preservePitch ? "" : " varispeed");
+                    std::snprintf(rate, sizeof rate, "%s%.3gx%s", name.empty() ? "" : "  \u00b7 ",
+                                  take->playrate, take->preservePitch ? "" : " varispeed");
                     name += rate;
                 }
+                lanes_.stats_.labels.push_back(name);
                 const auto* owner = s.tracks.find(item->track);
                 const bool frozen = owner && owner->freeze;
                 if (frozen) {

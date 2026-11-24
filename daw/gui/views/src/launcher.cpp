@@ -235,104 +235,6 @@ void addLaying(json::Value& args, const SceneLaying& laying) {
 
 }  // namespace
 
-namespace {
-std::string barWords(const model::Session& s, double beat) {
-    return "bar " + std::to_string(s.timeMap->barBeat(std::max(0.0, beat)).bar);
-}
-}  // namespace
-
-std::string launcherName(const model::Session& s, model::Id id) {
-    const std::string text = id.str();
-    auto is = [&](std::string_view prefix) { return text.starts_with(prefix); };
-    if (is("sc_")) {
-        const model::Scene* sc = s.scenes.find(id);
-        if (sc && !sc->name.empty()) return sc->name;
-        const std::vector<model::Id> order = launcherColumns(s).scenes;
-        const auto at = std::find(order.begin(), order.end(), id);
-        return at == order.end() ? std::string("a removed scene")
-                                 : "Scene " + std::to_string(at - order.begin() + 1);
-    }
-    if (is("tr_")) {
-        const model::Track* t = s.tracks.find(id);
-        if (!t) return "a removed track";
-        return t->name.empty() ? std::string("an unnamed track") : t->name;
-    }
-    if (is("cl_")) {
-        const model::Clip* c = s.clips.find(id);
-        if (!c) return "a removed clip";
-        if (!c->name.empty()) return c->name;
-        return launcherName(s, c->track) + "'s clip in " + launcherName(s, c->scene);
-    }
-    if (is("it_")) {
-        const model::Item* it = s.items.find(id);
-        if (!it) return "a removed item";
-        if (std::string label = Lanes::itemLabel(s, *it); !label.empty()) return label;
-        return launcherName(s, it->track) + "'s item at " +
-               barWords(s, model::itemSpan(s, *it).startBeat);
-    }
-    if (is("tk_")) {
-        const model::Take* tk = s.takes.find(id);
-        if (!tk) return "a removed take";
-        if (!tk->name.empty()) return tk->name;
-        const auto owner = model::takeOwner(s, id);
-        return owner ? launcherName(s, *owner) : std::string("a take");
-    }
-    if (is("en_")) {
-        const model::Envelope* en = s.envelopes.find(id);
-        if (!en) return "a removed envelope";
-        const std::string object = en->target.object.str();
-        const std::string what =
-            en->target.param.empty() ? std::string("automation") : en->target.param + " automation";
-        if (object.starts_with("tr_") || object.starts_with("tk_"))
-            return launcherName(s, en->target.object) + "'s " + what;
-        return "the " + what;
-    }
-    if (is("rg_")) {
-        const model::Region* rg = s.regions.find(id);
-        if (!rg) return "a removed section";
-        if (!rg->name.empty()) return rg->name;
-        const double start =
-            rg->timebase == model::Timebase::Time ? s.timeMap->beatAt(rg->start) : rg->start;
-        return "the section at " + barWords(s, start);
-    }
-    return text;
-}
-
-std::string launcherNames(const model::Session& s, std::string_view text) {
-    static constexpr std::string_view kPrefixes[] = {"sc_", "cl_", "tr_", "it_",
-                                                     "tk_", "en_", "rg_"};
-    auto word = [&](std::size_t i) {
-        return i < text.size() &&
-               (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_');
-    };
-    std::string out;
-    for (std::size_t i = 0; i < text.size();) {
-        const std::string_view rest = text.substr(i);
-        const bool prefix = std::any_of(std::begin(kPrefixes), std::end(kPrefixes),
-                                        [&](std::string_view p) { return rest.starts_with(p); });
-        if (prefix && (i == 0 || !word(i - 1))) {
-            std::size_t end = i + 3;
-            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
-            if (end > i + 3 && !word(end)) {
-                if (const auto id = model::Id::parse(std::string(text.substr(i, end - i)))) {
-                    out += launcherName(s, *id);
-                    i = end;
-                    continue;
-                }
-            }
-        }
-        out += text[i++];
-    }
-    return out;
-}
-
-Error launcherNames(const model::Session& s, Error error) {
-    error.message = launcherNames(s, error.message);
-    error.hint = launcherNames(s, error.hint);
-    for (Error& detail : error.details) detail = launcherNames(s, std::move(detail));
-    return error;
-}
-
 std::optional<std::string> followNotice(const model::Session& s, const std::string& command,
                                         const json::Value& args, const json::Value& answer) {
     if (!answer.isObject()) return std::nullopt;
@@ -903,7 +805,7 @@ void LauncherPane::paint(ui::Canvas& c) {
                        ui::kRight | ui::kMiddle);
             stats.keys.push_back(strip > 0 ? keyMark : std::string());
             // An unnamed clip draws no name: its row and column say its
-            // track and scene (refusals still call it launcherName's words).
+            // track and scene (refusals still call it objectName's words).
             const std::string label = clip->name;
             const std::string fit =
                 c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
@@ -1557,8 +1459,8 @@ void LauncherHeader::paint(ui::Canvas& c) {
             drawPlay(c, {cell.x + 1, cell.y, 14, cell.h},
                      t.color("ink-quiet").withAlpha(refused ? 0.45f : 1.0f));
         if (playing) c.strokeRect(cell.inset(1), t.color("playing"), 1.5f);
-        // An unnamed scene by its place, as a refusal says it (launcherName).
-        const std::string name = launcherName(s, cols.scenes[col]);
+        // An unnamed scene by its place, as a refusal says it (objectName).
+        const std::string name = objectName(s, cols.scenes[col]);
         const std::string fit = c.elide(name, ui::Font::Ui, caption, cell.w - 19);
         stats.names.push_back(fit);
         if (!fit.empty())
@@ -1805,8 +1707,8 @@ void LauncherHeader::openLayOut() {
         line.layout.gap = 4;
         line.emplace<ui::Label>("launcher.layout.mark." + n, "", ui::Font::UiBold, "small", "armed")
             .layout.width = ui::SizeRule::fixed(8);
-        auto& use = line.emplace<ui::Checkbox>("launcher.layout.use." + n,
-                                               launcherName(s, scenes[i]), true);
+        auto& use =
+            line.emplace<ui::Checkbox>("launcher.layout.use." + n, objectName(s, scenes[i]), true);
         use.layout.width = ui::SizeRule::fraction();
         use.onToggle = [runnable, recompute](bool) {
             runnable();
@@ -1914,8 +1816,8 @@ void LauncherHeader::openLayOut() {
         const Error& first = e.details.empty() ? e : e.details[0];
         std::string path = first.path;
         if (path.rfind("/args", 0) == 0) path = path.substr(5);
-        std::string mark, prefix, text = launcherNames(view_.session(), e.message);
-        if (!e.details.empty()) text += ": " + launcherNames(view_.session(), first.message);
+        std::string mark, prefix, text = objectNames(view_.session(), e.message);
+        if (!e.details.empty()) text += ": " + objectNames(view_.session(), first.message);
         if (path.rfind("/sequence/", 0) == 0) {
             const std::size_t entry = wholeNumberAt(path, 10);
             if (entry < rows.size()) {

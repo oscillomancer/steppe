@@ -1118,7 +1118,9 @@ TEST_CASE("the status line shows a recording's warnings, whoever stopped it") {
         shell.engineEvents(a.app->takeEvents());  // what the app does each pass
         // The note, which the status line shows once the new item's audio is prepared.
         const std::string text = shell.statusNote();
-        CHECK(text.find("not a take of " + item) != std::string::npos);
+        // The item by name, never its id (views::objectNames).
+        CHECK(text.find("not a take of held") != std::string::npos);
+        CHECK(text.find(item) == std::string::npos);
         CHECK(text.find("locked") != std::string::npos);
         if (halt) break;
     }

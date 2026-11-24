@@ -19,6 +19,7 @@
 #include <tuple>
 
 #include "supple/model/session.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -307,15 +308,14 @@ Status PluginWindows::open(model::Id fx) {
     }
     const model::Session& s = app_.head();
     const model::FxInstance* info = s.fx.find(fx);
-    if (!info) return Error("gui.editor", "no effect " + fx.str());
+    if (!info) return Error("gui.editor", "no effect " + views::objectName(s, fx));
     host::Instance* instance = app_.instanceOf(fx);
     if (!instance)
         return Error("gui.editor", "the effect is not running", "",
                      "start the engine (engine.start) to open its editor");
     std::string title = info->plugin.name.empty() ? info->plugin.id : info->plugin.name;
-    if (auto track = model::trackOfFx(s, fx))
-        if (const model::Track* t = s.tracks.find(*track))
-            title += " — " + (t->name.empty() ? track->str() : t->name);
+    if (auto track = model::trackOfFx(s, fx); track && s.tracks.find(*track))
+        title += " — " + views::objectName(s, *track);
     Editor editor;
     editor.fx = fx;
     editor.instance = instance;

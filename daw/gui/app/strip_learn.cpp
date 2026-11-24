@@ -9,6 +9,7 @@
 #include "supple/engine/midi_control.h"
 #include "supple/model/schemas.h"
 #include "supple/ui/popup.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -64,7 +65,7 @@ std::string ownerName(const model::Session& s, const std::vector<model::Id>& obj
     }
     if (!isRoute(id)) return trackName(s, id);
     const model::Route* r = s.routes.find(id);
-    if (!r) return id.str();
+    if (!r) return views::objectName(s, id);
     std::string to = r->to.track ? trackName(s, r->to.track) : r->to.fx ? "key" : "out";
     return trackName(s, r->from.track) + " → " + to;
 }

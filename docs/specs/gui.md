@@ -427,6 +427,40 @@ never works around the bus.
 
 ### 4.1 Main window
 
+**Names, not ids.** No model id (`tr_3`, `it_4`, …) reaches the user. Where
+an object is drawn in its own place (an item on its lane, a clip in its
+cell) an unnamed one draws no name: its place says what it is. Where it is
+referred to from elsewhere (window and inspector titles, lists, menus,
+messages, the status line, a file name offered for an export) it is called
+by `views::objectName`: its name, else words that say where it is, the same
+everywhere:
+
+| Object | Unnamed |
+|---|---|
+| Track | its label (`model::trackLabel`: "Track 3", "Bus 2") |
+| Scene | "Scene *N*", by its place in the launcher pane |
+| Clip | "*track*'s clip in *scene*" |
+| Item | "*track*'s item at bar *N*" (named by its take or file, §4.3) |
+| Take | as its item or clip |
+| Envelope | "*track or take*'s *param* automation" ("the *param* automation" on a route or module) |
+| Automation item | "*envelope* item at bar *N*" |
+| Section or range | "the section (range) at bar *N*" |
+| Marker | "the marker at bar *N*" |
+| Tempo, meter, key or chord point | "the tempo change (meter change, key, chord) at bar *N*" |
+| Plug-in | its plug-in's name |
+| Send | "the send from *track* to *track*" |
+| Group | "an unnamed group" |
+| Rack, module | its rack's label; its plug-in's or type's name |
+| Cable, modulation route | "the cable from *module* to *module*"; "the modulation of *parameter*" |
+| Media file | its file name |
+
+One that is gone is "a removed …". Each status line (the main window's,
+the FX window's, the event list's, the render dialog's, the rack window's)
+says each whole id in what it shows by `views::objectNames`, so a
+command's refusal names what it is about; the rest of its words are kept.
+Commands, their errors and what agents see keep their ids; the command log
+(§4.10) shows commands as they ran.
+
 Transport bar (go to start, play/stop, record, loop, punch, metronome,
 count-in and follow as symbol buttons: |◀, ▶ or ■ while playing, a red ● (a
 ring while counting in), circling arrows, [●], a metronome, →| with the bar
@@ -824,7 +858,8 @@ its content starts, short ("→D", "→Dm": `views::takeFollowMark`), in the
 name's ink, left of the badges; a take that does not follow, a baked one
 included, carries none. The label is the heard take's name; an unnamed audio take is
 called by its media file, without the folder and the extension; an item with
-neither shows its id (`Lanes::itemLabel`). A stretched take adds its rate. An
+neither draws no name on its lane (`Lanes::itemLabel`; elsewhere it is
+"*track*'s item at bar *N*", §4.1). A stretched take adds its rate. An
 item that begins before the view keeps its label at the view's left edge. An
 item whose top is scrolled above the view has its bar out of sight, and its
 label and marks with it: they are not redrawn on the body. An
@@ -2446,7 +2481,7 @@ a new channel). It follows rack.md §8.
   Out module carries a tag under it naming the channel it feeds. A plugin module shows the plug-in's name and
   vendor on its plate and a window mark; a click (not a drag) opens the
   plug-in's editor, as the mixer's slot does. A module of an unknown type is
-  kept, outlined in the clip colour, saying "Missing module" and its id.
+  kept, outlined in the clip colour, saying "Missing module" and its type's name.
   Bypassed modules are veiled and say so. Modules have a soft shadow and
   are dragged by any part that is not a control: a click selects, Ctrl+click
   or Shift+click toggles, a drag on the space draws a marquee (Ctrl or
@@ -2899,7 +2934,7 @@ a track's own; none without one), its name in the title size
 
 | Selection | Title | Line |
 |---|---|---|
-| One item | Its name as the arrange view shows it (§4.3), else its id | "Audio item on *track*", "MIDI item on *track*" or "Empty item on *track*" |
+| One item | Its name as the arrange view shows it (§4.3), else "*track*'s item at bar *N*" (§4.1) | "Audio item on *track*", "MIDI item on *track*" or "Empty item on *track*" |
 | Several items | "*N* items" | "On *track*", or "On *M* tracks" |
 | One track | Its label | "Channel", "Buss" or "Master" |
 | Several tracks | "*N* tracks" | "Selected together" |
@@ -3131,22 +3166,13 @@ same heights, scroll and colours.
   - A refusal of `scene.insert` (items already in the span, an empty
     scene, a looping clip whose period is not its content) shows its
     message in the status line and changes nothing.
-  - **Names, not ids.** The launcher calls each object one way, in the pane
-    and in its refusals (`views::launcherName`), never by id: a scene by its
-    name, else "Scene N" by its place in the pane (the header draws it so);
-    a track by its name, else "an unnamed track"; a clip by its name, else
-    "<track>'s clip in <scene>" (its cell draws no name: the row and column
-    say it); an item
-    by its label (§4.3), else "<track>'s item at bar N"; a take by its name,
-    else as its item or clip; an envelope as "<track or take>'s <param>
-    automation" ("the <param> automation" on a plugin, route or group); a
-    section by its name, else "the section at bar N"; "a removed …" for one
-    that is gone. Every launcher refusal reaches the user (the status line,
-    the Lay out dialog) with each such id in its message, hint and listed
-    errors said so (`views::launcherNames`); the rest of the command's
-    words, its code and path, are kept. This covers the pane's commands
-    (`ArrangeView::runLauncher`), items dropped into cells, the menu's
-    Delete, Capture's refusals and the ruler's Capture as scene.
+  - **Names, not ids** (§4.1). The header draws an unnamed scene as
+    "Scene N", the words its refusals use; an unnamed clip's cell draws no
+    name (its row and column say it). Every launcher refusal reaches the
+    user (the status line, the Lay out dialog) with each id in its message,
+    hint and listed errors said by `views::objectNames`: the pane's
+    commands (`ArrangeView::runLauncher`), items dropped into cells, the
+    menu's Delete, Capture's refusals and the ruler's Capture as scene.
   - What laying did goes to the status line (`views::followNotice`): each
     clip that follows or was laid as written in another key, and, with
     write_context, a section whose harmony was not written ("Verse's harmony

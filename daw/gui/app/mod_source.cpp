@@ -8,6 +8,7 @@
 #include "rack_scene.h"
 #include "supple/ui/root.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 
@@ -38,7 +39,7 @@ std::string modSourceName(const model::Session& s, const rack::Catalog* catalog,
     }
     if (catalog) return moduleTitle(s, *catalog, from.front());
     const model::RackModule* mod = s.modules.find(from.front());
-    if (!mod) return from.front().str();
+    if (!mod) return views::objectName(s, from.front());
     if (!mod->label.empty()) return mod->label;
     const auto dot = mod->type.rfind('.');
     return mod->type.substr(dot == std::string::npos ? 0 : dot + 1);
