@@ -948,7 +948,7 @@ TEST_CASE("launcher: Stop all, Arrangement and Capture share one row; narrow, th
         CHECK(header.hintAt({stop.x + stop.w / 2, stop.y + stop.h / 2}).name == "Stop all");
         CHECK(header.hintAt({arr.x + arr.w / 2, arr.y + arr.h / 2}).name == "Arrangement");
         CHECK(header.hintAt({cap.x + cap.w / 2, cap.y + cap.h / 2}).name == "Capture");
-        if (width == views::LauncherColumns::kMinWidth) f.snapshot("launcher-header-glyphs.png");
+        if (width == views::LauncherColumns::kMinWidth) f.golden("launcher-header-glyphs.png");
         if (width == 260) f.snapshot("launcher-header-words.png");
     }
     CHECK(sawGlyphs);
