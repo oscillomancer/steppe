@@ -186,3 +186,77 @@ TEST_CASE("turning preserve pitch on just after a launch in a later loop cycle" 
             CHECK(loudest(runs[1], 256000 + 131000, 256000 + 160000) > 0.01);
         }
 }
+
+TEST_CASE("a launch not yet begun when the rate changes, after a seek and without" *
+          doctest::description("rt")) {
+    // Review round 160: a seek (to 3 s: the device 144000 frames ahead of
+    // the stream, the capture holding the eight cycles run stopped before
+    // play) does not change where a queued launch lands across a rate
+    // change. cl_2 is queued for the next bar (running frame 128000 without
+    // the seek, 64000 with it); each change reaches the executors about
+    // `lag` frames after the edit, here 2500 frames before the bar.
+    // - In the anticipative executor the launch's warm-up is under way
+    //   then (applied): it keeps its bar and frame, either change.
+    // - In the callback it is not yet applied. A scalar edit (0.75 to 0.8)
+    //   voids it and service places it again on the new trajectory: the
+    //   same bar, sooner, by the same frames with and without the seek. A
+    //   compiled change (a rate envelope) voids it and placement keeps it
+    //   clear of the change: a bar later.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}})
+        for (const bool scalar : {true, false}) {
+            std::int64_t twinMoved = INT64_MIN;
+            for (const double seek : {0.0, 3.0}) {
+                INFO("anticipative " << options.anticipative << ", scalar " << scalar
+                                     << ", sought to " << seek);
+                Project p;
+                twoTracks(p);
+                p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+                AppLive live(p, options, 128, 48000 * 8);
+                const std::int64_t stopped = seek > 0 ? 8 * 128 : 0;
+                if (seek > 0) {
+                    p.run("transport.seek", R"({"seconds": 3})");
+                    live.until(stopped);
+                }
+                REQUIRE(p.app->transport("play"));
+                live.until(stopped + 20 * 128);
+                p.run("launch.clip", R"({"clip": "cl_2"})");  // the next bar
+                const std::int64_t bar = seek > 0 ? 64000 : 128000;
+                const double beat = seek > 0 ? 8 : 4;
+                const std::int64_t lag = options.anticipative ? 9793 : 9601;
+                const std::int64_t edit = bar - lag - 2500;
+                live.until(stopped + edit);
+                if (scalar)
+                    p.run("transport.playrate.set", R"({"rate": 0.8, "preserve_pitch": true})");
+                else
+                    p.run("env.add",
+                          R"({"track": "tr_0", "param": "playrate", "points": [)"
+                          R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
+                for (std::int64_t f = edit + 1024; f < bar + 160000; f += 1024) {
+                    live.until(stopped + f);
+                    p.app->engine()->service();  // as the app's tick
+                }
+                const auto log = p.app->engine()->launchLog();
+                CHECK(p.app->engine()->processErrors() == 0);
+                ChangeRun run;
+                run.heard = live.stop();
+                run.latency = live.latency + static_cast<std::uint32_t>(stopped);
+                REQUIRE(log.size() == 1);
+                const std::int64_t lands = log[0].runningFrame;
+                INFO("lands at " << lands << ", beat " << log[0].anchorBeat);
+                CHECK(loudest(run, lands + 3000, lands + 30000) > 0.01);  // cl_2 plays
+                if (options.anticipative) {
+                    CHECK(log[0].anchorBeat == beat);  // under way: kept
+                    CHECK(lands == bar);
+                } else if (scalar) {
+                    CHECK(log[0].anchorBeat == beat);  // the same bar
+                    CHECK(lands < bar);                // reached sooner at 0.8
+                    if (seek == 0)
+                        twinMoved = lands - bar;
+                    else
+                        CHECK(lands - bar == twinMoved);
+                } else {
+                    CHECK(log[0].anchorBeat == beat + 4);  // voided: a bar later
+                }
+            }
+        }
+}
