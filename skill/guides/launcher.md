@@ -15,11 +15,17 @@ loop, quantize, gain and content).
   empty one-bar MIDI clip. One clip per track and scene, on a channel (not a buss
   or master). A MIDI clip is measured in **beats**, as long as its notes rounded
   up to whole bars; an audio clip in **seconds** of take time.
-- `clip.set {clip, name, color, mute, gain_db, length, loop, mode, quantize}`.
+- `clip.set {clip, name, color, mute, gain_db, length, loop, mode, quantize,
+  fade_in, fade_in_shape, fade_out, fade_out_shape}`.
   `mode` is `loop` (the default: it repeats every `length`) or `once`. `loop:
   {on, start, length}` repeats only a window of the clip. `quantize` (`bar`,
   `beat`, `1/2` … `1/32`, `none`) overrides the project's `launch_quantize`; `null`
-  goes back to it.
+  goes back to it. `fade_in` and `fade_out` (seconds; audio clips only, a MIDI clip
+  refuses them with `clip.unsupported`) fade every pass of an audio clip as an item's
+  fades fade the item, with the same shapes; an item's fades go into its clip and back.
+  **What you hear differently:** a launched clip with a fade-in starts with its own fade,
+  not the 5 ms switch ramp on top of it; a clip launched away during its fade-out
+  finishes that fade-out, overlapping the incoming clip by up to the fade's length.
 - `clip.move`, `clip.duplicate` (the copy's MIDI is its own unless `pooled`),
   `clip.remove`.
 
@@ -200,7 +206,15 @@ same audio as without it. To hear (measure) a scene, put it on the timeline.
   arrangement, its clips and its stopped or held stretches replace what the timeline
   had there; tracks that stayed on the arrangement are untouched. Each clip becomes
   copies of its takes at the phase heard, MIDI copied (shared with `pooled: true`),
-  and the 5 ms switches are item fades. A scene launched whole (`launch.scene`, every
+  and the 5 ms switches are item fades; an audio clip's own fades go on its pieces
+  where they start or end a pass; a clip still playing in its fade-out when the capture
+  ends is laid to its pass's end, as you heard it: the track's items under that tail are
+  removed and the next one split with a 5 ms fade-in, and the reply's `to` ends there. A
+  piece that would start or end inside
+  a clip's fade (the capture began inside a fade-in, a loop wrap fell inside a fade, or a
+  switch cut a fade-out that was finishing) is refused with `launch.commit.fade`; the
+  performance is kept, so set the fades to 0 or capture again.
+  A scene launched whole (`launch.scene`, every
   clip that could play started on one boundary) also writes a **section** named after
   the scene, from that boundary until one of its tracks is launched again or the capture
   ends, so `context.at` names it as it does a built song's; clips launched one by one

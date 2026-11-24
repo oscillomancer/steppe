@@ -881,7 +881,7 @@ routes: sd_1 tr_2 → tr_6 ch 1/2→3/4 pre-fader −6 dB (sidechain)
 markers: mk_1 "Verse" bar 1 · regions: rg_1 "Chorus" bars 9–17
 ```
 
-## 5. Project file (`supple.project/2.21`)
+## 5. Project file (`supple.project/2.22`)
 
 ### 5.1 Shape
 
@@ -903,9 +903,9 @@ track's points (ADR-0095); 2.18 adds scenes, clips and
 on a clip take's FX in clip time (ADR-0097, amended 2026-11-20, C2); 2.20
 adds a clip's `context` and `follow` (ADR-0098); 2.21 adds a MIDI take's
 `context`, `context_period`, `context_phase` and `follow` ("Take context and
-follow").
+follow"); 2.22 adds an audio clip's `fade_in` and `fade_out` ("Clip fades").
 
-The loader accepts 1.x and 2.x documents and saves the current schema (2.21,
+The loader accepts 1.x and 2.x documents and saves the current schema (2.22,
 §5). Migration allocates child channel IDs in track-ID order, inserts each
 child first, and moves the source items and record/input FX there while
 keeping user inserts on the buss. Hardware/MIDI record routes follow the new
@@ -1503,7 +1503,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `scene` names the scene when `launch.scene` launched it (none for a
   track's own launch), so a commit knows a scene was launched whole.
   Errors `launch.capture` (nothing captured), `launch.commit` (a captured
-  track or clip is gone), `item.locked`, `clip.unsupported`); `scene.insert`,
+  track or clip is gone), `item.locked`, `clip.unsupported`,
+  `launch.commit.fade` (a piece would start or end inside an audio clip's
+  own fade: engine.md "Committing it")); `scene.insert`,
   `scene.capture {region}`, `arrangement.build {sequence}` (L4a: "Scenes and
   clips", "Scene ↔ section").
 - **automation**: `env.add {target}`, `env.remove`, `env.set {mode, active,
@@ -2175,6 +2177,7 @@ present, and the project field `launch_quantize`, written only when not
 | `quantize` | Overrides `launch_quantize` for this clip: `bar`, `beat`, `1/2` … `1/32`, `none`. |
 | `name`, `color`, `mute`, `gain_db` | As an item's. An item has no name field of its own: its name is its active take's (`item.set {name}`), so a clip's name and an item's go with the clip or item they come from (below). |
 | `context`, `follow` | Schema 2.20: the key and chords the clip was written against, and how it follows the context track when laid ("Clip context", the contract for X1 and X2). |
+| `fade_in`, `fade_out` | Schema 2.22, audio clips only: an item's fade (`{length, shape, curve}`, `length` in seconds of played time), shaping each pass of the period ("Clip fades"). |
 
 **The clip's kind and unit.** A clip's `kind` is set when it is made and
 never changes. `length`, `loop` and the clip's take envelopes are in beats
@@ -2213,8 +2216,13 @@ and a clip"):
 - a MIDI clip's length is the item's length in beats, an audio clip's its
   length in seconds; the new item spans the clip's length from its position;
 - notes, audio, playrate, pitch, start offset and take FX copy as they
-  are; the item's gain, mute and colour become the clip's and back, and its
-  fades are not kept;
+  are; the item's gain, mute and colour become the clip's and back, and so
+  do an audio item's fades (schema 2.22; a MIDI item's play nothing and are
+  not kept); laid on the timeline, an audio clip with fades that repeats
+  becomes one item per pass, each faded as its pass; a pass the span's end
+  cuts inside its fade-out plays on to its pass's end under it (past the
+  span, over what follows), and one cut before its fade-out ends at the
+  cut without it;
 - an item's `loop` becomes a clip loop on, from 0, one content length long;
   back on the timeline only that loop, or none, converts (other windows:
   `clip.unsupported`);
@@ -2429,15 +2437,38 @@ scenes has a lead sheet without writing it twice.
 
 **What `session.describe` prints.** After the tracks, one line per scene in
 order with its clips under it. Each clip line has its track, length in its
-unit, mode, content and flags (loop window, quantize, gain when not 0 dB, muted); no clip moves the project length:
+unit, mode, content and flags (loop window, quantize, gain when not 0 dB, fades, muted); no clip moves the project length:
 
 ```
 Scenes (2):
   sc_1 Verse
     tr_2 Bass: cl_1 "Bass line" 8 beats · loop 0–4 · MIDI mi_3, 12 notes
-    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · -6 dB · muted
+    tr_5 Pad: cl_4 "Pad swell" 6.0 s once · audio md_2 pad.wav · quantize beat · -6 dB · fade in 0.5 s · muted
   sc_2 Chorus (no clips)
 ```
+
+### Clip fades (schema 2.22, ADR-0097 S3 step C; the contract)
+
+*Built so far: the fields, the file and the checks; `clip.set {fade_in,
+fade_in_shape, fade_out, fade_out_shape}` (a MIDI clip refuses them with
+`clip.unsupported`) and the `session.describe` line; playback, every pass
+shaped (engine.md, players). The switch rules, the conversions and the
+commit follow in step C.*
+
+Writers emit `supple.project/2.22`. An audio clip gains `fade_in` and
+`fade_out`, each an item's fade: `{length, shape, curve}`, `length` in
+seconds of played take time (the clip's unit), `shape` and `curve` as an
+item's. Each is written only when its length, shape or curve is not the
+default. Earlier files load unchanged and nothing migrates; a 2.21 build
+drops both members with its newer-minor warning.
+
+- **A MIDI clip holds none,** as MIDI items play none: a fade with a length
+  on a MIDI clip fails the commit (`/clips/<id>/fade_in`).
+- **A length** is finite and 0 or more, and a curve finite. A fade may be
+  longer than the period, as an item's may be longer than the item.
+- **What they mean:** the fade-in shapes each pass from the period's start
+  and the fade-out each pass to its end (a `once` clip's one pass), the two
+  multiplied where they overlap, as an item multiplies its fades.
 
 ### Clip context (schema 2.20, ADR-0098; the contract for steps X1 and X2)
 

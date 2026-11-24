@@ -326,9 +326,9 @@ Result:
 
 ## `clip.set@1`
 
-Set a clip's name, colour, mute, gain, length, loop, mode or quantize.
+Set a clip's name, colour, mute, gain, fades, length, loop, mode or quantize.
 
-length and loop are in the clip's unit: beats for MIDI, seconds of take time for audio. loop: {on, start?, length?}, the window that repeats inside the clip from the take's start. mode loop repeats every length; once plays it once. quantize (bar, beat, 1/2 … 1/32, none) overrides the project's launch_quantize; null returns to it. context (a lead sheet in clip bars; "" clears it) or context_at (read from the project at a bar or beat) sets the key and chords the clip was written against, and follow (none, key, chords) how it is mapped when laid; shortening a clip drops the points past its end (clip.context_dropped), and a context left with no key at the start resets follow to none (clip.follow_reset).
+length and loop are in the clip's unit: beats for MIDI, seconds of take time for audio. loop: {on, start?, length?}, the window that repeats inside the clip from the take's start. mode loop repeats every length; once plays it once. quantize (bar, beat, 1/2 … 1/32, none) overrides the project's launch_quantize; null returns to it. context (a lead sheet in clip bars; "" clears it) or context_at (read from the project at a bar or beat) sets the key and chords the clip was written against, and follow (none, key, chords) how it is mapped when laid; shortening a clip drops the points past its end (clip.context_dropped), and a context left with no key at the start resets follow to none (clip.follow_reset). fade_in and fade_out (audio clips) shape each pass of the period, as an item's fades shape the item: in from the pass's start, out to its end.
 
 Kind: `edit`. Exposure: `mcp-exec`.
 
@@ -341,6 +341,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 | `color` | string |  |  |  |  |
 | `mute` | boolean |  |  |  |  |
 | `gain_db` | number |  | -150.0..24.0 |  |  |
+| `fade_in` | number |  | 0.0.. |  | Seconds of take time, from each pass's start. |
+| `fade_in_shape` | string |  |  |  | One of: linear, slow, fast, slow_fast, fast_slow, cos, exp. |
+| `fade_out` | number |  | 0.0.. |  | Seconds of take time, to each pass's end. |
+| `fade_out_shape` | string |  |  |  | One of: linear, slow, fast, slow_fast, fast_slow, cos, exp. |
 | `length` | number |  |  |  |  |
 | `loop` | object |  |  |  |  |
 | `loop.on` | boolean |  |  |  |  |
@@ -382,6 +386,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `clip.context_audio`: a chord, or a key after the start, on an audio clip Hint: an audio clip's context is a key at the start of bar 1
 - `clip.no_key`: follow without a key at the clip's start Hint: give the clip a context with a key at its start
 - `clip.follow_audio`: follow on an audio clip Hint: follow is for MIDI clips
+- `clip.unsupported`: a fade on a MIDI clip Hint: MIDI clips play no fades, as MIDI items play none
 
 ### Examples
 

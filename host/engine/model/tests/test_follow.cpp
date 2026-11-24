@@ -168,7 +168,7 @@ RigSpec varied() {
 TEST_CASE("take context: a plain take writes none of the four members") {
     const Rig r = rig({});
     const std::string bytes = serializeProject(r.s);
-    CHECK(bytes.find("\"supple.project/2.21\"") != std::string::npos);
+    CHECK(bytes.find("\"supple.project/2.22\"") != std::string::npos);
     CHECK(bytes.find("context_period") == std::string::npos);
     CHECK(bytes.find("context_phase") == std::string::npos);
     CHECK(bytes.find("\"follow\"") == std::string::npos);
@@ -203,7 +203,7 @@ TEST_CASE("take context: the four members save, reopen and serialize the same") 
 TEST_CASE("take context: a 2.20 file opens unchanged") {
     const Rig r = rig({});
     std::string bytes = serializeProject(r.s);
-    const auto at = bytes.find("supple.project/2.21");
+    const auto at = bytes.find("supple.project/2.22");
     REQUIRE(at != std::string::npos);
     bytes.replace(at, 19, "supple.project/2.20");
     std::vector<schema::Warning> warnings;

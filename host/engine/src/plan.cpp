@@ -3480,6 +3480,7 @@ bool processClipChain(Plan& p, Node& node, TakeChain& tc, std::int64_t pos, std:
         const double song = launchClock(p, node, pos + i);
         double g = launchWeight(node, tc.player, song);
         if (g == 0.0) continue;
+        g *= clipChainFade(node, tc.player, song);  // its own fades, after the chain (S3 C)
         double gl = tc.gainL, gr = tc.gainR;
         std::int64_t ticks = 0;
         if (enveloped && clipChainTicks(p, node, tc.player, song, ticks)) {

@@ -296,6 +296,17 @@ instructions are in `docs/guides/installing.md`.
     over 5 ms.
   - A clip's phase is a function of the song position and its anchor.
     `once` and the loop window play as specified.
+  - An audio clip's `fade_in` and `fade_out` (schema 2.22, S3 step C)
+    fade every pass, at unity and under a playrate, and stand in for a
+    switch's 5 ms fades: a launched clip with a fade-in starts with it
+    alone, and one switched away at or up to 5 ms before its fade-out
+    plays it out to its pass's end. `launch.commit` lays such a clip one
+    item per pass with its fades, as heard, a capture ending inside a
+    fade-out included (the piece plays out to its pass's end); what an
+    item's fades cannot write (a capture beginning inside a fade-in, a
+    loop wrap inside a fade, a fade-out cut by a further switch) is refused
+    with `launch.commit.fade`. A `clip.set` of a clip's length or
+    fade-out while its fade-out stands in moves the stand-in's end at once.
   - `launch.state` (and `Engine::launchState()` for the GUI) reports what
     each track plays as heard, the clip's position, and what is queued.
   - The engine logs every applied launch. The tests replay that log
@@ -401,7 +412,8 @@ instructions are in `docs/guides/installing.md`.
   items of a track, an item across or after the section's start, a warped
   take. MIDI is copied unless `pooled`. Limits: capture reads whole items
   only (it never splits or trims), a master's items are skipped with a
-  warning, and fades are not kept (as in the item and clip conversion). A clip
+  warning, and an audio item's fades are kept (schema 2.22; a repeating
+  audio clip with fades is laid one item per pass). A clip
   whose loop period is not its content (a gap after it, a length shorter than
   it) is refused with `scene.insert.period`: it is not laid out yet.
 - **Clip launcher, capture** (ADR-0097, step L4's engine half; engine.md
