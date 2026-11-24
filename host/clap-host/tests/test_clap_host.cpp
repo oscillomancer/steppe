@@ -2548,7 +2548,10 @@ TEST_CASE("bridged calls report where their time went") {
     // that the call gave up only once the deadline passed, and that its
     // wait lies within the call.
     const std::int64_t before = steadyNanoseconds();
-    const std::int64_t due = before + 20'000'000;
+    // A deadline far enough off that the thread posting the call is not
+    // descheduled past it before the post (the call is counted as past its
+    // deadline if it is).
+    const std::int64_t due = before + 250'000'000;
     {
         LiveBridgeDeadline deadline(due);
         CHECK(h.process(buf.block(256)));  // silent for the block, not failed

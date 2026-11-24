@@ -445,7 +445,11 @@ TEST_CASE("a timed-out call closes the connection and the next call reconnects")
     std::promise<void> release;
     auto gate = release.get_future().share();
     queue.post([gate] { gate.wait(); });
-    client.setTimeout(std::chrono::milliseconds(20));
+    // The client closes its end at the timeout, and the server, which breaks
+    // on the hang-up before it reads, drops a request it has not read by then:
+    // the timeout is long beside the server's wake-up, not 20 ms of it. The
+    // model thread is held, so the call cannot finish before the timeout.
+    client.setTimeout(std::chrono::milliseconds(300));
     auto late = client.call("counter.add", parse(R"({"value":3})"));
     release.set_value();
     REQUIRE_FALSE(late);
