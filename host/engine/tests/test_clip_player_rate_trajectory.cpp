@@ -519,7 +519,11 @@ TEST_CASE("a launched clip unread across a trajectory change catches up within i
     // unmuted about 30000 frames after S: its first use is far past S, and
     // a reading that is behind by more than the catch-up (32 quanta) starts
     // again where it is read, as a primed one does, instead of running every
-    // quantum from S in one block.
+    // quantum from S in one block. With the mirror off: the mirror primes
+    // cl_2's reading for S (a hit), and this is the miss path's bound, which
+    // a moved loop, a launch since the read or an unanchored reading still
+    // takes (review round 163 F1).
+    const MirrorOff off;
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
         INFO("anticipative " << options.anticipative);
         Project p;
