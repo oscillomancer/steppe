@@ -835,6 +835,15 @@ the same.*
       0 plays on the old trajectory (`previousTimelines`) until S and
       crossfades into the new one over `smoothFrames`, as an item does,
       converting while it is read.
+    - *Built in two phases.* Phase 1 has no mirror yet: every adoption
+      takes the miss path. `carryLaunchAcross` (from `carryRateSources`)
+      hands each reading to the new reader's `previous`
+      (`PlayerReader::previous`, allocated at compile) and seeks the new
+      reader for output from S, and it is primed at its first use, on the
+      audio thread: at most a warm-up's primes per reader in one callback
+      (45 at 48 kHz). A warm-up switching after S starts again on the new
+      trajectory, primed as far as it had come, in the adoption's block.
+      Phase 2, the mirror, only moves that priming to the main thread.
     - A switch inside that crossfade, in (S, S + `smoothFrames`), rotates
       the reader with its `previous` (`applyLaunch`): the outgoing side
       plays both until S + `smoothFrames`. An outgoing reader still in

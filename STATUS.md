@@ -332,8 +332,13 @@ instructions are in `docs/guides/installing.md`.
       a launched audio clip reads through a stretch converter warmed up
       about 61 ms before its switch, live as the replay (S3 step D), except
       one read through a take chain (`launch.playrate`); a launch made
-      inside a track's warm-up lands after that switch; a trajectory change
-      starts launched audio cold; a
+      inside a track's warm-up lands after that switch; a compiled
+      trajectory change (an envelope edit, preserve pitch toggled) switches
+      launched audio where the items switch, crossfaded from the old
+      reading (S3 step D4, phase 1: the new reading is primed on the audio
+      thread, a warm-up's primes per reader at most, until the main-thread
+      mirror lands), and an audio launch pressed while it is pending lands
+      after its crossfade plus a warm-up; a
       capture runs in song time under one, refused (or ended, with a
       warning) while a launched audio clip plays and the playrate keeps
       the pitch, and ended on its boundary by a switch that cuts

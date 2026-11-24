@@ -848,6 +848,16 @@ struct PlayerReader {
     std::int64_t startQuantum = INT64_MIN, launchCycle = 0;
     std::uint32_t primes = 0;
     std::uint32_t credit = 0;  // frames played since its warm-up's last prime (R1)
+    // Across a trajectory change (S3 step D4): the reading as the previous
+    // plan read it, on the old trajectory (Plan::previousTimelines), heard
+    // until rateSwitchDevice and crossfaded into this one over smoothFrames;
+    // only it when this reader holds no reading for the switch (one going
+    // out). Allocated with the reader at compile, its state handed over at
+    // adoption, released with the plan on the main thread. It rotates with
+    // its reader (applyLaunch).
+    std::unique_ptr<PlayerReader> previous;
+    bool previousLive = false;
+    bool previousOnly = false;  // no reading of its own for the switch
 };
 
 // An audio item ready to play: which source frames land on which samples.
@@ -1698,6 +1708,14 @@ bool clipHasTakeChain(const Session& s, const model::Clip& clip);
 // Its readers' converters carried to the new plan's node by clip, when the
 // rate controls did not change (carryRateSources).
 void carryLaunchReaders(Node& old, Node& n) SUPPLE_RT;
+// The same across a plan that changes the trajectory (S3 step D4): each
+// reading goes on as the new reader's previous, on the old trajectory, and
+// the new reader takes the reading the node has at the switch on the new
+// one; a warm-up switching later starts again there (carryRateSources).
+void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT;
+// Stretch converter primes since the process began (a relaxed count, for
+// the tests' per-block bound).
+std::uint64_t stretchPrimes() noexcept;
 // What a clip chain's input reads in this block: the player's anchor on the
 // input side, or nothing (`on` false).
 struct ClipChainInput {
