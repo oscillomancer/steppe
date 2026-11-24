@@ -268,12 +268,17 @@ jobs:
             echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CCACHE_MAXSIZE=1G" >> "$GITHUB_ENV"
+            # Run 45420333801: 817 of 2190 compiles were uncacheable, 796 as "unsupported
+            # compiler option". The log names the options; the stats step summarises it.
+            echo "CCACHE_LOGFILE=$(cygpath -m "$RUNNER_TEMP")/ccache.log" >> "$GITHUB_ENV"
             # ccache cannot cache an object whose debug information goes to a PDB at
             # compile time (/Zi); /Z7 embeds it, and clang-cl treats /Zi as /Z7 already, so
             # the objects are the same. CI only: the windows preset is unchanged, and the
             # isolated plugin builds (60% of the compiles) take the setting from here.
+            # CMP0141 is unset in code whose cmake_minimum_required is below 3.25 (the
+            # setting is then ignored there and /Zi stays), so its default is NEW too.
             cmake --preset windows -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+              -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
           else
             echo "::warning title=No ccache::ccache is missing or does not run; this Windows build is uncached"
             cmake --preset ${{ matrix.preset }}
@@ -371,6 +376,10 @@ jobs:
         run: |
           ccache --show-stats --verbose
           ccache --show-config | grep -E '^\(.*\) (cache_dir|max_size) ' || true
+          if [[ -n "${CCACHE_LOGFILE:-}" && -f "$CCACHE_LOGFILE" ]]; then
+            echo "ccache log: $(wc -l < "$CCACHE_LOGFILE") lines; rejected compiles by reason:"
+            grep -i 'unsupported' "$CCACHE_LOGFILE" | sed -E 's/^\[[^]]*\] *//' | sort | uniq -c | sort -rn | sed -n 1,20p || true
+          fi
       - name: Test Linux (software OpenGL under Xvfb)
         if: matrix.platform == 'linux'
         env:

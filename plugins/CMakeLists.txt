@@ -51,12 +51,18 @@ if(SUPPLE_BUILD_PLUGINS)
       list(APPEND plugin_output_args "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_${plugin_config}=${plugin_build}/plugins")
     endif()
     # A debug-information format chosen for the outer build (native CI embeds it,
-    # /Z7, so ccache can cache the objects) reaches the isolated build too; with
-    # none chosen the isolated project keeps its own default.
+    # /Z7, so ccache can cache the objects) reaches the isolated build too, and so
+    # does the policy default that lets code with an old cmake_minimum_required
+    # (CMP0141 is unset below 3.25) honour it; with none chosen the isolated
+    # project keeps its own default.
     set(plugin_debug_format_args)
     if(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
       list(APPEND plugin_debug_format_args
            "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=${CMAKE_MSVC_DEBUG_INFORMATION_FORMAT}")
+    endif()
+    if(CMAKE_POLICY_DEFAULT_CMP0141)
+      list(APPEND plugin_debug_format_args
+           "-DCMAKE_POLICY_DEFAULT_CMP0141=${CMAKE_POLICY_DEFAULT_CMP0141}")
     endif()
     # As for the stock plugins: instrumented for tsan and rtsan, whose hosts
     # are, and not for asan.
