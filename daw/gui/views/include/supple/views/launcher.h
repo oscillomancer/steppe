@@ -201,6 +201,8 @@ class LauncherPane : public ui::Node {
     static constexpr float kKeyStrip = 12;
     static float keyStrip(const ui::Rect& body, const std::string& keyMark);
     static ui::Rect bodyRect(const ui::Rect& cell);
+    // The lowest body (above its key strip) that shows an audio clip's fades.
+    static constexpr float kFadeRoom = 8;
     // What a press at `p` lands on: a clip's ▶ or body, an empty cell's stop
     // square or the rest of it, a row's Arr dot.
     struct Hit {
@@ -224,10 +226,13 @@ class LauncherPane : public ui::Node {
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
         int refused = 0;  // clips drawn dimmed: their launch is refused (launchRefused)
-        std::size_t notes = 0, columns = 0, pending = 0;  // the last paintGl's
+        std::size_t notes = 0, columns = 0, pending = 0, fades = 0;  // the last paintGl's
     } stats;
 
   private:
+    // An audio clip's fades over its body, one pass across `full`; the fades drawn.
+    std::size_t drawClipFades(const ui::Rect& body, const ui::Rect& full, const model::Clip& clip,
+                              std::uint32_t rgba, std::uint32_t shade);
     ArrangeView& view_;
     peaks::PeakService& peaks_;
     Resolve resolve_;

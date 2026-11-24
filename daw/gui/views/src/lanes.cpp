@@ -696,28 +696,10 @@ void Lanes::drawFades(const ui::Rect& r, const model::Item& item, std::uint32_t 
     auto curve = [&](double fromSec, double toSec, float t0, float t1, model::FadeShape shape,
                      double bend) {
         const float x0 = xAt(fromSec), x1 = xAt(toSec);
-        if (x1 <= r.x || x0 >= r.right() || x1 - x0 < 0.5f) return;
         const double secondsWide = std::abs((toSec - fromSec) * view_.pixelsPerSecond);
         const int steps = static_cast<int>(std::clamp(std::ceil(secondsWide / 1.5), 2.0, 256.0));
-        auto yAt = [&](float t) {
-            const float gain = static_cast<float>(
-                model::fadeGain(shape, bend, static_cast<double>(t0 + (t1 - t0) * t)));
-            return (r.bottom() - 1) - gain * (r.h - 2);
-        };
-        strips_->beginRun();
-        for (int k = 0; k <= steps; ++k) {
-            const float t = static_cast<float>(k) / static_cast<float>(steps);
-            strips_->pair(x0 + (x1 - x0) * t, r.y + 1, yAt(t), shade);
-        }
-        strips_->endRun();
-        strips_->beginRun();
-        for (int k = 0; k <= steps; ++k) {
-            const float t = static_cast<float>(k) / static_cast<float>(steps);
-            const float y = yAt(t);
-            strips_->pair(x0 + (x1 - x0) * t, y - 0.75f, y + 0.75f, rgba);
-        }
-        strips_->endRun();
-        ++stats_.fades;
+        if (drawFadeCurve(*strips_, r, x0, x1, t0, t1, shape, bend, steps, rgba, shade))
+            ++stats_.fades;
     };
     if (item.fadeIn.length > 0)
         curve(span.startSec, span.startSec + item.fadeIn.length, 0.0f, 1.0f, item.fadeIn.shape,
