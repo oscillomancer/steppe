@@ -1566,6 +1566,22 @@ void setLaunchMirror(bool on) noexcept { gLaunchMirror.store(on, std::memory_ord
 bool launchMirror() noexcept { return gLaunchMirror.load(std::memory_order_relaxed); }
 
 void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings) {
+    // These readings replace any the plan holds: prepareRatePlan prepares
+    // again when it is late (S then later) or as a seek when it fails, and
+    // a reader an earlier attempt primed is none of this one's. The key
+    // check keeps it from being taken today (a reading for S holds S's
+    // quantum, which a retry moves; one after S is primed again by every
+    // attempt), but a seek plan's warm-up could still meet a mark it was
+    // not primed for (review round 166). Back to as compiled: nothing keys
+    // a reader with no player.
+    for (Node& n : p.nodes)
+        for (PlayerReader& r : n.launchReaders)
+            if (r.mirror) {
+                r.mirror = false;
+                r.player = nullptr;
+                r.startQuantum = INT64_MIN;
+                r.primes = 0;
+            }
     const std::int64_t S = p.rateSwitchDevice;
     if (S == INT64_MIN || !p.rateControlsChanged || !p.rateStretch) return;
     dsp::DenormalGuard denormals;

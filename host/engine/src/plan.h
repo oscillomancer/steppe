@@ -1758,7 +1758,9 @@ struct LaunchMirror {
 };
 // Seeks and primes on the main thread, before `p` is published, the
 // readers `readings` name, each as carryLaunchAcross (or warmLaunch) would,
-// and marks them PlayerReader::mirror. Not real-time.
+// and marks them PlayerReader::mirror; any reader an earlier call marked and
+// this one does not prime is unmarked and unkeyed (empty `readings`: all).
+// Not real-time.
 void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings);
 // Tests only: the mirror on (the default) or off, so a test can compare
 // what plays with it against the miss path. Read on the main thread.

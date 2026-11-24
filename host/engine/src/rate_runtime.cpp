@@ -236,6 +236,10 @@ void Engine::setSyncRate(double scale) {
 
 Status Engine::prepareRatePlan(detail::Plan& p) {
     const auto transport = transportSnapshot();
+    // No reading an earlier preparation of `p` primed (a late one, before
+    // the recovery seek prepares it again) survives into this one (review
+    // round 166).
+    detail::primeLaunchMirror(p, {});
     p.handEpoch = transport.epoch + (rateSeekTarget_ ? 1 : 0);
     p.rateSeekSequence = rateSeekTarget_ ? transport.seekSeq + 1 : 0;
     const auto words = readRateClock();
@@ -343,14 +347,22 @@ Status Engine::prepareRatePlan(detail::Plan& p) {
                 // What launched audio reads at the switch, primed here
                 // rather than on the audio thread at adoption (S3 step D4,
                 // phase 2), within this attempt's timed preparation.
-                // Only when the controls change: else no carry takes them
-                // (review round 163 S3).
-                if (result && p.rateControlsChanged)
-                    detail::primeLaunchMirror(p, launchMirrorReadings(p));
+                // Built only when the controls change: else no carry takes
+                // them (review round 163 S3). Called every attempt, so this
+                // attempt's readings replace an earlier one's (round 166).
+                detail::primeLaunchMirror(p, result && p.rateControlsChanged
+                                                 ? launchMirrorReadings(p)
+                                                 : std::vector<detail::LaunchMirror>{});
                 const auto elapsed =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
                 ratePreparationSeconds_ = std::max(elapsed, ratePreparationSeconds_ * .9);
-                if (!result || frontier() + granularity < handStream) break;
+                if (!result) break;
+                std::int64_t reached = frontier();
+                if (lateAttemptsForTests_ > 0) {  // as if the renderer had passed the hand
+                    --lateAttemptsForTests_;
+                    reached = std::max(reached, handStream - granularity);
+                }
+                if (reached + granularity < handStream) break;
                 // Priming must finish before its scheduled boundary. A busy
                 // machine can need more than the ordinary render horizon;
                 // predict farther ahead and prepare again while old audio runs.
@@ -358,7 +370,7 @@ Status Engine::prepareRatePlan(detail::Plan& p) {
                                       (backend_->ownsThread() ? elapsed : 0) * p.rate * 2)) +
                                   2 * granularity + 128;
                 const auto oldHand = handStream;
-                handStream = (frontier() + lead + 63) / 64 * 64;
+                handStream = (std::max(frontier(), reached) + lead + 63) / 64 * 64;
                 handDevice += handStream - oldHand;
                 p.handAt = handStream;
                 if (attempt == 2)

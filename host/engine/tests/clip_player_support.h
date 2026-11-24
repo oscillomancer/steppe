@@ -13,6 +13,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -29,6 +30,14 @@ namespace supple::engine {
 void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context);
 // The slots the executors still act on (Engine::launchesQueued_).
 std::uint32_t launchesQueuedForTests(const Engine& e);
+// The next `attempts` prepareRatePlan attempts count as late (review round
+// 166 T2); see EngineTestAccess::lateAttempts.
+void lateAttemptsForTests(Engine& e, int attempts);
+// The newest prepared trajectory change's switch S, a stream frame
+// (INT64_MIN: none, or a seek).
+std::int64_t preparedSwitchForTests(const Engine& e);
+// Launch readers the mirror marked in the kept plans (in-callback only).
+int mirrorMarkedForTests(const Engine& e);
 }  // namespace supple::engine
 
 namespace clip_player_test {
@@ -442,6 +451,17 @@ struct AppLive {
             cycles += n;
         }
         p.app->tick();
+    }
+    // The renderer as far ahead as it goes, where it stays until more is
+    // played (by condition, no clock): an edit prepared now finds the
+    // frontier fixed, so no attempt is late and its switch S is the one an
+    // unloaded run gets. until() leaves it catching up, and an attempt it
+    // overtakes prepares again with S later (review round 166 T1). The
+    // in-callback executor's frontier is what has played: fixed already.
+    void settle() {
+        if (!options.anticipative) return;
+        while (!p.app->engine()->awaitRendered(std::numeric_limits<std::int64_t>::max())) {
+        }
     }
     std::vector<float> stop() {
         CHECK(p.app->engine()->anticipationMisses() == 0);

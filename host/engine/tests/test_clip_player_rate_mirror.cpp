@@ -217,3 +217,75 @@ TEST_CASE("a warm-up switching at or before a change's switch takes the mirror's
         CHECK(r.primes == (hit ? 45u : 0u));
     }
 }
+
+TEST_CASE("a change primed again leaves no earlier attempt's mirror reading to take") {
+    // Review round 166: prepareRatePlan primes the mirror at every attempt
+    // and as it begins (a late attempt prepares again, a failed one again as
+    // a seek); each call's readings replace the last's. A warm-up switching
+    // after S is keyed by its own switch, not by S: a reading an earlier
+    // call left marked would be taken (all 45 primes) although this call
+    // did not prime it. Unmarked, the carry seeks it as far as the warm-up
+    // had come (10).
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session before = p.app->head();
+    p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                     R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
+    const model::Session after = p.app->head();
+    InstancePool pool = makePool();
+    MediaCache media;
+    const auto planOf = [&](const model::Session& s) {
+        auto plan = detail::compile(s, pool, 0, 128).value();
+        plan.media = &media;
+        plan.projectDir = p.app->projectDir();
+        REQUIRE(detail::prepare(plan, s));
+        return plan;
+    };
+    auto from = planOf(before);
+    auto to = planOf(after);
+    REQUIRE(detail::prepareRateSources(from, 0, 0.0, nullptr));
+    from.timelines[0]->ensure(160000);
+    REQUIRE(detail::configureRateTransition(to, &from, *from.timelines[0], 100000));
+    REQUIRE(to.rateControlsChanged);
+    const std::int64_t S = to.rateSwitchDevice;
+    to.timelines[0]->ensure(S + 20000);
+    const auto nodeOf = [](detail::Plan& plan) -> detail::Node& {
+        return *std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                             [](const auto& n) { return n.id == id("tr_2"); });
+    };
+    detail::Node& old = nodeOf(from);
+    detail::Node& node = nodeOf(to);
+    REQUIRE_FALSE(old.live);
+    const int player = detail::playerOf(old, id("cl_2"));
+    REQUIRE(player >= 0);
+    const std::int64_t warmSwitch = S + 2000;  // after S: keyed by its own switch
+    constexpr std::int64_t anchor = 96000;
+    old.launchWarmValid = true;
+    old.launchWarmNext.kind = detail::LaunchState::Kind::Clip;
+    old.launchWarmNext.player = player;
+    old.launchWarmNext.anchorSample = anchor;
+    old.launchWarmAt = warmSwitch;  // no seek: stream and device agree
+    detail::PlayerReader& warming = old.launchReaders[2];
+    REQUIRE(warming.state);
+    warming.player = &old.players[static_cast<std::size_t>(player)];
+    warming.anchor = anchor;
+    warming.startQuantum = detail::quantumAt(from, warmSwitch);
+    warming.primes = 10;
+    detail::LaunchMirror m;
+    m.track = id("tr_2");
+    m.clip = id("cl_2");
+    m.anchor = anchor;
+    m.warmSwitch = warmSwitch;
+    detail::primeLaunchMirror(to, {m});  // an earlier attempt
+    detail::PlayerReader& r = node.launchReaders[2];
+    REQUIRE(r.mirror);
+    REQUIRE(r.primes == 45u);
+    detail::primeLaunchMirror(to, {});  // the next, which primes nothing
+    CHECK_FALSE(r.mirror);
+    detail::carryRateSources(from, to, -1);
+    CHECK_FALSE(r.mirror);
+    CHECK(r.anchor == anchor);
+    CHECK(r.startQuantum == detail::quantumAt(to, warmSwitch));
+    CHECK(r.primes == 10u);  // as far as the warm-up had come, not the earlier 45
+}

@@ -842,7 +842,15 @@ the same.*
       `PlayerReader::mirror`. Reader 0's key holds no switch quantum:
       where a reading began does not change what one primed for S gives.
       A seek in the prepared plan, or a reader the timeline cannot yet
-      hold, is left to the executor.
+      hold, is left to the executor. Each attempt's readings replace the
+      last's, and a preparation begins with none: an attempt the renderer
+      overtakes prepares again with its hand, and so S, later, and one that
+      fails is prepared again as a recovery seek; a reader an earlier
+      attempt marked is unmarked and unkeyed (review round 166). The key
+      check alone kept one from being taken (a reading for S holds S's
+      quantum, which a retry moves; one after S is primed again by every
+      attempt), but a seek plan's warm-up could meet a mark it was not
+      primed for.
     - At adoption, the executor that runs the node (the renderer for a
       rendered node, the callback for a live one, each at `handAt` in its
       stream) compares each key with what it holds for S: its reader 0,

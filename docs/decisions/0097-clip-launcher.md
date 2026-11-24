@@ -1324,6 +1324,19 @@ and its `_queued` sibling, each run with the mirror off as well and equal to it 
 - phase 1's catch-up bound runs with the mirror off, so the miss path's unprimed reading still has a
   test that goes red without it (round 163 F1).
 
+*Revision 2026-11-24 (review round 166, after the ThreadSanitizer leg on 6e039628):* the mirror is
+primed at every attempt of `prepareRatePlan` and as it begins, each call's readings replacing the
+last's, so no attempt's marks reach the next or the recovery seek. The leg's failure was not the
+mirror's: its live cases compared two runs whose change switched at different frames, the renderer
+still catching up as the edit was prepared and overtaking an attempt the mirror's priming made longer
+(a retry puts S a quantum or more later). The mirror's tests now let the renderer get as far ahead as
+it goes before each edit (`AppLive::settle`, by condition) and check that both runs switched at the
+same S before comparing samples. test_clip_player_rate_mirror_retry.cpp forces late attempts through a
+test hook (`EngineTestAccess::lateAttempts`), in both runs alike: one and two put S later and change
+what plays, and the mirror still plays the miss path's samples there; three fail into the recovery
+seek, which keeps no mark (red before the change) and plays the same with the mirror. At plan level, a
+reading primed and then not primed again is not taken (red before: the carry took its 45 primes).
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take
