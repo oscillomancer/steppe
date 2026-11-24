@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -2629,6 +2630,23 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     REQUIRE(errors.size() == 1);
     CHECK(errors[0].find("using the default device") != std::string::npos);
     CHECK(fallback.lastError().find("using the default device") != std::string::npos);
+    CHECK(fallback.lastError().find(" Hz") == std::string::npos);  // no rate chosen
+    // A chosen rate the fallback does not run at: the note names the
+    // engine's rate, not the choice, which stays saved for the device.
+    gui::AudioDeviceSettings faster = fallback.settings();
+    faster.rate = 96000;
+    errors.clear();
+    REQUIRE(fallback.apply(faster));
+    REQUIRE(f.app->backend() != nullptr);
+    const double runs = f.app->engineStatus().sampleRate;
+    REQUIRE(runs > 0);
+    REQUIRE(runs != 96000);
+    char note[80];
+    std::snprintf(note, sizeof note, "(using the default device at %.0f Hz)", runs);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find(note) != std::string::npos);
+    CHECK(fallback.lastError().find(note) != std::string::npos);
+    CHECK(fallback.settings().rate == 96000);
     starts.clear();
     REQUIRE(fallback.rescan());
     CHECK(f.app->backend() != nullptr);  // still running, on the defaults

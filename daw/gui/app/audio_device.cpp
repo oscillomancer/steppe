@@ -271,7 +271,16 @@ Status AudioDeviceDialog::start(bool fallback) {
         defaults.backend = settings_.backend;
         defaults.block = settings_.block;
         if (!(defaults == settings_) && attempt(defaults)) {
-            lastError_ = message(st.error()) + " (using the default device)";
+            // The defaults leave the rate to the device; when it runs at
+            // another rate than the one chosen, say the engine's.
+            std::string note = "using the default device";
+            const double rate = app_.engineStatus().sampleRate;
+            if (settings_.rate > 0 && rate > 0 && rate != settings_.rate) {
+                char hz[48];
+                std::snprintf(hz, sizeof hz, " at %.0f Hz", rate);
+                note += hz;
+            }
+            lastError_ = message(st.error()) + " (" + note + ")";
             if (onError) onError("audio device: " + lastError_);
             refresh();
             return {};

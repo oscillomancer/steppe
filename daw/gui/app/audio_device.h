@@ -62,7 +62,9 @@ class AudioDeviceDialog {
                       AudioDeviceSettings settings, Save save);
     // Starts the engine from the settings. With `fallback` (app start), a
     // refused choice of devices or rate retries the defaults; the saved
-    // choice is kept for when the device returns.
+    // choice is kept for when the device returns. The note says so, with the
+    // engine's rate when it differs from the one chosen ("(using the default
+    // device at 48000 Hz)").
     Status start(bool fallback = false);
     // Saved, then a running engine (or one whose start failed) restarts with
     // it. A failed save changes nothing.
