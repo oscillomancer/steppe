@@ -375,10 +375,12 @@ TEST_CASE("rack.probe: the window is heard whole under a master playrate below o
     CHECK(heard() == std::pair{all, std::int64_t{4}});
     f.run("transport.playrate.set", R"({"rate": 0.25})");
     CHECK(heard() == std::pair{all, std::int64_t{4}});
-    // An envelope from full to half speed over the first four beats, then held.
+    // An envelope that holds half speed from the start, the project's rate at 1: the render
+    // lasts 4 s of device time, and the last note is at 3 s. (The listener must read the
+    // envelope's lowest point, not the project's rate.)
     f.run("transport.playrate.set", R"({"rate": 1})");
-    f.run("env.add", R"({"track": "tr_0", "param": "playrate",
-        "points": [{"beat": 0, "value": 1}, {"beat": 4, "value": 0.5}]})");
+    f.run("env.add",
+          R"({"track": "tr_0", "param": "playrate", "points": [{"beat": 0, "value": 0.5}]})");
     CHECK(heard() == std::pair{all, std::int64_t{4}});
 }
 
