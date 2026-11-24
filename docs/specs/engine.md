@@ -513,8 +513,11 @@ the same.*
   timelines.
 - **The queue is the engine's (L-b).** It has fixed capacity and holds one
   entry per track; a newer launch on a track replaces its pending entry.
-  Plans hold only the players, so an entry survives plan swaps and a plan
-  waiting for adoption.
+  *(An entry applied early, a clip chain's lead or an audio clip's warm-up
+  under a pitch-keeping rate, is no longer pending and is not replaced;
+  for a warm-up a later launch lands after its switch, §1.4.2's *Under a
+  playrate that keeps the pitch*.)* Plans hold only the players, so an
+  entry survives plan swaps and a plan waiting for adoption.
   - **Who applies it:** the executor that runs the track's node when its
     block reaches the target. It splits the block at the target, as at a
     loop wrap, and takes the entry by compare-and-swap, so a node handed
@@ -786,7 +789,8 @@ the same.*
     quantum, catching up, when that is at most 32 quanta back, so it plays
     what a warm-up would, else at its own quantum; its loop cycle is the
     switch frame's either way (`Node::launchSwitchAt`, set by the first
-    block after the switch). It reads the player's song frames from the
+    block after the switch). The worst cold restart is 45 primes and 32
+    quanta of catch-up in one block (48 kHz). It reads the player's song frames from the
     anchor, in loop cycles after the switch's; the switch crossfade and
     the clip's fades weight its output. Going out it plays on as the clip
     repeats, without the tape path's held pass or cut at the crossfade's
@@ -797,7 +801,9 @@ the same.*
     returns keep the clip-chain lead alone), and at least
     `launchWarm` after the track's applied audio launch still to switch
     (one warm-up at a time; a launch is applied from its warm-up's first
-    frame, so a later one does not replace it). A plan swap that
+    frame, so a later one does not replace it), and any other launch of the
+    track at least a frame after it, so the later press wins (round 139
+    S1). A plan swap that
     keeps the rate controls hands the readers over with their converters
     (`carryLaunchReaders`, §1.6); one that changes the trajectory restarts
     them cold where they play (an interim: timeline clips crossfade

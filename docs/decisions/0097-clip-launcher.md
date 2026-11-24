@@ -355,8 +355,10 @@ Clips replace that with an **ordered budget**:
   timelines.
 - **The queue is the engine's (L-b).** It has fixed capacity and holds one
   entry per track; a newer launch on a track replaces its pending entry.
-  Plans hold only the players, so an entry survives plan swaps and a plan
-  waiting for adoption.
+  *(Note 2026-11-23: one applied early, by a clip chain's lead or, under
+  a pitch-keeping rate, an audio clip's warm-up, is not; see the revision
+  "S3 step D".)* Plans hold only the players, so an entry survives plan
+  swaps and a plan waiting for adoption.
   - **Who applies it:** the executor that runs the track's node when its
     block reaches the target. It splits the block at the target, as at a
     loop wrap, and takes the entry by compare-and-swap, so a node handed
@@ -1089,7 +1091,9 @@ the replay.
   ruling, round 139 R3). A launch is applied from its warm-up's first
   frame, so a later one on the track does not replace it; reader 2 warms
   one launch at a time, so placement keeps an audio launch at least
-  `launchWarm` after the track's applied audio launch still to switch.
+  `launchWarm` after the track's applied audio launch still to switch, and
+  any other launch of the track at least a frame after it: the later press
+  wins (round 139 S1).
 - **Live equals the replay.** Every prime position is a function of the
   switch's quantum and the trajectory, not of when it runs. The replay
   delivers the warm-up as a third switch entry, `launchWarm` early. A
@@ -1099,7 +1103,8 @@ the replay.
   as the replay does: from its switch's quantum, catching up, when that
   is at most 32 quanta back, so it plays what a warm-up would; else at its
   own quantum. Its loop cycle is the switch frame's either way (round 139
-  R4).
+  R4). The worst cold restart is 45 primes and 32 quanta of catch-up in
+  one block (48 kHz).
 - **What it reads:** the player's song frames from the anchor, folded as
   the song is, before the anchor only in a later loop cycle than the
   switch's. The switch crossfade and the clip's fades weight its output.

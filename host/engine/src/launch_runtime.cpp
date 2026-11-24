@@ -170,10 +170,13 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
                                        ? detail::playerOf(n, r.clip)
                                        : -1;
                 floor = std::max(floor, at + detail::launchEarly(n, kind, player));
-                // Its converter's warm-up never begins before the track's
-                // warmed switch already under way (an applied launch still
-                // to play): reader 2 warms one launch at a time.
-                if (detail::launchWarms(n, kind, player))
+                // A warmed launch of the track already under way (applied
+                // from its warm-up's first frame, so not replaced) switches
+                // first: a later press lands after it, whatever its kind
+                // (round 139 S1), and a warming one only once that warm-up
+                // is done, reader 2 warming one launch at a time.
+                const bool warms = detail::launchWarms(n, kind, player);
+                if (n.id == r.track && n.launchWarm > 0)
                     for (const LaunchSlot& s : *launchSlots_) {
                         if (status(s.state.load()) != LaunchSlot::kApplied ||
                             s.track.load() != r.track.n || s.epoch.load() != clock.epoch ||
@@ -187,7 +190,7 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
                                                        static_cast<std::uint32_t>(s.clip.load())})
                                 : -1;
                         if (detail::launchWarms(n, was, wasPlayer))
-                            floor = std::max(floor, s.target.load() + n.launchWarm);
+                            floor = std::max(floor, s.target.load() + (warms ? n.launchWarm : 1));
                     }
             }
     // On a playrate plan the song follows the rate timeline (S3).

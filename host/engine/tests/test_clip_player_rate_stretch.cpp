@@ -190,6 +190,54 @@ TEST_CASE(
     CHECK(differs(play(128, true, false, 128000 + 40 * 64)) > 0.0);
 }
 
+TEST_CASE("a press during an audio launch's warm-up lands after its switch, and wins" *
+          doctest::description("rt")) {
+    // Round 139 S1: cl_2 (audio) is applied from 2944 frames before bar 2.
+    // A stop pressed inside that warm-up, unquantized, would land before its
+    // switch; a MIDI clip pressed there on Bar would land on the same frame.
+    // Either way the earlier audio launch would then play over the later
+    // press. Each lands after the switch instead (the stop a frame after at
+    // least, the MIDI clip on bar 3), and the track ends on it; live is the
+    // replay.
+    Project p;
+    twoTracks(p);
+    p.run("scene.add", "{}");  // sc_2
+    const std::string midi = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
+                                               R"("notation": "voice v; 1: C4:w"})")["clip"]
+                                 .asString();
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session s = p.app->head();
+    Engine::LaunchRequest stop = backTo("tr_2");
+    stop.action = LaunchLogEntry::Action::Stop;
+    Engine::LaunchRequest notes = request("tr_2", "cl_2");
+    notes.clip = id(midi.c_str());
+    Replays replays;
+    for (const bool quantized : {false, true})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("quantized " << quantized << ", anticipative " << options.anticipative);
+            constexpr std::uint32_t block = 128;
+            const Engine::LaunchRequest later = quantized ? notes : stop;
+            const std::vector<Step> steps{
+                {20, {request("tr_2", "cl_2")}},
+                {(128000 - 1000) / block,
+                 {later},
+                 quantized ? model::LaunchQuantize::Bar : model::LaunchQuantize::None}};
+            const Live live =
+                playLive(s, p.app->projectDir(), options, block, 300000 + 16384, steps);
+            REQUIRE_MESSAGE(live.log.size() == 2, describe(live.log) << live.report);
+            CHECK(live.log[0].clip == id("cl_2"));
+            CHECK(live.log[0].runningFrame == 128000);
+            CHECK(live.log[1].action == later.action);
+            if (quantized) {
+                CHECK(live.log[1].clip == notes.clip);
+                CHECK(live.log[1].runningFrame == 256000);  // bar 3
+            } else {
+                CHECK(live.log[1].runningFrame > 128000);
+            }
+            liveIsReplay(s, p.app->projectDir(), live, 7.0, 300000, replays);
+        }
+}
+
 TEST_CASE("a plan swap or a rate change during a launch's warm-up" * doctest::description("rt")) {
     // Round 139: a swap that keeps the rate (a track added) inside cl_2's
     // warm-up hands reader 2 over mid-warm-up, and the launch still plays
