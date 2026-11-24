@@ -2055,7 +2055,9 @@ writes it to the project. Presets and your default are kept in the data folder
   version* to start a branch at that mix.
 - **Range**: the entire project (to the last item's end), the time
   selection (the range drawn on the ruler, also the loop, whether or not
-  looping is on), or a custom start and end in beats. A **tail** renders seconds past the end for
+  looping is on), or a custom start and end, written as bar, beat and
+  thousandths as the transport shows them (`3.1.000`; `3` or `3.2` will do),
+  with the time beside each. A **tail** renders seconds past the end for
   reverb and delays; *Cut silence at the end* trims what is left quiet.
 
 ### Files and formats

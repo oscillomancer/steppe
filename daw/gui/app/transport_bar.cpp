@@ -84,16 +84,6 @@ std::string rateText(double rate) {
     return text;
 }
 
-std::string timeText(double seconds) {
-    if (seconds < 0) seconds = 0;
-    const auto totalMs = std::llround(seconds * 1000.0);
-    const int minutes = static_cast<int>(totalMs / 60000);
-    const int rest = static_cast<int>(totalMs % 60000);
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%d:%02d.%03d", minutes, rest / 1000, rest % 1000);
-    return buf;
-}
-
 std::string barsText(double beat, const time::TimeMap& tm) {
     const time::BarBeat bb = tm.barBeat(beat);
     char buf[48];
@@ -143,6 +133,16 @@ void arcArrow(ui::Canvas& c, ui::Point o, float r, float a0, float a1, ui::Color
 }
 
 }  // namespace
+
+std::string timeText(double seconds) {
+    if (seconds < 0) seconds = 0;
+    const auto totalMs = std::llround(seconds * 1000.0);
+    const int minutes = static_cast<int>(totalMs / 60000);
+    const int rest = static_cast<int>(totalMs % 60000);
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%d:%02d.%03d", minutes, rest / 1000, rest % 1000);
+    return buf;
+}
 
 // A transport button drawn as a symbol. Its text stays the state word ("play",
 // "stop", "loop on", "count 2") for tests and the GUI query; only the symbol

@@ -2235,8 +2235,13 @@ project is drawn in the quiet ink, with "from your default" on hover.
 - **Range:** a dropdown with Entire project | Time selection | Custom.
   - Time selection is the loop range drawn on the ruler (`bounds: loop`),
     whether or not looping is on; it is disabled while there is none.
-  - Start, End and Length are shown in the ruler's format, and are editable
-    under Custom.
+  - Start, End and Length are shown in the ruler's format: Start and End
+    as bar, beat and thousandths (`inspectorBarsText`, the transport's
+    "3.1.000") with the time beside each (m:ss.mmm, the transport's), and
+    Length in beats and time. Under Custom the two fields are editable and
+    read what they show (`inspectorParseBars`: "3", "3.2" and "3.2.500"
+    too); one that is not a position says how to write one, and End must
+    be after bar 1.
   - Tail: a checkbox and an editable dropdown in seconds (0.5, 1, 2, 5, 10),
     with "Cut silence at the end" (`trim.end`).
 - **Output:**

@@ -439,7 +439,7 @@ TEST_CASE("render numeric fields reject non-finite values and overflowing intege
     Fixture f;
     if (!f.ok) return;
     f.render->open();
-    f.render->setField("render.end", "4");
+    f.render->setField("render.end", "2");  // bar 2: beat 4
     for (const auto& [field, value] : {std::pair{"render.start", "nan"},
                                        {"render.tail", "inf"},
                                        {"render.sample_rate", "1e100"},
@@ -455,6 +455,55 @@ TEST_CASE("render numeric fields reject non-finite values and overflowing intege
         CHECK(f.render->job().empty());
         f.render->setField(field, "");
     }
+}
+
+TEST_CASE("render Start and End are bars and beats as the ruler writes them, typed back alike") {
+    Fixture f;
+    if (!f.ok) return;
+    // An item to bar 5 (16 beats at 120 BPM: 8 s).
+    const model::Id track = f.addTrack("Keys");
+    REQUIRE(f.run("item.add", f.args({{"track", track.str()},
+                                      {"position", 0.0},
+                                      {"length", 16.0},
+                                      {"notation", "1: C4:w | C4:w | C4:w | C4:w"}})));
+    f.render->open();
+    f.frame();
+    auto node = [&](const char* id) {
+        ui::Node* n = f.root->find(id);
+        REQUIRE(n);
+        return n;
+    };
+    auto text = [&](const char* id) { return node(id)->valueText(); };
+    // Custom picked: the fields show the range in the ruler's bars and
+    // beats, the time beside each, the length in beats and time.
+    auto* range = dynamic_cast<ui::Dropdown*>(node("render.range"));
+    REQUIRE(range);
+    REQUIRE(range->onChange);
+    range->onChange("custom");
+    f.frame();
+    CHECK(text("render.start") == "1.1.000");
+    CHECK(text("render.end") == "5.1.000");
+    CHECK(text("render.start.time") == "0:00.000");
+    CHECK(text("render.end.time") == "0:08.000");
+    CHECK(text("render.length") == "Length 16 beats · 0:08.000");
+    // Typed as the field shows it, or shorter: bar 3 is beat 8, bar 5 beat 3
+    // is beat 18, and "3.2.500" is half a beat after bar 3 beat 2.
+    f.render->setField("render.start", "3");
+    f.render->setField("render.end", "5.3.000");
+    CHECK(f.render->settings().find("start_beat")->asDouble() == doctest::Approx(8));
+    CHECK(f.render->settings().find("end_beat")->asDouble() == doctest::Approx(18));
+    f.render->setField("render.start", "3.2.500");
+    CHECK(f.render->settings().find("start_beat")->asDouble() == doctest::Approx(9.5));
+    // What the field showed reads back as the same beat.
+    f.render->setField("render.end", "5.1.000");
+    CHECK(f.render->settings().find("end_beat")->asDouble() == doctest::Approx(16));
+    // Not a position: the field says how to write one, nothing changes, and
+    // the render is refused until it is fixed.
+    f.render->setField("render.start", "three");
+    CHECK(f.render->settings().find("start_beat")->asDouble() == doctest::Approx(9.5));
+    f.render->addToQueue();
+    CHECK(f.app->renderQueue().empty());
+    CHECK(f.render->statusText().find("render.start") != std::string::npos);
 }
 
 TEST_CASE("the FX chain: browser, bypass/offline, reorder, remove, parameters, favourites") {
@@ -2975,7 +3024,7 @@ TEST_CASE("the render dialog: the preview matches render.dry-run and a job lists
     auto* rate = dynamic_cast<ui::TextField*>(f.uiRoot().find("render.sample_rate.text"));
     REQUIRE(rate);
     CHECK(rate->placeholder() == "Project (48000)");
-    f.render->setField("render.end", "8");  // a short render: fast and load-insensitive
+    f.render->setField("render.end", "3");  // bar 3 (beat 8): fast and load-insensitive
     f.frame();
     CHECK(shown("render.range") == "Custom");
     f.render->setField("render.pattern", "preview-{counter:02}");
@@ -3058,7 +3107,7 @@ TEST_CASE("the render dialog: FLAC, a second file, and the render queue") {
     gui::test::linkGeneratedMedia(f.app->mediaDir());
     REQUIRE(gui::generateSession(*f.dispatcher, f.app->mediaDir(), 1));
     f.render->open();
-    f.render->setField("render.end", "4");
+    f.render->setField("render.end", "2");  // bar 2: beat 4
     f.render->setField("render.pattern", "q-{counter:02}");
     f.render->setField("render.format", "flac");
     f.render->setField("render.bit_depth", "24");
@@ -3721,7 +3770,7 @@ TEST_CASE("render dialog settings: written once when changed; presets; File → 
         f.dispatcher->flushJobEvents();
     };
     f.render->open();
-    f.render->setField("render.end", "2");
+    f.render->setField("render.end", "1.3");  // beat 2
     f.render->setField("render.pattern", "once-{counter:02}");
     const std::size_t before = f.historyCount();
     f.render->run();
@@ -3787,7 +3836,7 @@ TEST_CASE("render dialog: regions checklist, the matrix grid and the chain rate 
     f.click("render.matrix.close");
     f.render->setSource(gui::RenderDialog::Source::Master);
     // A new sample rate gives a file at that rate (outputs follow the chain).
-    f.render->setField("render.end", "2");
+    f.render->setField("render.end", "1.3");  // beat 2
     f.render->setField("render.sample_rate", "44100");
     f.render->setField("render.pattern", "rate-{counter:02}");
     f.render->run();
@@ -3820,7 +3869,7 @@ TEST_CASE("render dialog: with several masters the mix lists them, a file each (
     const json::Value args = f.render->renderArguments();
     REQUIRE(args.find("masters"));
     CHECK(args.find("masters")->size() == 2);
-    f.render->setField("render.end", "1");
+    f.render->setField("render.end", "1.2");  // beat 1
     f.render->refreshPreview();
     CHECK(f.render->preview().find("Cue") != std::string::npos);  // its own file
 }

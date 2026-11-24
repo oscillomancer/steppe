@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 Supple Audio
 #include "render_dialog.h"
+
+#include "transport_bar.h"
+
 #include <supple/base/paths.h>
+#include "inspector.h"
 
 #include <SDL3/SDL_misc.h>
 
@@ -272,20 +276,29 @@ void RenderDialog::setField(const std::string& id, const std::string& typed) {
         return;
     }
     if (id == "render.start" || id == "render.end") {
-        numberField(id, typed, [&, id](double v) -> Status {
-            const char* key = id == "render.start" ? "start_beat" : "end_beat";
-            if (std::isnan(v)) {
-                settings_.asObject().erase(key);
-            } else {
-                if (v < 0 || (id == "render.end" && v <= 0))
-                    return Error("gui.render.field", "enter a positive number of beats");
-                settings_[key] = v;
+        // A position as the transport and the inspector write it ("3.1.000";
+        // "3" and "3.2" too): what the field shows reads back the same.
+        raw_[id] = typed;
+        errors_.erase(id);
+        markDirty();
+        const char* key = id == "render.start" ? "start_beat" : "end_beat";
+        if (typed.empty()) {
+            settings_.asObject().erase(key);
+        } else {
+            const auto beat = inspectorParseBars(typed, *app_.head().timeMap);
+            if (!beat) {
+                errors_[id] = beat.error().message;
+                return;
             }
-            owned_.insert(key);
-            const bool was = text(settings_.find("bounds")) == "custom";
-            set("bounds", "custom", !was);  // the Range dropdown follows
-            return {};
-        });
+            if (id == "render.end" && *beat <= 0) {
+                errors_[id] = "end after bar 1.1.000";
+                return;
+            }
+            settings_[key] = *beat;
+        }
+        owned_.insert(key);
+        const bool was = text(settings_.find("bounds")) == "custom";
+        set("bounds", "custom", !was);  // the Range dropdown follows
     } else if (id == "render.tail") {
         numberField(id, typed, [&](double v) -> Status {
             if (!std::isnan(v)) SUPPLE_TRY(range(v, 0, 600));
@@ -783,29 +796,27 @@ void RenderDialog::buildRange(ui::Node& body) {
         first = num(settings_.find("start_beat"), 0);
         last = num(settings_.find("end_beat"), last);
     }
-    auto position = [&](double beat) {
-        const auto bb = s.timeMap->barBeat(beat);
-        char buf[48];
-        std::snprintf(buf, sizeof buf, "%d.%d", bb.bar, bb.beat);
-        return std::string(buf);
-    };
+    // In the ruler's format: bars and beats in the field (the transport's
+    // "3.1.000", typed back the same way), the time beside it.
     const bool custom = bounds == "custom";
     for (const auto& [id, label, value] :
          {std::tuple{"render.start", "Start", first}, std::tuple{"render.end", "End", last}}) {
         caption(r, std::string(id) + ".label", label, 34);
-        auto& field =
-            r.emplace<ui::TextField>(id, raw_.count(id) ? raw_[id] : (custom ? compact(value) : ""),
-                                     custom ? "beats" : compact(value));
-        field.layout.width = ui::SizeRule::fixed(64);
+        const std::string bars = inspectorBarsText(value, *s.timeMap);
+        auto& field = r.emplace<ui::TextField>(
+            id, raw_.count(id) ? raw_[id] : (custom ? bars : std::string()), bars);
+        field.layout.width = ui::SizeRule::fixed(72);
         field.enabled = custom;
         field.onChange = [this, field = std::string(id)](const std::string& t) {
             setField(field, t);
         };
-        caption(r, std::string(id) + ".bar", position(value), 44);
+        caption(r, std::string(id) + ".time", timeText(s.timeMap->secondsAt(value)), 64);
     }
-    char length[64];
-    std::snprintf(length, sizeof length, "Length %.2f beats (%.2f s)", std::max(0.0, last - first),
-                  std::max(0.0, s.timeMap->secondsAt(last) - s.timeMap->secondsAt(first)));
+    char beats[32];
+    std::snprintf(beats, sizeof beats, "%g", std::max(0.0, last - first));
+    const std::string length =
+        std::string("Length ") + beats + " beats \u00b7 " +
+        timeText(std::max(0.0, s.timeMap->secondsAt(last) - s.timeMap->secondsAt(first)));
     r.emplace<ui::Label>("render.length", length, ui::Font::Ui, "caption", "ink-quiet");
     auto& tail = row(body, "render.tail.row");
     const double tailS = num(settings_.find("tail_s"));

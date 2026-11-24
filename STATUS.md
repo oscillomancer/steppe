@@ -1877,8 +1877,6 @@ Engine and hosting:
   opening every output of a device).
 - Overlapping gestures on a plugin without semantic parameters share one
   state blob.
-- The render dialog's Start and End show beats and bar.beat rather than
-  the ruler's full format.
 - MP3 encodes run one at a time (LAME's shared tables, `libs/audio-codecs`):
   several MP3 renders in parallel jobs wait for each other's encoding step.
 - Renders: MP3 and Ogg Vorbis files are byte-identical from run to run on
