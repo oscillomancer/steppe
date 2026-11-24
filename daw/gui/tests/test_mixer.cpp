@@ -3701,6 +3701,11 @@ TEST_CASE("mixer: an unnamed group is drawn as \"Group N\" wherever its name sho
     // track menu and messages call it (views::objectName), by its place.
     CHECK(f.node("mixer.group.tr_1.gr_1")->valueText() == "Drums");
     CHECK(f.node("mixer.group.tr_1.gr_2")->valueText() == "Group 2");
+    // Too narrow for "Group 2", the tab says "2"; a named one elides.
+    const auto tab = [&](const char* id) { return dynamic_cast<ui::Button*>(f.node(id)); };
+    REQUIRE(tab("mixer.group.tr_1.gr_2"));
+    CHECK(tab("mixer.group.tr_1.gr_2")->narrowText() == "2");
+    CHECK(tab("mixer.group.tr_1.gr_1")->narrowText().empty());
     CHECK(f.node("mixer.vca.name.gr_2")->valueText() == "Group 2");
     CHECK(f.node("mixer.vca.members.gr_2")->valueText() == "1 member");
     model::Envelope env;
@@ -3710,6 +3715,7 @@ TEST_CASE("mixer: an unnamed group is drawn as \"Group N\" wherever its name sho
     f.exec("group.set", R"({"group":"gr_2","active":false})");
     f.refresh();
     CHECK(f.node("mixer.group.tr_1.gr_2")->valueText() == "· Group 2");
+    CHECK(tab("mixer.group.tr_1.gr_2")->narrowText() == "· 2");
     // MIDI learn on its VCA fader names it too.
     const ui::Point fader = f.centre(f.node("mixer.vca.fader.gr_2"));
     f.pointer(ui::PointerEvent::Type::Down, fader, 1, 0, 3);

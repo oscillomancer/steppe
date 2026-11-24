@@ -1359,6 +1359,13 @@ void Mixer::rebuild(bool keepLists) {
                 tab.onClick = [this, gid, tid, b = &tab] {
                     trackMenu_.openGroup(gid, {tid}, b->bounds());
                 };
+                // An unnamed group's tab too narrow for "Group N" says the
+                // number alone; a named one elides.
+                if (group.name.empty()) {
+                    const std::string words = views::objectName(s, gid);
+                    if (words.starts_with("Group "))
+                        tab.setNarrowText((group.active ? "" : "· ") + words.substr(6));
+                }
                 tab.layout.width = ui::SizeRule::fraction();
                 tab.layout.height = ui::SizeRule::fixed(14);
             }
