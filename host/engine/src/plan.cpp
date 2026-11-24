@@ -3820,8 +3820,12 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         node.launchBuf.clear(n);
         bool any = false;
         for (std::uint32_t i = 0; i < n && !any; ++i) any = g[i] != 0.0f;
+        // Silent while a launched clip holds the track, a stretch
+        // converter still runs every quantum, its output unused: skipped
+        // quanta would leave its history behind the song, and it refuses to
+        // jump when the arrangement returns (S3 step D).
         for (Clip& c : node.clips)
-            if (any && transport.playing && c.takeChain < 0)
+            if ((any || p.rateStretch) && transport.playing && c.takeChain < 0)
                 playClip(p, c, node.launchBuf, pos, n, 0, node.live);
         if (any)
             for (std::uint32_t i = 0; i < n; ++i) {
