@@ -1135,7 +1135,8 @@ the replay.
   refused.
 
 **Consequences.**
-- Tests (test_clip_player_rate_stretch.cpp; the refusal in
+- Tests (test_clip_player_rate_stretch.cpp and, for presses during a
+  warm-up, test_clip_player_rate_presses.cpp; the refusal in
   test_clip_player_rate.cpp): live equals the replay for a scene,
   a switch between two audio clips and a stop under a pitch-keeping 0.75
   and an envelope, in both executors, at two block sizes (the envelope at

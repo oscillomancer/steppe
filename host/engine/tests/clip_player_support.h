@@ -544,4 +544,18 @@ inline double largestStep(const ChangeRun& r, std::int64_t a, std::int64_t b) {
     return m;
 }
 
+// Service-only steps every 1024 frames over [from, to), merged in order. The
+// app services its engine on every tick, and service() places a launch the
+// renderer overtook while it was placed again from there (engine.md
+// §1.4.2): an unquantized launch near the render horizon can be overtaken,
+// under ThreadSanitizer's slowness above all, and without a service before
+// the next step it would wait there unplaced.
+inline std::vector<Step> serviced(std::vector<Step> steps, std::int64_t from, std::int64_t to,
+                                  std::uint32_t block) {
+    for (std::int64_t f = from; f < to; f += 1024) steps.push_back({f / block, {}});
+    std::stable_sort(steps.begin(), steps.end(),
+                     [](const Step& a, const Step& b) { return a.cycle < b.cycle; });
+    return steps;
+}
+
 }  // namespace clip_player_test
