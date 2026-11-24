@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -1780,8 +1781,20 @@ TEST_CASE("oversized acknowledged bridge output count fails silently without are
             ::mmap(nullptr, layout.size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
         REQUIRE(arena != MAP_FAILED);
         auto* header = new (arena) bridge::Header{};
-        auto process = BridgeTestAccess::adopt(-1, -1);
+        // A bridge that lives: adopted with no child, alive() is false and any
+        // call the peer answers after one 10 ms wait counts as a dead bridge
+        // ("the plugin bridge exited", not the protocol violation under test;
+        // CI 45303761407). The peer is a scripted one, so a child that only
+        // waits stands for the bridge's process.
+        const pid_t sleeper = ::fork();
+        REQUIRE(sleeper >= 0);
+        if (sleeper == 0)
+            for (;;) ::pause();
+        ScriptedChild child{sleeper};
+        auto process = BridgeTestAccess::adopt(-1, BridgeTestAccess::watch(sleeper));
         auto instance = BridgeTestAccess::dataPlane(process, arena, layout);
+        // However long the peer takes, it is not a hung bridge.
+        instance->setCallDeadlineMs(60'000);
         auto* output =
             reinterpret_cast<float*>(static_cast<std::uint8_t*>(arena) + layout.outAudio);
         auto* aux =
@@ -1789,7 +1802,10 @@ TEST_CASE("oversized acknowledged bridge output count fails silently without are
         std::fill_n(output, 128, .5f);
         std::fill_n(aux, 128, .5f);
         // A scripted peer acknowledges corrupt output exactly as a bridge would.
+        // The call is made once the peer is waiting for it.
+        std::atomic<bool> waiting{false};
         std::thread peer([&] {
+            waiting.store(true);
             while (header->request.load(std::memory_order_acquire) == 0) std::this_thread::yield();
             header->outEventCount = bridge::kMaxOutEvents + 1;
             header->result = 1;
@@ -1804,11 +1820,13 @@ TEST_CASE("oversized acknowledged bridge output count fails silently without are
         block.auxOutputChannels = 2;
         std::vector<OutputEvent> storage(static_cast<std::size_t>(std::max(0, sinkSize)));
         OutputEvents events{storage};
+        while (!waiting.load()) std::this_thread::yield();
         const auto ok = instance->process(block, sinkSize < 0 ? nullptr : &events);
         peer.join();
         CHECK(ok);  // failed plug-in is silenced while its session keeps playing
         CHECK(instance->failed());
-        CHECK(instance->failure().find("protocol") != std::string::npos);
+        CHECK_MESSAGE(instance->failure().find("protocol") != std::string::npos,
+                      "failure: " << instance->failure());
         CHECK(events.count == 0);
         CHECK(events.dropped == 0);
         CHECK(std::all_of(buffers.ol.begin(), buffers.ol.end(), [](float x) { return x == 0; }));
@@ -1817,7 +1835,8 @@ TEST_CASE("oversized acknowledged bridge output count fails silently without are
         const auto query = instance->paramValue(0);
         REQUIRE_FALSE(query);
         CHECK(query.error().code == "host.bridge_failed");
-        CHECK(query.error().message.find("protocol") != std::string::npos);
+        CHECK_MESSAGE(query.error().message.find("protocol") != std::string::npos,
+                      "message: " << query.error().message);
         CHECK_FALSE(query.error().hint.empty());
     }
 }
