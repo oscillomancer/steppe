@@ -1078,6 +1078,12 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     // ends in the id's is another name, and keeps both.
     CHECK(views::objectNames(s, "Sub Bass (tr_2) is frozen") == "Sub Bass (Bass) is frozen");
     CHECK(views::objectNames(s, "SubBass (tr_2)") == "SubBass (Bass)");
+    // Joined by a hyphen, dot or slash: another, longer name (second re-check F3).
+    CHECK(views::objectNames(s, "Sub-Bass (tr_2) is frozen") == "Sub-Bass (Bass) is frozen");
+    CHECK(views::objectNames(s, "Sub.Bass (tr_2)") == "Sub.Bass (Bass)");
+    CHECK(views::objectNames(s, "Sub/Bass (tr_2)") == "Sub/Bass (Bass)");
+    CHECK(views::objectNames(s, "frozen: Bass (tr_2)") == "frozen: Bass");
+    CHECK(views::objectNames(s, "\"Bass (tr_2)\"") == "\"Bass\"");
     CHECK(views::objectNames(s, "track Bass (tr_2): kept") == "track Bass: kept");
     CHECK(views::objectNames(s, "Drums (tr_1), Bass (tr_2)") == "Drums, Bass");
     // The Error form: the message, the hint and each listed error; the code

@@ -16,16 +16,23 @@ namespace supple::views {
 namespace {
 
 // Whether the name that ends `out` at `p` (its first character) starts
-// there as a whole name: at the start, after a separator ("(Bass", ", Bass",
-// ": Bass"), or after a lower-case word ("track Bass"); not inside a longer
-// name ("Sub Bass", "SubBass"), which is another name than the id's.
+// there as a whole name: at the start, after a separator ('(', ',', ':', ';'
+// or '"', a space between allowed: "(Bass", ", Bass", ": Bass"), or after a
+// lower-case word ("track Bass"); not inside a longer name ("Sub Bass",
+// "SubBass", "Sub-Bass", "Sub.Bass"), which is another name than the id's.
+// Anything else before it keeps both names, the safe direction.
 bool wholeNameAt(const std::string& out, std::size_t p) {
     auto word = [&](std::size_t k) {
         return std::isalnum(static_cast<unsigned char>(out[k])) || out[k] == '_';
     };
+    auto separator = [&](std::size_t k) {
+        const char c = out[k];
+        return c == '(' || c == ',' || c == ':' || c == ';' || c == '"';
+    };
     if (p == 0) return true;
-    if (out[p - 1] != ' ') return !word(p - 1);
-    if (p == 1 || !word(p - 2)) return true;
+    if (out[p - 1] != ' ') return separator(p - 1);
+    if (p == 1 || separator(p - 2)) return true;
+    if (!word(p - 2)) return false;
     std::size_t w = p - 1;
     while (w > 0 && word(w - 1)) --w;
     return std::islower(static_cast<unsigned char>(out[w])) != 0;
