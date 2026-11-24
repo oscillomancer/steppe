@@ -1175,6 +1175,11 @@ struct Node {
     // (applyLaunch marks it pending): a cold reading starts from its quantum
     // and takes its loop cycle, as a warm-up does (S3 step D).
     std::int64_t launchSwitchAt = INT64_MIN;
+    // Its loop cycle on a playrate plan, taken in that block, while the
+    // timeline still holds the frame (its ring keeps seconds, not a clip's
+    // whole play): a reading handed on from a tape reader takes it (S3 step
+    // D4, round 152 F2).
+    std::int64_t launchSwitchCycle = 0;
     bool launchSwitchPending = false;
     LaunchAction launchWarmNext;
     bool launchWarmValid = false;

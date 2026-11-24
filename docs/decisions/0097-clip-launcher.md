@@ -1245,15 +1245,27 @@ and switching about 61 ms later (option B), so the two stay in step.
 - the mirror and the carry at plan level with explicit readings; the placement floor while a change is
   pending, judged by the callback for a live node; and both tape directions.
 
-**Built:** phase 1 (2026-11-24): every adoption takes the miss path, primed on the audio thread
-within a warm-up's primes per reader (`carryLaunchAcross`, `PlayerReader::previous`), with the A1
-bound and the placement floor; it could ship alone. Phase 1's tests (test_clip_player_rate_trajectory.cpp):
-continuity across an envelope edit, a switch to tape and one from tape, in both executors and at blocks
-of 32 to 512 (a click about ten times the material's step before, stretch to stretch and to tape); the
-primes per callback (45 at most, at the new reading's first use); a launch queued across a change (its
-switch before S, a warm-up under way after it, one voided and placed again a bar later); the floor for
-a launch pressed inside the pending window; and the A1 bound at plan level for every side. Phase 2 (the
-mirror, its keys, the race and two-node cases, the loop wrap A6) is still to come.
+**Built:** phase 1 (2026-11-24, round 152's fixes the same day): every adoption takes the miss path,
+primed on the audio thread within a warm-up's primes per reader (`carryLaunchAcross`,
+`PlayerReader::previous`), with the A1 bound and the placement floor; it could ship alone. Phase 1's
+tests, in test_clip_player_rate_trajectory.cpp and its `_queued` sibling:
+- continuity across an envelope edit, a switch to tape and one from tape, in both executors and at blocks
+  of 32 to 512 (a click about ten times the material's step before, stretch to stretch and to tape);
+- the primes per callback: 45 for one track and 90 for two, all in the callback holding S, and the
+  switch there continuous (the cold start before D4 primed as many, with a click: that part goes red
+  without D4);
+- three launches after a change still warm up, two primes a callback (round 152 F1: 45 at each switch
+  before);
+- a launch queued across a change (its switch before S, a warm-up under way after it, one voided and
+  placed again a bar later), and one switching just before a change of preserve pitch, both ways
+  (round 152 N2);
+- tape to stretch just after a launch in a later loop cycle plays as in the first (round 152 F2; the
+  converter reads from S, after the anchor, so the cycle it keeps is not heard there: the case pins the
+  result, it was not seen red);
+- the floor for a launch pressed inside the pending window, and the A1 bound at plan level for every
+  side.
+
+Phase 2 (the mirror, its keys, the race case, the loop wrap A6) is still to come.
 
 ## Consequences
 

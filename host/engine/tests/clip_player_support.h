@@ -522,4 +522,26 @@ inline CommitResidual commitResidual(const std::vector<float>& heard, std::uint3
     return r;
 }
 
+// A run's output across a playrate change (S3 step D4).
+struct ChangeRun {
+    std::vector<float> heard;
+    std::uint32_t latency = 0;
+};
+// The loudest sample over [a, b) of the stream.
+inline double loudest(const ChangeRun& r, std::int64_t a, std::int64_t b) {
+    double m = 0;
+    for (std::int64_t k = a; k < b; ++k)
+        m = std::max(m, std::fabs(double(r.heard[static_cast<std::size_t>(k + r.latency)])));
+    return m;
+}
+// The largest step between neighbouring samples over [a, b) of the stream.
+inline double largestStep(const ChangeRun& r, std::int64_t a, std::int64_t b) {
+    double m = 0;
+    for (std::int64_t k = a; k < b; ++k) {
+        const auto i = static_cast<std::size_t>(k + r.latency);
+        m = std::max(m, std::fabs(double(r.heard[i + 1]) - double(r.heard[i])));
+    }
+    return m;
+}
+
 }  // namespace clip_player_test

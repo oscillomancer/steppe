@@ -5,6 +5,7 @@
 // new reader's previous, on the old trajectory, crossfaded at the switch
 // into the same reading on the new one, primed on the audio thread within
 // a warm-up's primes. Its own ctest entry.
+#include <functional>
 #include "clip_player_support.h"
 
 using namespace supple;
@@ -13,10 +14,6 @@ using namespace clip_player_test;
 
 namespace {
 enum class Change { Envelope, ToTape, FromTape };
-struct ChangeRun {
-    std::vector<float> heard;
-    std::uint32_t latency = 0;
-};
 ChangeRun changeRun(const EngineOptions& options, std::uint32_t block, Change kind, bool change,
                     std::int64_t at) {
     Project p;
@@ -47,22 +44,6 @@ ChangeRun changeRun(const EngineOptions& options, std::uint32_t block, Change ki
     out.heard = live.stop();
     out.latency = live.latency;
     return out;
-}
-// The loudest sample over [a, b) of the stream.
-double loudest(const ChangeRun& r, std::int64_t a, std::int64_t b) {
-    double m = 0;
-    for (std::int64_t k = a; k < b; ++k)
-        m = std::max(m, std::fabs(double(r.heard[static_cast<std::size_t>(k + r.latency)])));
-    return m;
-}
-// The largest step between neighbouring samples over [a, b) of the stream.
-double largestStep(const ChangeRun& r, std::int64_t a, std::int64_t b) {
-    double m = 0;
-    for (std::int64_t k = a; k < b; ++k) {
-        const auto i = static_cast<std::size_t>(k + r.latency);
-        m = std::max(m, std::fabs(double(r.heard[i + 1]) - double(r.heard[i])));
-    }
-    return m;
 }
 }  // namespace
 
@@ -104,97 +85,119 @@ TEST_CASE("launched audio stays continuous across a change of the trajectory" *
         }
 }
 
-TEST_CASE("a trajectory change primes launched audio within a warm-up's primes per callback" *
+namespace {
+// The primes of every callback over (from, to] that primed, by the frame it
+// played to; `at(frame)` runs before each.
+using Primes = std::vector<std::pair<std::int64_t, std::uint64_t>>;
+Primes primesPerCallback(AppLive& live, std::int64_t from, std::int64_t to, std::uint32_t block,
+                         const std::function<void(std::int64_t)>& at) {
+    Primes out;
+    for (std::int64_t c = from / block + 1; c <= to / block; ++c) {
+        at(c * block);
+        const std::uint64_t before = detail::stretchPrimes();
+        live.until(c * block);
+        if (const std::uint64_t d = detail::stretchPrimes() - before; d > 0)
+            out.push_back({c * block, d});
+    }
+    return out;
+}
+void addEnvelope(Project& p) {
+    p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                     R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
+}
+}  // namespace
+
+TEST_CASE("a trajectory change primes launched audio within a warm-up's primes per track" *
           doctest::description("rt")) {
-    // Phase 1 of S3 step D4: the new reading is primed on the audio thread,
-    // at its first use, a warm-up's primes (45 at 48 kHz) at most; a warm-up
-    // spreads its own over its frames.
-    for (const bool change : {false, true}) {
-        INFO("change " << change);
+    // Phase 1 of S3 step D4: each track's new reading is primed on the audio
+    // thread at its first use, in the callback holding the switch S (209600,
+    // the callback to 209664): a warm-up's primes (45 at 48 kHz) per track
+    // with a launched audio clip, so two such tracks take 90 there. The cold
+    // start before D4 primed as many, in the same callback; what D4 buys
+    // with them is a continuous switch, checked here too. Without a change
+    // only cl_2's warm-up primes, two per callback at most.
+    for (const int tracks : {0, 1, 2}) {  // 0: no change, one track
+        INFO("tracks " << tracks);
         Project p;
         twoTracks(p);
+        if (tracks == 2) {
+            p.run("track.add", R"({"name": "Loop 2"})");  // tr_3, as tr_2
+            auto args = j(R"({"track": "tr_3", "scene": "sc_1"})");
+            args["audio_file"] = p.ramp("clip3.wav", 48000).string();
+            p.runArgs("clip.add", args);  // cl_3
+            p.run("fx.add", R"({"track": "tr_3", "plugin": "com.suppleaudio.test.gain"})");
+            p.run("fx.patch.merge", R"({"fx": "fx_3", "patch": {"params": {"latency": "short"}}})");
+        }
         p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
         constexpr std::uint32_t block = 128;
         AppLive live(p, kInCallback, block, 48000 * 6 + 16384);
         REQUIRE(p.app->transport("play"));
         live.until(20 * block);
         p.run("launch.clip", R"({"clip": "cl_2"})");
-        std::uint64_t most = 0;
-        for (std::int64_t c = 21; c < 300000 / block; ++c) {
-            if (change && c == 200000 / block)
-                p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
-                                 R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
-            const std::uint64_t before = detail::stretchPrimes();
-            live.until(c * block);
-            most = std::max(most, detail::stretchPrimes() - before);
-        }
+        if (tracks == 2) p.run("launch.clip", R"({"clip": "cl_3"})");
+        const Primes warm = primesPerCallback(live, 20 * block, 150016, block, [](std::int64_t) {});
+        const Primes around = primesPerCallback(live, 150016, 280064, block, [&](std::int64_t f) {
+            if (tracks > 0 && f == 200064) addEnvelope(p);
+        });
         CHECK(p.app->engine()->processErrors() == 0);
-        live.stop();
-        CHECK(most <= 45);
-        if (change) CHECK(most == 45);  // the new reading, primed in one callback
+        const std::vector<float> heard = live.stop();
+        for (const auto& [frame, primes] : warm) CHECK(primes <= 2u * std::max(tracks, 1));
+        if (tracks == 0) {
+            CHECK(around.empty());
+            continue;
+        }
+        REQUIRE(around.size() == 1);
+        CHECK(around[0].first == 209664);
+        CHECK(around[0].second == 45u * std::uint64_t(tracks));
+        ChangeRun run;
+        run.heard = heard;
+        run.latency = live.latency;
+        const std::int64_t S = 209600;
+        // The material's own step just before S (earlier, the clips' own loop
+        // restarts step further).
+        CHECK(largestStep(run, S - 200, S + 3000) <= 1.5 * largestStep(run, S - 3000, S - 200));
     }
 }
 
-TEST_CASE("a launch queued across a trajectory change" * doctest::description("rt")) {
-    // cl_2 plays; cl_3 is queued for bar 3 (running frame 256000), and a rate
-    // envelope is added so that the change's switch S lands `d` frames
-    // before bar 3 (the change reaches S about 9600 frames after the edit
-    // here, a little later in the anticipative executor).
-    // - d <= 0: cl_3 switches first, warmed on the old trajectory, then
-    //   crossfades into the new one at S.
-    // - d > 0 in the anticipative executor: its warm-up is under way when
-    //   the change is adopted, so it starts again on the new trajectory and
-    //   still switches at bar 3.
-    // - d > 0 in the callback: the change voids the launch, not yet applied,
-    //   and placement keeps it clear of the pending change: it lands a bar
-    //   later (the app's service places it again).
-    struct Case {
-        bool anticipative;
-        std::int64_t d;
-        double beat;  // where it lands: bar 3, or bar 4
-    };
-    for (const Case c :
-         {Case{false, -2000, 8}, Case{false, -300, 8}, Case{true, -2000, 8}, Case{true, -300, 8},
-          Case{true, 200, 8}, Case{true, 2500, 8}, Case{false, 2500, 12}}) {
-        INFO("anticipative " << c.anticipative << ", d " << c.d);
-        Project p;
-        twoTracks(p);
-        auto args = j(R"({"track": "tr_2", "scene": "sc_2"})");
-        args["audio_file"] = p.ramp("second.wav", 48000).string();
-        p.runArgs("clip.add", args);  // cl_3
-        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
-        constexpr std::uint32_t block = 128;
-        const EngineOptions options = c.anticipative ? EngineOptions{.workers = 0} : kInCallback;
-        AppLive live(p, options, block, 48000 * 9 + 16384);
-        REQUIRE(p.app->transport("play"));
-        live.until(20 * block);
-        p.run("launch.clip", R"({"clip": "cl_2"})");
-        live.until(200000);
-        p.run("launch.clip", R"({"clip": "cl_3"})");  // bar 3
-        const std::int64_t lag = c.anticipative ? 9793 : 9601;
-        live.until(256000 - lag - c.d);
-        p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
-                         R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
-        for (std::int64_t f = 256000 - lag - c.d + 1024; f < 420000; f += 1024) {
-            live.until(f);
-            p.app->engine()->service();  // as the app's tick
-        }
-        const auto log = p.app->engine()->launchLog();
-        CHECK(p.app->engine()->processErrors() == 0);
-        ChangeRun run;
-        run.heard = live.stop();
-        run.latency = live.latency;
-        REQUIRE(log.size() == 2);
-        CHECK(log[1].clip == id("cl_3"));
-        CHECK(log[1].anchorBeat == c.beat);
-        if (c.beat == 8) CHECK(log[1].runningFrame == 256000);  // not moved
-        const std::int64_t lands = log[1].runningFrame;
-        CHECK(loudest(run, lands + 3000, lands + 30000) > 0.01);  // cl_3 plays
-        if (c.d <= 0) {
-            const std::int64_t S = 256000 - c.d;
-            CHECK(largestStep(run, S - 300, S + 3000) <=
-                  1.5 * largestStep(run, S + 20000, S + 40000));
-        }
+TEST_CASE("launches after a trajectory change still warm up" * doctest::description("rt")) {
+    // Round 152 F1: the reader that held the clip playing at the change kept
+    // its previous reading's flag, and two launches later, back on reader 2,
+    // it warmed each later launch into that previous reading on the old
+    // trajectory: those launches started cold, 45 primes in their switch's
+    // callback. Three launches after an envelope edit now warm up, two primes
+    // a callback at most, after the change's own 45 at S.
+    Project p;
+    twoTracks(p);
+    auto args = j(R"({"track": "tr_2", "scene": "sc_2"})");
+    args["audio_file"] = p.ramp("second.wav", 48000).string();
+    p.runArgs("clip.add", args);  // cl_3
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    constexpr std::uint32_t block = 128;
+    AppLive live(p, kInCallback, block, 48000 * 16 + 16384);
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * block);
+    p.run("launch.clip", R"({"clip": "cl_2"})");
+    live.until(150016);
+    const char* order[] = {"cl_3", "cl_2", "cl_3"};
+    std::size_t pressed = 0;
+    const Primes primes = primesPerCallback(live, 150016, 600064, block, [&](std::int64_t f) {
+        if (f == 200064) addEnvelope(p);
+        if (f % 1024 == 0) p.app->engine()->service();
+        // Each pressed once the one before has switched (a bar each).
+        if (f > 215000 && pressed < 3 && p.app->engine()->launchLog().size() == pressed + 1)
+            p.run("launch.clip", std::string(R"({"clip": ")") + order[pressed++] + R"("})");
+    });
+    const auto log = p.app->engine()->launchLog();
+    CHECK(p.app->engine()->processErrors() == 0);
+    live.stop();
+    REQUIRE(log.size() == 4);
+    for (std::size_t k = 1; k < 4; ++k) CHECK(log[k].clip == id(order[k - 1]));
+    for (const auto& [frame, n] : primes) {
+        INFO("primes " << n << " in the callback to " << frame);
+        if (frame == 209664)
+            CHECK(n == 45);  // the change's own, at S
+        else
+            CHECK(n <= 2);
     }
 }
 

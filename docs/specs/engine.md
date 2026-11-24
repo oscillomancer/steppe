@@ -841,9 +841,23 @@ the same.*
       (`PlayerReader::previous`, allocated at compile) and seeks the new
       reader for output from S, and it is primed at its first use, on the
       audio thread: at most a warm-up's primes per reader in one callback
-      (45 at 48 kHz). A warm-up switching after S starts again on the new
-      trajectory, primed as far as it had come, in the adoption's block.
-      Phase 2, the mirror, only moves that priming to the main thread.
+      (45 at 48 kHz), so a callback holding S primes 45 for each track
+      with launched audio under stretch. A warm-up switching after S
+      starts again on the new trajectory, primed as far as it had come, in
+      the adoption's block; only a warm-up switching at or before S goes on
+      in `previous`, and the reader rotated onto reader 2 at a switch drops
+      its `previous` (round 152 F1). A tape reader keeps no loop cycle, so
+      a reading handed on from one takes its switch's
+      (`Node::launchSwitchCycle`, recorded in the switch's block while the
+      timeline still holds that frame; round 152 F2). Phase 2, the mirror,
+      only moves that priming to the main thread.
+    - *A change of preserve pitch with a launch switching in (adoption,
+      S].* Stretch to tape: reader 2 holds a tape reader with no warm-up,
+      so the launch is not rotated in: the clip plays on tape from its own
+      switch, not on a stretched warm-up until S. Tape to stretch: a tape
+      plan warms nothing, so the clip plays on the new trajectory from its
+      switch, primed there (step D's cold start). Neither crossfades at S;
+      the launch's own crossfade covers its start (round 152 N2).
     - A switch inside that crossfade, in (S, S + `smoothFrames`), rotates
       the reader with its `previous` (`applyLaunch`): the outgoing side
       plays both until S + `smoothFrames`. An outgoing reader still in

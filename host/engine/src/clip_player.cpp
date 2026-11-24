@@ -380,9 +380,13 @@ void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
         std::swap(r[0], r[1]);
         if (a.kind == LaunchState::Kind::Clip && a.player >= 0 && r[2].state &&
             r[2].player == &n.players[static_cast<std::size_t>(a.player)] &&
-            r[2].anchor == a.anchorSample && r[2].startQuantum != INT64_MIN)
+            r[2].anchor == a.anchorSample && r[2].startQuantum != INT64_MIN) {
             std::swap(r[0], r[2]);
-        else
+            // What went out before is over (switches are a warm-up apart):
+            // reader 2 starts the next warm-up with no previous reading
+            // (round 152 F1).
+            r[2].previousLive = false;
+        } else
             r[0].previousLive = false;  // a reading of its own from here (S3 step D4)
         const LaunchAction& warm = n.launchWarmNext;
         if (n.launchWarmValid && warm.kind == a.kind && warm.player == a.player &&
@@ -450,6 +454,7 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     n.launch = L;
     n.launchFresh = old.launchFresh;
     n.launchSwitchAt = old.launchSwitchAt;
+    n.launchSwitchCycle = old.launchSwitchCycle;
     n.launchSwitchPending = old.launchSwitchPending;
     // A launch reaching it early (prelaunch), by clip id too.
     n.launchNext = old.launchNext;
@@ -844,10 +849,12 @@ void warmLaunch(const Plan& p, Node& n, std::uint32_t frames) SUPPLE_RT {
     PlayerReader& reader = n.launchReaders[2];
     if (pl.midi || pl.chain >= 0 || !pl.audio.data || !reader.state || !reader.state->preserve)
         return;
-    // A warm-up switching before a trajectory change's switch goes on as
-    // the previous plan's reading, on the old trajectory (S3 step D4).
+    // A warm-up switching at or before a trajectory change's switch goes on
+    // as the previous plan's reading, on the old trajectory (S3 step D4);
+    // one switching later warms on the plan's own (round 152 F1).
     const bool before = reader.previousLive && reader.previous && reader.previous->state &&
-                        reader.previous->state->preserve && p.previousTimelines[n.live ? 1 : 0];
+                        reader.previous->state->preserve && p.previousTimelines[n.live ? 1 : 0] &&
+                        n.launchWarmAt - n.timelineShift <= p.rateSwitchDevice;
     PlayerReader& r = before ? *reader.previous : reader;
     const PlayrateTimeline& timeline =
         before ? *p.previousTimelines[n.live ? 1 : 0] : *p.timelines[n.live ? 1 : 0];
@@ -958,6 +965,11 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
     n.arrangementGain = nullptr;
     if (n.launchSwitchPending) {  // this block starts at the switch
         n.launchSwitchAt = pos - n.timelineShift;
+        n.launchSwitchCycle = 0;
+        if (p.rateEnabled) {
+            const PlayrateTimeline& timeline = *p.timelines[n.live ? 1 : 0];
+            n.launchSwitchCycle = timeline.cycle(timeline.phase(n.launchSwitchAt));
+        }
         n.launchSwitchPending = false;
     }
     if (p.rateStretch) warmLaunch(p, n, frames);  // the next launch's converter (S3 step D)
@@ -1411,8 +1423,14 @@ void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
         if (stretched) {
             // Seeked here for output from the switch; primed at its first
             // use, a warm-up's primes at most (stretchQuantum).
+            // Its loop cycle: the reading's own, or a tape reader's switch's
+            // (a tape reader keeps none: round 152 F2). A switch whose block
+            // has not run yet starts cold there instead (stretchQuantum).
+            const bool tape = !to.previous->state->preserve;
+            if (tape && old.launchSwitchPending) continue;
             stretchSeekCycle(to, *pl, to.previous->anchor, to.previous->unanchored,
-                             to.previous->launchCycle, timeline, quantumAt(p, S));
+                             tape ? old.launchSwitchCycle : to.previous->launchCycle, timeline,
+                             quantumAt(p, S));
             to.previousLive = true;
         } else {
             to.player = pl;

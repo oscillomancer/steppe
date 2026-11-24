@@ -336,9 +336,11 @@ instructions are in `docs/guides/installing.md`.
       trajectory change (an envelope edit, preserve pitch toggled) switches
       launched audio where the items switch, crossfaded from the old
       reading (S3 step D4, phase 1: the new reading is primed on the audio
-      thread, a warm-up's primes per reader at most, until the main-thread
-      mirror lands), and an audio launch pressed while it is pending lands
-      after its crossfade plus a warm-up; a
+      thread, a warm-up's primes for each track with launched audio, in the
+      callback holding the switch, until the main-thread mirror lands), and
+      an audio launch pressed while it is pending, or queued before it and
+      not yet begun, can land a boundary later, after its crossfade plus a
+      warm-up; a
       capture runs in song time under one, refused (or ended, with a
       warning) while a launched audio clip plays and the playrate keeps
       the pitch, and ended on its boundary by a switch that cuts
