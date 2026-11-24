@@ -3118,14 +3118,15 @@ same heights, scroll and colours.
   (`launch.playrate`, `launch.clip`); a scene holding one memory-skipped clip
   launches the rest, so its ▶ stays bright and only that clip dims. Refusals
   that depend on the transport (no engine running, a relocation, a full queue)
-  are not shown. While the pane is shown the app asks again for every clip and
-  scene only when `EngineApp::launchRefusalGeneration` moves (a published
-  plan, an edit, an engine started or stopped, a project opened;
-  `gui::RefusalWatch`, each frame), at most once a frame, so a fader drag,
-  which edits every frame, asks once a frame; while it is hidden nothing is
-  asked, and the first frame it is shown asks if anything moved meanwhile. No
-  text is drawn for a refusal, and the code gives it no look of its own; a
-  click still asks, and the refusal's message reaches the status line.
+  are not shown. While the pane is shown the app asks again, every clip and
+  scene in one call (`EngineApp::launchRefusals`, one pass over the clips),
+  only when `EngineApp::launchRefusalGeneration` moves (a published plan, an
+  edit, an engine started or stopped, a project opened; `gui::RefusalWatch`,
+  each frame), at most once a frame, so a fader drag, which edits every frame,
+  asks once a frame; while it is hidden nothing is asked, and the first frame
+  it is shown asks if anything moved meanwhile. No text is drawn for a
+  refusal, and the code gives it no look of its own; a click still asks, and
+  the refusal's message reaches the status line.
   - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
     name bar's ink while idle).
   - **Playing:** the ▶, an outline, and a progress line along the bottom
@@ -3303,7 +3304,8 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   its scene's ▶ stays bright and launches the rest; any code set on the view
   dims the same way. A fader drag asks for the refusals once per frame that
   moved the head while the pane is shown, never while it is hidden, and once
-  when it is shown again (a count, not a time).
+  when it is shown again, each ask one `EngineApp::launchRefusals` call (a
+  count, not a time).
 - The clip menu's Take FX… handing the app the active take, and the FX
   window opening a clip's take chain.
 - A scene dragged onto the lanes (its ghost, the command, the section and

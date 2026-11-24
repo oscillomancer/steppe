@@ -469,13 +469,10 @@ views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& s
     return out;
 }
 
-views::LaunchRefusals launchRefusals(const engine::EngineApp& app) {
-    const model::Session& s = app.head();
+views::LaunchRefusals launchRefusalViews(const engine::EngineApp::LaunchRefusals& refusals) {
     views::LaunchRefusals out;
-    for (const auto& e : s.clips)
-        if (auto refused = app.launchRefusal(e.id)) out.clips[e.id] = refused->code;
-    for (const auto& e : s.scenes)
-        if (auto refused = app.sceneLaunchRefusal(e.id)) out.scenes[e.id] = refused->code;
+    for (const auto& [clip, error] : refusals.clips) out.clips.emplace(clip, error.code);
+    for (const auto& [scene, error] : refusals.scenes) out.scenes.emplace(scene, error.code);
     return out;
 }
 
@@ -485,7 +482,7 @@ void RefusalWatch::update(const engine::EngineApp& app, views::ArrangeView& view
     if (generation == seen_) return;
     seen_ = generation;
     ++asked_;
-    view.setLaunchRefusals(launchRefusals(app));
+    view.setLaunchRefusals(launchRefusalViews(source_ ? source_(app) : app.launchRefusals()));
 }
 
 std::optional<std::chrono::steady_clock::time_point> Shell::nextDeadline() const {

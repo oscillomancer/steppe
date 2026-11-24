@@ -43,9 +43,9 @@ std::string countsText(const model::Session& session);
 
 // The engine's launch state as the arrange view draws it (ADR-0097).
 views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& state);
-// What a press on each clip and scene of the head would be refused for now
-// (EngineApp::launchRefusal, sceneLaunchRefusal), by its code.
-views::LaunchRefusals launchRefusals(const engine::EngineApp& app);
+// The engine app's answers (EngineApp::launchRefusals: what a press on each
+// clip and scene would be refused for now) as the views draw them, by code.
+views::LaunchRefusals launchRefusalViews(const engine::EngineApp::LaunchRefusals& refusals);
 // Keeps the arrange view's refusals current while its launcher pane is
 // shown: asks them again whenever EngineApp::launchRefusalGeneration moves
 // (a plan published, an edit, an engine started or stopped, a project
@@ -54,11 +54,16 @@ views::LaunchRefusals launchRefusals(const engine::EngineApp& app);
 // first pass asks if anything moved meanwhile. Each frame.
 class RefusalWatch {
   public:
+    // Where an ask goes: one EngineApp::launchRefusals call, every clip and
+    // scene in one pass (the default; a test wraps it to count the calls).
+    using Source = std::function<engine::EngineApp::LaunchRefusals(const engine::EngineApp& app)>;
+    explicit RefusalWatch(Source source = {}) : source_(std::move(source)) {}
     void update(const engine::EngineApp& app, views::ArrangeView& view);
     // How many times the refusals were asked for (tests pin the bound).
     std::size_t asked() const { return asked_; }
 
   private:
+    Source source_;
     std::optional<std::uint64_t> seen_;  // nullopt: never asked yet
     std::size_t asked_ = 0;
 };

@@ -1869,10 +1869,17 @@ TEST_CASE("launcher: followNotice words key changes, chords, folding, and sums u
 TEST_CASE("launcher: a fader drag asks for the refusals once a frame while shown, never hidden") {
     // Round 147 F1: a fader drag sends a coalesced track.set every frame, a
     // new head version each time, so the refusals' generation moves every
-    // frame. Shown, the pane asks once per frame that moved it, no more;
-    // hidden, it asks nothing during the drag and once when shown again.
+    // frame. Shown, the pane asks once per frame that moved it, no more,
+    // and each ask is one EngineApp::launchRefusals call (every clip and
+    // scene in one pass); hidden, it asks nothing during the drag and once
+    // when shown again.
     LauncherFixture f;
     f.song();
+    std::size_t batches = 0;  // EngineApp::launchRefusals calls
+    f.refusals = gui::RefusalWatch([&](const engine::EngineApp& app) {
+        ++batches;
+        return app.launchRefusals();
+    });
     views::TcpCallbacks cb;
     cb.commit = [&](std::string_view command, json::Value args, std::string gesture) {
         cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
@@ -1903,22 +1910,30 @@ TEST_CASE("launcher: a fader drag asks for the refusals once a frame while shown
         return moved;
     };
     REQUIRE(f.view->launcherShown());
+    f.sync();
     std::size_t before = f.refusals.asked();
+    std::size_t batchesBefore = batches;
+    REQUIRE(before >= 1);  // the watch asked on its first pass
+    CHECK(batches == before);
     const double startDb = f.app->head().tracks.find(drums)->volumeDb;
     const std::size_t moved = drag(12);
     CHECK(f.app->head().tracks.find(drums)->volumeDb < startDb);  // the drag edited
     CHECK(moved >= 12);
     CHECK(f.refusals.asked() - before == moved);  // one ask per frame that moved the head
+    CHECK(batches - batchesBefore == moved);      // each ask one batch call
     // Hidden: the same drag asks nothing; shown again, one ask, current.
     f.view->setLauncherShown(false);
     f.sync();
     REQUIRE_FALSE(f.view->launcherShown());
     before = f.refusals.asked();
+    batchesBefore = batches;
     CHECK(drag(12) >= 12);
     CHECK(f.refusals.asked() == before);
+    CHECK(batches == batchesBefore);
     f.view->setLauncherShown(true);
     f.sync();
     CHECK(f.refusals.asked() == before + 1);
+    CHECK(batches == batchesBefore + 1);
     agreeWithEngine(f, "shown again after a hidden drag");
     CHECK(f.errors.empty());
     f.exec("engine.stop", "{}");
