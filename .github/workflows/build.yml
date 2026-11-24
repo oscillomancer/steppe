@@ -272,6 +272,8 @@ jobs:
             # all /clang: options, the project's own warning and codegen flags); the stats
             # step summarises it.
             echo "CCACHE_LOGFILE=$(cygpath -m "$RUNNER_TEMP")/ccache.log" >> "$GITHUB_ENV"
+            # The sources built with the project's /clang: flags stay uncached on purpose:
+            # ccache 4.14.1+ refuses them as unsafe to cache (CONTRIBUTING.md).
             # ccache cannot cache an object whose debug information goes to a PDB at
             # compile time (/Zi); /Z7 embeds it, and clang-cl treats /Zi as /Z7 already, so
             # the objects are the same. CI only: the windows preset is unchanged, and the
