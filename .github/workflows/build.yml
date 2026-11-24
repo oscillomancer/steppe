@@ -363,7 +363,8 @@ jobs:
           while ($true) {
             $c = (Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
             $m = (Get-Counter '\Memory\Available MBytes' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
-            ('{0} {1:N0} {2:N0}' -f (Get-Date -Format 'HH:mm:ss'), $c, $m) | Out-File -Append -Encoding ascii $log
+            # F0, not N0: N0 writes 12,345 and awk would read 12.
+            ('{0} {1:F0} {2:F0}' -f (Get-Date -Format 'HH:mm:ss'), $c, $m) | Out-File -Append -Encoding ascii $log
             Start-Sleep -Seconds 15
           }
           '@ | Set-Content -Encoding ascii -Path $script
