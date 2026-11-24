@@ -431,7 +431,13 @@ TEST_CASE("structured errors keep their text locations across RPC") {
 }
 
 // The model thread is held until the call has returned, so the call can only
-// end by timing out; no wall-clock threshold decides the result.
+// end by timing out, whatever the timeout. Whether add-3 still runs is
+// decided by the server: it breaks on the hang-up before it reads, so a
+// request it has not read within the 300 ms is dropped. The case accepts both
+// outcomes (4: read in time, 1: not) and checks what holds either way, that
+// the next answer is not the late response; "a request that was read still
+// runs" is shown deterministically by the interrupt case below, which gates
+// on the server having queued it.
 TEST_CASE("a timed-out call closes the connection and the next call reconnects") {
     auto commands = registry();
     Host host;
@@ -456,10 +462,13 @@ TEST_CASE("a timed-out call closes the connection and the next call reconnects")
     CHECK(late.error().code == "rpc.timeout");
     client.setTimeout(kGuard);
     // Not the late response to the first call (that one went to the closed
-    // connection), and the first call still ran before it.
+    // connection: it would read 3), and the first call ran before it (4), or
+    // the server had not read it before the hang-up (1).
     auto next = client.call("counter.add", parse(R"({"value":1})"));
     REQUIRE(next);
-    CHECK(next->find("count")->asInt() == 4);
+    const auto count = next->find("count")->asInt();
+    CHECK((count == 4 || count == 1));
+    if (count == 1) MESSAGE("the server had not read add-3 within the timeout: dropped, not run");
     std::promise<cmd::Origin> origin;
     queue.post([&] { origin.set_value(host.last); });
     auto seen = origin.get_future().get();
