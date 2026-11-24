@@ -2483,80 +2483,84 @@ TEST_CASE("audio device: each start error reads as gui.md's table says, per audi
         return s;
     };
     const char* hint = "a hint for command callers";
+    // The words key on the code and the audio system only: every message
+    // here is the same text, which no row reads.
+    const char* text = "driver text";
+    auto error = [&](const char* code, const char* path = "") {
+        return Error(code, text, path, hint);
+    };
+    const std::string unknown = "Driver text.";
     const std::vector<Case> cases{
         // JACK (Linux): the server, the library; never another device or system.
         {"jack library",
          settings("jack"),
          {},
-         Error("backend.unavailable", "JACK is not available: libjack.so.0: cannot open", {}, hint),
-         "The JACK library was not found. Install PipeWire's JACK support (pipewire-jack) or "
-         "JACK, then Restart audio."},
-        {"jack symbols",
-         settings("jack"),
-         {},
-         Error("backend.unavailable", "libjack.so.0 lacks JACK symbols: jack_activate", {}, hint),
-         "The JACK library found is incomplete. Install PipeWire's JACK support (pipewire-jack) "
-         "or JACK, then Restart audio."},
+         error("backend.unavailable"),
+         "The JACK library is missing or incomplete. Install PipeWire's JACK support "
+         "(pipewire-jack) or JACK, then Restart audio."},
         {"jack server",
          settings("jack"),
          {},
-         Error("backend.open", "could not connect to the JACK server (failure, server failed)", {},
-               hint),
+         error("backend.driver"),
          "The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), "
          "or a JACK server, then Restart audio."},
-        {"jack ports",
-         settings("jack"),
-         {},
-         Error("backend.open", "JACK: cannot activate the client", {}, hint),
-         "JACK refused the connection (cannot activate the client). Restart audio; if it fails "
-         "again, restart PipeWire or the JACK server."},
-        {"jack other",
-         settings("jack"),
-         {},
-         Error("backend.config", "invalid requested graph rate", "/rate", hint),
-         "Invalid requested graph rate."},
+        {"jack other", settings("jack"), {}, error("backend.open"), unknown},
         // Windows WASAPI (shared mode).
-        {"wasapi busy", settings("portaudio"), fakeDevices(),
-         Error("backend.open", "Device unavailable", "/backend", hint),
-         "The device is unavailable. Another app may be using it in exclusive mode: close that "
-         "app, then Restart audio."},
+        {"wasapi invalid", settings("portaudio"), fakeDevices(),
+         error("backend.device.invalid", "/backend"),
+         "The device could not be opened. Another app may be using it in exclusive mode, or it "
+         "was disconnected: close that app or reconnect it, then Restart audio."},
         {"wasapi rate", settings("portaudio", "", "", "", 96000), fakeDevices(),
-         Error("backend.open", "Invalid sample rate", "/rate", hint),
-         "The device refused the sample rate. Choose another sample rate, or the device's own "
-         "rate."},
+         error("backend.rate", "/rate"),
+         "The device does not run at 96000\xC2\xA0Hz. Choose another sample rate, or the "
+         "device's own rate."},
         {"wasapi input", settings("portaudio", "", "", "Microphone 2"), fakeDevices(),
-         Error("backend.device", "device was not found", "/input_device", hint),
+         error("backend.device.not_found", "/input_device"),
          "The input device \"Microphone 2\" was not found. Choose another device, or Refresh "
          "once it is connected.",
          "System default", "Microphone 2 (not found)"},
         {"wasapi host", settings("portaudio", "Windows DirectSound"), fakeDevices(),
-         Error("backend.device", "host API was not found", "/host_api", hint),
+         error("backend.host_api.not_found", "/host_api"),
          "The audio system \"Windows DirectSound\" was not found. Choose another audio system."},
-        {"wasapi other", settings("portaudio"), fakeDevices(),
-         Error("backend.open", "Unanticipated host error", "/backend", hint),
-         "Unanticipated host error."},
-        // Windows ASIO: one device for input and output (round 165 re-check 3 F2).
+        {"wasapi busy", settings("portaudio"), fakeDevices(), error("backend.busy", "/backend"),
+         "The device is in use. Close the app using it, then Restart audio."},
+        {"wasapi other", settings("portaudio"), fakeDevices(), error("backend.open", "/backend"),
+         unknown},
+        // Windows ASIO: one device for input and output.
         {"asio missing", settings("portaudio", "ASIO", "Focusrite USB ASIO"), fakeDevices(),
-         Error("backend.device", "device was not found", "/input_device", hint),
+         error("backend.device.not_found", "/input_device"),
          "The device \"Focusrite USB ASIO\" was not found. Choose another device, or Refresh "
          "once it is connected.",
          "Focusrite USB ASIO (not found)", "Same device as output"},
+        {"asio unnamed", settings("portaudio", "ASIO"), fakeDevices(),
+         error("backend.device.not_found", "/output_device"),
+         "No ASIO device was found. Choose another device, or Refresh once it is connected.",
+         "System default (not found)", "Same device as output"},
+        {"asio no inputs", settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices(),
+         error("backend.device.no_inputs", "/input_device"),
+         "The device \"Interface ASIO\" has no inputs. Choose another input device, or None "
+         "(playback only).",
+         "Interface ASIO", "Same device as output (no inputs)"},
+        {"asio driver", settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices(),
+         error("backend.driver", "/backend"),
+         "The ASIO driver did not start. If another app is using it, close that app; check that "
+         "the interface is connected; then Restart audio."},
         {"asio busy", settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices(),
-         Error("backend.open", "Device unavailable", "/backend", hint),
-         "The ASIO driver is unavailable. An ASIO driver serves one app at a time: close the "
-         "other app using it, then Restart audio."},
+         error("backend.busy", "/backend"),
+         "The ASIO driver is already open in this app. Restart audio."},
         // macOS Core Audio: the only audio system, so never "another" one.
-        {"coreaudio busy", settings("portaudio"), mac,
-         Error("backend.open", "Device unavailable", "/backend", hint),
-         "The device is unavailable. Another app may have taken it over: close that app, then "
-         "Restart audio."},
+        {"coreaudio busy", settings("portaudio"), mac, error("backend.busy", "/backend"),
+         "The device is in use. Another app has taken it over: close that app, then Restart "
+         "audio."},
         {"coreaudio host", settings("portaudio", "Core Audio"), mac,
-         Error("backend.device", "host API was not found", "/host_api", hint),
+         error("backend.host_api.not_found", "/host_api"),
          "The audio system \"Core Audio\" was not found."},
         {"coreaudio channels", settings("portaudio", "", "", "MacBook Pro Microphone"), mac,
-         Error("backend.config", "device has too few channels", "/inputs", hint),
+         error("backend.device.channels", "/inputs"),
          "The input device has too few channels. Choose another input device, or None (playback "
          "only)."},
+        {"coreaudio driver", settings("portaudio"), mac, error("backend.driver", "/backend"),
+         unknown},
     };
     for (const Case& c : cases) {
         CAPTURE(c.what);
@@ -2660,7 +2664,7 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     audio.startEngine = [&](const json::Value& args) -> Result<json::Value> {
         calls.push_back("start");
         if (refuse)
-            return Error("backend.device", "device was not found", "/output_device",
+            return Error("backend.device.not_found", "device was not found", "/output_device",
                          "choose an exact name from engine.devices");
         json::Value dummy = json::Value::object();  // a device-free engine stands in
         dummy["backend"] = "dummy";
@@ -2743,7 +2747,7 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     fallback.startEngine = [&](const json::Value& args) -> Result<json::Value> {
         starts.push_back(json::writeCompact(args));
         if (missing && args.find("output_device"))
-            return Error("backend.device", "device was not found", "/output_device",
+            return Error("backend.device.not_found", "device was not found", "/output_device",
                          "choose an exact name from engine.devices");
         json::Value dummy = json::Value::object();
         dummy["backend"] = "dummy";
@@ -2905,7 +2909,7 @@ TEST_CASE("audio device: the dialog saves each choice and restarts the engine wi
     audio.startEngine = [&](const json::Value& args) -> Result<json::Value> {
         starts.push_back(json::writeCompact(args));
         if (refuse && args.find("output_device"))
-            return Error("backend.device", "device was not found", "/output_device",
+            return Error("backend.device.not_found", "device was not found", "/output_device",
                          "choose an exact name from engine.devices");
         // A device-free engine stands in for the device.
         json::Value dummy = json::Value::object();

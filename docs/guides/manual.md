@@ -127,8 +127,9 @@ backend, rate, buffer size, device period and output latency.
 When audio cannot start, the dialog says why and what to do. On Linux, "The
 JACK server did not answer" means PipeWire's JACK support (pipewire-jack) or a
 JACK server is not running: start it, then **Restart audio**. On Windows, an
-ASIO driver serves one app at a time, and an app using a device in exclusive
-mode keeps it from others: close that app, then **Restart audio**.
+ASIO driver that does not start is often held by another app, and an app using
+a device in exclusive mode keeps it from others: close that app, then
+**Restart audio**.
 
 The right end of the transport bar shows what the device is running at, for
 example **48 kHz · 256 samples**. It stays quiet while all is well. If

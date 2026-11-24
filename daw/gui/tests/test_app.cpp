@@ -293,7 +293,7 @@ TEST_CASE("audio device: the app's wiring says Refresh's refusals in the status 
     };
     audio.startEngine = [&](const json::Value& args) -> Result<json::Value> {
         if (refuse)
-            return Error("backend.device", "device was not found", "/output_device",
+            return Error("backend.device.not_found", "device was not found", "/output_device",
                          "choose an exact name from engine.devices");
         json::Value dummy = json::Value::object();  // a device-free engine stands in
         dummy["backend"] = "dummy";

@@ -11,6 +11,7 @@
 #include <functional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "supple/cmd/bus.h"
@@ -132,9 +133,10 @@ class AudioDeviceDialog {
     std::string logged_;                // the last detail onLog was given
     bool wanted_ = false;               // a start was asked for: changes restart the engine
     bool startedWithFallback_ = false;  // the last start(): Refresh starts the same way
-    // The saved device a fallback did not find ("/output_device" or
-    // "/input_device"): its row reads "<name> (not found)".
-    std::string missing_;
+    // The output and input rows' suffixes after a failed start ("(not
+    // found)", "(no inputs)"), from the error's code and path.
+    std::pair<std::string, std::string> marks_;
+    bool asio() const;  // the native device on its ASIO host
 };
 
 // The app's wiring: the dialog's refusals and failures go to the status

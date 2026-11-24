@@ -3899,34 +3899,38 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   (`engineStartArgs`): an explicit rate, or for the native device the output
   device's own rate; for JACK, `force_graph` only when forcing.
 
-**Audio device errors** (`errorWords`, audio_device.cpp). The audio systems
-are JACK (Linux, through PipeWire), Core Audio (macOS), WASAPI in shared mode
-and ASIO (Windows), and Dummy, which opens no device and has no rows; no ALSA
-and no WASAPI exclusive mode are built. "Choose another audio system" is
-said only when the Audio system menu lists another one with devices, never
-for Dummy alone. *X* is the device or audio system asked for.
+**Audio device errors** (`errorWords`, audio_device.cpp). The words key on
+the engine's error code, which carries the cause (engine.md, the codes of a
+failed start), and the audio system; the error's path only says which device.
+No message text is compared. The audio systems are JACK (Linux, through
+PipeWire), Core Audio (macOS), WASAPI in shared mode and ASIO (Windows), and
+Dummy, which opens no device and has no rows; no ALSA and no WASAPI exclusive
+mode are built. "Choose another audio system" is said only when the Audio
+system menu lists another one with devices, never for Dummy alone. *X* is the
+device asked for: an ASIO driver is one device for input and output; an
+unnamed device is "the default input (output) device", "No ASIO device" on
+ASIO, never `""`. The row the error points at is marked: "(not found)" on
+the device's row (an ASIO driver's: the output row), "(no inputs)" on the
+input row.
 
-| Audio system | Engine error (code, path, message) | The dialog says |
+| Cause (code) | Audio system | The dialog says |
 |---|---|---|
-| JACK | `backend.unavailable`, "JACK is not available: …" | The JACK library was not found. Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart audio. |
-| JACK | `backend.unavailable`, "… lacks JACK symbols: …" | The JACK library found is incomplete. Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart audio. |
-| JACK | `backend.open`, "could not connect to the JACK server (…)" | The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), or a JACK server, then Restart audio. |
-| JACK | `backend.open`, "JACK: *what*" (ports, activation) | JACK refused the connection (*what*). Restart audio; if it fails again, restart PipeWire or the JACK server. |
-| Core Audio, WASAPI | `backend.device`, `/output_device`, "device was not found" | The output device "*X*" was not found (a default: The default output device was not found). Choose another device, or Refresh once it is connected. |
-| Core Audio, WASAPI | `backend.device`, `/input_device`, "device was not found" | The input device "*X*" was not found (or: The default input device …). Choose another device, or Refresh once it is connected. |
-| ASIO | `backend.device`, `/output_device` or `/input_device`, "device was not found" | The device "*X*" was not found. Choose another device, or Refresh once it is connected. |
-| Core Audio, WASAPI, ASIO | `backend.device`, a device path, "device name is ambiguous" | More than one device is named "*X*". Rename one in the system's sound settings, or choose another device. |
-| Core Audio, WASAPI, ASIO | `backend.device`, `/host_api` | The audio system "*X*" was not found. (Choose another audio system., when another is listed) |
-| Core Audio, WASAPI, ASIO | `backend.open`, `/rate` (the rate not supported) | The device refused the sample rate. (Choose another sample rate, or the device's own rate., when a rate was chosen) |
-| WASAPI | `backend.open`, `/backend`, "Device unavailable" | The device is unavailable. Another app may be using it in exclusive mode: close that app, then Restart audio. |
-| ASIO | `backend.open`, `/backend`, "Device unavailable" | The ASIO driver is unavailable. An ASIO driver serves one app at a time: close the other app using it, then Restart audio. |
-| Core Audio | `backend.open`, `/backend`, "Device unavailable" | The device is unavailable. Another app may have taken it over: close that app, then Restart audio. |
-| Core Audio, WASAPI, ASIO | `backend.config`, `/inputs`, "device has too few channels" | The input device has too few channels. Choose another input device, or None (playback only). |
-| Core Audio, WASAPI, ASIO | `backend.config`, `/outputs`, "device has too few channels" | The output device has too few channels. Choose another output device. |
-| Core Audio, WASAPI, ASIO | `backend.config`, `/rate`, "device returned an invalid stream rate" | The device reported an invalid sample rate. Choose another device or sample rate. |
-| any | anything else (other PortAudio errors, such as "Unanticipated host error", the device monitor, `engine.*`) | The message alone, as a sentence ("Unanticipated host error."). |
-
-
+| `backend.unavailable` | JACK | The JACK library is missing or incomplete. Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart audio. |
+| `backend.driver` | JACK | The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), or a JACK server, then Restart audio. |
+| `backend.driver` | ASIO | The ASIO driver did not start. If another app is using it, close that app; check that the interface is connected; then Restart audio. |
+| `backend.device.not_found` | Core Audio, WASAPI | The output (input) device "*X*" was not found, or: The default output (input) device was not found. Choose another device, or Refresh once it is connected. |
+| `backend.device.not_found` | ASIO | The device "*X*" was not found, or: No ASIO device was found. Choose another device, or Refresh once it is connected. |
+| `backend.device.no_inputs` | Core Audio, WASAPI, ASIO | The input device "*X*" has no inputs (ASIO: The device "*X*" has no inputs). Choose another input device, or None (playback only). |
+| `backend.device.ambiguous` | Core Audio, WASAPI, ASIO | More than one device is named "*X*". Rename one in the system's sound settings, or choose another device. |
+| `backend.device.channels` | Core Audio, WASAPI, ASIO | The input (output) device has too few channels. Choose another input device, or None (playback only) / Choose another output device. |
+| `backend.device.invalid` | WASAPI | The device could not be opened. Another app may be using it in exclusive mode, or it was disconnected: close that app or reconnect it, then Restart audio. |
+| `backend.device.invalid` | Core Audio, ASIO | The device could not be opened. It may have been disconnected: reconnect it or choose another device, then Restart audio. |
+| `backend.host_api.not_found` | Core Audio, WASAPI, ASIO | The audio system "*X*" was not found. (Choose another audio system., when another is listed) |
+| `backend.rate` | Core Audio, WASAPI, ASIO | The device does not run at *N* Hz. Choose another sample rate, or the device's own rate. (No rate chosen: The device refused the sample rate.) |
+| `backend.busy` | Core Audio | The device is in use. Another app has taken it over: close that app, then Restart audio. |
+| `backend.busy` | ASIO | The ASIO driver is already open in this app. Restart audio. |
+| `backend.busy` | WASAPI | The device is in use. Close the app using it, then Restart audio. |
+| anything else (`backend.open`, `backend.config`, `engine.*`, `backend.driver` off JACK and ASIO) | any | The message alone, as a sentence. |
 
 ## 7. Visual identity
 
