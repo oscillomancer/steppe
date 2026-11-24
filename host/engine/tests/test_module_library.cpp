@@ -580,6 +580,32 @@ TEST_CASE("rack.capture: a rack's notes become a MIDI item") {
     CHECK(input.error().path == "/args/pitch");
 }
 
+TEST_CASE("rack.capture: a master playrate does not stretch the notes it writes") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("track.add", R"({"name": "Keys"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                    // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");  // mo_2
+    const auto capture = [&](double at) {
+        char text[400];
+        std::snprintf(text, sizeof text,
+                      R"({"rack": "rk_1", "pitch": "mo_2.pitch", "gate": "mo_2.gate",
+        "track": "tr_2", "beats": 4, "at": %g, "quantize": 0.25,
+        "notes": "voice v; 1: C4:q E4:e r:e [G4 B4]:h"})",
+                      at);
+        json::Value r = f.run("rack.capture", text);
+        return f.app->head().midi.find(*model::Id::parse(r["source"].asString()))->sequence.notes;
+    };
+    const auto unity = capture(8);
+    REQUIRE(unity.size() == 4);
+    // The notes are written in song beats from the capture's start, whatever the speed they
+    // were heard at: half speed hears them twice as long, double speed half as long.
+    f.run("transport.playrate.set", R"({"rate": 0.5})");
+    CHECK(capture(16) == unity);
+    f.run("transport.playrate.set", R"({"rate": 2})");
+    CHECK(capture(24) == unity);
+}
+
 TEST_CASE("rack.patch: named modules and cables in one step, all or nothing") {
     Fixture f;
     f.run("track.add", R"({"name": "Synth"})");

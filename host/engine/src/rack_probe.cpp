@@ -659,7 +659,12 @@ void registerRackCapture(cmd::Registry& registry) {
                        beats](const OfflineSettings& renderSettings) -> Result<CaptureResult> {
             InstancePool pool(resolver, identity);
             pool.setOverrides(overrides);
-            auto rendered = renderOffline(copy, pool, renderSettings);
+            // The listener's frames are running frames: under a master playrate they are not
+            // song time, so the render says what song position each block plays.
+            OfflineSettings withClock = renderSettings;
+            std::vector<std::pair<std::int64_t, double>> clock;
+            withClock.songClock = &clock;
+            auto rendered = renderOffline(copy, pool, withClock);
             if (!rendered) return std::move(rendered).error();
             const rack::Instance* in = pool.racks().find(id);
             const auto* capture =
@@ -670,7 +675,9 @@ void registerRackCapture(cmd::Registry& registry) {
             midi::Sequence seq;
             const double ppq = seq.ppq;
             auto beatOf = [&](std::int64_t frame) {
-                return copy.timeMap->beatAt(start + static_cast<double>(frame) / rate) - fromBeat;
+                return copy.timeMap->beatAt(
+                           songSecondsAt(clock, static_cast<double>(frame), start, rate)) -
+                       fromBeat;
             };
             auto snap = [&](double beat) {
                 return a.quantize ? std::round(beat / *a.quantize) * *a.quantize : beat;

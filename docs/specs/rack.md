@@ -956,10 +956,13 @@ voice) and velocity (`round(127 × v)`, clamped to 1..127; 96 without
 `velocity`), and a fall below 0.25 ends it. A note still sounding at the
 end ends there. It keeps up to 65,536 gate changes and warns when there
 were more. With `quantize` (beats, 1/64..4) starts and ends go to the
-nearest grid line and a note lasts at least one step. The notes, in beats
+nearest grid line and a note lasts at least one step. The notes, in song beats
 from `from_beat`, become a MIDI source, a take named `name` (default the
 rack's name) and an item at `at` (default `from_beat`) on `track`, a
-channel, `beats` long. The same project and arguments give the same notes.
+channel, `beats` long. The same project and arguments give the same notes. The render keeps the
+master playrate, so the listener's frames are device time; each event is placed at the song
+position the render's own clock gives for its frame (the clock `rack.probe` reads, §7.2 "Probe
+names"), and a note lasts as many song beats as the rack held it for, at any master playrate.
 
 With `async: true`, the command returns `{job}` immediately and renders the
 immutable project and module/plug-in catalogue snapshot on a job worker.
