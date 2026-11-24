@@ -1160,6 +1160,8 @@ the replay.
 
 ## Revision (2026-11-24, S3 step D4): launched audio across a trajectory change
 
+*(Revised the same day after review round 145: A1 to A6, and S1's miss path.)*
+
 **Context.** Step D's readers restart cold where they play when a plan swap changes the trajectory (a
 scalar, preserve pitch, an envelope): a burst of up to 45 primes in one block, and a cut from the old
 trajectory's reading to the new one, while the timeline's items switch at `rateSwitchDevice` (S) with a
@@ -1168,42 +1170,76 @@ switch launched audio the items' way (option A of the S3 design note) over warmi
 and switching about 61 ms later (option B), so the two stay in step.
 
 **Decision.**
+- **Units.** S is a device frame; in an executor's stream it is `handAt + S − rateHandDevice`, as
+  `rateSafeStream_` converts it.
 - **The mirror.** At prepare the main thread reads what each node with audio clips reads at S, from the
-  acknowledged launch log and the applied launch slots only: the clip, its anchor and its switch quantum
-  (the key). Slots are atomics and an applied slot's target is fixed, so the read takes no lock.
+  acknowledged launch log and the applied launch slots only: the clip, its anchor, its switch quantum,
+  its loop cycle and whether it is unanchored (the key; `stretchSource` positions depend on all five).
+  Slots are atomics and an applied slot's target is fixed, so the read takes no lock.
 - **Priming.** It primes a reader for that reading on the new trajectory from S, and for an applied
   warm-up whose switch is after S a reader on the new trajectory primed as far as that warm-up's frame
   credit stands at the handover. Prime positions are functions of the switch quantum and the trajectory
-  (step D), so where they are primed does not change what plays. Each primed reader carries its key, and
-  each node has room for one more reader state (allocated at compile) for the old reader 0 kept as
-  `previous`.
-- **Adoption.** The callback compares each key with what it holds for S: its reader 0, or the warming
-  launch that switches at or before S. A match takes the primed reader; the old reader 0 plays the old
-  trajectory (`previousTimelines`) until S and crossfades into the new one over `smoothFrames`, exactly
-  as an item; an outgoing reader still in its switch crossfade at S finishes it on the old trajectory,
-  and `rateSafeDevice` keeps that trajectory until then. A mismatch restarts that reader cold where it
-  plays, the bounded burst step D states: at most 45 primes and 32 quanta in one block at 48 kHz.
+  (step D), so where they are primed does not change what plays. Each primed reader carries its key.
+- **Adoption.** The executor that runs the node (the renderer for rendered nodes, the callback for live
+  ones, each at `handAt` in its own stream) compares each key with what it holds for S: its reader 0, or
+  the warming launch that switches at or before S. A match takes the primed reader. A miss primes the
+  same reading there and then, within a warm-up's length: at most 45 primes per reader, N readers missing
+  in one block costing N times that. Either way the old reader 0 plays the old trajectory
+  (`previousTimelines`) until S and crossfades into the new one over `smoothFrames`, exactly as an item,
+  converting while it is read (round 142 H1). So a miss changes CPU only, never what plays (round 145
+  S1); priming in an executor is step D's bounded cold-start work, already real-time safe.
+- **Rotation and the extra states.** A switch inside the trajectory crossfade, in (S, S + `smoothFrames`),
+  rotates the reader with its `previous` (`applyLaunch`), so the outgoing side plays both until
+  S + `smoothFrames`. An outgoing reader still in its own switch crossfade at S finishes it on the old
+  trajectory. Placement keeps a node's switches `launchWarm` (2944) apart, more than a switch crossfade
+  (at most 960 device frames: 240 song samples at 0.25), so one extra reader state per node holds every
+  case: before a switch at or before S the primed reader waits in it, and after a switch inside the
+  crossfade the old state is `previous`. When `rateSourceAhead` exceeds `launchWarm` − 960 − 63 frames
+  (a take chain of about 40 ms or more anywhere in the project), reader 1 can still be busy at adoption
+  while a warm-up switching at or before S is pending, and compile gives each node with audio clips a
+  second extra state. Both are allocated at compile.
+- **How long the old trajectory is kept.** On a plan with audio players under stretch, `rateSafeDevice`
+  is S + max(`smoothFrames`, ⌈`launchFadeFrames` / 0.25⌉) + `rateSourceBehind` + 64 (round 145 A1):
+  the next compiled change or scalar edit cannot be adopted, and take trajectory 0 away, while an
+  outgoing reader still reads it. That is about 10 ms later than items alone need, at 48 kHz.
+- **Nothing is freed on an audio executor.** A primed reader the node does not take, and an old state
+  once its crossfade is over, are swapped into the outgoing plan and released with it on the main
+  thread, as `carryRateSources` does for items.
 - **Why the mirror stays right.** Between the read and the adoption a reading can change only by a launch
-  already placed at the read (committed or pending) being applied with its switch at or before S, or by
-  one being replaced or voided. A warming launch placed after the read cannot switch that early
-  (placement, below), and any other launch only takes the audio reading away, which drops the primed
-  reader. The key check catches every case; a miss costs the bounded cold start, never a wrong reading.
-- **Placement.** No launch target already acknowledged moves. While a change is pending (from the
-  prepare until S plus `smoothFrames` has passed) a warming launch is placed at least `smoothFrames`
-  plus `launchWarm` after S, so its warm-up runs on the new trajectory alone; other launches keep their
-  floors.
+  already placed at the read being applied with its switch at or before S (a live node's warm-up, which
+  the callback reaches about `aheadFrames` after the renderer would), or by one being replaced or voided.
+  A warming launch placed after the read cannot switch that early (placement, below), and any other
+  launch only takes the audio reading away. The key check catches every case, and the miss path plays
+  what a match would have. (With a large `rateSourceAhead`, S − `handAt` can exceed `launchWarm`, and a
+  launch applied after the adoption warms on the new plan's trajectory, which equals the old one until
+  S: no primed reader is needed.)
+- **Placement.** No launch target already acknowledged moves. While a change is pending, from the
+  prepare until the slowest executor that runs the node has passed S + `smoothFrames` (for a live node,
+  the callback's played stream), a warming launch is placed at least `smoothFrames` + `launchWarm`
+  after S, so its warm-up runs on the new trajectory alone; other launches keep their floors. A
+  quantized press can then land a whole boundary later (engine.md; the manual's launcher section
+  says so when the code lands).
 - **Tape on either side.** A switch to tape plays the old stretch reader as `previous` through the
-  crossfade, converting while it is read (round 142 H1's rule for items); a switch from tape primes the
-  new reader and fades from the tape reading, which keeps no history.
+  crossfade, converting while it is read. A switch from tape primes the new reader and fades from the
+  tape reading, which keeps no history. A launch the tape plan applied without a warm-up (tape has none)
+  that switches after the adoption starts cold on the stretch plan: step D's bounded cold start.
 
 **Tests.** No replay spans a controls change (an offline render has one session), so the tests check:
-continuity at S (no step larger than the material's own) and, after the crossfade, the reading equal to
-a fresh warm reading on the new trajectory, in both executors and at blocks of 32 to 512; a warm-up under
-way at the change, switching on time and equal to a warm reading on the new trajectory, within step D's
-prime bound; the race, by a test hook after the mirror's read that replaces a committed launch under
-about 100 ms of render-ahead, falling back cold within 45 primes and 32 quanta per block, run under
-rtsan; the mirror and the carry at plan level with explicit readings; the placement floor while a
-change is pending; and both tape directions.
+- continuity at S (no step larger than the material's own) and, after the crossfade, the reading equal
+  to a fresh warm reading on the new trajectory, in both executors and at blocks of 32 to 512;
+- a warm-up under way at the change, switching on time and equal to a warm reading on the new
+  trajectory, within step D's prime bound, with its switch both after S + `smoothFrames` and inside
+  (S, S + `smoothFrames`) (A2);
+- the race on a live node: a launch pending at the read whose warm-up the callback starts before its
+  adoption (T − `launchWarm` between the callback's position at the read and `handAt`, T ≤ S), arranged
+  by the executors' positions, not by delaying the prepare (`prepareRatePlan` repeats a late transition,
+  which would read the slot again). Two nodes miss in one block; the output equals the matched path's,
+  and each block's primes stay within 45 per reader, under rtsan (A3, A5);
+- an old rate of 0.25 with a switch one quantum before S, then a second change at the earliest
+  admission: the outgoing reader's crossfade completes (A1);
+- a transport loop wrap between a clip's anchor and S (A6);
+- the mirror and the carry at plan level with explicit readings; the placement floor while a change is
+  pending, judged by the callback for a live node; and both tape directions.
 
 **Built:** not yet; the contract comes first, and STATUS keeps the cold start until the code lands on
 this branch.

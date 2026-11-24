@@ -813,37 +813,67 @@ the same.*
     keeps the rate controls hands the readers over with their converters
     (`carryLaunchReaders`, §1.6). One that changes the trajectory (a
     scalar, preserve pitch, an envelope; S3 step D4) switches launched
-    audio where the timeline's items switch, at `rateSwitchDevice` (S),
-    and the same way:
+    audio where the timeline's items switch, at `rateSwitchDevice` (S, a
+    device frame; in an executor's stream `handAt + S - rateHandDevice`,
+    as `rateSafeStream_`), and the same way:
     - At prepare the main thread reads, from the acknowledged launch log
       and the applied launch slots, what each node with audio clips
-      reads at S: the clip, its anchor and its switch quantum (the key).
-      It primes a reader for that on the new trajectory from S, as an
-      item's converter is primed, and, for an applied warm-up whose
-      switch is after S, a reader on the new trajectory primed as far as
-      that warm-up's credit stands at the handover. Each carries its key.
-    - At adoption the callback compares each key with what it holds for
-      S: its reader 0, or the warming launch that switches at or before
-      S. On a match it takes the primed reader: the old reader 0 plays on
-      the old trajectory (`previousTimelines`) until S and crossfades
-      into it over `smoothFrames`, as an item does, and an outgoing
-      reader still in its switch crossfade at S finishes it on the old
-      trajectory, which is kept that long (`rateSafeDevice`). On a
-      mismatch that reader restarts cold where it plays: at most 45
-      primes and 32 quanta in one block (the worst cold restart above).
+      reads at S: the clip, its anchor, its switch quantum, its loop
+      cycle (`launchCycle`) and whether it is unanchored (the key). It
+      primes a reader for that on the new trajectory from S, as an item's
+      converter is primed, and, for an applied warm-up whose switch is
+      after S, a reader on the new trajectory primed as far as that
+      warm-up's credit stands at the handover. Each carries its key.
+    - At adoption, the executor that runs the node (the renderer for a
+      rendered node, the callback for a live one, each at `handAt` in its
+      stream) compares each key with what it holds for S: its reader 0,
+      or the warming launch that switches at or before S. On a match it
+      takes the primed reader. On a miss it primes the same reading
+      itself, there and then: at most 45 primes per reader (a warm-up's
+      length), so N nodes that miss in one block cost N times that, and
+      a miss changes CPU only, not what plays. Either way the old reader
+      0 plays on the old trajectory (`previousTimelines`) until S and
+      crossfades into the new one over `smoothFrames`, as an item does,
+      converting while it is read.
+    - A switch inside that crossfade, in (S, S + `smoothFrames`), rotates
+      the reader with its `previous` (`applyLaunch`): the outgoing side
+      plays both until S + `smoothFrames`. An outgoing reader still in
+      its own switch crossfade at S finishes it on the old trajectory.
+      Placement keeps a node's switches `launchWarm` apart, longer than a
+      crossfade (at most 960 frames, 240 song samples at 0.25), so one
+      extra reader state per node holds every case. A plan whose
+      `rateSourceAhead` exceeds `launchWarm` minus 960 minus 63 frames (a
+      take chain of 40 ms or more) gives each such node a second.
+      Both are allocated at compile.
+    - The old trajectory is kept until every reader that reads it is
+      done: on a plan with audio players under stretch `rateSafeDevice`
+      is S + max(`smoothFrames`, ceil(`launchFadeFrames` / 0.25)) +
+      `rateSourceBehind` + 64, so the next change cannot be adopted while
+      an outgoing reader still reads the old trajectory (about 10 ms
+      later than items alone need, at 48 kHz).
+    - Nothing is freed on an audio executor: a primed reader the node
+      does not take, and an old state once its crossfade is over, are
+      swapped into the outgoing plan and released with it on the main
+      thread, as `carryRateSources` does for items.
     - The read can be overtaken only by a launch already placed when it
-      ran (committed or pending) and applied before the adoption, or by
-      one replaced or voided: a warming launch placed after the read
-      cannot switch at or before S (below), and any other only takes the
-      audio reading away, so its primed reader is dropped. The key check
-      catches every case.
+      ran and applied before the adoption (a live node's warm-up, which
+      the callback starts some `aheadFrames` after the renderer would),
+      or by one replaced or voided: a warming launch placed after the
+      read cannot switch at or before S (below), and any other only
+      takes the audio reading away. The key check catches every case,
+      and the miss path plays what a match would have.
     - No launch target already acknowledged moves. A warming launch
-      placed from the prepare until S plus `smoothFrames` has passed
-      switches at least `smoothFrames` plus `launchWarm` after S, so its
-      warm-up runs on the new trajectory alone.
+      placed from the prepare until the slowest executor that runs the
+      node (for a live node, the callback's played stream) has passed S
+      plus `smoothFrames` switches at least `smoothFrames` plus
+      `launchWarm` after S, so its warm-up runs on the new trajectory
+      alone. A quantized press can then land a whole boundary later.
     A switch to tape plays the old stretch reader as `previous` through
-    the crossfade, converting while it is read; a switch from tape primes
-    the new reader and fades from the tape one, which keeps no history.
+    the crossfade, converting while it is read. A switch from tape primes
+    the new reader and fades from the tape one, which keeps no history;
+    a launch the tape plan applied with no warm-up (tape has none) and
+    which switches after the adoption starts cold on the stretch plan,
+    step D's bounded cold start.
     An audio clip read through a take chain (take
     FX or an active take envelope) still has no player there: compile
     warns and its launch is refused with `launch.playrate`.
