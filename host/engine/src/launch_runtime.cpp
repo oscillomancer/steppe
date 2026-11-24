@@ -747,7 +747,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 a.anchorSample = anchorSample;
                 a.anchorBeat = anchorBeat;
                 if (chain) detail::prelaunch(n, a);
-                if (warm) detail::prewarm(n, a, at);
+                if (warm) detail::prewarm(n, a, target);  // the bare target (Node::launchWarmAt)
             });
             apply([&](std::int64_t at) { return at == stream; }, false);
         }

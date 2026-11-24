@@ -781,7 +781,10 @@ the same.*
     warms the next launch up. A launch reaches the node `launchWarm`
     before its switch (the converter's output lookahead rounded up to
     quanta, and one quantum to spare: 2944 frames, about 61 ms, at
-    48 kHz; `prewarm`), and reader 2 seeks there for output from the
+    48 kHz; `prewarm`; the switch's frame is kept as the slot's stream
+    target, without the node's shift, so a plan that moves the shift during
+    the warm-up keeps it, and is taken onto the trajectory's device frames
+    by the plan's `rateOrigin`, which a seek moves), and reader 2 seeks there for output from the
     switch's quantum and primes once per 64 frames played (a frame
     credit, at any block size), so the switch costs no burst. At the switch the
     readers rotate (`applyLaunch`). Every prime position is a function of

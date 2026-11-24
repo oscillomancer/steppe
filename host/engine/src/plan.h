@@ -1168,8 +1168,11 @@ struct Node {
     // rotates them, so a converter's history stays with its reading.
     std::array<PlayerReader, 3> launchReaders;
     // A pitch-keeping plan's warm-up (S3 step D): a launch of an audio clip
-    // reaches the node `launchWarm` frames before it applies (prewarm), at
-    // node frame `launchWarmAt`, and its converter warms up meanwhile.
+    // reaches the node `launchWarm` frames before it applies (prewarm), and
+    // its converter warms up meanwhile. `launchWarmAt`: the stream frame of
+    // its switch (the slot's target, the replay's running frame), without
+    // the node's shift, so a plan that moves the shift during the warm-up
+    // keeps it (review round 157 F1).
     std::int64_t launchWarm = 0, launchWarmAt = 0;
     // The device frame of the last switch, set by the first block after it
     // (applyLaunch marks it pending): a cold reading starts from its quantum
@@ -1696,8 +1699,9 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
 // A launch reaching the node Node::launchLead before it applies: its clip
 // chains' input (that much ahead) takes it from here.
 void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
-// A launch reaching the node Node::launchWarm before it applies, at node
-// frame `at` (S3 step D): its converter warms up from here.
+// A launch reaching the node Node::launchWarm before it applies, switching
+// at stream frame `at` (Node::launchWarmAt; S3 step D): its converter warms
+// up from here.
 void prewarm(Node& n, const LaunchAction& a, std::int64_t at) SUPPLE_RT;
 // Whether a launch of `player` warms a converter up first: an audio clip
 // on a pitch-keeping plan (S3 step D).
@@ -1728,6 +1732,10 @@ std::int64_t switchCycle(const Node& n, const PlayrateTimeline& timeline) SUPPLE
 // Stretch converter primes since the process began (a relaxed count, for
 // the tests' per-block bound).
 std::uint64_t stretchPrimes() noexcept;
+// The start quantum (device frame) of the reading the `n`th prime counted by
+// stretchPrimes was for, among the last 256: where a cold start's burst
+// begins, whatever the executor's lead (a test seam, written relaxed).
+std::int64_t stretchPrimeFrame(std::uint64_t n) noexcept;
 // What a clip chain's input reads in this block: the player's anchor on the
 // input side, or nothing (`on` false).
 struct ClipChainInput {

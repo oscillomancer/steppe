@@ -346,3 +346,157 @@ TEST_CASE("under a pitch-keeping rate an audio clip's launch ends the capture at
         CHECK(first == -1);
     }
 }
+
+TEST_CASE("after a seek a launched clip's converter still warms up ahead of its switch" *
+          doctest::description("rt")) {
+    // S3 step D: a launch's warm-up runs at its switch's frame on the
+    // trajectory, a device frame; the slot's target is a stream frame, which
+    // a seek moves away from the device's by the seek's target (the plan's
+    // rateOrigin). Taken as a device frame, the warm-up primed for frames
+    // 144000 early here and went to waste, and the switch started cold, its
+    // 45 primes in the callback holding it (90 in all).
+    for (const double seek : {0.0, 3.0})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("sought to " << seek << " s, anticipative " << options.anticipative);
+            Project p;
+            twoTracks(p);
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+            AppLive live(p, options, 128, 48000 * 8);
+            if (seek > 0) {
+                auto a = j("{}");
+                a["seconds"] = seek;
+                p.runArgs("transport.seek", a);
+                live.until(8 * 128);
+            }
+            REQUIRE(p.app->transport("play"));
+            live.until(40 * 128);
+            p.run("launch.clip", R"({"clip": "cl_2"})");  // the next bar
+            std::uint64_t most = 0, total = 0;
+            for (std::int64_t c = 41; c <= 200000 / 128; ++c) {
+                const std::uint64_t before = detail::stretchPrimes();
+                live.until(c * 128);
+                const std::uint64_t d = detail::stretchPrimes() - before;
+                total += d;
+                most = std::max(most, d);
+            }
+            const auto log = p.app->engine()->launchLog();
+            REQUIRE(log.size() == 1);
+            CHECK(log[0].runningFrame == (seek > 0 ? 64000 : 128000));
+            CHECK(p.app->engine()->processErrors() == 0);
+            INFO("most primes in one callback " << most << ", " << total << " in all");
+            CHECK(total == 45);  // one warm-up, no cold start
+            // The renderer runs ahead in longer slices; the callback primes
+            // once per 64 frames played.
+            if (!options.anticipative) CHECK(most <= 2);
+            ChangeRun run;
+            run.heard = live.stop();
+            run.latency = live.latency + (seek > 0 ? 8 * 128 : 0);  // the cycles before play
+            CHECK(loudest(run, log[0].runningFrame + 3000, log[0].runningFrame + 30000) > 0.01);
+        }
+}
+
+TEST_CASE("a plan that moves a track's shift during its launch's warm-up keeps the warm-up" *
+          doctest::description("rt")) {
+    // Review round 157 F1: tr_3 holds only an audio clip (no items, so a
+    // change of its shift needs no fresh converter history), shifted by
+    // tr_2's latent gain; a gain of the same latency added to tr_3 inside
+    // cl_3's warm-up takes its shift to 0. The warm-up's switch was kept as
+    // a node frame (the stream target plus the shift at the warm-up's
+    // start), so the new plan read it that shift early, its converter
+    // started again and the switch primed all at once. It is now the bare
+    // stream target.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("track.add", R"({"name": "Clips"})");  // tr_3
+        auto args = j(R"({"track": "tr_3", "scene": "sc_1"})");
+        args["audio_file"] = p.ramp("clip3.wav", 48000).string();
+        p.runArgs("clip.add", args);  // cl_3
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        AppLive live(p, options, 128, 48000 * 6);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_3"})");  // bar 2: running frame 128000
+        // The swap reaches the executors about this long after the edit, so
+        // inside the warm-up (from 125056).
+        const std::int64_t lag = options.anticipative ? 9793 : 9601;
+        // All of them from the launch on (the renderer also primes while the
+        // edits run), and the most in one callback.
+        const std::uint64_t start = detail::stretchPrimes();
+        std::uint64_t most = 0;
+        const auto run = [&](std::int64_t to) {
+            for (std::int64_t c = live.cycles + 1; c <= to / 128; ++c) {
+                const std::uint64_t before = detail::stretchPrimes();
+                live.until(c * 128);
+                most = std::max(most, detail::stretchPrimes() - before);
+            }
+        };
+        run(128000 - lag - 1500);
+        p.run("fx.add", R"({"track": "tr_3", "plugin": "com.suppleaudio.test.gain"})");
+        p.run("fx.patch.merge", R"({"fx": "fx_3", "patch": {"params": {"latency": "short"}}})");
+        run(200000);
+        const std::uint64_t total = detail::stretchPrimes() - start;
+        const auto log = p.app->engine()->launchLog();
+        REQUIRE(log.size() == 1);
+        CHECK(log[0].runningFrame == 128000);
+        CHECK(p.app->engine()->processErrors() == 0);
+        INFO("most primes in one callback " << most << ", " << total << " in all");
+        CHECK(total == 45);  // one warm-up, not started again
+        if (!options.anticipative) CHECK(most <= 2);
+        ChangeRun heard;
+        heard.heard = live.stop();
+        heard.latency = live.latency;
+        CHECK(loudest(heard, 131000, 160000) > 0.01);  // cl_3 plays
+    }
+}
+
+TEST_CASE("after a seek a launched audio clip under a pitch-keeping rate plays as the replay" *
+          doctest::description("rt")) {
+    // Review round 157: the seek of the case above (3 s, so the device runs
+    // 144000 frames ahead of the stream), cl_2 launched on the next bar,
+    // against the offline replay of the log from the seek's position. The
+    // capture holds the eight cycles run stopped before play.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        AppLive live(p, options, 128, 48000 * 6);
+        p.run("transport.seek", R"({"seconds": 3})");
+        live.until(8 * 128);
+        REQUIRE(p.app->transport("play"));
+        live.until(40 * 128);
+        p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 3: running frame 64000
+        live.until(200000);
+        const auto log = p.app->engine()->launchLog();
+        REQUIRE(log.size() == 1);
+        CHECK(log[0].runningFrame == 64000);
+        CHECK(p.app->engine()->processErrors() == 0);
+        const std::vector<float> heard = live.stop();
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.startSeconds = 3.0;
+        settings.endSeconds = 3.0 + 200000 * 0.75 / 48000;
+        settings.blockSize = 128;
+        settings.projectDir = p.app->projectDir();
+        const auto render = [&](std::vector<LaunchLogEntry> launches) {
+            settings.launches = std::move(launches);
+            auto r = renderOffline(p.app->head(), pool, settings);
+            REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+            REQUIRE(r->audio.channels[0].size() >= 180000);
+            return r->audio.channels[0];
+        };
+        const std::vector<float> offline = render(log);
+        const std::uint32_t at = live.latency + 8 * 128;
+        const auto [worst, first] = compare(heard, at, offline, 0, 180000);
+        INFO("worst " << worst << " first at " << first);
+        CHECK(worst == 0.0);
+        CHECK(first == -1);
+        // Without the launch it is not the same.
+        const std::vector<float> plain = render({});
+        const auto [apart, from] = compare(heard, at, plain, 0, 180000);
+        CHECK(apart > 1e-3);
+        CHECK(from >= 60000);  // the same until the switch
+    }
+}
