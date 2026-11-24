@@ -12,6 +12,7 @@
 
 #include "command_validation.h"
 #include "supple/json/parse.h"
+#include "supple/product.h"
 #include "supple/sync/chase.h"
 
 namespace supple::engine {
@@ -402,15 +403,18 @@ json::Value parsed(std::string_view text) { return json::parse(text).value(); }
 schema::Schema<SyncReport> syncStatusSchema() { return syncReportSchema(); }
 
 void registerSyncCommands(cmd::Registry& registry) {
-    const auto settingsDoc =
-        "source: off, midi_clock, mtc or ltc. midi_input: the MIDI input port the master's clock "
-        "or MTC arrives on (its name, or a part of it). ltc_input: the device input channel "
-        "carrying LTC (1-based). follow_tempo (midi_clock): chase the master's tempo with the live "
-        "playrate (pitch preserved); off follows Start, Continue, Stop and Song Position only. "
-        "offset_ms: positive plays Steppe that much behind the master. on_loss: stop, or "
-        "freewheel for freewheel_frames timecode frames, when the signal stops. ltc_output: "
-        "write LTC of the transport (the project's timecode) to ltc_output_channel, replacing "
-        "whatever a master plays there, at ltc_level_db.";
+    const std::string settingsDoc =
+        std::string(
+            "source: off, midi_clock, mtc or ltc. midi_input: the MIDI input port the "
+            "master's clock or MTC arrives on (its name, or a part of it). ltc_input: the "
+            "device input channel carrying LTC (1-based). follow_tempo (midi_clock): chase "
+            "the master's tempo with the live playrate (pitch preserved); off follows "
+            "Start, Continue, Stop and Song Position only. offset_ms: positive plays ") +
+        std::string(product::kName) +
+        " that much behind the master. on_loss: stop, or freewheel for freewheel_frames "
+        "timecode frames, when the signal stops. ltc_output: write LTC of the transport (the "
+        "project's timecode) to ltc_output_channel, replacing whatever a master plays there, at "
+        "ltc_level_db.";
     [&] {
         cmd::Command<NoArgs, SyncInfo> c;
         c.name = "sync.get";

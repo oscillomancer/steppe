@@ -8,6 +8,7 @@
 #include <cstdlib>
 
 #include "supple/json/write.h"
+#include "supple/product.h"
 #include "supple/sync/timecode.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/text_field.h"
@@ -125,7 +126,7 @@ void SyncDialog::build() {
     };
 
     dropdown("sync.source", "Follow",
-             {{"off", "Off (Steppe is the master)"},
+             {{"off", "Off (" + std::string(product::kName) + " is the master)"},
               {"midi_clock", "MIDI clock"},
               {"mtc", "MIDI Time Code (MTC)"},
               {"ltc", "SMPTE LTC (audio)"}},
@@ -240,7 +241,7 @@ void SyncDialog::refresh() {
     std::vector<std::string> lines;
     char text[160];
     if (r.source == "off") {
-        lines.push_back("Steppe runs on its own clock.");
+        lines.push_back(std::string(product::kName) + " runs on its own clock.");
     } else if (!app_.engine()) {
         lines.push_back("Start the audio engine to follow a master.");
     } else if (!r.present) {
