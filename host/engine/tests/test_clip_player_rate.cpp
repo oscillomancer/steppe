@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "clip_player_support.h"
+#include "supple/product.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -225,7 +226,7 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK(p.app->launchRefusalGeneration() > before);
     // A project opened moves it too (round 145).
     auto save = json::Value::object();
-    save["path"] = (p.root / "refusals.steppe").string();
+    save["path"] = (p.root / ("refusals." + std::string(product::kSlug))).string();
     p.runArgs("project.save", save);
     p.runArgs("project.open", save);
     CHECK(moved());
