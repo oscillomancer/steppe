@@ -978,11 +978,15 @@ the same.*
   - An entry of another epoch is not applied by an executor in a newer
     one, except the remaining targets of an applied entry (above).
     `service()` places missed, voided and old-epoch entries again, alone,
-    from the current position: a launch the renderer overtook while it was
-    placed lands at most one service interval (the app's tick) plus the
-    floor (render-ahead, a block, its lead or warm-up) after it was
+    from the current position. Per placement, a launch the renderer
+    overtook while it was placed lands at most one service interval (the
+    app's tick, or a headless host's own loop) plus the floor after it was
     pressed when unquantized, and on the next boundary after that
-    otherwise. It drops, with a
+    otherwise. The floor is the render-ahead, a block, its lead or
+    warm-up, and at least a frame after the track's applied warming switch
+    (above). A re-placement can be overtaken in turn, so under sustained
+    overload the delay is a whole number of intervals; while relocating,
+    `launch.later` defers it to the next service. It drops, with a
   warning, any waiting entry whose track or clip the latest plan cannot
   play (frozen, removed, or a master playrate active), so an edit never
   leaves a launch to fire later. Applied entries come back
