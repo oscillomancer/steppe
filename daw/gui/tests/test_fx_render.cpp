@@ -40,6 +40,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/object_name.h"
 
 using namespace supple;
 
@@ -3705,6 +3706,17 @@ TEST_CASE("FX native title follows track switches, renames and take headers") {
     const auto sampleTake = *model::Id::parse(sample->find("take")->asString());
     REQUIRE(f.fx->openTake(sampleTake));
     CHECK(title() == "Take FX: Take track / kick");
+    // In an item of several takes, an unnamed take is "Take N" by its place,
+    // as the inspector's take list says it (second re-check R1): not the
+    // heard take's file.
+    const auto extra = f.run("take.add", f.args({{"item", sample->find("item")->asString()}}));
+    REQUIRE(extra);
+    const auto otherTake = *model::Id::parse(extra->find("id")->asString());
+    REQUIRE(f.fx->openTake(otherTake));
+    CHECK(title() == "Take FX: Take track / Take 2");
+    CHECK(views::takeLabel(f.app->head(), otherTake) == "Take 2");
+    REQUIRE(f.fx->openTake(sampleTake));
+    CHECK(title() == "Take FX: Take track / Take 1");
     matchesHeader();
 }
 

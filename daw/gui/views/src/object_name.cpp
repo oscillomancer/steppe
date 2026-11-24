@@ -220,6 +220,17 @@ std::string objectName(const model::Session& s, model::Id id) {
     return "an object";
 }
 
+std::string takeLabel(const model::Session& s, model::Id take) {
+    const model::Take* tk = s.takes.find(take);
+    if (tk && tk->name.empty())
+        if (const auto owner = model::takeOwner(s, take))
+            if (const std::vector<model::Id>* takes = model::ownerTakes(s, *owner);
+                takes && takes->size() > 1)
+                for (std::size_t i = 0; i < takes->size(); ++i)
+                    if ((*takes)[i] == take) return "Take " + std::to_string(i + 1);
+    return objectName(s, take);
+}
+
 std::string objectNames(const model::Session& s, std::string_view text) {
     auto word = [&](std::size_t i) {
         return i < text.size() &&

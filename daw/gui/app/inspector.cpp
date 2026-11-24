@@ -1006,8 +1006,8 @@ void Inspector::readItems(bool force) {
     takeNames_.clear();
     heard_ = takeIds_.size();
     for (std::size_t i = 0; i < takeIds_.size(); ++i) {
-        const model::Take* tk = s.takes.find(takeIds_[i]);
-        takeNames_.push_back(tk && !tk->name.empty() ? tk->name : "Take " + std::to_string(i + 1));
+        // views::takeLabel, as the take FX title says it.
+        takeNames_.push_back(views::takeLabel(s, takeIds_[i]));
         if (item->activeTake && takeIds_[i] == *item->activeTake) heard_ = i;
     }
     takesBox_->visible = takeIds_.size() > 1;

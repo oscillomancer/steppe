@@ -38,6 +38,10 @@ namespace supple::views {
 // - a media file: its file name; a MIDI source: as the item that plays it.
 // One that is gone is "a removed …".
 std::string objectName(const model::Session& session, model::Id id);
+// A take as its item's take list says it (the inspector, the take FX
+// title): its name, else "Take N" by its place when its item or clip has
+// more than one take, else objectName's words.
+std::string takeLabel(const model::Session& session, model::Id take);
 // `text` with each whole id in it (tr_3, it_4, sc_2, …) said by objectName.
 // The other words are kept.
 std::string objectNames(const model::Session& session, std::string_view text);

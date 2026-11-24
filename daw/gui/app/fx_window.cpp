@@ -1142,12 +1142,13 @@ void FxWindow::refresh() {
     const std::string trackName = views::objectName(app_.head(), track_);
     if (take_ && !app_.head().takes.find(*take_)) take_.reset();  // the take is gone
     if (title_) {
-        // The take after its track ("Bass / Take 2", "Bass / kick" for an
-        // unnamed take called by its file or clip), unless its words already
-        // say the track ("Bass's item at bar 2").
+        // The take after its track, in the inspector's words (takeLabel:
+        // "Bass / Take 2" in an item of several takes, "Bass / kick" for a
+        // lone unnamed take called by its file or clip), unless its words
+        // already say the track ("Bass's item at bar 2").
         std::string title = "FX: " + trackName;
         if (take_) {
-            const std::string words = views::objectName(app_.head(), *take_);
+            const std::string words = views::takeLabel(app_.head(), *take_);
             title = "Take FX: " +
                     (words.starts_with(trackName + "'s ") ? words : trackName + " / " + words);
         }
