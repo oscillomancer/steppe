@@ -1583,8 +1583,10 @@ void Mixer::rebuild(bool keepLists) {
         auto& filler = frame->emplace<ui::Node>("mixer.vca.space." + tid);
         filler.layout.height = ui::SizeRule::fraction();
         // Their menus open at the button.
-        auto& members = frame->emplace<ui::Button>(
-            "mixer.vca.members." + tid, std::to_string(e.value->members.size()) + " members");
+        auto& members =
+            frame->emplace<ui::Button>("mixer.vca.members." + tid,
+                                       std::to_string(e.value->members.size()) +
+                                           (e.value->members.size() == 1 ? " member" : " members"));
         members.onClick = [this, gid, b = &members] {
             trackMenu_.openGroup(gid, actions_.ui().selectedTracks, b->bounds());
         };

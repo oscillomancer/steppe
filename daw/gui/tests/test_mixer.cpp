@@ -3702,6 +3702,7 @@ TEST_CASE("mixer: an unnamed group is drawn as \"Group N\" wherever its name sho
     CHECK(f.node("mixer.group.tr_1.gr_1")->valueText() == "Drums");
     CHECK(f.node("mixer.group.tr_1.gr_2")->valueText() == "Group 2");
     CHECK(f.node("mixer.vca.name.gr_2")->valueText() == "Group 2");
+    CHECK(f.node("mixer.vca.members.gr_2")->valueText() == "1 member");
     model::Envelope env;
     env.target.object = *model::Id::parse("gr_2");
     env.target.param = "volume";

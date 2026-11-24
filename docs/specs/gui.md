@@ -4098,7 +4098,8 @@ or pan gesture changes only that member. Group suspension disables links,
 including selection and matched-span item edits, but leaves VCA sound active.
 
 A group's optional VCA appears after audio strips and before pinned masters in
-the existing mixer. It has a name/color, member count/menu, envelope button,
+the existing mixer. It has a name/color, member count/menu ("1 member", "2
+members"), envelope button,
 fader, mute and solo; it has no audio meter, pan, inserts, inputs or routing.
 A right-click on its fader, mute or solo opens that control's parameter menu
 (§4.2): MIDI learn (§4.5, `vca.learn.set`, ADR-0058), the volume or mute lane,
