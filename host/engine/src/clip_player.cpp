@@ -844,6 +844,13 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
     return st;
 }
 
+// The device frame of the switch `n` warms up for: launchWarmAt is the
+// slot's target (a stream frame) plus the node's shift, and a seek moves the
+// device away from the stream by the plan's rateOrigin.
+std::int64_t warmSwitchDevice(const Plan& p, const Node& n) SUPPLE_RT {
+    return n.launchWarmAt - n.timelineShift + p.rateOrigin;
+}
+
 // A launch warming up on reader 2 (prewarm): its converter seeks at the
 // first block that has it and primes once per 64 frames played (a frame
 // credit, whatever the block size: round 139 R1), its launchWarm frames
@@ -861,11 +868,11 @@ void warmLaunch(const Plan& p, Node& n, std::uint32_t frames) SUPPLE_RT {
     // one switching later warms on the plan's own (round 152 F1).
     const bool before = reader.previousLive && reader.previous && reader.previous->state &&
                         reader.previous->state->preserve && p.previousTimelines[n.live ? 1 : 0] &&
-                        n.launchWarmAt - n.timelineShift <= p.rateSwitchDevice;
+                        warmSwitchDevice(p, n) <= p.rateSwitchDevice;
     PlayerReader& r = before ? *reader.previous : reader;
     const PlayrateTimeline& timeline =
         before ? *p.previousTimelines[n.live ? 1 : 0] : *p.timelines[n.live ? 1 : 0];
-    const std::int64_t device = n.launchWarmAt - n.timelineShift;
+    const std::int64_t device = warmSwitchDevice(p, n);
     const std::int64_t q = quantumAt(p, device);
     if (r.player != &pl || r.anchor != a.anchorSample || r.startQuantum != q)
         stretchSeek(r, pl, a.anchorSample, false, timeline, q, device);
@@ -1400,7 +1407,7 @@ void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
                          old.launchWarmNext.kind == LaunchState::Kind::Clip &&
                          old.launchWarmNext.player >= 0;
     const std::int64_t warmSwitch =
-        warming ? old.launchWarmAt - old.timelineShift : std::numeric_limits<std::int64_t>::max();
+        warming ? warmSwitchDevice(p, old) : std::numeric_limits<std::int64_t>::max();
     const bool warmFirst = warming && warmSwitch <= S;  // what reads at S is that launch
     // The reading each reader holds in the previous plan: 0 what plays, 1
     // what goes out, 2 the warm-up.

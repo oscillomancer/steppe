@@ -443,3 +443,68 @@ TEST_CASE("a launched clip restarting cold just before its first wrap keeps the 
         CHECK(loudest(run, wrap + 3000, wrap + 60000) > 0.01);
     }
 }
+
+TEST_CASE("after a seek a warm-up switching after a trajectory change warms on the new one") {
+    // S3 step D4 and the warm-up's frame: a warm-up's switch (launchWarmAt)
+    // is a stream frame, S a device frame, apart by rateOrigin after a seek
+    // (72000 here). Compared unconverted, a warm-up switching 2000 frames
+    // after S read as switching first: handed on as the previous plan's
+    // reading and seeked for S (and warmLaunch, by the same comparison,
+    // went on warming it on the old trajectory).
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session before = p.app->head();
+    p.run("transport.playrate.set", R"({"rate": 0.8, "preserve_pitch": true})");
+    const model::Session after = p.app->head();
+    InstancePool pool = makePool();
+    MediaCache media;
+    const auto planOf = [&](const model::Session& s) {
+        auto plan = detail::compile(s, pool, 0, 128).value();
+        plan.media = &media;
+        plan.projectDir = p.app->projectDir();
+        REQUIRE(detail::prepare(plan, s));
+        return plan;
+    };
+    constexpr std::int64_t origin = 72000;  // device minus stream, after the seek
+    auto from = planOf(before);
+    auto to = planOf(after);
+    from.rateOrigin = origin;
+    to.rateOrigin = origin;
+    REQUIRE(detail::prepareRateSources(from, origin, 54000.0, nullptr));
+    from.timelines[0]->ensure(origin + 80000);
+    REQUIRE(detail::configureRateTransition(to, &from, *from.timelines[0], origin + 36000));
+    REQUIRE(to.rateControlsChanged);
+    const std::int64_t S = to.rateSwitchDevice;
+    REQUIRE(S > origin + 36000);
+    to.timelines[0]->ensure(S + 20000);
+    const auto nodeOf = [](detail::Plan& plan) -> detail::Node& {
+        return *std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                             [](const auto& n) { return n.id == id("tr_2"); });
+    };
+    detail::Node& old = nodeOf(from);
+    detail::Node& node = nodeOf(to);
+    REQUIRE_FALSE(old.live);
+    REQUIRE(old.timelineShift == 0);
+    const int player = detail::playerOf(old, id("cl_2"));
+    REQUIRE(player >= 0);
+    const std::int64_t warmSwitch = S + 2000;  // a device frame, after S
+    old.launchWarmValid = true;
+    old.launchWarmNext.kind = detail::LaunchState::Kind::Clip;
+    old.launchWarmNext.player = player;
+    old.launchWarmNext.anchorSample = 96000;
+    old.launchWarmAt = warmSwitch - origin;  // the slot's target, a stream frame
+    detail::PlayerReader& warming = old.launchReaders[2];
+    REQUIRE(warming.state);
+    REQUIRE(warming.state->preserve);
+    // Its warm-up under way: seeked for its switch, ten primes done.
+    warming.player = &old.players[static_cast<std::size_t>(player)];
+    warming.anchor = 96000;
+    warming.startQuantum = detail::quantumAt(from, warmSwitch);
+    warming.primes = 10;
+    detail::carryRateSources(from, to, -1);
+    detail::PlayerReader& r = node.launchReaders[2];
+    CHECK_FALSE(r.previousLive);  // not the previous plan's reading: it switches after S
+    CHECK(r.startQuantum == detail::quantumAt(to, warmSwitch));
+    CHECK(r.primes == 10);  // as far as it had come
+}

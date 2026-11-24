@@ -346,3 +346,51 @@ TEST_CASE("under a pitch-keeping rate an audio clip's launch ends the capture at
         CHECK(first == -1);
     }
 }
+
+TEST_CASE("after a seek a launched clip's converter still warms up ahead of its switch" *
+          doctest::description("rt")) {
+    // S3 step D: a launch's warm-up runs at its switch's frame on the
+    // trajectory, a device frame; the slot's target is a stream frame, which
+    // a seek moves away from the device's by the seek's target (the plan's
+    // rateOrigin). Taken as a device frame, the warm-up primed for frames
+    // 144000 early here and went to waste, and the switch started cold, its
+    // 45 primes in the callback holding it (90 in all).
+    for (const double seek : {0.0, 3.0})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("sought to " << seek << " s, anticipative " << options.anticipative);
+            Project p;
+            twoTracks(p);
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+            AppLive live(p, options, 128, 48000 * 8);
+            if (seek > 0) {
+                auto a = j("{}");
+                a["seconds"] = seek;
+                p.runArgs("transport.seek", a);
+                live.until(8 * 128);
+            }
+            REQUIRE(p.app->transport("play"));
+            live.until(40 * 128);
+            p.run("launch.clip", R"({"clip": "cl_2"})");  // the next bar
+            std::uint64_t most = 0, total = 0;
+            for (std::int64_t c = 41; c <= 200000 / 128; ++c) {
+                const std::uint64_t before = detail::stretchPrimes();
+                live.until(c * 128);
+                const std::uint64_t d = detail::stretchPrimes() - before;
+                total += d;
+                most = std::max(most, d);
+            }
+            const auto log = p.app->engine()->launchLog();
+            REQUIRE(log.size() == 1);
+            CHECK(log[0].runningFrame == (seek > 0 ? 64000 : 128000));
+            CHECK(p.app->engine()->processErrors() == 0);
+            INFO("most primes in one callback " << most << ", " << total << " in all");
+            CHECK(total == 45);  // one warm-up, no cold start
+            // The renderer runs ahead in longer slices; the callback primes
+            // once per 64 frames played.
+            if (!options.anticipative) CHECK(most <= 2);
+            ChangeRun run;
+            run.heard = live.stop();
+            run.latency = live.latency;
+            CHECK(loudest(run, log[0].runningFrame + 3000, log[0].runningFrame + 30000) > 0.01);
+        }
+}
