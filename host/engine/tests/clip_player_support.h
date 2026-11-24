@@ -12,8 +12,6 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-#include <functional>
-#include <limits>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -30,14 +28,6 @@ namespace supple::engine {
 void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context);
 // The slots the executors still act on (Engine::launchesQueued_).
 std::uint32_t launchesQueuedForTests(const Engine& e);
-// The next `attempts` prepareRatePlan attempts count as late (review round
-// 166 T2); see EngineTestAccess::lateAttempts.
-void lateAttemptsForTests(Engine& e, int attempts);
-// The newest prepared trajectory change's switch S, a stream frame
-// (INT64_MIN: none, or a seek).
-std::int64_t preparedSwitchForTests(const Engine& e);
-// Launch readers the mirror marked in the kept plans (in-callback only).
-int mirrorMarkedForTests(const Engine& e);
 }  // namespace supple::engine
 
 namespace clip_player_test {
@@ -452,17 +442,6 @@ struct AppLive {
         }
         p.app->tick();
     }
-    // The renderer as far ahead as it goes, where it stays until more is
-    // played (by condition, no clock): an edit prepared now finds the
-    // frontier fixed, so no attempt is late and its switch S is the one an
-    // unloaded run gets. until() leaves it catching up, and an attempt it
-    // overtakes prepares again with S later (review round 166 T1). The
-    // in-callback executor's frontier is what has played: fixed already.
-    void settle() {
-        if (!options.anticipative) return;
-        while (!p.app->engine()->awaitRendered(std::numeric_limits<std::int64_t>::max())) {
-        }
-    }
     std::vector<float> stop() {
         CHECK(p.app->engine()->anticipationMisses() == 0);
         latency = p.app->engine()->outputLatency();
@@ -577,50 +556,6 @@ inline std::vector<Step> serviced(std::vector<Step> steps, std::int64_t from, st
     std::stable_sort(steps.begin(), steps.end(),
                      [](const Step& a, const Step& b) { return a.cycle < b.cycle; });
     return steps;
-}
-
-// S3 step D4, phase 2: the mirror off while it lives (the miss path, as
-// phase 1 played), so a test can compare what plays with and without it.
-struct MirrorOff {
-    MirrorOff() { detail::setLaunchMirror(false); }
-    ~MirrorOff() { detail::setLaunchMirror(true); }
-    MirrorOff(const MirrorOff&) = delete;
-    MirrorOff& operator=(const MirrorOff&) = delete;
-};
-
-// The mirror's budget in readers for its scope (review round 166 F): -1
-// the engine's own (the hand's slack), else that many. A renderer caught up
-// leaves the hand under a render block past its frontier, so the engine
-// primes nothing for it: the renderer's cases that check what the mirror
-// primes open it (kAllReaders).
-inline constexpr int kAllReaders = std::numeric_limits<int>::max();
-struct MirrorBudget {
-    explicit MirrorBudget(int readers) { detail::setLaunchMirrorBudget(readers); }
-    ~MirrorBudget() { detail::setLaunchMirrorBudget(-1); }
-    MirrorBudget(const MirrorBudget&) = delete;
-    MirrorBudget& operator=(const MirrorBudget&) = delete;
-};
-// The renderer's cases open the budget; the callback's keep the engine's
-// (its hand is its render-ahead past what has played: room for all).
-inline int openForRenderer(const EngineOptions& options) {
-    return options.anticipative ? kAllReaders : -1;
-}
-
-// The stretch primes each run of `live` over (from, to] does, by the frame
-// it ran to (blocks of `block`), those that primed only; `at(frame)` runs
-// before each.
-inline std::vector<std::pair<std::int64_t, std::uint64_t>> primesPerRun(
-    AppLive& live, std::int64_t from, std::int64_t to, std::uint32_t block,
-    const std::function<void(std::int64_t)>& at) {
-    std::vector<std::pair<std::int64_t, std::uint64_t>> out;
-    for (std::int64_t c = from / block + 1; c <= to / block; ++c) {
-        at(c * block);
-        const std::uint64_t before = detail::stretchPrimes();
-        live.until(c * block);
-        if (const std::uint64_t d = detail::stretchPrimes() - before; d > 0)
-            out.push_back({c * block, d});
-    }
-    return out;
 }
 
 }  // namespace clip_player_test

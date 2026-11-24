@@ -1294,65 +1294,22 @@ tests, in test_clip_player_rate_trajectory.cpp and its `_queued` sibling:
 - the floor for a launch pressed inside the pending window, and the A1 bound at plan level for every
   side.
 
-**Built:** phase 2, the mirror (2026-11-24). `Engine::launchMirrorReadings` reads, in each attempt of
-`prepareRatePlan`, the acknowledged log and the applied slots; `detail::primeLaunchMirror` seeks and
-primes each reading on the new plan before it is published and marks it `PlayerReader::mirror`; the
-carry (and `warmLaunch`, for a warm-up begun after the adoption) takes it only when the player, anchor,
-anchoring, loop cycle and start equal what it would seek, else primes as phase 1 does; a mirror reading
-no executor took keys nothing. *Revision 2026-11-24 (accepted by the co-director with the design):*
-reader 0's key holds no switch quantum (a reading's positions are functions of the frame, and a warm
-start equals a cold one, so where it began does not change what one primed for S gives), and its loop
-cycle is the switch's whole loop passes from the log's song frame under the loop as it is then, not a
-read of the ring; an applied warm-up after S is primed fully (the state its own primes reach). Before
-it, a phase 1 fault found while building it: a reading carried across a change and first read more
-than the catch-up after S ran every quantum since S in one block (469 in one callback); it now starts
-again where it is read, as a primed reading does. Phase 2's tests, in test_clip_player_rate_mirror.cpp
-and its `_queued` sibling, each run with the mirror off as well and equal to it bit for bit:
-- an envelope with one and two launched tracks, and tape to stretch: nothing primed in the run holding
-  S (45 per track there with it off), in both executors;
-- two launches of one clip that differ only in their switch's quantum both found;
-- a launch in a later loop cycle found by the passes from its song frame, and one with a wrap between
-  its anchor and S (A6); the loop's end moved after the switch, a miss (45);
-- the queued launches across a change: a warm-up under way when the change is prepared found, switching
-  after S (the executors prime 4 instead of 94), in [handAt, S] (reader 2 for S, the renderer's d −30;
-  the window is under 100 frames there and never reached by the callback, whose read precedes its
-  adoption by its render-ahead), or switched by the adoption (reader 0, classified by `handAt`: review
-  round 163 S1); and the race case, a warm-up begun between the read and the callback's adoption,
-  missed and primed by the executor as with the mirror off;
-- reader 2 for S at plan level: a warm-up switching at or before S takes the mirror's reading when its
-  key matches and is seeked unprimed when it does not (round 163 S2);
-- phase 1's catch-up bound runs with the mirror off, so the miss path's unprimed reading still has a
-  test that goes red without it (round 163 F1).
+Phase 2 (the mirror, its keys, the race case, the loop wrap A6) is still to come.
 
-*Revision 2026-11-24 (review round 166, after the ThreadSanitizer leg on 6e039628):* the mirror is
-primed at every attempt of `prepareRatePlan` and as it begins, each call's readings replacing the
-last's, so no attempt's marks reach the next or the recovery seek. The leg's failure was not the
-mirror's: its live cases compared two runs whose change switched at different frames, the renderer
-still catching up as the edit was prepared and overtaking an attempt the mirror's priming made longer
-(a retry puts S a quantum or more later). The mirror's tests now let the renderer get as far ahead as
-it goes before each edit (`AppLive::settle`, by condition) and check that both runs switched at the
-same S before comparing samples. test_clip_player_rate_mirror_retry.cpp forces late attempts through a
-test hook (`EngineTestAccess::lateAttempts`), in both runs alike: one and two put S later and change
-what plays, and the mirror still plays the miss path's samples there; three fail into the recovery
-seek, which keeps no mark (red before the change) and plays the same with the mirror. At plan level, a
-reading primed and then not primed again is not taken (red before: the carry took its 45 primes).
-
-*Revision 2026-11-24 (review round 166 F, accepted by the co-director):* the mirror's main-thread
-priming lengthens the timed attempt, so on a loaded machine it made a retry (S later) and the recovery
-seek (audible, and it ends a running capture) likelier. The mirror is an economy, so it may never be
-the reason an attempt is late: only the first attempt primes, reader by reader while
-`handStream - (frontier + granularity)` exceeds one of the frontier's steps (a render block for the
-renderer, a device block for the callback: the most the frontier moves at once), in frames and engine
-state, never a clock; the readings go in a fixed order, the one heard first first (by the device frame
-first read, then node order), so what a tight budget drops is what is heard last; a reading not primed
-is a miss. What it still buys: the in-callback executor, whose hand is its render-ahead past what has
-played, keeps every reading primed off the device callback, where the miss path would run 45 primes per
-track inside the callback holding S; a renderer caught up has under a render block of slack and primes
-nothing unless its preparation margin, or its own lag, gives more (its misses run on the renderer,
-within its render-ahead, not in the device callback). Tests, no clock: a hook stops the budget after
-0, 1 and all readers of two launched tracks, every sample the miss path's at the same S; with the
-engine's own slack the callback primes both and a caught-up renderer neither; a retry primes nothing;
-at plan level a budget of one primes the reading heard first though given second.
+*Revision 2026-11-24, the mirror taken out (the co-director, on review round 166):* phase 2 was
+built (469496c2 through 77c51914 on codirector/launch-s3-d4-mirror; review rounds 163 and 166) and
+removed by a revert on top of ab732087, so it can be brought back by reverting that revert. Measured:
+its output is by design the miss path's, and what it saves is the miss path's burst, 45 primes per
+launched stretched track in the block holding S. With the anticipative renderer, the default and the
+only executor the GUI starts, a renderer caught up leaves the hand about 128 frames past its frontier,
+under the render block the frontier can move at once, so a budget that keeps the mirror from making an
+attempt late (round 166 F) primed nothing; the renderer's misses run within its render-ahead, not
+against a device deadline. It served only the in-callback executor, which only a scripted
+`engine.start {"anticipative": false}` reaches. Its code (a second key path in audio-thread code)
+and test time did not earn that. Kept from it: the tests' renderer settle before an edit and a check
+that two compared runs switched at the same S, and a test hook that makes preparation attempts late
+(late attempts move S later; three end in the recovery seek). The in-callback executor's burst is a
+known limit in STATUS.
 
 ## Consequences
 

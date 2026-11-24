@@ -825,91 +825,32 @@ the same.*
     audio where the timeline's items switch, at `rateSwitchDevice` (S, a
     device frame; in an executor's stream `handAt + S - rateHandDevice`,
     as `rateSafeStream_`), and the same way:
-    - At prepare (`prepareRatePlan`, each attempt) the main thread reads,
-      from the acknowledged launch log and the applied launch slots
-      (`Engine::launchMirrorReadings`), what each node with audio clips
-      reads at S: the clip, its anchor, anchored, and its loop cycle
-      (`launchCycle`), the switch's whole loop passes from its song frame
-      (`LaunchLogEntry::songFrame`, as no ring holds a frame long past)
-      under the loop as it is then. It seeks and primes a reader for that
-      on the new trajectory from S (`detail::primeLaunchMirror`), all 45
-      primes, and, for an applied warm-up whose switch is after S, a
-      reader for that switch, primed fully (the same converter state its
-      warm-up reaches once its own primes are done); an applied slot that
-      switches before the adoption (`handAt`) is read as reader 0's
-      reading at S, as the log will hold it. Only when the controls change
-      (`rateControlsChanged`). Each is marked
-      `PlayerReader::mirror`. Reader 0's key holds no switch quantum:
-      where a reading began does not change what one primed for S gives.
-      A seek in the prepared plan, or a reader the timeline cannot yet
-      hold, is left to the executor. Each attempt's readings replace the
-      last's, and a preparation begins with none: an attempt the renderer
-      overtakes prepares again with its hand, and so S, later, and one that
-      fails is prepared again as a recovery seek; a reader an earlier
-      attempt marked is unmarked and unkeyed (review round 166). The key
-      check alone kept one from being taken (a reading for S holds S's
-      quantum, which a retry moves; one after S is primed again by every
-      attempt), but a seek plan's warm-up could meet a mark it was not
-      primed for.
-    - The mirror's budget (review round 166 F). The mirror is an economy,
-      never the reason an attempt is late: only the first attempt primes (a
-      retry's readers are misses), reader by reader, and only while the
-      hand stays more than one of the frontier's steps past the frontier:
-      `handStream - (frontier + granularity) > step`, in frames from engine
-      state, no clock. The step (the reserve) is the most the frontier can
-      move at once: one render block (`EngineOptions::renderBlock`) for the
-      anticipative renderer, which renders a whole block once it is under
-      its render-ahead, and one device block for the in-callback executor,
-      whose frontier is what has played. So the next move of the frontier
-      cannot by itself overtake an attempt the mirror is priming in; one
-      reader's priming outlasting more than one move can. The readings are
-      primed in a fixed order, the one heard first first: by the device
-      frame each is first read (S for a reading for S, reader 0 or a
-      warm-up switching at or before S; a later warm-up's own switch), then
-      in the plan's node order; what a tight budget leaves is what is heard
-      last. A reading not primed is a miss, the same samples. In practice
-      the in-callback executor's hand is its render-ahead past what has
-      played, room for every reading; a renderer caught up leaves the hand
-      under a render block past its frontier (two quanta and the
-      preparation margin), so it primes only when that margin
-      (`ratePreparationSeconds_`, on a backend that owns its thread) or a
-      renderer still catching up gives more than a render block.
-    - At adoption, the executor that runs the node (the renderer for a
-      rendered node, the callback for a live one, each at `handAt` in its
-      stream) compares each key with what it holds for S: its reader 0,
-      or the warming launch that switches at or before S. On a match (the
-      player, anchor, anchoring, loop cycle and start equal to what it
-      would seek: so the same seek and primes) it takes the primed
-      reader; a warm-up that begins after the adoption checks the same in
-      `warmLaunch`. A primed reader no executor took keys nothing else
-      (`stretchQuantum`, a later carry), so it never plays what the miss
-      path would not. On a miss it primes the same reading
-      itself, there and then: at most 45 primes per reader (a warm-up's
-      length), so N readers that miss in one block cost N times that, and
-      a miss changes CPU only, not what plays. Either way the old reader
-      0 plays on the old trajectory (`previousTimelines`) until S and
-      crossfades into the new one over `smoothFrames`, as an item does,
-      converting while it is read.
-    - *The miss path* (all of phase 1, and a mirror reading not found):
-      `carryLaunchAcross` (from `carryRateSources`)
-      hands each reading to the new reader's `previous`
+    - At adoption `carryLaunchAcross` (from `carryRateSources`) hands
+      each reading to the new reader's `previous`
       (`PlayerReader::previous`, allocated at compile) and seeks the new
-      reader for output from S, and it is primed at its first use, on the
-      audio thread: at most a warm-up's primes per reader in one callback
-      (45 at 48 kHz), so a callback holding S primes 45 for each track
-      with launched audio under stretch; one first read more than the
-      catch-up (32 quanta) after S starts again where it is read, as a
-      primed reading does, rather than running every quantum since S in
-      one block. A warm-up switching after S
+      reader for output from S. The old reading plays on the old
+      trajectory (`previousTimelines`) until S and crossfades into the new
+      one over `smoothFrames`, as an item does, converting while it is
+      read. The new reader is primed at its first use by the executor that
+      runs the node (the renderer for a rendered node, the callback for a
+      live one): at most a warm-up's primes per reader in one block (45 at
+      48 kHz), so the block holding S primes 45 for each track with
+      launched audio under stretch, on the renderer within its
+      render-ahead, and inside the device callback for a live node or with
+      the in-callback executor (a known limit, STATUS). One first read more
+      than the catch-up (32 quanta) after S starts again where it is read,
+      as a primed reading does, rather than running every quantum since S
+      in one block. A warm-up switching after S
       starts again on the new trajectory, primed as far as it had come, in
       the adoption's block; only a warm-up switching at or before S goes on
       in `previous`, and the reader rotated onto reader 2 at a switch drops
       its `previous` (round 152 F1). A tape reader keeps no loop cycle, so
       a reading handed on from one takes its switch's (`switchCycle`,
       from `Node::launchSwitchPhase`, recorded in the switch's block while
-      the timeline still holds that frame; round 152 F2). The mirror
-      (phase 2) moves that priming to the main thread where it can, and
-      plays the same, bit for bit (`test_clip_player_rate_mirror`).
+      the timeline still holds that frame; round 152 F2). A mirror that
+      primed those readers on the main thread at prepare (phase 2) was
+      built and taken out: it was dormant with the anticipative renderer,
+      the default (ADR-0097, revision 2026-11-24, "the mirror taken out").
     - *A change of preserve pitch with a launch switching in (adoption,
       S].* Stretch to tape: reader 2 holds a tape reader with no warm-up,
       so the launch is not rotated in: the clip plays on tape from its own

@@ -43,7 +43,6 @@ namespace supple::engine {
 
 namespace detail {
 struct Plan;
-struct LaunchMirror;
 class BufferPool;
 struct ChunkRing;
 class SyncRuntime;
@@ -1249,10 +1248,6 @@ class Engine {
     // the slots and deciding them, as a main thread preempted there.
     void (*launchCommitForTests_)(void*) = nullptr;
     void* launchCommitContext_ = nullptr;
-    // Tests only (EngineTestAccess): this many of the next prepareRatePlan
-    // attempts are late, as if the renderer had passed their hand, so they
-    // prepare again (the third fails, and a recovery seek follows).
-    int lateAttemptsForTests_ = 0;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or
@@ -1445,10 +1440,6 @@ class Engine {
         bool looping = false;
     };
     std::optional<HeardSong> heardSong(std::uint64_t epoch) const;
-    // Main thread, preparing `p` (S3 step D4, phase 2): what each track's
-    // launched audio reads at the change's switch, from the acknowledged log
-    // and the applied slots, for detail::primeLaunchMirror.
-    std::vector<detail::LaunchMirror> launchMirrorReadings(const detail::Plan& p) const;
     // Main thread, on a unity plan: the song count at stream 0 of `clock`'s
     // epoch (it moves with the stream there).
     std::int64_t unitySongBase(const LaunchClock& clock) const;

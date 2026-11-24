@@ -236,10 +236,6 @@ void Engine::setSyncRate(double scale) {
 
 Status Engine::prepareRatePlan(detail::Plan& p) {
     const auto transport = transportSnapshot();
-    // No reading an earlier preparation of `p` primed (a late one, before
-    // the recovery seek prepares it again) survives into this one (review
-    // round 166).
-    detail::primeLaunchMirror(p, {});
     p.handEpoch = transport.epoch + (rateSeekTarget_ ? 1 : 0);
     p.rateSeekSequence = rateSeekTarget_ ? transport.seekSeq + 1 : 0;
     const auto words = readRateClock();
@@ -344,46 +340,10 @@ Status Engine::prepareRatePlan(detail::Plan& p) {
                 }
                 p.rateOrigin = handDevice - handStream;
                 result = detail::configureRateTransition(p, previous, old, handDevice);
-                // What launched audio reads at the switch, primed here
-                // rather than on the audio thread at adoption (S3 step D4,
-                // phase 2). Built only when the controls change: else no
-                // carry takes them (review round 163 S3). Called every
-                // attempt, so this attempt's readings replace an earlier
-                // one's (round 166). The mirror is an economy, never the
-                // reason an attempt is late (round 166 F): only the first
-                // attempt primes (a retry's readers are misses), and only
-                // while the hand stays more than one of the frontier's steps
-                // past it, reader by reader, in frames and engine state: the
-                // renderer's frontier moves a render block at a time, the
-                // callback's (what has played) a device block. A reading
-                // not primed is a miss, which its executor primes, the same
-                // samples.
-                const std::int64_t step = options_.anticipative
-                                              ? static_cast<std::int64_t>(options_.renderBlock)
-                                              : static_cast<std::int64_t>(config_.blockSize);
-                int primed = 0;
-                const auto more = [&] {
-                    if (const int budget = detail::launchMirrorBudget(); budget >= 0)
-                        return primed++ < budget;  // tests: as if the slack ran out there
-                    if (handStream - (frontier() + granularity) <= step) return false;
-                    ++primed;
-                    return true;
-                };
-                detail::primeLaunchMirror(p,
-                                          attempt == 0 && result && p.rateControlsChanged
-                                              ? launchMirrorReadings(p)
-                                              : std::vector<detail::LaunchMirror>{},
-                                          more);
                 const auto elapsed =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
                 ratePreparationSeconds_ = std::max(elapsed, ratePreparationSeconds_ * .9);
-                if (!result) break;
-                std::int64_t reached = frontier();
-                if (lateAttemptsForTests_ > 0) {  // as if the renderer had passed the hand
-                    --lateAttemptsForTests_;
-                    reached = std::max(reached, handStream - granularity);
-                }
-                if (reached + granularity < handStream) break;
+                if (!result || frontier() + granularity < handStream) break;
                 // Priming must finish before its scheduled boundary. A busy
                 // machine can need more than the ordinary render horizon;
                 // predict farther ahead and prepare again while old audio runs.
@@ -391,7 +351,7 @@ Status Engine::prepareRatePlan(detail::Plan& p) {
                                       (backend_->ownsThread() ? elapsed : 0) * p.rate * 2)) +
                                   2 * granularity + 128;
                 const auto oldHand = handStream;
-                handStream = (std::max(frontier(), reached) + lead + 63) / 64 * 64;
+                handStream = (frontier() + lead + 63) / 64 * 64;
                 handDevice += handStream - oldHand;
                 p.handAt = handStream;
                 if (attempt == 2)

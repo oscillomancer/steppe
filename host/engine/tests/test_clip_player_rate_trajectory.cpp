@@ -116,10 +116,7 @@ TEST_CASE("a trajectory change primes launched audio within a warm-up's primes p
     // with a launched audio clip, so two such tracks take 90 there. The cold
     // start before D4 primed as many, in the same callback; what D4 buys
     // with them is a continuous switch, checked here too. Without a change
-    // only cl_2's warm-up primes, two per callback at most. With the mirror
-    // off: phase 2 primes these on the main thread (test_clip_player_rate_
-    // mirror.cpp), the miss path's cost being what this case pins.
-    const MirrorOff off;
+    // only cl_2's warm-up primes, two per callback at most.
     for (const int tracks : {0, 1, 2}) {  // 0: no change, one track
         INFO("tracks " << tracks);
         Project p;
@@ -519,11 +516,7 @@ TEST_CASE("a launched clip unread across a trajectory change catches up within i
     // unmuted about 30000 frames after S: its first use is far past S, and
     // a reading that is behind by more than the catch-up (32 quanta) starts
     // again where it is read, as a primed one does, instead of running every
-    // quantum from S in one block. With the mirror off: the mirror primes
-    // cl_2's reading for S (a hit), and this is the miss path's bound, which
-    // a moved loop, a launch since the read or an unanchored reading still
-    // takes (review round 163 F1).
-    const MirrorOff off;
+    // quantum from S in one block.
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
         INFO("anticipative " << options.anticipative);
         Project p;

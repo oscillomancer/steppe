@@ -13,7 +13,6 @@
 #include "pan.h"
 #include "plan.h"
 #include "rack_runtime.h"
-#include "supple/dsp/dsp.h"
 #include "supple/model/source_mapping.h"
 
 namespace supple::engine::detail {
@@ -759,7 +758,6 @@ void stretchSeekCycle(PlayerReader& r, const ClipPlayer& pl, std::int64_t anchor
     r.launchCycle = launchCycle;
     r.primes = 0;
     r.credit = 0;
-    r.mirror = false;
     st.primed = false;
     st.quantum = INT64_MIN;
     const PlayerSource source = stretchSource(r, pl, timeline);
@@ -823,8 +821,8 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
                                     std::int64_t switchCycle) SUPPLE_RT {
     RateClipState& st = *r.state;
     constexpr std::int64_t kCatchUp = 32 * kRateQuantum;
-    const bool keyed = !r.mirror && r.player == &pl && r.anchor == anchor &&
-                       r.startQuantum != INT64_MIN && q >= r.startQuantum;
+    const bool keyed =
+        r.player == &pl && r.anchor == anchor && r.startQuantum != INT64_MIN && q >= r.startQuantum;
     // The last quantum it has run; an unprimed reading (one carried across a
     // trajectory change, seeked for S and primed at its first use: S3 step
     // D4) counts from its start, so a first use long after it starts again
@@ -885,13 +883,8 @@ void warmLaunch(const Plan& p, Node& n, std::uint32_t frames) SUPPLE_RT {
         before ? *p.previousTimelines[n.live ? 1 : 0] : *p.timelines[n.live ? 1 : 0];
     const std::int64_t device = warmSwitchDevice(p, n);
     const std::int64_t q = quantumAt(p, device);
-    // A reading the mirror primed is taken only when it is the one this
-    // would seek (S3 step D4, phase 2): the same start, anchored, in the
-    // switch frame's loop cycle.
-    if (r.player != &pl || r.anchor != a.anchorSample || r.startQuantum != q ||
-        (r.mirror && (r.unanchored || r.launchCycle != timeline.cycle(timeline.phase(device)))))
+    if (r.player != &pl || r.anchor != a.anchorSample || r.startQuantum != q)
         stretchSeek(r, pl, a.anchorSample, false, timeline, q, device);
-    r.mirror = false;
     r.credit += frames;
     const std::uint32_t budget = r.credit / kRateQuantum;
     r.credit %= kRateQuantum;
@@ -1392,7 +1385,6 @@ void handReading(PlayerReader& to, PlayerReader& from, const ClipPlayer* pl) SUP
     to.launchCycle = from.launchCycle;
     to.primes = from.primes;
     to.credit = from.credit;
-    to.mirror = false;
 }
 }  // namespace
 
@@ -1452,28 +1444,16 @@ void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
         const bool stretched = to.state->preserve;
         if (k == 2 && !warmFirst) {
             // It switches after the change: its warm-up starts again on the
-            // new trajectory, primed as far as it had come; or the mirror
-            // primed it there, all of its primes (the same converter state
-            // once the rest are done, which its warm-up then finds done).
-            if (stretched && from.state->preserve && from.startQuantum != INT64_MIN &&
-                !from.mirror) {
-                const std::int64_t q = quantumAt(p, warmSwitch);
-                if (to.mirror && to.player == pl && to.anchor == from.anchor && !to.unanchored &&
-                    to.startQuantum == q &&
-                    to.launchCycle == timeline.cycle(timeline.phase(warmSwitch))) {
-                    to.mirror = false;
-                    to.previousLive = false;
-                } else {
-                    stretchSeek(to, *pl, from.anchor, false, timeline, q, warmSwitch);
-                    stretchPrime(to, timeline, from.primes);
-                }
+            // new trajectory, primed as far as it had come.
+            if (stretched && from.state->preserve && from.startQuantum != INT64_MIN) {
+                stretchSeek(to, *pl, from.anchor, false, timeline, quantumAt(p, warmSwitch),
+                            warmSwitch);
+                stretchPrime(to, timeline, from.primes);
                 to.credit = from.credit;
             }
             continue;
         }
-        // A reading the mirror primed and no executor took is none.
-        const bool reading =
-            from.state->preserve ? from.startQuantum != INT64_MIN && !from.mirror : true;
+        const bool reading = from.state->preserve ? from.startQuantum != INT64_MIN : true;
         if (!reading) continue;
         handReading(*to.previous, from, pl);
         to.previousLive = true;
@@ -1494,17 +1474,9 @@ void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
                 to.previousLive = false;
                 continue;
             }
-            // The mirror's reading when it is this one (S3 step D4, phase 2):
-            // the same player, anchor, anchoring, loop cycle and start, so
-            // the same seek and primes, done on the main thread.
-            const std::int64_t cycle = tape ? switchCycle(old, timeline) : to.previous->launchCycle;
-            const std::int64_t q = quantumAt(p, S);
-            if (!(to.mirror && to.player == pl && to.anchor == to.previous->anchor &&
-                  to.unanchored == to.previous->unanchored && to.launchCycle == cycle &&
-                  to.startQuantum == q))
-                stretchSeekCycle(to, *pl, to.previous->anchor, to.previous->unanchored, cycle,
-                                 timeline, q);
-            to.mirror = false;
+            stretchSeekCycle(to, *pl, to.previous->anchor, to.previous->unanchored,
+                             tape ? switchCycle(old, timeline) : to.previous->launchCycle, timeline,
+                             quantumAt(p, S));
             to.previousLive = true;
         } else {
             to.player = pl;
@@ -1545,7 +1517,6 @@ void carryLaunchReaders(Node& old, Node& n) SUPPLE_RT {
         to.launchCycle = from.launchCycle;
         to.primes = from.primes;
         to.credit = from.credit;
-        to.mirror = from.mirror;
         // Its player in the new plan, by clip (a retiring one too).
         to.player = nullptr;
         if (!from.player) continue;
@@ -1556,93 +1527,6 @@ void carryLaunchReaders(Node& old, Node& n) SUPPLE_RT {
             for (const ClipPlayer& r : n.retiring)
                 if (r.clip == clip) to.player = &r;
     }
-}
-
-namespace {
-std::atomic<bool> gLaunchMirror{true};
-std::atomic<int> gLaunchMirrorBudget{-1};
-}  // namespace
-
-void setLaunchMirror(bool on) noexcept { gLaunchMirror.store(on, std::memory_order_relaxed); }
-bool launchMirror() noexcept { return gLaunchMirror.load(std::memory_order_relaxed); }
-void setLaunchMirrorBudget(int readers) noexcept {
-    gLaunchMirrorBudget.store(readers, std::memory_order_relaxed);
-}
-int launchMirrorBudget() noexcept { return gLaunchMirrorBudget.load(std::memory_order_relaxed); }
-
-void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings,
-                       const std::function<bool()>& more) {
-    // These readings replace any the plan holds: prepareRatePlan prepares
-    // again when it is late (S then later) or as a seek when it fails, and
-    // a reader an earlier attempt primed is none of this one's. The key
-    // check keeps it from being taken today (a reading for S holds S's
-    // quantum, which a retry moves; one after S is primed again by every
-    // attempt), but a seek plan's warm-up could still meet a mark it was
-    // not primed for (review round 166). Back to as compiled: nothing keys
-    // a reader with no player.
-    for (Node& n : p.nodes)
-        for (PlayerReader& r : n.launchReaders)
-            if (r.mirror) {
-                r.mirror = false;
-                r.player = nullptr;
-                r.startQuantum = INT64_MIN;
-                r.primes = 0;
-            }
-    const std::int64_t S = p.rateSwitchDevice;
-    if (S == INT64_MIN || !p.rateControlsChanged || !p.rateStretch) return;
-    // The reading heard first first, so what a tight budget leaves to the
-    // executors is what is heard last (review round 166 F): by the device
-    // frame it is first read, S for a reading for S (reader 0, or a warm-up
-    // switching at or before it), a later warm-up's own switch; then in the
-    // order given (the plan's node order).
-    const auto heard = [&](const LaunchMirror& m) {
-        return m.warmSwitch == INT64_MIN ? S : std::max(S, m.warmSwitch + p.rateOrigin);
-    };
-    std::vector<const LaunchMirror*> order;
-    order.reserve(readings.size());
-    for (const LaunchMirror& m : readings) order.push_back(&m);
-    std::stable_sort(order.begin(), order.end(), [&](const LaunchMirror* a, const LaunchMirror* b) {
-        return heard(*a) < heard(*b);
-    });
-    dsp::DenormalGuard denormals;
-    for (const LaunchMirror* reading : order)
-        for (Node& n : p.nodes) {
-            const LaunchMirror& m = *reading;
-            if (n.id != m.track || !p.previousTimelines[n.live ? 1 : 0]) continue;
-            const ClipPlayer* pl = playerIn(n, m.clip);
-            if (!pl || pl->midi || pl->chain >= 0 || !pl->audio.data) continue;
-            PlayrateTimeline& timeline = *p.timelines[n.live ? 1 : 0];
-            const bool warm = m.warmSwitch != INT64_MIN;
-            const std::int64_t device = warm ? m.warmSwitch + p.rateOrigin : S;
-            // What reads at S: reader 0, or reader 2 for a warm-up switching
-            // at or before S (rotated in at its switch); a warm-up switching
-            // after S on reader 2, for its own switch (carryLaunchAcross).
-            PlayerReader& r = n.launchReaders[warm ? 2 : 0];
-            if (!r.state || !r.state->preserve || !r.previous) continue;
-            const bool after = warm && device > S;
-            const std::int64_t q = quantumAt(p, after ? device : S);
-            // Its seek reads the frame before q, its primes up to q plus the
-            // converter's lookahead (stretchSeekCycle, stretchPrime).
-            const int latency = r.state->stretch->lookahead();
-            timeline.ensure(q + latency + kRateQuantum);
-            if (!timeline.hasHistory(q - kRateQuantum, q + latency))
-                continue;                 // the executor primes it (the miss path)
-            if (more && !more()) return;  // the budget is spent: the rest are misses
-            // Its loop cycle: a warm-up after S takes its switch frame's, as
-            // warmLaunch does; a switch at or before S its whole loop passes
-            // from the log (a frame long past is no longer in the ring).
-            std::int64_t cycle = 0;
-            if (after)
-                cycle = timeline.cycle(timeline.phase(device));
-            else if (timeline.looping() && timeline.cycleLength() > 0) {
-                const double length = timeline.cycleLength();
-                const auto passes = std::llround(double(m.songFrame - m.anchor) / length);
-                cycle = timeline.cycle(double(m.anchor) + double(passes) * length);
-            }
-            stretchSeekCycle(r, *pl, m.anchor, false, cycle, timeline, q);
-            stretchPrime(r, timeline, UINT32_MAX);
-            r.mirror = true;
-        }
 }
 
 ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT {

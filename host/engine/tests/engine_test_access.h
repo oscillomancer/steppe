@@ -48,26 +48,6 @@ struct EngineTestAccess {
         e.launchCommitForTests_ = hook;
         e.launchCommitContext_ = context;
     }
-    // The next `attempts` prepareRatePlan attempts count as late (review
-    // round 166 T2): each prepares again with the hand later, so S later;
-    // three fail, and the recovery seek prepares the plan once more.
-    static void lateAttempts(Engine& e, int attempts) { e.lateAttemptsForTests_ = attempts; }
-    // The newest prepared trajectory change's switch S as a stream frame
-    // (INT64_MIN: none, or a seek). Control thread.
-    static std::int64_t preparedSwitch(const Engine& e) {
-        const detail::Plan* p = e.ratePreparedTail_;
-        if (!p || p->rateSwitchDevice == INT64_MIN) return INT64_MIN;
-        return p->rateSwitchDevice - p->rateOrigin;
-    }
-    // Launch readers the mirror marked in the kept plans. Only where no
-    // executor runs alongside (in-callback, between cycles).
-    static int mirrorMarked(const Engine& e) {
-        int n = 0;
-        for (const auto& plan : e.plans_)
-            for (const auto& node : plan->nodes)
-                for (const auto& r : node.launchReaders) n += r.mirror ? 1 : 0;
-        return n;
-    }
     static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
         e.afterCollectForTests_ = hook;
         e.afterCollectContext_ = context;
