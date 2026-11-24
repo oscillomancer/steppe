@@ -1320,6 +1320,11 @@ TEST_CASE("clip audio is prepared after the arrangement, in launch order, as far
         REQUIRE(l.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
                                    EngineOptions{.anticipative = false, .workers = 0}));
         CHECK(l.fails("launch.clip", R"({"clip": "cl_2"})").code == "launch.memory");
+        // The launcher's refusals (step E): cl_2 alone; sc_2 still launches cl_4.
+        const auto memory = l.app->launchRefusal(id("cl_2"));
+        CHECK((memory ? memory->code : "") == "launch.memory");
+        CHECK_FALSE(l.app->launchRefusal(id("cl_4")));
+        CHECK_FALSE(l.app->sceneLaunchRefusal(id("sc_2")));
         auto scene = l.run("launch.scene", R"({"scene": "sc_2"})");
         REQUIRE(scene["tracks"].size() == 1);
         CHECK(scene["tracks"].at(0).find("clip")->asString() == "cl_4");

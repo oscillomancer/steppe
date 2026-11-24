@@ -87,6 +87,25 @@ void warnClipsRemoved(cmd::Context& ctx, const std::vector<model::Id>& clips,
 // followed depth-first by its children.
 std::vector<model::Id> tracksInDisplayOrder(const model::Session& s);
 
+// launch.scene's selection (step E): the scene's clips in track display
+// order, leaving out frozen tracks' clips (track.frozen) and those in
+// `skipped`, whose audio did not fit the prepared-audio budget
+// (launch.memory). EngineApp::sceneLaunchRefusal makes the same choice.
+struct SceneLaunch {
+    struct Left {
+        const char* code;  // track.frozen or launch.memory
+        model::Id track, clip;
+    };
+    std::vector<Engine::LaunchRequest> requests;
+    std::vector<Left> left;
+};
+SceneLaunch sceneLaunchRequests(const model::Session& s, model::Id scene,
+                                const std::vector<model::Id>& skipped);
+// launch.scene's error when its selection is empty.
+Error sceneHasNoClip(model::Id scene);
+// launch.clip's refusal of a frozen track's clip (and EngineApp::launchRefusal's).
+Error trackFrozen(model::Id track, const std::string& path);
+
 // One bar in beats at the first meter.
 double firstBarBeats(const model::Session& s);
 

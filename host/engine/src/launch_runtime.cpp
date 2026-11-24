@@ -363,40 +363,8 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
     if (!plan)
         return Error("launch.engine", "no project is loaded in the engine", "",
                      "start the engine with a project first");
-    for (const LaunchRequest& r : requests) {
-        // Staged (S3 step 1): launched audio plays by tape only.
-        const model::Clip* clip = r.action == LaunchLogEntry::Action::Clip && latest_
-                                      ? latest_->clips.find(r.clip)
-                                      : nullptr;
-        // With the pitch kept, launched audio warms a stretch converter up
-        // (S3 step D); one read through its take chain cannot yet.
-        if (plan->rateStretch && clip && clip->kind != model::ClipKind::Midi &&
-            detail::clipHasTakeChain(*latest_, *clip))
-            return Error("launch.playrate",
-                         r.clip.str() +
-                             " is an audio clip with take FX or envelopes, which cannot play "
-                             "while the master playrate keeps the pitch",
-                         "",
-                         "turn off the master playrate's preserve pitch, or set it to 1 without "
-                         "an envelope, or launch a copy of the clip without take FX");
-        const auto& prepared = plan->preparedSources;
-        if (r.action == LaunchLogEntry::Action::Clip && prepared &&
-            std::find(prepared->clipsSkipped.begin(), prepared->clipsSkipped.end(), r.clip) !=
-                prepared->clipsSkipped.end())
-            return Error("launch.memory",
-                         r.clip.str() + "'s audio did not fit the prepared-audio budget", "",
-                         "use shorter audio or fewer distinct files in clips, or remove some "
-                         "arrangement audio");
-        const detail::Node* n = nodeOf(*plan, r.track);
-        if (!n || n->players.empty())
-            return Error("launch.clip", r.track.str() + " has no clips to play", "",
-                         "the track is frozen or has no clips");
-        if (r.action == LaunchLogEntry::Action::Clip && detail::playerOf(*n, r.clip) < 0)
-            return Error(
-                "launch.clip",
-                r.clip.str() + " is not one of " + r.track.str() + "'s clips in the running plan",
-                "", "wait for the edit to reach the engine, then launch again");
-    }
+    for (const LaunchRequest& r : requests)
+        if (auto refused = launchRefused(*plan, r)) return std::move(*refused);
     // Placed, published, then decided. If every executor's horizon passed
     // it meanwhile (a placement on a playrate plan integrates the rate up to
     // the boundary), it is placed again at once, the slots reused.
@@ -408,6 +376,49 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
             return placed;
         }
     }
+}
+
+std::optional<Error> Engine::launchRefused(const detail::Plan& plan, const LaunchRequest& r) const {
+    const bool clip = r.action == LaunchLogEntry::Action::Clip;
+    // With the pitch kept, launched audio warms a stretch converter up
+    // (S3 step D); one read through its take chain has no player yet.
+    if (clip && std::find(plan.launchRefusedPlayrate.begin(), plan.launchRefusedPlayrate.end(),
+                          r.clip) != plan.launchRefusedPlayrate.end())
+        return Error("launch.playrate",
+                     r.clip.str() +
+                         " is an audio clip with take FX or envelopes, which cannot play "
+                         "while the master playrate keeps the pitch",
+                     "",
+                     "turn off the master playrate's preserve pitch, or set it to 1 without "
+                     "an envelope, or launch a copy of the clip without take FX");
+    const auto& prepared = plan.preparedSources;
+    if (clip && prepared &&
+        std::find(prepared->clipsSkipped.begin(), prepared->clipsSkipped.end(), r.clip) !=
+            prepared->clipsSkipped.end())
+        return Error("launch.memory",
+                     r.clip.str() + "'s audio did not fit the prepared-audio budget", "",
+                     "use shorter audio or fewer distinct files in clips, or remove some "
+                     "arrangement audio");
+    const detail::Node* n = nodeOf(plan, r.track);
+    if (!n || n->players.empty())
+        return Error("launch.clip", r.track.str() + " has no clips to play", "",
+                     "the track is frozen or has no clips");
+    if (clip && detail::playerOf(*n, r.clip) < 0)
+        return Error(
+            "launch.clip",
+            r.clip.str() + " is not one of " + r.track.str() + "'s clips in the running plan", "",
+            "wait for the edit to reach the engine, then launch again");
+    return std::nullopt;
+}
+
+std::optional<Error> Engine::launchRefusal(model::Id clip) const {
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    if (!plan || !latest_) return std::nullopt;
+    const model::Clip* c = latest_->clips.find(clip);
+    if (!c)
+        return Error("launch.clip", clip.str() + " is not a clip of the project", "",
+                     "launch a clip that exists");
+    return launchRefused(*plan, {c->track, LaunchLogEntry::Action::Clip, clip, {}});
 }
 
 Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest> requests,

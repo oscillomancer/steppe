@@ -1003,6 +1003,25 @@ the same.*
   entry not yet reached by the played stream is still queued, along with
   its pending slot. A track whose clip a later plan lacks is back on the
   arrangement from then on.
+- **What a press would be refused for, for the launcher pane** (step E).
+  `Engine::launchRefusal(clip)` runs `launch()`'s per-clip checks against
+  the latest published plan without placing anything, and `launch()`
+  runs the same function first: `launch.playrate` (an audio clip the
+  plan gave no player because it reads through a take chain while the
+  pitch is kept: `Plan::launchRefusedPlayrate`, recorded by compile),
+  `launch.memory` (`clipsSkipped`), `launch.clip` (no players on the
+  track, or the plan lacks the clip). `EngineApp::launchRefusal(clip)`
+  puts launch.clip's own `track.frozen` check first, engine or not;
+  `EngineApp::sceneLaunchRefusal(scene)` makes launch.scene's selection
+  (`sceneLaunchRequests`: frozen tracks' and memory-skipped clips left
+  out) and answers `launch.scene` when it is empty, else the first
+  refusal among its clips. Transport-state refusals (`engine.stopped`,
+  `launch.later`, `launch.queue`) are not reported.
+  `EngineApp::launchRefusalGeneration()` moves whenever an answer can
+  change: a published plan (each engine's count is folded into a base
+  that survives a restart), an engine starting or stopping, a session
+  version (track.freeze sets its flag before its plan arrives, an undo)
+  and a project opened. It never repeats a value.
 - **Plan swaps.** `carryMix` carries `Node::launch` by clip id
   (`carryLaunch`). A clip the new plan lacks, or a node with no players
   (a frozen track), returns its track to the arrangement at once, and its

@@ -1408,6 +1408,10 @@ struct Plan {
     bool gestureHolds = false;
     std::filesystem::path projectDir;
     std::shared_ptr<const PreparedSources> preparedSources;
+    // Audio clips given no player because they read through a take chain on
+    // a pitch-keeping plan (S3 step D): launching one is refused with
+    // launch.playrate (Engine::launchRefusal).
+    std::vector<model::Id> launchRefusedPlayrate;
     MediaCache* media = nullptr;
     std::vector<host::Instance*> instances;  // every instance the plan processes, sorted
     std::unique_ptr<TaskGraph> graph;        // node dependencies, for processBlockOn

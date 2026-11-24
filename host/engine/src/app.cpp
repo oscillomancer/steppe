@@ -775,7 +775,7 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     stopJobs();
     if (engine_) {
         engine_->stop();
-        engine_.reset();
+        dropEngine();
         protections_->stop();
         processFaultBase_.reset();
         faultWatch_.clear();
@@ -1764,7 +1764,7 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
     engine_->setMidiPreferences(midiInputsPreferences_, midiOutputsPreferences_);
     auto st = engine_->start(backend, config);
     if (!st) {
-        engine_.reset();
+        dropEngine();
         backend.setMainThreadWake(nullptr);
         return st;
     }
@@ -1781,7 +1781,7 @@ Status EngineApp::startEngine(Backend& backend, const BackendConfig& config,
             }
     if (!numeric) {
         engine_->stop();
-        engine_.reset();
+        dropEngine();
         backend.setMainThreadWake(nullptr);
         return numeric.error();
     }
@@ -1903,7 +1903,7 @@ void EngineApp::haltEngine() {
         engine_->stop();
         auto takes = engine_->stopRecording();
         engine_->service();
-        engine_.reset();
+        dropEngine();
         recordingFiles_.clear();
         recordingMasters_ = false;  // the engine that held them is gone
         if (takes) {
@@ -5638,6 +5638,41 @@ struct Gain : Effect {
     if (fixture == "render_queued")  // + q1: the mix of the first beat
         run("render.queue.add",
             R"({"command": "render.mix", "args": {"end_beat": 1, "name": "queued"}})");
+}
+
+// The commands read view(); outside a transaction (the GUI's frames) that is
+// the head, read here without a copy.
+std::optional<Error> EngineApp::launchRefusal(model::Id clip) const {
+    const auto refusal = [&](const model::Session& s) -> std::optional<Error> {
+        if (const model::Clip* c = s.clips.find(clip))
+            if (const auto* track = s.tracks.find(c->track); track && track->freeze)
+                return trackFrozen(c->track, "/clip");
+        if (!engine_) return std::nullopt;  // launch.clip: engine.stopped
+        return engine_->launchRefusal(clip);
+    };
+    return txn_ ? refusal(view()) : refusal(head());
+}
+
+std::uint64_t EngineApp::launchRefusalGeneration() const {
+    const RefusalInputs now{planBase_ + (engine_ ? engine_->planGeneration() : 0), head().version,
+                            projectGeneration(), engine_ != nullptr};
+    if (!(now == refusalInputs_)) {
+        refusalInputs_ = now;
+        ++refusalGeneration_;
+    }
+    return refusalGeneration_;
+}
+
+std::optional<Error> EngineApp::sceneLaunchRefusal(model::Id scene) const {
+    if (!engine_) return std::nullopt;
+    const auto refusal = [&](const model::Session& s) -> std::optional<Error> {
+        const SceneLaunch selection = sceneLaunchRequests(s, scene, engine_->clipsSkipped());
+        if (selection.requests.empty()) return sceneHasNoClip(scene);
+        for (const Engine::LaunchRequest& r : selection.requests)
+            if (auto refused = engine_->launchRefusal(r.clip)) return refused;
+        return std::nullopt;
+    };
+    return txn_ ? refusal(view()) : refusal(head());
 }
 
 }  // namespace supple::engine

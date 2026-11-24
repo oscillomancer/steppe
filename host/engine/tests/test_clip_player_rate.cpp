@@ -108,6 +108,85 @@ TEST_CASE("launches under a master playrate play as the offline replay, in both 
     }
 }
 
+TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, and say when") {
+    // Step E: EngineApp::launchRefusal and sceneLaunchRefusal run the
+    // commands' own checks without launching; launchRefusalGeneration moves
+    // whenever their answers can change. twoTracks: cl_1 (MIDI, tr_1) and
+    // cl_2 (audio, tr_2) in sc_1; a take-FX audio clip on tr_2 in sc_2.
+    Project p;
+    twoTracks(p);
+    auto args = j(R"({"track": "tr_2", "scene": "sc_2"})");
+    args["audio_file"] = p.ramp("chained.wav", 48000).string();
+    const std::string chained = p.runArgs("clip.add", args)["clip"].asString();
+    auto fx = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+    fx["take"] = takeOf(p, chained.c_str());
+    p.runArgs("fx.add", fx);
+    const model::Id midi = id("cl_1"), audio = id("cl_2"), take = id(chained.c_str());
+    auto moved = [&, last = p.app->launchRefusalGeneration()]() mutable {
+        const std::uint64_t now = p.app->launchRefusalGeneration();
+        return std::exchange(last, now) != now;
+    };
+    const auto code = [](const std::optional<Error>& e) { return e ? e->code : std::string(); };
+    const auto refusedBy = [&](const char* command, json::Value a) {
+        auto r = p.bus->execute({command, std::move(a), kOrigin});
+        return r ? Error("", "", "", "") : r.error();
+    };
+    json::Value launchTake = json::Value::object();
+    launchTake["clip"] = chained;
+    // No engine: nothing refused (a press answers engine.stopped).
+    CHECK_FALSE(p.app->launchRefusal(take));
+    CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_2")));
+    CHECK_FALSE(moved());  // asked twice, nothing changed
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
+    CHECK(moved());
+    for (const model::Id clip : {midi, audio, take}) CHECK_FALSE(p.app->launchRefusal(clip));
+    // Keeping the pitch: the take-FX clip alone is refused, as launch.clip
+    // refuses it, and so is the scene holding it.
+    p.run("transport.playrate.set", R"({"rate": 0.5, "preserve_pitch": true})");
+    REQUIRE(p.app->engine()->awaitPlan());
+    CHECK(moved());
+    const auto refused = p.app->launchRefusal(take);
+    CHECK(code(refused) == "launch.playrate");
+    CHECK_FALSE(p.app->launchRefusal(midi));
+    CHECK_FALSE(p.app->launchRefusal(audio));
+    const Error pressed = refusedBy("launch.clip", launchTake);
+    CHECK(pressed.code == code(refused));
+    CHECK(pressed.message == (refused ? refused->message : ""));
+    CHECK(code(p.app->sceneLaunchRefusal(id("sc_2"))) == "launch.playrate");
+    CHECK(refusedBy("launch.scene", j(R"({"scene": "sc_2"})")).code == "launch.playrate");
+    CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_1")));
+    CHECK_FALSE(moved());
+    // Back at 1 (freezing needs it), the plan that follows launches it.
+    p.run("transport.playrate.set", R"({"rate": 1, "preserve_pitch": false})");
+    REQUIRE(p.app->engine()->awaitPlan());
+    CHECK(moved());
+    CHECK_FALSE(p.app->launchRefusal(take));
+    CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_2")));
+    // A frozen track: track.frozen, from the edit on (before its plan); a
+    // scene left with nothing to play answers launch.scene, as the command.
+    p.run("track.freeze", R"({"track": "tr_2"})");
+    CHECK(moved());
+    CHECK(code(p.app->launchRefusal(audio)) == "track.frozen");
+    CHECK(code(p.app->launchRefusal(take)) == "track.frozen");
+    CHECK(refusedBy("launch.clip", j(R"({"clip": "cl_2"})")).code == "track.frozen");
+    CHECK(code(p.app->sceneLaunchRefusal(id("sc_2"))) == "launch.scene");
+    CHECK(refusedBy("launch.scene", j(R"({"scene": "sc_2"})")).code == "launch.scene");
+    CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_1")));  // cl_1 plays
+    // Stopped: a frozen track's clip is still refused (launch.clip's check
+    // comes before the engine's); nothing else is.
+    p.app->stopEngine();
+    CHECK(moved());
+    CHECK(code(p.app->launchRefusal(audio)) == "track.frozen");
+    CHECK(refusedBy("launch.clip", j(R"({"clip": "cl_2"})")).code == "track.frozen");
+    CHECK_FALSE(p.app->launchRefusal(midi));
+    CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_2")));
+    // A new engine counts its plans from 0: the generation still never repeats.
+    std::uint64_t before = p.app->launchRefusalGeneration();
+    REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
+    CHECK(p.app->launchRefusalGeneration() > before);
+}
+
 TEST_CASE("under a pitch-keeping rate a track's audio items come back after a MIDI clip held it" *
           doctest::description("rt")) {
     // While a launched clip holds a track its arrangement is silent, and its

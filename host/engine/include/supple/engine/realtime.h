@@ -841,6 +841,13 @@ class Engine {
     // launch.clip when a track's node has no player for the clip.
     Result<LaunchPlaced> launch(std::span<const LaunchRequest> requests,
                                 model::LaunchQuantize quantize);
+    // Main thread: why launching `clip` now would be refused for the clip
+    // itself (launch.playrate, launch.memory, launch.clip), without placing
+    // anything; nullopt when its checks pass or no project is loaded. A
+    // function of the latest published plan (planGeneration()); launch()
+    // runs the same checks first. Transport-state refusals (launch.later,
+    // launch.queue) are not per-clip and not reported (step E).
+    std::optional<Error> launchRefusal(model::Id clip) const;
     // Main thread: the launches applied since the engine started, in order
     // of epoch and running frame (service() collects them), and the pending
     // ones.
@@ -1332,6 +1339,8 @@ class Engine {
     // Main thread: whether every executor running one of `track`'s launch
     // targets in `plan` has a horizon at or before `target` in `epoch`
     // (read after the slot is published).
+    // A request's per-clip refusal against `plan` (launch(), launchRefusal()).
+    std::optional<Error> launchRefused(const detail::Plan& plan, const LaunchRequest& r) const;
     bool launchHorizonsAllow(const detail::Plan& plan, const LaunchRequest& r, std::uint64_t epoch,
                              std::int64_t target) const;
     // Main thread (service): collects acks, re-places missed launches and

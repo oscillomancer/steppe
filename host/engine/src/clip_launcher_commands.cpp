@@ -46,6 +46,31 @@ void warnClipsRemoved(cmd::Context& ctx, const std::vector<Id>& clips, const std
              path);
 }
 
+SceneLaunch sceneLaunchRequests(const model::Session& s, Id scene, const std::vector<Id>& skipped) {
+    SceneLaunch out;
+    for (Id track : tracksInDisplayOrder(s))
+        for (const auto& e : s.clips) {
+            if (e.value->scene != scene || e.value->track != track) continue;
+            if (s.tracks.find(track)->freeze)
+                out.left.push_back({"track.frozen", track, e.id});
+            else if (std::find(skipped.begin(), skipped.end(), e.id) != skipped.end())
+                out.left.push_back({"launch.memory", track, e.id});
+            else
+                out.requests.push_back({track, Engine::LaunchRequest{}.action, e.id, scene});
+        }
+    return out;
+}
+
+Error sceneHasNoClip(Id scene) {
+    return Error("launch.scene", scene.str() + " has no clip that can play", "/scene",
+                 "add clips to the scene with clip.add, or unfreeze their tracks");
+}
+
+Error trackFrozen(Id track, const std::string& path) {
+    return Error("track.frozen", track.str() + " is frozen; it plays its print", path,
+                 "track.unfreeze {track: \"" + track.str() + "\"} to launch its clips");
+}
+
 std::vector<Id> tracksInDisplayOrder(const model::Session& s) {
     std::vector<Id> out;
     std::function<void(Id)> walk = [&](Id id) {

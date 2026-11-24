@@ -524,6 +524,25 @@ class EngineApp : public cmd::Host {
     std::vector<Engine::TrackLaunch> launchState() const {
         return engine_ ? engine_->launchState() : std::vector<Engine::TrackLaunch>{};
     }
+    // What launch.clip on `clip` would refuse it for now, for the clip itself
+    // (step E): track.frozen (the command's own check, engine or not), else
+    // the engine's (launch.playrate, launch.memory, launch.clip;
+    // Engine::launchRefusal). nullopt when it would not; transport-state
+    // refusals (engine.stopped, launch.later, launch.queue) are not
+    // reported. Model thread.
+    std::optional<Error> launchRefusal(model::Id clip) const;
+    // Why launch.scene on `scene` would be refused now: its selection (frozen
+    // tracks' and memory-skipped clips left out, as the command warns) empty
+    // gives launch.scene's error, else the first clip of it the engine
+    // refuses; nullopt when it would launch, or with no engine (the command
+    // answers engine.stopped then). Model thread.
+    std::optional<Error> sceneLaunchRefusal(model::Id scene) const;
+    // Moves whenever the two refusals above can change, read outside a
+    // transaction: a plan the engine publishes, an engine starting or
+    // stopping, a version of the session (an edit such as track.freeze, an
+    // undo) and a project opened. Never repeats a value. The launcher pane
+    // compares it each frame and asks again when it moves. Model thread.
+    std::uint64_t launchRefusalGeneration() const;
     // Whether launch.capture is on (L4).
     bool launchCapturing() const { return engine_ && engine_->launchCapturing(); }
     bool launchCaptureEnding() const { return engine_ && engine_->launchCaptureEnding(); }
@@ -1146,6 +1165,21 @@ class EngineApp : public cmd::Host {
     std::optional<SourceKeyMemo> sourceKeyMemo_;
     std::shared_ptr<const model::Session> loadedHead_;
     std::unique_ptr<Engine> engine_;
+    // Plans published by every engine so far (each Engine counts from 0):
+    // raised past the engine's count when it goes.
+    std::uint64_t planBase_ = 0;
+    // launchRefusalGeneration(): what the refusals read when it last looked.
+    struct RefusalInputs {
+        std::uint64_t plans = 0, version = 0, project = 0;
+        bool engine = false;
+        bool operator==(const RefusalInputs&) const = default;
+    };
+    mutable RefusalInputs refusalInputs_;
+    mutable std::uint64_t refusalGeneration_ = 0;
+    void dropEngine() {
+        planBase_ += engine_->planGeneration() + 1;
+        engine_.reset();
+    }
     Backend* backend_ = nullptr;
     std::unique_ptr<Backend> ownedBackend_;
     double playStart_ = 0.0;  // transport.stop returns here

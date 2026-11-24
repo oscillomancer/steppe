@@ -1157,6 +1157,22 @@ the replay.
   cold; clips with take chains are refused; the launcher pane still dims
   audio clips under a pitch-keeping rate until the GUI follows.
 
+## Revision (2026-11-23, S3 step E, engine side): the engine says what a press would be refused for
+
+The launcher pane dimmed clips by a copy of the engine's rule made from the session, which missed a
+MIDI-clock chase and went stale with step D. The engine now answers it from the code that refuses:
+`Engine::launchRefusal(clip)` runs `launch()`'s per-clip checks against the latest published plan, and
+`launch()` runs the same function, so the two cannot drift. The app adds launch.clip's own
+`track.frozen` check (it applies with no engine too) and launch.scene's selection
+(`EngineApp::sceneLaunchRefusal`: frozen and memory-skipped clips left out as the command warns; empty,
+launch.scene's error). Only per-clip refusals are reported; transport-state ones (`engine.stopped`,
+`launch.later`, `launch.queue`) are a press's to answer. `EngineApp::launchRefusalGeneration()` is the
+one value the pane polls: it moves with a published plan, an engine start or stop, a session version and
+a project opened, and never repeats, so the pane needs neither the engine's identity nor the freeze's
+render job. engine.md §1.4.2 has the details; the pane's side is the gui-lead's (gui.md).
+Tests: test_clip_player_rate.cpp ("the launcher's refusals…") and the memory case in
+test_clip_launcher.cpp.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

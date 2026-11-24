@@ -217,6 +217,7 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
         // converter warmed up before its switch (S3 step D); one with take FX
         // or envelopes, read through its take chain, has no player yet.
         if (p.rateStretch && clip.kind != model::ClipKind::Midi && clipHasTakeChain(s, clip)) {
+            p.launchRefusedPlayrate.push_back(id);
             p.warnings.push_back(id.str() +
                                  ": launch.playrate: an audio clip with take FX or envelopes "
                                  "cannot be launched while the master playrate preserves the "
