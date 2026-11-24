@@ -1805,8 +1805,10 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
     if (state_.drag == Drag::Comp && anchor && !anchor->locked) {
         // take.comp, as an agent would call it (session-model §1.5.1): a
         // swipe paints its range with the lane's take, a click in a comp
-        // that piece; a re-comp keeps the comp's crossfade, a first one takes
-        // take.comp's default. On an edit-grouped track take.comp comps every
+        // that piece. No crossfade is sent: take.comp keeps the seams the
+        // call does not touch as they are, hand-set ones included, and gives
+        // the seams it makes the comp's own crossfade (take.comp's default
+        // on a first comp). On an edit-grouped track take.comp comps every
         // member with it. A click on a lone item hears that take throughout:
         // take.activate (which a looped item also takes), or take.comp over
         // the whole item in an edit group, so the members follow.
@@ -1868,14 +1870,15 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             return;
         }
         const CompSpan span{state_.compFrom, state_.compTo, state_.takeLane};
-        const auto crossfade = comp ? compCrossfade(s, *comp) : std::nullopt;
-        runSteps("Comp take", {{"take.comp", compArgs(state_.anchor, {span}, crossfade)}});
+        runSteps("Comp take", {{"take.comp", compArgs(state_.anchor, {span}, std::nullopt)}});
         return;
     }
     if (state_.drag == Drag::Seam) {
         if (!moved_ || std::abs(state_.deltaBeats) < 1e-9) return;
         // The two stretches beside the seam, as they are now, with their
-        // shared edge moved; what they do not cover keeps its take.
+        // shared edge moved; what they do not cover keeps its take. No
+        // crossfade: the seam keeps its own length and shape, and the others
+        // are not touched.
         auto at = seamAtBeat(s, state_.anchor, state_.seamBeat);
         if (!at) return;
         auto& spans = at->spans;
@@ -1883,14 +1886,16 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
         spans[at->k].to = to;
         spans[at->k + 1].from = to;
         runSteps("Move comp seam",
-                 {{"take.comp", compArgs(state_.anchor, {spans[at->k], spans[at->k + 1]},
-                                         compCrossfade(s, at->comp))}});
+                 {{"take.comp",
+                   compArgs(state_.anchor, {spans[at->k], spans[at->k + 1]}, std::nullopt)}});
         return;
     }
     if (state_.drag == Drag::CompFade) {
-        // The comp's crossfade, at every seam (take.comp has one per comp):
-        // its length dragged, or its shape toggled by the fade handles'
-        // cycle_shape click. The stretches beside the seam stay as they are.
+        // The comp's crossfade, at every seam: its length dragged, or its
+        // shape toggled by the fade handles' cycle_shape click. The one
+        // gesture that sends a crossfade, so take.comp rebuilds every seam
+        // with it, hand-set ones included. The stretches beside the seam stay
+        // as they are.
         if (!moved_ && !cycleFade_) return;
         auto at = seamAtBeat(s, state_.anchor, state_.seamBeat);
         if (!at) return;

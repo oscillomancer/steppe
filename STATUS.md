@@ -1098,7 +1098,7 @@ instructions are in `docs/guides/installing.md`.
   refused with `comp.group_takes` (the commit warns `record.stack_group` naming them); `midi_overdub`
   is unchanged; a frozen track's recording is left out with `record.frozen_skipped` (kept with its
   journal for `project.recover` after unfreezing, the other tracks' placed; arming a frozen track and freezing an armed one are
-  refused), and a pass inside a comp with hand-set seams makes them uniform with `record.comp_uniform`.
+  refused).
 - **Comping** (session-model §1.5.1): `take.comp {item|items, spans, crossfade?,
   crossfade_shape?}` and `take.comp.get` make a comp from an item's takes (a loop
   recording's passes): the item is split where the take changes, every piece keeps all
@@ -1109,7 +1109,9 @@ instructions are in `docs/guides/installing.md`.
   the file marks a comp: the run of pieces is found by adjacency and equal takes.
   The GUI comps with `take.comp` (a swipe, a lane click in a comp), draws each seam
   between takes, moves one by a drag and sets the comp's crossfade by dragging a seam's
-  top or in the inspector, keeping a comp's crossfade on every re-comp.
+  top or in the inspector. Its re-comps and seam drags send no crossfade, so a seam set by
+  hand elsewhere stays as stored; only the crossfade handle and the inspector's Crossfade
+  send one, which rebuilds every seam.
   Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
   a looped item's swipe splits and switches with hard cuts until its Loop is off;
   on a track grouped for edits every comp gesture is the group's `take.comp` (Alt
@@ -1122,9 +1124,14 @@ instructions are in `docs/guides/installing.md`.
   after a tempo change a Beats-timebase seam's overlap and its fades (seconds) disagree
   until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
   stays, and between MIDI pieces of one take a held note sounds again there
-  (`comp.midi_boundary`); a seam fade edited by hand (another length or shape) is overwritten
-  by the next `take.comp`, which gives every seam one length and shape: `take.comp.get` says
-  `uniform: false` and lists the seams a rebuild with the read-back would rewrite. An item in an
+  (`comp.midi_boundary`); a `take.comp` without `crossfade` keeps the seams its spans do not touch
+  exactly as stored (a hand-set fade included, unless a span edge leaves it too little room beside
+  a new seam, when it is rebuilt and clamped; a seam moved on its own keeps its own length and
+  shape; new seams take the comp's crossfade, the default 10 ms when the item has no seam between
+  takes), so an omitted crossfade no longer resets a comp
+  to 10 ms, and a given one rebuilds every seam alike; `take.comp.get` says `uniform: false`
+  for a hand-set seam, informationally, with that seam's own crossfade and shape in
+  `differing_seams` and the fade shapes on the pieces. An item in an
   edit group is comped with every other track of the group that has items over the same stretch
   (matched by the run's extent: however it is cut or crossfaded, a whole item beside a split lead
   is comped to the spans; same spans and take indices, one undo step, `members` in the result;
