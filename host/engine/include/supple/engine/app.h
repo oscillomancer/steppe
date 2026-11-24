@@ -537,6 +537,15 @@ class EngineApp : public cmd::Host {
     // refuses; nullopt when it would launch, or with no engine (the command
     // answers engine.stopped then). Model thread.
     std::optional<Error> sceneLaunchRefusal(model::Id scene) const;
+    // Every answer launchRefusal(clip) and sceneLaunchRefusal(scene) would
+    // give now, for every clip and scene of the session the commands read,
+    // in one pass (the launcher pane's recompute, round 147 F1): equal,
+    // entry for entry, to the per-id calls; nullopt answers are left out.
+    // O(C log C + T) plus each clip's plan check. Model thread.
+    struct LaunchRefusals {
+        std::map<model::Id, Error> clips, scenes;
+    };
+    LaunchRefusals launchRefusals() const;
     // Moves whenever the two refusals above can change, read outside a
     // transaction: a plan the engine publishes, an engine starting or
     // stopping, a version of the session (an edit such as track.freeze, an
@@ -1175,6 +1184,8 @@ class EngineApp : public cmd::Host {
         bool operator==(const RefusalInputs&) const = default;
     };
     mutable RefusalInputs refusalInputs_;
+    // launchRefusal(clip)'s answer from `s` (the batch shares it).
+    std::optional<Error> clipRefusal(const model::Session& s, model::Id clip) const;
     mutable std::uint64_t refusalGeneration_ = 0;
     void dropEngine() {
         planBase_ += engine_->planGeneration() + 1;

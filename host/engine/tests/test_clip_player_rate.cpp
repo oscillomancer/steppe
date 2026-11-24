@@ -134,11 +134,34 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
         auto r = p.bus->execute({command, std::move(a), kOrigin});
         return r ? Error("", "", "", "") : r.error();
     };
+    // The batch (round 147 F1) equals the per-id calls, entry for entry.
+    const auto batchAgrees = [&] {
+        const auto batch = p.app->launchRefusals();
+        const auto same = [](const std::optional<Error>& one, const auto& map, model::Id id) {
+            const auto it = map.find(id);
+            if (!one || it == map.end()) return !one && it == map.end();
+            return one->code == it->second.code && one->message == it->second.message &&
+                   one->hint == it->second.hint && one->path == it->second.path;
+        };
+        const model::Session& s = p.app->head();
+        std::size_t clips = 0, scenes = 0;
+        for (const auto& e : s.clips) {
+            CHECK_MESSAGE(same(p.app->launchRefusal(e.id), batch.clips, e.id), e.id.str());
+            clips += p.app->launchRefusal(e.id).has_value();
+        }
+        for (const auto& e : s.scenes) {
+            CHECK_MESSAGE(same(p.app->sceneLaunchRefusal(e.id), batch.scenes, e.id), e.id.str());
+            scenes += p.app->sceneLaunchRefusal(e.id).has_value();
+        }
+        CHECK(batch.clips.size() == clips);
+        CHECK(batch.scenes.size() == scenes);
+    };
     json::Value launchTake = json::Value::object();
     launchTake["clip"] = chained;
     // No engine: nothing refused (a press answers engine.stopped).
     CHECK_FALSE(p.app->launchRefusal(take));
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_2")));
+    batchAgrees();
     CHECK_FALSE(moved());  // asked twice, nothing changed
     DummyBackend backend({.mode = DummyBackend::Mode::Manual});
     REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
@@ -165,6 +188,7 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK(scenePressed.code == "launch.playrate");
     CHECK(scenePressed.path == (sceneRefused ? sceneRefused->path : ""));
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_1")));
+    batchAgrees();  // a take-chain clip under preserve
     CHECK_FALSE(moved());
     // Back at 1 (freezing needs it), the plan that follows launches it.
     p.run("transport.playrate.set", R"({"rate": 1, "preserve_pitch": false})");
@@ -190,6 +214,7 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK((onItsWay ? onItsWay->message : "") == pending.message);
     CHECK((onItsWay ? onItsWay->hint : "") == pending.hint);
     CHECK((onItsWay ? onItsWay->path : "") == pending.path);
+    batchAgrees();  // a clip on its way, and a scene holding only it
     // Prepared and loaded (the app's tick), it launches.
     for (int i = 0; p.app->preparingAudio(); ++i) {
         REQUIRE(i < 100'000);
@@ -215,6 +240,7 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK(emptyPressed.message == (empty ? empty->message : ""));
     CHECK(emptyPressed.path == (empty ? empty->path : ""));
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_1")));  // cl_1 plays
+    batchAgrees();  // a frozen track, and a scene left with nothing
     // An undo is a version too: the freeze undone, then redone.
     p.run("history.undo", "{}");
     CHECK(moved());
@@ -230,6 +256,7 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK(refusedBy("launch.clip", j(R"({"clip": "cl_2"})")).code == "track.frozen");
     CHECK_FALSE(p.app->launchRefusal(midi));
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_2")));
+    batchAgrees();  // no engine
     // A new engine counts its plans from 0: the generation still never repeats.
     std::uint64_t before = p.app->launchRefusalGeneration();
     REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));

@@ -1325,6 +1325,14 @@ TEST_CASE("clip audio is prepared after the arrangement, in launch order, as far
         CHECK((memory ? memory->code : "") == "launch.memory");
         CHECK_FALSE(l.app->launchRefusal(id("cl_4")));
         CHECK_FALSE(l.app->sceneLaunchRefusal(id("sc_2")));
+        // The batch (round 147 F1) gives the same: cl_2 alone.
+        const auto batch = l.app->launchRefusals();
+        REQUIRE(batch.clips.size() == 1);
+        CHECK(batch.clips.begin()->first == id("cl_2"));
+        CHECK(batch.clips.begin()->second.code == "launch.memory");
+        CHECK(batch.clips.begin()->second.message == (memory ? memory->message : ""));
+        CHECK(batch.clips.begin()->second.path == (memory ? memory->path : ""));
+        CHECK(batch.scenes.empty());
         auto scene = l.run("launch.scene", R"({"scene": "sc_2"})");
         REQUIRE(scene["tracks"].size() == 1);
         CHECK(scene["tracks"].at(0).find("clip")->asString() == "cl_4");
