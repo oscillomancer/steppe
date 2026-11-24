@@ -19,6 +19,8 @@ using namespace supple;
 using namespace supple::host;
 namespace fs = std::filesystem;
 namespace {
+constexpr int kPatientScanMs = 120000;
+constexpr int kShortScanMs = 2000;
 struct ScanTest {
     fs::path dir;
     ScanOptions options;
@@ -30,7 +32,11 @@ struct ScanTest {
         dir = created;
         options.cacheDirectory = dir / "cache";
         options.bridgeExecutable = BRIDGE_PATH;
-        options.timeoutMs = 2000;
+        // A healthy scan may not race a deadline: the scanner child must
+        // start, load the module and answer, and under a sanitizer on a
+        // loaded machine that takes seconds (test_native_host.cpp). A test
+        // of a deadline sets kShortScanMs only for what must not answer.
+        options.timeoutMs = kPatientScanMs;
         if (const char* log = std::getenv("SUPPLE_SCAN_FIXTURE_LOG")) previousLog = log;
         REQUIRE(::setenv("SUPPLE_SCAN_FIXTURE_LOG", (dir / "calls").c_str(), 1) == 0);
     }
@@ -85,19 +91,30 @@ TEST_CASE("supervised scan isolates entry crashes/hangs and caches results until
                                       fixture.copy(SCAN_CRASH_PATH, "crash.clap"),
                                       fixture.copy(SCAN_HANG_PATH, "hang.clap")};
     const auto beforeFds = fdCount();
+    // Neither the good module's scan nor the crash may race a deadline; a
+    // hang outlasts any, so only its own scan has a short one.
+    const std::vector<fs::path> goodAndCrash{paths[0], paths[1]};
+    const std::vector<fs::path> hang{paths[2]};
     ScanReport report;
-    auto first = scan(paths, fixture.options, &report);
+    auto first = scan(goodAndCrash, fixture.options, &report);
     REQUIRE(first);
     REQUIRE(first->size() == 1);
     CHECK(first->front().id == "com.suppleaudio.test.scan");
-    REQUIRE(report.failures.size() == 2);
+    REQUIRE(report.failures.size() == 1);
     CHECK(report.failures[0].reason.code == "host.scan.crashed");
     CHECK(report.failures[0].reason.message.find("signal 9") != std::string::npos);
-    CHECK(report.failures[1].reason.code == "host.scan.timeout");
-    CHECK(report.failures[1].reason.hint == "repair/reinstall the module to retry its scan");
-    CHECK(report.failures[1].reason.message == "plugin scanner timed out after 2000 ms");
     CHECK_FALSE(report.failures[0].cached);
-    CHECK_FALSE(report.failures[1].cached);
+    CHECK(report.cachedModules == 0);
+    fixture.options.timeoutMs = kShortScanMs;
+    auto hung = scan(hang, fixture.options, &report);
+    fixture.options.timeoutMs = kPatientScanMs;
+    REQUIRE(hung);
+    CHECK(hung->empty());
+    REQUIRE(report.failures.size() == 1);
+    CHECK(report.failures[0].reason.code == "host.scan.timeout");
+    CHECK(report.failures[0].reason.hint == "repair/reinstall the module to retry its scan");
+    CHECK(report.failures[0].reason.message == "plugin scanner timed out after 2000 ms");
+    CHECK_FALSE(report.failures[0].cached);
     CHECK(report.cachedModules == 0);
     CHECK(fixture.calls() == std::map<int, int>{{0, 1}, {1, 1}, {2, 1}});
     auto second = scan(paths, fixture.options, &report);
@@ -117,8 +134,13 @@ TEST_CASE("supervised scan isolates entry crashes/hangs and caches results until
     CHECK(fixture.calls() == std::map<int, int>{{0, 1}, {1, 1}, {2, 1}});
     fixture.options.bridgeExecutable = BRIDGE_PATH;
     for (const auto& path : paths) touch(path);
-    auto third = scan(paths, fixture.options, &report);
+    auto third = scan(goodAndCrash, fixture.options, &report);
     REQUIRE(third);
+    CHECK(report.cachedModules == 0);
+    fixture.options.timeoutMs = kShortScanMs;
+    auto thirdHang = scan(hang, fixture.options, &report);
+    fixture.options.timeoutMs = kPatientScanMs;
+    REQUIRE(thirdHang);
     CHECK(report.cachedModules == 0);
     CHECK(fixture.calls() == std::map<int, int>{{0, 2}, {1, 2}, {2, 2}});
     CHECK(fdCount() == beforeFds);
@@ -245,6 +267,9 @@ TEST_CASE("scan kills descendants retaining stdout at its deadline") {
     const auto good = fixture.copy(SCAN_GOOD_PATH, "good.clap");
     fixture.bridgeScript("sleep 60 &\necho $! > '" + (fixture.dir / "descendant").string() +
                          "'\nexit 0\n");
+    // The deadline is what ends this scan, so it is short; but the script
+    // must have written its pid by then, so not as short as a hang's.
+    fixture.options.timeoutMs = 5000;
     ScanReport report;
     auto result = scan(std::span<const fs::path>(&good, 1), fixture.options, &report);
     REQUIRE(result);
