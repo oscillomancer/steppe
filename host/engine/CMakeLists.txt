@@ -324,7 +324,8 @@ if(SUPPLE_BUILD_TESTS)
   # engine.transport). On a starved runner a healthy dummy device took longer
   # (Windows CI 45186989443), so every test here, and the engine binaries the
   # Python ones start, waits as long as a test may (realtime.h,
-  # transportWaitSeconds); a test of the refusal sets its own short bound.
+  # transportWaitSeconds); a test of the refusal sets its own short bound. The
+  # same switch lifts Engine::awaitRendered's and awaitPlan's 10 s (awaitSeconds).
   get_property(engine_tests DIRECTORY PROPERTY TESTS)
   foreach(test ${engine_tests})
     set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "SUPPLE_TEST_TRANSPORT_PATIENT=1")

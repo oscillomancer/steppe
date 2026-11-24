@@ -3334,9 +3334,12 @@ TEST_CASE("mixer: a modulated fader shows the engine's live offset while it runs
     CHECK_FALSE(f.strip(a).fader->modulation()->live);  // stopped: nothing applies it
     f.exec("engine.start", R"({"backend":"dummy"})");
     // The engine reports once its plan binds the route; the bound only keeps
-    // a broken build from hanging, the check is on what arrives.
+    // a broken build from hanging (60 s of the clock, not a count of rounds: a
+    // loaded or sanitized runner takes seconds to start the engine), the check
+    // is on what arrives.
     std::optional<double> live;
-    for (int i = 0; i < 500 && !live; ++i) {
+    const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!live && std::chrono::steady_clock::now() < giveUp) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         f.now += std::chrono::milliseconds(10);
         f.refresh();
@@ -3383,9 +3386,10 @@ TEST_CASE("mixer: a route nothing feeds draws idle, and the fader's menu says wh
     f.root->closePopup();
     f.exec("engine.start", R"({"backend":"dummy"})");
     // Until the engine reports the route's offset; the bound only keeps a
-    // broken build from hanging.
+    // broken build from hanging (60 s of the clock, as above).
     bool reported = false;
-    for (int i = 0; i < 300 && !reported; ++i) {
+    const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (!reported && std::chrono::steady_clock::now() < giveUp) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         f.now += std::chrono::milliseconds(10);
         f.refresh();
