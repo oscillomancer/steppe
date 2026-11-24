@@ -2822,7 +2822,11 @@ harness. See the tooling README for schemas, limits and invocation details.
   it to 60 s, so a starved runner never becomes a refusal (in process with
   `setTransportWaitSeconds`, for a binary a test starts with
   `SUPPLE_TEST_TRANSPORT_PATIENT=1`, which every engine and GUI ctest entry
-  sets), and a test of the refusal sets a short bound of its own.
+  sets), and a test of the refusal sets a short bound of its own. The same
+  switch raises the 10 s default of `Engine::awaitRendered` and `awaitPlan`
+  (`awaitSeconds()`, `setAwaitSeconds`: waits tests and tools make for the
+  renderer to be ahead or to adopt a plan); a call that passes its own bound
+  keeps it.
   `transport.stop` returns to where play started. `<slug>-engine play FILE`
   plays a project through the device from the CLI.
 - **Anticipative processing** (ADR-0012, `EngineOptions`, default on): a
