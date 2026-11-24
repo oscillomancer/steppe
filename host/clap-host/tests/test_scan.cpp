@@ -279,7 +279,10 @@ TEST_CASE("scan kills descendants retaining stdout at its deadline") {
     } subreaper;
     ScanTest fixture;
     const auto good = fixture.copy(SCAN_GOOD_PATH, "good.clap");
-    fixture.bridgeScript("sleep 60 &\necho $! > '" + (fixture.dir / "descendant").string() +
+    // The descendant outlives every deadline the case may reach (the 120 s
+    // rung included): a `sleep 60` would end first, and the scan would return
+    // its output instead of timing out. The scan kills it at the deadline.
+    fixture.bridgeScript("sleep 600 &\necho $! > '" + (fixture.dir / "descendant").string() +
                          "'\nexit 0\n");
     // The deadline is what ends this scan and starts at its spawn, so the
     // script must have written its pid by then. A start slower than the short
