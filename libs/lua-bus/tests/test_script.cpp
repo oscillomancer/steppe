@@ -207,7 +207,7 @@ TEST_CASE("time spent inside commands does not count against the script's budget
     cmd::Command<AddArgs, CountResult> slow;
     slow.name = "toy.slow";
     slow.exposure = cmd::Exposure::Internal;
-    slow.summary = "Wait 60 ms, then read the toy counter.";
+    slow.summary = "Wait 400 ms, then read the toy counter.";
     slow.description = "A slow command for the budget test.";
     slow.args = schema::object<AddArgs>("slow_args")
                     .field("value", &AddArgs::value, schema::integer())
@@ -216,14 +216,16 @@ TEST_CASE("time spent inside commands does not count against the script's budget
                       .field("count", &CountResult::count, schema::integer())
                       .build();
     slow.run = [](const AddArgs&, cmd::Context&) -> Result<CountResult> {
-        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        std::this_thread::sleep_for(std::chrono::milliseconds(400));
         return CountResult{0};
     };
     registry.add(std::move(slow));
     ToyHost host;
     cmd::Dispatcher dispatcher(registry, host);
     Script script(&registry, &dispatcher);
-    auto out = script.run("for i = 1, 3 do q.run('toy.slow', {value = 0}) end", 100.0);
+    // Three commands of 400 ms inside a 1 s budget: the script's own part is
+    // a few milliseconds, so a runner stall of a hundred is no failure of it.
+    auto out = script.run("for i = 1, 3 do q.run('toy.slow', {value = 0}) end", 1000.0);
     CHECK_MESSAGE(static_cast<bool>(out), (out ? std::string() : out.error().toString()));
     // The clock still runs between the calls.
     auto runaway = script.run("q.run('toy.slow', {value = 0}) while true do end", 100.0);

@@ -612,7 +612,9 @@ TEST_CASE("job lifecycle, cancellation, timeout and event throttling") {
             return workerStatus;
         });
     });
-    auto done = call(dispatcher, "job.wait", obj("{\"job\":\"jb_1\",\"timeout_s\":1}"));
+    // It returns as soon as the job is done; the bound only keeps a worker
+    // thread that never runs from hanging the case, so it is not a second.
+    auto done = call(dispatcher, "job.wait", obj("{\"job\":\"jb_1\",\"timeout_s\":30}"));
     worker.join();
     CHECK(workerStatus);
     REQUIRE(done);

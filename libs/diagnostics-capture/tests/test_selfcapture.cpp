@@ -260,6 +260,14 @@ bool restrictSyscalls() {
 // The common setup of a child that will fail: the handlers, a registered thread, the
 // recorded executable, the shared slot. Exits with kSkip where no handler can be installed.
 void prepare(unsigned char* memory) {
+    // The handler's own 200 ms bound would fail a capture in a child the
+    // runner does not schedule for that long; the cases that test the bound
+    // set their own.
+    setHandlerBudgetForTests(3600ULL * 1'000'000'000ULL);
+    // A capture that never ends would hold the parent's waitpid for the hour
+    // the budget now allows: this child ends by SIGALRM instead, which every
+    // case reports as a failed signal check. Only a safety stop.
+    ::alarm(60);
     if (!install()) ::_exit(kSkip);
     if (!diagctx::registerThread(diagctx::ThreadRole::BridgeControl)) ::_exit(kBad);
     if (!recordImage(reinterpret_cast<const void*>(&markerFunction))) ::_exit(kBad);

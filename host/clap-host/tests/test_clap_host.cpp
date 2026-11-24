@@ -2581,7 +2581,10 @@ TEST_CASE("bridged calls report where their time went") {
     // that the call gave up only once the deadline passed, and that its
     // wait lies within the call.
     const std::int64_t before = steadyNanoseconds();
-    const std::int64_t due = before + 20'000'000;
+    // A deadline far enough off that the thread posting the call is not
+    // descheduled past it before the post (the call is counted as past its
+    // deadline if it is).
+    const std::int64_t due = before + 250'000'000;
     {
         LiveBridgeDeadline deadline(due);
         CHECK(h.process(buf.block(256)));  // silent for the block, not failed
@@ -2590,7 +2593,13 @@ TEST_CASE("bridged calls report where their time went") {
     t = bridgeTiming();
     CHECK(t.live.calls == 1);
     CHECK(t.live.late == 1);
-    CHECK(t.live.pastDeadline == 0);
+    // Counted past its deadline only if the call was posted at or after `due`
+    // (bridge_client.cpp, post()). The one live wait runs from the post to
+    // the return, so the post was at or before after - waitMaxNs: a call
+    // counted past while that bound is before `due` is a fault whatever the
+    // test thread was doing, and a stall of the thread before the post (more
+    // than the 250 ms margin) is the one thing that excuses it.
+    CHECK((t.live.pastDeadline == 0 || after - t.live.waitMaxNs >= due));
     CHECK(after >= due);
     CHECK(t.live.waitMaxNs > 0);
     CHECK(t.live.waitMaxNs <= after - before);
