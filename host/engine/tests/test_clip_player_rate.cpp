@@ -6,6 +6,8 @@
 // The capture-commit cases that run long live are in
 // test_clip_player_rate_commit.cpp, _armed.cpp, _chain.cpp and _wrap.cpp
 // (CI 45118821222).
+#include <thread>
+
 #include "clip_player_support.h"
 
 using namespace supple;
@@ -151,8 +153,11 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK_FALSE(p.app->launchRefusal(midi));
     CHECK_FALSE(p.app->launchRefusal(audio));
     const Error pressed = refusedBy("launch.clip", launchTake);
+    // The press's error field for field (round 145 B2).
     CHECK(pressed.code == code(refused));
     CHECK(pressed.message == (refused ? refused->message : ""));
+    CHECK(pressed.hint == (refused ? refused->hint : ""));
+    CHECK(pressed.path == (refused ? refused->path : ""));
     CHECK(code(p.app->sceneLaunchRefusal(id("sc_2"))) == "launch.playrate");
     CHECK(refusedBy("launch.scene", j(R"({"scene": "sc_2"})")).code == "launch.playrate");
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_1")));
@@ -163,6 +168,32 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK(moved());
     CHECK_FALSE(p.app->launchRefusal(take));
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_2")));
+    // An edit on its way (round 145 B1): a clip with new audio waits for its
+    // preparation before the engine loads it. The pane answers from the
+    // commands' session, as the press does: the running plan lacks the clip.
+    p.run("scene.add", "{}");  // sc_3, away from the scenes checked below
+    auto added = j(R"({"track": "tr_1", "scene": "sc_3"})");
+    added["audio_file"] = p.ramp("pending.wav", 24000).string();
+    const std::string fresh = p.runArgs("clip.add", added)["clip"].asString();
+    REQUIRE(p.app->preparingAudio());  // the load waits for it
+    CHECK(moved());
+    json::Value pressFresh = json::Value::object();
+    pressFresh["clip"] = fresh;
+    const Error pending = refusedBy("launch.clip", pressFresh);
+    CHECK(pending.code == "launch.clip");
+    const auto onItsWay = p.app->launchRefusal(id(fresh.c_str()));
+    CHECK(code(onItsWay) == pending.code);
+    CHECK((onItsWay ? onItsWay->message : "") == pending.message);
+    CHECK((onItsWay ? onItsWay->hint : "") == pending.hint);
+    CHECK((onItsWay ? onItsWay->path : "") == pending.path);
+    // Prepared and loaded (the app's tick), it launches.
+    for (int i = 0; p.app->preparingAudio(); ++i) {
+        REQUIRE(i < 100'000);
+        p.app->tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(moved());
+    CHECK_FALSE(p.app->launchRefusal(id(fresh.c_str())));
     // A frozen track: track.frozen, from the edit on (before its plan); a
     // scene left with nothing to play answers launch.scene, as the command.
     p.run("track.freeze", R"({"track": "tr_2"})");
@@ -173,6 +204,13 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK(code(p.app->sceneLaunchRefusal(id("sc_2"))) == "launch.scene");
     CHECK(refusedBy("launch.scene", j(R"({"scene": "sc_2"})")).code == "launch.scene");
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_1")));  // cl_1 plays
+    // An undo is a version too: the freeze undone, then redone.
+    p.run("history.undo", "{}");
+    CHECK(moved());
+    CHECK(code(p.app->launchRefusal(audio)) != "track.frozen");
+    p.run("history.redo", "{}");
+    CHECK(moved());
+    CHECK(code(p.app->launchRefusal(audio)) == "track.frozen");
     // Stopped: a frozen track's clip is still refused (launch.clip's check
     // comes before the engine's); nothing else is.
     p.app->stopEngine();
@@ -185,6 +223,12 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     std::uint64_t before = p.app->launchRefusalGeneration();
     REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
     CHECK(p.app->launchRefusalGeneration() > before);
+    // A project opened moves it too (round 145).
+    auto save = json::Value::object();
+    save["path"] = (p.root / "refusals.steppe").string();
+    p.runArgs("project.save", save);
+    p.runArgs("project.open", save);
+    CHECK(moved());
 }
 
 TEST_CASE("under a pitch-keeping rate a track's audio items come back after a MIDI clip held it" *

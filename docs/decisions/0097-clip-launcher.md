@@ -1161,8 +1161,10 @@ the replay.
 
 The launcher pane dimmed clips by a copy of the engine's rule made from the session, which missed a
 MIDI-clock chase and went stale with step D. The engine now answers it from the code that refuses:
-`Engine::launchRefusal(clip)` runs `launch()`'s per-clip checks against the latest published plan, and
-`launch()` runs the same function, so the two cannot drift. The app adds launch.clip's own
+`Engine::launchRefusal(request)` runs `launch()`'s checks of one request against the latest published
+plan, and `launch()` runs the same function, so the checks cannot drift; the app builds the request from
+the session the commands read, as the press does, so the request cannot either (round 145 B1). The app
+adds launch.clip's own
 `track.frozen` check (it applies with no engine too) and launch.scene's selection
 (`EngineApp::sceneLaunchRefusal`: frozen and memory-skipped clips left out as the command warns; empty,
 launch.scene's error). Only per-clip refusals are reported; transport-state ones (`engine.stopped`,

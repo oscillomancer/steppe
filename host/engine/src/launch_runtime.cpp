@@ -411,14 +411,10 @@ std::optional<Error> Engine::launchRefused(const detail::Plan& plan, const Launc
     return std::nullopt;
 }
 
-std::optional<Error> Engine::launchRefusal(model::Id clip) const {
+std::optional<Error> Engine::launchRefusal(const LaunchRequest& request) const {
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
-    if (!plan || !latest_) return std::nullopt;
-    const model::Clip* c = latest_->clips.find(clip);
-    if (!c)
-        return Error("launch.clip", clip.str() + " is not a clip of the project", "",
-                     "launch a clip that exists");
-    return launchRefused(*plan, {c->track, LaunchLogEntry::Action::Clip, clip, {}});
+    if (!plan) return std::nullopt;
+    return launchRefused(*plan, request);
 }
 
 Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest> requests,

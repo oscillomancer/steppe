@@ -5641,14 +5641,20 @@ struct Gain : Effect {
 }
 
 // The commands read view(); outside a transaction (the GUI's frames) that is
-// the head, read here without a copy.
+// the head, read here without a copy. Each request is built from that
+// session, as the press builds it, and an engine refusal carries the
+// press's path (launchNow), so the answer is the press's error field for
+// field (round 145 B1, B2).
 std::optional<Error> EngineApp::launchRefusal(model::Id clip) const {
     const auto refusal = [&](const model::Session& s) -> std::optional<Error> {
-        if (const model::Clip* c = s.clips.find(clip))
-            if (const auto* track = s.tracks.find(c->track); track && track->freeze)
-                return trackFrozen(c->track, "/clip");
+        const model::Clip* c = s.clips.find(clip);
+        if (!c) return std::nullopt;  // the press: not a clip (an argument error)
+        if (const auto* track = s.tracks.find(c->track); track && track->freeze)
+            return trackFrozen(c->track, "/clip");
         if (!engine_) return std::nullopt;  // launch.clip: engine.stopped
-        return engine_->launchRefusal(clip);
+        auto refused = engine_->launchRefusal({c->track, LaunchLogEntry::Action::Clip, clip, {}});
+        if (refused) refused->path = "/clip";
+        return refused;
     };
     return txn_ ? refusal(view()) : refusal(head());
 }
@@ -5669,7 +5675,10 @@ std::optional<Error> EngineApp::sceneLaunchRefusal(model::Id scene) const {
         const SceneLaunch selection = sceneLaunchRequests(s, scene, engine_->clipsSkipped());
         if (selection.requests.empty()) return sceneHasNoClip(scene);
         for (const Engine::LaunchRequest& r : selection.requests)
-            if (auto refused = engine_->launchRefusal(r.clip)) return refused;
+            if (auto refused = engine_->launchRefusal(r)) {
+                refused->path = "/scene";
+                return refused;
+            }
         return std::nullopt;
     };
     return txn_ ? refusal(view()) : refusal(head());

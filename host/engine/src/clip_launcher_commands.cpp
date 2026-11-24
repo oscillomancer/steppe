@@ -56,7 +56,7 @@ SceneLaunch sceneLaunchRequests(const model::Session& s, Id scene, const std::ve
             else if (std::find(skipped.begin(), skipped.end(), e.id) != skipped.end())
                 out.left.push_back({"launch.memory", track, e.id});
             else
-                out.requests.push_back({track, Engine::LaunchRequest{}.action, e.id, scene});
+                out.requests.push_back({track, LaunchLogEntry::Action::Clip, e.id, scene});
         }
     return out;
 }

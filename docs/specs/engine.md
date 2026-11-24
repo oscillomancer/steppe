@@ -1004,14 +1004,18 @@ the same.*
   its pending slot. A track whose clip a later plan lacks is back on the
   arrangement from then on.
 - **What a press would be refused for, for the launcher pane** (step E).
-  `Engine::launchRefusal(clip)` runs `launch()`'s per-clip checks against
-  the latest published plan without placing anything, and `launch()`
-  runs the same function first: `launch.playrate` (an audio clip the
+  `Engine::launchRefusal(request)` runs `launch()`'s checks of one
+  request against the latest published plan without placing anything,
+  and `launch()` runs the same function first: `launch.playrate` (an audio clip the
   plan gave no player because it reads through a take chain while the
   pitch is kept: `Plan::launchRefusedPlayrate`, recorded by compile),
   `launch.memory` (`clipsSkipped`), `launch.clip` (no players on the
-  track, or the plan lacks the clip). `EngineApp::launchRefusal(clip)`
-  puts launch.clip's own `track.frozen` check first, engine or not;
+  track, or the plan lacks the clip). The app builds each request from
+  the session the commands read, not the engine's (an edit can be on its
+  way, as while audio is prepared), and gives an engine refusal the
+  press's path, so the answer is the press's error field for field.
+  `EngineApp::launchRefusal(clip)` puts launch.clip's own `track.frozen`
+  check first, engine or not;
   `EngineApp::sceneLaunchRefusal(scene)` makes launch.scene's selection
   (`sceneLaunchRequests`: frozen tracks' and memory-skipped clips left
   out) and answers `launch.scene` when it is empty, else the first
