@@ -765,7 +765,12 @@ the same.*
     commit reads on (the switch reaches the node at its frame): a stated
     limit, measured up to 0.011. Under a playrate that keeps the pitch an audio clip has no
     player yet (step 1b): compile warns and its launch is refused with
-    `launch.playrate`.
+    `launch.playrate`. While a clip holds a track, its items' stretch
+    converters still run every quantum, their output unused, so they are
+    current when the arrangement comes back: on a plan that keeps the
+    pitch, and after a switch to tape while the old converter is still
+    read (until the switch and through its crossfade). A skipped converter
+    refused the jump and failed every block after.
   - *Capture* runs in song time (above): placement gives each launch its
     song frame, the boundary's unwrapped song sample, and the capture
     counts song samples from the published rate clock, so a commit lays
