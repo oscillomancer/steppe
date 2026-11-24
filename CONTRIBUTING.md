@@ -112,7 +112,8 @@ beyond it. See GitHub's
 [cache access restrictions](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache).
 
 Linux (`ubuntu-24.04`, Clang 22) builds the existing `dev` preset with all
-its tests, under Xvfb and software OpenGL. SDL3 and the pinned CLAP validator
+its tests, under Xvfb and software OpenGL; CI adds `-gline-tables-only` (as the
+macOS preset has it) to keep the executables, and the compiler cache, small. SDL3 and the pinned CLAP validator
 are built and cached in the runner's workspace; Ubuntu 24.04 predates SDL3.
 macOS (`macos-15`, arm64) uses
 AppleClang and the system libc++, with deployment target 14.4. Its build preset

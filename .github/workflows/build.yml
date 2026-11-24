@@ -233,8 +233,13 @@ jobs:
             # GNU ld links at once are the likely cause of the runner lost mid-build
             # (runs 45285459726, 45314588844). The nested plugin projects do not read
             # these and build with one job already.
+            # Line tables only, as the macOS preset has it: the outputs are much smaller
+            # size (links, disk, and the ccache limit), assertions and unoptimized code stay
+            # on and backtraces keep file and line. CI only; the dev preset is unchanged,
+            # and the isolated plugin projects keep their own Debug flags.
             cmake --preset dev -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_JOB_POOLS=link=2 -DCMAKE_JOB_POOL_LINK=link
+              -DCMAKE_JOB_POOLS=link=2 -DCMAKE_JOB_POOL_LINK=link \
+              -DCMAKE_CXX_FLAGS_DEBUG=-gline-tables-only
           elif [[ '${{ matrix.platform }}' == macos ]]; then
             echo "CCACHE_DIR=$GITHUB_WORKSPACE/.compiler-cache" >> "$GITHUB_ENV"
             echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
