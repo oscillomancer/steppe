@@ -1092,25 +1092,25 @@ power and linear ("Comp crossfade shape"). Each is one `take.comp` with the
 crossfade and applies to every seam of the comp, hand-set ones included; a hard
 cut is the length dragged or typed to 0, for the whole comp (the GUI sets no
 per-seam length; an agent's hand-set seam keeps its own until the crossfade is
-set). **On a track grouped for
-edits** (`model::linkedTracks`, attribute `edit`) every one of these is the same
-`take.comp`, which comps every other track of the group with items over the
-stretch with the same spans (session-model §1.5.1, Edit groups). Each member
-keeps the seams the spans do not touch, and a seam it gets takes its own
-crossfade, so only the crossfade handle and the inspector's Crossfade field,
-which send the crossfade, make every member's seams the comped track's. A click on a lone item there,
-its badge and the Takes list send `take.comp` over the whole item rather than
-`take.activate` (which would switch it alone), so the members follow
-(`views::compPieceOf`). A member whose comp the engine reads as differing from
-the group's (`take.comp.get`'s `differing_members`, asked for the group's first
-track in the order `take.comp` takes members, `views::compDiffersFrom`: other
-spans, takes, crossfade or shape, from an edit that bypassed the group) draws its
-seam lines broken, every other 4 units, and the inspector shows a **Group** row,
-"Differs from Close", for one selected piece of it. The crossfade handle or the
-Crossfade field on the group brings it back in step. The other gestures send no
-crossfade, so a seam that differs stays as it is, broken, with the row, unless
-the gesture joins it away (a lane click that gives the pieces beside it one
-take). A member's comp with no seam of its own shows the
+set). **On a track grouped for edits** (`model::linkedTracks`, attribute `edit`)
+every one of these is the same `take.comp`, which comps every other track of the
+group with items over the stretch with the same spans (session-model §1.5.1,
+Edit groups). Each member keeps the seams the spans do not touch, and a seam it
+gets takes its own crossfade, so only the crossfade handle and the inspector's
+Crossfade field, which send the crossfade, make every member's seams the comped
+track's. A click on a lone item there, its badge and the Takes list send
+`take.comp` over the whole item rather than `take.activate` (which would switch
+it alone), so the members follow (`views::compPieceOf`). A member whose comp the
+engine reads as differing from the group's (`take.comp.get`'s
+`differing_members`, asked for the group's first track in the order `take.comp`
+takes members, `views::compDiffersFrom`: other spans, takes, crossfade or shape,
+from an edit that bypassed the group) draws its seam lines broken, every other 4
+units, and the inspector shows a **Group** row, "Differs from Close", for one
+selected piece of it. The crossfade handle or the Crossfade field on the group
+brings it back in step. The other gestures send no crossfade, so a seam that
+differs stays as it is, broken, with the row, unless the gesture joins it away
+(a lane click that gives the pieces beside it one take). A member's comp with no
+seam of its own shows the
 difference only in the inspector. A **looped item** keeps the swipe it had before
 `take.comp`, which refuses it (`comp.loop`): `item.split` at the swipe's ends and
 `take.activate` of the middle, with hard cuts, until its Loop is turned off. Its
