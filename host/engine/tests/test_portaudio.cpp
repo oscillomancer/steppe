@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <mutex>
 #include "../../../tests/file_platform.h"
+#include "../../../tests/precise_sleep.h"
 #include "midi_input.h"
 #include "midi_output.h"
 #include "portaudio_api.h"
@@ -1095,7 +1096,12 @@ struct FakeSink : detail::MidiSink {
     void releaseThread() override { released.fetch_add(1, std::memory_order_release); }
     void waitUntil(double seconds) override {
         waits.fetch_add(1, std::memory_order_release);
-        detail::MidiSink::waitUntil(seconds);
+        // The base class's pause, on the high-resolution timer on Windows:
+        // a 1 ms sleep there ends a timer tick (15.6 ms) late, and this sink
+        // stands in for the production sender's wait, which uses that timer.
+        // The fake clock, not this pause, decides what the tests observe.
+        const double delay = std::clamp(seconds - now(), 0.0, .001);
+        if (delay > 0) supple::test::sleepFor(std::chrono::duration<double>(delay));
     }
 };
 }  // namespace
