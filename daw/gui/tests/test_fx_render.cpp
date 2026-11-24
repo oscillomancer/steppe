@@ -3684,11 +3684,13 @@ TEST_CASE("FX native title follows track switches, renames and take headers") {
     REQUIRE(item);
     const auto take = *model::Id::parse(item->find("take")->asString());
     REQUIRE(f.fx->openTake(take));
-    CHECK(title() == "Take FX: Renamed / " + take.str());
+    // An unnamed take is called by its item's words; no id (round 165 F2).
+    CHECK(title() == "Take FX: Renamed's item at bar 1");
+    CHECK(title().find(take.str()) == std::string::npos);
     matchesHeader();
     REQUIRE(f.run("track.set", f.args({{"track", second.str()}, {"name", "Take track"}})));
     f.fx->tick();
-    CHECK(title() == "Take FX: Take track / " + take.str());
+    CHECK(title() == "Take FX: Take track's item at bar 1");
     matchesHeader();
 }
 

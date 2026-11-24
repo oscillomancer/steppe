@@ -518,7 +518,9 @@ Each has its own GL context, bundled fonts, retained root, focus, damage cache
 and popup stack. Resources are created on first open and retained while
 hidden. Both panels fill their client area with the theme's `raised` surface,
 matching the former popup frame. Their OS titles match their visible headers:
-"Routing", "FX: <track>", or the take FX header; switching tracks/takes or
+"Routing", "FX: <track>", or the take FX header ("Take FX: <track> / <take>"
+for a named take, "Take FX: Bass's item at bar 2" for an unnamed one, never
+an id); switching tracks/takes or
 renaming the track updates the FX title in place. Close or an unhandled Escape
 hides only that panel; Escape first closes a nested popup or cancels a widget
 gesture. Events are routed by SDL window identity before the main window's
@@ -1058,7 +1060,7 @@ selected one) and is greyed
 when its heard take is empty. It opens the system's save dialog (SDL3,
 asynchronous, guarded like Save As against a project change) filtered to WAV or
 MIDI, starting in the project's folder (unsaved: the media home) with the take's
-name (else the item ID) plus `.wav` or `.mid`, then runs `item.export`; the status
+name (else the item's words from `views::objectName`) plus `.wav` or `.mid`, then runs `item.export`; the status
 line reports "Exported <file>" or the error. `ui.item.export` is the key-bindable
 action (the first selected item). See engine.md for what the file holds.
 
