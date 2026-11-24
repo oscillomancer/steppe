@@ -382,7 +382,8 @@ instructions are in `docs/guides/installing.md`.
   (`EngineApp::launchState()`): playing with progress, queued, held, the
   playing scene, the Arr dots, and the held tracks' items dimmed. Every
   gesture in §4.15 is in: launch, select, stop, create, open, move and
-  copy, drags to and from the timeline, the clip and scene menus, rename,
+  copy, drags to and from the timeline (selected items into cells, a clip
+  each in one undo step), the clip and scene menus, rename,
   scene reordering, Delete, copy and paste (a cut moves the clips at the
   paste; the clipboard empties when another project opens), the inspector's clip fields (an audio clip's Fade in and Fade out,
   each a length and a shape) and the scene count in the status
@@ -405,7 +406,6 @@ instructions are in `docs/guides/installing.md`.
   - there is no dialog for `arrangement.build`;
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
-  - an item dragged into a cell makes a clip of the pressed item only;
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
     roll (clip-time lanes, with point selection, the marquee, moves,
     shapes, copy and paste and the lane's menu as on the timeline, one lane

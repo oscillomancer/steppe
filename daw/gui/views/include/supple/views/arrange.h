@@ -224,6 +224,10 @@ class ArrangeView : public ui::Node {
         model::Id track, scene;
         bool operator==(const Cell&) const = default;
     };
+    // Selects the clips in `cells` once the session holds them (the next
+    // show): a drop of several items makes its clips in one transaction,
+    // which answers only the last one's id.
+    void selectClipsIn(std::vector<Cell> cells) { landing_ = std::move(cells); }
     const std::optional<Cell>& selectedCell() const { return selectedCell_; }
     void selectCell(std::optional<Cell> cell);
     void clearLauncherSelection();
@@ -301,7 +305,8 @@ class ArrangeView : public ui::Node {
     LauncherHeader* launcherHeader_ = nullptr;
     ui::Node* lanesColumn_ = nullptr;
     std::optional<bool> launcherChoice_;
-    float launcherWidth_ = 0;  // 0: fit the columns
+    std::vector<Cell> landing_;  // selectClipsIn's cells, until the next show
+    float launcherWidth_ = 0;    // 0: fit the columns
     bool launcherFull_ = false;
     float launcherScroll_ = 0;
     LauncherCallbacks launcherCallbacks_;

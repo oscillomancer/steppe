@@ -1770,6 +1770,11 @@ track, the track's items on the timeline are dimmed.
 Drag a clip to another empty cell to move it, with Ctrl to copy it; an
 occupied cell refuses it. Drag a clip onto a channel's lane to lay a copy
 on the timeline, or an item into an empty cell to make a clip from it.
+With several items selected, each one makes a clip in that scene, on its
+own row, kept at the same distance from the item you hold, as when you
+move them; one undo takes them all back. If any of them can't go (its cell
+is taken, its row is not a channel, or it would fall off the track list),
+none is made and the status line says why.
 Right-click a clip for Rename, Colour, Mode (loop or once), Quantize,
 Duplicate, Lay on timeline at playhead, Take FX… (the clip's own effects,
 which play whenever the clip does) and Delete; Delete on the keyboard

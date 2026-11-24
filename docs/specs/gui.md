@@ -3178,8 +3178,19 @@ same heights, scroll and colours.
   clip from a copy of the pressed item's takes (`clip.add {item}`); the item
   stays where it was, the new clip is selected, and the cell is outlined
   while the item is over it (an occupied one in `meter-clip`, refusing it).
-  A refused drop shows the error's message in the status line (a warped
-  take, `clip.unsupported`).
+  With other items selected, each makes a clip in the same scene, on the
+  row at its offset from the pressed item's, as a move offsets rows: one
+  `clip.add` each, in one transaction (one undo step, "Clips from items"),
+  ordered by row and position, and every cell is outlined while held
+  (`LauncherPane::showDrop`'s offsets). The new clips are selected
+  (`ArrangeView::selectClipsIn`, at the next sync). A refusal of any
+  (a taken cell, `clip.occupied`; a row whose track holds no clips) refuses
+  them all with `clip.add`'s message. An offset that lands above the first
+  row, below the last or on an automation lane refuses the drop before
+  anything is sent (`gui.launcher.drop`, naming the item), and the pressed
+  item's cell is outlined in `meter-clip`. A drop on any cell of a scene
+  column, taken or not, goes to `clip.add`. A refused drop shows the
+  error's message in the status line (a warped take, `clip.unsupported`).
 - **What laying did with the keys.** A clip or scene laid on the timeline
   from the pane (a drag, Lay on timeline at playhead, Insert at playhead or
   at end) says in the status line, without a dialog, what its clips' keys

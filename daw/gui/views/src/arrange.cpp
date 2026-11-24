@@ -1404,6 +1404,13 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     const bool rebuilt = layout_.show(session, changes, generation);
     syncChordRow();
     syncLauncher();
+    if (!landing_.empty()) {
+        std::vector<model::Id> made;
+        for (const Cell& cell : landing_)
+            if (const auto clip = clipIn(session, cell.track, cell.scene)) made.push_back(*clip);
+        landing_.clear();
+        if (!made.empty()) selectClips(std::move(made));
+    }
     if (rebuilt) {
         lanes_->rebuild();
         tcp_->setSession(session);

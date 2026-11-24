@@ -555,9 +555,10 @@ LauncherPane::Hit LauncherPane::hitAt(ui::Point p) const {
     return hit;
 }
 
-void LauncherPane::showDrop(std::optional<ui::Point> at) {
+void LauncherPane::showDrop(std::optional<ui::Point> at, std::vector<std::ptrdiff_t> others) {
     if (!at && !dropAt_) return;
     dropAt_ = at;
+    dropOthers_ = at ? std::move(others) : std::vector<std::ptrdiff_t>{};
     invalidate();
 }
 
@@ -731,9 +732,28 @@ void LauncherPane::paint(ui::Canvas& c) {
     if (over && over->scene) {
         const auto col = std::find(cols.scenes.begin(), cols.scenes.end(), *over->scene);
         if (col != cols.scenes.end()) {
-            const ui::Rect cell = cellRect(over->row, col - cols.scenes.begin());
+            const auto column = static_cast<std::size_t>(col - cols.scenes.begin());
+            // The other items' cells, at their row offsets: each outlined as
+            // it would take its clip; one off the rows refuses the drop.
+            bool allIn = true;
+            for (const std::ptrdiff_t off : dropOthers_) {
+                const std::ptrdiff_t row = static_cast<std::ptrdiff_t>(over->row) + off;
+                if (row < 0 || static_cast<std::size_t>(row) >= tracks.rowCount() ||
+                    tracks.rows()[static_cast<std::size_t>(row)].lane()) {
+                    allIn = false;
+                    continue;
+                }
+                const TrackRow& target = tracks.rows()[static_cast<std::size_t>(row)];
+                const bool takes = target.type == model::StripType::Channel &&
+                                   !clipIn(s, target.track, *over->scene);
+                c.strokeRect(cellRect(static_cast<std::size_t>(row), column).inset(2),
+                             takes ? t.color("focus") : t.color("meter-clip"), 1.5f);
+                ++stats.dropShown;
+            }
+            const ui::Rect cell = cellRect(over->row, column);
             c.strokeRect(cell.inset(2),
-                         dropAllowed(*over) ? t.color("focus") : t.color("meter-clip"), 1.5f);
+                         allIn && dropAllowed(*over) ? t.color("focus") : t.color("meter-clip"),
+                         1.5f);
             ++stats.dropShown;
         }
     }

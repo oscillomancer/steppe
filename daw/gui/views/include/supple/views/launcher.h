@@ -215,9 +215,12 @@ class LauncherPane : public ui::Node {
         std::optional<model::Id> scene, clip;
     };
     Hit hitAt(ui::Point p) const;
-    // An item dragged from the lanes over the pane (ItemGestures): the cell
-    // under `at` is outlined as a drop that takes it, or refuses it.
-    void showDrop(std::optional<ui::Point> at);
+    // Items dragged from the lanes over the pane (ItemGestures): the cell
+    // under `at` is outlined as a drop that takes the pressed item, or
+    // refuses it, and so is the cell of each other selected item, at its row
+    // offset from the pressed one (`others`). An offset past the rows, or
+    // onto an automation lane, outlines the cell under `at` as refused.
+    void showDrop(std::optional<ui::Point> at, std::vector<std::ptrdiff_t> others = {});
     ui::Rect arrRect(std::size_t row) const;
     LauncherColumns columns() const;
     // What the last paint drew (tests).
@@ -255,6 +258,7 @@ class LauncherPane : public ui::Node {
     };
     std::optional<Drag> drag_;
     std::optional<ui::Point> dropAt_;
+    std::vector<std::ptrdiff_t> dropOthers_;
     bool dropAllowed(const Hit& over) const;
     // The clip's copy on the lanes under `p` (a channel's own row), if any.
     std::optional<ItemGestures::ClipGhost> timelineGhost(model::Id clip, ui::Point p,

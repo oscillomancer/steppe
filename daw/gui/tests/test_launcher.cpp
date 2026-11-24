@@ -617,6 +617,122 @@ TEST_CASE(
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: selected items dragged into a cell make a clip each, in one undo step") {
+    LauncherFixture f;
+    f.song();
+    // The gestures run their steps as the app does: one transaction.
+    f.view->gestures().run = [&f](const std::string& label,
+                                  const std::vector<views::EditStep>& steps) {
+        return f.dispatcher->transact(label, kLauncherUi, [&]() -> Result<json::Value> {
+            json::Value last = json::Value::object();
+            for (const views::EditStep& step : steps) {
+                f.commands.push_back(step.command);
+                auto r = f.dispatcher->execute({step.command, step.args, kLauncherUi});
+                if (!r) return r;
+                last = std::move(*r);
+            }
+            return last;
+        });
+    };
+    auto itemOn = [&](const char* track) {
+        const json::Value made =
+            f.exec("item.add", std::string(R"({"track":")") + track +
+                                   R"(","position":8,"length":4,"notation":"1: C4:q E4:q G4:h"})");
+        return *model::Id::parse(made.find("item")->asString());
+    };
+    const model::Id bass = *model::Id::parse("tr_2"), keys = *model::Id::parse("tr_3");
+    const model::Id verse = *model::Id::parse("sc_2"), chorus = *model::Id::parse("sc_3");
+    const model::Id onBass = itemOn("tr_2"), onKeys = itemOn("tr_3");
+    f.sync();
+    views::LauncherPane& pane = f.view->launcherPane();
+    auto beatX = [&](double beat) { return f.view->xAt(f.app->head().timeMap->secondsAt(beat)); };
+    auto grabOn = [&](model::Id track) {
+        const ui::Rect lane = f.view->rowRect(f.row(track.str().c_str()));
+        return ui::Point{beatX(9.5), lane.y + lane.h / 2};
+    };
+    auto rowOf = [&](model::Id track) { return f.row(track.str().c_str()); };
+    // Both selected, the Bass item pressed, held over Bass's Chorus cell: two
+    // cells outlined, Bass's and the Keys' one row down.
+    // `on`: the pressed item's track.
+    auto dragInto = [&](model::Id on, std::size_t row, std::size_t column, bool hold) {
+        f.view->gestures().setSelection({onBass, onKeys});
+        const ui::Point grab = grabOn(on);
+        const ui::Rect cell = pane.cellRect(row, column);
+        const ui::Point into{cell.x + 8, cell.bottom() - 8};
+        f.pointer(Pointer::Down, grab);
+        f.pointer(Pointer::Move, {grab.x - 20, grab.y});
+        f.pointer(Pointer::Move, into);
+        f.sync();
+        const std::size_t shown = pane.stats.dropShown;
+        if (hold) f.snapshot("launcher-items-drop.png");
+        f.pointer(Pointer::Up, into);
+        f.sync();
+        return shown;
+    };
+    const std::size_t items = f.app->head().items.size();
+    const std::size_t clips = f.app->head().clips.size();
+    auto steps = [&] { return f.exec("history.list", "{}").find("versions")->size(); };
+    const std::size_t before = steps();
+    CHECK(dragInto(bass, rowOf(bass), 2, true) == 2);
+    CHECK(f.errors.empty());
+    CHECK(f.commands == std::vector<std::string>{"clip.add", "clip.add"});
+    const auto onBassClip = views::clipIn(f.app->head(), bass, chorus);
+    const auto onKeysClip = views::clipIn(f.app->head(), keys, chorus);
+    REQUIRE(onBassClip);
+    REQUIRE(onKeysClip);
+    CHECK(f.app->head().clips.size() == clips + 2);
+    CHECK(f.app->head().items.size() == items);  // the items stay where they were
+    CHECK(steps() == before + 1);                // one undo step
+    std::vector<model::Id> selected = f.view->selectedClips();
+    std::sort(selected.begin(), selected.end());
+    std::vector<model::Id> made{*onBassClip, *onKeysClip};
+    std::sort(made.begin(), made.end());
+    CHECK(selected == made);
+    f.exec("history.undo", "{}");
+    f.sync();
+    CHECK(f.app->head().clips.size() == clips);  // both go with one undo
+    // A taken cell refuses the whole drop with clip.add's message: Bass's
+    // Verse cell holds Root, so the Keys' Verse cell stays empty too.
+    f.commands.clear();
+    CHECK(dragInto(bass, rowOf(bass), 1, false) == 2);
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.commands == std::vector<std::string>{"clip.add"});  // the first refused: rolled back
+    CHECK(f.errors[0].code == "clip.occupied");
+    CHECK_FALSE(views::clipIn(f.app->head(), keys, verse));
+    CHECK(f.app->head().clips.size() == clips);
+    // A track that holds no clips: the Keys' item lands on Verb (a buss), and
+    // clip.add refuses it, so nothing is made.
+    f.errors.clear();
+    CHECK(dragInto(bass, rowOf(keys), 2, false) == 2);
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code != "gui.launcher.drop");
+    CHECK_FALSE(views::clipIn(f.app->head(), keys, chorus));
+    CHECK(f.app->head().clips.size() == clips);
+    // Off the rows: the Keys' item pressed, Bass's one row up from the Drums
+    // row is above the first track. Refused before anything is sent.
+    f.errors.clear();
+    f.commands.clear();
+    CHECK(dragInto(keys, rowOf(*model::Id::parse("tr_1")), 2, false) == 1);
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "gui.launcher.drop");
+    CHECK(f.errors[0].message.find("above the first track") != std::string::npos);
+    CHECK(f.commands.empty());
+    CHECK(f.app->head().clips.size() == clips);
+    // One item alone onto a taken cell: clip.add says so too.
+    f.errors.clear();
+    f.view->gestures().setSelection({});
+    const ui::Point grab = grabOn(bass);
+    const ui::Rect taken = pane.cellRect(rowOf(bass), 1);
+    f.pointer(Pointer::Down, grab);
+    f.pointer(Pointer::Move, {grab.x - 20, grab.y});
+    f.pointer(Pointer::Move, {taken.x + 8, taken.bottom() - 8});
+    f.pointer(Pointer::Up, {taken.x + 8, taken.bottom() - 8});
+    f.sync();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "clip.occupied");
+    CHECK(f.app->head().clips.size() == clips);
+}
+
 TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected, in both themes") {
     LauncherFixture f;
     f.song();

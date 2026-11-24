@@ -91,6 +91,29 @@ constexpr float kHandle = 9;             // the fade handles' square at the top 
 constexpr double kMinLength = 1.0 / 64;  // beats
 
 const model::Item* itemOf(const model::Session& s, model::Id id) { return s.items.find(id); }
+
+// The items a drop on the launcher pane makes clips of: the pressed one
+// first, then each other selected item, ordered by row and position, each
+// with its track row's offset from the pressed item's (a move's offset).
+std::vector<std::pair<model::Id, std::ptrdiff_t>> launcherDropItems(
+    const model::Session& s, const TrackLayout& layout, model::Id anchor,
+    const std::vector<model::Id>& selection) {
+    std::vector<std::pair<model::Id, std::ptrdiff_t>> out;
+    const model::Item* pressed = itemOf(s, anchor);
+    const auto from = pressed ? layout.indexOf(pressed->track) : std::nullopt;
+    if (!from) return out;
+    out.emplace_back(anchor, 0);
+    std::vector<std::tuple<std::size_t, double, model::Id>> others;
+    for (model::Id id : selection) {
+        const model::Item* it = id == anchor ? nullptr : itemOf(s, id);
+        const auto row = it ? layout.indexOf(it->track) : std::nullopt;
+        if (row) others.emplace_back(*row, it->position, id);
+    }
+    std::sort(others.begin(), others.end());
+    for (const auto& [row, position, id] : others)
+        out.emplace_back(id, static_cast<std::ptrdiff_t>(row) - static_cast<std::ptrdiff_t>(*from));
+    return out;
+}
 const model::Take* activeTake(const model::Session& s, const model::Item& it) {
     return it.activeTake ? s.takes.find(*it.activeTake) : nullptr;
 }
@@ -1099,11 +1122,17 @@ bool ItemGestures::pointer(const ui::PointerEvent& e) {
                                    it);
                 }
                 state_.deltaRows = ok ? dr : 0;
-                // Over the clip launcher: the cell it would become a clip in.
+                // Over the clip launcher: the cells they would become clips
+                // in, each selected item's at its row offset from the pressed one.
                 if (view_.launcherShown()) {
                     LauncherPane& pane = view_.launcherPane();
-                    pane.showDrop(pane.bounds().contains(e.pos) ? std::optional(e.pos)
-                                                                : std::nullopt);
+                    std::vector<std::ptrdiff_t> others;
+                    for (const auto& [id, off] :
+                         launcherDropItems(s, view_.trackLayout(), state_.anchor, selection_))
+                        if (id != state_.anchor) others.push_back(off);
+                    pane.showDrop(
+                        pane.bounds().contains(e.pos) ? std::optional(e.pos) : std::nullopt,
+                        std::move(others));
                 }
                 break;
             }
@@ -2037,23 +2066,79 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
             changed();
             return;
         case Drag::Move: {
-            // Dropped in an empty launcher cell: a clip from a copy of the
-            // pressed item's takes (clip.add {item}); an occupied cell refuses
-            // it and the item stays.
+            // Dropped in a launcher cell: a clip from a copy of the pressed
+            // item's takes (clip.add {item}); an occupied cell is refused by
+            // clip.add, whose message goes to the status line, and the item
+            // stays. With other items selected, one clip each in the
+            // same scene, each at its row offset from the pressed item's cell,
+            // in one transaction (one undo step): a refusal of any (a taken
+            // cell, a track that holds no clips) refuses them all with
+            // clip.add's message, and an offset past the rows or onto an
+            // automation lane refuses the drop before anything is sent.
             if (view_.launcherShown()) {
                 LauncherPane& pane = view_.launcherPane();
                 pane.showDrop(std::nullopt);
                 if (pane.bounds().contains(e.pos)) {
+                    // Any cell of a scene column, taken or not: clip.add
+                    // says when it is taken.
                     const LauncherPane::Hit over = pane.hitAt(e.pos);
-                    if (over.kind != LauncherPane::Hit::Kind::Cell) return;
-                    json::Value args = json::Value::object();
-                    args["track"] = over.track.str();
-                    args["scene"] = over.scene->str();
-                    args["item"] = state_.anchor.str();
-                    if (auto r = view_.runLauncher("clip.add", std::move(args)))
-                        if (const json::Value* made = r->find("clip"); made && made->isString())
-                            if (auto id = model::Id::parse(made->asString()))
-                                view_.selectClips({*id});
+                    if (!over.scene || over.kind == LauncherPane::Hit::Kind::None ||
+                        over.kind == LauncherPane::Hit::Kind::Arr)
+                        return;
+                    const auto dropped =
+                        launcherDropItems(s, view_.trackLayout(), state_.anchor, selection_);
+                    if (dropped.size() <= 1 || !run) {
+                        json::Value args = json::Value::object();
+                        args["track"] = over.track.str();
+                        args["scene"] = over.scene->str();
+                        args["item"] = state_.anchor.str();
+                        if (auto r = view_.runLauncher("clip.add", std::move(args)))
+                            if (const json::Value* made = r->find("clip"); made && made->isString())
+                                if (auto id = model::Id::parse(made->asString()))
+                                    view_.selectClips({*id});
+                        return;
+                    }
+                    const TrackLayout& layout = view_.trackLayout();
+                    std::vector<EditStep> steps;
+                    std::vector<ArrangeView::Cell> cells;
+                    for (const auto& [id, off] : dropped) {
+                        const std::ptrdiff_t row = static_cast<std::ptrdiff_t>(over.row) + off;
+                        if (row < 0 || static_cast<std::size_t>(row) >= layout.rowCount() ||
+                            layout.rows()[static_cast<std::size_t>(row)].lane()) {
+                            const model::Item* it = itemOf(s, id);
+                            std::string name = it ? Lanes::itemLabel(s, *it) : std::string();
+                            if (name.empty()) name = id.str();
+                            const Error refused(
+                                "gui.launcher.drop",
+                                name + " would land " +
+                                    (row < 0 ? std::string("above the first track")
+                                     : static_cast<std::size_t>(row) >= layout.rowCount()
+                                         ? std::string("below the last track")
+                                         : std::string("on an automation lane")),
+                                {}, "drop the items where each one's row offset lands on a track");
+                            if (const auto& onRefused = view_.launcherCallbacks().onError)
+                                onRefused(refused);
+                            else if (onError)
+                                onError(refused);
+                            return;
+                        }
+                        const model::Id track = layout.rows()[static_cast<std::size_t>(row)].track;
+                        json::Value args = json::Value::object();
+                        args["track"] = track.str();
+                        args["scene"] = over.scene->str();
+                        args["item"] = id.str();
+                        steps.push_back({"clip.add", std::move(args)});
+                        cells.push_back({track, *over.scene});
+                    }
+                    auto r = run("Clips from items", steps);
+                    if (!r) {
+                        if (const auto& onRefused = view_.launcherCallbacks().onError)
+                            onRefused(r.error());
+                        else if (onError)
+                            onError(r.error());
+                        return;
+                    }
+                    view_.selectClipsIn(std::move(cells));
                     return;
                 }
             }
