@@ -930,12 +930,15 @@ one-word name (`"bass_env"`: "Bass env", `"osc1"`: "Osc 1", `"lfo"`:
 **Probe names.** `rack.probe` names a note as the roll and `midi.get` do (`specs/harmony.md` §3,
 ADR-0100): by the key and chord of the project's context track that hold at the project beat the
 note is heard at, the default table where none holds (a place before beat 0 reads beat 0's).
-That beat is `from_beat` plus the time into the window, through the tempo map: a pitch port's
-`notes` entry at the frame its list gained it (a pitch heard again later is named at that
-later time), an audio port's `pitch.note` at the middle of the stretch the pitch was read from
-(the middle of the window), and the description repeats those names. The answer depends only
-on the project (its context points and tempo map) and the arguments (`from_beat`, `seconds`,
-`notes`, `ports`), so the same project and arguments give the same names; the context is read
+That beat is the song position the recorded frame plays, through the tempo map. The render keeps
+the master playrate, so a frame is device time (`seconds` is song time and the render lasts
+`seconds` over the rate) and its song position is read from the render's own clock, which
+integrates the rate (a scalar or an envelope); at unity it is `from_beat` plus the frames over
+the sample rate. A pitch port's `notes` entry is named at the frame its list gained it (a pitch
+heard again later is named at that later time), an audio port's `pitch.note` at the middle of
+the stretch the pitch was read from (the middle of the window), and the description repeats
+those names. The answer depends only on the project (its context points, tempo map and master
+playrate) and the arguments (`from_beat`, `seconds`, `notes`, `ports`), so the same project and arguments give the same names; the context is read
 from the copy, which adds modules, cables and notes items and never context points. No field
 is added: the names are the same strings in the same fields, spelled `G#4` or `Ab4` as the
 context says. `rack.capture` writes MIDI numbers and names nothing.

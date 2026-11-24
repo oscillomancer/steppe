@@ -1062,6 +1062,13 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     const std::vector<host::Instance*> instances = p.instances;
     detail::Workers workers(opt.threads == 0 ? detail::Workers::defaultHelpers()
                                              : std::min(opt.threads, 64u) - 1);
+    if (opt.songClock) {
+        // Offline only: the rows are appended by this render's own block loop below (never by
+        // processBlock, which the live executors share), room for one per block up front.
+        opt.songClock->clear();
+        opt.songClock->reserve(
+            static_cast<std::size_t>(total / std::min<std::int64_t>(p.block, 64)) + 16);
+    }
     std::thread audio([&] {
         auto progressAt = std::chrono::steady_clock::time_point::min();
         nameThread("audio-offline");
@@ -1176,6 +1183,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                 // A failed plug-in's output went silent (ADR-0013 §6): the
                 // render fails below.
                 if (failing()) break;
+                if (opt.songClock) opt.songClock->emplace_back(pos, p.rateSeconds(song));
                 const Stereo& tap = opt.tap == model::Tap::PreFx      ? selected->preFx
                                     : opt.tap == model::Tap::PreFader ? selected->preFader
                                                                       : selected->post;

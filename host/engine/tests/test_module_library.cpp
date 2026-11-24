@@ -330,6 +330,30 @@ TEST_CASE("rack.probe: note names follow the key and chord at the beat each note
     CHECK(f.app->head().modules.size() == 2);
 }
 
+TEST_CASE("rack.probe: under a master playrate a note is named at the song beat it is heard at") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                    // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");  // mo_2
+    const char* args = R"({"rack": "rk_1", "ports": ["mo_2.pitch"], "seconds": 8,
+        "notes": "voice v; 1: C#4:h E4:h | C#4:h r:h"})";
+    // The notes sit at song beats 0, 2 and 4. Half speed hears the third one 4 s into the
+    // render, which the tempo map alone reads as beat 8, past the key change at beat 6.
+    f.run("key.set", R"({"at": 0, "tonic": "E", "scale": "major"})");
+    f.run("key.set", R"({"at": 6, "tonic": "Ab", "scale": "major"})");
+    f.run("transport.playrate.set", R"({"rate": 0.5})");
+    CHECK(probedNotes(f, args) == std::vector<std::string>{"C#4", "E4", "C#4"});
+    // Double speed hears it 1 s in, which the tempo map alone reads as beat 2, before the change
+    // at beat 3.
+    f.run("key.remove", R"({"at": 6})");
+    f.run("key.set", R"({"at": 3, "tonic": "Ab", "scale": "major"})");
+    f.run("transport.playrate.set", R"({"rate": 2})");
+    CHECK(probedNotes(f, args) == std::vector<std::string>{"C#4", "E4", "Db4"});
+    // At unity the same.
+    f.run("transport.playrate.set", R"({"rate": 1})");
+    CHECK(probedNotes(f, args) == std::vector<std::string>{"C#4", "E4", "Db4"});
+}
+
 TEST_CASE("rack.probe: an audio port's note is named by the context where it was measured") {
     Fixture f;
     f.write("sine", R"(#include <supple/script.h>

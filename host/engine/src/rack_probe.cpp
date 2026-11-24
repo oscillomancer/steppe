@@ -76,11 +76,34 @@ struct ProbeArgs {
 
 double rounded(double x, double step = 1e-4) { return std::round(x / step) * step; }
 
-// The key and chord that hold `seconds` after the probe window's start (from_beat), as the
-// session's context track has them (ADR-0100). Everything it reads is the project's: the
-// context points, the tempo map and from_beat, so the same project and arguments name the
-// same notes.
-using PlaceAt = std::function<harmony::Place(double seconds)>;
+// The song position of a running frame a listener recorded, from the rows a render with
+// `OfflineSettings::songClock` set wrote: linear between block starts, and the last block's
+// slope after the last row. Under a master playrate a frame is device time, and the song
+// position at it is the start plus the integral of the rate, not the start plus the frame over
+// the sample rate; at unity the two are the same. Empty rows: the unity formula.
+double songSecondsAt(const std::vector<std::pair<std::int64_t, double>>& rows, double frame,
+                     double startSeconds, double rate) {
+    if (rows.empty()) return startSeconds + frame / rate;
+    auto next = std::upper_bound(rows.begin(), rows.end(), frame,
+                                 [](double f, const auto& row) { return f < double(row.first); });
+    if (next == rows.begin())
+        return rows.front().second + (frame - double(rows.front().first)) / rate;
+    const auto& at = *(next - 1);
+    double slope = 1.0 / rate;  // song seconds per frame
+    if (next != rows.end())
+        slope = (next->second - at.second) / double(next->first - at.first);
+    else if (next - 1 != rows.begin()) {
+        const auto& before = *(next - 2);
+        slope = (at.second - before.second) / double(at.first - before.first);
+    }
+    return at.second + (frame - double(at.first)) * slope;
+}
+
+// The key and chord that hold at a running frame of the probe's render (from_beat's window), as
+// the session's context track has them (ADR-0100). Everything it reads is the project's: the
+// context points, the tempo map, the master playrate and from_beat, so the same project and
+// arguments name the same notes.
+using PlaceAt = std::function<harmony::Place(double frame)>;
 
 std::string noteName(int midi, const harmony::Place& place) { return harmony::spell(midi, place); }
 
@@ -229,8 +252,7 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
         std::string list;
         for (std::size_t k = 0; k < seen.size(); ++k) {
             // Each entry is named by the key and chord holding when it was reached.
-            const std::string name =
-                noteName(seen[k], placeAt(static_cast<double>(seenAt[k]) / rate));
+            const std::string name = noteName(seen[k], placeAt(static_cast<double>(seenAt[k])));
             notes.push_back(name);
             if (k < 16) list += (list.empty() ? "" : " ") + name;
         }
@@ -246,7 +268,7 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
         std::size_t centre = 0;
         if (auto f = fundamental(x, rate, centre)) {
             // Named where it was measured: the middle of the stretch the pitch was read from.
-            const auto place = placeAt(static_cast<double>(centre) / rate);
+            const auto place = placeAt(static_cast<double>(centre));
             const double midi = 69 + 12 * std::log2(*f / 440.0);
             const int note = static_cast<int>(std::lround(midi));
             json::Value p = json::Value::object();
@@ -418,14 +440,18 @@ void registerRackProbe(cmd::Registry& registry) {
         settings.endSeconds = settings.startSeconds + seconds;
         settings.projectDir = e.projectDir();
         settings.modules = std::move(catalog);
+        std::vector<std::pair<std::int64_t, double>> clock;  // frame -> song seconds
+        settings.songClock = &clock;
         auto rendered = renderOffline(*copy, pool, settings);
         if (!rendered) return std::move(rendered).error();
         const double rate = copy->project->sampleRate;
         const double bpm = copy->timeMap->bpmAt(fromBeat);
         // Note names follow the context track at the beat each note is heard at, in the copy
         // (a probe adds modules, cables and notes items, never context points).
-        const PlaceAt placeAt = [&copy, start = settings.startSeconds](double sinceStart) {
-            return model::songNamePlace(*copy, copy->timeMap->beatAt(start + sinceStart));
+        const PlaceAt placeAt = [&copy, &clock, start = settings.startSeconds,
+                                 rate = copy->project->sampleRate](double frame) {
+            return model::songNamePlace(
+                *copy, copy->timeMap->beatAt(songSecondsAt(clock, frame, start, rate)));
         };
         json::Value out = json::Value::object();
         out["seconds"] = seconds;
