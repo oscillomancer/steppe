@@ -392,10 +392,10 @@ Result<std::vector<std::string>> JackBackend::physicalPorts(const Options& optio
     JackClient* client =
         api->clientOpen((options.clientName + "-probe").c_str(), kNoStartServer, &status);
     if (!client)
-        return Error("backend.open",
+        return Error("backend.driver",
                      "could not connect to the JACK server (" + statusText(status) + ")", {},
-                     "use backend dummy if JACK is unavailable; for JACK, use a running server and "
-                     "a client/port configuration it can accept");
+                     "is PipeWire (with pipewire-jack) or a JACK server running? Use backend "
+                     "dummy if JACK is unavailable");
     std::vector<std::string> names;
     if (const char** ports =
             api->getPorts(client, nullptr, kAudioType,
@@ -464,7 +464,7 @@ Status JackBackend::start(const BackendConfig& config, Callback callback) {
         impl->client = api->clientOpen(options_.clientName.c_str(), kNoStartServer, &status);
     }
     if (!impl->client)
-        return Error("backend.open",
+        return Error("backend.driver",
                      "could not connect to the JACK server (" + statusText(status) + ")", {},
                      "is PipeWire (with pipewire-jack) or a JACK server running?");
 

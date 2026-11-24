@@ -92,8 +92,11 @@ TEST_CASE("an unreachable server is a clean error") {
     Recorder rec;
     auto st = backend.start(BackendConfig{}, rec.callback());
     REQUIRE_FALSE(st);
-    CHECK(st.error().code == "backend.open");
+    // The server not answering is the driver not starting (the dialog's
+    // words key on the code: daw/gui/app/audio_device.cpp).
+    CHECK(st.error().code == "backend.driver");
     CHECK(st.error().message.find("server failed") != std::string::npos);
+    CHECK_FALSE(st.error().hint.empty());
     fake.reset();
 }
 
