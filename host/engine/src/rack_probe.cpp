@@ -7,6 +7,7 @@
 // speed of a CV.
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <set>
 
 #include "command_validation.h"
@@ -14,6 +15,7 @@
 #include "supple/engine/app.h"
 #include "supple/engine/offline.h"
 #include "supple/harmony/harmony.h"
+#include "supple/model/follow.h"
 #include "supple/model/schemas.h"
 
 namespace supple::engine {
@@ -74,7 +76,13 @@ struct ProbeArgs {
 
 double rounded(double x, double step = 1e-4) { return std::round(x / step) * step; }
 
-std::string noteName(int midi) { return harmony::spell(midi); }
+// The key and chord that hold `seconds` after the probe window's start (from_beat), as the
+// session's context track has them (ADR-0100). Everything it reads is the project's: the
+// context points, the tempo map and from_beat, so the same project and arguments name the
+// same notes.
+using PlaceAt = std::function<harmony::Place(double seconds)>;
+
+std::string noteName(int midi, const harmony::Place& place) { return harmony::spell(midi, place); }
 
 std::string fixed(double x, int digits) {
     char buf[48];
@@ -87,13 +95,15 @@ std::string decibels(double x) {
 }
 
 // The fundamental of a periodic stretch (YIN's cumulative mean normalised
-// difference), 20 Hz .. 5 kHz; none when the signal is not periodic.
-std::optional<double> fundamental(const std::vector<double>& x, double rate) {
+// difference), 20 Hz .. 5 kHz; none when the signal is not periodic. `centre` gets the
+// middle sample of the stretch it read.
+std::optional<double> fundamental(const std::vector<double>& x, double rate, std::size_t& centre) {
     const auto maxLag = static_cast<std::size_t>(rate / 20.0);
     const auto minLag = static_cast<std::size_t>(std::max(2.0, rate / 5000.0));
     const std::size_t window = 2048;
     if (x.size() < window + maxLag + 1) return std::nullopt;
     const std::size_t from = (x.size() - window - maxLag) / 2;  // the middle
+    centre = from + window / 2;
     std::vector<double> d(maxLag + 1, 0.0);
     for (std::size_t lag = 1; lag <= maxLag; ++lag) {
         double sum = 0;
@@ -127,7 +137,7 @@ std::optional<double> fundamental(const std::vector<double>& x, double rate) {
 // What the port carried. `voices`: its first channels (at least one).
 json::Value describe(const std::vector<std::vector<double>>& voices, int width,
                      const sd::PortModel& port, const std::string& end, double rate, double seconds,
-                     double bpm) {
+                     double bpm, const PlaceAt& placeAt) {
     json::Value out = json::Value::object();
     out["port"] = end;
     static const char* const kinds[] = {"audio", "pitch", "gate", "cv", "unipolar", "phase"};
@@ -200,6 +210,7 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
     } else if (port.signal == sd::PortModel::Signal::Pitch) {
         // The notes the voices move to, in time order (1 = an octave, 0 = C4).
         std::vector<int> seen;
+        std::vector<std::size_t> seenAt;  // the frame each entry of `seen` was added at
         std::set<int> distinct;
         std::vector<int> last(voices.size(), INT32_MIN);
         for (std::size_t i = 0; i < frames; ++i)
@@ -208,14 +219,20 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
                 if (note == last[c]) continue;
                 last[c] = note;
                 if (!distinct.count(note) || (!seen.empty() && seen.back() != note))
-                    if (seen.size() < 64) seen.push_back(note);
+                    if (seen.size() < 64) {
+                        seen.push_back(note);
+                        seenAt.push_back(i);
+                    }
                 distinct.insert(note);
             }
         json::Value notes = json::Value::array();
         std::string list;
         for (std::size_t k = 0; k < seen.size(); ++k) {
-            notes.push_back(noteName(seen[k]));
-            if (k < 16) list += (list.empty() ? "" : " ") + noteName(seen[k]);
+            // Each entry is named by the key and chord holding when it was reached.
+            const std::string name =
+                noteName(seen[k], placeAt(static_cast<double>(seenAt[k]) / rate));
+            notes.push_back(name);
+            if (k < 16) list += (list.empty() ? "" : " ") + name;
         }
         out["notes"] = std::move(notes);
         text = "pitch, " + std::to_string(distinct.size()) + " distinct note" +
@@ -226,15 +243,18 @@ json::Value describe(const std::vector<std::vector<double>>& voices, int width,
         out["peak_db"] = rounded(20 * std::log10(peak), 0.1);
         out["rms_db"] = rounded(rms > 1e-9 ? 20 * std::log10(rms) : -200, 0.1);
         text = "audio, peak " + decibels(peak) + ", rms " + decibels(rms);
-        if (auto f = fundamental(x, rate)) {
+        std::size_t centre = 0;
+        if (auto f = fundamental(x, rate, centre)) {
+            // Named where it was measured: the middle of the stretch the pitch was read from.
+            const auto place = placeAt(static_cast<double>(centre) / rate);
             const double midi = 69 + 12 * std::log2(*f / 440.0);
             const int note = static_cast<int>(std::lround(midi));
             json::Value p = json::Value::object();
             p["hz"] = rounded(*f, 0.01);
-            p["note"] = noteName(note);
+            p["note"] = noteName(note, place);
             p["cents"] = rounded(100 * (midi - note), 1);
             out["pitch"] = std::move(p);
-            text += ", " + fixed(*f, 1) + " Hz (" + noteName(note) + " " +
+            text += ", " + fixed(*f, 1) + " Hz (" + noteName(note, place) + " " +
                     (midi >= note ? "+" : "") + fixed(100 * (midi - note), 0) + " ct)";
         } else {
             text += ", not periodic";
@@ -338,8 +358,10 @@ void registerRackProbe(cmd::Registry& registry) {
         "(a poly cable's first 4 voices summed); gates counted over the voices, per beat, "
         "and how long any is high; the notes the voices' pitches visit; a CV's range and "
         "speed (voice 1). notes: notation (as midi.write takes it) the rack's "
-        "Notes modules play from from_beat, besides what their tracks hold. Nothing is "
-        "changed; playback is not disturbed.";
+        "Notes modules play from from_beat, besides what their tracks hold. Note names "
+        "follow the key and chord of the context track at the beat each note is heard "
+        "(G# or Ab), the default names with none. Nothing is changed; playback is not "
+        "disturbed.";
     c.tags = {"rack", "modular", "analysis"};
     c.args = schema::object<ProbeArgs>("rack_probe_args")
                  .field("rack", &ProbeArgs::rack,
@@ -400,6 +422,11 @@ void registerRackProbe(cmd::Registry& registry) {
         if (!rendered) return std::move(rendered).error();
         const double rate = copy->project->sampleRate;
         const double bpm = copy->timeMap->bpmAt(fromBeat);
+        // Note names follow the context track at the beat each note is heard at, in the copy
+        // (a probe adds modules, cables and notes items, never context points).
+        const PlaceAt placeAt = [&copy, start = settings.startSeconds](double sinceStart) {
+            return model::songNamePlace(*copy, copy->timeMap->beatAt(start + sinceStart));
+        };
         json::Value out = json::Value::object();
         out["seconds"] = seconds;
         out["from_beat"] = fromBeat;
@@ -414,8 +441,8 @@ void registerRackProbe(cmd::Registry& registry) {
                 const auto& v = probe->recorded[static_cast<std::size_t>(ch)];
                 voices.emplace_back(v.begin(), v.end());
             }
-            ports.push_back(
-                describe(voices, probe->width, *probes[k].second, a.ports[k], rate, seconds, bpm));
+            ports.push_back(describe(voices, probe->width, *probes[k].second, a.ports[k], rate,
+                                     seconds, bpm, placeAt));
         }
         out["ports"] = std::move(ports);
         if (!rendered->warnings.empty()) {

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -275,6 +276,95 @@ struct Sine : Module {
     CHECK(ports[3]["rate_hz"].asDouble() == doctest::Approx(2).epsilon(0.05));
     // Nothing changed.
     CHECK(f.app->head().modules.size() == 4);
+}
+
+namespace {
+std::vector<std::string> probedNotes(Fixture& f, std::string_view args) {
+    json::Value r = f.run("rack.probe", args);
+    std::vector<std::string> names;
+    // The pitch output sits at 0 V, which is C4, whenever no voice holds a note (the first block
+    // and between notes), and the list visits it; none of these phrases plays C4.
+    for (auto& n : r["ports"].asArray()[0]["notes"].asArray())
+        if (n.asString() != "C4") names.push_back(n.asString());
+    return names;
+}
+}  // namespace
+
+TEST_CASE("rack.probe: note names follow the key and chord at the beat each note is heard") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                    // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");  // mo_2
+    const std::string ahead = R"({"rack": "rk_1", "ports": ["mo_2.pitch"], "seconds": 8,
+        "notes": "voice v; 1: C#4:h E4:h | C#4:h r:h"%s})";
+    const auto probe = [&](const char* extra = "") {
+        char text[400];
+        std::snprintf(text, sizeof text, ahead.c_str(), extra);
+        return probedNotes(f, text);
+    };
+    const std::vector<std::string> plain{"C#4", "E4", "C#4"};
+    // No context: the default table, as before.
+    CHECK(probe() == plain);
+    // A flat key spells the note it holds.
+    f.run("key.set", R"({"at": 0, "tonic": "Ab", "scale": "major"})");
+    const std::vector<std::string> flat{"Db4", "E4", "Db4"};
+    CHECK(probe() == flat);
+    // A key change at beat 3 is read at the beat each note is reached (beat 0, 2 and 4).
+    f.run("key.set", R"({"at": 0, "tonic": "E", "scale": "major"})");
+    f.run("key.set", R"({"at": 3, "tonic": "Ab", "scale": "major"})");
+    const std::vector<std::string> changes{"C#4", "E4", "Db4"};
+    CHECK(probe() == changes);
+    // from_beat moves the window, so the notes are reached later in the song: all after beat 3.
+    CHECK(probe(R"(, "from_beat": 4)") == flat);
+    // The same project and arguments name the same notes.
+    CHECK(probe() == changes);
+    // A chord names its tones by their degree: the third of E is G#, not Ab.
+    f.run("key.remove", R"({"at": 3})");
+    f.run("key.set", R"({"at": 0, "tonic": "C", "scale": "major"})");
+    CHECK(probedNotes(f, R"({"rack": "rk_1", "ports": ["mo_2.pitch"], "seconds": 1,
+        "notes": "voice v; 1: G#4:w"})") == std::vector<std::string>{"Ab4"});
+    f.run("chord.set", R"({"at": 0, "symbol": "E"})");
+    CHECK(probedNotes(f, R"({"rack": "rk_1", "ports": ["mo_2.pitch"], "seconds": 1,
+        "notes": "voice v; 1: G#4:w"})") == std::vector<std::string>{"G#4"});
+    // Nothing changed.
+    CHECK(f.app->head().modules.size() == 2);
+}
+
+TEST_CASE("rack.probe: an audio port's note is named by the context where it was measured") {
+    Fixture f;
+    f.write("sine", R"(#include <supple/script.h>
+
+struct Sine : Module {
+    static constexpr ModuleInfo info = {.name = "Sine", .id = "com.example.sine",
+                                        .vendor = "Example", .description = "A test sine."};
+    Param freq = frequency("Frequency", 20, 2000, 220);
+    Output out = audioOut("Out");
+    double phase = 0;
+
+    void process(int frames) {
+        for (int i = 0; i < frames; ++i) {
+            out[0][i] = 0.5 * sin(2 * pi * phase);
+            phase += freq.at(i) / sampleRate();
+            phase -= floor(phase);
+        }
+    }
+};
+)");
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");
+    f.run("module.add",
+          R"({"rack": "rk_1", "type": "com.example.sine", "params": {"freq": 233.082}})");
+    const auto note = [&] {
+        json::Value r =
+            f.run("rack.probe", R"({"rack": "rk_1", "seconds": 1, "ports": ["mo_2.out"]})");
+        auto& port = r["ports"].asArray()[0];
+        return std::pair{port["pitch"]["note"].asString(), port["description"].asString()};
+    };
+    CHECK(note().first == "Bb3");
+    f.run("key.set", R"({"at": 0, "tonic": "E", "scale": "major"})");
+    const auto [name, text] = note();
+    CHECK(name == "A#3");
+    CHECK(text.find("(A#3 ") != std::string::npos);
 }
 
 TEST_CASE("rack presets: a patch saved from one rack plays in another") {

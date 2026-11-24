@@ -61,3 +61,8 @@ continuation keeps its first piece's names.
   Ab: the name says what the note is in the chord.
 
 Amends the spelling rule of [ADR-0095](0095-context-track.md).
+
+*Note, 2026-11-24:* `rack.probe` now spells by place, at the project beat each note is heard at
+(`specs/rack.md` §7.2, `specs/harmony.md` §3.2), so it no longer stays on the default table as the
+Consequences say. MIDI-control labels stay on it on purpose, and so do the roll's keyboard C labels;
+`midi.notes` and `midi.edit` name nothing.

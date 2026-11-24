@@ -753,7 +753,7 @@ examples run as tests. Ends are strings: `"mo_3.out"`.
 | `rack.set` | edit | `{rack, name?, track?}` |
 | `rack.list` | query | `{}` → racks with their home tracks, module counts and Out modules |
 | `rack.get` | query | `{rack, detail?: brief\|full}` → modules (id, type, label, changed params, position, size), cables (with `feedback`), Out modules and the channels they feed, node/per-Out `latency_samples`, `note_outs`, problems |
-| `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes |
+| `rack.probe` | query | `{rack, ports: ["mo_N.<output>", …≤8], seconds? (≤10, 2), from_beat?, notes? (notation the rack's Notes modules play)}` → per port: peak, rms, dc, min, max; audio (the first 4 voices summed): dB and pitch (Hz, note, cents) when periodic; gates over the voices: count, per second, per beat, duty; pitch: the notes visited; CV: rate; a one-line description. An offline render of a copy with a listener (`ProbeModule`) on each port; nothing changes. Note names (a pitch port's `notes`, an audio port's `pitch.note`, and the description) are spelled by `harmony::spell` at the key and chord of the context track that hold at the project beat they were heard at (ADR-0100; §7.2 "Probe names") |
 | `rack.capture` | action | `{rack, pitch, gate, velocity?, track, beats? (≤1024, 16), from_beat?, at?, quantize?, notes?, name?, async?}` → `{item, take, source, position, length, notes, voices, warnings?}`: an offline render of a copy as `rack.probe`'s, with a listener (`CaptureModule`) on the ports, written as a MIDI item (§7.3); one undo step |
 | `rack.levels` | query | `{rack}` → `{modules: {mo_N: {port: level}}}`: every module and known output port, latest block's linear peak across all channels; stopped or silent reads zero, missing types have an empty port object |
 | `rack.patch` | edit | `{rack, modules: {name: {type\|plugin, params?, preset?, label?, x?, y?, source?, device?}}, cables?: [[from, to, amount?, color?] \| {from, to, amount?, color?}], x?, y?}` → `{modules: {name: id}, cables}`: ends `"name.port"`, `"name.knob"` (a plugin module's: its plug-in's) or `"mo_N.port"`; modules without a place laid out as §7.2; a name labels its module (§7.2); checked as `module.add` and `cable.add` check, all or nothing |
@@ -926,6 +926,19 @@ readable: `_` to spaces, a trailing number apart, the first letter
 capitalised, and a word that is a type's key spelled as that type's
 one-word name (`"bass_env"`: "Bass env", `"osc1"`: "Osc 1", `"lfo"`:
 "LFO"). A plugin module keeps its plug-in's name.
+
+**Probe names.** `rack.probe` names a note as the roll and `midi.get` do (`specs/harmony.md` §3,
+ADR-0100): by the key and chord of the project's context track that hold at the project beat the
+note is heard at, the default table where none holds (a place before beat 0 reads beat 0's).
+That beat is `from_beat` plus the time into the window, through the tempo map: a pitch port's
+`notes` entry at the frame its list gained it (a pitch heard again later is named at that
+later time), an audio port's `pitch.note` at the middle of the stretch the pitch was read from
+(the middle of the window), and the description repeats those names. The answer depends only
+on the project (its context points and tempo map) and the arguments (`from_beat`, `seconds`,
+`notes`, `ports`), so the same project and arguments give the same names; the context is read
+from the copy, which adds modules, cables and notes items and never context points. No field
+is added: the names are the same strings in the same fields, spelled `G#4` or `Ab4` as the
+context says. `rack.capture` writes MIDI numbers and names nothing.
 
 ### 7.3 Capture
 
