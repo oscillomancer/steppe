@@ -1580,11 +1580,17 @@ TEST_CASE("midi clock output: engine stop sends Stop from a running cycle") {
     run("item.add", R"({"track": "tr_1", "notation": "voice a; 1: C4:w"})");
     run("route.add", R"({"from": "tr_1", "to_midi": "Synth", "midi": {}})");
     run("transport.play", "{}");
-    for (int i = 0; i < 300 && !app->engine()->syncConfig().outputs[0].transport; ++i) {
+    // The paced device runs on the clock; what the stop path is shown after is
+    // audio time, a quarter second of it played, not 300 ms of wall time (a
+    // thread the runner does not schedule for that long has sent nothing). The
+    // guard only bounds a device that never runs.
+    const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while ((!app->engine()->syncConfig().outputs[0].transport ||
+            app->engine()->transport().sample < static_cast<std::int64_t>(kRate / 4)) &&
+           std::chrono::steady_clock::now() < giveUp) {
         app->tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
     app->tick();
     app->stopEngine();
     const auto& sent = backend.midiCapture();
