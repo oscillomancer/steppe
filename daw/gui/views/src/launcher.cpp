@@ -190,30 +190,6 @@ std::size_t wholeNumberAt(const std::string& path, std::size_t at) {
     return static_cast<std::size_t>(wholeNumber(std::string_view(path).substr(at, end - at)));
 }
 
-// A command's message with each scene id (sc_3) said by the scene's name, as
-// the dialog lists it; an unnamed scene keeps its id.
-std::string withSceneNames(const model::Session& s, const std::string& text) {
-    std::string out;
-    for (std::size_t i = 0; i < text.size();) {
-        const bool starts = text.compare(i, 3, "sc_") == 0 &&
-                            (i == 0 || !std::isalnum(static_cast<unsigned char>(text[i - 1])));
-        std::size_t end = i + 3;
-        while (starts && end < text.size() && std::isdigit(static_cast<unsigned char>(text[end])))
-            ++end;
-        if (starts && end > i + 3 &&
-            (end == text.size() || !std::isalnum(static_cast<unsigned char>(text[end])))) {
-            const std::string id = text.substr(i, end - i);
-            const auto parsed = model::Id::parse(id);
-            const model::Scene* sc = parsed ? s.scenes.find(*parsed) : nullptr;
-            out += sc && !sc->name.empty() ? sc->name : id;
-            i = end;
-            continue;
-        }
-        out += text[i++];
-    }
-    return out;
-}
-
 // The Lay out dialog's status: the text wrapped to the dialog's width, its
 // height following the lines (one line's when empty).
 class LayOutNote : public ui::Node {
@@ -257,6 +233,64 @@ void addLaying(json::Value& args, const SceneLaying& laying) {
 }
 
 }  // namespace
+
+namespace {
+// A scene as the user knows it: its name, else its place in the pane.
+std::string sceneWords(const model::Session& s, model::Id id) {
+    const model::Scene* sc = s.scenes.find(id);
+    if (sc && !sc->name.empty()) return sc->name;
+    const std::vector<model::Id> order = launcherColumns(s).scenes;
+    const auto at = std::find(order.begin(), order.end(), id);
+    return at == order.end() ? std::string("a removed scene")
+                             : "Scene " + std::to_string(at - order.begin() + 1);
+}
+std::string trackWords(const model::Session& s, model::Id id) {
+    const model::Track* t = s.tracks.find(id);
+    if (!t) return "a removed track";
+    return t->name.empty() ? std::string("an unnamed track") : t->name;
+}
+std::string clipWords(const model::Session& s, model::Id id) {
+    const model::Clip* c = s.clips.find(id);
+    if (!c) return "a removed clip";
+    if (!c->name.empty()) return c->name;
+    return trackWords(s, c->track) + "'s clip in " + sceneWords(s, c->scene);
+}
+}  // namespace
+
+std::string launcherNames(const model::Session& s, std::string_view text) {
+    auto word = [&](std::size_t i) {
+        return i < text.size() &&
+               (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_');
+    };
+    std::string out;
+    for (std::size_t i = 0; i < text.size();) {
+        const std::string_view rest = text.substr(i);
+        const bool prefix =
+            rest.starts_with("sc_") || rest.starts_with("cl_") || rest.starts_with("tr_");
+        if (prefix && (i == 0 || !word(i - 1))) {
+            std::size_t end = i + 3;
+            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
+            if (end > i + 3 && !word(end)) {
+                if (const auto id = model::Id::parse(std::string(text.substr(i, end - i)))) {
+                    out += rest.starts_with("sc_")   ? sceneWords(s, *id)
+                           : rest.starts_with("cl_") ? clipWords(s, *id)
+                                                     : trackWords(s, *id);
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        out += text[i++];
+    }
+    return out;
+}
+
+Error launcherNames(const model::Session& s, Error error) {
+    error.message = launcherNames(s, error.message);
+    error.hint = launcherNames(s, error.hint);
+    for (Error& detail : error.details) detail = launcherNames(s, std::move(detail));
+    return error;
+}
 
 std::optional<std::string> followNotice(const model::Session& s, const std::string& command,
                                         const json::Value& args, const json::Value& answer) {
@@ -1777,8 +1811,8 @@ void LauncherHeader::openLayOut() {
         const Error& first = e.details.empty() ? e : e.details[0];
         std::string path = first.path;
         if (path.rfind("/args", 0) == 0) path = path.substr(5);
-        std::string mark, prefix, text = withSceneNames(view_.session(), e.message);
-        if (!e.details.empty()) text += ": " + withSceneNames(view_.session(), first.message);
+        std::string mark, prefix, text = launcherNames(view_.session(), e.message);
+        if (!e.details.empty()) text += ": " + launcherNames(view_.session(), first.message);
         if (path.rfind("/sequence/", 0) == 0) {
             const std::size_t entry = wholeNumberAt(path, 10);
             if (entry < rows.size()) {

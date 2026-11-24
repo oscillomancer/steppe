@@ -2132,10 +2132,11 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
                     }
                     auto r = run("Clips from items", steps);
                     if (!r) {
+                        const Error refused = launcherNames(s, r.error());
                         if (const auto& onRefused = view_.launcherCallbacks().onError)
-                            onRefused(r.error());
+                            onRefused(refused);
                         else if (onError)
-                            onError(r.error());
+                            onError(refused);
                         return;
                     }
                     view_.selectClipsIn(std::move(cells));

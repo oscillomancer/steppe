@@ -1825,7 +1825,9 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
         command == "item.add" || command == "scene.insert" || command == "arrangement.build";
     const json::Value asked = lays ? args : json::Value();
     auto r = launcherCallbacks_.run(command, std::move(args));
-    if (!r && launcherCallbacks_.onError) launcherCallbacks_.onError(r.error());
+    // Refusals reach the user with names, not ids (launcherNames).
+    if (!r && launcherCallbacks_.onError)
+        launcherCallbacks_.onError(launcherNames(session(), r.error()));
     if (r && lays && launcherCallbacks_.onNotice)
         if (const auto notice = followNotice(session(), command, asked, *r))
             launcherCallbacks_.onNotice(*notice);

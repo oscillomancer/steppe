@@ -138,6 +138,16 @@ int barAtOrAfter(const time::TimeMap& map, double beat);
 // its last item or section (bar 1 when it is empty).
 int barAfterArrangement(const model::Session& session);
 
+// A launcher refusal as the user reads it (gui.md §4.15): each clip, track
+// and scene id in the text (sc_3, cl_2, tr_1) said by name, so no id reaches
+// the user: a scene's name, else "Scene N" by its place in the pane; a
+// track's, else "an unnamed track"; a clip's, else "<track>'s clip in
+// <scene>" ("a removed …" for one that is gone). The rest of the command's
+// words are kept. The Error form does the message, the hint and each listed
+// error.
+std::string launcherNames(const model::Session& session, std::string_view text);
+Error launcherNames(const model::Session& session, Error error);
+
 // What a command that laid clips on the timeline did with their keys, in a
 // few words for the status line (gui.md §4.15), read from the answer's
 // `followed` blocks. The notes are laid as written and sound as the place

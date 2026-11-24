@@ -3114,7 +3114,7 @@ same heights, scroll and colours.
     1", "From bar: …") and nothing is sent. A whole number of any length is
     sent (held at a billion), so every other limit is the command's.
   - A refusal shows in the dialog (and in the status line) as the command
-    says it, with each scene id said by the scene's name, the first listed
+    says it, with names for ids (below), the first listed
     error when the arguments' form was refused, and the hint after. The
     error's path names the entry (`/sequence/<i>/…`, the i-th checked row)
     or `/bar`: that row's name goes first unless the message already says
@@ -3124,6 +3124,15 @@ same heights, scroll and colours.
   - A refusal of `scene.insert` (items already in the span, an empty
     scene, a looping clip whose period is not its content) shows its
     message in the status line and changes nothing.
+  - **Names, not ids.** Every launcher refusal reaches the user (the status
+    line, the Lay out dialog) with each clip, track and scene id in its
+    message, hint and listed errors said by name (`views::launcherNames`): a
+    scene's name, else "Scene N" by its place in the pane; a track's, else
+    "an unnamed track"; a clip's, else "<track>'s clip in <scene>"; "a
+    removed …" for one that is gone. The rest of the command's words, its
+    code and path, are kept. This covers the pane's commands
+    (`ArrangeView::runLauncher`), items dropped into cells, the menu's
+    Delete and Capture's refusals.
   - What laying did goes to the status line (`views::followNotice`): each
     clip that follows or was laid as written in another key, and, with
     write_context, a section whose harmony was not written ("Verse's harmony

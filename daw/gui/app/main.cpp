@@ -963,11 +963,13 @@ int frontendMain(int argc, char** argv) {
              std::vector<std::string> ids;
              for (model::Id id : clips) ids.push_back(id.str());
              if (auto r = gui::removeClips(dispatcher, ids); !r && appActions.onError)
-                 appActions.onError("Clip launcher: " + r.error().message);
+                 appActions.onError("Clip launcher: " +
+                                    views::launcherNames((*app)->head(), r.error()).message);
          },
          [&](bool on) {
              if (auto r = shell.capture().set(on); !r && appActions.onError)
-                 appActions.onError("Capture: " + r.error().message);
+                 appActions.onError("Capture: " +
+                                    views::launcherNames((*app)->head(), r.error()).message);
          },
          [&](model::Id take) {
              if (auto r = fxWindow.openTake(take); !r && appActions.onError)
@@ -976,8 +978,9 @@ int frontendMain(int argc, char** argv) {
          // What a clip or scene laid on the timeline did with its key.
          [&shell](const std::string& notice) { shell.setStatus(notice); }});
     // A capture's commit at stop, or the next one's arming, refused.
-    shell.capture().onError = [&appActions](const Error& e) {
-        if (appActions.onError) appActions.onError("Capture: " + e.message);
+    shell.capture().onError = [&appActions, &app](const Error& e) {
+        if (appActions.onError)
+            appActions.onError("Capture: " + views::launcherNames((*app)->head(), e).message);
     };
     // What a commit copied under another key (gui.md §4.15), as a lay says it.
     shell.capture().onNotice = [&shell](const std::string& notice) { shell.setStatus(notice); };

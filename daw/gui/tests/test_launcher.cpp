@@ -706,6 +706,7 @@ TEST_CASE("launcher: selected items dragged into a cell make a clip each, in one
     REQUIRE(f.errors.size() == 1);
     CHECK(f.commands == std::vector<std::string>{"clip.add"});  // the first refused: rolled back
     CHECK(f.errors[0].code == "clip.occupied");
+    CHECK(f.errors[0].message == "Root is already in Bass's Verse");  // names, not ids
     CHECK_FALSE(views::clipIn(f.app->head(), keys, verse));
     CHECK(f.app->head().clips.size() == clips);
     // A track that holds no clips: the Keys' item lands on Verb (a buss), and
@@ -799,6 +800,52 @@ TEST_CASE("launcher: Stop all, Arrangement and Capture share one row; narrow, th
     const ui::Rect stop = header.stopRect();
     f.click({stop.x + stop.w / 2, stop.y + stop.h / 2});
     CHECK(f.commands == std::vector<std::string>{"launch.stop"});
+}
+
+TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
+    LauncherFixture f;
+    f.song();
+    // An unnamed scene and clip: Scene 4 (its place), Keys's clip in Scene 4.
+    f.exec("scene.add", "{}");
+    f.exec("clip.add", R"({"track":"tr_3","scene":"sc_4","notation":"1: C4:w"})");
+    const model::Session& s = f.app->head();
+    CHECK(views::launcherNames(s, "cl_3 is already in tr_2's sc_2") ==
+          "Root is already in Bass's Verse");
+    CHECK(views::launcherNames(s, "sc_4 is empty") == "Scene 4 is empty");
+    CHECK(views::launcherNames(s, "cl_4 can't play") == "Keys's clip in Scene 4 can't play");
+    CHECK(views::launcherNames(s, "sc_9 and cl_9 and tr_9") ==
+          "a removed scene and a removed clip and a removed track");
+    // Only whole ids: part of a word, or a prefix with no number, stays.
+    CHECK(views::launcherNames(s, "disc_3, tr_2x, sc_ and (tr_1)") ==
+          "disc_3, tr_2x, sc_ and (Drums)");
+    // The Error form: the message, the hint and each listed error; the code
+    // and path stay as the command gave them.
+    Error e("clip.occupied", "cl_3 is in sc_2", "/clip", "move cl_3 out of tr_2 first");
+    e.details.push_back(Error("x", "sc_1 has none", "/scene", "add one to sc_1"));
+    const Error named = views::launcherNames(s, e);
+    CHECK(named.code == "clip.occupied");
+    CHECK(named.path == "/clip");
+    CHECK(named.message == "Root is in Verse");
+    CHECK(named.hint == "move Root out of Bass first");
+    REQUIRE(named.details.size() == 1);
+    CHECK(named.details[0].message == "Intro has none");
+    CHECK(named.details[0].hint == "add one to Intro");
+    // Through the pane: Insert at end of an empty scene names it.
+    views::LauncherHeader& header = f.view->launcherHeader();
+    f.click({header.sceneRect(2).x + 40, header.sceneRect(2).y + 8}, 0, 1, 3);
+    ui::Node* menu = f.root->find("launcher.scene.menu");
+    REQUIRE(menu);
+    std::function<void()> insertAtEnd;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label == "Insert at end") insertAtEnd = item.run;
+    f.root->closePopups();
+    REQUIRE(insertAtEnd);
+    insertAtEnd();
+    f.sync();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "scene.empty");
+    CHECK(f.errors[0].message.find("sc_") == std::string::npos);
+    CHECK(f.errors[0].message.find("Chorus") != std::string::npos);
 }
 
 TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected, in both themes") {
@@ -1901,8 +1948,10 @@ TEST_CASE("launcher: the scene menu's checks say how scenes are laid; Lay out sc
     REQUIRE(f.root->find("launcher.layout"));
     ui::Node* status = f.root->find("launcher.layout.status");
     REQUIRE(status);
-    CHECK(f.errors[0].message.find("sc_3") != std::string::npos);
-    CHECK(status->valueText().find("sc_3") == std::string::npos);
+    // Names, not ids, in what reaches the user (launcherNames).
+    CHECK(f.errors[0].message.find("sc_") == std::string::npos);
+    CHECK(f.errors[0].message.find("Chorus") != std::string::npos);
+    CHECK(status->valueText().find("sc_") == std::string::npos);
     CHECK(status->valueText().find("Chorus") != std::string::npos);
     CHECK(status->valueText().ends_with("; " + f.errors[0].hint));
     auto mark = [&](const std::string& row) {
