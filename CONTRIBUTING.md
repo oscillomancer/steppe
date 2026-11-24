@@ -101,7 +101,9 @@ gh workflow run build.yml --ref main -f platforms=all -f tests='^core-json'
 gh cache delete --all --ref refs/heads/<merged-branch> --succeed-on-no-caches
 ```
 
-The seed builds everything and runs one small test entry; its save steps run
+The seed builds everything (leave `targets` empty: a narrowed run on `main` saves
+a partial cache under a newer key, which a later restore then prefers) and runs
+one small test entry; its save steps run
 whatever the outcome of the tests, so a failed test does not lose the build's
 objects. Once it has finished, delete the superseded seed's caches too (the
 keys end in the commit they were built from: `gh cache list --ref refs/heads/main`).
@@ -116,6 +118,10 @@ first run, so that the branch's later runs restore its caches instead of
 ```sh
 gh workflow run build.yml --ref <candidate> -f platforms=all -f save_caches=true
 ```
+
+GitHub refuses an input the ref's own `build.yml` does not declare, so this works
+only on a branch that contains the `save_caches` input (one based on a `main`
+that has it).
 
 With a seed on `main` (about 2.6 GB) and two candidates holding saved caches
 (about 2.4 GB each) the store holds about 7.4 GB, 10.7 GB if every cache is at
