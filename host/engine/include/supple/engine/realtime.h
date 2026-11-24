@@ -1248,6 +1248,10 @@ class Engine {
     // the slots and deciding them, as a main thread preempted there.
     void (*launchCommitForTests_)(void*) = nullptr;
     void* launchCommitContext_ = nullptr;
+    // Tests only (EngineTestAccess): this many of the next prepareRatePlan
+    // attempts are late, as if the renderer had passed their hand, so they
+    // prepare again (the third fails, and a recovery seek follows).
+    int lateAttemptsForTests_ = 0;
     bool bridgedLive_ = false;  // main thread (bridgedLive())
     std::atomic<std::uint64_t> stoppedGen_{0};
     // The session the engine plays: the newest published plan's, or a mix or
