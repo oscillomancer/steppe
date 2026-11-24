@@ -1338,8 +1338,8 @@ TEST_CASE("take comping: a click hears a take, a swipe comps with take.comp as a
     f.sync();
     CHECK(trackJson(f, track) == byGui);
 
-    // A comp whose crossfade was set (50 ms, linear) keeps it on the next
-    // swipe, at every seam.
+    // A comp whose crossfade was set (50 ms, linear): the next swipe sends no
+    // crossfade, and take.comp gives the seams it makes the comp's own.
     // (The swipe's call again, with a crossfade.)
     json::Value set = swipe;
     set["crossfade"] = 0.05;
@@ -1357,10 +1357,8 @@ TEST_CASE("take comping: a click hears a take, a swipe comps with take.comp as a
            laneAt(last, 2, heard, last.x + last.w * 0.7f));
     REQUIRE(sent.size() == 3);
     CHECK(sent[2][0].command == "take.comp");
-    REQUIRE(sent[2][0].args.find("crossfade"));
-    CHECK(sent[2][0].args.find("crossfade")->asDouble() == doctest::Approx(0.05));
-    REQUIRE(sent[2][0].args.find("crossfade_shape"));
-    CHECK(sent[2][0].args.find("crossfade_shape")->asString() == "linear");
+    CHECK_FALSE(sent[2][0].args.find("crossfade"));
+    CHECK_FALSE(sent[2][0].args.find("crossfade_shape"));
     pieces = piecesOf(f, track);
     REQUIRE(pieces.size() == 5);
     for (std::size_t i = 0; i + 1 < pieces.size(); ++i) {
@@ -1368,8 +1366,8 @@ TEST_CASE("take comping: a click hears a take, a swipe comps with take.comp as a
         CHECK(pieces[i]->fadeOut.shape == model::FadeShape::Linear);
     }
 
-    // A click on a lane in a comp re-comps that piece alone: the first piece
-    // takes the middle one's take and joins it; the crossfade stays.
+    // A click on a lane in a comp re-comps that piece alone, with no
+    // crossfade: the first piece takes the middle one's take and joins it.
     const ui::Rect first = f.rectOf([&] {
         for (const auto& e : f.app->head().items)
             if (e.value.get() == pieces[0]) return e.id;
@@ -1378,8 +1376,7 @@ TEST_CASE("take comping: a click hears a take, a swipe comps with take.comp as a
     f.click(laneAt(first, 2, heard, first.x + first.w * 0.5f));
     REQUIRE(sent.size() == 4);
     CHECK(sent[3][0].command == "take.comp");
-    REQUIRE(sent[3][0].args.find("crossfade"));
-    CHECK(sent[3][0].args.find("crossfade")->asDouble() == doctest::Approx(0.05));
+    CHECK_FALSE(sent[3][0].args.find("crossfade"));
     pieces = piecesOf(f, track);
     REQUIRE(pieces.size() == 4);
     CHECK(heardOf(*pieces[0]) == heard);
@@ -1390,7 +1387,7 @@ TEST_CASE("take comping: a click hears a take, a swipe comps with take.comp as a
 }
 
 // The seams of a comp: drawn where the take changes, and a drag on one is a
-// take.comp with that span edge moved (the crossfade kept).
+// take.comp with that span edge moved and no crossfade (the seam keeps its own).
 TEST_CASE("a comp's seam: found and hit where the take changes, dragged with take.comp") {
     Fixture f;
     if (!f.ok) return;
@@ -1433,7 +1430,7 @@ TEST_CASE("a comp's seam: found and hit where the take changes, dragged with tak
     const ui::Rect first = f.rectOf(seams[0].left);
     CHECK(g.hit({first.x + 2, first.y + first.h / 2})->zone == views::ItemGestures::Drag::TrimLeft);
     // A free drag (Shift) moves the seam right by 20 px: one take.comp with
-    // the two stretches beside it, and the crossfade the comp has.
+    // the two stretches beside it and no crossfade; the seam keeps its own.
     auto& sent = recordSteps(f);
     const auto steps = f.steps();
     const double before = seams[0].seconds;
@@ -1443,8 +1440,7 @@ TEST_CASE("a comp's seam: found and hit where the take changes, dragged with tak
     REQUIRE(sent[0].size() == 1);
     CHECK(sent[0][0].command == "take.comp");
     CHECK(sent[0][0].args.find("spans")->size() == 2);
-    REQUIRE(sent[0][0].args.find("crossfade"));
-    CHECK(sent[0][0].args.find("crossfade")->asDouble() == doctest::Approx(0.01).epsilon(0.01));
+    CHECK_FALSE(sent[0][0].args.find("crossfade"));
     CHECK(f.steps() == steps + 1);
     const auto moved = f.view->lanes().compSeams(row);
     REQUIRE(moved.size() == 2);
@@ -1483,13 +1479,242 @@ TEST_CASE("a comp's seam: found and hit where the take changes, dragged with tak
     // A plain click there changes nothing.
     f.click({xs, r2.y + 3});
     CHECK(sent.size() == 4);
-    // Dragged far past the next seam, it stops short of it: the comp keeps
-    // its three pieces.
-    const float x2 = f.view->lanes().xAt(f.view->lanes().compSeams(row)[0].seconds);
+    // Dragged far past the next seam, it stops short of it (1/64 beat): the
+    // comp keeps its three pieces, and the seam has moved there.
+    const auto beforeFar = f.view->lanes().compSeams(row);
+    const float x2 = f.view->lanes().xAt(beforeFar[0].seconds);
+    const auto farSteps = f.steps();
     f.drag({x2, y}, {x2 + 2000, y}, ui::kShift);
     REQUIRE(sent.size() == 5);
+    CHECK_FALSE(sent[4][0].args.find("crossfade"));
+    CHECK(f.steps() == farSteps + 1);  // not refused
+    CHECK(piecesOf(f, track).size() == 3);
+    const auto far = f.view->lanes().compSeams(row);
+    REQUIRE(far.size() == 2);
+    CHECK(far[0].seconds > beforeFar[0].seconds);
+    CHECK(far[0].seconds < far[1].seconds);
+    // The middle piece is now short, and its clamped seams can make its
+    // neighbours meet: the comp is still one comp, asked from any piece (the
+    // seam drag, the Crossfade field and the take badge ask the piece they are
+    // on), and a second drag on the moved seam is still a seam drag.
+    std::vector<model::Id> ids;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == track && e.value->takes.size() == 2) ids.push_back(e.id);
+    REQUIRE(ids.size() == 3);
+    for (model::Id id : ids) {
+        CAPTURE(id.str());
+        const auto comp = views::compOf(f.app->head(), id);
+        REQUIRE(comp);
+        CHECK(comp->pieces.size() == 3);
+        CHECK(comp->seams.size() == 2);
+    }
+    const ui::Rect farRight = f.rectOf(far[0].right);
+    const auto again =
+        g.hit({f.view->lanes().xAt(far[0].seconds) + 1, farRight.y + farRight.h / 2});
+    REQUIRE(again);
+    CHECK(again->zone == views::ItemGestures::Drag::Seam);
+}
+
+// A seam dragged all the way to the next one leaves the piece between them
+// 1/64 beat long, its two seams clamped to meet in it: at 125 BPM that core is
+// an even 360 samples, and the pieces either side of it then meet at one
+// sample. It is still one comp from every piece (the lanes, the seam drag, the
+// Crossfade field and the take badge ask the piece they are on), so both seams
+// stay drawn and draggable.
+TEST_CASE("a seam dragged against the next one: the comp is still one comp from every piece") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute(
+        {"tempo.set", json::parse(R"({"points":[{"beat":0,"bpm":125}]})").value(), kUi}));
+    f.sync();
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double start = f.item(it).position, length = f.item(it).length;
+    json::Value args = json::Value::object();
+    args["item"] = it.str();
+    args["crossfade"] = 0.5;
+    json::Value span = json::Value::object();
+    span["from"] = start + length / 3;
+    span["to"] = start + 2 * length / 3;
+    span["index"] = static_cast<std::int64_t>(1 - heard);
+    args["spans"] = json::Value::array();
+    args["spans"].push_back(span);
+    REQUIRE(f.dispatcher->execute({"take.comp", args, kUi}));
+    f.sync();
+    const std::size_t row = *f.view->trackLayout().indexOf(track);
+    const auto seams = f.view->lanes().compSeams(row);
+    REQUIRE(seams.size() == 2);
+    const ui::Rect right = f.rectOf(seams[0].right);
+    const float x = f.view->lanes().xAt(seams[0].seconds), y = right.y + right.h / 2;
+    const auto steps = f.steps();
+    f.drag({x, y}, {x + 2000, y}, ui::kShift);
+    REQUIRE(f.steps() == steps + 1);
+    const model::Session& s = f.app->head();
+    std::vector<model::Id> ids;
+    for (const auto& e : s.items)
+        if (e.value->track == track && e.value->takes.size() == 2) ids.push_back(e.id);
+    REQUIRE(ids.size() == 3);
+    for (model::Id id : ids) {
+        CAPTURE(id.str());
+        const auto comp = views::compOf(s, id);
+        REQUIRE(comp);
+        CHECK(comp->pieces.size() == 3);
+        CHECK(comp->seams.size() == 2);
+    }
+    const auto after = f.view->lanes().compSeams(row);
+    REQUIRE(after.size() == 2);
+    CHECK((after[1].seconds - after[0].seconds) * s.project->sampleRate ==
+          doctest::Approx(360).epsilon(0.01));
+    // Close enough to tell the two seams apart (150 px), each is a seam drag.
+    auto viewport = f.view->viewport();
+    viewport.pixelsPerSecond = 20000;
+    viewport.startSeconds = after[0].seconds - 0.02;
+    f.view->setViewport(viewport);
+    f.sync();
+    auto& g = f.view->gestures();
+    for (std::size_t k = 0; k < 2; ++k) {
+        CAPTURE(k);
+        const auto seam = f.view->lanes().compSeams(row)[k];
+        const ui::Rect r = f.rectOf(seam.right);
+        const auto h = g.hit({f.view->lanes().xAt(seam.seconds) + 1, r.y + r.h / 2});
+        REQUIRE(h);
+        CHECK(h->zone == views::ItemGestures::Drag::Seam);
+        CHECK(h->seamLeft == seam.left);
+    }
+    if (const char* out = std::getenv("SUPPLE_SCREENSHOT_DIR")) {
+        viewport.pixelsPerSecond = 1500;
+        viewport.startSeconds = after[0].seconds - 0.45;
+        f.view->setViewport(viewport);
+        f.sync();
+        REQUIRE(gui::writePng(std::filesystem::path(out) / "comp-clamped-seams.png",
+                              f.root->readBack()));
+    }
+}
+
+// comp-seams (round 137): a seam drag and a lane click send take.comp with no
+// crossfade, so a seam set by hand elsewhere (an agent's item.set on the two
+// pieces beside it) stays as stored, byte for byte. Only the crossfade handle
+// sends a crossfade, which rebuilds every seam.
+TEST_CASE("a hand-set seam elsewhere survives a seam drag and a lane click") {
+    Fixture f;
+    if (!f.ok) return;
+    auto [it, heard] = twoTakeItem(f);
+    const std::size_t other = 1 - heard;
+    const model::Id track = f.item(it).track;
+    const double start = f.item(it).position, length = f.item(it).length;
+    // Four pieces by an agent, heard, other, heard, other; seams 20 ms equal power.
+    json::Value args = json::Value::object();
+    args["item"] = it.str();
+    args["crossfade"] = 0.02;
+    args["crossfade_shape"] = "cos";
+    args["spans"] = json::Value::array();
+    for (int k = 0; k < 4; ++k) {
+        json::Value span = json::Value::object();
+        span["from"] = start + length * k / 4;
+        span["to"] = start + length * (k + 1) / 4;
+        span["index"] = static_cast<std::int64_t>(k % 2 == 0 ? heard : other);
+        args["spans"].push_back(span);
+    }
+    REQUIRE(f.dispatcher->execute({"take.comp", args, kUi}));
+    f.sync();
+    auto ids = [&] {
+        std::vector<model::Id> out;
+        for (const model::Item* p : piecesOf(f, track))
+            for (const auto& e : f.app->head().items)
+                if (e.value.get() == p) out.push_back(e.id);
+        return out;
+    };
+    std::vector<model::Id> pieces = ids();
+    REQUIRE(pieces.size() == 4);
+    // The first seam set by hand: 10 ms, linear, on both pieces beside it.
+    REQUIRE(f.dispatcher->execute({"item.set",
+                                   json::parse(R"({"item":")" + pieces[0].str() +
+                                               R"(","fade_out":0.01,"fade_out_shape":"linear"})")
+                                       .value(),
+                                   kUi}));
+    REQUIRE(f.dispatcher->execute({"item.set",
+                                   json::parse(R"({"item":")" + pieces[1].str() +
+                                               R"(","fade_in":0.01,"fade_in_shape":"linear"})")
+                                       .value(),
+                                   kUi}));
+    f.sync();
+    // The two pieces beside it, item and takes, as stored.
+    auto stored = [&](model::Id id) {
+        const model::Session& s = f.app->head();
+        const model::Item* item = s.items.find(id);
+        REQUIRE(item);
+        std::string out = json::writeCanonical(model::toJson(*item));
+        for (const auto& take : item->takes)
+            out += json::writeCanonical(model::toJson(*s.takes.find(take)));
+        return out;
+    };
+    const std::string a = stored(pieces[0]), b = stored(pieces[1]);
+    auto handSet = [&] {
+        auto got = f.dispatcher->execute(
+            {"take.comp.get", json::parse(R"({"item":")" + pieces[0].str() + R"("})").value(),
+             kUi});
+        REQUIRE(got);
+        CHECK_FALSE(got->find("uniform")->asBool());
+        const json::Value* differing = got->find("differing_seams");
+        REQUIRE(differing);
+        REQUIRE(differing->size() == 1);
+        const json::Value& seam = differing->asArray()[0];
+        CHECK(seam.find("seam")->asInt() == 0);
+        CHECK(seam.find("crossfade")->asDouble() == doctest::Approx(0.01));
+        CHECK(seam.find("crossfade_shape")->asString() == "linear");
+    };
+    handSet();
+    auto& sent = recordSteps(f);
+    // The last seam dragged left by 12 px (free): no crossfade; the hand-set
+    // seam and the piece beside it are as stored.
+    const std::size_t row = *f.view->trackLayout().indexOf(track);
+    const auto seams = f.view->lanes().compSeams(row);
+    REQUIRE(seams.size() == 3);
+    const float x = f.view->lanes().xAt(seams[2].seconds);
+    const ui::Rect right = f.rectOf(seams[2].right);
+    const float y = right.y + right.h / 2;
+    REQUIRE(f.view->gestures().hit({x + 2, y})->zone == views::ItemGestures::Drag::Seam);
+    auto steps = f.steps();
+    f.drag({x, y}, {x - 12, y}, ui::kShift);
+    REQUIRE(sent.size() == 1);
+    CHECK(sent[0][0].command == "take.comp");
+    CHECK_FALSE(sent[0][0].args.find("crossfade"));
+    CHECK_FALSE(sent[0][0].args.find("crossfade_shape"));
+    CHECK(f.steps() == steps + 1);
+    REQUIRE(f.view->lanes().compSeams(row).size() == 3);
+    CHECK(f.view->lanes().compSeams(row)[2].seconds < seams[2].seconds);
+    CHECK(stored(pieces[0]) == a);
+    CHECK(stored(pieces[1]) == b);
+    handSet();
+    // A click on the last piece's other lane: it takes the third piece's take
+    // and joins it, no crossfade; the hand-set seam is as stored.
+    pieces = ids();
+    REQUIRE(pieces.size() == 4);
+    const ui::Rect last = f.rectOf(pieces[3]);
+    steps = f.steps();
+    f.click(laneAt(last, 2, heard, last.x + last.w * 0.5f));
+    REQUIRE(sent.size() == 2);
+    CHECK(sent[1][0].command == "take.comp");
+    CHECK_FALSE(sent[1][0].args.find("crossfade"));
+    CHECK(f.steps() == steps + 1);
     CHECK(piecesOf(f, track).size() == 3);
     CHECK(f.view->lanes().compSeams(row).size() == 2);
+    CHECK(stored(pieces[0]) == a);
+    CHECK(stored(pieces[1]) == b);
+    handSet();
+    // The crossfade handle still sends one, and rebuilds every seam with it.
+    const auto now = f.view->lanes().compSeams(row);
+    const float xs = f.view->lanes().xAt(now[1].seconds);
+    const ui::Rect r2 = f.rectOf(now[1].right);
+    REQUIRE(f.view->gestures().hit({xs, r2.y + 3})->zone == views::ItemGestures::Drag::CompFade);
+    f.drag({xs, r2.y + 3}, {xs + 8, r2.y + 3}, ui::kShift);
+    REQUIRE(sent.size() == 3);
+    REQUIRE(sent[2][0].args.find("crossfade"));
+    const auto got = f.dispatcher->execute(
+        {"take.comp.get", json::parse(R"({"item":")" + pieces[0].str() + R"("})").value(), kUi});
+    REQUIRE(got);
+    CHECK(got->find("uniform")->asBool());
+    CHECK(f.item(pieces[0]).fadeOut.shape == model::FadeShape::Cos);
 }
 
 // Round 119 G1: the badge switches a comp piece as a lane click does, with
@@ -1709,12 +1934,79 @@ TEST_CASE("an edit-grouped track comps every member with take.comp; a member tha
         for (const auto& seam : leadSeams) CHECK_FALSE(seam.differs);
         for (const auto& seam : roomSeams) CHECK(seam.differs);
     }
-    // A lane click on a lead piece re-comps the group: the member is in step again.
-    const ui::Rect p = f.rectOf(idOf(f, pieces[0]));
-    f.click(laneAt(p, 2, 1 - heard, p.x + p.w * 0.5f));
-    REQUIRE(sent.size() == 3);
-    CHECK(sent[2][0].command == "take.comp");
+    auto differing = [&] {
+        json::Value ask = json::Value::object();
+        ask["item"] = it.str();
+        const auto back = f.dispatcher->execute({"take.comp.get", ask, kUi});
+        REQUIRE(back);
+        std::vector<std::string> out;
+        for (const auto& t : back->find("differing_members")->asArray())
+            out.push_back(t.asString());
+        return out;
+    };
+    // An ordinary gesture on the lead sends no crossfade, so each member
+    // keeps the seams its spans do not touch: a lane click on the lead's last
+    // piece (it joins the middle one) leaves the member's first seam, faded
+    // for it alone, as it is. The member still differs, its line still broken.
+    {
+        const ui::Rect p = f.rectOf(idOf(f, pieces[2]));
+        f.click(laneAt(p, 2, 1 - heard, p.x + p.w * 0.5f));
+        REQUIRE(sent.size() == 3);
+        CHECK(sent[2][0].command == "take.comp");
+        CHECK_FALSE(sent[2][0].args.find("crossfade"));
+        const auto leadSeams = f.view->lanes().compSeams(leadRow);
+        const auto roomSeams = f.view->lanes().compSeams(roomRow);
+        REQUIRE(leadSeams.size() == 1);
+        REQUIRE(roomSeams.size() == 1);
+        CHECK_FALSE(leadSeams[0].differs);
+        CHECK(roomSeams[0].differs);
+        REQUIRE(piecesOf(f, room).size() == 2);
+        CHECK(piecesOf(f, room)[1]->fadeIn.length == doctest::Approx(0.3));
+        CHECK(differing() == std::vector<std::string>{room.str()});
+    }
+    // The crossfade handle on the lead sends the comp's crossfade, which
+    // remakes every seam of every member: the member is in step again.
+    const double pps = f.view->viewport().pixelsPerSecond;
+    auto dragHandle = [&](std::size_t row, double seconds, unsigned mods) {
+        const auto seam = f.view->lanes().compSeams(row).at(0);
+        const ui::Rect hr = f.rectOf(seam.right);
+        const float x = f.view->lanes().xAt(seam.seconds);
+        REQUIRE(f.view->gestures().hit({x, hr.y + 3}));
+        REQUIRE(f.view->gestures().hit({x, hr.y + 3})->zone == views::ItemGestures::Drag::CompFade);
+        f.drag({x, hr.y + 3}, {x + static_cast<float>(seconds / 2 * pps), hr.y + 3}, mods);
+    };
+    dragHandle(leadRow, 0.5, ui::kShift);
+    REQUIRE(sent.size() == 4);
+    REQUIRE(sent[3][0].args.find("crossfade"));
+    CHECK_FALSE(sent[3][0].args.find("bypass_groups"));
     for (const auto& seam : f.view->lanes().compSeams(roomRow)) CHECK_FALSE(seam.differs);
+    CHECK(differing().empty());
+    // Held with Alt, the member's handle sets its crossfade alone (1 s): it
+    // differs again. A seam drag on the lead, without Alt, moves the seam on
+    // both; the member's moved seam takes its own crossfade, not the lead's,
+    // and it still differs until the lead's crossfade is set again.
+    dragHandle(roomRow, 1.0, ui::kShift | ui::kAlt);
+    REQUIRE(sent.size() == 5);
+    CHECK(sent[4][0].args.find("bypass_groups"));
+    CHECK(piecesOf(f, room)[1]->fadeIn.length == doctest::Approx(1.0).epsilon(0.02));
+    CHECK(piecesOf(f, track)[1]->fadeIn.length == doctest::Approx(0.5).epsilon(0.02));
+    CHECK(differing() == std::vector<std::string>{room.str()});
+    {
+        const auto seam = f.view->lanes().compSeams(leadRow).at(0);
+        const ui::Rect sr = f.rectOf(seam.right);
+        const float x = f.view->lanes().xAt(seam.seconds), y = sr.y + sr.h / 2;
+        f.drag({x, y}, {x + 12, y}, ui::kShift);
+        REQUIRE(sent.size() == 6);
+        CHECK_FALSE(sent[5][0].args.find("crossfade"));
+        CHECK_FALSE(sent[5][0].args.find("bypass_groups"));
+        CHECK(f.view->lanes().compSeams(roomRow).at(0).seconds ==
+              doctest::Approx(f.view->lanes().compSeams(leadRow).at(0).seconds));
+        CHECK(f.view->lanes().compSeams(leadRow).at(0).seconds > seam.seconds);
+        CHECK(piecesOf(f, room)[1]->fadeIn.length == doctest::Approx(1.0).epsilon(0.02));
+        CHECK(piecesOf(f, track)[1]->fadeIn.length == doctest::Approx(0.5).epsilon(0.02));
+        CHECK(f.view->lanes().compSeams(roomRow).at(0).differs);
+        CHECK(differing() == std::vector<std::string>{room.str()});
+    }
 }
 
 // A two-take item on a new track and a second track grouped with it for edits:

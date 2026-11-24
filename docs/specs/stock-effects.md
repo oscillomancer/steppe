@@ -57,7 +57,12 @@
   (`plugin.<name>.reset-stepped`): every switch and choice moved off its
   default in both states, so a plugin whose default is a passthrough still
   shows its processing state; a switch that silences the plugin by itself
-  (a mute) stays at its default, since the reference must carry signal.
+  (a mute) stays at its default, since the reference must carry signal. Finding which
+  switches mute the plugin costs one fresh instance and a second of audio per switch or choice
+  (Pollard 82, Marram 62), so the verdict for each is made once and kept for the second block
+  size; with the two block sizes that is most of what the run costs, and a Pollard or Marram run
+  takes about eight seconds in dev, about ten times that under `tsan`, whose tests get a
+  600 s limit (`plugin.<name>.reset*` otherwise 180 s).
 - **Block-size invariance under automation.** The real-time engine matches
   the offline render only for plugins whose output does not depend on the
   host's block (`docs/specs/engine.md`). `clap-block-check`

@@ -1043,6 +1043,88 @@ TEST_CASE("file actions: a late recording renews the discard decision before sav
     a.app->stopEngine();
 }
 
+// ADR-0103, round 134 G3/G4: a recording's commit warnings reach the status line from the
+// engine's record.warning events, whoever stopped it: here an agent's transport.stop, then the
+// engine halting with nobody's command to answer. Every record.warning shows, each message once.
+TEST_CASE("the status line shows a recording's warnings, whoever stopped it") {
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    App a;
+    REQUIRE(a.ok);
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    auto status = [&] {
+        shell.sync();
+        a.root->frame(false);
+        const auto* node = a.root->find("status");
+        REQUIRE(node);
+        return node->valueText();
+    };
+    // Every record.warning, whatever its code, each message once; other topics are not its.
+    auto warning = [](const char* code, const char* message) {
+        json::Value w = json::Value::object();
+        w["code"] = code;
+        w["message"] = message;
+        return w;
+    };
+    shell.engineEvents({{"record.warning", warning("record.stack_skipped", "a new item")},
+                        {"record.warning", warning("record.take_beyond_item", "past the end")},
+                        {"session.changed", json::Value::object()},
+                        {"record.warning", warning("record.stack_skipped", "a new item")}});
+    CHECK(shell.statusNote() == "a new item; past the end");
+    CHECK(status().find(" · a new item; past the end") != std::string::npos);
+    // A recording error in the same batch comes first; the warnings follow, never replace it.
+    json::Value failure = json::Value::object();
+    failure["message"] = "short write";
+    failure["file"] = "rec/Vocal-1.wav";
+    shell.engineEvents({{"record.warning", warning("record.stack_skipped", "a new item")},
+                        {"record.error", failure}});
+    CHECK(shell.statusNote().rfind("Recording failed: short write", 0) == 0);
+    CHECK(shell.statusNote().find("; a new item") != std::string::npos);
+
+    REQUIRE(a.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256, .inputs = 2},
+                               {.anticipative = false}));
+    const cmd::Origin agent{cmd::Origin::Type::Agent, "agent", {}};
+    auto exec = [&](const char* name, const std::string& args) {
+        auto result = a.dispatcher->execute({name, json::parse(args).value(), agent});
+        REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+        return *result;
+    };
+    exec("track.add", R"({"name":"Recorded"})");
+    exec("track.set", R"({"track":"tr_1","armed":true,"record_input":[1,2]})");
+    audio::AudioData tone;
+    tone.channels.assign(2, std::vector<float>(96000, 0.25f));
+    REQUIRE(writeFileAtomic(a.dir / "held.wav",
+                            std::span<const std::uint8_t>(*audio::encodeWav(tone))));
+    json::Value add = json::Value::object();
+    add["track"] = "tr_1";
+    add["audio_file"] = (a.dir / "held.wav").string();
+    add["position"] = 0;
+    const std::string item = exec("item.add", json::writeCompact(add))["item"].asString();
+    exec("item.set", R"({"item":")" + item + R"(","locked":true})");
+    for (const bool halt : {false, true}) {
+        CAPTURE(halt);
+        shell.setStatus("");
+        exec("transport.seek", R"({"seconds":0.5})");
+        exec("transport.record", "{}");
+        backend.run(8);
+        shell.engineEvents(a.app->takeEvents());
+        CHECK(shell.statusNote().empty());  // nothing while it records
+        if (halt)
+            a.app->stopEngine();  // the engine's own stop: no command, no reply
+        else
+            exec("transport.stop", "{}");         // an agent's: the GUI did not ask
+        shell.engineEvents(a.app->takeEvents());  // what the app does each pass
+        // The note, which the status line shows once the new item's audio is prepared.
+        const std::string text = shell.statusNote();
+        CHECK(text.find("not a take of " + item) != std::string::npos);
+        CHECK(text.find("locked") != std::string::npos);
+        if (halt) break;
+    }
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
 TEST_CASE("file actions: changed versions and branches renew the discard decision") {
     App a;
     REQUIRE(a.ok);

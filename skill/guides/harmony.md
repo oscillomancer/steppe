@@ -118,8 +118,9 @@ on the timeline (`item.add {clip}`, `scene.insert`) gives every MIDI take the cl
 - `midi.edit`'s `snap_to_scale`, `fit_to_chord` and `transpose_degrees` read the take's own context and act on the
   written notes (`acts_on: "written"` says some heard note sounds otherwise); `midi.write` keeps the context.
 - `item.consolidate` of following items keeps what sounds, or refuses with `item.follow_merge`
-  (`take.bake` them first); a MIDI recording over a following item is a new item beside it
-  (`record.follow_kept`); a context edit that leaves a following item without a key warns `context.no_key`.
+  (`take.bake` them first); a MIDI overdub over a following item is a new item beside it, and any other MIDI recording over
+  it is a new heard take of it with the following take left as it was (`record.follow_kept` both
+  ways); a context edit that leaves a following item without a key warns `context.no_key`.
 
 ## Sections
 

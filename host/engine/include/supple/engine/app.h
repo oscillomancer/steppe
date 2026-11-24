@@ -271,6 +271,7 @@ struct RecordedInfo {
     double seconds = 0;
     std::int64_t lostFrames = 0;     // input lost (the disk fell behind, playback dropped out)
     std::vector<std::string> takes;  // every take (one per loop pass)
+    bool stacked = false;            // the takes went into an existing item (ADR-0103)
     std::optional<std::vector<RecordingWarning>> warnings;
 };
 
@@ -636,6 +637,11 @@ class EngineApp : public cmd::Host {
     // the file where it is. A project without a folder (a headless engine's
     // unsaved one) always names the original.
     void setCopyImportedMedia(bool on) { copyImports_ = on; }
+    // On (the default, here and in the GUI), a recording pass over an item is a new take of it;
+    // off, every pass is laid as new items (ADR-0103). Read when a recording is committed and
+    // stored in that commit's record.commit arguments, so a replay does not depend on it.
+    void setStackRecordedTakes(bool on) { stackRecordedTakes_ = on; }
+    bool stackRecordedTakes() const { return stackRecordedTakes_; }
     bool copyImportedMedia() const { return copyImports_; }
     // Where third-party plug-ins left on inherit run (the GUI's preference,
     // ADR-0081): in_process, shared_bridge or dedicated, applied as their
@@ -812,15 +818,23 @@ class EngineApp : public cmd::Host {
     // Emits fx.failed once for each isolated instance that has failed.
     void checkFailures();
     // Commits recorded takes as items on their tracks (one version).
+    // `mayStack` false (a recovery): every take is laid as items, whatever stackRecordedTakes()
+    // says.
     Result<std::vector<RecordedInfo>> commitTakes(const std::vector<RecordedTake>& takes,
-                                                  std::string_view label = "record");
+                                                  std::string_view label = "record",
+                                                  bool mayStack = true);
+    // commitTakes without the "recording is kept" note on a refusal.
+    Result<std::vector<RecordedInfo>> commitTakesNow(const std::vector<RecordedTake>& takes,
+                                                     std::string_view label, bool mayStack);
     // Places recorded takes as items in the open transaction, with `punch`
     // as it was when they were recorded. `pendingHashes` (live commits): the
     // sources whose files still need hashing, and warnings are emitted; null
     // when record.commit replays a commit on another branch.
+    // `stack` (decided at commit time, stored in record.commit): a pass over an item is a take of
+    // it (ADR-0103).
     Result<std::vector<RecordedInfo>> placeTakes(
         const std::vector<RecordedTake>& takes, const TransportRange& punch,
-        std::vector<std::pair<model::Id, RecordedTake>>* pendingHashes);
+        std::vector<std::pair<model::Id, RecordedTake>>* pendingHashes, bool stack);
 
     // --- recordings (crash recovery, ADR-0014 §3) -----------------------------------
     // Where media lives: next to the project file, or the work directory's
@@ -1076,11 +1090,14 @@ class EngineApp : public cmd::Host {
                           const std::function<Status()>& prepare = {},
                           std::vector<schema::Warning>* warnings = nullptr);
     bool copyImports_ = false;
+    bool stackRecordedTakes_ = true;
     model::Isolation pluginIsolation_ = model::Isolation::InProcess;
     // Declared first: outlives instances, engine/backend, and worker joins.
     MainThreadWake mainWake_;
     MidiPortPreferences midiInputsPreferences_, midiOutputsPreferences_;
     std::array<std::vector<MidiPortPreferenceWarning>, 2> midiPreferencesWarnings_;
+    // The preferences file this engine last wrote and its bytes (keepNewerPreferences).
+    mutable std::pair<std::filesystem::path, std::string> midiPreferencesWritten_;
     // setMidiPreferences with the skipped records to keep: an explicit
     // correction leaves its own out, so it is not written back.
     Status applyMidiPreferences(MidiPortPreferences inputs, MidiPortPreferences outputs, bool save,

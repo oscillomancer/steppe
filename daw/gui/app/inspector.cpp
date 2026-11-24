@@ -236,6 +236,33 @@ const char* timebaseName(model::ItemTimebase timebase) {
     return "track";
 }
 
+// A fade's shape as clip.set names it, and the shape dropdown's choices in
+// FadeShape's order ("Equal power" as the comp's crossfade says it).
+constexpr std::pair<model::FadeShape, const char*> kFadeShapes[] = {
+    {model::FadeShape::Linear, "linear"},
+    {model::FadeShape::Slow, "slow"},
+    {model::FadeShape::Fast, "fast"},
+    {model::FadeShape::SlowFast, "slow_fast"},
+    {model::FadeShape::FastSlow, "fast_slow"},
+    {model::FadeShape::Cos, "cos"},
+    {model::FadeShape::Exp, "exp"}};
+
+const char* fadeShapeKey(model::FadeShape shape) {
+    for (const auto& [s, key] : kFadeShapes)
+        if (s == shape) return key;
+    return "linear";
+}
+
+std::vector<ui::Choice> fadeShapeChoices() {
+    return {{"linear", "Linear"},
+            {"slow", "Slow"},
+            {"fast", "Fast"},
+            {"slow_fast", "Slow, then fast"},
+            {"fast_slow", "Fast, then slow"},
+            {"cos", "Equal power"},
+            {"exp", "Exponential"}};
+}
+
 // What an audio item plays, for the File line.
 std::string fileText(const model::MediaSource& media) {
     std::string text = media.path;
@@ -596,8 +623,9 @@ std::unique_ptr<ui::Node> Inspector::build() {
     takes_->onSelect = [this](std::size_t i) {
         if (kind_ != InspectorSubject::Kind::Item || i >= takeIds_.size() || i == heard_) return;
         // A piece of a comp switches as a lane click does: take.comp with its
-        // span, keeping the comp's crossfade (take.activate would keep the
-        // seam fades over what may now be one source).
+        // span and no crossfade, so the seams it does not touch keep theirs
+        // (take.activate would keep the seam fades over what may now be one
+        // source).
         const model::Session& s = app_.head();
         if (const auto comp = views::compPieceOf(s, ids_.front())) {
             const model::Item* item = s.items.find(ids_.front());
@@ -637,6 +665,21 @@ std::unique_ptr<ui::Node> Inspector::build() {
     clipColors_ = &clipSwatches;
     field(clipBox, "clip.length", "Length");
     field(clipBox, "clip.gain_db", "Gain");
+    // An audio clip's fades (clip.set fade_in/fade_out and their shapes): each
+    // a length and a shape, shaping every pass as an item's fades shape the
+    // item. A MIDI clip has neither row.
+    for (const auto& [key, label] :
+         {std::pair{"clip.fade_in", "Fade in"}, std::pair{"clip.fade_out", "Fade out"}}) {
+        // The length keeps to its digits so the shape's name fits beside it.
+        field(clipBox, key, label).layout.width = ui::SizeRule::fixed(72);
+        auto& shape = rows_[key]->emplace<ui::Dropdown>(std::string("inspector.") + key + "_shape",
+                                                        fadeShapeChoices());
+        shape.layout.width = ui::SizeRule::fraction();
+        shape.layout.height = ui::SizeRule::fixed(22);
+        const std::string arg = std::string(key).substr(5) + "_shape";
+        shape.onChange = [this, arg](const std::string& value) { set(arg, value); };
+        (std::string(key) == "clip.fade_in" ? clipFadeInShape_ : clipFadeOutShape_) = &shape;
+    }
     auto dropdown = [&](const std::string& key, const std::string& label,
                         std::vector<ui::Choice> choices) {
         auto& row = formRow(clipBox, key, label);
@@ -771,6 +814,13 @@ void Inspector::readClip(bool force) {
     show("clip.length", midi ? plain(clip->length, 3) + " beats" : fixed(clip->length, 3, "s"),
          force);
     show("clip.gain_db", fixed(clip->gainDb, 1, "dB"), force);
+    rows_["clip.fade_in"]->visible = rows_["clip.fade_out"]->visible = !midi;
+    if (!midi) {
+        show("clip.fade_in", fixed(clip->fadeIn.length, 3, "s"), force);
+        show("clip.fade_out", fixed(clip->fadeOut.length, 3, "s"), force);
+        clipFadeInShape_->setValue(fadeShapeKey(clip->fadeIn.shape));
+        clipFadeOutShape_->setValue(fadeShapeKey(clip->fadeOut.shape));
+    }
     auto* row = static_cast<ColorRow*>(clipColors_);
     row->current = clip->color;
     row->invalidate();
@@ -793,7 +843,8 @@ void Inspector::readClip(bool force) {
                           : clip->follow == model::ClipFollow::Chords ? "chords"
                                                                       : "none");
     states_["clip.mute"]->setOn(clip->mute);
-    for (const char* key : {"clip.name", "clip.length", "clip.gain_db"})
+    for (const char* key :
+         {"clip.name", "clip.length", "clip.gain_db", "clip.fade_in", "clip.fade_out"})
         fields_[key].node->enabled = true;
 }
 

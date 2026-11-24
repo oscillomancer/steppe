@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 #include <random>
 #include <span>
 #include <string>
@@ -257,7 +258,14 @@ double nonDefaultValue(const host::ParamInfo& p) {
     return p.def;  // min == max: nothing to vary
 }
 
-// Whether moving this one parameter alone to `value` silences the plugin.
+// Whether moving this one parameter alone to `value` silences the plugin. It builds a fresh
+// instance and renders a second for each parameter, which dominates the run of a plugin with many
+// switches and choices (Pollard's 82 cost 164 instances, each decoding its samples), so the
+// answers are kept per parameter in `known` and the second block size reuses the first's. Whether
+// one parameter mutes a plugin does not depend on the host's block: the block-size check
+// (clap-block-check) is what pins that.
+using Silences = std::map<std::uint32_t, bool>;
+
 bool silences(const host::PluginInfo& info, std::uint32_t block, const host::ParamInfo& p,
               double value, const Stimulus& stimulus, const std::vector<Timed>& notes) {
     auto in = host::Instance::create(info, {});
@@ -282,7 +290,7 @@ bool applyAll(host::Instance& in, const std::vector<host::ParamInfo>& params,
 // Compares the two instances at one block size. `detail` carries what the
 // comparison actually covered (parameter count, peaks, the first differing
 // sample) so a failure can be read without reproducing it.
-bool compareAtBlock(const host::PluginInfo& info, std::uint32_t block, int pass,
+bool compareAtBlock(const host::PluginInfo& info, std::uint32_t block, int pass, Silences& known,
                     std::string& detail) {
     const Stimulus stimulus = makeStimulus();
 
@@ -323,8 +331,10 @@ bool compareAtBlock(const host::PluginInfo& info, std::uint32_t block, int pass,
     std::vector<double> moved;
     for (const auto& p : steps) {
         const double v = nextStep(p);
-        moved.push_back(
-            silences(info, block, p, v, stimulus, notes) ? std::clamp(p.def, p.min, p.max) : v);
+        auto seen = known.find(p.id);
+        if (seen == known.end())
+            seen = known.emplace(p.id, silences(info, block, p, v, stimulus, notes)).first;
+        moved.push_back(seen->second ? std::clamp(p.def, p.min, p.max) : v);
     }
 
     std::string error;
@@ -385,10 +395,11 @@ bool compareAtBlock(const host::PluginInfo& info, std::uint32_t block, int pass,
 
 void testPlugin(const host::PluginInfo& info) {
     std::printf("%s (%s)\n", info.id.c_str(), info.instrument ? "instrument" : "effect");
+    Silences known;  // shared by the two passes
     for (int pass = 0; pass < 2; ++pass) {
         const std::uint32_t block = pass == 0 ? 256u : 64u;
         std::string detail;
-        const bool ok = compareAtBlock(info, block, pass, detail);
+        const bool ok = compareAtBlock(info, block, pass, known, detail);
         std::string what =
             "a render after reset depends only on the state (block " + std::to_string(block) + ")";
         if (!detail.empty()) what += ": " + detail;

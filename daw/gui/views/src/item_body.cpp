@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "supple/model/audio_warp.h"
+#include "supple/model/fade_shape.h"
 #include "supple/model/source_mapping.h"
 
 namespace supple::views {
@@ -137,6 +138,39 @@ std::size_t drawSoundingBody(ui::RectRenderer& notes, const ui::Rect& r,
         notes.add({x0, y, std::max(1.0f, x1 - x0), noteH}, rgba, border);
     }
     return glyphs;
+}
+
+bool drawFadeCurve(ui::StripRenderer& strips, const ui::Rect& r, float x0, float x1, float t0,
+                   float t1, model::FadeShape shape, double bend, int steps, std::uint32_t rgba,
+                   std::uint32_t shade, float left, float right) {
+    if (x1 <= r.x || x0 >= r.right() || x1 - x0 < 0.5f) return false;
+    // The share of the fade inside [left, right]: all of it unless it is cut.
+    float from = 0, to = 1;
+    if (x0 < left) from = (left - x0) / (x1 - x0);
+    if (x1 > right) to = (right - x0) / (x1 - x0);
+    if (to <= from) return false;
+    auto at = [&](int k) {
+        return from + (to - from) * (static_cast<float>(k) / static_cast<float>(steps));
+    };
+    auto yAt = [&](float t) {
+        const float gain = static_cast<float>(
+            model::fadeGain(shape, bend, static_cast<double>(t0 + (t1 - t0) * t)));
+        return (r.bottom() - 1) - gain * (r.h - 2);
+    };
+    strips.beginRun();
+    for (int k = 0; k <= steps; ++k) {
+        const float t = at(k);
+        strips.pair(x0 + (x1 - x0) * t, r.y + 1, yAt(t), shade);
+    }
+    strips.endRun();
+    strips.beginRun();
+    for (int k = 0; k <= steps; ++k) {
+        const float t = at(k);
+        const float y = yAt(t);
+        strips.pair(x0 + (x1 - x0) * t, y - 0.75f, y + 0.75f, rgba);
+    }
+    strips.endRun();
+    return true;
 }
 
 }  // namespace supple::views

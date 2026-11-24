@@ -57,7 +57,8 @@ if(SUPPLE_PLATFORM_LINUX AND NOT SUPPLE_TEST_PORTABLE_ONLY)
   set(_engine_linux_tests ON)
 endif()
 set(_engine_test_sources
-  tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_take_comp.cpp tests/test_audio_warp.cpp
+  tests/bridge_patience.cpp tests/test_item_edits.cpp tests/test_take_comp.cpp tests/test_take_stack.cpp
+  tests/test_audio_warp.cpp
   tests/test_offline.cpp tests/test_native_engine.cpp tests/test_freeze.cpp tests/test_instance_pool.cpp
   tests/test_autosave.cpp tests/test_take_copy.cpp tests/test_groups.cpp tests/test_media_files.cpp tests/test_recording_shutdown.cpp
   tests/test_realtime.cpp tests/test_audition.cpp tests/test_realtime_arming.cpp
@@ -94,7 +95,7 @@ if(SUPPLE_BUILD_TESTS)
   # 600 s on a busy machine and took 363 s alone.
   set_tests_properties(engine.tests.test_realtime_playrate PROPERTIES TIMEOUT 1200)
   # About 5 min under ThreadSanitizer at -j 3 (the preset runs 6), a minute
-  # or so in dev: one case each, rate_stretch eight shorter ones.
+  # or so in dev: one case each, rate_stretch and presses a few shorter ones.
   set_tests_properties(engine.tests.test_clip_player_rate_chain engine.tests.test_clip_player_rate_wrap
                        engine.tests.test_clip_player_rate_fades engine.tests.test_clip_player_rate_stretch
                        engine.tests.test_clip_player_rate_presses PROPERTIES TIMEOUT 1200)
@@ -330,9 +331,10 @@ if(SUPPLE_BUILD_TESTS)
   # engine.transport). On a starved runner a healthy dummy device took longer
   # (Windows CI 45186989443), so every test here, and the engine binaries the
   # Python ones start, waits as long as a test may (realtime.h,
-  # transportWaitSeconds); a test of the refusal sets its own short bound.
+  # transportWaitSeconds); a test of the refusal sets its own short bound. The
+  # same switch lifts Engine::awaitRendered's and awaitPlan's 10 s (awaitSeconds).
   get_property(engine_tests DIRECTORY PROPERTY TESTS)
   foreach(test ${engine_tests})
-    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "SUPPLE_TRANSPORT_PATIENT=1")
+    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "SUPPLE_TEST_TRANSPORT_PATIENT=1")
   endforeach()
 endif()

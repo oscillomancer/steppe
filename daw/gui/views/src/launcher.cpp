@@ -757,6 +757,38 @@ void LauncherPane::paint(ui::Canvas& c) {
     c.restore();
 }
 
+// An audio clip's own fades over its body, as an item's are drawn (gui.md
+// §4.3): the period runs across `full`, each pass fading in from its start and
+// out to its end, so the cell shows one pass's. A fade longer than the period
+// is accepted (as the engine accepts it) and shows only the share a pass
+// reaches: a fade-in ends at fadeGain(P / L), a fade-out starts there, as the
+// engine plays it (clipFade). Each fade is drawn on its own, overlapping or
+// not, as an item's are. A fade is drawn when the body is at least kFadeRoom
+// high and the part shown at least 2 units wide; the part past the body's
+// right edge (cut at the Arr column) is not.
+std::size_t LauncherPane::drawClipFades(const ui::Rect& body, const ui::Rect& full,
+                                        const model::Clip& clip, std::uint32_t rgba,
+                                        std::uint32_t shade) {
+    if (clip.kind != model::ClipKind::Audio || clip.length <= 0 || body.h < kFadeRoom) return 0;
+    // Not clamped: a longer fade reaches past the period, and the cut below
+    // keeps the share inside it.
+    auto xAt = [&](double seconds) {
+        return full.x + static_cast<float>(seconds / clip.length) * full.w;
+    };
+    const float left = std::max(body.x, full.x), right = std::min(body.right(), full.right());
+    std::size_t drawn = 0;
+    auto curve = [&](float x0, float x1, float t0, float t1, const model::Fade& fade) {
+        const float shown = std::min(x1, right) - std::max(x0, left);
+        if (fade.length <= 0 || shown < 2) return;
+        const int steps = static_cast<int>(std::clamp(std::ceil(shown / 1.5f), 2.0f, 256.0f));
+        drawn += drawFadeCurve(*strips_, body, x0, x1, t0, t1, fade.shape, fade.curve, steps, rgba,
+                               shade, left, right);
+    };
+    curve(full.x, xAt(clip.fadeIn.length), 0.0f, 1.0f, clip.fadeIn);
+    curve(xAt(clip.length - clip.fadeOut.length), full.right(), 1.0f, 0.0f, clip.fadeOut);
+    return drawn;
+}
+
 void LauncherPane::paintGl(const ui::GlFrame& frame) {
     if (glFailed_ || !theme_) return;
     if (!notes_) {
@@ -774,8 +806,9 @@ void LauncherPane::paintGl(const ui::GlFrame& frame) {
     const TrackLayout& tracks = view_.trackLayout();
     const LauncherColumns cols = columns();
     const ui::Rect clip = frame.clip.intersect(bounds());
-    stats.notes = stats.columns = stats.pending = 0;
+    stats.notes = stats.columns = stats.pending = stats.fades = 0;
     const std::uint32_t border = ui::packRgba(t.color("ground").withAlpha(0.7f));
+    const std::uint32_t shade = ui::packRgba(t.color("ground").withAlpha(0.5f));  // as the lanes'
     for (std::size_t i = 0; i < tracks.rowCount(); ++i) {
         const TrackRow& row = tracks.rows()[i];
         const ui::Rect rr = arrRect(i);
@@ -810,18 +843,20 @@ void LauncherPane::paintGl(const ui::GlFrame& frame) {
                     drawMidiBody(*notes_, body, *take, *src, window,
                                  ui::packRgba(Lanes::noteColor(t, color).withAlpha(dim)), border);
             } else if (const model::MediaSource* m = s.media.find(*take->source)) {
-                auto pyramid = peaks_.get(m->hash, resolve_(*m));
-                if (!pyramid) {
+                const std::uint32_t ink = ui::packRgba(t.color("ink").withAlpha(0.8f * dim));
+                if (auto pyramid = peaks_.get(m->hash, resolve_(*m))) {
+                    const AudioWindow window{[&](float x) {
+                                                 return static_cast<double>((x - full.x) / full.w) *
+                                                        c->length;
+                                             },
+                                             static_cast<double>(full.w) / c->length, c->loop.on};
+                    stats.columns += drawAudioBody(
+                        *strips_, frame, body, *pyramid, *take, window,
+                        static_cast<float>(std::pow(10.0, (c->gainDb + take->gainDb) / 20.0)), ink);
+                } else {
                     ++stats.pending;  // the worker's delivery repaints
-                    continue;
                 }
-                const AudioWindow window{
-                    [&](float x) { return static_cast<double>((x - full.x) / full.w) * c->length; },
-                    static_cast<double>(full.w) / c->length, c->loop.on};
-                stats.columns += drawAudioBody(
-                    *strips_, frame, body, *pyramid, *take, window,
-                    static_cast<float>(std::pow(10.0, (c->gainDb + take->gainDb) / 20.0)),
-                    ui::packRgba(t.color("ink").withAlpha(0.8f * dim)));
+                stats.fades += drawClipFades(body, full, *c, ink, shade);
             }
         }
     }

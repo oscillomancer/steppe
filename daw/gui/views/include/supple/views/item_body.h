@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <span>
 
 #include "supple/model/follow.h"
@@ -57,5 +58,16 @@ std::size_t drawSoundingBody(ui::RectRenderer& notes, const ui::Rect& r,
                              std::span<const model::SoundingNote> heard, const model::Take& take,
                              const model::MidiSource& source, const MidiWindow& window,
                              double itemBeat, std::uint32_t rgba, std::uint32_t border);
+
+// A fade drawn over a body (gui.md §4.3): its gain curve from x0 to x1 over
+// r's height, the gain at each point model::fadeGain(shape, bend) of the share
+// running t0 -> t1 (0 -> 1 fades in, 1 -> 0 out), and a shade over the part of
+// r above the curve, in `steps` segments. Only the part between `left` and
+// `right` is drawn. Draws nothing, and returns false, when the fade is outside
+// r or under half a unit wide.
+bool drawFadeCurve(ui::StripRenderer& strips, const ui::Rect& r, float x0, float x1, float t0,
+                   float t1, model::FadeShape shape, double bend, int steps, std::uint32_t rgba,
+                   std::uint32_t shade, float left = std::numeric_limits<float>::lowest(),
+                   float right = std::numeric_limits<float>::max());
 
 }  // namespace supple::views

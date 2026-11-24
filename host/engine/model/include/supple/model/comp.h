@@ -27,8 +27,10 @@ struct CompPiece {
 // sample (a copy placed after the original does not, and is not the next piece).
 // The core of a seam is the middle sample of the overlap.
 // Errors: comp.takes (an item with fewer than two takes), comp.loop, comp.mismatch (`items`
-// that do not continue one another, or two items that could continue the run), each with the
-// path of the argument (`/item`, `/items/k`).
+// that do not continue one another, or two items that could continue the run; candidates that
+// continue one another in turn are one chain, and the nearest is the next piece; `items` that skip
+// a piece lying between two listed ones), each with the path of the argument (`/item`,
+// `/items/k`).
 Result<std::vector<CompPiece>> compRun(const Session&, std::optional<Id> item,
                                        std::span<const Id> items);
 
@@ -43,8 +45,9 @@ bool joinablePieces(const Session&, Id left, Id right);
 // The crossfade a run was made with (take.comp's `crossfade` and `crossfade_shape`), read back
 // from the stored pieces for take.comp.get and for a GUI that edits a comp: the longest
 // seam-side fade of the run, and that fade's shape (a seam clamped by short pieces does not
-// shrink it). A run of one piece (no seam) gives the default; a run whose seams are all hard
-// cuts gives 0. A fade of a shape take.comp does not offer reads as cos.
+// shrink it). Only seams between different takes count: a run with none (one piece, or an item
+// split in two) gives the default; a run whose seams between takes are all hard cuts gives 0. A
+// fade of a shape take.comp does not offer reads as cos.
 inline constexpr double kDefaultCompCrossfade = 0.01;  // seconds
 struct CompCrossfade {
     double seconds = kDefaultCompCrossfade;

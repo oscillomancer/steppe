@@ -1056,17 +1056,19 @@ the mouse map's free modifier frees them), which may reach across the comp's
 seams to its outer ends ("Comp take"). A **click** on a lane of a lone item
 hears that take throughout (`take.activate`, which a looped item also takes);
 in a comp it re-comps the pressed piece alone, its core span with that take, so
-its seams are rebuilt and it joins a neighbour playing the same take (a
+its own seams are remade and it joins a neighbour playing the same take (a
 `take.activate` would keep the old seam fades, and a piece switched to its
 neighbour's take would sum one source with itself through an equal-power
 crossfade). A click on the take a piece already plays sends nothing. The take
-badge and the inspector's Takes list switch a piece of a comp the same way. Every
-re-comp keeps the comp's **crossfade**: `take.comp` gives every seam of a comp
-one length and shape, so the GUI sends the comp's own, the value
-`take.comp.get` reads back (`model::compCrossfade`: the longest seam-side fade,
-which a clamped seam does not shrink, and its shape; 0 for a hard-cut comp).
-Only a first comp, with no seam between different takes yet, sends none and
-takes `take.comp`'s 10 ms, equal power (`views::compCrossfade` is empty then).
+badge and the inspector's Takes list switch a piece of a comp the same way. None
+of these sends a **crossfade**: `take.comp` without one keeps every seam the
+call does not touch as it is stored, a seam an agent set by hand (its own
+length or shape, `item.set` on the pieces beside it) included, and gives the
+seams it makes the comp's own crossfade (`model::compCrossfade`: the longest
+seam-side fade and its shape; 0 for a hard-cut comp), or on a first comp, with
+no seam between different takes yet, its 10 ms, equal power. A crossfade sent
+would rebuild every seam with it, so only the crossfade handle and the
+inspector's Crossfade field send one.
 
 The lanes draw each **seam** of a comp (`model::compRun`, cached per track and
 session version), only where the takes differ on its two sides: a one-unit line
@@ -1078,28 +1080,37 @@ take badge, which a long crossfade can bring within reach and which keeps its
 press; the comp's outer ends
 trim and fade as any item's. **Dragging a seam** moves it ("Move comp seam"):
 one `take.comp` with the two stretches beside it as they are, their shared edge
-moved, and the comp's crossfade; it snaps (the free modifier frees it) and stops
+moved, and no crossfade, so the seam keeps its own length and shape and the
+other seams are not touched; it snaps (the free modifier frees it) and stops
 1/64 beat short of the seams beside it. The **top of a seam** (the fade
 handles' square) is the comp's crossfade: a drag sets its length, twice the
 distance from the seam since it is centred there, up to what the shorter side
 allows ("Comp crossfade"), showing the length beside the extent while it is
 dragged ("12 ms", "1.20 s"), as a stretch shows its rate; the fade handles'
 shape click (the mouse map's `fade` context, Ctrl by default) toggles equal
-power and linear ("Comp crossfade shape"). Each is one `take.comp` and applies
-to every seam of the comp; a hard cut is the length dragged or typed to 0, for
-the whole comp (per-seam lengths are not built). **On a track grouped for
-edits** (`model::linkedTracks`, attribute `edit`) every one of these is the same
-`take.comp`, which comps every other track of the group with items over the
-stretch alike (session-model §1.5.1, Edit groups); a click on a lone item there,
-its badge and the Takes list send `take.comp` over the whole item rather than
-`take.activate` (which would switch it alone), so the members follow
-(`views::compPieceOf`). A member whose comp the engine reads as differing from
-the group's (`take.comp.get`'s `differing_members`, asked for the group's first
-track in the order `take.comp` takes members, `views::compDiffersFrom`: other
-spans, takes, crossfade or shape, from an edit that bypassed the group) draws its
-seam lines broken, every other 4 units, and the inspector shows a **Group** row,
-"Differs from Close", for one selected piece of it; any comp gesture on the group
-brings it back in step. A member's comp with no seam of its own shows the
+power and linear ("Comp crossfade shape"). Each is one `take.comp` with the
+crossfade and applies to every seam of the comp, hand-set ones included; a hard
+cut is the length dragged or typed to 0, for the whole comp (the GUI sets no
+per-seam length; an agent's hand-set seam keeps its own until the crossfade is
+set). **On a track grouped for edits** (`model::linkedTracks`, attribute `edit`)
+every one of these is the same `take.comp`, which comps every other track of the
+group with items over the stretch with the same spans (session-model §1.5.1,
+Edit groups). Each member keeps the seams the spans do not touch, and a seam it
+gets takes its own crossfade, so only the crossfade handle and the inspector's
+Crossfade field, which send the crossfade, make every member's seams the comped
+track's. A click on a lone item there, its badge and the Takes list send
+`take.comp` over the whole item rather than `take.activate` (which would switch
+it alone), so the members follow (`views::compPieceOf`). A member whose comp the
+engine reads as differing from the group's (`take.comp.get`'s
+`differing_members`, asked for the group's first track in the order `take.comp`
+takes members, `views::compDiffersFrom`: other spans, takes, crossfade or shape,
+from an edit that bypassed the group) draws its seam lines broken, every other 4
+units, and the inspector shows a **Group** row, "Differs from Close", for one
+selected piece of it. The crossfade handle or the Crossfade field on the group
+brings it back in step. The other gestures send no crossfade, so a seam that
+differs stays as it is, broken, with the row, unless the gesture joins it away
+(a lane click that gives the pieces beside it one take). A member's comp with no
+seam of its own shows the
 difference only in the inspector. A **looped item** keeps the swipe it had before
 `take.comp`, which refuses it (`comp.loop`): `item.split` at the swipe's ends and
 `take.activate` of the middle, with hard cuts, until its Loop is turned off. Its
@@ -2899,7 +2910,7 @@ inspector adds no command:
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s"; for a comp piece only at the comp's outer ends (its first piece's fade in, its last's fade out) | A number, with or without "s" | `fade_in`, `fade_out` |
 | Crossfade (`inspector.crossfade`, `inspector.crossfade_shape`) | One selected piece of a comp with a seam between takes (session-model §1.5.1): the comp's crossfade, "0.010 s" (`views::compCrossfade`), and its shape, Equal power or Linear | A number, with or without "s" (0: a hard cut), or a choice | `take.comp` with the comp's spans (`views::compSpans`) and the new length or shape, for every seam; one undo step |
-| Group (`inspector.group`) | One selected comp piece on a track grouped for edits whose comp the engine reads as differing from the group's (`views::compDiffersFrom`): "Differs from Close", the group's first track; no row when it is in step | read only | (a comp gesture brings it back in step) |
+| Group (`inspector.group`) | One selected comp piece on a track grouped for edits whose comp the engine reads as differing from the group's (`views::compDiffersFrom`): "Differs from Close", the group's first track; no row when it is in step | read only | (the crossfade handle or the Crossfade field on the group brings it back in step; other comp gestures leave a differing seam as it is) |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 | Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |
@@ -3087,7 +3098,20 @@ same heights, scroll and colours.
   "G dor", "Eb hm") right-aligned in a 12-unit strip at the foot of its
   body, under the preview, with "→" before it in full ink when the clip
   follows the key or the chords, in quiet ink when it plays as written; a
-  body lower than two strips shows no key. A muted clip is dimmed, as a
+  body lower than two strips shows no key. An audio clip's own fades
+  (`fade_in`, `fade_out`, schema 2.22) shape every pass, so the cell draws
+  one pass's over its body as an item's are drawn (`views::drawFadeCurve`,
+  shared with `Lanes::drawFades`): the gain curve from the period's start
+  and to its end, and the shade over what it takes away, above the key
+  strip and cut at the Arr column. A fade longer than the period is accepted,
+  as the engine accepts it, and the cell shows only the share a pass reaches,
+  as the engine plays it: a fade-in of L on a period P ends at
+  `fadeGain(P / L)` at the pass's end, and a fade-out starts the pass there.
+  Each fade is shown on its own: fades that overlap draw two curves, as an
+  item's do. A fade is drawn only where there is room:
+  a body at least `LauncherPane::kFadeRoom` (8 units) high and the part shown
+  at least 2 units wide. A MIDI clip has no fades and draws none; no text is
+  drawn for a fade. A muted clip is dimmed, as a
   muted item is. Clips launch under a master
   playrate; the engine refuses only an audio clip while the playrate keeps
   the pitch at other than a steady 1 (`launch.playrate`), and the pane dims
@@ -3212,12 +3236,17 @@ same heights, scroll and colours.
   that renders play the arrangement only (§4.8; built with L2).
 - **Inspector.** After a launcher click it shows the selected clip (before
   tracks and items): its header (name; "MIDI clip on Bass, Verse"; its
-  colour) and its fields, each one `clip.set`: Name, Colour, Length (beats,
-  or seconds for an audio clip), Gain, Plays (Loop / Once), Launch (the
+  colour) and its fields, each one `clip.set` and one undo step: Name,
+  Colour, Length (beats, or seconds for an audio clip), Gain, for an audio
+  clip **Fade in** and **Fade out** (each a length in seconds, 72 units
+  wide, and a shape: Linear, Slow, Fast, Slow, then fast, Fast, then slow,
+  Equal power, Exponential; `fade_in`/`fade_out` and their `_shape`; a MIDI
+  clip shows neither row), Plays (Loop / Once), Launch (the
   project's quantize, Bar … 1/32, At once), Follow (None / Key / Chords,
   ADR-0098: Key and Chords are disabled, their labels saying why, unless the
   clip is MIDI with a key at its start) and Mute. Several clips show only
-  their count.
+  their count. A refusal (a negative fade, say) goes to the status line and
+  the field shows the clip's value again.
 - **Status line.** It counts scenes beside tracks only when there are some
   ("4 tracks  2 scenes  version 9", `gui::countsText`).
 - **Sections.** A section's right-click menu captures it as a scene
@@ -3229,7 +3258,17 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
 - Golden images of the pane with playing, queued, held, empty and selected
   cells and Capture lit, in both themes (`launcher-dark.png`,
   `launcher-light.png`), and a playing clip in every track colour
-  (`launcher-playing-dark.png`, `launcher-playing-light.png`).
+  (`launcher-playing-dark.png`, `launcher-playing-light.png`), and an
+  audio clip with an equal-power fade-in and fade-out
+  (`launcher-fades-dark.png`). Its fades are drawn where there is room:
+  one fade one curve, none under 2 units wide or in a body under
+  `kFadeRoom`, none for MIDI clips; an 8 s fade-in or fade-out on a 2 s
+  pass of silence shades the top of the body at the pass's end (or start)
+  and not its foot (gain 0.25 there), and two overlapping fades draw two
+  curves (`test_launcher.cpp`). The inspector's
+  Fade in and Fade out each run one `clip.set`, one undo step, undo takes
+  back one, a refusal reaches the status line, and a MIDI clip shows
+  neither row (`test_side_panel.cpp`).
 - Capture with the dummy engine: armed, a launch, a stop committing the
   performance in one undo step and arming the next; refused without an
   engine; off with nothing played writing nothing. A commit refused by a
@@ -3472,13 +3511,22 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   Saved `zoom_height` bindings are ignored on load, retaining current defaults
   and unrelated customizations without changing the mouse file schema.
 - **Preferences** (Edit > Preferences…): app-wide settings, never project
-  state. The default monitoring of new channels (off, on — the default — or
+  state. A preferences file from a newer version (`engine::preferencesSchemaNewer`)
+  is not read: `Preferences::load` refuses it as `preferences.newer` (path
+  `/schema`), the app starts on the defaults, and it says so in the status line
+  at start and in a line above the settings (`prefs.file.note`,
+  `PreferencesDialog::fileNotice`), as well as on stderr; the hint says to
+  rename the backup back to `preferences.json` to use it in the newer version.
+  The file is kept beside itself as `preferences.json.<label, '/' as '-'>.bak`
+  (a later, different copy as `….2.bak` and on; never overwritten) before a
+  save writes this version's (`engine::keepNewerPreferences`; engine.md). The default monitoring of new channels (off, on — the default — or
   auto; `preferences.json`, supple.preferences/1.6, sets
   `EngineApp::defaultMonitor`, so the agents' track.add follows it too), and
   a way into the mouse modifiers.
   The dialog is in sections, each a heading over a rule
   (`prefs.section.<name>.title`): **Audio** (the audio device), **Recording
-  and import** (Input monitoring on new tracks, Copy imported audio),
+  and import** (Input monitoring on new tracks, Record over an item, Copy
+  imported audio),
   **Plug-ins** (Third-party plug-ins run), **Editing** (Mouse modifiers) and
   **Advanced** (Audio processing threads, Lock memory, Keep CPUs out of deep
   idle). Advanced (`prefs.advanced`) is closed until its **Show** is clicked
@@ -3558,6 +3606,26 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   (absent, and in older files, false; other types report
   `preferences.render_open_folder`), set from the render dialog's After
   render section.
+  **Record over an item** (1.11, ADR-0103; `prefs.stack.set`): **New take**
+  (the default: a pass that starts inside an item is a take of it, heard where
+  it was recorded) or **Layer on top** (laid as a new item), from a menu
+  (`prefs.stack.menu`); saved as the boolean `stack_recorded_takes` (absent,
+  and in older files, true; other types report
+  `preferences.stack_recorded_takes`) and applied to
+  `EngineApp::setStackRecordedTakes` (what `record.set {stack_takes}` sets)
+  when the dialog is made at start-up and on each choice. The engine keeps
+  it only while it runs, so the GUI is its keeper. The row shows the engine's
+  setting: an agent's `record.set` appears there and is not saved.
+  Every warning of a recording's commit (`record.stack_skipped`,
+  `record.stack_group`, `record.take_beyond_item`, and any other the engine
+  sends as a `record.warning` event, ADR-0103) goes on the status line,
+  whatever ended the recording: a key or button, an agent, a MIDI controller
+  or the engine halting. The app hands each batch of engine events to
+  `Shell::engineEvents`, which joins the messages of its `record.warning`
+  events, each once, by "; " (`Shell::statusNote`). A `record.error` in the
+  same batch comes first ("Recording failed: …"), and the warnings follow it
+  after "; ": they never replace it. While audio is being prepared the line
+  says so first, then the note.
   **Copy imported audio** (1.4): On by default, saved as the
   boolean `copy_imported_media` (absent, and in older files, means true;
   other types report `preferences.copy_imported_media`) and applied to

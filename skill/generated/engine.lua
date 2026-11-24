@@ -1689,6 +1689,18 @@ q = nil
 ---@class Steppe.record_commit_args
 ---@field takes table[]
 ---@field punch table
+---@field stack? boolean A pass over an item becomes a take of it (ADR-0103) (default: false)
+
+---@class Steppe.record_get_result
+---@field stack_takes boolean
+---@field warnings? table[]
+
+---@class Steppe.record_set_args
+---@field stack_takes? boolean
+
+---@class Steppe.record_set_result
+---@field stack_takes boolean
+---@field warnings? table[]
 
 ---@class Steppe.region_add_args
 ---@field start? number
@@ -2155,8 +2167,8 @@ q = nil
 ---@field item? string Item id, e.g. "it_1" (a clip's id is refused with item.kind).
 ---@field items? string[]
 ---@field spans table[]
----@field crossfade? number Seconds. (default: 0.01)
----@field crossfade_shape? "cos"|"linear" (default: "cos")
+---@field crossfade? number Seconds.
+---@field crossfade_shape? "cos"|"linear"
 ---@field bypass_groups? boolean (default: false)
 
 ---@class Steppe.take_comp_result
@@ -2948,6 +2960,8 @@ q = nil
 
 ---@class Steppe.record
 ---@field commit fun(args: Steppe.record_commit_args): table Record a recording's commit (or a recovery's) as a replayable edit.
+---@field get fun(): Steppe.record_get_result How a recording pass over an item is kept (stack_takes).
+---@field set fun(args?: Steppe.record_set_args): Steppe.record_set_result Choose whether recording over an item makes a take of it; returns it.
 
 ---@class Steppe.region
 ---@field add fun(args?: Steppe.region_add_args): Steppe.region_add_result Add a named region in beats.

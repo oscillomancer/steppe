@@ -78,6 +78,13 @@ process audio, locking memory, keeping CPUs out of deep idle) is under
 Locking memory and the CPU idle setting work on Linux only, and are listed
 only there.
 In a low window the settings scroll under the dialog's heading.
+If your preferences file was written by a newer version of Steppe, this
+version does not read it: it uses its defaults and says so at the top of the
+dialog. The first time you change a setting it keeps the newer file beside the
+new one, as `preferences.json.supple.preferences-<version>.bak` (a later copy
+gets a number, `….2.bak`; none is ever overwritten). The newer version reads
+only `preferences.json`: to use its settings there again, rename the `.bak`
+file back to `preferences.json`.
 
 - **Linux:** the rate and buffer size are requests to PipeWire, which shares
   the graph with other apps. It changes the rate only while no other client
@@ -521,18 +528,43 @@ to move the seam, or drag the top of it to make the crossfade longer or
 shorter; Ctrl+click there switches between an equal-power and a linear
 crossfade. One crossfade length and shape serves every seam of a comp, and
 the inspector shows it as **Crossfade** for a selected piece: type 0 for hard
-cuts. Clicking a lane of one piece switches just that piece. To make a comp
+cuts. Changing the crossfade there or at a seam's top sets every seam. Moving
+a seam, or comping again elsewhere, leaves the other seams as they are, even
+one an agent shortened or reshaped by hand. Clicking a lane of one piece
+switches just that piece. To make a comp
 one plain item again, select its pieces and use **Consolidate items**. On a
 track grouped for editing, every track of the group follows: a drag, a click
 on a lane or the take number comps each of them the same way. If one of them
 has been changed on its own since, its seam lines are drawn broken and the
-inspector's **Group** row says which track it differs from; comping again
-brings it back in step. A track of the group with a single take there (a bass beside
+inspector's **Group** row says which track it differs from. Other comp edits
+leave its own seams as they are; dragging the top of a seam (the crossfade) on
+the group, or setting the **Crossfade** in the inspector, brings it back in
+step. A track of the group with a single take there (a bass beside
 the drum takes) is left as it is. If a track cannot follow (a looped or locked
 item, or one that starts or ends elsewhere), the status line says so and nothing
 changes: hold **Alt** while you drag, click or pick a take to comp this track
 alone. An item whose Loop is on is comped with hard cuts (no
 crossfades) until you turn its Loop off.
+
+**Recording over an item** adds a take to it instead of laying a second item on top: arm the
+track, put the playhead (or a punch-in) inside the item and record, and the item keeps its place
+and gains a take, which you hear where you recorded it: punch into bar 5 of an eight-bar item and
+bars 1 to 4 and 6 to 8 go on playing what they did, with the new take in bar 5 (the item is split
+into pieces there, with a short crossfade, as **take.comp** makes them; one undo puts it back). A
+pass over the whole item is heard whole. The older takes stay and **Show all takes** (or
+`take.comp`) lets you pick between them. A pass that starts before the item, or into a locked or
+looped item, still makes a new item, and the recording says so. If the pass runs past the item's
+end, the rest stays in the take, hidden; lengthen the item to hear it. If the item was a comp
+(several pieces of one set of takes), every piece gets the take. If you record only some of the
+tracks of an edit group, the others do not get a take, and the recording says so: arm every track
+of the group to keep their takes level. A pass inside a comp leaves the comp's other seams exactly as they were, ones you set by hand
+included. Agents turn this off with
+`record.set {stack_takes: false}` (every pass is then laid as items, as in older versions);
+`record.get` reads it. In the app it is **Edit > Preferences > Recording and import > Record over
+an item**: **New take** (the default) or **Layer on top**, kept with your other preferences; an
+agent's change shows there and lasts until Steppe quits. When a pass became a new item instead of a
+take, or other tracks of an edit group were left without a take, the status line says so when the
+recording stops, whether you stopped it, an agent did or the audio engine did.
 
 ### Changing what the mouse does
 
@@ -837,7 +869,14 @@ metadata; `session.describe` marks frozen channels. Work on other tracks can
 continue during a freeze. Completion refuses if the source sound, input files,
 project/branch or latency schedule changed; submit the freeze again.
 
-Disarm the channel and remove external audio, sidechain/key or MIDI inputs first.
+Disarm the channel and remove external audio, sidechain/key or MIDI inputs first. Arming needs an
+unfrozen channel (arming a frozen one says to unfreeze it first), and an armed channel cannot be
+frozen, so a recording does not normally meet a frozen channel; arming a group leaves its frozen
+members unarmed, with a warning. Should a channel be frozen under a recording anyway, nothing is
+lost: the recording stops as usual, every other channel's takes are placed, and the frozen channel's
+recording is kept in the project's recordings folder, named in a `record.frozen_skipped` warning.
+Unfreeze the channel and `project.recover` places it where it was played, loop passes included. A
+commit that is refused for any reason keeps the recordings the same way, and its error says so.
 V1 requires unity master playrate without an active rate envelope. Tempo, meter,
 project sample rate and master-rate edits name the frozen tracks that must be
 unfrozen first. Missing plugins or unavailable media must be repaired before
@@ -1738,7 +1777,7 @@ removes the selected clips. Ctrl+C copies the selected clips; click an empty
 cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
 marks clips to move, and the next paste moves them. Copied clips stay in
 their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
-colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
+colour, length, gain, fades (an audio clip's), mode, launch quantize, Follow and mute. Follow (key or
 chords) maps the clip's notes onto the song's key or chords, when it is laid
 and when it is launched; it needs a key at the clip's start. When you lay a clip or a
 scene on the timeline, its notes are laid as written and the status line at
@@ -1818,7 +1857,9 @@ that much longer, so the clip is still heard on its boundary. At the
 switch, notes still sounding end and audio crossfades over 5 ms. Returning to the arrangement does not restart a
 note already under way: it sounds from its next start. An audio clip can
 fade in and out on every pass (`clip.set {fade_in, fade_out}`, in seconds,
-with the same shapes as an item's fades). Its own fades replace the 5 ms
+with the same shapes as an item's fades; in the inspector, **Fade in** and
+**Fade out**, each a length and a shape, and the clip's cell shades the faded
+part as an item's fades are shaded). Its own fades replace the 5 ms
 switch: a launched clip with a fade-in starts with its own fade, and a
 clip launched away during its fade-out finishes that fade-out, overlapping
 the incoming clip by up to the fade's length. A clip keeps its
