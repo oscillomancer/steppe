@@ -111,17 +111,19 @@ TEST_CASE("launches queued across a trajectory change play the same with the mir
     // frame 256000), and the envelope's switch S lands `d` frames before it
     // (after it for d < 0): a warm-up switching before S, one under way at
     // the adoption switching after it. A warm-up under way when the change
-    // is prepared and switching after S is found (the executors prime 4
-    // there instead of 94); one that begins between the mirror's read and
-    // the adoption (here every one switching before S: the race case) is
-    // missed and primed by the executor. Whatever it finds or misses, what
-    // plays is the miss path's.
+    // is prepared is found: switching after S (reader 2 for its switch; the
+    // executors prime 4 there instead of 94), in [handAt, S] (reader 2 for S:
+    // the renderer's d -30), or switched by the adoption (reader 0 for S,
+    // round 163 S1: the renderer's d -300). One that begins between the
+    // mirror's read and the callback's adoption (every callback case here:
+    // the race case) is missed and primed by the executor. Whatever it finds
+    // or misses, what plays is the miss path's.
     struct Case {
         bool anticipative;
         std::int64_t d;
     };
-    for (const Case c : {Case{false, -2000}, Case{false, -300}, Case{true, -300}, Case{true, 200},
-                         Case{true, 2500}}) {
+    for (const Case c : {Case{false, -2000}, Case{false, -300}, Case{true, -300}, Case{true, -30},
+                         Case{true, 200}, Case{true, 2500}}) {
         INFO("anticipative " << c.anticipative << ", d " << c.d);
         MirrorRun runs[2];
         std::uint64_t primed[2] = {0, 0};  // by the executors over the run, with and without
@@ -163,8 +165,8 @@ TEST_CASE("launches queued across a trajectory change play the same with the mir
         CHECK(firstDifference(runs[0], runs[1]) == -1);
         INFO("the executors primed " << primed[0] << " with the mirror, " << primed[1]
                                      << " without");
-        if (c.d > 0)
-            CHECK(primed[0] + 45 <= primed[1]);  // the warm-up under way, found
+        if (c.anticipative)                      // the renderer adopts long after its read
+            CHECK(primed[0] + 44 <= primed[1]);  // the warm-up under way, or switched, found
         else
             CHECK(primed[0] == primed[1]);  // begun after the read: a miss (the race case)
     }

@@ -140,3 +140,80 @@ TEST_CASE("two launches that differ only in their switch's quantum both find the
         CHECK(firstDifference(moved, movedOff) == -1);
     }
 }
+
+TEST_CASE("a warm-up switching at or before a change's switch takes the mirror's reading") {
+    // Reader 2 for S (review round 163 S2): a warm-up applied when the
+    // change is prepared, switching in [handAt, S], is what reads at S, so
+    // the mirror primes reader 2 for S and the carry takes it when its key
+    // is the one the carry would seek (the hit), else seeks it unprimed for
+    // its first use (the miss). Live, the window is narrow (under 100 frames
+    // here, the renderer's: "launches queued across a trajectory change play
+    // the same with the mirror", d -30), so the plan-level case pins it.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session before = p.app->head();
+    p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                     R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
+    const model::Session after = p.app->head();
+    InstancePool pool = makePool();
+    MediaCache media;
+    const auto planOf = [&](const model::Session& s) {
+        auto plan = detail::compile(s, pool, 0, 128).value();
+        plan.media = &media;
+        plan.projectDir = p.app->projectDir();
+        REQUIRE(detail::prepare(plan, s));
+        return plan;
+    };
+    for (const bool hit : {true, false}) {
+        INFO("hit " << hit);
+        auto from = planOf(before);
+        auto to = planOf(after);
+        REQUIRE(detail::prepareRateSources(from, 0, 0.0, nullptr));
+        from.timelines[0]->ensure(160000);
+        REQUIRE(detail::configureRateTransition(to, &from, *from.timelines[0], 100000));
+        REQUIRE(to.rateControlsChanged);
+        const std::int64_t S = to.rateSwitchDevice;
+        REQUIRE(S > 100000);
+        to.timelines[0]->ensure(S + 20000);
+        const auto nodeOf = [](detail::Plan& plan) -> detail::Node& {
+            return *std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                 [](const auto& n) { return n.id == id("tr_2"); });
+        };
+        detail::Node& old = nodeOf(from);
+        detail::Node& node = nodeOf(to);
+        REQUIRE_FALSE(old.live);
+        const int player = detail::playerOf(old, id("cl_2"));
+        REQUIRE(player >= 0);
+        const std::int64_t warmSwitch = S - 128;  // at or before S: reader 2 reads at S
+        constexpr std::int64_t anchor = 96000;
+        old.launchWarmValid = true;
+        old.launchWarmNext.kind = detail::LaunchState::Kind::Clip;
+        old.launchWarmNext.player = player;
+        old.launchWarmNext.anchorSample = anchor;
+        old.launchWarmAt = warmSwitch;  // no seek: stream and device agree
+        detail::PlayerReader& warming = old.launchReaders[2];
+        REQUIRE(warming.state);
+        warming.player = &old.players[static_cast<std::size_t>(player)];
+        warming.anchor = anchor;
+        warming.startQuantum = detail::quantumAt(from, warmSwitch);
+        warming.primes = 10;
+        // The mirror's reading for that warm-up: a hit, or one 64 frames off.
+        detail::LaunchMirror m;
+        m.track = id("tr_2");
+        m.clip = id("cl_2");
+        m.anchor = hit ? anchor : anchor + 64;
+        m.warmSwitch = warmSwitch;
+        detail::primeLaunchMirror(to, {m});
+        detail::PlayerReader& r = node.launchReaders[2];
+        REQUIRE(r.mirror);
+        REQUIRE(r.primes == 45u);
+        detail::carryRateSources(from, to, -1);
+        CHECK_FALSE(r.mirror);
+        CHECK(r.previousLive);  // the warm-up's reading crossfades into it
+        CHECK(r.anchor == anchor);
+        CHECK(r.startQuantum == detail::quantumAt(to, S));
+        // Taken, primed on the main thread; missed, seeked for its first use.
+        CHECK(r.primes == (hit ? 45u : 0u));
+    }
+}

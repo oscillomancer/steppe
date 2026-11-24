@@ -1313,10 +1313,16 @@ and its `_queued` sibling, each run with the mirror off as well and equal to it 
 - two launches of one clip that differ only in their switch's quantum both found;
 - a launch in a later loop cycle found by the passes from its song frame, and one with a wrap between
   its anchor and S (A6); the loop's end moved after the switch, a miss (45);
-- the queued launches across a change: a warm-up under way when the change is prepared and switching
-  after S found (the executors prime 4 instead of 94), and the race case, a warm-up begun between the
-  read and the adoption (every one switching before S here, in both executors), missed and primed by
-  the executor as with the mirror off.
+- the queued launches across a change: a warm-up under way when the change is prepared found, switching
+  after S (the executors prime 4 instead of 94), in [handAt, S] (reader 2 for S, the renderer's d −30;
+  the window is under 100 frames there and never reached by the callback, whose read precedes its
+  adoption by its render-ahead), or switched by the adoption (reader 0, classified by `handAt`: review
+  round 163 S1); and the race case, a warm-up begun between the read and the callback's adoption,
+  missed and primed by the executor as with the mirror off;
+- reader 2 for S at plan level: a warm-up switching at or before S takes the mirror's reading when its
+  key matches and is seeked unprimed when it does not (round 163 S2);
+- phase 1's catch-up bound runs with the mirror off, so the miss path's unprimed reading still has a
+  test that goes red without it (round 163 F1).
 
 ## Consequences
 
