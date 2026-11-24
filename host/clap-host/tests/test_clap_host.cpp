@@ -2572,6 +2572,9 @@ TEST_CASE("bridged calls report where their time went") {
     REQUIRE(h.activate(48000, 1, 256));
     REQUIRE(h.startProcessing());
     REQUIRE(h.setParam(1, 2.0));  // hang in the next process()
+    // The binary's deadline is patient (bridge_patience.cpp), and stopProcessing
+    // below waits for this hung call: its own, short one ends that wait.
+    h.setCallDeadlineMs(200);
     resetBridgeTiming();
     // The wait is timed from when the call was posted, a little after the
     // deadline was set, so it can fall short of the span; what holds is
