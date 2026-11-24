@@ -46,6 +46,44 @@ void warnClipsRemoved(cmd::Context& ctx, const std::vector<Id>& clips, const std
              path);
 }
 
+std::map<Id, SceneLaunch> sceneLaunches(const model::Session& s, const std::vector<Id>& skipped) {
+    std::map<Id, std::vector<Id>> byTrack;  // each track's clips, in the session's order
+    for (const auto& e : s.clips) byTrack[e.value->track].push_back(e.id);
+    std::map<Id, SceneLaunch> out;
+    for (Id track : tracksInDisplayOrder(s)) {
+        const auto clips = byTrack.find(track);
+        if (clips == byTrack.end()) continue;
+        const bool frozen = s.tracks.find(track)->freeze.has_value();
+        for (Id clip : clips->second) {
+            const Id scene = s.clips.find(clip)->scene;
+            SceneLaunch& selection = out[scene];
+            if (frozen)
+                selection.left.push_back({"track.frozen", track, clip});
+            else if (std::find(skipped.begin(), skipped.end(), clip) != skipped.end())
+                selection.left.push_back({"launch.memory", track, clip});
+            else
+                selection.requests.push_back({track, LaunchLogEntry::Action::Clip, clip, scene});
+        }
+    }
+    return out;
+}
+
+SceneLaunch sceneLaunchRequests(const model::Session& s, Id scene, const std::vector<Id>& skipped) {
+    auto all = sceneLaunches(s, skipped);
+    const auto found = all.find(scene);
+    return found == all.end() ? SceneLaunch{} : std::move(found->second);
+}
+
+Error sceneHasNoClip(Id scene) {
+    return Error("launch.scene", scene.str() + " has no clip that can play", "/scene",
+                 "add clips to the scene with clip.add, or unfreeze their tracks");
+}
+
+Error trackFrozen(Id track, const std::string& path) {
+    return Error("track.frozen", track.str() + " is frozen; it plays its print", path,
+                 "track.unfreeze {track: \"" + track.str() + "\"} to launch its clips");
+}
+
 std::vector<Id> tracksInDisplayOrder(const model::Session& s) {
     std::vector<Id> out;
     std::function<void(Id)> walk = [&](Id id) {

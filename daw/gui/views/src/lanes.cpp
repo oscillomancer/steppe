@@ -322,6 +322,7 @@ void Lanes::paint(ui::Canvas& c) {
     theme_ = &c.theme();
     const ui::Theme& t = c.theme();
     c.fillRect(bounds(), t.color("ground"));
+    dimmedLaneSpans_.clear();
     for (std::size_t i = 0; i < layout_.rowCount(); ++i) {
         const ui::Rect r = rowRect(i);
         if (r.bottom() < bounds().y) continue;
@@ -358,6 +359,34 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
                                   : std::nullopt;
     const ui::Rect area = envArea(r);
     const float bx0 = std::max(area.x, bounds().x), bx1 = std::min(area.right(), bounds().right());
+    // An item's take effect plays only over the item, while its take is the
+    // active one (session-model): elsewhere the lane is washed with ground
+    // as a held track's items are (0.45 of the ink shows); edits there work
+    // as anywhere. The title, drawn after, stays clear.
+    auto dimSilent = [&] {
+        const model::EnvTarget* target = env ? &env->target : lane.target ? &*lane.target : nullptr;
+        if (!target || target->object.kind != model::Kind::Fx) return;
+        const auto owner = layout_.takeFxOwner(target->object);
+        if (!owner) return;
+        const model::Item* item = s.items.find(owner->first);
+        float x0 = r.x, x1 = r.x;  // played nowhere: all of it
+        if (item && item->activeTake == owner->second) {
+            const model::ItemSpan span = model::itemSpan(s, *item);
+            x0 = xAt(span.startSec);
+            x1 = xAt(span.endSec);
+        }
+        const ui::Color wash = t.color("ground").withAlpha(0.55f);
+        auto dim = [&](float from, float to) {
+            from = std::max(from, std::max(r.x, bounds().x));
+            to = std::min(to, std::min(r.right(), bounds().right()));
+            if (to - from < 0.5f) return;
+            const ui::Rect d{from, r.y, to - from, r.h - 1};
+            c.fillRect(d, wash);
+            dimmedLaneSpans_.push_back(d);
+        };
+        dim(r.x, x0);
+        dim(x1, r.right());
+    };
     auto drawBand = [&](const std::function<double(float)>& baseAt) {
         if (!band) return;
         const ui::Color cv = t.color("signal-cv").withAlpha(0.35f);
@@ -390,6 +419,7 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
         drawBand([base](float) { return base; });
         const float y = area.bottom() - static_cast<float>(scale->toNorm(base)) * area.h;
         c.fillRect({bx0, y, std::max(0.0f, bx1 - bx0), 1}, t.color(typeToken(lane.type)));
+        dimSilent();
         model::Envelope probe;  // named as an envelope on the target would be
         if (lane.target) probe.target = *lane.target;
         c.text({r.x + 6, r.y, 200, 14}, envTitle(probe, s, &*scale), ui::Font::Ui,
@@ -477,6 +507,7 @@ void Lanes::drawEnvelope(ui::Canvas& c, std::size_t row, const ui::Rect& r) {
             continue;  // under an item: not what plays
         c.fillRect({x - 3, yOf(pt.value) - 3, 6, 6}, ink);
     }
+    dimSilent();
     c.text({r.x + 6, r.y, 200, 14}, envTitle(*env, s, &*scale) + (env->active ? "" : " (off)"),
            ui::Font::Ui, t.type("caption"), t.color("ink-quiet"));
 }

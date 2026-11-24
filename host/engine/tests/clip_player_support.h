@@ -133,6 +133,7 @@ using Loop = std::optional<std::pair<double, double>>;
 // decided after bar 2 finds its next bar past the loop end: the song wraps
 // before that anchor too, and it lands on bar 2 of the next pass.
 inline const Loop kWrapBeforeAnchor = std::pair{1.0, 3.0};
+// A step with no requests and no load only services the engine.
 struct Step {
     std::int64_t cycle;
     std::vector<Engine::LaunchRequest> requests;
@@ -220,6 +221,7 @@ inline Live playLive(const model::Session& s, const fs::path& dir, const EngineO
             REQUIRE(engine.load(*step.load, dir));
             continue;
         }
+        if (step.requests.empty()) continue;  // a service alone, as the app's tick
         auto placed = engine.launch(step.requests, step.quantize);
         REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
         report += "\n  step at frame " + std::to_string(step.cycle * block) + ": placed epoch " +
@@ -518,6 +520,42 @@ inline CommitResidual commitResidual(const std::vector<float>& heard, std::uint3
         worst = std::max(worst, d);
     }
     return r;
+}
+
+// A run's output across a playrate change (S3 step D4).
+struct ChangeRun {
+    std::vector<float> heard;
+    std::uint32_t latency = 0;
+};
+// The loudest sample over [a, b) of the stream.
+inline double loudest(const ChangeRun& r, std::int64_t a, std::int64_t b) {
+    double m = 0;
+    for (std::int64_t k = a; k < b; ++k)
+        m = std::max(m, std::fabs(double(r.heard[static_cast<std::size_t>(k + r.latency)])));
+    return m;
+}
+// The largest step between neighbouring samples over [a, b) of the stream.
+inline double largestStep(const ChangeRun& r, std::int64_t a, std::int64_t b) {
+    double m = 0;
+    for (std::int64_t k = a; k < b; ++k) {
+        const auto i = static_cast<std::size_t>(k + r.latency);
+        m = std::max(m, std::fabs(double(r.heard[i + 1]) - double(r.heard[i])));
+    }
+    return m;
+}
+
+// Service-only steps every 1024 frames over [from, to), merged in order. The
+// app services its engine on every tick, and service() places a launch the
+// renderer overtook while it was placed again from there (engine.md
+// §1.4.2): an unquantized launch near the render horizon can be overtaken,
+// under ThreadSanitizer's slowness above all, and without a service before
+// the next step it would wait there unplaced.
+inline std::vector<Step> serviced(std::vector<Step> steps, std::int64_t from, std::int64_t to,
+                                  std::uint32_t block) {
+    for (std::int64_t f = from; f < to; f += 1024) steps.push_back({f / block, {}});
+    std::stable_sort(steps.begin(), steps.end(),
+                     [](const Step& a, const Step& b) { return a.cycle < b.cycle; });
+    return steps;
 }
 
 }  // namespace clip_player_test

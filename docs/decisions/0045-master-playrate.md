@@ -147,3 +147,12 @@ timeline audio and MIDI, so an empty frontier does not remove this problem.
 **2026-10-17 amendment:** [ADR-0046](0046-live-scalar-playrate.md) replaces
 prepared-plan/coalescing delivery for compatible scalar-only live edits with
 scheduled clock controls and specifies renderer-frontier handoff scheduling.
+
+**2026-11-23 note:** [ADR-0097](0097-clip-launcher.md), revision "S3 step
+D", plays launched audio clips through stretch converters under a
+pitch-keeping playrate. A launch is decided at its boundary, so their
+converters are seeked and primed in the callback, not prepared off it as
+§5 has for sources: a quantum's worth of priming per 64-frame quantum
+played, from about 61 ms before the switch, on storage allocated with the
+plan (§4). Prime positions follow the canonical quanta and the seek policy
+above, so offline renders take the same warm-up and equal live.

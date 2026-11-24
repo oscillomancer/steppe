@@ -128,9 +128,7 @@ Result<LaunchDone> launchNow(EngineApp& app, Action action,
 }
 
 Status refuseFrozen(const model::Session& s, Id track, const std::string& path) {
-    if (s.tracks.find(track)->freeze)
-        return Error("track.frozen", track.str() + " is frozen; it plays its print", path,
-                     "track.unfreeze {track: \"" + track.str() + "\"} to launch its clips");
+    if (s.tracks.find(track)->freeze) return trackFrozen(track, path);
     return {};
 }
 
@@ -246,8 +244,11 @@ const char* kWhen =
 std::vector<cmd::ErrorSpec> commonErrors() {
     return {
         {"engine.stopped", "the engine is not running", "engine.start first"},
-        {"launch.playrate", "an audio clip cannot play while the master playrate keeps the pitch",
-         "turn off the master playrate's preserve pitch, or set it to 1 without an envelope"},
+        {"launch.playrate",
+         "an audio clip with take FX or envelopes cannot play while the master playrate keeps "
+         "the pitch",
+         "turn off the master playrate's preserve pitch, or set it to 1 without an envelope, or "
+         "launch a copy of the clip without take FX"},
         {"launch.clip", "the running plan has no player for the clip",
          "wait for the edit to reach the engine, then launch again"},
         {"launch.queue", "too many launches are waiting", "wait for them to play"},
@@ -331,27 +332,16 @@ void registerLaunchCommands(cmd::Registry& registry) {
             if (!scene) return std::move(scene).error();
             auto engine = runningEngine(app);
             if (!engine) return std::move(engine).error();
-            const auto skipped = (*engine)->clipsSkipped();
-            std::vector<Engine::LaunchRequest> requests;
-            for (Id track : tracksInDisplayOrder(s))
-                for (const auto& e : s.clips) {
-                    if (e.value->scene != *scene || e.value->track != track) continue;
-                    if (s.tracks.find(track)->freeze) {
-                        ctx.warn("track.frozen",
-                                 track.str() + " is frozen; its clip " + e.id.str() +
-                                     " was not launched",
-                                 "/scene");
-                    } else if (std::find(skipped.begin(), skipped.end(), e.id) != skipped.end()) {
-                        ctx.warn("launch.memory",
-                                 e.id.str() + "'s audio did not fit the prepared-audio budget",
-                                 "/scene");
-                    } else {
-                        requests.push_back({track, Action::Clip, e.id, *scene});
-                    }
-                }
-            if (requests.empty())
-                return Error("launch.scene", a.scene + " has no clip that can play", "/scene",
-                             "add clips to the scene with clip.add, or unfreeze their tracks");
+            const SceneLaunch selection = sceneLaunchRequests(s, *scene, (*engine)->clipsSkipped());
+            for (const SceneLaunch::Left& left : selection.left)
+                ctx.warn(left.code,
+                         std::string_view(left.code) == "track.frozen"
+                             ? left.track.str() + " is frozen; its clip " + left.clip.str() +
+                                   " was not launched"
+                             : left.clip.str() + "'s audio did not fit the prepared-audio budget",
+                         "/scene");
+            const auto& requests = selection.requests;
+            if (requests.empty()) return sceneHasNoClip(*scene);
             auto done = launchNow(app, Action::Clip, requests, quantizeOf(s, nullptr), "/scene");
             if (done)
                 for (const auto& r : requests)

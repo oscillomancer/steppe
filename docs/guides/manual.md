@@ -1136,6 +1136,11 @@ and write mode the last value holds until you stop or pause. A modulation
 that reaches that parameter through its envelope pauses while you hold it
 and resumes on top of what you recorded.
 
+An item's own effects (its take FX) are automated on the item's track, in
+song time, and their lanes run the whole width of the timeline. They play
+only under the item, and only while that take is the one heard, so the lane
+is dimmed everywhere else; you can still edit points there.
+
 Undo, redo or switching branches while playing starts a fresh automation
 pass at the current position. Earlier moves no longer override the envelope
 or extend their last value to where you stop.
@@ -1721,9 +1726,15 @@ Above the columns, **Stop all** silences every clip and **Arrangement**
 returns every track to the timeline. Each scene's header has a ▶ that
 launches the scene; double-click its name to rename it, drag it sideways
 to reorder the scenes, and right-click it for Rename, Colour, Insert at
-playhead, Insert at end and Delete. The **+** after the last scene adds one.
+playhead, Insert at end, the two checks for how scenes are laid, Lay out
+scenes… and Delete (all described below). The **+** after the last scene
+adds one.
 
-**Capture**, under Stop all, records what you launch the way the record
+Stop all, Arrangement and Capture sit in one row. In a narrow pane they
+show as small symbols (a square, two bars and a dot); rest the pointer on
+one and the status line names it.
+
+**Capture**, after Arrangement, records what you launch the way the record
 button records audio. Click it so it lights, then play and launch clips and
 scenes. When you stop (or seek, or change the loop) the performance is
 written onto the timeline as items, in one undo step, and Capture stays lit
@@ -1746,10 +1757,29 @@ from the bar you drop it on, for as many whole bars as its longest clip
 needs, with a marker showing where while you drag. **Insert at playhead**
 and **Insert at end** in its menu do the same from the next bar line at the
 playhead, or after the last item or section. Each makes a section named
-after the scene. The other way round, right-click a section in the ruler
-and choose **Capture as scene** to make a scene from the items inside it.
+after the scene. Two checks in the same menu say how the clips are laid,
+for a drop too: **Follow the song's key and chords** lays the MIDI clips so
+they sound in the key and chords of the song where they land (unchecked,
+each clip keeps its own Follow, set in its inspector; following only the
+key, or forcing a clip to play as written, is set there per clip), and
+**Write harmony to the context track** writes the clips' own key and
+chords onto the context track under the new section, unless the track
+already has points there or the clips disagree about the key or chord at
+some point (the status line says which). The project remembers both, and
+recalling a screenset leaves them as they are. **Lay out scenes…**
+lays several scenes one after the other: tick the scenes you want, set each
+one's bars and the bar to start from, and choose **Lay out**. Each
+scene's bars start at what its clips need where it would land, and follow
+the scenes before it as you tick and change them, until you type a scene's
+bars yourself. If it can't
+be done the dialog says why, marks the scene it is about with a red dot,
+and keeps what you entered. The other way round, right-click a section in
+the ruler and choose **Capture as scene** to make a scene from the items
+inside it.
 When one of these cannot be done (items already lie in the way, a scene has
-no clips, a section has two items on one track) the status line says why.
+no clips, a section has two items on one track) the status line says why. It
+names the clips, tracks and scenes involved; one without a name is called
+by where it is, such as "Scene 4" or "Bass's clip in Verse".
 
 In a cell, no click does two things:
 - a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds
@@ -1770,6 +1800,15 @@ track, the track's items on the timeline are dimmed.
 Drag a clip to another empty cell to move it, with Ctrl to copy it; an
 occupied cell refuses it. Drag a clip onto a channel's lane to lay a copy
 on the timeline, or an item into an empty cell to make a clip from it.
+With several items selected, each one makes a clip on its own row, kept
+at the same distance from the item you hold, as when you move them.
+Several items on one track go into that scene and the ones after it, in
+the order they play: the first into the scene you drop on, the next into
+the one after it. One undo takes them all back. Every cell they will
+fill is outlined while you hold them. If any of them can't go (its cell is
+taken, its row is not a channel, it would fall off the track list, there
+are not enough scenes after the one you drop on, or it is on a hidden
+track or in a closed folder), none is made and the status line says why.
 Right-click a clip for Rename, Colour, Mode (loop or once), Quantize,
 Duplicate, Lay on timeline at playhead, Take FX… (the clip's own effects,
 which play whenever the clip does) and Delete; Delete on the keyboard
@@ -1788,10 +1827,16 @@ different key ("its chord Am differs from F at bar 5" in the same key over
 another chord). A Capture take laid under a different key or chord says so
 the same way. A clip with its own key
 shows it in the corner of its cell ("Dm", "G dor"), with "→" before it
-when the clip follows. Clips launch under a master playrate, but
-while it keeps the pitch an audio clip can't be launched: the pane draws
-those clips (and the scenes holding one) dimmed, and a click says why in
-the status line.
+when the clip follows. The pane draws a clip dimmed when launching it
+now would be refused: an audio clip with take FX or take envelopes while
+the master playrate keeps the pitch (or follows MIDI clock), a clip
+whose audio didn't fit in memory, a frozen track's clips, or a clip
+just added while audio is being prepared (it stays dimmed until the
+audio is ready). A scene's
+▶ is dimmed when the scene can't launch: nothing in it can play, or a
+clip it would start with the rest is refused. A refusal that depends on
+the transport, such as the engine not running, is not shown. A click
+still asks, and the status line says why.
 
 In the piano roll a clip starts at its own bar 1, and its end is marked
 "end", with the time after it shaded. It has no place in the
@@ -1907,12 +1952,17 @@ committing again writes the same performance over itself.
 
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
-- launching an audio clip while the master playrate keeps the pitch
-  (`launch.playrate`); MIDI clips, and audio clips without it, follow
-  the playrate;
+- launching an audio clip with take FX or take envelopes while the
+  master playrate keeps the pitch (`launch.playrate`); other clips
+  follow the playrate, audio ones time-stretched with the pitch kept, and
+  a launch then lands at least about 61 ms ahead, while its stretcher
+  gets ready (anything launched on that track meanwhile lands after it),
+  and a launch pressed while a playrate change takes effect, or queued
+  before it and not yet begun, can land a boundary later;
 - capturing while a launched audio clip plays and the master playrate
   keeps the pitch (`launch.playrate`): stop the clip or turn off preserve
-  pitch first. Otherwise a capture runs under any playrate and through
+  pitch first. Launching an audio clip then ends a capture at its switch,
+  with a warning. Otherwise a capture runs under any playrate and through
   changes to it, and the commit plays the same song positions, not the
   same durations, at another rate.
 
@@ -1921,8 +1971,9 @@ launches: it plays the clip, falls silent when the track stops, and
 plays the timeline again with the arrangement. The track's MIDI sends
 carry the clips too.
 
-A frozen track plays its print: `launch.clip` refuses it and
-`launch.scene` skips it.
+A frozen track plays its print: `launch.clip` refuses its clips
+(`track.frozen`), and the pane draws them dimmed, and `launch.scene`
+skips them.
 
 ### From scenes to a song
 

@@ -42,6 +42,13 @@ std::int64_t earlyFrame(std::int64_t at, std::int64_t lead) {
     return std::max<std::int64_t>(at - lead, 0);
 }
 
+// What a launch's action does to a channel.
+detail::LaunchState::Kind launchKind(LaunchLogEntry::Action action) {
+    return action == LaunchLogEntry::Action::Clip   ? detail::LaunchState::Kind::Clip
+           : action == LaunchLogEntry::Action::Stop ? detail::LaunchState::Kind::Stopped
+                                                    : detail::LaunchState::Kind::Arrangement;
+}
+
 // The song position `d` stream frames after `from`, the loop folding.
 std::int64_t songAfter(const LoopRange& loop, std::int64_t from, std::int64_t d) {
     const std::int64_t x = from + d;
@@ -156,8 +163,47 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
                 const std::int64_t end = h.end.load();
                 if (h.epoch.load() == clock.epoch) at = std::max(at, end);
                 // Its clip chains' input takes the launch its lead earlier
-                // (ADR-0097, amended 2026-11-20).
-                floor = std::max(floor, at + n.launchLead);
+                // (ADR-0097, amended 2026-11-20), and an audio clip on a
+                // pitch-keeping plan its warm-up (S3 step D); nothing else.
+                const auto kind = launchKind(r.action);
+                const int player = n.id == r.track && kind == detail::LaunchState::Kind::Clip
+                                       ? detail::playerOf(n, r.clip)
+                                       : -1;
+                floor = std::max(floor, at + detail::launchEarly(n, kind, player));
+                // A warmed launch of the track already under way (applied
+                // from its warm-up's first frame, so not replaced) switches
+                // first: a later press lands after it, whatever its kind
+                // (round 139 S1), and a warming one only once that warm-up
+                // is done, reader 2 warming one launch at a time.
+                const bool warms = detail::launchWarms(n, kind, player);
+                if (n.id == r.track && n.launchWarm > 0)
+                    for (const LaunchSlot& s : *launchSlots_) {
+                        if (status(s.state.load()) != LaunchSlot::kApplied ||
+                            s.track.load() != r.track.n || s.epoch.load() != clock.epoch ||
+                            s.target.load() < clock.stream)
+                            continue;
+                        const auto was =
+                            launchKind(static_cast<LaunchLogEntry::Action>(s.action.load()));
+                        const int wasPlayer =
+                            was == detail::LaunchState::Kind::Clip
+                                ? detail::playerOf(n, {model::Kind::Clip,
+                                                       static_cast<std::uint32_t>(s.clip.load())})
+                                : -1;
+                        if (detail::launchWarms(n, was, wasPlayer))
+                            floor = std::max(floor, s.target.load() + (warms ? n.launchWarm : 1));
+                    }
+                // While a trajectory change is pending (S3 step D4): until the
+                // callback, the slowest executor, has played its switch and
+                // the crossfade, a warming launch switches at least the
+                // crossfade plus its warm-up after the switch, so its warm-up
+                // runs on the new trajectory alone (stream = device -
+                // rateOrigin).
+                if (warms && n.id == r.track && plan->rateEnabled &&
+                    plan->rateSwitchDevice != INT64_MIN) {
+                    const std::int64_t change = plan->rateSwitchDevice - plan->rateOrigin;
+                    if (clock.stream < change + plan->smoothFrames)
+                        floor = std::max(floor, change + plan->smoothFrames + n.launchWarm);
+                }
             }
     // On a playrate plan the song follows the rate timeline (S3).
     if (clock.playing && plan->rateEnabled)
@@ -329,37 +375,8 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
     if (!plan)
         return Error("launch.engine", "no project is loaded in the engine", "",
                      "start the engine with a project first");
-    for (const LaunchRequest& r : requests) {
-        // Staged (S3 step 1): launched audio plays by tape only.
-        const model::Clip* clip = r.action == LaunchLogEntry::Action::Clip && latest_
-                                      ? latest_->clips.find(r.clip)
-                                      : nullptr;
-        if (plan->rateStretch && clip && clip->kind != model::ClipKind::Midi)
-            return Error("launch.playrate",
-                         r.clip.str() +
-                             " is an audio clip, which cannot play while the master playrate "
-                             "keeps the pitch",
-                         "",
-                         "turn off the master playrate's preserve pitch, or set it to 1 without "
-                         "an envelope, then launch");
-        const auto& prepared = plan->preparedSources;
-        if (r.action == LaunchLogEntry::Action::Clip && prepared &&
-            std::find(prepared->clipsSkipped.begin(), prepared->clipsSkipped.end(), r.clip) !=
-                prepared->clipsSkipped.end())
-            return Error("launch.memory",
-                         r.clip.str() + "'s audio did not fit the prepared-audio budget", "",
-                         "use shorter audio or fewer distinct files in clips, or remove some "
-                         "arrangement audio");
-        const detail::Node* n = nodeOf(*plan, r.track);
-        if (!n || n->players.empty())
-            return Error("launch.clip", r.track.str() + " has no clips to play", "",
-                         "the track is frozen or has no clips");
-        if (r.action == LaunchLogEntry::Action::Clip && detail::playerOf(*n, r.clip) < 0)
-            return Error(
-                "launch.clip",
-                r.clip.str() + " is not one of " + r.track.str() + "'s clips in the running plan",
-                "", "wait for the edit to reach the engine, then launch again");
-    }
+    for (const LaunchRequest& r : requests)
+        if (auto refused = launchRefused(*plan, r)) return std::move(*refused);
     // Placed, published, then decided. If every executor's horizon passed
     // it meanwhile (a placement on a playrate plan integrates the rate up to
     // the boundary), it is placed again at once, the slots reused.
@@ -371,6 +388,47 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
             return placed;
         }
     }
+}
+
+std::optional<Error> Engine::launchRefused(const detail::Plan& plan, const LaunchRequest& r) const {
+    // The scene (r.scene) is not read: EngineApp::launchRefusals answers a
+    // scene from its clips' refusals, asked without it (round 149 S2).
+    const bool clip = r.action == LaunchLogEntry::Action::Clip;
+    // With the pitch kept, launched audio warms a stretch converter up
+    // (S3 step D); one read through its take chain has no player yet.
+    if (clip && std::find(plan.launchRefusedPlayrate.begin(), plan.launchRefusedPlayrate.end(),
+                          r.clip) != plan.launchRefusedPlayrate.end())
+        return Error("launch.playrate",
+                     r.clip.str() +
+                         " is an audio clip with take FX or envelopes, which cannot play "
+                         "while the master playrate keeps the pitch",
+                     "",
+                     "turn off the master playrate's preserve pitch, or set it to 1 without "
+                     "an envelope, or launch a copy of the clip without take FX");
+    const auto& prepared = plan.preparedSources;
+    if (clip && prepared &&
+        std::find(prepared->clipsSkipped.begin(), prepared->clipsSkipped.end(), r.clip) !=
+            prepared->clipsSkipped.end())
+        return Error("launch.memory",
+                     r.clip.str() + "'s audio did not fit the prepared-audio budget", "",
+                     "use shorter audio or fewer distinct files in clips, or remove some "
+                     "arrangement audio");
+    const detail::Node* n = nodeOf(plan, r.track);
+    if (!n || n->players.empty())
+        return Error("launch.clip", r.track.str() + " has no clips to play", "",
+                     "the track is frozen or has no clips");
+    if (clip && detail::playerOf(*n, r.clip) < 0)
+        return Error(
+            "launch.clip",
+            r.clip.str() + " is not one of " + r.track.str() + "'s clips in the running plan", "",
+            "wait for the edit to reach the engine, then launch again");
+    return std::nullopt;
+}
+
+std::optional<Error> Engine::launchRefusal(const LaunchRequest& request) const {
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    if (!plan) return std::nullopt;
+    return launchRefused(*plan, request);
 }
 
 Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest> requests,
@@ -447,8 +505,7 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
     // and placed again by service().
     missed = !published.empty();
     for (auto& [slot, st] : published) {
-        const bool allow =
-            launchHorizonsAllow(*plan, slot->request.track, placed->epoch, placed->stream);
+        const bool allow = launchHorizonsAllow(*plan, slot->request, placed->epoch, placed->stream);
         std::uint64_t expect = st;
         if (allow) {
             (void)slot->state.compare_exchange_strong(expect, with(st, LaunchSlot::kCommitted));
@@ -461,8 +518,10 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
     return placed;
 }
 
-bool Engine::launchHorizonsAllow(const detail::Plan& plan, model::Id track, std::uint64_t epoch,
-                                 std::int64_t target) const {
+bool Engine::launchHorizonsAllow(const detail::Plan& plan, const LaunchRequest& r,
+                                 std::uint64_t epoch, std::int64_t target) const {
+    const model::Id track = r.track;
+    const auto kind = launchKind(r.action);
     for (const detail::Node& n : plan.nodes) {
         const bool owns = (n.id == track && !n.players.empty()) ||
                           (n.rack && std::any_of(n.rack->notes.begin(), n.rack->notes.end(),
@@ -475,7 +534,10 @@ bool Engine::launchHorizonsAllow(const detail::Plan& plan, model::Id track, std:
         const std::int64_t end = h.end.load();
         const std::uint64_t e = h.epoch.load();
         if (e > epoch) return false;  // relocated already
-        if (e == epoch && end > earlyFrame(target, n.launchLead))
+        const int player = n.id == track && kind == detail::LaunchState::Kind::Clip
+                               ? detail::playerOf(n, r.clip)
+                               : -1;
+        if (e == epoch && end > earlyFrame(target, detail::launchEarly(n, kind, player)))
             return false;  // its early half too
     }
     return true;
@@ -562,10 +624,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         const std::uint64_t scene = slot.scene.load(std::memory_order_relaxed);
         const auto action =
             static_cast<LaunchLogEntry::Action>(slot.action.load(std::memory_order_relaxed));
-        const detail::LaunchState::Kind kind =
-            action == LaunchLogEntry::Action::Clip   ? detail::LaunchState::Kind::Clip
-            : action == LaunchLogEntry::Action::Stop ? detail::LaunchState::Kind::Stopped
-                                                     : detail::LaunchState::Kind::Arrangement;
+        const detail::LaunchState::Kind kind = launchKind(action);
         const std::int64_t target = slot.target.load(std::memory_order_relaxed);
         const std::int64_t anchorSample = slot.anchorSample.load(std::memory_order_relaxed);
         const double anchorBeat = slot.anchorBeat.load(std::memory_order_relaxed);
@@ -622,20 +681,23 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed* feed) {
             const std::int64_t at = target + n.timelineShift;
             // A channel with clip chains takes it its lead early as well
-            // (prelaunch): its first frame, which decides it.
-            const std::int64_t early = earlyFrame(at, feed ? 0 : n.launchLead);
+            // (prelaunch), and a pitch-keeping one its warm-up early
+            // (prewarm, S3 step D): the first of them decides it.
+            const int player =
+                kind == detail::LaunchState::Kind::Clip ? detail::playerOf(n, clip) : -1;
+            const std::int64_t early =
+                earlyFrame(at, feed ? 0 : detail::launchEarly(n, kind, player));
+            const std::int64_t chain = earlyFrame(at, feed ? 0 : n.launchLead);
             any = true;
             first = std::min(first, early);
             if (early < stream) passed = true;  // (consulted only while undecided)
-            if (early == stream || at == stream) {
+            if (early == stream || chain == stream || at == stream) {
                 due = true;
                 lacking = lacking || (!feed && kind == detail::LaunchState::Kind::Clip &&
                                       detail::playerOf(n, clip) < 0);
             }
-            if (early > stream)
-                after = std::min(after, early);
-            else if (at > stream)
-                after = std::min(after, at);
+            for (const std::int64_t f : {early, chain, at})
+                if (f > stream) after = std::min(after, f);
         });
         if (!any) {  // nothing of it runs here
             if (was == LaunchSlot::kApplied) launchDone(slot, mine);
@@ -672,16 +734,20 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         }
         if (due && !repeat) {
             forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed* feed) {
-                if (feed || n.launchLead <= 0 ||
-                    earlyFrame(target + n.timelineShift, n.launchLead) != stream)
-                    return;
+                if (feed) return;
+                const std::int64_t at = target + n.timelineShift;
                 detail::LaunchAction a;
                 a.kind = kind;
                 a.player = kind == detail::LaunchState::Kind::Clip ? detail::playerOf(n, clip) : -1;
                 if (kind == detail::LaunchState::Kind::Clip && a.player < 0) return;
+                const bool chain = n.launchLead > 0 && earlyFrame(at, n.launchLead) == stream;
+                const bool warm = detail::launchWarms(n, kind, a.player) &&
+                                  earlyFrame(at, n.launchWarm) == stream;
+                if (!chain && !warm) return;
                 a.anchorSample = anchorSample;
                 a.anchorBeat = anchorBeat;
-                detail::prelaunch(n, a);
+                if (chain) detail::prelaunch(n, a);
+                if (warm) detail::prewarm(n, a, at);
             });
             apply([&](std::int64_t at) { return at == stream; }, false);
         }
@@ -1090,9 +1156,16 @@ void Engine::captureBeforeStretchCut() {
                 continue;
             const std::int64_t song = s.songFrame.load();
             if (song <= capture_.startSong ||
-                (capture_.cutSlot != SIZE_MAX && capture_.cutSong <= song) ||
-                !cutsArrangementAudio(s.request, s.anchorSample.load()))
+                (capture_.cutSlot != SIZE_MAX && capture_.cutSong <= song))
                 continue;
+            // A launched audio clip reads through a stretch converter too,
+            // whose history no committed item has (S3 step D, Q2 b).
+            const model::Clip* launched = s.request.action == LaunchLogEntry::Action::Clip
+                                              ? latest_->clips.find(s.request.clip)
+                                              : nullptr;
+            const bool audio = launched && launched->kind != model::ClipKind::Midi;
+            if (!audio && !cutsArrangementAudio(s.request, s.anchorSample.load())) continue;
+            capture_.cutAudio = audio;
             capture_.cutSlot = i;
             capture_.cutGeneration = st >> 3;
             capture_.cutTrack = s.request.track;
@@ -1102,10 +1175,14 @@ void Engine::captureBeforeStretchCut() {
         }
     if (capture_.cutSlot != SIZE_MAX &&
         (capture_.cutSlot != before || capture_.cutGeneration != beforeGeneration))
-        warnings_.push_back("launch: the capture ends at " + capture_.cutTrack.str() +
-                            "'s switch: its arrangement plays audio there, which a capture cannot "
-                            "write as heard where a switch cuts it while the master playrate keeps "
-                            "the pitch");
+        warnings_.push_back(
+            "launch: the capture ends at " + capture_.cutTrack.str() + "'s switch: " +
+            (capture_.cutAudio
+                 ? std::string("it launches an audio clip, which a capture cannot write as heard "
+                               "while the master playrate keeps the pitch")
+                 : std::string("its arrangement plays audio there, which a capture cannot write as "
+                               "heard where a switch cuts it while the master playrate keeps the "
+                               "pitch")));
     settleCaptureEnd();
 }
 

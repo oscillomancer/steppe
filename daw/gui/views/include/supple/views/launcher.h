@@ -16,6 +16,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "supple/base/result.h"
@@ -48,6 +49,20 @@ struct LaunchView {
 };
 using LaunchViews = std::map<model::Id, LaunchView>;  // by track
 
+// What a press would be refused for right now, by clip and by scene, with
+// the refusal's code (EngineApp::launchRefusal and sceneLaunchRefusal; the
+// views do not see the engine). A clip: track.frozen, launch.playrate (an
+// audio clip with take FX or envelopes while the plan keeps the pitch),
+// launch.memory, launch.clip. A scene: launch.scene (nothing it holds can
+// play) or the first refusal among the clips it would launch together.
+// Transport-state refusals (no engine, a relocation, a full queue) are not
+// here. The pane draws these clips, and these scenes' ▶, dimmed as a muted
+// clip is; a click still asks, and its refusal reaches the status line.
+struct LaunchRefusals {
+    std::map<model::Id, std::string> clips, scenes;
+    bool operator==(const LaunchRefusals&) const = default;
+};
+
 struct LauncherCallbacks {
     // One command per gesture (launches are actions, edits one undo step).
     std::function<Result<json::Value>(const std::string&, json::Value)> run;
@@ -69,6 +84,19 @@ struct LauncherCallbacks {
     // What laying clips on the timeline did with their keys (followNotice),
     // for the status line; not called when there is nothing to say.
     std::function<void(const std::string&)> onNotice;
+};
+
+// How a scene is laid on the timeline (gui.md §4.15): the scene menu's two
+// checks, which a scene dropped on the lanes and Lay out scenes… use too.
+// One state per project view, saved in the UI sidecar.
+struct SceneLaying {
+    // follow: chords, the song's key and chords under each item; unset, the
+    // command is not told, so each clip keeps its own Follow.
+    bool followSong = false;
+    // write_context: the clips' own key and chords onto the context track
+    // under each section that has none.
+    bool writeContext = false;
+    bool operator==(const SceneLaying&) const = default;
 };
 
 // The pane's geometry, shared by its body and its header cell: one column
@@ -109,18 +137,16 @@ int barAtOrAfter(const time::TimeMap& map, double beat);
 // The bar after the arrangement: the first bar line at or after the end of
 // its last item or section (bar 1 when it is empty).
 int barAfterArrangement(const model::Session& session);
-// Whether the engine refuses to launch `clip` now (launch.playrate), so the
-// pane draws it dimmed: an audio clip while the master playrate keeps the
-// pitch at other than a steady 1 (a rate or an active envelope); a MIDI clip
-// always launches. The engine does not say which clips it would refuse
-// (neither EngineApp nor launch.state does); until it does, this mirrors
-// Engine::launch's check (launch_runtime.cpp:323, the plan's rateStretch)
-// here and nowhere else. A MIDI-clock chase, which stretches too, cannot be
-// seen from the session.
-bool launchRefused(const model::Session& session, const model::Clip& clip);
-// A scene's launch is refused when one of the clips it would start is:
-// Engine::launch takes them together (launch.scene skips frozen tracks).
-bool sceneLaunchRefused(const model::Session& session, model::Id scene);
+
+// A launcher refusal as the user reads it (gui.md §4.15): each clip, track
+// and scene id in the text (sc_3, cl_2, tr_1) said by name, so no id reaches
+// the user: a scene's name, else "Scene N" by its place in the pane; a
+// track's, else "an unnamed track"; a clip's, else "<track>'s clip in
+// <scene>" ("a removed …" for one that is gone). The rest of the command's
+// words are kept. The Error form does the message, the hint and each listed
+// error.
+std::string launcherNames(const model::Session& session, std::string_view text);
+Error launcherNames(const model::Session& session, Error error);
 
 // What a command that laid clips on the timeline did with their keys, in a
 // few words for the status line (gui.md §4.15), read from the answer's
@@ -213,9 +239,19 @@ class LauncherPane : public ui::Node {
         std::optional<model::Id> scene, clip;
     };
     Hit hitAt(ui::Point p) const;
-    // An item dragged from the lanes over the pane (ItemGestures): the cell
-    // under `at` is outlined as a drop that takes it, or refuses it.
-    void showDrop(std::optional<ui::Point> at);
+    // Where one dragged item would become a clip, from the cell under the
+    // pointer: rows down (a move's row offset) and scenes along (its place in
+    // its track's run).
+    struct DropCell {
+        std::ptrdiff_t row = 0, scene = 0;
+    };
+    // Items dragged from the lanes over the pane (ItemGestures): each item's
+    // cell (`cells`, from the cell under `at`) outlined as it would take its
+    // clip (empty, on a channel) or not. A cell past the rows or the scenes,
+    // or on an automation lane, or `refused` (an item on a hidden track),
+    // refuses the whole drop: the cell under `at` is outlined so.
+    void showDrop(std::optional<ui::Point> at, std::vector<DropCell> cells = {},
+                  bool refused = false);
     ui::Rect arrRect(std::size_t row) const;
     LauncherColumns columns() const;
     // What the last paint drew (tests).
@@ -225,7 +261,9 @@ class LauncherPane : public ui::Node {
         std::vector<std::string> keys;   // their key marks as drawn ("Dm"; "" for none)
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
-        int refused = 0;  // clips drawn dimmed: their launch is refused (launchRefused)
+        bool dropTakes = false;  // the cell under a drop outlined as taking it (focus)
+        int refused = 0;  // clips drawn dimmed: a press is refused (ArrangeView::launchRefusals)
+        std::vector<model::Id> refusedClips;  // those clips, in drawing order
         std::size_t notes = 0, columns = 0, pending = 0, fades = 0;  // the last paintGl's
     } stats;
 
@@ -252,6 +290,8 @@ class LauncherPane : public ui::Node {
     };
     std::optional<Drag> drag_;
     std::optional<ui::Point> dropAt_;
+    std::vector<DropCell> dropCells_;
+    bool dropRefused_ = false;
     bool dropAllowed(const Hit& over) const;
     // The clip's copy on the lanes under `p` (a channel's own row), if any.
     std::optional<ItemGestures::ClipGhost> timelineGhost(model::Id clip, ui::Point p,
@@ -272,21 +312,41 @@ class LauncherHeader : public ui::Node {
     ui::Rect arrangementRect() const;
     ui::Rect scenesRow() const;
     ui::Rect addRect() const;  // the + cell after the last scene
-    // The Capture toggle, under Stop all: lit while armed
+    // The Capture toggle, after Arrangement: lit while armed
     // (ArrangeView::captureArmed).
     ui::Rect captureRect() const;
+    // Stop all, Arrangement and Capture sit in one row. Where their words
+    // don't fit (a pane one or two scenes wide), all three are glyph cells
+    // (kGlyphCell wide) whose names are their hints, so none overlaps at
+    // any width the pane allows.
+    static constexpr float kGlyphCell = 22;
+    bool glyphCells() const;
+    ui::Hint hintAt(ui::Point p) const override;
     // What the last paint drew (tests).
     struct Stats {
         bool captureLit = false;
         bool captureEnding = false;  // lit, outlined dashed (ArrangeView::captureEnding)
-        int refused = 0;             // scenes whose ▶ is dimmed (sceneLaunchRefused)
+        bool glyphCells = false;     // Stop all, Arrangement and Capture drawn as glyphs
+        int refused = 0;             // scenes whose ▶ is dimmed (ArrangeView::launchRefusals)
+        std::vector<model::Id> refusedScenes;  // those scenes, in column order
     } stats;
     // The scene column under x in the headers' row, and its ▶.
     std::optional<std::size_t> sceneAt(ui::Point p) const;
     ui::Rect sceneRect(std::size_t column) const;
     // A scene laid on the timeline (scene.insert) from `bar`, for its
-    // longest clip's whole bars; a refusal goes to onError.
+    // longest clip's whole bars, as the view's SceneLaying says; a refusal
+    // goes to onError.
     bool insertScene(model::Id scene, int bar);
+    // Scenes laid out one after the other from `bar` (arrangement.build),
+    // each for its bars, as the view's SceneLaying says; a refusal goes to
+    // onError and is returned.
+    Result<json::Value> layOut(const std::vector<std::pair<model::Id, std::int64_t>>& sequence,
+                               int bar);
+    // The scene menu's Lay out scenes…: the scenes in pane order, each with
+    // a check and its bars (its longest clip's whole bars), a start bar (the
+    // first whole bar after the arrangement) and the laying's two checks.
+    // Lay out runs layOut; a refusal shows in the dialog, which stays open.
+    void openLayOut();
 
   private:
     void openSceneMenu(model::Id scene, ui::Point at);

@@ -138,6 +138,11 @@ sizes clamp to the panel minimum and 8192 units, and a position with no visible
 48-unit corner on a current display is discarded. Open panels adopt the new
 project's placement on project replacement. Screensets continue to store the
 mixer dock, the side panel (§4.14) and the arrange layout; floating panels are not screenset entries.
+The arrange layout a screenset stores leaves out the scene menu's two checks
+(`arrange.clips.follow_song`, `write_context`, §4.15): they are a choice
+about what laying a scene does, not layout, so a screenset neither stores
+them nor changes them when recalled (`ArrangeView::saveScreenLayout`,
+`loadScreenLayout`).
 
 Screenset names trim leading and trailing spaces and tabs. Import skips
 empty names and silently keeps the first entry when trimmed names collide.
@@ -941,7 +946,12 @@ entry whose `id` is the envelope's parameter (`gui::PluginScales`). An item's ta
 automate on the item's track, in timeline position as the model keeps them:
 a visible envelope (or a modulated parameter) on one has a lane there like
 any other, titled with "(take)" after it, and it follows the item to
-another track. Titles that would be the same say what tells them apart: an
+another track. It plays only over the item (`model::itemSpan`), while its
+take is the active one: the lane is washed with `ground` at 0.55 elsewhere
+(all of it while another take is active), as a held track's items are
+dimmed, its title clear (`Lanes::dimmedLaneSpans`,
+`TrackLayout::takeFxOwner`). Points there are edited as anywhere; the
+engine plays none of them. Titles that would be the same say what tells them apart: an
 effect with another of its name in its chain gets its place there ("Teasel
 2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
 14)", the take's name and the item's first bar) when another item on the
@@ -1501,9 +1511,10 @@ dragging a row (an insertion bar; Escape cancels; Alt+Up/Down, the
 `fx` section's `ui.fx.move_up/down`, move the selected effect; no arrow
 buttons), bypass vs offline
 (distinct, `reaper-ux.md` addendum), a double click on a row opens that
-effect's own GUI; a left double click on empty chain space (including the
-"No effects yet" message or below the last row) opens Add plugin, as in the
-mixer. The input section's empty area adds input FX; a take adds take FX.
+effect's own GUI; a left double click on empty chain space (below the last
+row, or under the section's heading when the chain is empty, which says
+nothing more) opens Add plugin, as in the mixer. The input section's empty
+area adds input FX; a take adds take FX.
 Single and right clicks on empty space do not open the browser. Ctrl+click adds a row to the selection (or takes it out)
 including the active row; effects moved out of the displayed track/take chains
 leave the selection. Shift+click selects the rows from the last one clicked; on a row of a
@@ -2980,7 +2991,8 @@ lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
 same heights, scroll and colours.
 - **Shown.** It is shown by View > Clip launcher (`ui.clips`, ticked while
   shown) and saved in the UI sidecar (`arrange.clips: {shown, width,
-  full}`, each only once chosen). The sidecar's entry wins. Only when there
+  full, follow_song, write_context}`, each only once chosen; the last two
+  are the scene menu's checks, below). The sidecar's entry wins. Only when there
   is none does the project decide: one with scenes opens with it shown, and
   one without (a new project too) hides it.
 - **Width.** Unset, it is wide enough for its columns (every scene, the +
@@ -2994,10 +3006,15 @@ same heights, scroll and colours.
   (`tcp.wheel`): the rows scroll together.
 - **The header cell (amendment L-h).** Above the scene headers, the pane
   takes a cell in the arrange header row, beside the ruler, as wide as the
-  pane. It holds **Stop all** (`launch.stop`, every track) and
-  **Arrangement** (`launch.arrangement`, every track back to the timeline),
-  the header's uniform cells, and under Stop all **Capture** (L4; a cell
-  that does not fit the pane is not drawn).
+  pane. It holds, in one row, **Stop all** (`launch.stop`, every track),
+  **Arrangement** (`launch.arrangement`, every track back to the timeline)
+  and **Capture** (L4), the header's uniform cells (56, 84 and 66 units,
+  6 apart, 8 from the edge). In a pane too narrow for their words (under
+  234 units: one or two scenes) all three are glyph cells, 22 units each:
+  a square for Stop all, two staggered bars for Arrangement and Capture's
+  dot alone. Each says its name as its hint (`LauncherHeader::hintAt`,
+  the status line's), and none overlaps another or the pane's edge at any
+  width the pane allows.
 - **Capture** behaves as recording does. A click arms it
   (`launch.capture {on: true}`: from the position heard now, or where
   playing starts), and it is lit while armed, as the transport's record
@@ -3062,7 +3079,8 @@ same heights, scroll and colours.
     under the pointer (`scene.insert {scene, bar, bars}`) for its longest
     clip's length rounded up to whole bars from that bar
     (`views::sceneBars`; an audio clip's seconds through the tempo map),
-    as items and a section named after it, one undo step. While it is held
+    as items and a section named after it, one undo step, with the scene
+    menu's two checks (below). While it is held
     over the lanes the ghost layer draws a drop marker at that bar in
     `focus`, a light wash over the span and each clip's copy on its track
     (`ItemGestures::showSceneGhost`).
@@ -3070,10 +3088,64 @@ same heights, scroll and colours.
     first bar line at or after the playhead), **Insert at end** (from the
     first bar line at or after the end of the last item or section,
     `views::barAfterArrangement`), both `scene.insert` for the same bars,
-    and Delete (`scene.remove`, with its clips).
+    two checks, **Lay out scenes…**, and Delete (`scene.remove`, with its
+    clips).
+  - **The checks** say how every scene is laid on the timeline, by a drop,
+    Insert or Lay out scenes… (`views::SceneLaying`, one state per project
+    view, saved in the sidecar's `arrange.clips`; both unchecked by default,
+    for the drop and the menu alike). **Follow the song's key and chords**
+    sends `follow: chords`; unchecked, `follow` is not sent, so each clip
+    keeps its own Follow (the clip inspector's). `follow: key` and
+    `follow: none` for a whole scene stay with the clips' own Follow and
+    with agents; the check is not the whole of `follow`. **Write harmony to
+    the context track** sends `write_context`: the clips' own key and
+    chords go onto the context track under each section that has none. A
+    pick toggles its check and closes the menu.
+  - **Lay out scenes…** opens a dialog for `arrangement.build`: every scene
+    in pane order, each with a check (on) and its bars (its longest clip's
+    whole bars where it would land after the ones before it), **From bar**
+    (the first whole bar at or after the end of the arrangement), and the
+    same two checks, which read and write the same state as the menu's.
+    **Lay out** sends the checked scenes in order (no repeats; an agent can
+    repeat a scene); with none checked it is disabled.
+  - A row's bars follow the rows before it until edited by hand: unticking
+    or ticking a row, or editing a row's bars or From bar, works out each
+    later row not edited by hand again where it would now land (so a meter
+    change between them counts). An unticked row takes no bars. A row edited
+    by hand keeps what was typed, and is never worked out again while the
+    dialog is open. A From bar that is not a whole number from 1 to 100000
+    changes no row.
+  - A field is a whole number when it is digits, with spaces only at its
+    ends. One that is not, or is 0 (the commands' own lower limit), is said
+    in the dialog by its row ("Verse: give its bars as a whole number from
+    1", "From bar: …") and nothing is sent. A whole number of any length is
+    sent (held at a billion), so every other limit is the command's.
+  - A refusal shows in the dialog (and in the status line) as the command
+    says it, with names for ids (below), the first listed
+    error when the arguments' form was refused, and the hint after. The
+    error's path names the entry (`/sequence/<i>/…`, the i-th checked row)
+    or `/bar`: that row's name goes first unless the message already says
+    it, and a dot in `armed` marks the row (or From bar). The text wraps to
+    the dialog's width. The dialog stays open with its entries; done, it
+    closes.
   - A refusal of `scene.insert` (items already in the span, an empty
     scene, a looping clip whose period is not its content) shows its
     message in the status line and changes nothing.
+  - **Names, not ids.** Every launcher refusal reaches the user (the status
+    line, the Lay out dialog) with each clip, track and scene id in its
+    message, hint and listed errors said by name (`views::launcherNames`): a
+    scene's name, else "Scene N" by its place in the pane; a track's, else
+    "an unnamed track"; a clip's, else "<track>'s clip in <scene>"; "a
+    removed …" for one that is gone. The rest of the command's words, its
+    code and path, are kept. This covers the pane's commands
+    (`ArrangeView::runLauncher`), items dropped into cells, the menu's
+    Delete and Capture's refusals.
+  - What laying did goes to the status line (`views::followNotice`): each
+    clip that follows or was laid as written in another key, and, with
+    write_context, a section whose harmony was not written ("Verse's harmony
+    is not written: the context track has points there", "… its clips
+    disagree at bar 9"); `arrangement.build`'s head names the scene, or
+    counts them ("3 scenes from bar 5").
   - A last header cell, **+**, adds a scene (`scene.add`).
 - **Arr.** A narrow last column, 22 units, holds per track a dot that is lit
   in `playing` while the track follows the arrangement. A click on an unlit
@@ -3112,15 +3184,32 @@ same heights, scroll and colours.
   a body at least `LauncherPane::kFadeRoom` (8 units) high and the part shown
   at least 2 units wide. A MIDI clip has no fades and draws none; no text is
   drawn for a fade. A muted clip is dimmed, as a
-  muted item is. Clips launch under a master
-  playrate; the engine refuses only an audio clip while the playrate keeps
-  the pitch at other than a steady 1 (`launch.playrate`), and the pane dims
-  exactly those, and the scenes' ▶ whose launch would start one, the same
-  way (`views::launchRefused`, `views::sceneLaunchRefused`). The engine does
-  not report which clips it would refuse, so that function mirrors its one
-  check (launch_runtime.cpp, `Engine::launch`) from the session; a MIDI-clock
-  chase, which stretches too, is not seen. A click still asks, and the
-  refusal's message reaches the status line.
+  muted item is. The pane dims what a press would be refused for right now, as
+  the engine answers it (`EngineApp::launchRefusal`, `sceneLaunchRefusal`; the
+  app hands the views a `views::LaunchRefusals`): a clip as a muted clip is
+  dimmed, a scene's ▶ in quiet ink at the same 0.45. A clip is refused when
+  its track is frozen (`track.frozen`, with the engine running or not), when
+  it is an audio clip with take FX or a take envelope and the latest published
+  plan keeps the pitch, under a pitch-keeping master playrate or a MIDI-clock
+  chase (`launch.playrate`; other clips launch under any playrate), when its
+  audio did not fit the prepared-audio budget (`launch.memory`), or while the
+  latest published plan does not hold it yet (`launch.clip`: a clip just added
+  waits there while audio is prepared, which holds every load). A scene's ▶ is
+  dimmed when `launch.scene` would refuse: nothing it holds can play, frozen
+  tracks' and memory-skipped clips left out as the command leaves them out
+  (`launch.scene`), or a clip it would launch with the rest is refused
+  (`launch.playrate`, `launch.clip`); a scene holding one memory-skipped clip
+  launches the rest, so its ▶ stays bright and only that clip dims. Refusals
+  that depend on the transport (no engine running, a relocation, a full queue)
+  are not shown. While the pane is shown the app asks again, every clip and
+  scene in one call (`EngineApp::launchRefusals`, one pass over the clips),
+  only when `EngineApp::launchRefusalGeneration` moves (a published plan, an
+  edit, an engine started or stopped, a project opened; `gui::RefusalWatch`,
+  each frame), at most once a frame, so a fader drag, which edits every frame,
+  asks once a frame; while it is hidden nothing is asked, and the first frame
+  it is shown asks if anything moved meanwhile. No text is drawn for a
+  refusal, and the code gives it no look of its own; a click still asks, and
+  the refusal's message reaches the status line.
   - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
     name bar's ink while idle).
   - **Playing:** the ▶, an outline, and a progress line along the bottom
@@ -3161,8 +3250,32 @@ same heights, scroll and colours.
   clip from a copy of the pressed item's takes (`clip.add {item}`); the item
   stays where it was, the new clip is selected, and the cell is outlined
   while the item is over it (an occupied one in `meter-clip`, refusing it).
-  A refused drop shows the error's message in the status line (a warped
-  take, `clip.unsupported`).
+  With other items selected, each makes a clip on the row at its offset
+  from the pressed item's, as a move offsets rows. Items on one track
+  take the scenes from the dropped one in time order (the first in time
+  the dropped scene, the next the scene after it, each track's run its
+  own; the pressed item need not be first). One `clip.add` each, in one
+  transaction (one undo step, "Clips from items"), ordered by row and
+  position, and every target cell is outlined while held, `focus` if it
+  would take its clip (empty, on a channel; the centre's stop square of an
+  empty cell counts as empty) and `meter-clip` if not
+  (`LauncherPane::showDrop`'s cells). The new clips are selected
+  (`ArrangeView::selectClipsIn`, at the next sync). A refusal of any
+  (a taken cell, `clip.occupied`; a row whose track holds no clips) refuses
+  them all with `clip.add`'s message. These refuse the drop before
+  anything is sent (`gui.launcher.drop`), and the cell under the pointer
+  is outlined in `meter-clip`:
+  - an offset that lands above the first row, below the last or on an
+    automation lane (naming the item);
+  - a track's run longer than the scenes from the dropped one ("Keys's 3
+    items need 3 scenes from Verse, and there are 2", the hint saying how
+    many to add); a drop creates no scenes;
+  - a selected item on a track without a row, a collapsed folder's child
+    or a hidden track ("<item> is on a hidden track"), as such an item
+    refuses a move.
+
+  A drop on any cell of a scene column, taken or not, goes to `clip.add`. A refused drop shows the
+  error's message in the status line (a warped take, `clip.unsupported`).
 - **What laying did with the keys.** A clip or scene laid on the timeline
   from the pane (a drag, Lay on timeline at playhead, Insert at playhead or
   at end) says in the status line, without a dialog, what its clips' keys
@@ -3282,11 +3395,24 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   cell is dashed meanwhile, and a second click ends it at once and commits.
   An agent's quantized end dashes the cell too, and a click then ends the
   capture at once and commits it.
-- A master playrate: at a rate that moves the pitch nothing dims; keeping
-  the pitch, the audio clip and its scene's ▶ dim and nothing else (golden
-  `launcher-refused-dark.png`), its ▶ click is refused with
-  `launch.playrate` through the launcher's error hook while a MIDI clip's
-  launches, and nothing dims again at rate 1.
+- The pane against the engine (step E): at every step the clips drawn dimmed
+  and the scenes whose ▶ is dimmed are exactly those
+  `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the
+  view holds. Stopped, running, and at a rate that moves the pitch nothing
+  dims; keeping the pitch, the take-envelope audio clip and its scene's ▶ dim
+  and the plain audio clip does not (golden `launcher-refused-dark.png`), its
+  ▶ click is refused with `launch.playrate` while a MIDI clip's launches; a
+  clip with new audio just added dims with `launch.clip`, and the scene
+  holding only it, until its audio is prepared and loaded; a frozen track's
+  clips dim with `track.frozen` from the edit on and a scene left with nothing
+  to play with `launch.scene`, whose dimmed ▶ click is refused with
+  `launch.scene`, and stopped the frozen clips stay dimmed while no scene
+  does. A clip whose audio did not fit dims alone with `launch.memory` while
+  its scene's ▶ stays bright and launches the rest; any code set on the view
+  dims the same way. A fader drag asks for the refusals once per frame that
+  moved the head while the pane is shown, never while it is hidden, and once
+  when it is shown again, each ask one `EngineApp::launchRefusals` call (a
+  count, not a time).
 - The clip menu's Take FX… handing the app the active take, and the FX
   window opening a clip's take chain.
 - A scene dragged onto the lanes (its ghost, the command, the section and

@@ -1404,6 +1404,13 @@ void ArrangeView::show(const model::Session& session, const std::vector<model::C
     const bool rebuilt = layout_.show(session, changes, generation);
     syncChordRow();
     syncLauncher();
+    if (!landing_.empty()) {
+        std::vector<model::Id> made;
+        for (const Cell& cell : landing_)
+            if (const auto clip = clipIn(session, cell.track, cell.scene)) made.push_back(*clip);
+        landing_.clear();
+        if (!made.empty()) selectClips(std::move(made));
+    }
     if (rebuilt) {
         lanes_->rebuild();
         tcp_->setSession(session);
@@ -1814,10 +1821,13 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
                      "wire ArrangeView::setLauncherCallbacks");
     // Clips laid on the timeline: what they did with their keys goes to the
     // status line (gui.md §4.15).
-    const bool lays = command == "item.add" || command == "scene.insert";
+    const bool lays =
+        command == "item.add" || command == "scene.insert" || command == "arrangement.build";
     const json::Value asked = lays ? args : json::Value();
     auto r = launcherCallbacks_.run(command, std::move(args));
-    if (!r && launcherCallbacks_.onError) launcherCallbacks_.onError(r.error());
+    // Refusals reach the user with names, not ids (launcherNames).
+    if (!r && launcherCallbacks_.onError)
+        launcherCallbacks_.onError(launcherNames(session(), r.error()));
     if (r && lays && launcherCallbacks_.onNotice)
         if (const auto notice = followNotice(session(), command, asked, *r))
             launcherCallbacks_.onNotice(*notice);
@@ -1832,6 +1842,14 @@ void ArrangeView::setCaptureEnding(bool ending) {
     if (ending == captureEnding_) return;
     captureEnding_ = ending;
     if (launcherHeader_) launcherHeader_->invalidate();
+}
+void ArrangeView::setLaunchRefusals(LaunchRefusals refusals) {
+    if (refusals == launchRefusals_) return;
+    launchRefusals_ = std::move(refusals);
+    if (launcherPane_ && launcherPane_->visible) {
+        launcherPane_->invalidate();
+        launcherHeader_->invalidate();
+    }
 }
 void ArrangeView::setLaunchState(LaunchViews views) {
     if (views == launchViews_) return;
@@ -1871,11 +1889,14 @@ json::Value ArrangeView::saveLayout() const {
     if (chordRowChoice_) v["chords"] = *chordRowChoice_;  // View > Chords chose
     // The clip launcher (gui.md §4.15): what View > Clip launcher chose, its
     // dragged width and whether it fills the view.
-    if (launcherChoice_ || launcherWidth_ > 0 || launcherFull_) {
+    if (launcherChoice_ || launcherWidth_ > 0 || launcherFull_ || sceneLaying_ != SceneLaying{}) {
         json::Value clips = json::Value::object();
         if (launcherChoice_) clips["shown"] = *launcherChoice_;
         if (launcherWidth_ > 0) clips["width"] = static_cast<double>(launcherWidth_);
         if (launcherFull_) clips["full"] = true;
+        // How scenes are laid on the timeline (the scene menu's checks).
+        if (sceneLaying_.followSong) clips["follow_song"] = true;
+        if (sceneLaying_.writeContext) clips["write_context"] = true;
         v["clips"] = std::move(clips);
     }
     json::Value heights = json::Value::object();
@@ -1886,6 +1907,23 @@ json::Value ArrangeView::saveLayout() const {
     for (model::Id item : trackLayout().expandedItems()) expanded.push_back(item.str());
     v["expanded_takes"] = std::move(expanded);
     return v;
+}
+
+json::Value ArrangeView::saveScreenLayout() const {
+    json::Value v = saveLayout();
+    json::Object& saved = v.asObject();
+    if (json::Value* clips = saved.find("clips"); clips && clips->isObject()) {
+        clips->asObject().erase("follow_song");
+        clips->asObject().erase("write_context");
+        if (clips->asObject().empty()) saved.erase("clips");
+    }
+    return v;
+}
+
+void ArrangeView::loadScreenLayout(const json::Value& v) {
+    const SceneLaying kept = sceneLaying_;
+    loadLayout(v);
+    sceneLaying_ = kept;
 }
 
 void ArrangeView::loadLayout(const json::Value& v) {
@@ -1924,6 +1962,11 @@ void ArrangeView::loadLayout(const json::Value& v) {
             shown && shown->isBool() ? std::optional<bool>(shown->asBool()) : std::nullopt;
         setLauncherWidth(width && width->isNumber() ? static_cast<float>(width->asDouble()) : 0.0f,
                          full && full->isBool() && full->asBool());
+        auto flag = [clips](const char* key) {
+            const json::Value* x = clips && clips->isObject() ? clips->find(key) : nullptr;
+            return x && x->isBool() && x->asBool();
+        };
+        sceneLaying_ = {flag("follow_song"), flag("write_context")};
     }
     trackLayout().clearTakesExpanded();
     if (const json::Value* ex = v.find("expanded_takes"); ex && ex->isArray())

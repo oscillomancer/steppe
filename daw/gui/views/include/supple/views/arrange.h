@@ -150,6 +150,11 @@ class ArrangeView : public ui::Node {
     // Per-project UI sidecar/screensets: viewport, row heights, follow and takes.
     json::Value saveLayout() const;
     void loadLayout(const json::Value& value);
+    // A screenset's share of it: the same but the scene laying, a choice
+    // about what laying a scene does rather than layout (gui.md §4.15), so a
+    // screenset neither stores it nor changes it when recalled.
+    json::Value saveScreenLayout() const;
+    void loadScreenLayout(const json::Value& value);
     // Clamps the vertical scroll once the children have their bounds (a
     // viewport set before the first layout cannot know the visible height).
     void arrange(const ui::Canvas& canvas, const ui::Rect& r) override;
@@ -183,6 +188,10 @@ class ArrangeView : public ui::Node {
     // project has scenes.
     void setLauncherShown(std::optional<bool> shown);
     std::optional<bool> launcherChoice() const { return launcherChoice_; }
+    // How scenes are laid on the timeline (the scene menu's checks; saved in
+    // the layout's "clips" object).
+    const SceneLaying& sceneLaying() const { return sceneLaying_; }
+    void setSceneLaying(SceneLaying laying) { sceneLaying_ = laying; }
     bool launcherShown() const;
     // Its width as laid out; set by dragging its right edge (0: wide enough
     // for its columns). Dragged all the way it fills the view and the lanes
@@ -202,6 +211,11 @@ class ArrangeView : public ui::Node {
     // tracks' dimmed lanes. Redraws only when it changes.
     void setLaunchState(LaunchViews views);
     const LaunchViews& launchState() const { return launchViews_; }
+    // What a press on each clip and scene would be refused for now, set by
+    // the app when its answers can change (EngineApp::launchRefusalGeneration):
+    // the pane dims those clips and scenes' ▶. Redraws only when it changes.
+    void setLaunchRefusals(LaunchRefusals refusals);
+    const LaunchRefusals& launchRefusals() const { return launchRefusals_; }
     // The launcher header's Capture toggle, lit while the app has it armed
     // (set each pass).
     void setCaptureArmed(bool armed);
@@ -219,6 +233,10 @@ class ArrangeView : public ui::Node {
         model::Id track, scene;
         bool operator==(const Cell&) const = default;
     };
+    // Selects the clips in `cells` once the session holds them (the next
+    // show): a drop of several items makes its clips in one transaction,
+    // which answers only the last one's id.
+    void selectClipsIn(std::vector<Cell> cells) { landing_ = std::move(cells); }
     const std::optional<Cell>& selectedCell() const { return selectedCell_; }
     void selectCell(std::optional<Cell> cell);
     void clearLauncherSelection();
@@ -296,11 +314,14 @@ class ArrangeView : public ui::Node {
     LauncherHeader* launcherHeader_ = nullptr;
     ui::Node* lanesColumn_ = nullptr;
     std::optional<bool> launcherChoice_;
-    float launcherWidth_ = 0;  // 0: fit the columns
+    SceneLaying sceneLaying_;
+    std::vector<Cell> landing_;  // selectClipsIn's cells, until the next show
+    float launcherWidth_ = 0;    // 0: fit the columns
     bool launcherFull_ = false;
     float launcherScroll_ = 0;
     LauncherCallbacks launcherCallbacks_;
     LaunchViews launchViews_;
+    LaunchRefusals launchRefusals_;
     bool captureArmed_ = false;
     bool captureEnding_ = false;
     std::vector<model::Id> selectedClips_;

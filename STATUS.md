@@ -329,19 +329,30 @@ instructions are in `docs/guides/installing.md`.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - under a master playrate clips play on the playrate path, live as
-      the replay (ADR-0097, revision 2026-11-21), but while it keeps the
-      pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
-      clips can); a capture runs in song time under one, refused (or
-      ended, with a warning) while a launched audio clip plays and the
-      playrate keeps the pitch, and ended on its boundary by a switch that
-      cuts arrangement audio while the pitch is kept; its commit meets the
+      the replay (ADR-0097, revision 2026-11-21); while it keeps the pitch
+      a launched audio clip reads through a stretch converter warmed up
+      about 61 ms before its switch, live as the replay (S3 step D), except
+      one read through a take chain (`launch.playrate`); a launch made
+      inside a track's warm-up lands after that switch; a compiled
+      trajectory change (an envelope edit, preserve pitch toggled) switches
+      launched audio where the items switch, crossfaded from the old
+      reading (S3 step D4, phase 1: the new reading is primed on the audio
+      thread, a warm-up's primes for each track with launched audio, in the
+      callback holding the switch, until the main-thread mirror lands), and
+      an audio launch pressed while it is pending, or queued before it and
+      not yet begun, can land a boundary later, after its crossfade plus a
+      warm-up; a
+      capture runs in song time under one, refused (or ended, with a
+      warning) while a launched audio clip plays and the playrate keeps
+      the pitch, and ended on its boundary by a switch that cuts
+      arrangement audio, or launches an audio clip, while the pitch is
+      kept; its commit meets the
       rate-1 standard except within 128 song samples of the capture's
       first and last samples (up to the level of the audio cut there),
       and within 128 song samples before a switch that lands on the wrap
       of a clip laid per period (up to 0.011 in the test);
       there a frozen track's print
-      cuts in without the crossfade, and launched audio does not crossfade
-      between trajectories when a plan swap changes the rate;
+      cuts in without the crossfade;
     - freezing, or removing the playing clip, crossfades an audio clip
       out, but a clip with a take chain stops dead (its chain leaves with
       the plan), and so does one removed by an edit that comes before the
@@ -371,28 +382,35 @@ instructions are in `docs/guides/installing.md`.
   (`EngineApp::launchState()`): playing with progress, queued, held, the
   playing scene, the Arr dots, and the held tracks' items dimmed. Every
   gesture in §4.15 is in: launch, select, stop, create, open, move and
-  copy, drags to and from the timeline, the clip and scene menus, rename,
+  copy, drags to and from the timeline (selected items into cells, a clip
+  each in one undo step), the clip and scene menus, rename,
   scene reordering, Delete, copy and paste (a cut moves the clips at the
   paste; the clipboard empties when another project opens), the inspector's clip fields (an audio clip's Fade in and Fade out,
   each a length and a shape) and the scene count in the status
   line. An audio clip's cell draws its fades as an item's are drawn. The piano roll opens MIDI clips. L4 adds the header's Capture
-  toggle (armed while lit; a stop, seek or loop change commits the
+  toggle (in one row with Stop all and Arrangement, the three drawn as
+  named glyph cells in a pane too narrow for their words; armed while lit; a stop, seek or loop change commits the
   performance with `launch.commit` and arms the next; a refused commit
   keeps the performance, dark, for the next click; a commit made while
   stopped returns the tracks to the arrangement; the cell also lights for
   an agent's capture), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for
-  its longest clip's whole bars, with a drop marker while dragged), and a
+  its longest clip's whole bars, with a drop marker while dragged), the
+  scene menu's Lay out scenes… (`arrangement.build`, a dialog), with two
+  remembered checks for all three (follow the song's key and chords,
+  write the clips' harmony to the context track), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
-  status line. The clip menu's Take FX… opens a clip's take chain, and with
-  under a pitch-keeping master playrate the pane dims the audio clips (and
-  their scenes' ▶) the engine refuses to launch, by a mirror of the
-  engine's check until the engine reports it (a MIDI-clock chase is not
-  seen). Limits:
-  - there is no dialog for `arrangement.build`;
-  - Capture sits under Stop all, and in a pane too narrow for it (one or
-    two scenes) Arrangement is not drawn, as before;
-  - an item dragged into a cell makes a clip of the pressed item only;
+  status line. The clip menu's Take FX… opens a clip's take chain. The pane
+  dims the clips (and scenes' ▶) a press would be refused for now, as the
+  engine answers it (`EngineApp::launchRefusal`, `sceneLaunchRefusal`, step
+  E): a frozen track's clips, an audio clip with a take chain while the plan
+  keeps the pitch (a MIDI-clock chase included), a clip whose audio did not
+  fit.
+  Limits:
+  - Lay out scenes… lays each scene once, in pane order (an agent's
+    `arrangement.build` can repeat one), and the checks send only
+    `follow: chords` (key-only or as-written laying stays with each clip's
+    own Follow);
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
     roll (clip-time lanes, with point selection, the marquee, moves,
     shapes, copy and paste and the lane's menu as on the timeline, one lane
@@ -400,9 +418,10 @@ instructions are in `docs/guides/installing.md`.
     clip's in its pane (a double-click opens its waveform, in seconds, with
     the same Lanes menu and lanes, snapping to a seconds grid, and a key
     button for its one key point), which edits no audio;
-  - an item's take FX have lanes on the timeline, drawn across the whole
-    timeline although only the item's span plays (titled with their item
-    when two items on a track automate the same effect's parameter);
+  - an item's take FX have lanes on the timeline, across the whole
+    timeline and dimmed where they don't play (outside the item, or all of
+    it while another take is heard), titled with their item when two items
+    on a track automate the same effect's parameter;
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole

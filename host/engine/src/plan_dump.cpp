@@ -480,7 +480,9 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
                                   takeChains, players, retiring, launch, launchLead, launchNext,
                                   launchNextValid, launchFresh, launchFadeFrames, arrangementGain,
-                                  arrangementGains, launchBuf, launchReaders, clipVoices,
+                                  arrangementGains, launchBuf, launchReaders, launchWarm,
+                                  launchWarmAt, launchSwitchAt, launchSwitchPhase,
+                                  launchSwitchPending, launchWarmNext, launchWarmValid, clipVoices,
                                   clipWindow, postItems, itemShift, items, mix, silentFrom,
                                   silentTo, dropItems, noteTarget, volumeDb, pan, staticGain,
                                   panSettings, panCache, type, mute, master, decodeInput,
@@ -530,6 +532,8 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
     d.put(a, "launchLead", n.launchLead);
     // Its readers on the playrate path (S3): whether the plan made them.
     d.put(a, "launchReaders", n.launchReaders[0].state != nullptr);
+    // A pitch-keeping plan's warm-up lead (S3 step D); the warm-up is state.
+    d.put(a, "launchWarm", n.launchWarm);
     d.put(a, "clipSizing",
           std::array<std::uint64_t, 3>{static_cast<std::uint64_t>(n.launchFadeFrames), n.clipVoices,
                                        n.clipWindow});
@@ -755,12 +759,12 @@ std::string dumpPlan(const Plan& p) {
                                   scalarPublication, scalarHistory, requestedScalar, rate,
                                   smoothFrames, mix, startSeconds, outputLatency, block, timeMap,
                                   warnings, clipPlayers, follow, gestureHolds, projectDir,
-                                  preparedSources, media, instances, graph, anyLive, heldLive,
-                                  rendererNodes, liveNodes, rendererGraph, liveGraph,
-                                  rendererInstances, liveInstances, modules, rendererModules,
-                                  liveModules, rendererMeterNodes, liveMeterNodes, meterNodes,
-                                  frontier, rateOutput, frontierRings, recordTaps, recordRings,
-                                  handAt, handEpoch, handContinuable, split, deviceIn,
+                                  preparedSources, launchRefusedPlayrate, media, instances, graph,
+                                  anyLive, heldLive, rendererNodes, liveNodes, rendererGraph,
+                                  liveGraph, rendererInstances, liveInstances, modules,
+                                  rendererModules, liveModules, rendererMeterNodes, liveMeterNodes,
+                                  meterNodes, frontier, rateOutput, frontierRings, recordTaps,
+                                  recordRings, handAt, handEpoch, handContinuable, split, deviceIn,
                                   deviceInChannels, deviceRecording, hardwareMidi,
                                   midiInputsSettings, midiOutputsSettings, hardwareLead,
                                   hardwareLeadBase, deviceMidi, deviceMidiOffset, processedInputs] =
@@ -803,6 +807,7 @@ std::string dumpPlan(const Plan& p) {
     d.put(a, "gestureHolds", p.gestureHolds);
     d.put(a, "projectDir", p.projectDir.generic_string());
     d.put(a, "preparedSources", p.preparedSources != nullptr);
+    d.put(a, "launchRefusedPlayrate", p.launchRefusedPlayrate.size());
     d.put(a, "mainMaster", static_cast<std::uint64_t>(p.mainMaster));
     for (std::size_t i = 0; i < p.outputs.size(); ++i)
         d.put(at(a, "output", i), "tap",

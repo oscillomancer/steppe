@@ -104,6 +104,10 @@ class Lanes : public ui::Node {
         std::size_t rows = 0, items = 0, columns = 0, notes = 0, pending = 0, fades = 0;
     };
     const Stats& stats() const { return stats_; }
+    // The parts of automation lanes the last paint dimmed: where an item's
+    // take effect does not play (outside the item, or all of it while
+    // another take is active), as a held track's items are dimmed.
+    const std::vector<ui::Rect>& dimmedLaneSpans() const { return dimmedLaneSpans_; }
     struct IndexStats {
         std::uint64_t rebuilds = 0, items = 0;
     };
@@ -143,6 +147,7 @@ class Lanes : public ui::Node {
     const ui::Theme* theme_ = nullptr;  // from the last paint (paintGl has no canvas)
     Stats stats_;
     IndexStats indexStats_;
+    std::vector<ui::Rect> dimmedLaneSpans_;
 };
 
 }  // namespace supple::views

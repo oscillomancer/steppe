@@ -854,6 +854,14 @@ class Engine {
     // launch.clip when a track's node has no player for the clip.
     Result<LaunchPlaced> launch(std::span<const LaunchRequest> requests,
                                 model::LaunchQuantize quantize);
+    // Main thread: why launch() would refuse `request` for its clip or
+    // track (launch.playrate, launch.memory, launch.clip), without placing
+    // anything; nullopt when its checks pass or no plan is published. A
+    // function of the latest published plan; launch() runs the same checks
+    // first. The caller builds the request from the session it reads (the
+    // commands', not the engine's: an edit can be on its way). Transport-
+    // state refusals (launch.later, launch.queue) are not reported (step E).
+    std::optional<Error> launchRefusal(const LaunchRequest& request) const;
     // Main thread: the launches applied since the engine started, in order
     // of epoch and running frame (service() collects them), and the pending
     // ones.
@@ -1345,7 +1353,9 @@ class Engine {
     // Main thread: whether every executor running one of `track`'s launch
     // targets in `plan` has a horizon at or before `target` in `epoch`
     // (read after the slot is published).
-    bool launchHorizonsAllow(const detail::Plan& plan, model::Id track, std::uint64_t epoch,
+    // A request's refusal against `plan` (launch(), launchRefusal()).
+    std::optional<Error> launchRefused(const detail::Plan& plan, const LaunchRequest& r) const;
+    bool launchHorizonsAllow(const detail::Plan& plan, const LaunchRequest& r, std::uint64_t epoch,
                              std::int64_t target) const;
     // Main thread (service): collects acks, re-places missed launches and
     // those of an old epoch.
@@ -1388,6 +1398,7 @@ class Engine {
         std::size_t cutSlot = SIZE_MAX;
         std::uint64_t cutGeneration = 0;
         model::Id cutTrack;
+        bool cutAudio = false;  // the cut launches an audio clip (S3 step D, Q2 b)
         std::int64_t cutSong = 0;
         double cutBeat = 0;
         std::uint64_t epoch = 0;

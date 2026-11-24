@@ -282,10 +282,14 @@ bool TrackLayout::show(const model::Session& session, const std::vector<model::C
         if (const model::Rack* rk = session_.racks.find(m.value->rack)) owners[m.id] = rk->track;
     // An item's take FX automate on the item's track, in timeline position
     // (session-model). A clip's take FX are in clip time: no lane here.
+    takeFx_.clear();
     for (const auto& item : session_.items)
         for (model::Id take : item.value->takes)
             if (const model::Take* tk = session_.takes.find(take))
-                for (auto fx : tk->chain) owners[fx] = item.value->track;
+                for (auto fx : tk->chain) {
+                    owners[fx] = item.value->track;
+                    takeFx_[fx] = {item.id, take};
+                }
     // A lane per target: a visible envelope's, or a modulated parameter's
     // whose routes ask for one (ADR-0096 `lane`), with its envelope if any.
     // Envelopes' lanes come first in their order, then modulated ones'.
@@ -406,6 +410,12 @@ bool TrackLayout::pruneExpanded() {
 std::optional<std::size_t> TrackLayout::indexOf(model::Id track) const {
     const auto found = trackRows_.find(track);
     return found == trackRows_.end() ? std::nullopt : std::optional(found->second);
+}
+
+std::optional<std::pair<model::Id, model::Id>> TrackLayout::takeFxOwner(model::Id fx) const {
+    const auto found = takeFx_.find(fx);
+    if (found == takeFx_.end()) return std::nullopt;
+    return found->second;
 }
 
 std::optional<std::size_t> TrackLayout::indexOfEnv(model::Id env) const {
