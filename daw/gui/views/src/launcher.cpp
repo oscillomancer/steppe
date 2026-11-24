@@ -1702,6 +1702,33 @@ void LauncherHeader::openLayOut() {
             button->invalidate();
         }
     };
+    // A row's bars until edited by hand follow the rows before it: unticking
+    // a row, editing a bars field or From bar works the others out again
+    // (sceneBars where each would land, so a meter change between them is
+    // counted). A row edited by hand keeps what was typed.
+    auto edited = std::make_shared<std::vector<bool>>(scenes.size(), false);
+    auto recompute = [this, r, scenes, edited] {
+        const auto* fromField = dynamic_cast<const ui::TextField*>(r->find("launcher.layout.bar"));
+        std::int64_t from = fromField ? wholeNumber(fromField->text()) : 0;
+        if (from < 1 || from > 100000) return;  // the dialog or the command says so at Lay out
+        const model::Session& now = view_.session();
+        int place = static_cast<int>(from);
+        for (std::size_t i = 0; i < scenes.size(); ++i) {
+            const std::string n = std::to_string(i);
+            const auto* use =
+                dynamic_cast<const ui::Checkbox*>(r->find("launcher.layout.use." + n));
+            auto* field = dynamic_cast<ui::TextField*>(r->find("launcher.layout.bars." + n));
+            if (!use || !field || !use->checked()) continue;  // not laid: takes no bars
+            std::int64_t bars = 0;
+            if ((*edited)[i]) {
+                bars = wholeNumber(field->text());
+            } else {
+                bars = sceneBars(now, scenes[i], place);
+                if (field->text() != std::to_string(bars)) field->setText(std::to_string(bars));
+            }
+            place += static_cast<int>(std::clamp<std::int64_t>(bars, 0, 100000));
+        }
+    };
     for (std::size_t i = 0; i < scenes.size(); ++i) {
         const model::Scene* sc = s.scenes.find(scenes[i]);
         const std::int64_t bars = sceneBars(s, scenes[i], at);
@@ -1712,11 +1739,20 @@ void LauncherHeader::openLayOut() {
         line.emplace<ui::Label>("launcher.layout.mark." + n, "", ui::Font::UiBold, "small", "armed")
             .layout.width = ui::SizeRule::fixed(8);
         auto& use = line.emplace<ui::Checkbox>(
-            "launcher.layout.use." + n, sc && !sc->name.empty() ? sc->name : scenes[i].str(), true);
+            "launcher.layout.use." + n,
+            sc && !sc->name.empty() ? sc->name : launcherNames(s, scenes[i].str()), true);
         use.layout.width = ui::SizeRule::fraction();
-        use.onToggle = [runnable](bool) { runnable(); };
-        line.emplace<ui::TextField>("launcher.layout.bars." + n, std::to_string(bars))
-            .layout.width = ui::SizeRule::fixed(56);
+        use.onToggle = [runnable, recompute](bool) {
+            runnable();
+            recompute();
+        };
+        auto& barsField =
+            line.emplace<ui::TextField>("launcher.layout.bars." + n, std::to_string(bars));
+        barsField.layout.width = ui::SizeRule::fixed(56);
+        barsField.onChange = [edited, i, recompute](const std::string&) {
+            (*edited)[i] = true;
+            recompute();
+        };
         line.emplace<ui::Label>("launcher.layout.unit." + n, "bars", ui::Font::Ui, "small",
                                 "ink-quiet")
             .layout.width = ui::SizeRule::fixed(32);
@@ -1728,8 +1764,9 @@ void LauncherHeader::openLayOut() {
     from.emplace<ui::Label>("launcher.layout.from.label", "From bar", ui::Font::Ui, "small",
                             "ink-quiet")
         .layout.width = ui::SizeRule::fraction();
-    from.emplace<ui::TextField>("launcher.layout.bar", std::to_string(start)).layout.width =
-        ui::SizeRule::fixed(56);
+    auto& fromField = from.emplace<ui::TextField>("launcher.layout.bar", std::to_string(start));
+    fromField.layout.width = ui::SizeRule::fixed(56);
+    fromField.onChange = [recompute](const std::string&) { recompute(); };
     // Under the scenes' fields, which leave room for their scroll bar.
     from.emplace<ui::Node>("launcher.layout.from.pad").layout.width =
         ui::SizeRule::fixed(32 + ui::ScrollBar::kThickness);

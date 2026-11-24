@@ -802,6 +802,72 @@ TEST_CASE("launcher: Stop all, Arrangement and Capture share one row; narrow, th
     CHECK(f.commands == std::vector<std::string>{"launch.stop"});
 }
 
+TEST_CASE("launcher: Lay out's rows follow the rows before them until edited by hand") {
+    LauncherFixture f;
+    f.song();
+    // 3/4 from bar 2: Verse's four beats take one bar at bar 1, two from bar 2.
+    f.exec("timesig.set", R"({"bar":2,"meter":"3/4"})");
+    views::LauncherHeader& header = f.view->launcherHeader();
+    f.click({header.sceneRect(0).x + 40, header.sceneRect(0).y + 8}, 0, 1, 3);
+    ui::Node* menu = f.root->find("launcher.scene.menu");
+    REQUIRE(menu);
+    std::function<void()> layOut;
+    for (const auto& item : ui::menuItems(*menu))
+        if (item.label == "Lay out scenes…") layOut = item.run;
+    f.root->closePopups();
+    REQUIRE(layOut);
+    layOut();
+    f.sync();
+    REQUIRE(f.root->find("launcher.layout"));
+    auto field = [&](const std::string& id) {
+        auto* t = dynamic_cast<ui::TextField*>(f.root->find(id));
+        REQUIRE(t);
+        return t;
+    };
+    auto use = [&](std::size_t i) {
+        auto* c =
+            dynamic_cast<ui::Checkbox*>(f.root->find("launcher.layout.use." + std::to_string(i)));
+        REQUIRE(c);
+        return c;
+    };
+    auto type = [&](const std::string& id, const std::string& text) {
+        field(id)->setText(text);
+        REQUIRE(field(id)->onChange);
+        field(id)->onChange(text);  // as typing does
+    };
+    REQUIRE(field("launcher.layout.bar")->text() == "1");
+    CHECK(field("launcher.layout.bars.0")->text() == "1");  // Intro at bar 1, 4/4
+    CHECK(field("launcher.layout.bars.1")->text() == "2");  // Verse at bar 2, 3/4
+    // Intro unticked: Verse lands at bar 1, in 4/4, and is one bar.
+    use(0)->toggle();
+    CHECK_FALSE(use(0)->checked());
+    CHECK(field("launcher.layout.bars.1")->text() == "1");
+    use(0)->toggle();
+    CHECK(field("launcher.layout.bars.1")->text() == "2");
+    // Intro's bars by hand: 2, so Verse starts at bar 3 (3/4), still two.
+    type("launcher.layout.bars.0", "2");
+    CHECK(field("launcher.layout.bars.1")->text() == "2");
+    // From bar 2: Intro keeps its 2 (edited); Verse at bar 4 is two bars.
+    type("launcher.layout.bar", "2");
+    CHECK(field("launcher.layout.bars.0")->text() == "2");
+    CHECK(field("launcher.layout.bars.1")->text() == "2");
+    // Back to bar 1 with Intro at 0 bars typed: Verse lands at bar 1, one bar.
+    type("launcher.layout.bar", "1");
+    type("launcher.layout.bars.0", "0");
+    CHECK(field("launcher.layout.bars.1")->text() == "1");
+    // Verse edited by hand is never worked out again, whatever moves before it.
+    type("launcher.layout.bars.1", "5");
+    type("launcher.layout.bars.0", "1");
+    CHECK(field("launcher.layout.bars.1")->text() == "5");
+    use(0)->toggle();
+    CHECK(field("launcher.layout.bars.1")->text() == "5");
+    // A From bar that is not a whole number from 1 changes no row.
+    const std::string chorus = field("launcher.layout.bars.2")->text();
+    type("launcher.layout.bar", "x");
+    CHECK(field("launcher.layout.bars.2")->text() == chorus);
+    f.root->closePopups();
+}
+
 TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     LauncherFixture f;
     f.song();

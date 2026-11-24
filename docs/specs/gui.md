@@ -3108,6 +3108,13 @@ same heights, scroll and colours.
     same two checks, which read and write the same state as the menu's.
     **Lay out** sends the checked scenes in order (no repeats; an agent can
     repeat a scene); with none checked it is disabled.
+  - A row's bars follow the rows before it until edited by hand: unticking
+    or ticking a row, or editing a row's bars or From bar, works out each
+    later row not edited by hand again where it would now land (so a meter
+    change between them counts). An unticked row takes no bars. A row edited
+    by hand keeps what was typed, and is never worked out again while the
+    dialog is open. A From bar that is not a whole number from 1 to 100000
+    changes no row.
   - A field is a whole number when it is digits, with spaces only at its
     ends. One that is not, or is 0 (the commands' own lower limit), is said
     in the dialog by its row ("Verse: give its bars as a whole number from
