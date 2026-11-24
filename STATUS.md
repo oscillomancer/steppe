@@ -351,8 +351,7 @@ instructions are in `docs/guides/installing.md`.
       and within 128 song samples before a switch that lands on the wrap
       of a clip laid per period (up to 0.011 in the test);
       there a frozen track's print
-      cuts in without the crossfade, and launched audio does not crossfade
-      between trajectories when a plan swap changes the rate;
+      cuts in without the crossfade;
     - freezing, or removing the playing clip, crossfades an audio clip
       out, but a clip with a take chain stops dead (its chain leaves with
       the plan), and so does one removed by an edit that comes before the
