@@ -70,7 +70,9 @@ class AudioDeviceDialog {
     void open();  // lists the devices present now
     // Refresh: lists the devices again. PortAudio sees a device plugged in
     // since only when nothing holds it, so a running engine stops for the
-    // listing and starts again (audio stops for a moment). Refused while
+    // listing and starts again the way it last started (with the defaults
+    // as a fallback when that start had them; audio stops for a moment).
+    // Refused while
     // recording (audio.recording), which it would put at risk, and while a
     // launcher capture is held (audio.capture): an engine stop discards it.
     // A failed start is said in the dialog's status and through onError; the
@@ -109,7 +111,8 @@ class AudioDeviceDialog {
     Save save_;
     std::vector<engine::AudioDevice> devices_;
     std::string enumerateError_, lastError_;
-    bool wanted_ = false;  // a start was asked for: changes restart the engine
+    bool wanted_ = false;               // a start was asked for: changes restart the engine
+    bool startedWithFallback_ = false;  // the last start(): Refresh starts the same way
 };
 
 }  // namespace supple::gui

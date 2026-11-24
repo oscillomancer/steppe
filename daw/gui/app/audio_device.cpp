@@ -255,6 +255,7 @@ std::string AudioDeviceDialog::hostApiName() const { return resolvedHost(setting
 
 Status AudioDeviceDialog::start(bool fallback) {
     wanted_ = true;
+    startedWithFallback_ = fallback;
     auto attempt = [&](const AudioDeviceSettings& s) -> Status {
         const auto listed =
             effectiveBackend(s) == "portaudio" ? devices(true) : std::vector<engine::AudioDevice>{};
@@ -359,9 +360,14 @@ Status AudioDeviceDialog::rescan() {
     }
     const bool running = app_.backend() != nullptr;
     if (running) stopEngine();  // PortAudio rescans only when nothing holds it
-    devices(true);
     Status st;
-    if (running) st = start(false);  // says a refusal in lastError_
+    // Started again as it last was: an engine on the defaults because the
+    // saved device was refused at app start falls back again (and runs on
+    // the saved device if it is back). start() lists the devices itself.
+    if (running)
+        st = start(startedWithFallback_);  // says a refusal in lastError_
+    else
+        devices(true);
     if (!st && onError) onError("audio device: " + lastError_);
     if (isOpen()) build(false);  // the fresh list, and the status
     return st;

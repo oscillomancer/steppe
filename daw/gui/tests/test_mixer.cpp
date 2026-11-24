@@ -2592,6 +2592,44 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     REQUIRE(audio.isOpen());
     CHECK(f.node("audio.status.0")->valueText().find("Not running: ") == 0);
     CHECK(audio.lastError().find("device was not found") != std::string::npos);
+    // An engine on the defaults because the saved device was refused at app
+    // start: Refresh starts it the same way, so it keeps running, and on the
+    // saved device once that is back (round 165 F1).
+    gui::AudioDeviceSettings saved = initial;
+    saved.outputDevice = "Interface";
+    gui::AudioDeviceDialog fallback(*f.root, *f.dispatcher, *f.app, saved, {});
+    bool missing = true;
+    std::vector<std::string> starts;
+    fallback.enumerate = audio.enumerate;
+    fallback.stopEngine = audio.stopEngine;
+    fallback.startEngine = [&](const json::Value& args) -> Result<json::Value> {
+        starts.push_back(json::writeCompact(args));
+        if (missing && args.find("output_device"))
+            return Error("backend.device", "device was not found", "/output_device",
+                         "choose an exact name from engine.devices");
+        json::Value dummy = json::Value::object();
+        dummy["backend"] = "dummy";
+        dummy["block"] = args.find("block")->asInt();
+        return f.dispatcher->execute({"engine.start", dummy, test});
+    };
+    errors.clear();
+    fallback.onError = audio.onError;
+    REQUIRE(fallback.start(true));  // as at app start
+    REQUIRE(f.app->backend() != nullptr);
+    CHECK(fallback.lastError().find("using the default device") != std::string::npos);
+    starts.clear();
+    REQUIRE(fallback.rescan());
+    CHECK(f.app->backend() != nullptr);  // still running, on the defaults
+    REQUIRE(starts.size() == 2);         // the saved device, then the defaults
+    CHECK(starts.back().find("output_device") == std::string::npos);
+    missing = false;  // plugged in again
+    starts.clear();
+    REQUIRE(fallback.rescan());
+    CHECK(f.app->backend() != nullptr);
+    REQUIRE(starts.size() == 1);
+    CHECK(starts[0].find(R"("output_device":"Interface")") != std::string::npos);
+    CHECK(fallback.lastError().empty());
+    fallback.stop();
     // Stopped, Refresh only lists: nothing is started behind the user's back.
     refuse = false;
     errors.clear();

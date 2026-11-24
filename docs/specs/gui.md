@@ -3844,7 +3844,10 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   heading has **Refresh** (`AudioDeviceDialog::rescan`), which lists the
   devices again: PortAudio sees a device plugged in since only when nothing
   holds it, so a running engine is stopped (`engine.stop`), the devices
-  listed (`engine.devices`) and the engine started again (`engine.start`);
+  listed (`engine.devices`) and the engine started again (`engine.start`)
+  the way it last started: one that came up on the defaults because the
+  saved device was refused at app start falls back again, and runs on the
+  saved device once that is back;
   audio stops for a moment, which its hover hint says. A stopped engine is
   only listed for. While recording it is disabled, its hint "Refresh is off
   while recording", and refused (`audio.recording`); likewise while a
