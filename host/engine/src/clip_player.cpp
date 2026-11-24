@@ -405,6 +405,7 @@ void applyLaunch(Node& n, const LaunchAction& a) SUPPLE_RT {
     L.unanchored = false;
     n.releaseHeld = true;  // what was left's notes end at this block's start
     n.launchFresh = true;
+    n.launchSwitchPending = true;
 }
 
 void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
@@ -442,6 +443,8 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     }
     n.launch = L;
     n.launchFresh = old.launchFresh;
+    n.launchSwitchAt = old.launchSwitchAt;
+    n.launchSwitchPending = old.launchSwitchPending;
     // A launch reaching it early (prelaunch), by clip id too.
     n.launchNext = old.launchNext;
     n.launchNextValid = old.launchNextValid && !n.players.empty();
@@ -741,6 +744,7 @@ void stretchSeek(PlayerReader& r, const ClipPlayer& pl, std::int64_t anchor, boo
     r.startQuantum = q;
     r.launchCycle = timeline.cycle(timeline.phase(switchAt));
     r.primes = 0;
+    r.credit = 0;
     st.primed = false;
     st.quantum = INT64_MIN;
     const PlayerSource source = stretchSource(r, pl, timeline);
@@ -777,16 +781,23 @@ bool stretchPrime(PlayerReader& r, const PlayrateTimeline& timeline,
 // order from its start: a quantum a block skipped (no weight there) is run
 // before the next, so its history is the same however blocks fall. A
 // reading it was not warmed for (a launch from stop, a relocation, a plan
-// that lost its converter) starts at q all at once.
+// that lost its converter) starts all at once: from its switch's quantum
+// (`switchQ`, the frame `switchAt`) when that is near, so it gives what a
+// warm-up gives, else at q; its loop cycle is the switch frame's either
+// way (round 139 R4).
 const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::int64_t anchor,
                                     bool unanchored, const PlayrateTimeline& timeline,
-                                    std::int64_t q) SUPPLE_RT {
+                                    std::int64_t q, std::int64_t switchAt,
+                                    std::int64_t switchQ) SUPPLE_RT {
     RateClipState& st = *r.state;
     constexpr std::int64_t kCatchUp = 32 * kRateQuantum;
     const bool keyed =
         r.player == &pl && r.anchor == anchor && r.startQuantum != INT64_MIN && q >= r.startQuantum;
-    if (!keyed || (st.primed && (q < st.quantum || q - st.quantum > kCatchUp)))
-        stretchSeek(r, pl, anchor, unanchored, timeline, q, q);
+    if (!keyed || (st.primed && (q < st.quantum || q - st.quantum > kCatchUp))) {
+        const bool fromSwitch = switchQ != INT64_MIN && q >= switchQ && q - switchQ <= kCatchUp;
+        stretchSeek(r, pl, anchor, unanchored, timeline, fromSwitch ? switchQ : q,
+                    switchAt != INT64_MIN ? switchAt : q);
+    }
     if (!st.primed) stretchPrime(r, timeline, UINT32_MAX);
     const PlayerSource source = stretchSource(r, pl, timeline);
     while (st.quantum < q) {
@@ -803,8 +814,9 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
 }
 
 // A launch warming up on reader 2 (prewarm): its converter seeks at the
-// first block that has it and primes a quantum's worth per quantum played,
-// ready by its switch without a burst (Q5).
+// first block that has it and primes once per 64 frames played (a frame
+// credit, whatever the block size: round 139 R1), its launchWarm frames
+// giving one prime to spare, ready by its switch without a burst (Q5).
 void warmLaunch(const Plan& p, Node& n, std::uint32_t frames) SUPPLE_RT {
     if (!n.launchWarmValid) return;
     const LaunchAction& a = n.launchWarmNext;
@@ -817,7 +829,10 @@ void warmLaunch(const Plan& p, Node& n, std::uint32_t frames) SUPPLE_RT {
     const std::int64_t q = quantumAt(p, device);
     if (r.player != &pl || r.anchor != a.anchorSample || r.startQuantum != q)
         stretchSeek(r, pl, a.anchorSample, false, timeline, q, device);
-    stretchPrime(r, timeline, frames / kRateQuantum + 1);
+    r.credit += frames;
+    const std::uint32_t budget = r.credit / kRateQuantum;
+    r.credit %= kRateQuantum;
+    stretchPrime(r, timeline, budget);
 }
 
 // playerFrame for a block on a playrate plan: frame i reads the song
@@ -827,7 +842,8 @@ template <class Weight>
 void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPlayer& pl,
                 std::int64_t anchor, bool unanchored, std::int64_t pos, std::int64_t ahead,
                 std::uint32_t frames, Weight&& weight, Stereo& into, bool raw,
-                std::int64_t until = INT64_MAX, std::int64_t hold = INT64_MAX) SUPPLE_RT {
+                std::int64_t until = INT64_MAX, std::int64_t hold = INT64_MAX,
+                std::int64_t switchAt = INT64_MIN) SUPPLE_RT {
     const Clip& c = pl.audio;
     if (!c.data || c.data->channels.empty() || pl.muted || pl.periodFrames <= 0 || !reader.state)
         return;
@@ -836,6 +852,7 @@ void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPl
     const std::int64_t pass = timeline.cycle(timeline.phase(pos - n.timelineShift));
     const bool fades = !raw && clipFades(pl);
     const std::int64_t held = heldPass(pl, anchor, hold);
+    const std::int64_t switchQ = switchAt == INT64_MIN ? INT64_MIN : quantumAt(p, switchAt);
     for (std::uint32_t i = 0; i < frames; ++i) {
         double w = weight(i);
         if (w == 0.0) continue;
@@ -853,7 +870,7 @@ void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPl
         const std::int64_t q = quantumAt(p, device);
         const RateClipState& st =
             reader.state->preserve
-                ? stretchQuantum(reader, pl, anchor, unanchored, timeline, q)
+                ? stretchQuantum(reader, pl, anchor, unanchored, timeline, q, switchAt, switchQ)
                 : playerQuantum(reader, pl, anchor, unanchored, pass, timeline, q, until, hold);
         const auto k = static_cast<std::size_t>(device - q);
         float l = st.output[0][k], r = st.output[1][k];
@@ -882,6 +899,10 @@ void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPl
 
 void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t frames) SUPPLE_RT {
     n.arrangementGain = nullptr;
+    if (n.launchSwitchPending) {  // this block starts at the switch
+        n.launchSwitchAt = pos - n.timelineShift;
+        n.launchSwitchPending = false;
+    }
     if (p.rateStretch) warmLaunch(p, n, frames);  // the next launch's converter (S3 step D)
     const std::int64_t song0 = pos - n.timelineShift;
     const double clock0 = launchClock(p, n, pos);
@@ -934,7 +955,8 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
                           bool unanchored, auto&& weight, std::int64_t hold) SUPPLE_RT {
         if (p.rateEnabled)
             playerRate(p, n, n.launchReaders[reader], pl, anchor, unanchored, pos, 0, frames,
-                       weight, into, false, reader == 1 ? outEnd : INT64_MAX, hold);
+                       weight, into, false, reader == 1 ? outEnd : INT64_MAX, hold,
+                       reader == 0 ? n.launchSwitchAt : INT64_MIN);
         else
             for (std::uint32_t i = 0; i < frames; ++i)
                 playerFrame(pl, anchor, unanchored, song0 + i, weight(i), into, i, false, hold);
@@ -1263,6 +1285,7 @@ void carryLaunchReaders(Node& old, Node& n) SUPPLE_RT {
         to.startQuantum = from.startQuantum;
         to.launchCycle = from.launchCycle;
         to.primes = from.primes;
+        to.credit = from.credit;
         // Its player in the new plan, by clip (a retiring one too).
         to.player = nullptr;
         if (!from.player) continue;

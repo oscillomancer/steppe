@@ -42,6 +42,13 @@ std::int64_t earlyFrame(std::int64_t at, std::int64_t lead) {
     return std::max<std::int64_t>(at - lead, 0);
 }
 
+// What a launch's action does to a channel.
+detail::LaunchState::Kind launchKind(LaunchLogEntry::Action action) {
+    return action == LaunchLogEntry::Action::Clip   ? detail::LaunchState::Kind::Clip
+           : action == LaunchLogEntry::Action::Stop ? detail::LaunchState::Kind::Stopped
+                                                    : detail::LaunchState::Kind::Arrangement;
+}
+
 // The song position `d` stream frames after `from`, the loop folding.
 std::int64_t songAfter(const LoopRange& loop, std::int64_t from, std::int64_t d) {
     const std::int64_t x = from + d;
@@ -156,17 +163,32 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
                 const std::int64_t end = h.end.load();
                 if (h.epoch.load() == clock.epoch) at = std::max(at, end);
                 // Its clip chains' input takes the launch its lead earlier
-                // (ADR-0097, amended 2026-11-20).
-                floor = std::max(floor, at + detail::launchEarly(n));
+                // (ADR-0097, amended 2026-11-20), and an audio clip on a
+                // pitch-keeping plan its warm-up (S3 step D); nothing else.
+                const auto kind = launchKind(r.action);
+                const int player = n.id == r.track && kind == detail::LaunchState::Kind::Clip
+                                       ? detail::playerOf(n, r.clip)
+                                       : -1;
+                floor = std::max(floor, at + detail::launchEarly(n, kind, player));
                 // Its converter's warm-up never begins before the track's
-                // switch already under way (an applied launch still to
-                // play): reader 2 warms one launch at a time (S3 step D).
-                if (n.launchWarm > 0 && n.id == r.track)
-                    for (const LaunchSlot& s : *launchSlots_)
-                        if (status(s.state.load()) == LaunchSlot::kApplied &&
-                            s.track.load() == r.track.n && s.epoch.load() == clock.epoch &&
-                            s.target.load() >= clock.stream)
+                // warmed switch already under way (an applied launch still
+                // to play): reader 2 warms one launch at a time.
+                if (detail::launchWarms(n, kind, player))
+                    for (const LaunchSlot& s : *launchSlots_) {
+                        if (status(s.state.load()) != LaunchSlot::kApplied ||
+                            s.track.load() != r.track.n || s.epoch.load() != clock.epoch ||
+                            s.target.load() < clock.stream)
+                            continue;
+                        const auto was =
+                            launchKind(static_cast<LaunchLogEntry::Action>(s.action.load()));
+                        const int wasPlayer =
+                            was == detail::LaunchState::Kind::Clip
+                                ? detail::playerOf(n, {model::Kind::Clip,
+                                                       static_cast<std::uint32_t>(s.clip.load())})
+                                : -1;
+                        if (detail::launchWarms(n, was, wasPlayer))
                             floor = std::max(floor, s.target.load() + n.launchWarm);
+                    }
             }
     // On a playrate plan the song follows the rate timeline (S3).
     if (clock.playing && plan->rateEnabled)
@@ -459,8 +481,7 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
     // and placed again by service().
     missed = !published.empty();
     for (auto& [slot, st] : published) {
-        const bool allow =
-            launchHorizonsAllow(*plan, slot->request.track, placed->epoch, placed->stream);
+        const bool allow = launchHorizonsAllow(*plan, slot->request, placed->epoch, placed->stream);
         std::uint64_t expect = st;
         if (allow) {
             (void)slot->state.compare_exchange_strong(expect, with(st, LaunchSlot::kCommitted));
@@ -473,8 +494,10 @@ Result<Engine::LaunchPlaced> Engine::publishLaunch(std::span<const LaunchRequest
     return placed;
 }
 
-bool Engine::launchHorizonsAllow(const detail::Plan& plan, model::Id track, std::uint64_t epoch,
-                                 std::int64_t target) const {
+bool Engine::launchHorizonsAllow(const detail::Plan& plan, const LaunchRequest& r,
+                                 std::uint64_t epoch, std::int64_t target) const {
+    const model::Id track = r.track;
+    const auto kind = launchKind(r.action);
     for (const detail::Node& n : plan.nodes) {
         const bool owns = (n.id == track && !n.players.empty()) ||
                           (n.rack && std::any_of(n.rack->notes.begin(), n.rack->notes.end(),
@@ -487,7 +510,10 @@ bool Engine::launchHorizonsAllow(const detail::Plan& plan, model::Id track, std:
         const std::int64_t end = h.end.load();
         const std::uint64_t e = h.epoch.load();
         if (e > epoch) return false;  // relocated already
-        if (e == epoch && end > earlyFrame(target, detail::launchEarly(n)))
+        const int player = n.id == track && kind == detail::LaunchState::Kind::Clip
+                               ? detail::playerOf(n, r.clip)
+                               : -1;
+        if (e == epoch && end > earlyFrame(target, detail::launchEarly(n, kind, player)))
             return false;  // its early half too
     }
     return true;
@@ -574,10 +600,7 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
         const std::uint64_t scene = slot.scene.load(std::memory_order_relaxed);
         const auto action =
             static_cast<LaunchLogEntry::Action>(slot.action.load(std::memory_order_relaxed));
-        const detail::LaunchState::Kind kind =
-            action == LaunchLogEntry::Action::Clip   ? detail::LaunchState::Kind::Clip
-            : action == LaunchLogEntry::Action::Stop ? detail::LaunchState::Kind::Stopped
-                                                     : detail::LaunchState::Kind::Arrangement;
+        const detail::LaunchState::Kind kind = launchKind(action);
         const std::int64_t target = slot.target.load(std::memory_order_relaxed);
         const std::int64_t anchorSample = slot.anchorSample.load(std::memory_order_relaxed);
         const double anchorBeat = slot.anchorBeat.load(std::memory_order_relaxed);
@@ -636,7 +659,10 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
             // A channel with clip chains takes it its lead early as well
             // (prelaunch), and a pitch-keeping one its warm-up early
             // (prewarm, S3 step D): the first of them decides it.
-            const std::int64_t early = earlyFrame(at, feed ? 0 : detail::launchEarly(n));
+            const int player =
+                kind == detail::LaunchState::Kind::Clip ? detail::playerOf(n, clip) : -1;
+            const std::int64_t early =
+                earlyFrame(at, feed ? 0 : detail::launchEarly(n, kind, player));
             const std::int64_t chain = earlyFrame(at, feed ? 0 : n.launchLead);
             any = true;
             first = std::min(first, early);
@@ -686,14 +712,14 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
             forEachTarget(p, liveClass, track, [&](detail::Node& n, detail::NotesFeed* feed) {
                 if (feed) return;
                 const std::int64_t at = target + n.timelineShift;
-                const bool chain = n.launchLead > 0 && earlyFrame(at, n.launchLead) == stream;
-                const bool warm = n.launchWarm > 0 && kind == detail::LaunchState::Kind::Clip &&
-                                  earlyFrame(at, n.launchWarm) == stream;
-                if (!chain && !warm) return;
                 detail::LaunchAction a;
                 a.kind = kind;
                 a.player = kind == detail::LaunchState::Kind::Clip ? detail::playerOf(n, clip) : -1;
                 if (kind == detail::LaunchState::Kind::Clip && a.player < 0) return;
+                const bool chain = n.launchLead > 0 && earlyFrame(at, n.launchLead) == stream;
+                const bool warm = detail::launchWarms(n, kind, a.player) &&
+                                  earlyFrame(at, n.launchWarm) == stream;
+                if (!chain && !warm) return;
                 a.anchorSample = anchorSample;
                 a.anchorBeat = anchorBeat;
                 if (chain) detail::prelaunch(n, a);

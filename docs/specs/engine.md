@@ -774,23 +774,30 @@ the same.*
     before its switch (the converter's output lookahead rounded up to
     quanta, and one quantum to spare: 2944 frames, about 61 ms, at
     48 kHz; `prewarm`), and reader 2 seeks there for output from the
-    switch's quantum and primes no more than a quantum's worth per
-    quantum played, so the switch costs no burst. At the switch the
+    switch's quantum and primes once per 64 frames played (a frame
+    credit, at any block size), so the switch costs no burst. At the switch the
     readers rotate (`applyLaunch`). Every prime position is a function of
     the switch's quantum and the trajectory, not of when the prime runs,
     so the warm-up is the replay's, which takes it as a third switch
     entry. A reading runs every quantum in order from its start, a
     quantum a block skipped (no weight there) before the next, up to 32
-    quanta; past that, or with no warm-up (a launch from stop, a
-    relocation, a plan that lost the converter) it seeks and primes at
-    once at its quantum, live and in the replay alike. It reads the
-    player's song frames from the anchor, in loop cycles after the
-    switch's; the switch crossfade and the clip's fades weight its
-    output. Placement keeps a launch `launchEarly` (the larger of the
-    clip-chain lead and `launchWarm`) ahead of the clock, and at least
-    `launchWarm` after the track's applied launch still to switch (one
-    warm-up at a time; a launch is applied from its warm-up's first frame,
-    so a later one does not replace it). A plan swap that
+    quanta. With no warm-up (a launch from stop, a relocation, a plan that
+    lost the converter) it seeks and primes at once: from its switch's
+    quantum, catching up, when that is at most 32 quanta back, so it plays
+    what a warm-up would, else at its own quantum; its loop cycle is the
+    switch frame's either way (`Node::launchSwitchAt`, set by the first
+    block after the switch). It reads the player's song frames from the
+    anchor, in loop cycles after the switch's; the switch crossfade and
+    the clip's fades weight its output. Going out it plays on as the clip
+    repeats, without the tape path's held pass or cut at the crossfade's
+    end: its converter has read some 5000 song frames past a switch before
+    the switch is known, and no capture commits it (Q2 b). Placement keeps
+    an audio clip's launch `launchEarly` (the larger of the clip-chain
+    lead and `launchWarm`) ahead of the clock (MIDI clips, stops and
+    returns keep the clip-chain lead alone), and at least
+    `launchWarm` after the track's applied audio launch still to switch
+    (one warm-up at a time; a launch is applied from its warm-up's first
+    frame, so a later one does not replace it). A plan swap that
     keeps the rate controls hands the readers over with their converters
     (`carryLaunchReaders`, §1.6); one that changes the trajectory restarts
     them cold where they play (an interim: timeline clips crossfade

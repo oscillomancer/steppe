@@ -1332,7 +1332,7 @@ class Engine {
     // Main thread: whether every executor running one of `track`'s launch
     // targets in `plan` has a horizon at or before `target` in `epoch`
     // (read after the slot is published).
-    bool launchHorizonsAllow(const detail::Plan& plan, model::Id track, std::uint64_t epoch,
+    bool launchHorizonsAllow(const detail::Plan& plan, const LaunchRequest& r, std::uint64_t epoch,
                              std::int64_t target) const;
     // Main thread (service): collects acks, re-places missed launches and
     // those of an old epoch.

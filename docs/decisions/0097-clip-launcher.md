@@ -1080,24 +1080,35 @@ the replay.
   `launchWarm` device frames before its switch (`prewarm`): the
   converter's output lookahead rounded up to whole 64-frame quanta, plus
   one (2944 frames, about 61 ms, at 48 kHz). Reader 2 seeks there for
-  output from the switch's quantum and primes at most a quantum's worth
-  per quantum played, so it is ready by the switch with no burst.
-  Placement keeps a launch `launchEarly` ahead of the clock (the larger of
-  the clip-chain lead and `launchWarm`), and the early decision and the
-  horizon use it. A launch is applied from its warm-up's first frame, so
-  a later one on the track does not replace it; reader 2 warms one launch
-  at a time, so placement keeps a launch at least `launchWarm` after the
-  track's applied launch still to switch.
+  output from the switch's quantum and primes once per 64 frames played
+  (a frame credit, at any block size), so it is ready by the switch with
+  no burst. Placement keeps an audio clip's launch `launchEarly` ahead of
+  the clock (the larger of the clip-chain lead and `launchWarm`), and the
+  early decision and the horizon use it; MIDI clips, stops and returns,
+  which warm nothing, keep the clip-chain lead alone (the co-director's
+  ruling, round 139 R3). A launch is applied from its warm-up's first
+  frame, so a later one on the track does not replace it; reader 2 warms
+  one launch at a time, so placement keeps an audio launch at least
+  `launchWarm` after the track's applied audio launch still to switch.
 - **Live equals the replay.** Every prime position is a function of the
   switch's quantum and the trajectory, not of when it runs. The replay
   delivers the warm-up as a third switch entry, `launchWarm` early. A
   reading runs every quantum in order from its start (a skipped quantum is
-  run before the next, up to 32); past that, or with no warm-up (a launch
-  from stop, a relocation, a plan that lost the converter), it seeks and
-  primes at once at its quantum, as the replay does.
+  run before the next, up to 32). With no warm-up (a launch from stop, a
+  relocation, a plan that lost the converter) it seeks and primes at once,
+  as the replay does: from its switch's quantum, catching up, when that
+  is at most 32 quanta back, so it plays what a warm-up would; else at its
+  own quantum. Its loop cycle is the switch frame's either way (round 139
+  R4).
 - **What it reads:** the player's song frames from the anchor, folded as
   the song is, before the anchor only in a later loop cycle than the
   switch's. The switch crossfade and the clip's fades weight its output.
+  Going out it plays on as the clip repeats, without the tape path's held
+  pass (`hold`) or cut at the crossfade's end (`until`): its converter has
+  read some 5000 song frames past a switch (output and analysis
+  lookahead) before the switch is known, so neither could reach the
+  crossfade, and no capture commits a stretched launch (Q2 b; round 139
+  R2).
 - **Plan swaps** that keep the rate controls hand the readers to the new
   plan with their converters, by clip (`carryLaunchReaders`). One that
   changes the trajectory restarts them cold where they play: an interim,
@@ -1116,15 +1127,21 @@ the replay.
   a switch between two audio clips and a stop under a pitch-keeping 0.75
   and an envelope, in both executors, at two block sizes (the envelope at
   one), and differs from the tape reading; the warm-up primes a quantum's worth a quantum, is
-  ready by the switch and comes in with its history; a plan swap mid-clip
-  stays the replay (cold, it differs by 0.055); a launch made while
-  stopped lands on the play start; a launch made during another's warm-up
-  lands after its switch, live as the replay; the capture ends at an audio
-  launch's switch and commits exactly; a clip with take FX is refused.
+  ready by the switch and comes in with its history, at most one prime
+  per 64 frames at 32- and 128-frame blocks; a cold start plays the same
+  bit for bit, also at a loop wrap between the switch's quantum start and
+  the switch, and after a converter lost within the catch-up; a plan swap
+  mid-clip stays the replay (cold, it differs by 0.055), and so does one
+  during the warm-up; a rate change during the warm-up still switches; a
+  launch made while stopped lands on the play start; a launch made during
+  another's warm-up lands after its switch, live as the replay, also at
+  32-frame blocks; MIDI, stop and return launches keep the tape path's
+  timing; the capture ends at an audio launch's switch and commits
+  exactly; a clip with take FX is refused.
 - Each node with audio clips holds three converters under a pitch-keeping
   plan: about 0.94 MB each, stereo at 48 kHz.
-- An unquantized launch lands up to about 61 ms later than on the tape
-  path.
+- An unquantized audio clip launch lands up to about 61 ms later than on
+  the tape path.
 - A launch made during another's warm-up on its track lands at least
   `launchWarm` after that one's switch (unquantized, about 61 ms later
   than it would otherwise).

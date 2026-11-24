@@ -169,73 +169,203 @@ TEST_CASE("launched audio under a pitch-keeping playrate plays as the offline re
 }
 
 TEST_CASE(
-    "a launched audio clip's converter warms up before its switch, a quantum's worth a quantum" *
+    "a launched audio clip's converter warms up a prime per 64 frames, and cold gives the same" *
     doctest::description("rt")) {
-    // S3 step D, Q5: from launchWarm before the switch the next launch's
-    // stretch converter (reader 2) seeks and primes no more than a quantum's
-    // worth per quantum played, is ready by the switch, and comes in on
-    // reader 0 there with its history: no burst at the switch.
+    // S3 step D, Q5 and round 139 R1/R4: from launchWarm before the switch
+    // the next launch's stretch converter (reader 2) seeks and primes no
+    // more than once per 64 frames played, at any block size (32 here),
+    // is ready by the switch, and comes in on reader 0 with its history. A
+    // launch it was not warmed for starts cold from the switch's quantum,
+    // all at once, and plays the same bit for bit; also where a loop wrap
+    // falls between that quantum's start and the switch, each taking the
+    // switch frame's loop cycle: the song loops 96000..120010, at 0.75
+    // wrapping at device frame 160014, and reaches an anchor at 96005 at
+    // 160020, both in the quantum from 160000; read in the cycle before,
+    // the five frames before the anchor would sound (round 139 R4).
     Project p;
     twoTracks(p);
     p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
     const model::Session s = p.app->head();
-    InstancePool pool = makePool();
-    constexpr std::uint32_t block = 128;
-    MediaCache media;
-    auto plan = detail::compile(s, pool, 0, block).value();
-    plan.media = &media;
-    plan.projectDir = p.app->projectDir();
-    REQUIRE(detail::prepare(plan, s));
-    REQUIRE(detail::prepareRateSources(plan, 0, 0.0));  // as the engine does before playing
-    REQUIRE(detail::primeRateSources(plan, 0));
-    REQUIRE(plan.rateStretch);
-    for (auto* instance : plan.instances) REQUIRE(instance->startProcessing());
-    auto& node = *std::find_if(plan.nodes.begin(), plan.nodes.end(),
-                               [](const auto& n) { return n.id == id("tr_2"); });
-    REQUIRE(node.launchReaders[2].state);
-    const int lookahead = node.launchReaders[2].state->stretch->lookahead();
-    const auto quanta = static_cast<std::uint32_t>((lookahead + 63) / 64);
-    CHECK(node.launchWarm == (quanta + 1) * 64);  // the lookahead's quanta and one to spare
-    detail::LaunchAction a;
-    a.kind = detail::LaunchState::Kind::Clip;
-    a.player = detail::playerOf(node, id("cl_2"));
-    REQUIRE(a.player >= 0);
-    a.anchorSample = 96000;  // bar 2, heard at 128000 at 0.75
-    a.anchorBeat = 4;
-    const std::int64_t at = 128000 + node.timelineShift;
-    const std::int64_t warmAt = at - node.launchWarm;
-    std::int64_t pos = 0;
-    const auto run = [&](std::int64_t until) {
-        while (pos < until) {
-            const auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(block, until - pos));
-            REQUIRE(detail::processBlock(plan, pos, n));
+    // `lose`: the node frame where reader 0 loses its converter (as a plan
+    // that did not carry it), restarting cold.
+    const auto play = [&](std::uint32_t block, bool warm, bool looped,
+                          std::int64_t lose = INT64_MAX) {
+        InstancePool pool = makePool();
+        MediaCache media;
+        auto plan = detail::compile(s, pool, 0, block).value();
+        plan.media = &media;
+        plan.projectDir = p.app->projectDir();
+        REQUIRE(detail::prepare(plan, s));
+        const LoopRange loop{96000, 120010, looped};
+        REQUIRE(detail::prepareRateSources(plan, 0, 0.0, &loop));  // as the engine does
+        REQUIRE(detail::primeRateSources(plan, 0));
+        REQUIRE(plan.rateStretch);
+        for (auto* instance : plan.instances) REQUIRE(instance->startProcessing());
+        auto& node = *std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                   [](const auto& n) { return n.id == id("tr_2"); });
+        REQUIRE(node.timelineShift == 0);  // (tr_2's latent gain shifts tr_1)
+        REQUIRE(node.launchReaders[2].state);
+        const int lookahead = node.launchReaders[2].state->stretch->lookahead();
+        const auto quanta = static_cast<std::uint32_t>((lookahead + 63) / 64);
+        CHECK(node.launchWarm == (quanta + 1) * 64);  // the lookahead's quanta and one to spare
+        detail::LaunchAction a;
+        a.kind = detail::LaunchState::Kind::Clip;
+        a.player = detail::playerOf(node, id("cl_2"));
+        REQUIRE(a.player >= 0);
+        a.anchorSample = looped ? 96005 : 96000;  // bar 2, heard at 128000 at 0.75
+        a.anchorBeat = 4;
+        const std::int64_t at = looped ? 160020 : 128000;
+        if (looped) CHECK(detail::quantumAt(plan, at) == 160000);
+        const std::int64_t warmAt = at - node.launchWarm;
+        const std::int64_t end = at + 8192;
+        const auto& master = plan.nodes[plan.mainMaster].post;
+        std::vector<float> out;
+        std::uint32_t primes = 0;
+        const detail::RateClipState* warmed = nullptr;
+        for (std::int64_t pos = 0; pos < end;) {
+            if (warm && pos == warmAt) {
+                CHECK(node.launchReaders[2].startQuantum == INT64_MIN);  // nothing before
+                detail::prewarm(node, a, at);
+            }
+            if (pos == at) {
+                if (warm) {
+                    const detail::PlayerReader& r = node.launchReaders[2];
+                    REQUIRE(r.state->primed);  // ready by the switch
+                    CHECK(r.primes == quanta);
+                    CHECK(r.startQuantum == detail::quantumAt(plan, at));
+                    warmed = r.state.get();
+                }
+                detail::applyLaunch(node, a);
+                if (warm) CHECK(node.launchReaders[0].state.get() == warmed);  // with its history
+            }
+            if (pos == lose) node.launchReaders[0].player = nullptr;
+            std::int64_t next = std::min<std::int64_t>(pos + block, end);
+            for (const std::int64_t stop : {warmAt, at, lose})
+                if (pos < stop && stop < next) next = stop;
+            auto n = static_cast<std::uint32_t>(next - pos);
+            n = detail::rateUntil(plan, pos, n, loop, -1);  // no block crosses the wrap
+            REQUIRE(detail::processBlock(plan, pos, n, true, &loop));
+            out.insert(out.end(), master.l.begin(), master.l.begin() + n);
             pos += n;
+            if (warm && pos > warmAt && pos <= at) {
+                const detail::PlayerReader& r = node.launchReaders[2];
+                CHECK(r.primes <= std::uint32_t(pos - warmAt) / 64);  // R1: a prime per 64 frames
+                primes = r.primes;
+            }
         }
+        if (warm && lose == INT64_MAX) {
+            CHECK(primes == quanta);
+            CHECK(node.launchReaders[0].state.get() == warmed);
+        }
+        for (auto* instance : plan.instances) instance->stopProcessing();
+        return out;
     };
-    run(warmAt);
-    CHECK(node.launchReaders[2].startQuantum == INT64_MIN);  // nothing warmed before
-    detail::prewarm(node, a, at);
-    std::uint32_t primes = 0;
-    while (pos < at) {
-        const auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(block, at - pos));
-        run(pos + n);
-        const detail::PlayerReader& r = node.launchReaders[2];
-        CHECK(r.primes - primes <= n / 64 + 1);  // a quantum's worth a quantum, and one
-        primes = r.primes;
-    }
-    const detail::PlayerReader& warm = node.launchReaders[2];
-    REQUIRE(warm.state->primed);  // ready by the switch
-    CHECK(warm.primes == quanta);
-    CHECK(warm.anchor == 96000);
-    CHECK(warm.startQuantum == detail::quantumAt(plan, at - node.timelineShift));
-    const detail::RateClipState* warmed = warm.state.get();
-    detail::applyLaunch(node, a);
-    CHECK(node.launchReaders[0].state.get() == warmed);  // in, with its history
-    run(at + block);
-    CHECK(node.launchReaders[0].state.get() == warmed);
-    CHECK(node.launchReaders[0].primes == quanta);
-    CHECK(node.launchReaders[0].state->quantum >= at - node.timelineShift);  // it played on
-    for (auto* instance : plan.instances) instance->stopProcessing();
+    for (const bool looped : {false, true})
+        for (const std::uint32_t block : {32u, 128u}) {
+            INFO("looped " << looped << ", block " << block);
+            const std::vector<float> warm = play(block, true, looped);
+            const std::vector<float> cold = play(block, false, looped);
+            REQUIRE(warm.size() == cold.size());
+            double worst = 0;
+            for (std::size_t k = 0; k < warm.size(); ++k)
+                worst = std::max(worst, std::fabs(double(warm[k]) - double(cold[k])));
+            CHECK(worst == 0.0);
+        }
+    // The catch-up: a converter lost 10 quanta after the switch restarts
+    // from the switch's quantum and runs the quanta since at once, so it
+    // plays on bit for bit; lost 40 quanta after (past the 32 caught up),
+    // it starts at its own quantum, and differs from there.
+    const std::vector<float> reference = play(128, true, false);
+    const auto differs = [&](const std::vector<float>& v) {
+        REQUIRE(v.size() == reference.size());
+        double worst = 0;
+        for (std::size_t k = 0; k < v.size(); ++k)
+            worst = std::max(worst, std::fabs(double(v[k]) - double(reference[k])));
+        return worst;
+    };
+    CHECK(differs(play(128, true, false, 128000 + 10 * 64)) == 0.0);
+    CHECK(differs(play(128, true, false, 128000 + 40 * 64)) > 0.0);
+}
+
+TEST_CASE("a plan swap or a rate change during a launch's warm-up" * doctest::description("rt")) {
+    // Round 139: a swap that keeps the rate (a track added) inside cl_2's
+    // warm-up hands reader 2 over mid-warm-up, and the launch still plays
+    // as the replay; a rate change there (0.75 to 0.8, the pitch kept) loses
+    // it, and the launch still switches and plays, cold.
+    for (const bool rate : {false, true})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("rate change " << rate << ", anticipative " << options.anticipative);
+            Project p;
+            twoTracks(p);
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+            AppLive live(p, options, 128, 48000 * 6 + 16384);
+            REQUIRE(p.app->transport("play"));
+            live.until(20 * 128);
+            p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 2: running frame 128000
+            live.until(128000 - 1500);                    // inside its warm-up (from 125056)
+            if (rate)
+                p.run("transport.playrate.set", R"({"rate": 0.8, "preserve_pitch": true})");
+            else
+                p.run("track.add", R"({"name": "Empty"})");
+            live.until(250000);
+            const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
+            REQUIRE(log.size() == 1);
+            CHECK(log[0].anchorSample == 96000);
+            const std::int64_t switched = log[0].runningFrame;
+            const std::vector<float> heard = live.stop();
+            double loudest = 0;
+            for (std::int64_t k = switched + 2000; k < switched + 40000; ++k)
+                loudest =
+                    std::max(loudest, std::fabs(double(heard[std::size_t(k + live.latency)])));
+            CHECK(loudest > 0.01);  // cl_2's ramp plays
+            if (!rate) {
+                CHECK(switched == 128000);
+                const std::vector<float> offline = replay(p, 6.0, log, 128);
+                const auto [worst, first] = compare(heard, live.latency, offline, 0, 240000);
+                CHECK(worst == 0.0);
+                CHECK(first == -1);
+            }
+        }
+}
+
+TEST_CASE("under a pitch-keeping rate only an audio clip's launch waits for a warm-up" *
+          doctest::description("rt")) {
+    // Round 139 R3: on tr_2, which holds an audio clip, a MIDI clip and a
+    // stop launched unquantized land where they would on the tape path; an
+    // audio clip lands launchWarm (2944 frames at 48 kHz) later.
+    Project p;
+    twoTracks(p);
+    p.run("scene.add", "{}");  // sc_2
+    const std::string midi = p.run("clip.add", R"({"track": "tr_2", "scene": "sc_2", )"
+                                               R"("notation": "voice v; 1: C4:w"})")["clip"]
+                                 .asString();
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+    const model::Session tape = p.app->head();
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session kept = p.app->head();
+    const auto placed = [&](const model::Session& s, const Engine::LaunchRequest& r) {
+        InstancePool pool = makePool();
+        MediaCache media;
+        DummyBackend backend({.mode = DummyBackend::Mode::Manual});
+        Engine engine(pool, media, kInCallback);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = 128}));
+        REQUIRE(engine.load(s, p.app->projectDir()));
+        engine.play();
+        backend.run(20);
+        engine.service();
+        auto at = engine.launch(std::span(&r, 1), model::LaunchQuantize::None);
+        REQUIRE_MESSAGE(at, (at ? std::string() : at.error().toString()));
+        engine.stop();
+        return at->stream;
+    };
+    Engine::LaunchRequest stop = backTo("tr_2");
+    stop.action = LaunchLogEntry::Action::Stop;
+    Engine::LaunchRequest notes = request("tr_2", "cl_2");
+    notes.clip = id(midi.c_str());
+    CHECK(placed(kept, notes) == placed(tape, notes));
+    CHECK(placed(kept, stop) == placed(tape, stop));
+    CHECK(placed(kept, backTo("tr_2")) == placed(tape, backTo("tr_2")));
+    CHECK(placed(kept, request("tr_2", "cl_2")) == placed(tape, request("tr_2", "cl_2")) + 2944);
 }
 
 TEST_CASE("a launched audio clip's converter carries over a plan swap under a pitch-keeping rate" *
@@ -285,11 +415,13 @@ TEST_CASE("a launch made during another's warm-up lands after it, and plays as t
     const std::int64_t frames = 460000 + 16384;
     constexpr std::int64_t kWarm = 2944;  // at 48 kHz (the plan-level case above)
     Replays replays;
-    for (const std::uint32_t block : {128u, 512u})
+    for (const std::uint32_t block : {32u, 128u, 512u})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            // Blocks under a quantum (round 139) in the callback executor.
+            if (block == 32 && options.anticipative) continue;
             INFO("block " << block << ", anticipative " << options.anticipative);
             const std::vector<Step> steps{
-                {20, {request("tr_2", "cl_2")}},
+                {2560 / block, {request("tr_2", "cl_2")}},
                 {(128000 - 1000) / block, {request("tr_2", "cl_3")}, model::LaunchQuantize::None},
                 {(256000 + 4000) / block, {request("tr_2", "cl_2")}}};
             const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);

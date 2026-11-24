@@ -847,6 +847,7 @@ struct PlayerReader {
     // switch's (`launchCycle`); `primes` of the converter's warm-up are done.
     std::int64_t startQuantum = INT64_MIN, launchCycle = 0;
     std::uint32_t primes = 0;
+    std::uint32_t credit = 0;  // frames played since its warm-up's last prime (R1)
 };
 
 // An audio item ready to play: which source frames land on which samples.
@@ -1160,6 +1161,11 @@ struct Node {
     // reaches the node `launchWarm` frames before it applies (prewarm), at
     // node frame `launchWarmAt`, and its converter warms up meanwhile.
     std::int64_t launchWarm = 0, launchWarmAt = 0;
+    // The device frame of the last switch, set by the first block after it
+    // (applyLaunch marks it pending): a cold reading starts from its quantum
+    // and takes its loop cycle, as a warm-up does (S3 step D).
+    std::int64_t launchSwitchAt = INT64_MIN;
+    bool launchSwitchPending = false;
     LaunchAction launchWarmNext;
     bool launchWarmValid = false;
     // MIDI sizing (prepareRackMidi): the most clip notes sounding at once and
@@ -1673,9 +1679,18 @@ void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
 // A launch reaching the node Node::launchWarm before it applies, at node
 // frame `at` (S3 step D): its converter warms up from here.
 void prewarm(Node& n, const LaunchAction& a, std::int64_t at) SUPPLE_RT;
-// How early a launch reaches the node: its clip chains' lead or its warm-up.
-inline std::int64_t launchEarly(const Node& n) SUPPLE_RT {
-    return n.launchLead > n.launchWarm ? n.launchLead : n.launchWarm;
+// Whether a launch of `player` warms a converter up first: an audio clip
+// on a pitch-keeping plan (S3 step D).
+inline bool launchWarms(const Node& n, LaunchState::Kind kind, int player) SUPPLE_RT {
+    return n.launchWarm > 0 && kind == LaunchState::Kind::Clip && player >= 0 &&
+           static_cast<std::size_t>(player) < n.players.size() &&
+           !n.players[static_cast<std::size_t>(player)].midi;
+}
+// How early that launch reaches the node: its clip chains' lead, or its
+// warm-up when it has one. MIDI, stops and returns keep the lead alone.
+inline std::int64_t launchEarly(const Node& n, LaunchState::Kind kind, int player) SUPPLE_RT {
+    const std::int64_t warm = launchWarms(n, kind, player) ? n.launchWarm : 0;
+    return n.launchLead > warm ? n.launchLead : warm;
 }
 // An audio clip whose active take has FX or envelopes: it plays through a
 // take chain (plan.cpp), which a pitch-keeping plan cannot read launched yet.

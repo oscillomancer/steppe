@@ -1138,7 +1138,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                         -1,
                                         {},
                                         true});
-                if (node.launchWarm > 0 && a.kind == detail::LaunchState::Kind::Clip)
+                if (detail::launchWarms(node, a.kind, a.player))
                     switches.push_back({e.runningFrame + node.timelineShift - node.launchWarm,
                                         k,
                                         a,
