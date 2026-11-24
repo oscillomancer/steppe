@@ -1070,6 +1070,10 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     // Only whole ids: part of a word, or a prefix with no number, stays.
     CHECK(views::objectNames(s, "disc_3, tr_2x, sc_ and (tr_1)") ==
           "disc_3, tr_2x, sc_ and (Drums)");
+    // A message that gives the name and the id says the name once (round
+    // 165 F4: freeze.cpp's "Bass (tr_2) is frozen"); another name stays.
+    CHECK(views::objectNames(s, "Bass (tr_2) is frozen") == "Bass is frozen");
+    CHECK(views::objectNames(s, "Old (tr_2) is frozen") == "Old (Bass) is frozen");
     // The Error form: the message, the hint and each listed error; the code
     // and path stay as the command gave them.
     Error e("clip.occupied", "cl_3 is in sc_2", "/clip", "move cl_3 out of tr_2 first");

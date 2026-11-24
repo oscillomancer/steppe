@@ -198,7 +198,18 @@ std::string objectNames(const model::Session& s, std::string_view text) {
             while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
             if (!word(end))
                 if (const auto id = model::Id::parse(text.substr(i, end - i))) {
-                    out += objectName(s, *id);
+                    const std::string name = objectName(s, *id);
+                    // "Bass (tr_2)": a message that gives the name already
+                    // says it once, not "Bass (Bass)".
+                    const std::string given = name + " (";
+                    if (i > 0 && text[i - 1] == '(' && end < text.size() && text[end] == ')' &&
+                        out.size() >= given.size() &&
+                        out.compare(out.size() - given.size(), given.size(), given) == 0) {
+                        out.resize(out.size() - 2);
+                        i = end + 1;
+                        continue;
+                    }
+                    out += name;
                     i = end;
                     continue;
                 }

@@ -458,6 +458,9 @@ One that is gone is "a removed …". Each status line (the main window's,
 the FX window's, the event list's, the render dialog's, the rack window's)
 says each whole id in what it shows by `views::objectNames`, so a
 command's refusal names what it is about; the rest of its words are kept.
+A message that already gives the name with the id in parentheses ("Bass
+(tr_2) is frozen") says the name once ("Bass is frozen"); a different name
+before it stays ("Old (Bass)").
 Commands, their errors and what agents see keep their ids; the command log
 (§4.10) shows commands as they ran.
 
