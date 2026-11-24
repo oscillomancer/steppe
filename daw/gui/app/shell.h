@@ -42,6 +42,19 @@ std::string countsText(const model::Session& session);
 
 // The engine's launch state as the arrange view draws it (ADR-0097).
 views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& state);
+// What a press on each clip and scene of the head would be refused for now
+// (EngineApp::launchRefusal, sceneLaunchRefusal), by its code.
+views::LaunchRefusals launchRefusals(const engine::EngineApp& app);
+// Keeps the arrange view's refusals current: asks them again whenever
+// EngineApp::launchRefusalGeneration moves (a plan published, an edit, an
+// engine started or stopped, a project opened), and only then. Each frame.
+class RefusalWatch {
+  public:
+    void update(const engine::EngineApp& app, views::ArrangeView& view);
+
+  private:
+    std::optional<std::uint64_t> seen_;  // nullopt: never asked yet
+};
 
 class Shell {
   public:
@@ -135,6 +148,7 @@ class Shell {
     std::unique_ptr<TrackMenu> trackMenu_;  // made in build() (needs the root)
     UiState& ui_;
     std::string status_, editStatus_;
+    RefusalWatch refusals_;  // the launcher's dimmed clips and scenes (step E)
     // The name and keys of the control the pointer rests on, which the
     // status line says in the note's place; a note set since the pointer
     // came to rest there shows instead (a press's error is not hidden).

@@ -420,6 +420,9 @@ void Shell::sync(bool event) {
     // What each track with clips plays (ADR-0097): the launcher's playing,
     // queued and held cells, its Arr dots and the held tracks' lanes.
     arrange_->setLaunchState(launchViews(app_.launchState()));
+    // What a press on each clip and scene would be refused for (step E): the
+    // engine's own answer, asked again only when it can have changed.
+    refusals_.update(app_, *arrange_);
     // Capture (L4): a capture the transport ended is committed, and the
     // toggle shows whether it is armed.
     capture_.service();
@@ -464,6 +467,23 @@ views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& s
         out[t.track] = v;
     }
     return out;
+}
+
+views::LaunchRefusals launchRefusals(const engine::EngineApp& app) {
+    const model::Session& s = app.head();
+    views::LaunchRefusals out;
+    for (const auto& e : s.clips)
+        if (auto refused = app.launchRefusal(e.id)) out.clips[e.id] = refused->code;
+    for (const auto& e : s.scenes)
+        if (auto refused = app.sceneLaunchRefusal(e.id)) out.scenes[e.id] = refused->code;
+    return out;
+}
+
+void RefusalWatch::update(const engine::EngineApp& app, views::ArrangeView& view) {
+    const std::uint64_t generation = app.launchRefusalGeneration();
+    if (generation == seen_) return;
+    seen_ = generation;
+    view.setLaunchRefusals(launchRefusals(app));
 }
 
 std::optional<std::chrono::steady_clock::time_point> Shell::nextDeadline() const {

@@ -1833,6 +1833,14 @@ void ArrangeView::setCaptureEnding(bool ending) {
     captureEnding_ = ending;
     if (launcherHeader_) launcherHeader_->invalidate();
 }
+void ArrangeView::setLaunchRefusals(LaunchRefusals refusals) {
+    if (refusals == launchRefusals_) return;
+    launchRefusals_ = std::move(refusals);
+    if (launcherPane_ && launcherPane_->visible) {
+        launcherPane_->invalidate();
+        launcherHeader_->invalidate();
+    }
+}
 void ArrangeView::setLaunchState(LaunchViews views) {
     if (views == launchViews_) return;
     std::set<model::Id> held;

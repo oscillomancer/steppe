@@ -359,22 +359,6 @@ std::string takeFollowMark(const model::Take& take) {
     return std::string(kFollowMark) + text;
 }
 
-bool launchRefused(const model::Session& s, const model::Clip& clip) {
-    // launch_runtime.cpp:323: plan->rateStretch && the clip is not MIDI.
-    if (clip.kind == model::ClipKind::Midi || !s.project) return false;
-    const model::Playrate& rate = s.project->playrate;
-    return rate.preservePitch && (rate.rate != 1 || model::activePlayrateEnvelope(s));
-}
-
-bool sceneLaunchRefused(const model::Session& s, model::Id scene) {
-    for (const auto& e : s.clips) {
-        if (e.value->scene != scene) continue;
-        const model::Track* track = s.tracks.find(e.value->track);
-        if (track && !track->freeze && launchRefused(s, *e.value)) return true;
-    }
-    return false;
-}
-
 int barAfterArrangement(const model::Session& s) {
     double end = 0;
     for (const auto& e : s.items) end = std::max(end, model::itemEndBeat(s, *e.value));
@@ -619,10 +603,11 @@ void LauncherPane::paint(ui::Canvas& c) {
     const LauncherColumns cols = columns();
     c.fillRect(b, t.color("ground"));
     const float caption = t.type("caption");
-    // A clip the engine would refuse to launch (an audio clip under a
-    // pitch-keeping master playrate) draws as a muted one does, and a click's
+    // A clip a press would be refused for now (ArrangeView::launchRefusals,
+    // the engine's own answer) draws as a muted one does, and a click's
     // refusal says why in the status line.
     stats.refused = 0;
+    const auto& refusedClips = view_.launchRefusals().clips;
     c.save();
     c.clip(b);
     for (std::size_t i = 0; i < tracks.rowCount(); ++i) {
@@ -669,8 +654,9 @@ void LauncherPane::paint(ui::Canvas& c) {
             const bool queued =
                 lv && lv->queued == LaunchView::Queued::Clip && lv->queuedClip == id;
             const ui::Color color = clipColor(t, s, *clip);
-            const bool refused = launchRefused(s, *clip);
+            const bool refused = refusedClips.contains(*id);
             stats.refused += refused;
+            if (refused) stats.refusedClips.push_back(*id);
             const float dim = clip->mute || refused ? 0.45f : 1.0f;
             c.fillRound(inner, 2, color.withAlpha(0.24f * dim));
             c.strokeRound(inner, 2, color.withAlpha(0.8f * dim));
@@ -826,7 +812,7 @@ void LauncherPane::paintGl(const ui::GlFrame& frame) {
             if (body.w <= 2 || body.h < 4 || body.right() <= bounds().x) continue;
             const model::Take* take = s.takes.find(*c->activeTake);
             if (!take || !take->source) continue;
-            const float dim = c->mute || launchRefused(s, *c) ? 0.45f : 1.0f;
+            const float dim = c->mute || view_.launchRefusals().clips.contains(*id) ? 0.45f : 1.0f;
             const ui::Color color = clipColor(t, s, *c);
             const ui::Rect full = bodyRect(cellRect(i, col));  // the period's span
             if (const model::MidiSource* src = s.midi.find(*take->source)) {
@@ -1212,6 +1198,7 @@ void LauncherHeader::paint(ui::Canvas& c) {
     const ui::Rect b = bounds();
     const model::Session& s = view_.session();
     stats.refused = 0;
+    stats.refusedScenes.clear();
     c.fillRect(b, t.color("panel"));
     c.fillRect({b.x, b.bottom() - 1, b.w, 1}, t.color("rule"));
     c.fillRect({b.right() - 1, b.y, 1, b.h}, t.color("rule"));
@@ -1260,8 +1247,9 @@ void LauncherHeader::paint(ui::Canvas& c) {
         const ui::Rect cell{cols.columnX(col), row.y, LauncherColumns::kColumn, row.h};
         c.fillRect({cell.right() - 1, cell.y + 3, 1, cell.h - 6}, t.color("rule"));
         const bool playing = scenePlaying(s, view_.launchState(), cols.scenes[col]);
-        const bool refused = sceneLaunchRefused(s, cols.scenes[col]);
+        const bool refused = view_.launchRefusals().scenes.contains(cols.scenes[col]);
         stats.refused += refused;
+        if (refused) stats.refusedScenes.push_back(cols.scenes[col]);
         if (playing)
             drawPlaying(c, {cell.x + 1, cell.y, 14, cell.h});
         else

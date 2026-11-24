@@ -12,8 +12,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -27,6 +29,7 @@
 #include "supple/json/parse.h"
 #include "supple/json/write.h"
 #include "supple/peaks/peaks.h"
+#include "supple/product.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
@@ -57,6 +60,7 @@ struct LauncherFixture {
     std::vector<Error> errors;
     std::vector<std::string> notices;  // the status line's notes (onNotice)
     std::vector<model::Id> opened, selected, takeFx;
+    gui::RefusalWatch refusals;  // as the shell keeps them, each pass
 
     LauncherFixture() {
         dir = std::filesystem::temp_directory_path() /
@@ -107,6 +111,7 @@ struct LauncherFixture {
     }
     void sync() {
         view->show(app->head());
+        refusals.update(*app, *view);
         root->frame(false);
     }
     json::Value exec(const std::string& command, const std::string& args) {
@@ -1130,63 +1135,255 @@ TEST_CASE(
     CHECK(f.errors.empty());
 }
 
-TEST_CASE("launcher: a pitch-keeping master playrate dims the audio clips the engine refuses") {
-    // The lead's b3af83f5: clips launch under a master playrate; only an
-    // audio clip while it keeps the pitch is refused (launch.playrate). The
-    // pane dims exactly those, and the scenes whose launch would start one.
-    LauncherFixture f;
-    f.song();
+namespace {
+// The pane against the engine (step E): the clips drawn dimmed and the scenes
+// whose ▶ is dimmed are exactly those a press would be refused for now
+// (EngineApp::launchRefusal, sceneLaunchRefusal), each clip by the code the
+// view holds. The refused clips' ids.
+std::set<model::Id> agreeWithEngine(LauncherFixture& f, const char* when) {
+    INFO(when);
+    f.sync();
+    f.root->damageAll();
+    f.root->frame(false);
+    const views::LauncherPane& pane = f.view->launcherPane();
+    const views::LauncherHeader& header = f.view->launcherHeader();
+    const views::LaunchRefusals& held = f.view->launchRefusals();
+    const model::Session& s = f.app->head();
+    std::set<model::Id> clips, scenes;
+    for (const auto& e : s.clips)
+        if (const auto refused = f.app->launchRefusal(e.id)) {
+            clips.insert(e.id);
+            const auto it = held.clips.find(e.id);
+            INFO(e.id.str() << " " << refused->code);
+            CHECK((it != held.clips.end() && it->second == refused->code));
+        }
+    for (const auto& e : s.scenes)
+        if (f.app->sceneLaunchRefusal(e.id)) scenes.insert(e.id);
+    CHECK(std::set<model::Id>(pane.stats.refusedClips.begin(), pane.stats.refusedClips.end()) ==
+          clips);
+    CHECK(pane.stats.refused == static_cast<int>(clips.size()));
+    CHECK(std::set<model::Id>(header.stats.refusedScenes.begin(),
+                              header.stats.refusedScenes.end()) == scenes);
+    CHECK(header.stats.refused == static_cast<int>(scenes.size()));
+    return clips;
+}
+
+// A mono file of one second at `level`, at the fixture's 48 kHz.
+std::string writeTone(LauncherFixture& f, const char* name, float level) {
     audio::AudioData tone;
     tone.sampleRate = 48000;
-    tone.channels.assign(1, std::vector<float>(96000, 0.25f));
-    const auto wav = f.dir / "tone.wav";
-    REQUIRE(audio::writeWav(wav, tone));
+    tone.channels.assign(1, std::vector<float>(48000, level));
+    const auto path = f.dir / name;
+    REQUIRE(audio::writeWav(path, tone));
+    return path.string();
+}
+
+std::string addAudioClip(LauncherFixture& f, const char* track, const char* scene,
+                         const std::string& file) {
     json::Value add = json::Value::object();
-    add["track"] = "tr_3";
-    add["scene"] = "sc_3";
-    add["audio_file"] = wav.string();
-    const std::string pad = f.exec("clip.add", *json::write(add))["clip"].asString();
-    f.exec("engine.start", R"({"backend":"dummy"})");
+    add["track"] = track;
+    add["scene"] = scene;
+    add["audio_file"] = file;
+    return f.exec("clip.add", *json::write(add))["clip"].asString();
+}
+}  // namespace
+
+TEST_CASE("launcher: the pane dims what a press would be refused for, as the engine answers") {
+    // Step E: the pane no longer copies the engine's rule; it asks
+    // EngineApp::launchRefusal and sceneLaunchRefusal, again whenever
+    // launchRefusalGeneration moves. After step D a plain audio clip launches
+    // under a pitch-keeping playrate; one read through a take chain (here a
+    // take envelope) is refused (launch.playrate), and so is the scene
+    // holding it. A frozen track's clips are refused (track.frozen), engine
+    // or not; a scene left with nothing to play answers launch.scene.
+    LauncherFixture f;
+    f.song();
+    using model::Id;
+    const auto id = [](const char* text) { return *Id::parse(text); };
+    // Keys: a plain audio clip in Chorus, and one with a take envelope in Intro.
+    const Id pad = id(addAudioClip(f, "tr_3", "sc_3", writeTone(f, "pad.wav", 0.25f)).c_str());
+    const Id chained =
+        id(addAudioClip(f, "tr_3", "sc_1", writeTone(f, "chained.wav", 0.5f)).c_str());
+    json::Value env = json::Value::object();
+    env["take"] = f.app->head().clips.find(chained)->activeTake->str();
+    env["param"] = "volume";
+    env["points"] =
+        json::parse(R"([{"seconds":0,"value":0},{"seconds":1,"value":"-6 dB"}])").value();
+    f.exec("env.add", *json::write(env));
     views::LauncherPane& pane = f.view->launcherPane();
     views::LauncherHeader& header = f.view->launcherHeader();
-    auto draw = [&] {
-        f.root->damageAll();
-        f.root->frame(false);
-    };
-    draw();
-    CHECK(pane.stats.refused == 0);
-    CHECK(header.stats.refused == 0);
-    // A rate that moves the pitch: every clip launches, nothing dims.
+    // No engine: nothing is refused for the clip itself (a press answers
+    // engine.stopped, which is not shown).
+    CHECK(agreeWithEngine(f, "stopped").empty());
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    CHECK(agreeWithEngine(f, "running at 1").empty());
+    // A rate that moves the pitch: every clip launches.
     f.exec("transport.playrate.set", R"({"rate":1.5})");
-    draw();
-    CHECK(pane.stats.refused == 0);
-    CHECK(header.stats.refused == 0);
-    // Keeping the pitch: the audio clip and Chorus's ▶ dim, the MIDI clips
-    // and the other scenes do not.
+    CHECK(agreeWithEngine(f, "1.5 moving the pitch").empty());
+    // Keeping the pitch: the take-envelope clip and Intro's ▶ dim; the plain
+    // audio clip, the MIDI clips and the other scenes do not.
     f.exec("transport.playrate.set", R"({"rate":1.5,"preserve_pitch":true})");
-    const model::Session& s = f.app->head();
-    CHECK(views::launchRefused(s, *s.clips.find(*model::Id::parse(pad))));
-    CHECK_FALSE(views::launchRefused(s, *s.clips.find(*model::Id::parse("cl_1"))));
-    CHECK(views::sceneLaunchRefused(s, *model::Id::parse("sc_3")));
-    CHECK_FALSE(views::sceneLaunchRefused(s, *model::Id::parse("sc_2")));
-    draw();
-    CHECK(pane.stats.refused == 1);
-    CHECK(header.stats.refused == 1);
+    CHECK(agreeWithEngine(f, "1.5 keeping the pitch") == std::set<Id>{chained});
+    CHECK(f.view->launchRefusals().clips.at(chained) == "launch.playrate");
+    CHECK_FALSE(f.app->launchRefusal(pad));  // plain audio launches (step D)
+    CHECK(header.stats.refusedScenes == std::vector<Id>{id("sc_1")});
+    CHECK(f.view->launchRefusals().scenes.at(id("sc_1")) == "launch.playrate");
     f.golden("launcher-refused-dark.png");
-    // The audio clip's ▶ still asks, and the refusal reaches the app's error
-    // hook (the status line), naming why.
-    f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_3"), 2))));
+    f.snapshot("launcher-refusals-playrate.png");
+    // Its ▶ still asks, and the refusal reaches the status line with the
+    // code the pane holds.
+    f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_3"), 0))));
     REQUIRE(f.errors.size() == 1);
     CHECK(f.errors.back().code == "launch.playrate");
     // A MIDI clip's launches.
     f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_1"), 0))));
     CHECK(f.errors.size() == 1);
-    // Back at 1: nothing dims.
-    f.exec("transport.playrate.set", R"({"rate":1.0})");
-    draw();
+    // At 1 with the pitch still kept, and with it off: whatever the plan
+    // then answers, the pane says the same; off, nothing dims.
+    f.exec("transport.playrate.set", R"({"rate":1.0,"preserve_pitch":true})");
+    agreeWithEngine(f, "1 keeping the pitch");
+    f.exec("transport.playrate.set", R"({"rate":1.0,"preserve_pitch":false})");
+    CHECK(agreeWithEngine(f, "1, pitch not kept").empty());
+    // A clip just added: while its plan is on its way to the engine a press
+    // answers launch.clip (wait for the edit), and the pane dims it then;
+    // once the plan is there nothing is dimmed. Outro holds only a Bass clip.
+    f.exec("scene.add", R"({"name":"Outro"})");  // sc_4
+    const Id fresh =
+        id(f.exec("clip.add",
+                  R"({"track":"tr_2","scene":"sc_4","notation":"voice b; 1: C2:w"})")["clip"]
+               .asString()
+               .c_str());
+    {
+        const std::set<Id> added = agreeWithEngine(f, "a clip added");
+        std::string held;
+        for (const auto& [clip, code] : f.view->launchRefusals().clips)
+            held += clip.str() + " " + code + "; ";
+        INFO("refused: " << held);
+        CHECK((added.empty() || (added == std::set<Id>{fresh} &&
+                                 f.view->launchRefusals().clips.at(fresh) == "launch.clip")));
+        const auto since = std::chrono::steady_clock::now();
+        while (f.app->launchRefusal(fresh) &&
+               std::chrono::steady_clock::now() - since < std::chrono::minutes(2)) {
+            f.app->tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(agreeWithEngine(f, "the added clip's plan reached the engine").empty());
+    }
+    // Freezing needs an item on the track: Bass gets an audio one.
+    {
+        json::Value item = json::Value::object();
+        item["track"] = "tr_2";
+        item["bar"] = 1;
+        item["audio_file"] = writeTone(f, "bass.wav", 0.3f);
+        f.exec("item.add", *json::write(item));
+    }
+    // Freezing Bass: its clips are refused from the edit on, before its print
+    // plays; Outro has nothing left to play (launch.scene), Verse still
+    // launches Kit B.
+    f.exec("transport.stop", "{}");
+    const std::uint64_t plans = f.app->engine()->planGeneration();
+    f.exec("track.freeze", R"({"track":"tr_2"})");
+    CHECK(agreeWithEngine(f, "frozen, before its print") == std::set<Id>{id("cl_3"), fresh});
+    CHECK(f.view->launchRefusals().clips.at(fresh) == "track.frozen");
+    CHECK(header.stats.refusedScenes == std::vector<Id>{id("sc_4")});
+    CHECK(f.view->launchRefusals().scenes.at(id("sc_4")) == "launch.scene");
+    f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_2"), 1))));
+    REQUIRE(f.errors.size() == 2);
+    CHECK(f.errors.back().code == "track.frozen");
+    // Once the print's plan is published the answers are the same.
+    const auto start = std::chrono::steady_clock::now();
+    while (f.app->engine()->planGeneration() == plans &&
+           std::chrono::steady_clock::now() - start < std::chrono::minutes(2)) {
+        f.app->tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(f.app->engine()->planGeneration() != plans);  // a hang guard, not a timing check
+    CHECK(agreeWithEngine(f, "frozen, its print published") == std::set<Id>{id("cl_3"), fresh});
+    // (A frozen track locks timing: the playrate cannot change now.)
+    f.snapshot("launcher-refusals-frozen.png");
+    // Stopped: a frozen track's clips are still refused (launch.clip checks
+    // the freeze before the engine); no scene is (launch.scene asks for the
+    // engine first), and the take-envelope clip is not.
+    f.exec("engine.stop", "{}");
+    CHECK(agreeWithEngine(f, "stopped, Bass frozen") == std::set<Id>{id("cl_3"), fresh});
+    CHECK(header.stats.refused == 0);
+}
+
+TEST_CASE("launcher: a clip whose audio did not fit dims alone; its scene still launches") {
+    // ADR-0097 "Memory", as test_clip_launcher.cpp's "clip audio is prepared
+    // after the arrangement…": three mono sources made 2^26 frames long in
+    // the saved file (the estimate reads the model) and two fill the budget.
+    // In launch order (scene, then track) cl_3, cl_1, cl_2, cl_4: cl_2's
+    // source is skipped (launch.memory); cl_4 shares cl_1's and still fits,
+    // so Verse launches it and its ▶ stays bright.
+    LauncherFixture f;
+    f.exec("track.add", R"({"type":"channel","name":"Drums"})");     // tr_1
+    f.exec("track.add", R"({"type":"channel","name":"Pad"})");       // tr_2
+    f.exec("scene.add", R"({"name":"Intro"})");                      // sc_1
+    f.exec("scene.add", R"({"name":"Verse"})");                      // sc_2
+    addAudioClip(f, "tr_2", "sc_1", writeTone(f, "a.wav", 0.25f));   // cl_1
+    addAudioClip(f, "tr_1", "sc_2", writeTone(f, "b.wav", 0.5f));    // cl_2
+    addAudioClip(f, "tr_1", "sc_1", writeTone(f, "c.wav", 0.125f));  // cl_3
+    f.exec("clip.duplicate", R"({"clip":"cl_1","scene":"sc_2"})");   // cl_4
+    const auto path = f.dir / ("memory." + std::string(product::kSlug));
+    json::Value save = json::Value::object();
+    save["path"] = path.string();
+    f.exec("project.save", *json::write(save));
+    std::stringstream text;
+    {
+        std::ifstream in(path);
+        text << in.rdbuf();
+    }
+    auto doc = json::parse(text.str()).value();
+    for (auto& m : doc["sources"]["media"].asObject()) m.value["frames"] = 1 << 26;
+    {
+        std::ofstream out(path, std::ios::trunc);
+        out << json::writeCanonical(doc);
+    }
+    f.exec("project.open", *json::write(save));
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    const model::Id skipped = *model::Id::parse("cl_2");
+    CHECK(agreeWithEngine(f, "cl_2 skipped") == std::set<model::Id>{skipped});
+    CHECK(f.view->launchRefusals().clips.at(skipped) == "launch.memory");
+    views::LauncherPane& pane = f.view->launcherPane();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    CHECK(header.stats.refused == 0);
+    // Its ▶ asks and is refused, naming why; Verse's ▶ launches the rest.
+    f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_1"), 1))));
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors.back().code == "launch.memory");
+    const ui::Rect verse = header.sceneRect(1);
+    f.click({verse.x + 8, verse.y + verse.h / 2});
+    CHECK(f.errors.size() == 1);
+    f.exec("engine.stop", "{}");
+}
+
+TEST_CASE("launcher: every refusal code dims its clip as a muted one; the set comes from the app") {
+    // The views do not see the engine: whatever the app sets is drawn, each
+    // code the same way (no text, no mark of its own).
+    LauncherFixture f;
+    f.song();
+    using model::Id;
+    const auto id = [](const char* text) { return *Id::parse(text); };
+    views::LaunchRefusals refusals;
+    refusals.clips = {{id("cl_1"), "launch.memory"},
+                      {id("cl_2"), "track.frozen"},
+                      {id("cl_3"), "launch.playrate"}};
+    refusals.scenes = {{id("sc_2"), "launch.playrate"}};
+    f.view->setLaunchRefusals(refusals);
+    f.root->damageAll();
+    f.root->frame(false);
+    views::LauncherPane& pane = f.view->launcherPane();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    CHECK(pane.stats.refusedClips == std::vector<Id>{id("cl_1"), id("cl_2"), id("cl_3")});
+    CHECK(header.stats.refusedScenes == std::vector<Id>{id("sc_2")});
+    // The clips draw no more than they did: names and key marks unchanged.
+    CHECK(pane.stats.names == std::vector<std::string>{"Kit A", "Kit B", "Root"});
+    f.view->setLaunchRefusals({});
+    f.root->damageAll();
+    f.root->frame(false);
     CHECK(pane.stats.refused == 0);
     CHECK(header.stats.refused == 0);
-    f.exec("engine.stop", "{}");
 }
 
 TEST_CASE(

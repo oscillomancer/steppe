@@ -1749,10 +1749,14 @@ different key ("its chord Am differs from F at bar 5" in the same key over
 another chord). A Capture take laid under a different key or chord says so
 the same way. A clip with its own key
 shows it in the corner of its cell ("Dm", "G dor"), with "→" before it
-when the clip follows. Clips launch under a master playrate, but
-while it keeps the pitch an audio clip can't be launched: the pane draws
-those clips (and the scenes holding one) dimmed, and a click says why in
-the status line.
+when the clip follows. The pane draws a clip dimmed when launching it
+now would be refused: an audio clip with take FX or take envelopes while
+the master playrate keeps the pitch (or follows MIDI clock), a clip
+whose audio didn't fit in memory, or a frozen track's clips. A scene's
+▶ is dimmed when the scene can't launch: nothing in it can play, or a
+clip it would start with the rest is refused. A refusal that depends on
+the transport, such as the engine not running, is not shown. A click
+still asks, and the status line says why.
 
 In the piano roll a clip starts at its own bar 1, and its end is marked
 "end", with the time after it shaded. It has no place in the
@@ -1885,8 +1889,9 @@ launches: it plays the clip, falls silent when the track stops, and
 plays the timeline again with the arrangement. The track's MIDI sends
 carry the clips too.
 
-A frozen track plays its print: `launch.clip` refuses it and
-`launch.scene` skips it.
+A frozen track plays its print: `launch.clip` refuses its clips
+(`track.frozen`), and the pane draws them dimmed, and `launch.scene`
+skips them.
 
 ### From scenes to a song
 

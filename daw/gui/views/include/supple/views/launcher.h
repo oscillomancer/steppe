@@ -48,6 +48,20 @@ struct LaunchView {
 };
 using LaunchViews = std::map<model::Id, LaunchView>;  // by track
 
+// What a press would be refused for right now, by clip and by scene, with
+// the refusal's code (EngineApp::launchRefusal and sceneLaunchRefusal; the
+// views do not see the engine). A clip: track.frozen, launch.playrate (an
+// audio clip with take FX or envelopes while the plan keeps the pitch),
+// launch.memory, launch.clip. A scene: launch.scene (nothing it holds can
+// play) or the first refusal among the clips it would launch together.
+// Transport-state refusals (no engine, a relocation, a full queue) are not
+// here. The pane draws these clips, and these scenes' ▶, dimmed as a muted
+// clip is; a click still asks, and its refusal reaches the status line.
+struct LaunchRefusals {
+    std::map<model::Id, std::string> clips, scenes;
+    bool operator==(const LaunchRefusals&) const = default;
+};
+
 struct LauncherCallbacks {
     // One command per gesture (launches are actions, edits one undo step).
     std::function<Result<json::Value>(const std::string&, json::Value)> run;
@@ -109,18 +123,6 @@ int barAtOrAfter(const time::TimeMap& map, double beat);
 // The bar after the arrangement: the first bar line at or after the end of
 // its last item or section (bar 1 when it is empty).
 int barAfterArrangement(const model::Session& session);
-// Whether the engine refuses to launch `clip` now (launch.playrate), so the
-// pane draws it dimmed: an audio clip while the master playrate keeps the
-// pitch at other than a steady 1 (a rate or an active envelope); a MIDI clip
-// always launches. The engine does not say which clips it would refuse
-// (neither EngineApp nor launch.state does); until it does, this mirrors
-// Engine::launch's check (launch_runtime.cpp:323, the plan's rateStretch)
-// here and nowhere else. A MIDI-clock chase, which stretches too, cannot be
-// seen from the session.
-bool launchRefused(const model::Session& session, const model::Clip& clip);
-// A scene's launch is refused when one of the clips it would start is:
-// Engine::launch takes them together (launch.scene skips frozen tracks).
-bool sceneLaunchRefused(const model::Session& session, model::Id scene);
 
 // What a command that laid clips on the timeline did with their keys, in a
 // few words for the status line (gui.md §4.15), read from the answer's
@@ -225,7 +227,8 @@ class LauncherPane : public ui::Node {
         std::vector<std::string> keys;   // their key marks as drawn ("Dm"; "" for none)
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
-        int refused = 0;  // clips drawn dimmed: their launch is refused (launchRefused)
+        int refused = 0;  // clips drawn dimmed: a press is refused (ArrangeView::launchRefusals)
+        std::vector<model::Id> refusedClips;  // those clips, in drawing order
         std::size_t notes = 0, columns = 0, pending = 0, fades = 0;  // the last paintGl's
     } stats;
 
@@ -279,7 +282,8 @@ class LauncherHeader : public ui::Node {
     struct Stats {
         bool captureLit = false;
         bool captureEnding = false;  // lit, outlined dashed (ArrangeView::captureEnding)
-        int refused = 0;             // scenes whose ▶ is dimmed (sceneLaunchRefused)
+        int refused = 0;             // scenes whose ▶ is dimmed (ArrangeView::launchRefusals)
+        std::vector<model::Id> refusedScenes;  // those scenes, in column order
     } stats;
     // The scene column under x in the headers' row, and its ▶.
     std::optional<std::size_t> sceneAt(ui::Point p) const;

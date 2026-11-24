@@ -202,6 +202,11 @@ class ArrangeView : public ui::Node {
     // tracks' dimmed lanes. Redraws only when it changes.
     void setLaunchState(LaunchViews views);
     const LaunchViews& launchState() const { return launchViews_; }
+    // What a press on each clip and scene would be refused for now, set by
+    // the app when its answers can change (EngineApp::launchRefusalGeneration):
+    // the pane dims those clips and scenes' ▶. Redraws only when it changes.
+    void setLaunchRefusals(LaunchRefusals refusals);
+    const LaunchRefusals& launchRefusals() const { return launchRefusals_; }
     // The launcher header's Capture toggle, lit while the app has it armed
     // (set each pass).
     void setCaptureArmed(bool armed);
@@ -301,6 +306,7 @@ class ArrangeView : public ui::Node {
     float launcherScroll_ = 0;
     LauncherCallbacks launcherCallbacks_;
     LaunchViews launchViews_;
+    LaunchRefusals launchRefusals_;
     bool captureArmed_ = false;
     bool captureEnding_ = false;
     std::vector<model::Id> selectedClips_;
