@@ -845,10 +845,12 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
 }
 
 // The device frame of the switch `n` warms up for: launchWarmAt is the
-// slot's target (a stream frame) plus the node's shift, and a seek moves the
-// device away from the stream by the plan's rateOrigin.
+// slot's target, a stream frame, and a seek moves the device away from the
+// stream by the plan's rateOrigin. (The node's shift does not enter: its
+// switch lands at the target plus the shift in node frames, the device frame
+// being the node frame less the shift.)
 std::int64_t warmSwitchDevice(const Plan& p, const Node& n) SUPPLE_RT {
-    return n.launchWarmAt - n.timelineShift + p.rateOrigin;
+    return n.launchWarmAt + p.rateOrigin;
 }
 
 // A launch warming up on reader 2 (prewarm): its converter seeks at the
