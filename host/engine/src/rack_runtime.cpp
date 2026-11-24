@@ -287,9 +287,7 @@ rack::Instance* RackPool::get(Id id, const model::RackModule& module,
     }
     setParams(*it->second.instance, module);
     if (auto* probe = dynamic_cast<ProbeModule*>(it->second.instance->host()))
-        probe->reserve(
-            static_cast<std::size_t>(std::ceil(it->second.instance->param(0) * setup.sampleRate)) +
-            rack::kGrid);
+        probe->reserve(probeListenerFrames(it->second.instance->param(0), setup.sampleRate));
     if (auto* capture = dynamic_cast<CaptureModule*>(it->second.instance->host()))
         capture->reserve();
     return it->second.instance.get();

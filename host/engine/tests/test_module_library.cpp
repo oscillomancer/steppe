@@ -421,8 +421,11 @@ TEST_CASE("rack.probe: names follow a tempo change and a playrate envelope insid
     f.run("key.set", R"({"at": 2.5, "tonic": "Ab", "scale": "major"})");
     CHECK(probe("voice v; 1: r:h r:e C#4:e r:q", 4) == std::vector<std::string>{"Db4"});
     // The rate is 0.5, doubles to 2 at song sample 20 and falls back to 0.5 at sample 48, all
-    // inside one 64-frame block; the note is at tick 2 (song sample 50, device frame 58), where
-    // the key changes. The clock is read at every frame, so both opposite bends are found.
+    // inside one 64-frame block. (The case is red on the midpoint-only clock only with this exact
+    // alignment: the beats round to samples 20 and 48 at 120 bpm and 48 kHz, and the old
+    // bisection's midpoint 47 then cancels; another tempo, rate or beat can pass on the old code.)
+    // the note is at tick 2 (song sample 50, device frame 58), where the key changes. The clock is
+    // read at every frame, so both opposite bends are found.
     f.run("key.remove", R"({"at": 2.5})");
     f.run("key.set", R"({"at": 0.0020833333333333333, "tonic": "Ab", "scale": "major"})");
     f.run("env.points.set", R"({"env": "en_1", "points": [
@@ -484,7 +487,8 @@ TEST_CASE("rack.probe: a window that would need gigabytes is refused with a hint
     CHECK(refused.error().path == "/args/seconds");
     CHECK(refused.error().hint.find("probe fewer ports") != std::string::npos);
     CHECK(refused.error().message.find("limit is 512 MiB") != std::string::npos);
-    // The same at unity is what worked before: 8 ports of 10.01 s at 384 kHz hold 492 MB.
+    // At unity the same project is probed as before (2 ports for 1 s here; the arithmetic test
+    // above covers the old worst case, 8 ports of 10.01 s at 384 kHz, 492 MB).
     f.run("transport.playrate.set", R"({"rate": 1})");
     json::Value ok = f.run("rack.probe", R"({"rack": "rk_1", "seconds": 1,
         "ports": ["mo_2.pitch", "mo_2.gate"], "notes": "voice v; 1: C4:q r:q r:h"})");

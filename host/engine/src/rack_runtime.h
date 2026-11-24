@@ -70,10 +70,13 @@ inline constexpr double kProbeMaxSeconds = 41;
 // so every probe that worked then still works; a window that needs more than this (a low master
 // playrate, many ports and a high project rate) is refused (rack.probe_size).
 inline constexpr std::size_t kProbeBudgetBytes = std::size_t{512} << 20;
+// The frames one listener reserves for `deviceSeconds`, with the rack grid's slack: what
+// RackPool::module reserves and what the budget counts, written once.
+inline std::size_t probeListenerFrames(double deviceSeconds, double sampleRate) {
+    return static_cast<std::size_t>(std::ceil(deviceSeconds * sampleRate)) + rack::kGrid;
+}
 inline std::size_t probeListenerBytes(std::size_t ports, double deviceSeconds, double sampleRate) {
-    // The frames a listener reserves (RackPool::module) with the rack grid's slack.
-    const auto frames = static_cast<std::size_t>(std::ceil(deviceSeconds * sampleRate)) + 32;
-    return ports * kProbeChannels * sizeof(float) * frames;
+    return ports * kProbeChannels * sizeof(float) * probeListenerFrames(deviceSeconds, sampleRate);
 }
 std::shared_ptr<const rack::ModuleType> probeModuleType();
 class ProbeModule final : public rack::HostModule {
