@@ -209,8 +209,11 @@ TEST_CASE("the override commands, and what they do to a project that is playing"
         CHECK(set["fx"].size() == 1);
         CHECK(set["fx"].at(0).asString() == "fx_2");
         // The next plan plays a new instance on a bridge of its own.
+        // Starting that bridge's process takes seconds on a loaded runner: the
+        // guard is 60 s of the clock, not a count of ticks.
         host::Instance* now = f.app->instanceOf(fx);
-        for (int i = 0; i < 400 && (!now || now == original); ++i) {
+        const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while ((!now || now == original) && std::chrono::steady_clock::now() < giveUp) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             f.app->tick();
             now = f.app->instanceOf(fx);
@@ -249,7 +252,8 @@ TEST_CASE("the override commands, and what they do to a project that is playing"
         const auto before = f.root.path / "before.json";
         REQUIRE(f.app->save(before));
         f.call("plugin.override", std::string(R"({"plugin":")") + kGain + R"(","mode":"disable"})");
-        for (int i = 0; i < 400 && f.app->instanceOf(fx); ++i) {
+        const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (f.app->instanceOf(fx) && std::chrono::steady_clock::now() < giveUp) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             f.app->tick();
         }
