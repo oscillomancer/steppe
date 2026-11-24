@@ -523,9 +523,9 @@ Each has its own GL context, bundled fonts, retained root, focus, damage cache
 and popup stack. Resources are created on first open and retained while
 hidden. Both panels fill their client area with the theme's `raised` surface,
 matching the former popup frame. Their OS titles match their visible headers:
-"Routing", "FX: <track>", or the take FX header ("Take FX: <track> / <take>"
-for a named take, "Take FX: Bass's item at bar 2" for an unnamed one, never
-an id); switching tracks/takes or
+"Routing", "FX: <track>", or the take FX header ("Take FX: <track> / <take>",
+the take by its name or, unnamed, its file or clip; "Take FX: Bass's item at
+bar 2" when its words already say the track; never an id); switching tracks/takes or
 renaming the track updates the FX title in place. Close or an unhandled Escape
 hides only that panel; Escape first closes a nested popup or cancels a widget
 gesture. Events are routed by SDL window identity before the main window's

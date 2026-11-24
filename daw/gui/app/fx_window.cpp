@@ -1142,13 +1142,14 @@ void FxWindow::refresh() {
     const std::string trackName = views::objectName(app_.head(), track_);
     if (take_ && !app_.head().takes.find(*take_)) take_.reset();  // the take is gone
     if (title_) {
-        // A named take after its track, as the MIDI editor's title; an
-        // unnamed one's words already say the track ("Bass's item at bar 2").
+        // The take after its track ("Bass / Take 2", "Bass / kick" for an
+        // unnamed take called by its file or clip), unless its words already
+        // say the track ("Bass's item at bar 2").
         std::string title = "FX: " + trackName;
         if (take_) {
-            const model::Take* t = app_.head().takes.find(*take_);
             const std::string words = views::objectName(app_.head(), *take_);
-            title = "Take FX: " + (t && !t->name.empty() ? trackName + " / " + words : words);
+            title = "Take FX: " +
+                    (words.starts_with(trackName + "'s ") ? words : trackName + " / " + words);
         }
         title_->setText(title);
         panel_.setTitle(title_->valueText());

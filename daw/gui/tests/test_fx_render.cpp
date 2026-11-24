@@ -3692,6 +3692,20 @@ TEST_CASE("FX native title follows track switches, renames and take headers") {
     f.fx->tick();
     CHECK(title() == "Take FX: Take track's item at bar 1");
     matchesHeader();
+    // An unnamed take called by its file keeps the track (round 165 re-check 5).
+    audio::AudioData tone;
+    tone.sampleRate = 8000;
+    tone.channels.assign(1, std::vector<float>(8000, 0.25f));
+    const auto kick = f.dir / "kick.wav";
+    REQUIRE(audio::writeWav(kick, tone));
+    const auto sample =
+        f.run("item.add",
+              f.args({{"track", second.str()}, {"position", 8.0}, {"audio_file", kick.string()}}));
+    REQUIRE(sample);
+    const auto sampleTake = *model::Id::parse(sample->find("take")->asString());
+    REQUIRE(f.fx->openTake(sampleTake));
+    CHECK(title() == "Take FX: Take track / kick");
+    matchesHeader();
 }
 
 TEST_CASE("FX project replacement closes overlays and clears pending prompts") {
