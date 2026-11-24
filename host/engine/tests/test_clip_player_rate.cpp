@@ -159,8 +159,11 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK(pressed.message == (refused ? refused->message : ""));
     CHECK(pressed.hint == (refused ? refused->hint : ""));
     CHECK(pressed.path == (refused ? refused->path : ""));
-    CHECK(code(p.app->sceneLaunchRefusal(id("sc_2"))) == "launch.playrate");
-    CHECK(refusedBy("launch.scene", j(R"({"scene": "sc_2"})")).code == "launch.playrate");
+    const auto sceneRefused = p.app->sceneLaunchRefusal(id("sc_2"));
+    const Error scenePressed = refusedBy("launch.scene", j(R"({"scene": "sc_2"})"));
+    CHECK(code(sceneRefused) == "launch.playrate");
+    CHECK(scenePressed.code == "launch.playrate");
+    CHECK(scenePressed.path == (sceneRefused ? sceneRefused->path : ""));
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_1")));
     CHECK_FALSE(moved());
     // Back at 1 (freezing needs it), the plan that follows launches it.
@@ -201,9 +204,16 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     CHECK(moved());
     CHECK(code(p.app->launchRefusal(audio)) == "track.frozen");
     CHECK(code(p.app->launchRefusal(take)) == "track.frozen");
-    CHECK(refusedBy("launch.clip", j(R"({"clip": "cl_2"})")).code == "track.frozen");
-    CHECK(code(p.app->sceneLaunchRefusal(id("sc_2"))) == "launch.scene");
-    CHECK(refusedBy("launch.scene", j(R"({"scene": "sc_2"})")).code == "launch.scene");
+    const auto frozen = p.app->launchRefusal(audio);
+    const Error frozenPressed = refusedBy("launch.clip", j(R"({"clip": "cl_2"})"));
+    CHECK(frozenPressed.code == "track.frozen");
+    CHECK(frozenPressed.path == (frozen ? frozen->path : ""));
+    const auto empty = p.app->sceneLaunchRefusal(id("sc_2"));
+    const Error emptyPressed = refusedBy("launch.scene", j(R"({"scene": "sc_2"})"));
+    CHECK(code(empty) == "launch.scene");
+    CHECK(emptyPressed.code == "launch.scene");
+    CHECK(emptyPressed.message == (empty ? empty->message : ""));
+    CHECK(emptyPressed.path == (empty ? empty->path : ""));
     CHECK_FALSE(p.app->sceneLaunchRefusal(id("sc_1")));  // cl_1 plays
     // An undo is a version too: the freeze undone, then redone.
     p.run("history.undo", "{}");

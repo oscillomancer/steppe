@@ -1012,8 +1012,10 @@ the same.*
   `launch.memory` (`clipsSkipped`), `launch.clip` (no players on the
   track, or the plan lacks the clip). The app builds each request from
   the session the commands read, not the engine's (an edit can be on its
-  way, as while audio is prepared), and gives an engine refusal the
-  press's path, so the answer is the press's error field for field.
+  way, as while audio is prepared), and gives every refusal the path a
+  caller of the press receives, `/args/clip` or `/args/scene` (the bus
+  puts `/args` before a command error's path), so the answer is the
+  press's error field for field.
   `EngineApp::launchRefusal(clip)` puts launch.clip's own `track.frozen`
   check first, engine or not;
   `EngineApp::sceneLaunchRefusal(scene)` makes launch.scene's selection
