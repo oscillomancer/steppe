@@ -209,7 +209,9 @@ jobs:
             # defaults even when the exported project's command has no flags.
             echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
-            echo "CCACHE_MAXSIZE=500M" >> "$GITHUB_ENV"
+            # 500M was full (the saved cache was 483 to 544 MB) and a restored cache
+            # saved almost no build time; macOS at 1G does not fill up.
+            echo "CCACHE_MAXSIZE=1.5G" >> "$GITHUB_ENV"
             # At most two links at a time (compiles stay at the build's own width): the
             # last dozen executables are about 600 MB each with debug info, and six
             # GNU ld links at once are the likely cause of the runner lost mid-build
@@ -266,6 +268,12 @@ jobs:
           SAMPLER
           : > "$RUNNER_TEMP/memavail.log"
           nohup setsid bash "$RUNNER_TEMP/memsampler.sh" "$RUNNER_TEMP/memavail.log" "$RUNNER_TEMP/memsampler.pid" > /dev/null 2>&1 &
+      # ccache keeps its counters in the cache directory, so a restored cache
+      # carries the last run's: zero them to read this run's hit rate.
+      - name: Compiler cache statistics reset
+        if: matrix.platform != 'windows'
+        continue-on-error: true
+        run: ccache --zero-stats
       - name: Build
         # Align the environment and explicit CLI limit for predictable
         # compiler concurrency on every runner.
@@ -311,6 +319,12 @@ jobs:
             echo "lowest root free:"; sort -k3,3n "$RUNNER_TEMP/memavail.log" | sed -n 1p
             echo "last ten:"; tail -n 10 "$RUNNER_TEMP/memavail.log"
           fi
+      - name: Compiler cache statistics after Build
+        if: always() && matrix.platform != 'windows'
+        continue-on-error: true
+        run: |
+          ccache --show-stats --verbose
+          ccache --show-config | grep -E '^\(.*\) (cache_dir|max_size) ' || true
       - name: Test Linux (software OpenGL under Xvfb)
         if: matrix.platform == 'linux'
         env:
