@@ -122,8 +122,9 @@ Result<std::vector<CompPiece>> compRun(const Session& s, std::optional<Id> item,
                 for (const Entry& o : others)
                     if (right ? continues(s, at, o) : continues(s, o, at)) found.push_back(o);
                 if (found.empty()) break;
-                // A piece fully clamped by its two seams ends exactly where the piece after it
-                // begins, so the piece after that continues `at` too. Of such candidates the
+                // When a piece is fully clamped by its two seams, the piece before it ends exactly
+                // where the piece after it begins, so the piece after continues `at` too. Of such
+                // candidates the
                 // nearest is the next piece: drop those another candidate continues in turn.
                 // Anything else stays ambiguous.
                 if (found.size() > 1) {
@@ -161,6 +162,28 @@ Result<std::vector<CompPiece>> compRun(const Session& s, std::optional<Id> item,
                 return mismatch("/items/" + std::to_string(listed[i].second),
                                 listed[i].first.id.str() + " does not continue " +
                                     listed[i - 1].first.id.str());
+            if (i > 0) {
+                // A piece left out of the list that sits between the two (their neighbours touch
+                // when it is clamped to half its core at both seams) would go on playing under
+                // the seam: the comp is the whole run, not the listed pieces alone.
+                const Entry& l = listed[i - 1].first;
+                const Entry& r = listed[i].first;
+                for (const auto& e : s.items) {
+                    if (e.value->track != l.item->track) continue;
+                    if (std::any_of(listed.begin(), listed.end(),
+                                    [&](const auto& x) { return x.first.id == e.id; }))
+                        continue;
+                    const Entry u = entry(e.id);
+                    if (continues(s, l, u) && continues(s, u, r))
+                        return Error("comp.mismatch",
+                                     r.id.str() + " does not follow " + l.id.str() + ": " +
+                                         u.id.str() + " lies between them and is not listed",
+                                     "/items/" + std::to_string(listed[i].second),
+                                     "add " + u.id.str() +
+                                         " to items, or name the comp by one piece in item "
+                                         "(take.comp.get lists the pieces)");
+                }
+            }
             run.push_back(listed[i].first);
         }
     }

@@ -1576,6 +1576,46 @@ TEST_CASE("a comp take.comp wrote reads back and edits when a short piece's neig
     CHECK(everything(f) == before);
 }
 
+TEST_CASE("items that skip a clamped middle piece are refused, naming the piece left out") {
+    CompFixture f;
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.5,"spans":[{"from":0,"to":1,"index":0},
+                           {"from":1,"to":3,"index":1},{"from":3,"to":4,"index":0}]})");
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":0,"to":2.984,"index":0},
+                                                  {"from":2.984,"to":3,"index":1}]})");
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 3);
+    const std::string a = pieces[0].item.str(), b = pieces[1].item.str(), c = pieces[2].item.str();
+    // The outer pieces touch at one sample, so C continues A, but B lies between them.
+    const std::string before = everything(f);
+    const auto refused = f.call("take.comp", R"({"items":[")" + a + R"(",")" + c +
+                                                 R"("],"spans":[{"from":0,"to":1,"index":1}]})");
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "comp.mismatch");
+    CHECK(refused.error().path == "/args/items/1");
+    CHECK(refused.error().hint.find(b) != std::string::npos);
+    CHECK(refused.error().message.find(b) != std::string::npos);
+    CHECK(everything(f) == before);
+    // With the middle one listed it is the comp, and the span splits the first piece: four.
+    f.run("take.comp", R"({"items":[")" + a + R"(",")" + b + R"(",")" + c +
+                           R"("],"spans":[{"from":0,"to":1,"index":1}]})");
+    CHECK(f.pieces().size() == 4);
+}
+
+TEST_CASE("two items that could both continue a piece, without one continuing the other, refuse") {
+    CompFixture f;
+    f.run("take.comp", kSpans);
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 4);
+    // An in-place copy of the second piece starts where it does: both continue the first piece,
+    // neither continues the other, so the run is not guessed (it is not a chain).
+    const std::string at = beatsText(f.app->head().items.find(pieces[1].item)->position);
+    f.run("item.duplicate", R"({"item":")" + pieces[1].item.str() + R"(","to":)" + at + "}");
+    const std::string first = pieces[0].item.str();
+    f.refused("take.comp.get", R"({"item":")" + first + R"("})", "comp.mismatch", "/item");
+    f.refused("take.comp", R"({"item":")" + first + R"(","spans":[{"from":1,"to":2,"index":0}]})",
+              "comp.mismatch", "/item");
+}
+
 TEST_CASE("a seam drag without a crossfade that ends inside the next seam's reach succeeds") {
     CompFixture f;
     // Takes 0, 1, 0 with seams at beats 1 and 3 and a crossfade of 0.5 s (a beat at 120 bpm: half a
