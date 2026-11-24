@@ -3524,8 +3524,12 @@ TEST_CASE("double clicking empty FX chain space adds to its main, input or take 
         f.frame();
     };
     f.frame();
-    const auto b = f.panel->root().find("fx.empty")->bounds();
-    const ui::Point empty{b.x + 20, b.y + b.h / 2};
+    // An empty chain says nothing (no hint line): its space is the body
+    // below the section's heading.
+    CHECK_FALSE(f.panel->root().find("fx.empty"));
+    f.snapshot("fx-empty-chain.png");
+    const auto body = f.panel->root().find("fx.body")->bounds();
+    const ui::Point empty{body.x + 20, body.bottom() - 20};
     doubleClick(empty, 1);
     CHECK_FALSE(f.fx->browser().isOpen());
     doubleClick(empty, 2, 3);
@@ -3557,8 +3561,10 @@ TEST_CASE("double clicking empty FX chain space adds to its main, input or take 
     const auto take = *model::Id::parse((*made)["take"].asString());
     REQUIRE(f.fx->openTake(take));
     f.frame();
-    const auto takeEmpty = f.panel->root().find("fx.empty")->bounds();
-    doubleClick({takeEmpty.x + 20, takeEmpty.y + takeEmpty.h / 2});
+    CHECK_FALSE(f.panel->root().find("fx.empty"));
+    f.snapshot("fx-empty-take-chain.png");
+    const auto takeBody = f.panel->root().find("fx.body")->bounds();
+    doubleClick({takeBody.x + 20, takeBody.bottom() - 20});
     REQUIRE(f.fx->browser().isOpen());
     f.fx->browser().onAdd()(f.pluginId("Hickory"));
     f.fx->browser().close();

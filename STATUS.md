@@ -395,7 +395,10 @@ instructions are in `docs/guides/installing.md`.
   stopped returns the tracks to the arrangement; the cell also lights for
   an agent's capture), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for
-  its longest clip's whole bars, with a drop marker while dragged), and a
+  its longest clip's whole bars, with a drop marker while dragged), the
+  scene menu's Lay out scenes… (`arrangement.build`, a dialog), with two
+  remembered checks for all three (follow the song's key and chords,
+  write the clips' harmony to the context track), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
   status line. The clip menu's Take FX… opens a clip's take chain. The pane
   dims the clips (and scenes' ▶) a press would be refused for now, as the
@@ -404,7 +407,10 @@ instructions are in `docs/guides/installing.md`.
   keeps the pitch (a MIDI-clock chase included), a clip whose audio did not
   fit.
   Limits:
-  - there is no dialog for `arrangement.build`;
+  - Lay out scenes… lays each scene once, in pane order (an agent's
+    `arrangement.build` can repeat one), and the checks send only
+    `follow: chords` (key-only or as-written laying stays with each clip's
+    own Follow);
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
     roll (clip-time lanes, with point selection, the marquee, moves,
     shapes, copy and paste and the lane's menu as on the timeline, one lane
@@ -412,9 +418,10 @@ instructions are in `docs/guides/installing.md`.
     clip's in its pane (a double-click opens its waveform, in seconds, with
     the same Lanes menu and lanes, snapping to a seconds grid, and a key
     button for its one key point), which edits no audio;
-  - an item's take FX have lanes on the timeline, drawn across the whole
-    timeline although only the item's span plays (titled with their item
-    when two items on a track automate the same effect's parameter);
+  - an item's take FX have lanes on the timeline, across the whole
+    timeline and dimmed where they don't play (outside the item, or all of
+    it while another take is heard), titled with their item when two items
+    on a track automate the same effect's parameter;
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole

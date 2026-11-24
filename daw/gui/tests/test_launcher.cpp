@@ -32,8 +32,12 @@
 #include "supple/peaks/peaks.h"
 #include "supple/product.h"
 #include "supple/time/timeline.h"
+#include "supple/ui/forms.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/scroll_view.h"
+#include "supple/ui/text_field.h"
+#include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
 
 using namespace supple;
@@ -58,6 +62,7 @@ struct LauncherFixture {
     std::unique_ptr<ui::Root> root;
     views::ArrangeView* view = nullptr;
     std::vector<std::string> commands;
+    std::vector<json::Value> sent;  // each command's arguments, as sent
     std::vector<Error> errors;
     std::vector<std::string> notices;  // the status line's notes (onNotice)
     std::vector<model::Id> opened, selected, takeFx;
@@ -92,6 +97,7 @@ struct LauncherFixture {
         view->setLauncherCallbacks(
             {[this](const std::string& command, json::Value args) {
                  commands.push_back(command);
+                 sent.push_back(args);
                  return dispatcher->execute({command, std::move(args), kLauncherUi});
              },
              [this](const Error& error) { errors.push_back(error); },
@@ -528,7 +534,9 @@ TEST_CASE("launcher: the header's buttons, scene ▶, rename, move, + and the sc
     std::vector<std::string> rows;
     for (const auto& item : ui::menuItems(*menu)) rows.push_back(item.label);
     CHECK(rows == std::vector<std::string>{"Rename…", "Colour…", "Insert at playhead",
-                                           "Insert at end", "", "Delete"});
+                                           "Insert at end", "Follow the song's key and chords",
+                                           "Write harmony to the context track", "Lay out scenes…",
+                                           "", "Delete"});
     f.root->closePopups();
     // The clip menu: its rows, and Mode sets the clip's.
     const std::size_t drums = f.row("tr_1");
@@ -1756,7 +1764,9 @@ TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inse
     std::vector<std::string> rows;
     for (const auto& item : ui::menuItems(*menu)) rows.push_back(item.label);
     CHECK(rows == std::vector<std::string>{"Rename…", "Colour…", "Insert at playhead",
-                                           "Insert at end", "", "Delete"});
+                                           "Insert at end", "Follow the song's key and chords",
+                                           "Write harmony to the context track", "Lay out scenes…",
+                                           "", "Delete"});
     f.root->closePopups();
     menuRun(0, 3);  // Intro at the end: bar 5
     f.view->setPlayhead(f.app->head().timeMap->secondsAt(30.5));
@@ -1772,6 +1782,267 @@ TEST_CASE("launcher: a scene dragged onto the timeline lies there; its menu inse
     // A length between bar lines rounds up: five beats take two bars.
     f.exec("clip.set", R"({"clip":"cl_1","length":5})");
     CHECK(views::sceneBars(f.app->head(), *model::Id::parse("sc_1"), 3) == 2);
+}
+
+TEST_CASE("launcher: the scene menu's checks say how scenes are laid; Lay out scenes… builds") {
+    LauncherFixture f;
+    f.song();
+    // Root, Bass's clip in Verse, was written in D minor.
+    f.exec("clip.set", R"({"clip":"cl_3","context":"1: key D minor ~:w"})");
+    views::LauncherHeader& header = f.view->launcherHeader();
+    const float y = header.sceneRect(0).y + 8;
+    auto menu = [&](std::size_t column) {
+        f.click({header.sceneRect(column).x + 40, y}, 0, 1, 3);
+        ui::Node* m = f.root->find("launcher.scene.menu");
+        REQUIRE(m);
+        std::vector<ui::MenuItem> rows(ui::menuItems(*m).begin(), ui::menuItems(*m).end());
+        f.root->closePopups();
+        return rows;
+    };
+    auto menuRun = [&](std::size_t column, std::size_t row) {
+        const auto rows = menu(column);
+        rows[row].run();
+        f.sync();
+    };
+    // Both checks start unchecked: Insert at end sends neither.
+    auto rows = menu(1);
+    CHECK(rows[4].label == "Follow the song's key and chords");
+    CHECK(rows[5].label == "Write harmony to the context track");
+    CHECK_FALSE(rows[4].checked);
+    CHECK_FALSE(rows[5].checked);
+    menuRun(0, 3);  // Intro at the end: bar 1
+    REQUIRE(f.commands.back() == "scene.insert");
+    CHECK_FALSE(f.sent.back().find("follow"));
+    CHECK_FALSE(f.sent.back().find("write_context"));
+    // Checked, each pick toggling one: the menu shows them, Insert sends them.
+    menuRun(1, 4);
+    menuRun(1, 5);
+    CHECK(f.view->sceneLaying() == views::SceneLaying{true, true});
+    rows = menu(1);
+    CHECK(rows[4].checked);
+    CHECK(rows[5].checked);
+    f.click({header.sceneRect(1).x + 40, y}, 0, 1, 3);
+    f.snapshot("launcher-scene-menu-checks.png");
+    f.root->closePopups();
+    menuRun(1, 3);  // Verse at the end: bar 2, its harmony written under it
+    REQUIRE(f.commands.back() == "scene.insert");
+    CHECK(f.errors.empty());
+    CHECK(f.sent.back().find("follow")->asString() == "chords");
+    CHECK(f.sent.back().find("write_context")->asBool());
+    const model::Session* s = &f.app->head();
+    REQUIRE(s->context.size() == 1);
+    CHECK(s->context.begin()->value->beat == doctest::Approx(4));
+    // One state per project view, in the sidecar's clips entry, and back.
+    const json::Value saved = f.view->saveLayout();
+    const json::Value* clips = saved.find("clips");
+    REQUIRE(clips);
+    CHECK(clips->find("follow_song")->asBool());
+    CHECK(clips->find("write_context")->asBool());
+    f.view->setSceneLaying({});
+    CHECK_FALSE(f.view->saveLayout().find("clips"));  // nothing chosen: nothing saved
+    f.view->loadLayout(saved);
+    CHECK(f.view->sceneLaying() == views::SceneLaying{true, true});
+    // A project choice, not screen layout: a screenset neither stores the
+    // checks nor changes them when recalled, whatever it holds.
+    const json::Value screen = f.view->saveScreenLayout();
+    CHECK_FALSE(screen.find("clips"));
+    f.view->setSceneLaying({});
+    f.view->loadScreenLayout(saved);  // one holding them, as an old file might
+    CHECK(f.view->sceneLaying() == views::SceneLaying{});
+    f.view->setSceneLaying({true, true});
+    f.view->loadScreenLayout(screen);  // one without them (an older screenset)
+    CHECK(f.view->sceneLaying() == views::SceneLaying{true, true});
+    // A drop uses them too.
+    const ui::Rect intro = header.sceneRect(0);
+    const ui::Rect lane = f.view->rowRect(f.row("tr_1"));
+    const double bar5 = f.app->head().timeMap->beatOfBar(5) + 0.5;
+    const ui::Point to{f.view->xAt(f.app->head().timeMap->secondsAt(bar5)), lane.y + lane.h / 2};
+    f.drag({intro.x + 40, intro.y + intro.h / 2}, to);
+    REQUIRE(f.commands.back() == "scene.insert");
+    CHECK(f.sent.back().find("bar")->asInt() == 5);
+    CHECK(f.sent.back().find("follow")->asString() == "chords");
+    CHECK(f.sent.back().find("write_context")->asBool());
+    f.view->setSceneLaying({});
+    // Lay out scenes…: every scene in pane order, checked, with its bars,
+    // from the first bar after the arrangement (bar 6).
+    menuRun(0, 6);
+    REQUIRE(f.root->find("launcher.layout"));
+    auto field = [&](const std::string& id) {
+        auto* t = dynamic_cast<ui::TextField*>(f.root->find(id));
+        REQUIRE(t);
+        return t;
+    };
+    auto check = [&](const std::string& id) {
+        auto* c = dynamic_cast<ui::Checkbox*>(f.root->find(id));
+        REQUIRE(c);
+        return c;
+    };
+    CHECK(check("launcher.layout.use.0")->text() == "Intro");
+    CHECK(check("launcher.layout.use.1")->text() == "Verse");
+    CHECK(check("launcher.layout.use.2")->text() == "Chorus");
+    CHECK(check("launcher.layout.use.2")->checked());
+    CHECK(field("launcher.layout.bars.0")->text() == "1");
+    CHECK(field("launcher.layout.bars.1")->text() == "1");
+    CHECK(field("launcher.layout.bar")->text() == "6");
+    CHECK_FALSE(check("launcher.layout.follow")->checked());
+    // The dialog's checks are the menu's state.
+    check("launcher.layout.follow")->toggle();
+    CHECK(f.view->sceneLaying() == views::SceneLaying{true, false});
+    f.snapshot("launcher-layout-dialog.png");
+    // Chorus has no clips: the command's refusal shows, by the scene's name
+    // (not sc_3), with its hint and Chorus's row marked; the dialog stays.
+    const std::size_t regions = f.app->head().regions.size();
+    f.errors.clear();
+    REQUIRE(f.root->click("launcher.layout.run"));
+    f.sync();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "scene.empty");
+    CHECK(f.errors[0].path == "/args/sequence/2/scene");
+    REQUIRE(f.root->find("launcher.layout"));
+    ui::Node* status = f.root->find("launcher.layout.status");
+    REQUIRE(status);
+    CHECK(f.errors[0].message.find("sc_3") != std::string::npos);
+    CHECK(status->valueText().find("sc_3") == std::string::npos);
+    CHECK(status->valueText().find("Chorus") != std::string::npos);
+    CHECK(status->valueText().ends_with("; " + f.errors[0].hint));
+    auto mark = [&](const std::string& row) {
+        auto* m = dynamic_cast<ui::Label*>(f.root->find("launcher.layout.mark." + row));
+        REQUIRE(m);
+        return m->text();
+    };
+    CHECK(mark("2") == "•");
+    CHECK(mark("0").empty());
+    CHECK(mark("from").empty());
+    CHECK(check("launcher.layout.use.2")->checked());  // the entries are kept
+    // Bars that are not a whole number from 1 are the dialog's to say:
+    // nothing is sent. Spaces at the ends are trimmed; one between digits is
+    // not a number.
+    check("launcher.layout.use.2")->toggle();
+    f.errors.clear();
+    const std::size_t sentBefore = f.commands.size();
+    for (const char* bad : {"two", "0", "1 6", "-2", "1.5", ""}) {
+        field("launcher.layout.bars.1")->setText(bad);
+        REQUIRE(f.root->click("launcher.layout.run"));
+        f.sync();
+        CHECK(f.commands.size() == sentBefore);
+        CHECK(status->valueText() == "Verse: give its bars as a whole number from 1");
+        CHECK(mark("1") == "•");
+    }
+    field("launcher.layout.bars.1")->setText("2");
+    field("launcher.layout.bar")->setText("");
+    REQUIRE(f.root->click("launcher.layout.run"));
+    CHECK(f.commands.size() == sentBefore);
+    CHECK(status->valueText() == "From bar: give a whole number from 1");
+    CHECK(mark("from") == "•");
+    CHECK(mark("1").empty());
+    // A whole number of any length goes to the command, whose limit answers:
+    // Verse named, its row marked, the hint after.
+    field("launcher.layout.bar")->setText("6");
+    for (const char* many : {"100001", "20000000", "99999999999999", " 100001 "}) {
+        field("launcher.layout.bars.1")->setText(many);
+        f.errors.clear();
+        REQUIRE(f.root->click("launcher.layout.run"));
+        f.sync();
+        REQUIRE(f.errors.size() == 1);
+        CHECK(f.errors[0].code == "scene.bars");
+        CHECK(f.errors[0].path == "/args/sequence/1/bars");
+        CHECK(status->valueText() == "Verse: " + f.errors[0].message + "; " + f.errors[0].hint);
+        CHECK(mark("1") == "•");
+    }
+    f.snapshot("launcher-layout-refused.png");
+    field("launcher.layout.bars.1")->setText("2");
+    f.errors.clear();
+    // Past the command's last bar: its own refusal, From bar named and marked.
+    field("launcher.layout.bar")->setText("999999");
+    REQUIRE(f.root->click("launcher.layout.run"));
+    f.sync();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "command.invalid_args");
+    REQUIRE_FALSE(f.errors[0].details.empty());
+    CHECK(status->valueText().starts_with("From bar: " + f.errors[0].message + ": " +
+                                          f.errors[0].details[0].message));
+    CHECK(mark("from") == "•");
+    REQUIRE(f.root->find("launcher.layout"));
+    field("launcher.layout.bar")->setText("6");
+    // Nothing checked: Lay out is disabled, and nothing is sent.
+    check("launcher.layout.use.0")->toggle();
+    check("launcher.layout.use.1")->toggle();
+    f.sync();
+    REQUIRE(f.root->find("launcher.layout.run"));
+    CHECK_FALSE(f.root->find("launcher.layout.run")->enabled);
+    (void)f.root->click("launcher.layout.run");
+    f.sync();
+    CHECK(f.commands.size() == sentBefore + 5);
+    check("launcher.layout.use.0")->toggle();
+    check("launcher.layout.use.1")->toggle();
+    CHECK(f.root->find("launcher.layout.run")->enabled);
+    // Corrected: Intro for one bar, then Verse for two, from bar 6.
+    field("launcher.layout.bars.1")->setText("2");
+    REQUIRE(f.root->click("launcher.layout.run"));
+    f.sync();
+    CHECK(f.errors.size() == 1);  // the one above
+    CHECK_FALSE(f.root->find("launcher.layout"));
+    REQUIRE(f.commands.back() == "arrangement.build");
+    const json::Value& args = f.sent.back();
+    CHECK(args.find("bar")->asInt() == 6);
+    CHECK(args.find("follow")->asString() == "chords");
+    CHECK_FALSE(args.find("write_context"));
+    const auto& sequence = args.find("sequence")->asArray();
+    REQUIRE(sequence.size() == 2);
+    CHECK(sequence[0].find("scene")->asString() == "sc_1");
+    CHECK(sequence[0].find("bars")->asInt() == 1);
+    CHECK(sequence[1].find("scene")->asString() == "sc_2");
+    CHECK(sequence[1].find("bars")->asInt() == 2);
+    CHECK(f.app->head().regions.size() == regions + 2);
+    CHECK(views::barAfterArrangement(f.app->head()) == 9);
+    // Past eight scenes the dialog's rows scroll; it stays in the window.
+    for (int i = 4; i <= 12; ++i)
+        f.exec("scene.add", R"({"name":"S)" + std::to_string(i) + R"("})");
+    menuRun(0, 6);
+    f.sync();
+    auto* list = dynamic_cast<ui::ScrollView*>(f.root->find("launcher.layout.scenes"));
+    REQUIRE(list);
+    CHECK(list->bounds().h <= 8 * 26 + 7 * 6 + 0.5f);
+    CHECK(list->contentHeight() > list->bounds().h);
+    REQUIRE(f.root->find("launcher.layout"));
+    CHECK(f.root->find("launcher.layout")->bounds().bottom() <= 600);
+    f.root->closePopups();
+}
+
+TEST_CASE("launcher: what write_context left unwritten reaches the status line") {
+    LauncherFixture f;
+    f.song();
+    const model::Session& s = f.app->head();
+    const json::Value present = *json::parse(
+        R"({"items":[],"context":{"written":false,"reason":"present","message":"…"}})");
+    CHECK(views::followNotice(s, "scene.insert", *json::parse(R"({"scene":"sc_2","bar":3})"),
+                              present) ==
+          "Verse at bar 3: Verse's harmony is not written: the context track has points there");
+    const json::Value disagree = *json::parse(
+        R"({"items":[],"context":{"written":false,"reason":"disagree","bar":4,"clips":["cl_2","cl_3"]}})");
+    CHECK(views::followNotice(s, "scene.insert", *json::parse(R"({"scene":"sc_2","bar":3})"),
+                              disagree) ==
+          "Verse at bar 3: Verse's harmony is not written: its clips disagree at bar 4");
+    // Written, held already or nothing to write: nothing to say.
+    for (const char* quiet :
+         {R"({"written":true,"keys":1,"chords":0})", R"({"written":false,"reason":"holds"})",
+          R"({"written":false,"reason":"no_context"})"})
+        CHECK_FALSE(views::followNotice(
+            s, "scene.insert", *json::parse(R"({"scene":"sc_2","bar":3})"),
+            *json::parse(std::string(R"({"items":[],"context":)") + quiet + "}")));
+    // arrangement.build: each segment as scene.insert's, under one head.
+    const json::Value built = *json::parse(
+        R"({"segments":[{"scene":"sc_1","items":[],"context":{"written":true}},)"
+        R"({"scene":"sc_2","items":[],"context":{"written":false,"reason":"present"}}]})");
+    CHECK(views::followNotice(s, "arrangement.build", *json::parse(R"({"bar":5})"), built) ==
+          "2 scenes from bar 5: Verse's harmony is not written: the context track has points "
+          "there");
+    const json::Value one = *json::parse(
+        R"({"segments":[{"scene":"sc_2","items":[],"context":{"written":false,"reason":"present"}}]})");
+    CHECK(views::followNotice(s, "arrangement.build", *json::parse(R"({"bar":5})"), one) ==
+          "Verse from bar 5: Verse's harmony is not written: the context track has points there");
+    CHECK_FALSE(views::followNotice(s, "arrangement.build", *json::parse(R"({"bar":5})"),
+                                    *json::parse(R"({"segments":[{"scene":"sc_1","items":[]}]})")));
 }
 
 TEST_CASE("launcher: copied clips paste from the selected cell, in their layout, one undo step") {

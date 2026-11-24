@@ -1135,6 +1135,57 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
         REQUIRE(scale);
         CHECK(views::envTitle(*e, f.app->head(), &*scale).ends_with(" (take)"));
     }
+    // It plays only over the item: the lane is dimmed outside it, all of the
+    // visible lane but the item's span.
+    auto paint = [&] {
+        f.root->damageAll();
+        f.root->frame(false);
+    };
+    auto dimmedWidth = [&] {
+        float w = 0;
+        for (const ui::Rect& d : f.view->lanes().dimmedLaneSpans()) w += d.w;
+        return w;
+    };
+    paint();
+    const ui::Rect lanes = f.view->lanesRect();
+    const ui::Rect laneRow = f.view->rowRect(*lane);
+    const ui::Rect body = f.rectOf(item);
+    const float visible = std::min(laneRow.right(), lanes.right()) - std::max(laneRow.x, lanes.x);
+    const float played =
+        std::max(0.0f, std::min(body.right(), lanes.right()) - std::max(body.x, lanes.x));
+    REQUIRE_FALSE(f.view->lanes().dimmedLaneSpans().empty());
+    for (const ui::Rect& d : f.view->lanes().dimmedLaneSpans()) {
+        CHECK(static_cast<double>(d.y) == doctest::Approx(static_cast<double>(laneRow.y)));
+        CHECK((d.right() <= body.x + 0.5f || d.x >= body.right() - 0.5f));
+    }
+    CHECK(static_cast<double>(dimmedWidth()) ==
+          doctest::Approx(static_cast<double>(visible - played)).epsilon(0.01));
+    if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS"))
+        REQUIRE(gui::writePng(std::filesystem::path(out) / "take-fx-lane-dimmed.png",
+                              f.root->readBack()));
+    // Another take active: the effect plays nowhere, so all of the lane is dimmed.
+    auto second = f.dispatcher->execute(
+        {"take.add",
+         json::parse(R"({"item":")" + item.str() + R"(","from":")" + take.str() + R"("})").value(),
+         kUi});
+    REQUIRE_MESSAGE(second, (second ? std::string() : second.error().toString()));
+    const std::string secondTake = (*second)["id"].asString();
+    auto activate = [&](const std::string& which) {
+        auto r = f.dispatcher->execute(
+            {"take.activate",
+             json::parse(R"({"item":")" + item.str() + R"(","take":")" + which + R"("})").value(),
+             kUi});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        f.sync();
+        paint();
+    };
+    activate(secondTake);
+    REQUIRE(f.view->trackLayout().indexOfEnv(env) == lane);
+    CHECK(static_cast<double>(dimmedWidth()) ==
+          doctest::Approx(static_cast<double>(visible)).epsilon(0.01));
+    activate(take.str());
+    CHECK(static_cast<double>(dimmedWidth()) ==
+          doctest::Approx(static_cast<double>(visible - played)).epsilon(0.01));
     // Editable: a click in the lane's upper quarter adds a point.
     const ui::Rect area = views::Lanes::envArea(f.view->rowRect(*lane));
     const float x = f.view->xAt(f.app->head().timeMap->secondsAt(8)) + 1;
@@ -1142,6 +1193,12 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
     const auto& pts = f.app->head().envelopes.find(env)->points;
     REQUIRE(pts.size() == 3);
     CHECK(params::toNormalized(spec->spec, pts[1].value) == doctest::Approx(0.75).epsilon(0.05));
+    // The dimmed part edits as anywhere: a click past the item's end adds a
+    // point there too.
+    const float past = body.right() + 30;
+    REQUIRE(past < lanes.right());
+    f.click({past, area.y + area.h * 0.25f});
+    CHECK(f.app->head().envelopes.find(env)->points.size() == 4);
     // The item moved to another track takes its take's lane along.
     const model::Id other = f.view->trackLayout().rows()[*lane + 1].track;
     REQUIRE(other != track);

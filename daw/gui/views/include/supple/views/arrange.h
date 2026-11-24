@@ -150,6 +150,11 @@ class ArrangeView : public ui::Node {
     // Per-project UI sidecar/screensets: viewport, row heights, follow and takes.
     json::Value saveLayout() const;
     void loadLayout(const json::Value& value);
+    // A screenset's share of it: the same but the scene laying, a choice
+    // about what laying a scene does rather than layout (gui.md §4.15), so a
+    // screenset neither stores it nor changes it when recalled.
+    json::Value saveScreenLayout() const;
+    void loadScreenLayout(const json::Value& value);
     // Clamps the vertical scroll once the children have their bounds (a
     // viewport set before the first layout cannot know the visible height).
     void arrange(const ui::Canvas& canvas, const ui::Rect& r) override;
@@ -183,6 +188,10 @@ class ArrangeView : public ui::Node {
     // project has scenes.
     void setLauncherShown(std::optional<bool> shown);
     std::optional<bool> launcherChoice() const { return launcherChoice_; }
+    // How scenes are laid on the timeline (the scene menu's checks; saved in
+    // the layout's "clips" object).
+    const SceneLaying& sceneLaying() const { return sceneLaying_; }
+    void setSceneLaying(SceneLaying laying) { sceneLaying_ = laying; }
     bool launcherShown() const;
     // Its width as laid out; set by dragging its right edge (0: wide enough
     // for its columns). Dragged all the way it fills the view and the lanes
@@ -305,6 +314,7 @@ class ArrangeView : public ui::Node {
     LauncherHeader* launcherHeader_ = nullptr;
     ui::Node* lanesColumn_ = nullptr;
     std::optional<bool> launcherChoice_;
+    SceneLaying sceneLaying_;
     std::vector<Cell> landing_;  // selectClipsIn's cells, until the next show
     float launcherWidth_ = 0;    // 0: fit the columns
     bool launcherFull_ = false;

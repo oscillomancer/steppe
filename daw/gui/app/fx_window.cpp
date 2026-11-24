@@ -1187,9 +1187,6 @@ void FxWindow::buildChain(ui::Node& body) {
         const auto takeChain = chain();
         body.emplace<ui::Label>("fx.section.take", "Take chain (before the track's input)",
                                 ui::Font::UiBold, "caption", "ink-quiet");
-        if (takeChain.empty())
-            body.emplace<ui::Label>("fx.empty", "No take FX yet — use “Add plugin…”.", ui::Font::Ui,
-                                    "small", "ink-quiet");
         for (std::size_t i = 0; i < takeChain.size(); ++i) buildRow(body, takeChain[i], i, false);
         return;
     }
@@ -1259,9 +1256,6 @@ void FxWindow::buildChain(ui::Node& body) {
         body.emplace<ui::Label>("fx.section.chain", "Chain", ui::Font::UiBold, "caption",
                                 "ink-quiet");
     }
-    if (track->chain.empty())
-        body.emplace<ui::Label>("fx.empty", "No effects yet — use “Add plugin…”.", ui::Font::Ui,
-                                "small", "ink-quiet");
     for (std::size_t i = 0; i < track->chain.size(); ++i) buildRow(body, track->chain[i], i, false);
 }
 

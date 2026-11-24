@@ -7,6 +7,8 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "supple/harmony/harmony.h"
@@ -14,10 +16,13 @@
 #include "supple/model/follow.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/canvas.h"
+#include "supple/ui/forms.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/root.h"
+#include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/theme.h"
+#include "supple/ui/widgets.h"
 #include "supple/views/arrange.h"
 #include "supple/views/item_body.h"
 #include "supple/views/lanes.h"
@@ -141,6 +146,116 @@ std::pair<Laid, std::string> laidPhrase(const std::string& name, const json::Val
     return {Laid::Quiet, {}};
 }
 
+// What write_context did under a scene's section, when it wrote nothing the
+// user asked for (the answer's context): points already there, or clips
+// that disagree. Nothing when it wrote, or had nothing to write.
+std::optional<std::string> harmonyPhrase(const std::string& scene, const json::Value* context) {
+    if (!context || !context->isObject()) return std::nullopt;
+    if (const json::Value* w = context->find("written"); w && w->isBool() && w->asBool())
+        return std::nullopt;
+    const std::string reason = jsonText(context->find("reason"));
+    if (reason == "present")
+        return scene + "'s harmony is not written: the context track has points there";
+    if (reason == "disagree") {
+        std::string at;
+        if (const json::Value* b = context->find("bar"); b && b->isNumber())
+            at = " at bar " + std::to_string(b->asInt());
+        return scene + "'s harmony is not written: its clips disagree" + at;
+    }
+    return std::nullopt;
+}
+
+// A dialog field as a command's whole number: digits, with spaces only at
+// the ends; 0 for anything else (empty, a sign, a point, a space between
+// digits). Any length: past a billion it is held there, so a number past a
+// command's limit is still sent and the command's refusal says the limit.
+std::int64_t wholeNumber(std::string_view text) {
+    while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
+    while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+    if (text.empty()) return 0;
+    constexpr std::int64_t kHeld = 1000000000;
+    std::int64_t value = 0;
+    for (char ch : text) {
+        if (ch < '0' || ch > '9') return 0;
+        value = std::min(kHeld, value * 10 + (ch - '0'));
+    }
+    return value;
+}
+
+// The index in "/sequence/<i>/…" from `at` (past "/sequence/"); npos if none.
+std::size_t wholeNumberAt(const std::string& path, std::size_t at) {
+    std::size_t end = at;
+    while (end < path.size() && path[end] >= '0' && path[end] <= '9') ++end;
+    if (end == at) return std::string::npos;
+    return static_cast<std::size_t>(wholeNumber(std::string_view(path).substr(at, end - at)));
+}
+
+// A command's message with each scene id (sc_3) said by the scene's name, as
+// the dialog lists it; an unnamed scene keeps its id.
+std::string withSceneNames(const model::Session& s, const std::string& text) {
+    std::string out;
+    for (std::size_t i = 0; i < text.size();) {
+        const bool starts = text.compare(i, 3, "sc_") == 0 &&
+                            (i == 0 || !std::isalnum(static_cast<unsigned char>(text[i - 1])));
+        std::size_t end = i + 3;
+        while (starts && end < text.size() && std::isdigit(static_cast<unsigned char>(text[end])))
+            ++end;
+        if (starts && end > i + 3 &&
+            (end == text.size() || !std::isalnum(static_cast<unsigned char>(text[end])))) {
+            const std::string id = text.substr(i, end - i);
+            const auto parsed = model::Id::parse(id);
+            const model::Scene* sc = parsed ? s.scenes.find(*parsed) : nullptr;
+            out += sc && !sc->name.empty() ? sc->name : id;
+            i = end;
+            continue;
+        }
+        out += text[i++];
+    }
+    return out;
+}
+
+// The Lay out dialog's status: the text wrapped to the dialog's width, its
+// height following the lines (one line's when empty).
+class LayOutNote : public ui::Node {
+  public:
+    explicit LayOutNote(std::string id) : Node(std::move(id)) {
+        layout.height = ui::SizeRule::content();
+    }
+    void setText(std::string text) {
+        if (text == text_) return;
+        text_ = std::move(text);
+        relayout();
+        invalidate();
+    }
+    std::string valueText() const override { return text_; }
+    ui::Size measure(const ui::Canvas& c, ui::Size available) override {
+        const float size = c.theme().type("small");
+        const std::size_t lines =
+            text_.empty() ? 1 : c.wrap(text_, ui::Font::Ui, size, available.w).size();
+        return {available.w, static_cast<float>(std::max<std::size_t>(1, lines)) * size * 1.4f};
+    }
+    void paint(ui::Canvas& c) override {
+        const ui::Rect b = bounds();
+        const float size = c.theme().type("small");
+        float y = b.y;
+        for (const std::string& line : c.wrap(text_, ui::Font::Ui, size, b.w)) {
+            c.text({b.x, y, b.w, size * 1.4f}, line, ui::Font::Ui, size, c.theme().color("ink"),
+                   ui::kLeft | ui::kMiddle);
+            y += size * 1.4f;
+        }
+    }
+
+  private:
+    std::string text_;
+};
+
+// The laying's choices as the commands take them (scene.insert,
+// arrangement.build).
+void addLaying(json::Value& args, const SceneLaying& laying) {
+    if (laying.followSong) args["follow"] = "chords";
+    if (laying.writeContext) args["write_context"] = true;
+}
+
 }  // namespace
 
 std::optional<std::string> followNotice(const model::Session& s, const std::string& command,
@@ -153,7 +268,7 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
         if (laid == Laid::Quiet) return std::nullopt;
         return text;
     }
-    std::vector<std::string> phrases, followed, copied;
+    std::vector<std::string> phrases, followed, copied, unwritten;
     std::string head;
     if (command == "launch.commit") {
         // A capture's commit copies what was heard: each launched stretch
@@ -171,22 +286,48 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
             copied.push_back(name);
         }
         head = "Committed";
-    } else if (command == "scene.insert") {
-        const json::Value* items = answer.find("items");
-        if (!items || !items->isArray()) return std::nullopt;
-        for (const json::Value& item : items->asArray()) {
-            const std::string name = laidName(s, jsonText(item.find("clip")));
-            auto [laid, text] = laidPhrase(name, item.find("followed"), false);
-            if (laid == Laid::Quiet) continue;
-            phrases.push_back(std::move(text));
-            (laid == Laid::Followed ? followed : copied).push_back(name);
+    } else if (command == "scene.insert" || command == "arrangement.build") {
+        // Each laid scene: what its clips did with their keys, then what
+        // write_context did under its section.
+        auto sceneName = [&s](const std::string& id) {
+            if (const auto parsed = model::Id::parse(id))
+                if (const model::Scene* sc = s.scenes.find(*parsed); sc && !sc->name.empty())
+                    return sc->name;
+            return std::string("The scene");
+        };
+        auto laySegment = [&](const json::Value& segment, const std::string& scene) {
+            if (const json::Value* items = segment.find("items"); items && items->isArray())
+                for (const json::Value& item : items->asArray()) {
+                    const std::string name = laidName(s, jsonText(item.find("clip")));
+                    auto [laid, text] = laidPhrase(name, item.find("followed"), false);
+                    if (laid == Laid::Quiet) continue;
+                    phrases.push_back(std::move(text));
+                    (laid == Laid::Followed ? followed : copied).push_back(name);
+                }
+            if (auto text = harmonyPhrase(sceneName(scene), segment.find("context"))) {
+                phrases.push_back(std::move(*text));
+                unwritten.push_back(sceneName(scene));
+            }
+        };
+        std::string bar;
+        if (const json::Value* b = args.find("bar"); b && b->isNumber())
+            bar = " at bar " + std::to_string(b->asInt());
+        if (command == "scene.insert") {
+            if (const json::Value* items = answer.find("items"); !items || !items->isArray())
+                return std::nullopt;
+            const std::string scene = jsonText(args.find("scene"));
+            laySegment(answer, scene);
+            head = sceneName(scene) + bar;
+        } else {
+            const json::Value* segments = answer.find("segments");
+            if (!segments || !segments->isArray()) return std::nullopt;
+            for (const json::Value& segment : segments->asArray())
+                laySegment(segment, jsonText(segment.find("scene")));
+            const std::size_t n = segments->asArray().size();
+            head = n == 1 ? sceneName(jsonText(segments->asArray()[0].find("scene")))
+                          : std::to_string(n) + " scenes";
+            head += bar.empty() ? std::string() : " from" + bar.substr(3);
         }
-        head = "The scene";
-        if (const auto id = model::Id::parse(jsonText(args.find("scene"))))
-            if (const model::Scene* sc = s.scenes.find(*id); sc && !sc->name.empty())
-                head = sc->name;
-        if (const json::Value* bar = args.find("bar"); bar && bar->isNumber())
-            head += " at bar " + std::to_string(bar->asInt());
     } else {
         return std::nullopt;
     }
@@ -208,6 +349,9 @@ std::optional<std::string> followNotice(const model::Session& s, const std::stri
     if (!copied.empty())
         text += std::string(followed.empty() ? " " : "; ") + std::to_string(copied.size()) +
                 " laid as written (" + names(copied) + ")";
+    if (!unwritten.empty())
+        text += std::string(followed.empty() && copied.empty() ? " " : "; ") +
+                "no harmony written under " + names(unwritten);
     return text;
 }
 
@@ -1456,7 +1600,206 @@ bool LauncherHeader::insertScene(model::Id scene, int bar) {
     args["scene"] = scene.str();
     args["bar"] = static_cast<std::int64_t>(bar);
     args["bars"] = sceneBars(view_.session(), scene, bar);
+    addLaying(args, view_.sceneLaying());
     return static_cast<bool>(view_.runLauncher("scene.insert", std::move(args)));
+}
+
+Result<json::Value> LauncherHeader::layOut(
+    const std::vector<std::pair<model::Id, std::int64_t>>& sequence, int bar) {
+    json::Value args = json::Value::object();
+    json::Value entries = json::Value::array();
+    for (const auto& [scene, bars] : sequence) {
+        json::Value entry = json::Value::object();
+        entry["scene"] = scene.str();
+        entry["bars"] = bars;
+        entries.push_back(std::move(entry));
+    }
+    args["sequence"] = std::move(entries);
+    args["bar"] = static_cast<std::int64_t>(bar);
+    addLaying(args, view_.sceneLaying());
+    return view_.runLauncher("arrangement.build", std::move(args));
+}
+
+void LauncherHeader::openLayOut() {
+    ui::Root* r = root();
+    if (!r) return;
+    const model::Session& s = view_.session();
+    const std::vector<model::Id> scenes = launcherColumns(s).scenes;
+    if (scenes.empty()) return;
+    r->closePopups();
+    auto form = std::make_unique<ui::Node>("launcher.layout");
+    form->layout.dir = ui::Layout::Dir::Column;
+    form->layout.width = ui::SizeRule::fixed(380);
+    form->layout.height = ui::SizeRule::content();
+    form->layout.padding = ui::Insets::all(12);
+    form->layout.gap = 6;
+    auto row = [](ui::Node& parent, const std::string& id) -> ui::Node& {
+        auto& out = parent.emplace<ui::Node>(id);
+        out.layout.dir = ui::Layout::Dir::Row;
+        out.layout.height = ui::SizeRule::fixed(26);
+        out.layout.gap = 8;
+        out.layout.align = ui::Layout::Align::Center;
+        return out;
+    };
+    auto& header = row(*form, "launcher.layout.header");
+    header.emplace<ui::Label>("launcher.layout.title", "Lay out scenes", ui::Font::UiBold, "body")
+        .layout.width = ui::SizeRule::fraction();
+    header.emplace<ui::Button>("launcher.layout.close", "Close", [r] { r->closePopups(); });
+    // Each scene in pane order, for its longest clip's whole bars where it
+    // would land after the ones before it. Past eight scenes their rows
+    // scroll. A row a refusal is about gets a mark before its check.
+    auto& list = form->emplace<ui::ScrollView>("launcher.layout.scenes");
+    list.layout.height = ui::SizeRule::content();
+    list.layout.maxHeight = 8 * 26 + 7 * 6;
+    list.content().layout.dir = ui::Layout::Dir::Column;
+    list.content().layout.gap = 6;
+    const int start = barAfterArrangement(s);
+    int at = start;
+    // Lay out is enabled while a scene is checked: an empty sequence has
+    // nothing to lay out.
+    auto runnable = [r, count = scenes.size()] {
+        bool any = false;
+        for (std::size_t i = 0; i < count && !any; ++i)
+            if (const auto* use = dynamic_cast<const ui::Checkbox*>(
+                    r->find("launcher.layout.use." + std::to_string(i))))
+                any = use->checked();
+        if (ui::Node* button = r->find("launcher.layout.run"); button && button->enabled != any) {
+            button->enabled = any;
+            button->invalidate();
+        }
+    };
+    for (std::size_t i = 0; i < scenes.size(); ++i) {
+        const model::Scene* sc = s.scenes.find(scenes[i]);
+        const std::int64_t bars = sceneBars(s, scenes[i], at);
+        at += static_cast<int>(bars);
+        const std::string n = std::to_string(i);
+        auto& line = row(list.content(), "launcher.layout.scene." + n);
+        line.layout.gap = 4;
+        line.emplace<ui::Label>("launcher.layout.mark." + n, "", ui::Font::UiBold, "small", "armed")
+            .layout.width = ui::SizeRule::fixed(8);
+        auto& use = line.emplace<ui::Checkbox>(
+            "launcher.layout.use." + n, sc && !sc->name.empty() ? sc->name : scenes[i].str(), true);
+        use.layout.width = ui::SizeRule::fraction();
+        use.onToggle = [runnable](bool) { runnable(); };
+        line.emplace<ui::TextField>("launcher.layout.bars." + n, std::to_string(bars))
+            .layout.width = ui::SizeRule::fixed(56);
+        line.emplace<ui::Label>("launcher.layout.unit." + n, "bars", ui::Font::Ui, "small",
+                                "ink-quiet")
+            .layout.width = ui::SizeRule::fixed(32);
+    }
+    auto& from = row(*form, "launcher.layout.from");
+    from.layout.gap = 4;
+    from.emplace<ui::Label>("launcher.layout.mark.from", "", ui::Font::UiBold, "small", "armed")
+        .layout.width = ui::SizeRule::fixed(8);
+    from.emplace<ui::Label>("launcher.layout.from.label", "From bar", ui::Font::Ui, "small",
+                            "ink-quiet")
+        .layout.width = ui::SizeRule::fraction();
+    from.emplace<ui::TextField>("launcher.layout.bar", std::to_string(start)).layout.width =
+        ui::SizeRule::fixed(56);
+    // Under the scenes' fields, which leave room for their scroll bar.
+    from.emplace<ui::Node>("launcher.layout.from.pad").layout.width =
+        ui::SizeRule::fixed(32 + ui::ScrollBar::kThickness);
+    // The same two choices as the scene menu's: one state.
+    const SceneLaying laying = view_.sceneLaying();
+    auto& follow =
+        row(*form, "launcher.layout.follow.row")
+            .emplace<ui::Checkbox>("launcher.layout.follow", "Follow the song's key and chords",
+                                   laying.followSong);
+    follow.onToggle = [this](bool on) {
+        SceneLaying next = view_.sceneLaying();
+        next.followSong = on;
+        view_.setSceneLaying(next);
+    };
+    auto& context =
+        row(*form, "launcher.layout.context.row")
+            .emplace<ui::Checkbox>("launcher.layout.context", "Write harmony to the context track",
+                                   laying.writeContext);
+    context.onToggle = [this](bool on) {
+        SceneLaying next = view_.sceneLaying();
+        next.writeContext = on;
+        view_.setSceneLaying(next);
+    };
+    form->emplace<LayOutNote>("launcher.layout.status");
+    auto& actions = row(*form, "launcher.layout.actions");
+    actions.emplace<ui::Node>("launcher.layout.actions.pad").layout.width =
+        ui::SizeRule::fraction();
+    // Lay out: the checked scenes, in order. A field that is not a whole
+    // number from 1 (the commands' own lower limit) is the dialog's to say,
+    // since text cannot be sent; every other limit is the command's, whose
+    // refusal is said with the scenes' names, its hint, and a mark on the
+    // row its path points at.
+    auto run = [this, r, count = scenes.size(), scenes] {
+        // `mark`: the row (an index into scenes), "from", or none.
+        auto show = [r, count](const std::string& text, const std::string& mark) {
+            for (std::size_t i = 0; i < count; ++i)
+                if (auto* m = dynamic_cast<ui::Label*>(
+                        r->find("launcher.layout.mark." + std::to_string(i))))
+                    m->setText(mark == std::to_string(i) ? "•" : "");
+            if (auto* m = dynamic_cast<ui::Label*>(r->find("launcher.layout.mark.from")))
+                m->setText(mark == "from" ? "•" : "");
+            if (auto* note = dynamic_cast<LayOutNote*>(r->find("launcher.layout.status")))
+                note->setText(text);
+        };
+        std::vector<std::pair<model::Id, std::int64_t>> sequence;
+        std::vector<std::size_t> rows;  // the dialog's row of each entry sent
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::string n = std::to_string(i);
+            const auto* use =
+                dynamic_cast<const ui::Checkbox*>(r->find("launcher.layout.use." + n));
+            if (!use || !use->checked()) continue;
+            const auto* field =
+                dynamic_cast<const ui::TextField*>(r->find("launcher.layout.bars." + n));
+            const std::int64_t bars = field ? wholeNumber(field->text()) : 0;
+            if (bars < 1) {
+                show(use->text() + ": give its bars as a whole number from 1", n);
+                return;
+            }
+            sequence.emplace_back(scenes[i], bars);
+            rows.push_back(i);
+        }
+        if (sequence.empty()) return;  // Lay out is disabled then
+        const auto* barField = dynamic_cast<const ui::TextField*>(r->find("launcher.layout.bar"));
+        const std::int64_t bar = barField ? wholeNumber(barField->text()) : 0;
+        if (bar < 1) {
+            show("From bar: give a whole number from 1", "from");
+            return;
+        }
+        auto done = layOut(sequence, static_cast<int>(bar));
+        if (done) {
+            r->closePopups();
+            return;
+        }
+        // The command's own words, with scene names for ids. A refusal of
+        // the arguments' form says its first listed error; the path (the
+        // error's, or that error's) names the entry, so its row is marked
+        // and named; then the hint.
+        const Error& e = done.error();
+        const Error& first = e.details.empty() ? e : e.details[0];
+        std::string path = first.path;
+        if (path.rfind("/args", 0) == 0) path = path.substr(5);
+        std::string mark, prefix, text = withSceneNames(view_.session(), e.message);
+        if (!e.details.empty()) text += ": " + withSceneNames(view_.session(), first.message);
+        if (path.rfind("/sequence/", 0) == 0) {
+            const std::size_t entry = wholeNumberAt(path, 10);
+            if (entry < rows.size()) {
+                mark = std::to_string(rows[entry]);
+                if (const auto* use =
+                        dynamic_cast<const ui::Checkbox*>(r->find("launcher.layout.use." + mark));
+                    use && text.find(use->text()) == std::string::npos)
+                    prefix = use->text() + ": ";
+            }
+        } else if (path == "/bar") {
+            mark = "from";
+            prefix = "From bar: ";
+        }
+        // The listed error's own hint; the wrapper's ("fix the listed
+        // argument errors") says nothing more here.
+        const std::string& fix = first.hint;
+        show(prefix + text + (fix.empty() ? std::string() : "; " + fix), mark);
+    };
+    actions.emplace<ui::Button>("launcher.layout.run", "Lay out", run);
+    r->openPopup(std::move(form), {}, ui::Placement::Center);
+    runnable();
 }
 
 void LauncherHeader::renameScene(model::Id scene, ui::Point at) {
@@ -1503,6 +1846,23 @@ void LauncherHeader::openSceneMenu(model::Id scene, ui::Point at) {
     items.push_back({"Insert at end", "", [this, scene] {
                          (void)insertScene(scene, barAfterArrangement(view_.session()));
                      }});
+    // How Insert, a drop and Lay out scenes… lay the clips (SceneLaying).
+    const SceneLaying laying = view_.sceneLaying();
+    items.push_back({"Follow the song's key and chords", "",
+                     [this, laying] {
+                         SceneLaying next = laying;
+                         next.followSong = !laying.followSong;
+                         view_.setSceneLaying(next);
+                     },
+                     true, false, laying.followSong});
+    items.push_back({"Write harmony to the context track", "",
+                     [this, laying] {
+                         SceneLaying next = laying;
+                         next.writeContext = !laying.writeContext;
+                         view_.setSceneLaying(next);
+                     },
+                     true, false, laying.writeContext});
+    items.push_back({"Lay out scenes\u2026", "", [this] { openLayOut(); }});
     items.push_back({"", "", {}, true, true});
     items.push_back({"Delete", "", [this, scene] {
                          json::Value args = json::Value::object();

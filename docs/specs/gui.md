@@ -138,6 +138,11 @@ sizes clamp to the panel minimum and 8192 units, and a position with no visible
 48-unit corner on a current display is discarded. Open panels adopt the new
 project's placement on project replacement. Screensets continue to store the
 mixer dock, the side panel (§4.14) and the arrange layout; floating panels are not screenset entries.
+The arrange layout a screenset stores leaves out the scene menu's two checks
+(`arrange.clips.follow_song`, `write_context`, §4.15): they are a choice
+about what laying a scene does, not layout, so a screenset neither stores
+them nor changes them when recalled (`ArrangeView::saveScreenLayout`,
+`loadScreenLayout`).
 
 Screenset names trim leading and trailing spaces and tabs. Import skips
 empty names and silently keeps the first entry when trimmed names collide.
@@ -941,7 +946,12 @@ entry whose `id` is the envelope's parameter (`gui::PluginScales`). An item's ta
 automate on the item's track, in timeline position as the model keeps them:
 a visible envelope (or a modulated parameter) on one has a lane there like
 any other, titled with "(take)" after it, and it follows the item to
-another track. Titles that would be the same say what tells them apart: an
+another track. It plays only over the item (`model::itemSpan`), while its
+take is the active one: the lane is washed with `ground` at 0.55 elsewhere
+(all of it while another take is active), as a held track's items are
+dimmed, its title clear (`Lanes::dimmedLaneSpans`,
+`TrackLayout::takeFxOwner`). Points there are edited as anywhere; the
+engine plays none of them. Titles that would be the same say what tells them apart: an
 effect with another of its name in its chain gets its place there ("Teasel
 2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
 14)", the take's name and the item's first bar) when another item on the
@@ -1501,9 +1511,10 @@ dragging a row (an insertion bar; Escape cancels; Alt+Up/Down, the
 `fx` section's `ui.fx.move_up/down`, move the selected effect; no arrow
 buttons), bypass vs offline
 (distinct, `reaper-ux.md` addendum), a double click on a row opens that
-effect's own GUI; a left double click on empty chain space (including the
-"No effects yet" message or below the last row) opens Add plugin, as in the
-mixer. The input section's empty area adds input FX; a take adds take FX.
+effect's own GUI; a left double click on empty chain space (below the last
+row, or under the section's heading when the chain is empty, which says
+nothing more) opens Add plugin, as in the mixer. The input section's empty
+area adds input FX; a take adds take FX.
 Single and right clicks on empty space do not open the browser. Ctrl+click adds a row to the selection (or takes it out)
 including the active row; effects moved out of the displayed track/take chains
 leave the selection. Shift+click selects the rows from the last one clicked; on a row of a
@@ -2980,7 +2991,8 @@ lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
 same heights, scroll and colours.
 - **Shown.** It is shown by View > Clip launcher (`ui.clips`, ticked while
   shown) and saved in the UI sidecar (`arrange.clips: {shown, width,
-  full}`, each only once chosen). The sidecar's entry wins. Only when there
+  full, follow_song, write_context}`, each only once chosen; the last two
+  are the scene menu's checks, below). The sidecar's entry wins. Only when there
   is none does the project decide: one with scenes opens with it shown, and
   one without (a new project too) hides it.
 - **Width.** Unset, it is wide enough for its columns (every scene, the +
@@ -3067,7 +3079,8 @@ same heights, scroll and colours.
     under the pointer (`scene.insert {scene, bar, bars}`) for its longest
     clip's length rounded up to whole bars from that bar
     (`views::sceneBars`; an audio clip's seconds through the tempo map),
-    as items and a section named after it, one undo step. While it is held
+    as items and a section named after it, one undo step, with the scene
+    menu's two checks (below). While it is held
     over the lanes the ghost layer draws a drop marker at that bar in
     `focus`, a light wash over the span and each clip's copy on its track
     (`ItemGestures::showSceneGhost`).
@@ -3075,10 +3088,48 @@ same heights, scroll and colours.
     first bar line at or after the playhead), **Insert at end** (from the
     first bar line at or after the end of the last item or section,
     `views::barAfterArrangement`), both `scene.insert` for the same bars,
-    and Delete (`scene.remove`, with its clips).
+    two checks, **Lay out scenes…**, and Delete (`scene.remove`, with its
+    clips).
+  - **The checks** say how every scene is laid on the timeline, by a drop,
+    Insert or Lay out scenes… (`views::SceneLaying`, one state per project
+    view, saved in the sidecar's `arrange.clips`; both unchecked by default,
+    for the drop and the menu alike). **Follow the song's key and chords**
+    sends `follow: chords`; unchecked, `follow` is not sent, so each clip
+    keeps its own Follow (the clip inspector's). `follow: key` and
+    `follow: none` for a whole scene stay with the clips' own Follow and
+    with agents; the check is not the whole of `follow`. **Write harmony to
+    the context track** sends `write_context`: the clips' own key and
+    chords go onto the context track under each section that has none. A
+    pick toggles its check and closes the menu.
+  - **Lay out scenes…** opens a dialog for `arrangement.build`: every scene
+    in pane order, each with a check (on) and its bars (its longest clip's
+    whole bars where it would land after the ones before it), **From bar**
+    (the first whole bar at or after the end of the arrangement), and the
+    same two checks, which read and write the same state as the menu's.
+    **Lay out** sends the checked scenes in order (no repeats; an agent can
+    repeat a scene); with none checked it is disabled.
+  - A field is a whole number when it is digits, with spaces only at its
+    ends. One that is not, or is 0 (the commands' own lower limit), is said
+    in the dialog by its row ("Verse: give its bars as a whole number from
+    1", "From bar: …") and nothing is sent. A whole number of any length is
+    sent (held at a billion), so every other limit is the command's.
+  - A refusal shows in the dialog (and in the status line) as the command
+    says it, with each scene id said by the scene's name, the first listed
+    error when the arguments' form was refused, and the hint after. The
+    error's path names the entry (`/sequence/<i>/…`, the i-th checked row)
+    or `/bar`: that row's name goes first unless the message already says
+    it, and a dot in `armed` marks the row (or From bar). The text wraps to
+    the dialog's width. The dialog stays open with its entries; done, it
+    closes.
   - A refusal of `scene.insert` (items already in the span, an empty
     scene, a looping clip whose period is not its content) shows its
     message in the status line and changes nothing.
+  - What laying did goes to the status line (`views::followNotice`): each
+    clip that follows or was laid as written in another key, and, with
+    write_context, a section whose harmony was not written ("Verse's harmony
+    is not written: the context track has points there", "… its clips
+    disagree at bar 9"); `arrangement.build`'s head names the scene, or
+    counts them ("3 scenes from bar 5").
   - A last header cell, **+**, adds a scene (`scene.add`).
 - **Arr.** A narrow last column, 22 units, holds per track a dot that is lit
   in `playing` while the track follows the arrangement. A click on an unlit
