@@ -284,7 +284,10 @@ Status AudioDeviceDialog::start(bool fallback) {
 
 Status AudioDeviceDialog::restart() {
     if (app_.backend()) stopEngine();
-    return start(false);
+    // With the fallback its last start had: an engine on the defaults because
+    // the saved device is missing keeps running when the rate or buffer
+    // changes. A fallback is said in the dialog and the status line (start).
+    return start(startedWithFallback_);
 }
 
 void AudioDeviceDialog::stop() {

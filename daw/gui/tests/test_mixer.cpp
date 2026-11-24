@@ -2617,6 +2617,18 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     REQUIRE(fallback.start(true));  // as at app start
     REQUIRE(f.app->backend() != nullptr);
     CHECK(fallback.lastError().find("using the default device") != std::string::npos);
+    // A new buffer size while the saved device is still missing: the restart
+    // falls back as the start did, so audio keeps running, and says so.
+    gui::AudioDeviceSettings bigger = fallback.settings();
+    bigger.block = 512;
+    errors.clear();
+    REQUIRE(fallback.apply(bigger));
+    CHECK(f.app->backend() != nullptr);
+    CHECK(starts.back().find(R"("block":512)") != std::string::npos);
+    CHECK(starts.back().find("output_device") == std::string::npos);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("using the default device") != std::string::npos);
+    CHECK(fallback.lastError().find("using the default device") != std::string::npos);
     starts.clear();
     REQUIRE(fallback.rescan());
     CHECK(f.app->backend() != nullptr);  // still running, on the defaults
@@ -2787,12 +2799,26 @@ TEST_CASE("audio device: the dialog saves each choice and restarts the engine wi
     auto saved = gui::Preferences::load(file);
     REQUIRE(saved);
     CHECK(saved->audio == audio.settings());
-    // A refused device leaves the engine stopped and says why; the choice is kept.
+    // A refused device: the engine started with the fallback (app start), so
+    // a restart runs on the defaults and says so in the dialog and through
+    // onError (the status line); the choice is kept. (A start without the
+    // fallback leaving the engine stopped: the Refresh test.)
     refuse = true;
-    REQUIRE_FALSE(audio.restart());
-    CHECK_FALSE(running);
-    CHECK(f.node("audio.status.0")->valueText().find("Not running: device was not found") == 0);
-    // At app start a refused choice falls back to the defaults, and says so.
+    errors.clear();
+    REQUIRE(audio.restart());
+    CHECK(running);
+    CHECK(starts.back().find("output_device") == std::string::npos);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("using the default device") != std::string::npos);
+    std::string status;  // the running line comes first; the note wraps onto the next
+    for (int i = 0; i < 3; ++i)
+        status += f.node("audio.status." + std::to_string(i))->valueText() + " ";
+    CHECK(status.find("using the default device") != std::string::npos);
+    CHECK(audio.settings().outputDevice == "Interface");
+    // At app start (the engine stopped) a refused choice falls back to the
+    // defaults, and says so.
+    audio.stopEngine();
+    errors.clear();
     REQUIRE(audio.start(true));
     CHECK(running);
     CHECK(starts.back().find("output_device") == std::string::npos);

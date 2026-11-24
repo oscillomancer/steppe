@@ -3862,7 +3862,11 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   the command's message in the dialog's status and the status line, the
   engine left stopped and the dialog open with the fresh list. Each choice is saved, then a
   running engine (or one whose start failed) restarts with it at once; a
-  stopped one stays stopped. The native input opens all its channels up to
+  stopped one stays stopped. A restart keeps the fallback the last start had:
+  after the app came up on the defaults, a choice the device refuses (the
+  saved device still missing, a rate it refuses) runs on the defaults again,
+  and the dialog's status and the status line say "(using the default
+  device)", so audio is not stopped by a change of rate or buffer. The native input opens all its channels up to
   32. At app start a refused saved choice retries the backend's defaults; the
   saved choice is kept. A failed start, or that fallback, opens the dialog,
   whose status says why (stderr is not seen from Finder or a desktop entry). engine.start receives the mapping

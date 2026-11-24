@@ -67,7 +67,10 @@ class AudioDeviceDialog {
     // Saved, then a running engine (or one whose start failed) restarts with
     // it. A failed save changes nothing.
     Status apply(AudioDeviceSettings next);
-    Status restart();  // stop if running, then start
+    // Stop if running, then start with the fallback the last start had (the
+    // app starts with one): a refused choice runs on the defaults, said in
+    // lastError() and through onError.
+    Status restart();
     void stop();
     void open();  // lists the devices present now
     // Refresh: lists the devices again. PortAudio sees a device plugged in
