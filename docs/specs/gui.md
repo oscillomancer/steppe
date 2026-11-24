@@ -1501,9 +1501,9 @@ dragging a row (an insertion bar; Escape cancels; Alt+Up/Down, the
 `fx` section's `ui.fx.move_up/down`, move the selected effect; no arrow
 buttons), bypass vs offline
 (distinct, `reaper-ux.md` addendum), a double click on a row opens that
-effect's own GUI; a left double click on empty chain space (including the
-"No effects yet" message or below the last row) opens Add plugin, as in the
-mixer. The input section's empty area adds input FX; a take adds take FX.
+effect's own GUI; a left double click on empty chain space (below the last
+row, or under the section's heading when the chain is empty, which says
+nothing more) opens Add plugin, as in the mixer. The input section's empty area adds input FX; a take adds take FX.
 Single and right clicks on empty space do not open the browser. Ctrl+click adds a row to the selection (or takes it out)
 including the active row; effects moved out of the displayed track/take chains
 leave the selection. Shift+click selects the rows from the last one clicked; on a row of a
