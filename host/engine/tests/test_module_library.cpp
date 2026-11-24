@@ -382,6 +382,43 @@ TEST_CASE("rack.probe: the window is heard whole under a master playrate below o
     CHECK(heard() == std::pair{all, std::int64_t{4}});
 }
 
+TEST_CASE("rack.probe: names follow a tempo change and a playrate envelope inside the window") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                    // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");  // mo_2
+    const auto probe = [&](const char* notes, int seconds) {
+        char text[300];
+        std::snprintf(text, sizeof text,
+                      R"({"rack": "rk_1", "ports": ["mo_2.pitch"], "seconds": %d,
+        "notes": "%s"})",
+                      seconds, notes);
+        return probedNotes(f, text);
+    };
+    const std::vector<std::string> change{"C#4", "E4", "Db4"};
+    // Tempo halves at beat 3; the third note is at beat 4, where the key changes.
+    f.run("key.set", R"({"at": 0, "tonic": "E", "scale": "major"})");
+    f.run("key.set", R"({"at": 4, "tonic": "Ab", "scale": "major"})");
+    f.run("tempo.set", R"({"points": [{"beat": 0, "bpm": 120}, {"beat": 3, "bpm": 60}]})");
+    CHECK(probe("voice v; 1: C#4:h E4:h | C#4:h r:h", 6) == change);
+    f.run("tempo.set", R"({"points": [{"beat": 0, "bpm": 120}]})");
+    // A ramp of the master playrate from 1 to 0.5 over four beats, and the key changes at beat
+    // 2 where the second note is: the rate moves the song position off the device's by an
+    // amount that grows, and the name is still the key holding at the note's beat.
+    f.run("key.remove", R"({"at": 4})");
+    f.run("key.set", R"({"at": 2, "tonic": "Ab", "scale": "major"})");
+    f.run("env.add", R"({"track": "tr_0", "param": "playrate",
+        "points": [{"beat": 0, "value": 1}, {"beat": 4, "value": 0.5}]})");
+    CHECK(probe("voice v; 1: C#4:q r:q C#4:q r:q", 4) == std::vector<std::string>{"C#4", "Db4"});
+    // A step of the rate from 1 to 0.5 at beat 2.5 (song frame 60000, inside a 64-frame block),
+    // and the key changes there, where the note is.
+    f.run("env.points.set", R"({"env": "en_1", "points": [
+        {"beat": 0, "value": 1, "shape": "square"}, {"beat": 2.5, "value": 0.5}]})");
+    f.run("key.remove", R"({"at": 2})");
+    f.run("key.set", R"({"at": 2.5, "tonic": "Ab", "scale": "major"})");
+    CHECK(probe("voice v; 1: r:h r:e C#4:e r:q", 4) == std::vector<std::string>{"Db4"});
+}
+
 TEST_CASE("rack.probe: an audio port's note is named by the context where it was measured") {
     Fixture f;
     f.write("sine", R"(#include <supple/script.h>

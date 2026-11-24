@@ -794,6 +794,41 @@ Error renderCancelled() {
 
 void setRenderWatchTestHooks(const RenderWatchTestHooks& hooks) { gWatchHooks = hooks; }
 
+namespace {
+
+// The rows OfflineSettings::songClock gets for a block that has just been processed: its first
+// frame and its last, and, between them, the frames where the clock bends. A step in a playrate
+// envelope falls at any frame, not at a block start, and the song position is straight between
+// two rows, so a row goes wherever the middle of a stretch is off the straight line by more than
+// kClockTolerance song seconds (a tenth of a millionth of a beat at 120 bpm, a fifth of the
+// slack a note's place has). The block's frames are still in the timeline's history.
+constexpr double kClockTolerance = 5e-8;
+template <class At>
+void refineClock(std::vector<std::pair<std::int64_t, double>>& rows, const At& at, std::int64_t lo,
+                 double from, std::int64_t hi, double to) {
+    if (hi - lo > 1) {
+        const std::int64_t mid = lo + (hi - lo) / 2;
+        const double heard = at(mid);
+        const double straight =
+            from + (to - from) * static_cast<double>(mid - lo) / static_cast<double>(hi - lo);
+        if (std::abs(heard - straight) > kClockTolerance) {
+            refineClock(rows, at, lo, from, mid, heard);
+            refineClock(rows, at, mid, heard, hi, to);
+            return;
+        }
+    }
+    rows.emplace_back(hi, to);
+}
+void appendSongClock(std::vector<std::pair<std::int64_t, double>>& rows, const detail::Plan& p,
+                     std::int64_t pos, std::int64_t song, std::uint32_t n) {
+    const auto at = [&](std::int64_t frame) { return p.rateSeconds(song + (frame - pos)); };
+    const double first = at(pos);
+    rows.emplace_back(pos, first);
+    if (n > 1) refineClock(rows, at, pos, first, pos + n - 1, at(pos + n - 1));
+}
+
+}  // namespace
+
 Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                     const OfflineSettings& opt) {
     static_assert(std::atomic<double>::is_always_lock_free);
@@ -1064,10 +1099,12 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                              : std::min(opt.threads, 64u) - 1);
     if (opt.songClock) {
         // Offline only: the rows are appended by this render's own block loop below (never by
-        // processBlock, which the live executors share), room for one per block up front.
+        // processBlock, which the live executors share). Room for a first and a last row per
+        // block up front; a bend inside a block adds rows, which is a reallocation on this
+        // thread, harmless.
         opt.songClock->clear();
         opt.songClock->reserve(
-            static_cast<std::size_t>(total / std::min<std::int64_t>(p.block, 64)) + 16);
+            2 * static_cast<std::size_t>(total / std::min<std::int64_t>(p.block, 64)) + 16);
     }
     std::thread audio([&] {
         auto progressAt = std::chrono::steady_clock::time_point::min();
@@ -1183,7 +1220,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                 // A failed plug-in's output went silent (ADR-0013 §6): the
                 // render fails below.
                 if (failing()) break;
-                if (opt.songClock) opt.songClock->emplace_back(pos, p.rateSeconds(song));
+                if (opt.songClock) appendSongClock(*opt.songClock, p, pos, song, n);
                 const Stereo& tap = opt.tap == model::Tap::PreFx      ? selected->preFx
                                     : opt.tap == model::Tap::PreFader ? selected->preFader
                                                                       : selected->post;
