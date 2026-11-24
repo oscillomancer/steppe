@@ -753,14 +753,7 @@ int frontendMain(int argc, char** argv) {
     gui::AudioDeviceDialog audioDevice(
         root, dispatcher, **app, prefs.audio,
         [&](const gui::AudioDeviceSettings& audio) { return preferences.setAudioDevice(audio); });
-    audioDevice.onError = [&shell](const std::string& message) {
-        std::fprintf(stderr, "%s\n", message.c_str());
-        shell.setStatus(message);
-    };
-    // An engine stop discards a launcher capture: Refresh waits for it.
-    audioDevice.captureHeld = [&shell, &app] {
-        return shell.capture().lit() || shell.capture().kept() || (*app)->launchCapturing();
-    };
+    gui::connectAudioDevice(audioDevice, shell);
     preferences.onAudioDevice = [&] { audioDevice.open(); };
     preferences.audioSummary = [&] { return audioDevice.summary(); };
     appActions.addUi("ui.audio.device", "Edit: audio device…", [&] { audioDevice.open(); });

@@ -25,6 +25,7 @@
 #include "actions_list.h"
 #include "app_actions.h"
 #include "appearance.h"
+#include "audio_device.h"
 #include "chrome.h"
 #include "crash_banner.h"
 #include "crash_report_text.h"
@@ -267,6 +268,64 @@ TEST_CASE("recording writer errors stay visible while healthy targets continue")
     CHECK(status->valueText().find("Vocal-1.wav") != std::string::npos);
     CHECK(status->valueText().find("kept") != std::string::npos);
     a.snapshot("recording-write-error.png");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+// Round 165 F3: the app's wiring of the audio device dialog says Refresh's
+// refusals in the status line, and the Capture toggle's capture keeps it off.
+TEST_CASE("audio device: the app's wiring says Refresh's refusals in the status line") {
+    App a;
+    if (!a.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    gui::AudioDeviceSettings settings;
+    settings.backend = "portaudio";
+    gui::AudioDeviceDialog audio(*a.root, *a.dispatcher, *a.app, settings, {});
+    const cmd::Origin test{cmd::Origin::Type::Test, "t", {}};
+    bool refuse = false;
+    audio.enumerate = [] {
+        return Result<std::vector<engine::AudioDevice>>(std::vector<engine::AudioDevice>{});
+    };
+    audio.startEngine = [&](const json::Value& args) -> Result<json::Value> {
+        if (refuse)
+            return Error("backend.device", "device was not found", "/output_device",
+                         "choose an exact name from engine.devices");
+        json::Value dummy = json::Value::object();  // a device-free engine stands in
+        dummy["backend"] = "dummy";
+        dummy["block"] = args.find("block")->asInt();
+        return a.dispatcher->execute({"engine.start", dummy, test});
+    };
+    audio.stopEngine = [&] {
+        (void)a.dispatcher->execute({"engine.stop", json::Value::object(), test});
+    };
+    gui::connectAudioDevice(audio, shell);
+    REQUIRE(audio.start());
+    auto status = [&] {
+        shell.sync();
+        a.root->frame(false);
+        const ui::Node* line = a.root->find("status");
+        return line ? line->valueText() : std::string();
+    };
+    // The Capture toggle armed: Refresh is off, refused, and says why there.
+    REQUIRE(shell.capture().set(true));
+    CHECK_FALSE(audio.refreshBlocked().empty());
+    const Status held = audio.rescan();
+    REQUIRE_FALSE(held);
+    CHECK(held.error().code == "audio.capture");
+    CHECK(status().find("off while the launcher captures") != std::string::npos);
+    REQUIRE(a.app->backend() != nullptr);  // nothing was stopped
+    REQUIRE(shell.capture().set(false));
+    CHECK(audio.refreshBlocked().empty());
+    // A refused start: the command's message in the status line.
+    refuse = true;
+    CHECK_FALSE(audio.rescan());
+    CHECK(status().find("device was not found") != std::string::npos);
+    CHECK(a.app->backend() == nullptr);
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 

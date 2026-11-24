@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "shell.h"
 #include "supple/ui/popup.h"
 #include "supple/ui/widgets.h"
 
@@ -335,6 +336,19 @@ void AudioDeviceDialog::openMenu(const std::string& id, std::vector<ui::MenuItem
 }
 
 void AudioDeviceDialog::open() { build(true); }
+
+void connectAudioDevice(AudioDeviceDialog& dialog, Shell& shell) {
+    dialog.onError = [&shell](const std::string& message) {
+        std::fprintf(stderr, "%s\n", message.c_str());
+        shell.setStatus(message);
+    };
+    // An engine stop discards a launcher capture: Refresh waits for it.
+    dialog.captureHeld = [&shell, &dialog] {
+        return shell.capture().lit() || shell.capture().kept() || dialog.engineCapturing();
+    };
+}
+
+bool AudioDeviceDialog::engineCapturing() const { return app_.launchCapturing(); }
 
 bool AudioDeviceDialog::recording() const {
     const auto transport = app_.transport("get");

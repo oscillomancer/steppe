@@ -50,6 +50,8 @@ json::Value audioDeviceJson(const AudioDeviceSettings& settings);
 json::Value engineStartArgs(const AudioDeviceSettings& settings,
                             std::span<const engine::AudioDevice> devices);
 
+class Shell;
+
 class AudioDeviceDialog {
   public:
     using Enumerate = std::function<Result<std::vector<engine::AudioDevice>>()>;
@@ -79,6 +81,7 @@ class AudioDeviceDialog {
     // engine is left stopped, the fresh list shown.
     Status rescan();
     bool recording() const;
+    bool engineCapturing() const;  // the engine's own capture runs
     // Why Refresh is off now ("" when it is not): recording or a capture.
     std::string refreshBlocked() const;
     bool isOpen() const;
@@ -114,5 +117,10 @@ class AudioDeviceDialog {
     bool wanted_ = false;               // a start was asked for: changes restart the engine
     bool startedWithFallback_ = false;  // the last start(): Refresh starts the same way
 };
+
+// The app's wiring: the dialog's refusals and failures go to the status
+// line (and stderr, for a start from a terminal), and a capture the
+// launcher's Capture toggle holds (armed, running or kept) keeps Refresh off.
+void connectAudioDevice(AudioDeviceDialog& dialog, Shell& shell);
 
 }  // namespace supple::gui
