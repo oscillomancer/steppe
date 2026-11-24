@@ -835,7 +835,10 @@ the same.*
       on the new trajectory from S (`detail::primeLaunchMirror`), all 45
       primes, and, for an applied warm-up whose switch is after S, a
       reader for that switch, primed fully (the same converter state its
-      warm-up reaches once its own primes are done). Each is marked
+      warm-up reaches once its own primes are done); an applied slot that
+      switches before the adoption (`handAt`) is read as reader 0's
+      reading at S, as the log will hold it. Only when the controls change
+      (`rateControlsChanged`). Each is marked
       `PlayerReader::mirror`. Reader 0's key holds no switch quantum:
       where a reading began does not change what one primed for S gives.
       A seek in the prepared plan, or a reader the timeline cannot yet

@@ -1017,9 +1017,10 @@ std::vector<detail::LaunchMirror> Engine::launchMirrorReadings(const detail::Pla
         m.songFrame = slot.songFrame.load(std::memory_order_relaxed);
         const std::int64_t target = slot.target.load(std::memory_order_relaxed);
         m.warmSwitch = target;
-        // One switched by the time this is read is in the log or will be;
-        // the executors tell (a mismatch is a miss).
-        if (target < playedStream(epoch))
+        // One switching before the adoption (`handAt`, the executors'
+        // stream) is reader 0's at S, in the log or about to be; the
+        // executors tell (a mismatch is a miss; review round 163 S1).
+        if (target < p.handAt)
             switched[m.track] = m;
         else
             warming[m.track] = m;

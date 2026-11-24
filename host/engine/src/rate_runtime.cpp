@@ -343,7 +343,10 @@ Status Engine::prepareRatePlan(detail::Plan& p) {
                 // What launched audio reads at the switch, primed here
                 // rather than on the audio thread at adoption (S3 step D4,
                 // phase 2), within this attempt's timed preparation.
-                if (result) detail::primeLaunchMirror(p, launchMirrorReadings(p));
+                // Only when the controls change: else no carry takes them
+                // (review round 163 S3).
+                if (result && p.rateControlsChanged)
+                    detail::primeLaunchMirror(p, launchMirrorReadings(p));
                 const auto elapsed =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
                 ratePreparationSeconds_ = std::max(elapsed, ratePreparationSeconds_ * .9);
