@@ -480,7 +480,8 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   nextEvent, rateEventFresh, held, releaseHeld, releaseLive, clips,
                                   takeChains, players, retiring, launch, launchLead, launchNext,
                                   launchNextValid, launchFresh, launchFadeFrames, arrangementGain,
-                                  arrangementGains, launchBuf, launchReaders, clipVoices,
+                                  arrangementGains, launchBuf, launchReaders, launchWarm,
+                                  launchWarmAt, launchWarmNext, launchWarmValid, clipVoices,
                                   clipWindow, postItems, itemShift, items, mix, silentFrom,
                                   silentTo, dropItems, noteTarget, volumeDb, pan, staticGain,
                                   panSettings, panCache, type, mute, master, decodeInput,
@@ -530,6 +531,8 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
     d.put(a, "launchLead", n.launchLead);
     // Its readers on the playrate path (S3): whether the plan made them.
     d.put(a, "launchReaders", n.launchReaders[0].state != nullptr);
+    // A pitch-keeping plan's warm-up lead (S3 step D); the warm-up is state.
+    d.put(a, "launchWarm", n.launchWarm);
     d.put(a, "clipSizing",
           std::array<std::uint64_t, 3>{static_cast<std::uint64_t>(n.launchFadeFrames), n.clipVoices,
                                        n.clipWindow});

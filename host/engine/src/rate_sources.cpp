@@ -313,6 +313,8 @@ void carryRateSources(Plan& from, Plan& to, int liveClass) SUPPLE_RT {
         Node* const found = findNode(to, oldNode.id);
         if (!found) continue;
         Node& node = *found;
+        // Launched audio's stretch converters (S3 step D), as the items'.
+        if (!to.rateControlsChanged) carryLaunchReaders(oldNode, node);
         for (auto& old : oldNode.clips)
             for (auto& clip : node.clips) {
                 if (old.item != clip.item || old.take != clip.take || old.data != clip.data ||

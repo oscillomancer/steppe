@@ -1375,6 +1375,7 @@ class Engine {
         std::size_t cutSlot = SIZE_MAX;
         std::uint64_t cutGeneration = 0;
         model::Id cutTrack;
+        bool cutAudio = false;  // the cut launches an audio clip (S3 step D, Q2 b)
         std::int64_t cutSong = 0;
         double cutBeat = 0;
         std::uint64_t epoch = 0;

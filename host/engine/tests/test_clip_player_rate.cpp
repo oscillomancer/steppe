@@ -12,24 +12,40 @@ using namespace supple;
 using namespace supple::engine;
 using namespace clip_player_test;
 
-TEST_CASE("an audio clip's launch is refused while the master playrate keeps the pitch") {
-    // S3 step 1: launched audio plays by tape only. A MIDI clip launches.
+TEST_CASE(
+    "an audio clip launches while the master playrate keeps the pitch; one with take FX is "
+    "refused") {
+    // S3 step D: launched audio reads through a stretch converter warmed up
+    // before its switch. A clip read through its take chain cannot yet
+    // (launch.playrate); without the pitch kept it launches.
     Project p;
     twoTracks(p);
+    p.run("scene.add", "{}");  // sc_3
+    auto args = j(R"({"track": "tr_2", "scene": "sc_2"})");
+    args["audio_file"] = p.ramp("chained.wav", 48000).string();
+    const std::string chained = p.runArgs("clip.add", args)["clip"].asString();
+    auto fx = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+    fx["take"] = takeOf(p, chained.c_str());
+    p.runArgs("fx.add", fx);
     DummyBackend backend({.mode = DummyBackend::Mode::Manual});
     REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128}, kInCallback));
     p.run("transport.playrate.set", R"({"rate": 0.5, "preserve_pitch": true})");
     REQUIRE(p.app->engine()->awaitPlan());
-    auto r = p.bus->execute({"launch.clip", j(R"({"clip": "cl_2"})"), kOrigin});
+    CHECK(p.bus->execute({"launch.clip", j(R"({"clip": "cl_2"})"), kOrigin}));
+    backend.run(40);  // (it started the transport: playing, the clock reads)
+    CHECK(p.bus->execute({"launch.clip", j(R"({"clip": "cl_1"})"), kOrigin}));
+    json::Value launch = json::Value::object();
+    launch["clip"] = chained;
+    auto r = p.bus->execute({"launch.clip", launch, kOrigin});
     REQUIRE_FALSE(r);
     CHECK(r.error().code == "launch.playrate");
-    CHECK(r.error().message.find("cl_2") != std::string::npos);
-    CHECK(p.bus->execute({"launch.clip", j(R"({"clip": "cl_1"})"), kOrigin}));
+    CHECK(r.error().message.find(chained) != std::string::npos);
+    CHECK(r.error().message.find("take FX") != std::string::npos);
     // Without the pitch kept it launches.
     p.run("transport.playrate.set", R"({"rate": 0.5, "preserve_pitch": false})");
     REQUIRE(p.app->engine()->awaitPlan());
     backend.run(40);  // (playing: the new plan's clock reads)
-    CHECK(p.bus->execute({"launch.clip", j(R"({"clip": "cl_2"})"), kOrigin}));
+    CHECK(p.bus->execute({"launch.clip", launch, kOrigin}));
     p.app->stopEngine();
 }
 
@@ -92,6 +108,164 @@ TEST_CASE("launches under a master playrate play as the offline replay, in both 
     }
 }
 
+TEST_CASE("launched audio under a pitch-keeping playrate plays as the offline replay" *
+          doctest::description("rt")) {
+    // S3 step D: twoTracks' scene on bar 2 (tr_2's audio clip cl_2), then
+    // tr_1 back to the arrangement and tr_2 switched to another audio clip
+    // (cl_3) on bar 3, and tr_2 stopped on bar 4, under a pitch-keeping 0.75
+    // and envelope. Each launched clip's stretch converter warms up from the
+    // quantum its switch falls in, the same live and offline, so live is the
+    // replay bit for bit; and it is not the tape reading.
+    for (const bool envelope : {false, true}) {
+        Project p;
+        twoTracks(p);
+        auto args = j(R"({"track": "tr_2", "scene": "sc_2"})");
+        args["audio_file"] = p.ramp("other.wav", 96000).string();
+        p.runArgs("clip.add", args);  // cl_3
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        if (envelope)
+            p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                             R"({"beat": 0, "value": 1}, {"beat": 8, "value": 0.6}]})");
+        const model::Session s = p.app->head();
+        const std::int64_t frames = 420000 + 16384;
+        Replays replays;
+        for (const std::uint32_t block : {128u, 512u})
+            for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+                if (envelope && block != 128) continue;
+                INFO("envelope " << envelope << ", block " << block << ", anticipative "
+                                 << options.anticipative);
+                Engine::LaunchRequest stop = backTo("tr_2");
+                stop.action = LaunchLogEntry::Action::Stop;
+                const std::vector<Step> steps{
+                    {20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}},
+                    {(128000 + 4000) / block, {backTo("tr_1"), request("tr_2", "cl_3")}},
+                    {(256000 + 4000) / block, {stop}}};
+                const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
+                REQUIRE(live.log.size() == 5);
+                CHECK(live.log[1].anchorSample == 96000);
+                CHECK(live.log[3].anchorSample == 192000);
+                CHECK(live.log[4].anchorSample == 288000);
+                liveIsReplay(s, p.app->projectDir(), live, 9.0, 420000, replays);
+            }
+        // Not the tape reading of the same log.
+        if (!envelope) {
+            InstancePool pool = makePool();
+            OfflineSettings settings;
+            settings.endSeconds = 9.0;
+            settings.projectDir = p.app->projectDir();
+            settings.launches = replays.rendered.front().first;
+            auto kept = renderOffline(s, pool, settings);
+            REQUIRE(kept);
+            p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+            auto tape = renderOffline(p.app->head(), pool, settings);
+            REQUIRE(tape);
+            double differ = 0;
+            for (std::size_t k = 130000; k < 250000; ++k)
+                differ = std::max(differ, std::fabs(double(kept->audio.channels[0][k]) -
+                                                    double(tape->audio.channels[0][k])));
+            CHECK(differ > 1e-3);
+        }
+    }
+}
+
+TEST_CASE(
+    "a launched audio clip's converter warms up before its switch, a quantum's worth a quantum" *
+    doctest::description("rt")) {
+    // S3 step D, Q5: from launchWarm before the switch the next launch's
+    // stretch converter (reader 2) seeks and primes no more than a quantum's
+    // worth per quantum played, is ready by the switch, and comes in on
+    // reader 0 there with its history: no burst at the switch.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session s = p.app->head();
+    InstancePool pool = makePool();
+    constexpr std::uint32_t block = 128;
+    MediaCache media;
+    auto plan = detail::compile(s, pool, 0, block).value();
+    plan.media = &media;
+    plan.projectDir = p.app->projectDir();
+    REQUIRE(detail::prepare(plan, s));
+    REQUIRE(detail::prepareRateSources(plan, 0, 0.0));  // as the engine does before playing
+    REQUIRE(detail::primeRateSources(plan, 0));
+    REQUIRE(plan.rateStretch);
+    for (auto* instance : plan.instances) REQUIRE(instance->startProcessing());
+    auto& node = *std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                               [](const auto& n) { return n.id == id("tr_2"); });
+    REQUIRE(node.launchReaders[2].state);
+    const int lookahead = node.launchReaders[2].state->stretch->lookahead();
+    const auto quanta = static_cast<std::uint32_t>((lookahead + 63) / 64);
+    CHECK(node.launchWarm == (quanta + 1) * 64);  // the lookahead's quanta and one to spare
+    detail::LaunchAction a;
+    a.kind = detail::LaunchState::Kind::Clip;
+    a.player = detail::playerOf(node, id("cl_2"));
+    REQUIRE(a.player >= 0);
+    a.anchorSample = 96000;  // bar 2, heard at 128000 at 0.75
+    a.anchorBeat = 4;
+    const std::int64_t at = 128000 + node.timelineShift;
+    const std::int64_t warmAt = at - node.launchWarm;
+    std::int64_t pos = 0;
+    const auto run = [&](std::int64_t until) {
+        while (pos < until) {
+            const auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(block, until - pos));
+            REQUIRE(detail::processBlock(plan, pos, n));
+            pos += n;
+        }
+    };
+    run(warmAt);
+    CHECK(node.launchReaders[2].startQuantum == INT64_MIN);  // nothing warmed before
+    detail::prewarm(node, a, at);
+    std::uint32_t primes = 0;
+    while (pos < at) {
+        const auto n = static_cast<std::uint32_t>(std::min<std::int64_t>(block, at - pos));
+        run(pos + n);
+        const detail::PlayerReader& r = node.launchReaders[2];
+        CHECK(r.primes - primes <= n / 64 + 1);  // a quantum's worth a quantum, and one
+        primes = r.primes;
+    }
+    const detail::PlayerReader& warm = node.launchReaders[2];
+    REQUIRE(warm.state->primed);  // ready by the switch
+    CHECK(warm.primes == quanta);
+    CHECK(warm.anchor == 96000);
+    CHECK(warm.startQuantum == detail::quantumAt(plan, at - node.timelineShift));
+    const detail::RateClipState* warmed = warm.state.get();
+    detail::applyLaunch(node, a);
+    CHECK(node.launchReaders[0].state.get() == warmed);  // in, with its history
+    run(at + block);
+    CHECK(node.launchReaders[0].state.get() == warmed);
+    CHECK(node.launchReaders[0].primes == quanta);
+    CHECK(node.launchReaders[0].state->quantum >= at - node.timelineShift);  // it played on
+    for (auto* instance : plan.instances) instance->stopProcessing();
+}
+
+TEST_CASE("a launched audio clip's converter carries over a plan swap under a pitch-keeping rate" *
+          doctest::description("rt")) {
+    // S3 step D: a plan swap that leaves the rate alone (a track added) hands
+    // the launched clip's stretch converter to the new plan with its
+    // history, so what plays is still the replay bit for bit; restarted cold
+    // it would differ from the swap on.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        AppLive live(p, options, 128, 48000 * 7 + 16384);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 2: running frame 128000
+        live.until(128000 + 24000);
+        p.run("track.add", R"({"name": "Empty"})");  // a new plan, the same rate
+        live.until(300000);
+        const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
+        REQUIRE(log.size() == 1);
+        const std::vector<float> heard = live.stop();
+        const std::vector<float> offline = replay(p, 7.0, log, 128);
+        const auto [worst, first] = compare(heard, live.latency, offline, 0, 290000);
+        CHECK(worst == 0.0);
+        CHECK(first == -1);
+    }
+}
+
 TEST_CASE("a launch under a master playrate switches where the song reaches its boundary") {
     // The anchor is the first frame whose song position reaches the bar:
     // on the rate timeline the frame before is short of it. And it moves
@@ -127,16 +301,27 @@ TEST_CASE("a launch made while stopped under a new playrate starts at the play s
     // transport stopped, a playrate set and then a scene launched answered
     // beat 0 but played from bar 2. Stopped, a launch targets the play start
     // whatever the rate (as at 1.0), and after a count-in too (review round
-    // 81 E3: its seek skipped the re-place).
-    for (const auto [rate, countIn] : {std::pair{1.25, false}, {0.8, false}, {1.25, true}})
+    // 81 E3: its seek skipped the re-place). With the pitch kept, tr_2's
+    // audio clip has no frames before the play start to warm its converter
+    // in: it starts there cold, on time (S3 step D).
+    struct Run {
+        double rate;
+        bool countIn, preserve;
+    };
+    for (const auto [rate, countIn, preserve] : {Run{1.25, false, false},
+                                                 {0.8, false, false},
+                                                 {1.25, true, false},
+                                                 {0.8, false, true},
+                                                 {1.25, true, true}})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
-            INFO("rate " << rate << ", count-in " << countIn << ", anticipative "
-                         << options.anticipative);
+            INFO("rate " << rate << ", count-in " << countIn << ", preserve " << preserve
+                         << ", anticipative " << options.anticipative);
             Project p;
             twoTracks(p);
             const model::Session unity = p.app->head();
-            json::Value set = j(R"({"preserve_pitch": false})");
+            json::Value set = json::Value::object();
             set["rate"] = rate;
+            set["preserve_pitch"] = preserve;
             p.runArgs("transport.playrate.set", set);
             const model::Session rated = p.app->head();
             constexpr std::uint32_t block = 128;
@@ -605,6 +790,53 @@ TEST_CASE("under a pitch-keeping rate a switch that cuts arrangement audio ends 
             CHECK(worst == 0.0);
             CHECK(first == -1);
         }
+}
+
+TEST_CASE("under a pitch-keeping rate an audio clip's launch ends the capture at its switch" *
+          doctest::description("rt")) {
+    // S3 step D, Q2 (b): a launched audio clip reads through a stretch
+    // converter whose history no committed item has, so a capture cannot
+    // write it as heard. Its switch ends a running capture there, with a
+    // warning saying why, though no arrangement audio is near (tr_2's item
+    // is moved far off); what was captured until then commits exactly.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("item.move", R"({"item": "it_2", "position": 64})");  // far from both switches
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        AppLive live(p, options, 128, 48000 * 6 + 16384);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        const double from = p.run("launch.capture", R"({"on": true})")["from"].asDouble();
+        p.run("launch.clip", R"({"clip": "cl_1"})");  // tr_1, MIDI, bar 2: no end
+        live.until(128000 + 8000);
+        CHECK(p.run("launch.state", "{}")["capturing"].asBool());
+        CHECK_FALSE(p.run("launch.state", "{}").find("capture_ends"));
+        p.run("launch.clip", R"({"clip": "cl_2"})");  // tr_2, audio, bar 3: song 192000
+        json::Value state = p.run("launch.state", "{}");
+        CHECK(state["capturing"].asBool());
+        REQUIRE(state.find("capture_ends"));
+        CHECK(state["capture_ends"].asDouble() == 8.0);
+        const auto& w = p.app->engine()->warnings();
+        CHECK(std::any_of(w.begin(), w.end(), [](const std::string& m) {
+            return m.find("the capture ends at tr_2's switch: it launches an audio clip") !=
+                   std::string::npos;
+        }));
+        live.until(256000 + 8000);
+        CHECK_FALSE(p.run("launch.state", "{}")["capturing"].asBool());
+        json::Value done = p.run("launch.commit", "{}");
+        CHECK(done["from"].asDouble() == from);
+        CHECK(done["to"].asDouble() == 8.0);
+        const std::vector<float> heard = live.stop();
+        const std::vector<float> committed = arrangement(p, 6.0, 128);
+        const std::int64_t start = std::llround(from * double(kBeat) / 0.75);
+        const std::int64_t end = 256000;
+        REQUIRE(end + std::int64_t(live.latency) <= std::int64_t(heard.size()));
+        const auto [worst, first] = compare(heard, live.latency, committed, start, end);
+        CHECK(worst == 0.0);
+        CHECK(first == -1);
+    }
 }
 
 TEST_CASE("under a pitch-keeping rate a capture's end at a switch goes with that switch" *

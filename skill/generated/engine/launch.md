@@ -74,7 +74,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
+- `launch.playrate`: an audio clip with take FX or envelopes cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope, or launch a copy of the clip without take FX
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
@@ -240,7 +240,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
+- `launch.playrate`: an audio clip with take FX or envelopes cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope, or launch a copy of the clip without take FX
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
@@ -520,7 +520,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
+- `launch.playrate`: an audio clip with take FX or envelopes cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope, or launch a copy of the clip without take FX
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment
@@ -742,7 +742,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 ### Errors
 
 - `engine.stopped`: the engine is not running Hint: engine.start first
-- `launch.playrate`: an audio clip cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope
+- `launch.playrate`: an audio clip with take FX or envelopes cannot play while the master playrate keeps the pitch Hint: turn off the master playrate's preserve pitch, or set it to 1 without an envelope, or launch a copy of the clip without take FX
 - `launch.clip`: the running plan has no player for the clip Hint: wait for the edit to reach the engine, then launch again
 - `launch.queue`: too many launches are waiting Hint: wait for them to play
 - `launch.later`: the transport is relocating, or the master playrate is changing Hint: launch again in a moment

@@ -841,6 +841,12 @@ struct PlayerReader {
     const ClipPlayer* player = nullptr;
     std::int64_t anchor = 0, pass = 0;
     bool unanchored = false;
+    // A stretched reading (a pitch-keeping plan, S3 step D): a converter
+    // with history, read every quantum in order from `startQuantum`. Its
+    // source plays before the anchor only in a later loop cycle than the
+    // switch's (`launchCycle`); `primes` of the converter's warm-up are done.
+    std::int64_t startQuantum = INT64_MIN, launchCycle = 0;
+    std::uint32_t primes = 0;
 };
 
 // An audio item ready to play: which source frames land on which samples.
@@ -1145,9 +1151,17 @@ struct Node {
     const float* arrangementGain = nullptr;
     std::vector<float> arrangementGains;
     Stereo launchBuf;
-    // On the playrate path (S3): the playing player's reader, and the one
-    // for what fades out (a player, or a retiring one).
-    std::array<PlayerReader, 2> launchReaders;
+    // On the playrate path (S3): the playing player's reader, the one for
+    // what fades out (a player, or a retiring one), and on a pitch-keeping
+    // plan the one warming up for the next launch (S3 step D). A switch
+    // rotates them, so a converter's history stays with its reading.
+    std::array<PlayerReader, 3> launchReaders;
+    // A pitch-keeping plan's warm-up (S3 step D): a launch of an audio clip
+    // reaches the node `launchWarm` frames before it applies (prewarm), at
+    // node frame `launchWarmAt`, and its converter warms up meanwhile.
+    std::int64_t launchWarm = 0, launchWarmAt = 0;
+    LaunchAction launchWarmNext;
+    bool launchWarmValid = false;
     // MIDI sizing (prepareRackMidi): the most clip notes sounding at once and
     // the most clip events in a block-long window, over the players.
     std::size_t clipVoices = 0, clipWindow = 0;
@@ -1656,6 +1670,19 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT;
 // A launch reaching the node Node::launchLead before it applies: its clip
 // chains' input (that much ahead) takes it from here.
 void prelaunch(Node& n, const LaunchAction& a) SUPPLE_RT;
+// A launch reaching the node Node::launchWarm before it applies, at node
+// frame `at` (S3 step D): its converter warms up from here.
+void prewarm(Node& n, const LaunchAction& a, std::int64_t at) SUPPLE_RT;
+// How early a launch reaches the node: its clip chains' lead or its warm-up.
+inline std::int64_t launchEarly(const Node& n) SUPPLE_RT {
+    return n.launchLead > n.launchWarm ? n.launchLead : n.launchWarm;
+}
+// An audio clip whose active take has FX or envelopes: it plays through a
+// take chain (plan.cpp), which a pitch-keeping plan cannot read launched yet.
+bool clipHasTakeChain(const Session& s, const model::Clip& clip);
+// Its readers' converters carried to the new plan's node by clip, when the
+// rate controls did not change (carryRateSources).
+void carryLaunchReaders(Node& old, Node& n) SUPPLE_RT;
 // What a clip chain's input reads in this block: the player's anchor on the
 // input side, or nothing (`on` false).
 struct ClipChainInput {

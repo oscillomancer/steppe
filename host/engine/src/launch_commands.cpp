@@ -246,8 +246,11 @@ const char* kWhen =
 std::vector<cmd::ErrorSpec> commonErrors() {
     return {
         {"engine.stopped", "the engine is not running", "engine.start first"},
-        {"launch.playrate", "an audio clip cannot play while the master playrate keeps the pitch",
-         "turn off the master playrate's preserve pitch, or set it to 1 without an envelope"},
+        {"launch.playrate",
+         "an audio clip with take FX or envelopes cannot play while the master playrate keeps "
+         "the pitch",
+         "turn off the master playrate's preserve pitch, or set it to 1 without an envelope, or "
+         "launch a copy of the clip without take FX"},
         {"launch.clip", "the running plan has no player for the clip",
          "wait for the edit to reach the engine, then launch again"},
         {"launch.queue", "too many launches are waiting", "wait for them to play"},

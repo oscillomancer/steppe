@@ -1090,6 +1090,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
             int feed = -1;
             Id clip;
             bool early = false;  // its clip chains' input side (Node::launchLead)
+            bool warm = false;   // its converter's warm-up (Node::launchWarm, S3 step D)
         };
         std::vector<Switch> switches;
         // The log's anchors are timeline samples (the live plan counts from
@@ -1137,6 +1138,14 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                         -1,
                                         {},
                                         true});
+                if (node.launchWarm > 0 && a.kind == detail::LaunchState::Kind::Clip)
+                    switches.push_back({e.runningFrame + node.timelineShift - node.launchWarm,
+                                        k,
+                                        a,
+                                        -1,
+                                        {},
+                                        false,
+                                        true});
             }
         std::stable_sort(switches.begin(), switches.end(),
                          [](const Switch& a, const Switch& b) { return a.at < b.at; });
@@ -1158,6 +1167,8 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                                 sw.action.anchorBeat);
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
+                    else if (sw.warm)  // where it applies, a launchWarm later
+                        detail::prewarm(node, sw.action, sw.at + node.launchWarm);
                     else
                         detail::applyLaunch(node, sw.action);
                 }
