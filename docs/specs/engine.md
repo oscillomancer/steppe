@@ -1012,8 +1012,10 @@ the same.*
   `launch.memory` (`clipsSkipped`), `launch.clip` (no players on the
   track, or the plan lacks the clip). The app builds each request from
   the session the commands read, not the engine's (an edit can be on its
-  way, as while audio is prepared), and gives an engine refusal the
-  press's path, so the answer is the press's error field for field.
+  way, as while audio is prepared), and gives every refusal the path a
+  caller of the press receives, `/args/clip` or `/args/scene` (the bus
+  puts `/args` before a command error's path), so the answer is the
+  press's error field for field.
   `EngineApp::launchRefusal(clip)` puts launch.clip's own `track.frozen`
   check first, engine or not;
   `EngineApp::sceneLaunchRefusal(scene)` makes launch.scene's selection
@@ -1021,6 +1023,11 @@ the same.*
   out) and answers `launch.scene` when it is empty, else the first
   refusal among its clips. Transport-state refusals (`engine.stopped`,
   `launch.later`, `launch.queue`) are not reported.
+  `EngineApp::launchRefusals()` gives every clip's and scene's answer in
+  one pass (`clips` and `scenes` maps, refused ones only), equal entry for
+  entry to the per-id calls: it reads `clipsSkipped` and the display order
+  once and groups clips by scene, so a pane's recompute costs
+  O(C log C + T) plus each clip's plan check (round 147 F1).
   `EngineApp::launchRefusalGeneration()` moves whenever an answer can
   change: a published plan (each engine's count is folded into a base
   that survives a restart), an engine starting or stopping, a session

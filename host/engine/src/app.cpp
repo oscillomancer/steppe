@@ -5642,21 +5642,68 @@ struct Gain : Effect {
 
 // The commands read view(); outside a transaction (the GUI's frames) that is
 // the head, read here without a copy. Each request is built from that
-// session, as the press builds it, and an engine refusal carries the
-// press's path (launchNow), so the answer is the press's error field for
-// field (round 145 B1, B2).
+// session, as the press builds it, and every refusal carries the path a
+// caller of the press receives (the bus puts /args before a command
+// error's path), so the answer is the press's error field for field
+// (round 145 B1, B2).
+std::optional<Error> EngineApp::clipRefusal(const model::Session& s, model::Id clip) const {
+    const model::Clip* c = s.clips.find(clip);
+    if (!c) return std::nullopt;  // the press: not a clip (an argument error)
+    if (const auto* track = s.tracks.find(c->track); track && track->freeze)
+        return trackFrozen(c->track, "/args/clip");
+    if (!engine_) return std::nullopt;  // launch.clip: engine.stopped
+    auto refused = engine_->launchRefusal({c->track, LaunchLogEntry::Action::Clip, clip, {}});
+    if (refused) refused->path = "/args/clip";
+    return refused;
+}
+
 std::optional<Error> EngineApp::launchRefusal(model::Id clip) const {
-    const auto refusal = [&](const model::Session& s) -> std::optional<Error> {
-        const model::Clip* c = s.clips.find(clip);
-        if (!c) return std::nullopt;  // the press: not a clip (an argument error)
-        if (const auto* track = s.tracks.find(c->track); track && track->freeze)
-            return trackFrozen(c->track, "/clip");
-        if (!engine_) return std::nullopt;  // launch.clip: engine.stopped
-        auto refused = engine_->launchRefusal({c->track, LaunchLogEntry::Action::Clip, clip, {}});
-        if (refused) refused->path = "/clip";
-        return refused;
+    return txn_ ? clipRefusal(view(), clip) : clipRefusal(head(), clip);
+}
+
+EngineApp::LaunchRefusals EngineApp::launchRefusals() const {
+    LaunchRefusals out;
+    const auto all = [&](const model::Session& s) {
+        for (const auto& e : s.clips)
+            if (auto refused = clipRefusal(s, e.id)) out.clips.emplace(e.id, std::move(*refused));
+        if (!engine_) return;  // launch.scene: engine.stopped
+        // launch.scene's selection for every scene at once
+        // (sceneLaunchRequests): each scene's clips in track display order,
+        // each track's in the session's order, frozen tracks' and
+        // memory-skipped clips left out.
+        const std::vector<model::Id> skipped = engine_->clipsSkipped();
+        std::map<model::Id, std::vector<model::Id>> byTrack;
+        for (const auto& e : s.clips) byTrack[e.value->track].push_back(e.id);
+        std::map<model::Id, std::vector<model::Id>> byScene;
+        for (const model::Id track : tracksInDisplayOrder(s)) {
+            const auto clips = byTrack.find(track);
+            if (clips == byTrack.end() || s.tracks.find(track)->freeze) continue;
+            for (const model::Id clip : clips->second)
+                if (std::find(skipped.begin(), skipped.end(), clip) == skipped.end())
+                    byScene[s.clips.find(clip)->scene].push_back(clip);
+        }
+        for (const auto& e : s.scenes) {
+            const auto selection = byScene.find(e.id);
+            if (selection == byScene.end()) {
+                Error none = sceneHasNoClip(e.id);
+                none.path = "/args/scene";
+                out.scenes.emplace(e.id, std::move(none));
+                continue;
+            }
+            for (const model::Id clip : selection->second)
+                if (const auto refused = out.clips.find(clip); refused != out.clips.end()) {
+                    Error first = refused->second;
+                    first.path = "/args/scene";
+                    out.scenes.emplace(e.id, std::move(first));
+                    break;
+                }
+        }
     };
-    return txn_ ? refusal(view()) : refusal(head());
+    if (txn_)
+        all(view());
+    else
+        all(head());
+    return out;
 }
 
 std::uint64_t EngineApp::launchRefusalGeneration() const {
@@ -5673,10 +5720,14 @@ std::optional<Error> EngineApp::sceneLaunchRefusal(model::Id scene) const {
     if (!engine_) return std::nullopt;
     const auto refusal = [&](const model::Session& s) -> std::optional<Error> {
         const SceneLaunch selection = sceneLaunchRequests(s, scene, engine_->clipsSkipped());
-        if (selection.requests.empty()) return sceneHasNoClip(scene);
+        if (selection.requests.empty()) {
+            Error none = sceneHasNoClip(scene);
+            none.path = "/args/scene";
+            return none;
+        }
         for (const Engine::LaunchRequest& r : selection.requests)
             if (auto refused = engine_->launchRefusal(r)) {
-                refused->path = "/scene";
+                refused->path = "/args/scene";
                 return refused;
             }
         return std::nullopt;
