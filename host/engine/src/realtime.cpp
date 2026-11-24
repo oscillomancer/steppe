@@ -1182,7 +1182,7 @@ std::atomic<double> gTransportWaitSeconds{0};  // 0: the default or the environm
 double transportWaitSeconds() {
     if (const double set = gTransportWaitSeconds.load(std::memory_order_relaxed); set > 0)
         return set;
-    static const double fromEnvironment = environmentFlagEnabled("SUPPLE_TRANSPORT_PATIENT")
+    static const double fromEnvironment = environmentFlagEnabled("SUPPLE_TEST_TRANSPORT_PATIENT")
                                               ? kPatientTransportSeconds
                                               : kTransportWaitSeconds;
     return fromEnvironment;
