@@ -62,9 +62,12 @@ class AudioDeviceDialog {
                       AudioDeviceSettings settings, Save save);
     // Starts the engine from the settings. With `fallback` (app start), a
     // refused choice of devices or rate retries the defaults; the saved
-    // choice is kept for when the device returns. The note says so, with the
-    // engine's rate when it differs from the one chosen ("(using the default
-    // device at 48000 Hz)").
+    // choice is kept for when the device returns. The dialog and onError say
+    // so as sentences, without command hints ("The output device "X" was not
+    // found. Audio is running on the default device at 48000 Hz. The choice
+    // is kept for when it returns.": the rate, the engine's, only when it
+    // differs from the one chosen), and the missing device's row reads
+    // "X (not found)".
     Status start(bool fallback = false);
     // Saved, then a running engine (or one whose start failed) restarts with
     // it. A failed save changes nothing.
@@ -121,6 +124,9 @@ class AudioDeviceDialog {
     std::string enumerateError_, lastError_;
     bool wanted_ = false;               // a start was asked for: changes restart the engine
     bool startedWithFallback_ = false;  // the last start(): Refresh starts the same way
+    // The saved device a fallback did not find ("/output_device" or
+    // "/input_device"): its row reads "<name> (not found)".
+    std::string missing_;
 };
 
 // The app's wiring: the dialog's refusals and failures go to the status

@@ -3867,12 +3867,17 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   stopped one stays stopped. A restart keeps the fallback the last start had:
   after the app came up on the defaults, a choice the device refuses (the
   saved device still missing, a rate it refuses) runs on the defaults again,
-  and the dialog's status and the status line say "(using the default
-  device)", so audio is not stopped by a change of rate or buffer. The
-  defaults leave the rate to the device: when the engine runs at another
-  rate than the one chosen, the note names the engine's rate, "(using the
-  default device at 48000 Hz)", and the chosen rate stays saved for when
-  the device returns. The native input opens all its channels up to
+  so audio is not stopped by a change of rate or buffer. The dialog's status
+  and the status line say it in the dialog's own words, as sentences, never
+  with a command name or an agent's hint: "The output device "Interface" was
+  not found. Audio is running on the default device. The choice is kept for
+  when it returns." (a refusal other than a missing device: "The saved choice
+  was refused: <message>."). The defaults leave the rate to the device: when
+  the engine runs at another rate than the one chosen, the note names the
+  engine's rate, "… on the default device at 48000 Hz.", and the chosen rate
+  stays saved for when the device returns. The rows show the saved choice;
+  the missing device's row reads "Interface (not found)" while the fallback
+  runs. The native input opens all its channels up to
   32. At app start a refused saved choice retries the backend's defaults; the
   saved choice is kept. A failed start, or that fallback, opens the dialog,
   whose status says why (stderr is not seen from Finder or a desktop entry). engine.start receives the mapping

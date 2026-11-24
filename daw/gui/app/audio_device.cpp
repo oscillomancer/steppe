@@ -74,6 +74,25 @@ std::string message(const Error& e) {
     return e.hint.empty() ? e.message : e.message + "; " + e.hint;
 }
 
+// A saved device the engine did not find: "/output_device" or
+// "/input_device", else empty.
+std::string missingDevice(const Error& e) {
+    const bool device = e.code == "backend.device" && e.message == "device was not found";
+    return device && (e.path == "/output_device" || e.path == "/input_device") ? e.path
+                                                                               : std::string();
+}
+
+// Why the saved choice did not start, in the dialog's own words: no command
+// names or hints, which are for agents.
+std::string refusedWords(const Error& e, const AudioDeviceSettings& s) {
+    if (const std::string missing = missingDevice(e); !missing.empty()) {
+        const bool input = missing == "/input_device";
+        return std::string(input ? "The input device \"" : "The output device \"") +
+               (input ? s.inputDevice : s.outputDevice) + "\" was not found.";
+    }
+    return "The saved choice was refused: " + e.message + ".";
+}
+
 ui::Node& row(ui::Node& form, const std::string& id, const std::string& label) {
     auto& r = form.emplace<ui::Node>(id);
     r.layout.dir = ui::Layout::Dir::Row;
@@ -256,6 +275,8 @@ std::string AudioDeviceDialog::hostApiName() const { return resolvedHost(setting
 
 Status AudioDeviceDialog::start(bool fallback) {
     wanted_ = true;
+    const bool marked = !missing_.empty();
+    missing_.clear();
     startedWithFallback_ = fallback;
     auto attempt = [&](const AudioDeviceSettings& s) -> Status {
         const auto listed =
@@ -271,23 +292,30 @@ Status AudioDeviceDialog::start(bool fallback) {
         defaults.backend = settings_.backend;
         defaults.block = settings_.block;
         if (!(defaults == settings_) && attempt(defaults)) {
-            // The defaults leave the rate to the device; when it runs at
-            // another rate than the one chosen, say the engine's.
-            std::string note = "using the default device";
+            // Said as sentences. The defaults leave the rate to the device;
+            // when it runs at another rate than the one chosen, the engine's
+            // rate is named. The missing device's row says so too.
+            std::string note =
+                refusedWords(st.error(), settings_) + " Audio is running on the default device";
             const double rate = app_.engineStatus().sampleRate;
-            if (settings_.rate > 0 && rate > 0 && rate != settings_.rate) {
-                char hz[48];
-                std::snprintf(hz, sizeof hz, " at %.0f Hz", rate);
-                note += hz;
-            }
-            lastError_ = message(st.error()) + " (" + note + ")";
+            if (settings_.rate > 0 && rate > 0 && rate != settings_.rate) note += " at " + hz(rate);
+            lastError_ = note + ". The choice is kept for when it returns.";
             if (onError) onError("audio device: " + lastError_);
-            refresh();
+            const std::string missing = missingDevice(st.error());
+            const bool rows = missing != missing_;
+            missing_ = missing;
+            if (rows && isOpen())
+                build(false);
+            else
+                refresh();
             return {};
         }
     }
     lastError_ = st ? std::string() : message(st.error());
-    refresh();
+    if (marked && isOpen())
+        build(false);  // the row's "(not found)" goes
+    else
+        refresh();
     return st;
 }
 
@@ -302,6 +330,7 @@ Status AudioDeviceDialog::restart() {
 void AudioDeviceDialog::stop() {
     wanted_ = false;
     lastError_.clear();
+    missing_.clear();
     stopEngine();
     refresh();
 }
@@ -478,7 +507,10 @@ void AudioDeviceDialog::build(bool reload) {
 
     if (backend == "portaudio") {
         button("audio.output", "Output device",
-               settings_.outputDevice.empty() ? "System default" : settings_.outputDevice, [this] {
+               settings_.outputDevice.empty() ? "System default"
+               : missing_ == "/output_device" ? settings_.outputDevice + " (not found)"
+                                              : settings_.outputDevice,
+               [this] {
                    std::vector<ui::MenuItem> items;
                    auto add = [&](std::string label, const std::string& name) {
                        ui::MenuItem item;
@@ -501,7 +533,9 @@ void AudioDeviceDialog::build(bool reload) {
         const std::string inputText = !settings_.record               ? "None (playback only)"
                                       : asio                          ? "Same device as output"
                                       : settings_.inputDevice.empty() ? "System default"
-                                                                      : settings_.inputDevice;
+                                      : missing_ == "/input_device"
+                                          ? settings_.inputDevice + " (not found)"
+                                          : settings_.inputDevice;
         button("audio.input", "Input device", inputText, [this, asio] {
             std::vector<ui::MenuItem> items;
             auto add = [&](std::string label, bool record, const std::string& name) {

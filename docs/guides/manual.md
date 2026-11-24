@@ -110,11 +110,19 @@ applies to Steppe and its plug-in bridges only: it changes no system setting,
 and ends when Steppe stops the engine. macOS and Windows do not merge memory
 this way, and nothing changes there.
 
-If the device is missing or busy when Steppe starts, the app still opens. The
-Audio device dialog then opens and says why. Choose another device, or
-**Restart audio** once the device is ready. The dialog's status lines show
-what is running: the backend, rate, buffer size, device period and output
-latency.
+If the device is missing or busy when Steppe starts, the app still opens. It
+tries the default device instead, and the Audio device dialog opens and says
+why. When the default device runs, audio keeps going on it. The dialog and the
+status line say so, for example: The output device "Interface" was not found.
+Audio is running on the default device at 48000 Hz. The choice is kept for
+when it returns. The rate is named only when it differs from the one you
+chose; the default device keeps its own rate. The missing device's row reads
+**Interface (not found)**. Changing the rate or buffer size meanwhile keeps
+audio on the default device, and your choices stay saved. Once the device is
+back, **Refresh** or **Restart audio** runs on it again. If the default device
+fails too, audio stays stopped: choose another device, or **Restart audio**
+once the device is ready. The dialog's status lines show what is running: the
+backend, rate, buffer size, device period and output latency.
 
 The right end of the transport bar shows what the device is running at, for
 example **48 kHz · 256 samples**. It stays quiet while all is well. If
