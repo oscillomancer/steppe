@@ -1493,6 +1493,102 @@ TEST_CASE("a comp's seam: found and hit where the take changes, dragged with tak
     REQUIRE(far.size() == 2);
     CHECK(far[0].seconds > beforeFar[0].seconds);
     CHECK(far[0].seconds < far[1].seconds);
+    // The middle piece is now short, and its clamped seams can make its
+    // neighbours meet: the comp is still one comp, asked from any piece (the
+    // seam drag, the Crossfade field and the take badge ask the piece they are
+    // on), and a second drag on the moved seam is still a seam drag.
+    std::vector<model::Id> ids;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track == track && e.value->takes.size() == 2) ids.push_back(e.id);
+    REQUIRE(ids.size() == 3);
+    for (model::Id id : ids) {
+        CAPTURE(id.str());
+        const auto comp = views::compOf(f.app->head(), id);
+        REQUIRE(comp);
+        CHECK(comp->pieces.size() == 3);
+        CHECK(comp->seams.size() == 2);
+    }
+    const ui::Rect farRight = f.rectOf(far[0].right);
+    const auto again =
+        g.hit({f.view->lanes().xAt(far[0].seconds) + 1, farRight.y + farRight.h / 2});
+    REQUIRE(again);
+    CHECK(again->zone == views::ItemGestures::Drag::Seam);
+}
+
+// A seam dragged all the way to the next one leaves the piece between them
+// 1/64 beat long, its two seams clamped to meet in it: at 125 BPM that core is
+// an even 360 samples, and the pieces either side of it then meet at one
+// sample. It is still one comp from every piece (the lanes, the seam drag, the
+// Crossfade field and the take badge ask the piece they are on), so both seams
+// stay drawn and draggable.
+TEST_CASE("a seam dragged against the next one: the comp is still one comp from every piece") {
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute(
+        {"tempo.set", json::parse(R"({"points":[{"beat":0,"bpm":125}]})").value(), kUi}));
+    f.sync();
+    auto [it, heard] = twoTakeItem(f);
+    const model::Id track = f.item(it).track;
+    const double start = f.item(it).position, length = f.item(it).length;
+    json::Value args = json::Value::object();
+    args["item"] = it.str();
+    args["crossfade"] = 0.5;
+    json::Value span = json::Value::object();
+    span["from"] = start + length / 3;
+    span["to"] = start + 2 * length / 3;
+    span["index"] = static_cast<std::int64_t>(1 - heard);
+    args["spans"] = json::Value::array();
+    args["spans"].push_back(span);
+    REQUIRE(f.dispatcher->execute({"take.comp", args, kUi}));
+    f.sync();
+    const std::size_t row = *f.view->trackLayout().indexOf(track);
+    const auto seams = f.view->lanes().compSeams(row);
+    REQUIRE(seams.size() == 2);
+    const ui::Rect right = f.rectOf(seams[0].right);
+    const float x = f.view->lanes().xAt(seams[0].seconds), y = right.y + right.h / 2;
+    const auto steps = f.steps();
+    f.drag({x, y}, {x + 2000, y}, ui::kShift);
+    REQUIRE(f.steps() == steps + 1);
+    const model::Session& s = f.app->head();
+    std::vector<model::Id> ids;
+    for (const auto& e : s.items)
+        if (e.value->track == track && e.value->takes.size() == 2) ids.push_back(e.id);
+    REQUIRE(ids.size() == 3);
+    for (model::Id id : ids) {
+        CAPTURE(id.str());
+        const auto comp = views::compOf(s, id);
+        REQUIRE(comp);
+        CHECK(comp->pieces.size() == 3);
+        CHECK(comp->seams.size() == 2);
+    }
+    const auto after = f.view->lanes().compSeams(row);
+    REQUIRE(after.size() == 2);
+    CHECK((after[1].seconds - after[0].seconds) * s.project->sampleRate ==
+          doctest::Approx(360).epsilon(0.01));
+    // Close enough to tell the two seams apart (150 px), each is a seam drag.
+    auto viewport = f.view->viewport();
+    viewport.pixelsPerSecond = 20000;
+    viewport.startSeconds = after[0].seconds - 0.02;
+    f.view->setViewport(viewport);
+    f.sync();
+    auto& g = f.view->gestures();
+    for (std::size_t k = 0; k < 2; ++k) {
+        CAPTURE(k);
+        const auto seam = f.view->lanes().compSeams(row)[k];
+        const ui::Rect r = f.rectOf(seam.right);
+        const auto h = g.hit({f.view->lanes().xAt(seam.seconds) + 1, r.y + r.h / 2});
+        REQUIRE(h);
+        CHECK(h->zone == views::ItemGestures::Drag::Seam);
+        CHECK(h->seamLeft == seam.left);
+    }
+    if (const char* out = std::getenv("SUPPLE_SCREENSHOT_DIR")) {
+        viewport.pixelsPerSecond = 1500;
+        viewport.startSeconds = after[0].seconds - 0.45;
+        f.view->setViewport(viewport);
+        f.sync();
+        REQUIRE(gui::writePng(std::filesystem::path(out) / "comp-clamped-seams.png",
+                              f.root->readBack()));
+    }
 }
 
 // comp-seams (round 137): a seam drag and a lane click send take.comp with no
