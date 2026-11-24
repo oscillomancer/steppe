@@ -1103,7 +1103,13 @@ the replay.
   as the replay does: from its switch's quantum, catching up, when that
   is at most 32 quanta back, so it plays what a warm-up would; else at its
   own quantum. Its loop cycle is the switch frame's either way (round 139
-  R4). The worst cold restart is 45 primes and 32 quanta of catch-up in
+  R4), from the song phase recorded at the switch (2026-11-24: it was read
+  back from the timeline's ring, about 11 s at 48 kHz. The cycle matters
+  only before the launch's first wrap, which unanchors it, where the
+  converter reads ahead into the next cycle; a cold restart there about
+  one ring after the switch, with the frame that overwrote the switch's
+  slot already past the wrap, took cycle 1, and the clip read silence for
+  the whole of that cycle before its anchor). The worst cold restart is 45 primes and 32 quanta of catch-up in
   one block (48 kHz).
 - **What it reads:** the player's song frames from the anchor, folded as
   the song is, before the anchor only in a later loop cycle than the
@@ -1261,7 +1267,11 @@ tests, in test_clip_player_rate_trajectory.cpp and its `_queued` sibling:
   (round 152 N2);
 - tape to stretch just after a launch in a later loop cycle plays as in the first (round 152 F2; the
   converter reads from S, after the anchor, so the cycle it keeps is not heard there: the case pins the
-  result, it was not seen red);
+  result), and at plan level the reading handed on from a tape reader keeps its switch's cycle, from the
+  phase recorded at the switch or, for a switch on a plan without a playrate, the frame read back (red
+  with the tape reader's own cycle, 0);
+- a cold restart just before the launch's first wrap, about one ring after its switch, keeps the
+  switch's cycle (step D; silent for the cycle before the anchor when it was read back from the ring);
 - the floor for a launch pressed inside the pending window, and the A1 bound at plan level for every
   side.
 

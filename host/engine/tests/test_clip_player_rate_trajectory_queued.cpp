@@ -140,8 +140,11 @@ TEST_CASE("turning preserve pitch on just after a launch in a later loop cycle" 
     // transport loop over song 0-4 s (256000 frames at 0.75), cl_2 launched
     // for bar 2 of the first or the second cycle, and preserve pitch turned on
     // so that S lands one quantum or 448 frames after its switch, the two
-    // play the same, a loop apart. (The converter reads from S, after the
-    // anchor, so this pins the result: the cycle is not heard here.)
+    // play the same, a loop apart. A pin of that result only: the converter
+    // reads from S, after the anchor, so the cycle is not heard here, and
+    // at one quantum the switch may land in the adoption's own slice and
+    // not reach the carry's tape branch at all. The carried cycle itself is
+    // checked at plan level (test_clip_player_rate_trajectory.cpp).
     for (const std::int64_t after : {115, 500})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("S about " << after << " after the switch, anticipative " << options.anticipative);

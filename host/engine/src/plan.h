@@ -1175,11 +1175,12 @@ struct Node {
     // (applyLaunch marks it pending): a cold reading starts from its quantum
     // and takes its loop cycle, as a warm-up does (S3 step D).
     std::int64_t launchSwitchAt = INT64_MIN;
-    // Its loop cycle on a playrate plan, taken in that block, while the
-    // timeline still holds the frame (its ring keeps seconds, not a clip's
-    // whole play): a reading handed on from a tape reader takes it (S3 step
-    // D4, round 152 F2).
-    std::int64_t launchSwitchCycle = 0;
+    // Its song phase on a playrate plan (absolute), taken in that block
+    // while the timeline still holds the frame: its ring keeps seconds, not
+    // a clip's whole play. NaN: none (a plan without a playrate). Its loop
+    // cycle, as the loop is now (switchCycle), is what a cold reading keeps,
+    // and one handed on from a tape reader (S3 step D4, round 152 F2).
+    double launchSwitchPhase = std::numeric_limits<double>::quiet_NaN();
     bool launchSwitchPending = false;
     LaunchAction launchWarmNext;
     bool launchWarmValid = false;
@@ -1718,6 +1719,8 @@ void carryLaunchReaders(Node& old, Node& n) SUPPLE_RT;
 // the new reader takes the reading the node has at the switch on the new
 // one; a warm-up switching later starts again there (carryRateSources).
 void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT;
+// The loop cycle of the node's last switch on `timeline`.
+std::int64_t switchCycle(const Node& n, const PlayrateTimeline& timeline) SUPPLE_RT;
 // Stretch converter primes since the process began (a relaxed count, for
 // the tests' per-block bound).
 std::uint64_t stretchPrimes() noexcept;

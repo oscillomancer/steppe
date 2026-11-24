@@ -481,7 +481,7 @@ void dumpNode(Dump& d, std::string_view a, const Node& n) {
                                   takeChains, players, retiring, launch, launchLead, launchNext,
                                   launchNextValid, launchFresh, launchFadeFrames, arrangementGain,
                                   arrangementGains, launchBuf, launchReaders, launchWarm,
-                                  launchWarmAt, launchSwitchAt, launchSwitchCycle,
+                                  launchWarmAt, launchSwitchAt, launchSwitchPhase,
                                   launchSwitchPending, launchWarmNext, launchWarmValid, clipVoices,
                                   clipWindow, postItems, itemShift, items, mix, silentFrom,
                                   silentTo, dropItems, noteTarget, volumeDb, pan, staticGain,

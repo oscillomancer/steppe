@@ -6,6 +6,7 @@
 // into the same reading on the new one, primed on the audio thread within
 // a warm-up's primes. Its own ctest entry.
 #include <functional>
+#include <limits>
 #include "clip_player_support.h"
 
 using namespace supple;
@@ -292,5 +293,68 @@ TEST_CASE("the old trajectory is kept through an outgoing launch's crossfade at 
         INFO("from preserve " << from.masterPlayrate.preservePitch << " to preserve "
                               << to.masterPlayrate.preservePitch);
         CHECK(to.rateSafeDevice == to.rateSwitchDevice + keep + to.rateSourceBehind + 64);
+    }
+}
+
+TEST_CASE("a reading handed on from a tape reader takes its switch's loop cycle") {
+    // Round 152 F2 and its re-check S1: a looped tape plan (song 0-20000,
+    // 26667 frames a cycle at 0.75) whose tr_2 plays cl_2 from a switch at
+    // frame 30000, in loop cycle 1, is carried to a stretched plan. The new
+    // reading on reader 0 keeps cycle 1, from the switch's phase recorded in
+    // its block (a tape reader keeps no cycle: 0 before). Also a switch made
+    // on a plan without a playrate (N3: no phase recorded), the frame read
+    // back while the timeline holds it.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": false})");
+    const model::Session tape = p.app->head();
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session kept = p.app->head();
+    InstancePool pool = makePool();
+    MediaCache media;
+    const auto planOf = [&](const model::Session& s) {
+        auto plan = detail::compile(s, pool, 0, 128).value();
+        plan.media = &media;
+        plan.projectDir = p.app->projectDir();
+        REQUIRE(detail::prepare(plan, s));
+        return plan;
+    };
+    for (const bool recorded : {true, false}) {
+        INFO("phase recorded at the switch " << recorded);
+        auto from = planOf(tape);
+        auto to = planOf(kept);
+        const LoopRange loop{0, 20000, true};
+        REQUIRE(detail::prepareRateSources(from, 0, 0.0, &loop));
+        from.timelines[0]->ensure(60000);
+        REQUIRE(from.timelines[0]->cycle(from.timelines[0]->phase(30000)) == 1);
+        REQUIRE(detail::configureRateTransition(to, &from, *from.timelines[0], 36000));
+        REQUIRE(to.rateControlsChanged);
+        to.timelines[0]->inheritControls(*from.timelines[0]);  // the loop, as adopted
+        const auto nodeOf = [](detail::Plan& plan) -> detail::Node& {
+            return *std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                 [](const auto& n) { return n.id == id("tr_2"); });
+        };
+        detail::Node& old = nodeOf(from);
+        detail::Node& node = nodeOf(to);
+        REQUIRE_FALSE(old.live);
+        const int player = detail::playerOf(old, id("cl_2"));
+        REQUIRE(player >= 0);
+        old.launch.kind = detail::LaunchState::Kind::Clip;
+        old.launch.player = player;
+        old.launch.anchorSample = 96000;
+        old.launch.fadeFrom = -2;
+        old.launchSwitchAt = 30000;
+        old.launchSwitchPhase = recorded ? from.timelines[0]->absolutePhase(30000)
+                                         : std::numeric_limits<double>::quiet_NaN();
+        detail::PlayerReader& reading = old.launchReaders[0];
+        REQUIRE(reading.state);
+        REQUIRE_FALSE(reading.state->preserve);  // a tape reader
+        reading.player = &old.players[static_cast<std::size_t>(player)];
+        reading.anchor = 96000;
+        REQUIRE(node.launchReaders[0].state);
+        REQUIRE(node.launchReaders[0].state->preserve);
+        detail::carryRateSources(from, to, -1);
+        CHECK(node.launchReaders[0].previousLive);  // the tape reading, crossfaded from
+        CHECK(node.launchReaders[0].launchCycle == 1);
     }
 }

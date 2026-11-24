@@ -794,7 +794,13 @@ the same.*
     quantum, catching up, when that is at most 32 quanta back, so it plays
     what a warm-up would, else at its own quantum; its loop cycle is the
     switch frame's either way (`Node::launchSwitchAt`, set by the first
-    block after the switch). The worst cold restart is 45 primes and 32
+    block after the switch, with its song phase, `launchSwitchPhase`,
+    taken there: the timeline's ring keeps about 11 s at 48 kHz, so a
+    restart long after the switch cannot read that frame back, and the
+    cycle is that phase's under the loop as it is then). The cycle matters
+    while the launch is anchored, before its first wrap, where the
+    converter reads ahead past the wrap; a reader is not reseeked when its
+    launch unanchors. The worst cold restart is 45 primes and 32
     quanta of catch-up in one block (48 kHz). It reads the player's song
     frames from the anchor, in loop cycles after the switch's; the switch
     crossfade and
@@ -847,9 +853,9 @@ the same.*
       the adoption's block; only a warm-up switching at or before S goes on
       in `previous`, and the reader rotated onto reader 2 at a switch drops
       its `previous` (round 152 F1). A tape reader keeps no loop cycle, so
-      a reading handed on from one takes its switch's
-      (`Node::launchSwitchCycle`, recorded in the switch's block while the
-      timeline still holds that frame; round 152 F2). Phase 2, the mirror,
+      a reading handed on from one takes its switch's (`switchCycle`,
+      from `Node::launchSwitchPhase`, recorded in the switch's block while
+      the timeline still holds that frame; round 152 F2). Phase 2, the mirror,
       only moves that priming to the main thread.
     - *A change of preserve pitch with a launch switching in (adoption,
       S].* Stretch to tape: reader 2 holds a tape reader with no warm-up,

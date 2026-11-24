@@ -454,7 +454,7 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     n.launch = L;
     n.launchFresh = old.launchFresh;
     n.launchSwitchAt = old.launchSwitchAt;
-    n.launchSwitchCycle = old.launchSwitchCycle;
+    n.launchSwitchPhase = old.launchSwitchPhase;
     n.launchSwitchPending = old.launchSwitchPending;
     // A launch reaching it early (prelaunch), by clip id too.
     n.launchNext = old.launchNext;
@@ -807,20 +807,23 @@ bool stretchPrime(PlayerReader& r, const PlayrateTimeline& timeline,
 // reading it was not warmed for (a launch from stop, a relocation, a plan
 // that lost its converter) starts all at once: from its switch's quantum
 // (`switchQ`, the frame `switchAt`) when that is near, so it gives what a
-// warm-up gives, else at q; its loop cycle is the switch frame's either
-// way (round 139 R4).
+// warm-up gives, else at q; its loop cycle is the switch's either way
+// (round 139 R4), `switchCycle` as recorded at the switch: the timeline's
+// ring holds seconds, so a frame long past reads a later one's phase there.
 const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::int64_t anchor,
                                     bool unanchored, const PlayrateTimeline& timeline,
-                                    std::int64_t q, std::int64_t switchAt,
-                                    std::int64_t switchQ) SUPPLE_RT {
+                                    std::int64_t q, std::int64_t switchAt, std::int64_t switchQ,
+                                    std::int64_t switchCycle) SUPPLE_RT {
     RateClipState& st = *r.state;
     constexpr std::int64_t kCatchUp = 32 * kRateQuantum;
     const bool keyed =
         r.player == &pl && r.anchor == anchor && r.startQuantum != INT64_MIN && q >= r.startQuantum;
     if (!keyed || (st.primed && (q < st.quantum || q - st.quantum > kCatchUp))) {
         const bool fromSwitch = switchQ != INT64_MIN && q >= switchQ && q - switchQ <= kCatchUp;
-        stretchSeek(r, pl, anchor, unanchored, timeline, fromSwitch ? switchQ : q,
-                    switchAt != INT64_MIN ? switchAt : q);
+        r.previousLive = false;  // a fresh reading (S3 step D4)
+        stretchSeekCycle(r, pl, anchor, unanchored,
+                         switchAt != INT64_MIN ? switchCycle : timeline.cycle(timeline.phase(q)),
+                         timeline, fromSwitch ? switchQ : q);
     }
     if (!st.primed) stretchPrime(r, timeline, UINT32_MAX);
     const PlayerSource source = stretchSource(r, pl, timeline);
@@ -876,7 +879,7 @@ void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPl
                 std::int64_t anchor, bool unanchored, std::int64_t pos, std::int64_t ahead,
                 std::uint32_t frames, Weight&& weight, Stereo& into, bool raw,
                 std::int64_t until = INT64_MAX, std::int64_t hold = INT64_MAX,
-                std::int64_t switchAt = INT64_MIN) SUPPLE_RT {
+                std::int64_t switchAt = INT64_MIN, std::int64_t switchCycle = 0) SUPPLE_RT {
     const Clip& c = pl.audio;
     if (!c.data || c.data->channels.empty() || pl.muted || pl.periodFrames <= 0 || !reader.state)
         return;
@@ -902,7 +905,8 @@ void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPl
     const auto reading = [&](PlayerReader& r, const PlayrateTimeline& tl, std::int64_t inPass,
                              std::int64_t q) SUPPLE_RT -> const RateClipState& {
         return r.state->preserve
-                   ? stretchQuantum(r, pl, anchor, unanchored, tl, q, switchAt, switchQ)
+                   ? stretchQuantum(r, pl, anchor, unanchored, tl, q, switchAt, switchQ,
+                                    switchCycle)
                    : playerQuantum(r, pl, anchor, unanchored, inPass, tl, q, until, hold);
     };
     for (std::uint32_t i = 0; i < frames; ++i) {
@@ -965,11 +969,9 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
     n.arrangementGain = nullptr;
     if (n.launchSwitchPending) {  // this block starts at the switch
         n.launchSwitchAt = pos - n.timelineShift;
-        n.launchSwitchCycle = 0;
-        if (p.rateEnabled) {
-            const PlayrateTimeline& timeline = *p.timelines[n.live ? 1 : 0];
-            n.launchSwitchCycle = timeline.cycle(timeline.phase(n.launchSwitchAt));
-        }
+        n.launchSwitchPhase = p.rateEnabled
+                                  ? p.timelines[n.live ? 1 : 0]->absolutePhase(n.launchSwitchAt)
+                                  : std::numeric_limits<double>::quiet_NaN();
         n.launchSwitchPending = false;
     }
     if (p.rateStretch) warmLaunch(p, n, frames);  // the next launch's converter (S3 step D)
@@ -1025,7 +1027,8 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
         if (p.rateEnabled)
             playerRate(p, n, n.launchReaders[reader], pl, anchor, unanchored, pos, 0, frames,
                        weight, into, false, reader == 1 ? outEnd : INT64_MAX, hold,
-                       reader == 0 ? n.launchSwitchAt : INT64_MIN);
+                       reader == 0 ? n.launchSwitchAt : INT64_MIN,
+                       switchCycle(n, *p.timelines[n.live ? 1 : 0]));
         else
             for (std::uint32_t i = 0; i < frames; ++i)
                 playerFrame(pl, anchor, unanchored, song0 + i, weight(i), into, i, false, hold);
@@ -1365,6 +1368,19 @@ void handReading(PlayerReader& to, PlayerReader& from, const ClipPlayer* pl) SUP
 }
 }  // namespace
 
+std::int64_t switchCycle(const Node& n, const PlayrateTimeline& timeline) SUPPLE_RT {
+    // A switch on a plan without a playrate: its frame while the ring still
+    // holds it, else 0 (too low a cycle only matters before the anchor in
+    // the switch's own cycle, long past by then; too high silences later
+    // cycles before the anchor).
+    if (std::isnan(n.launchSwitchPhase))
+        return n.launchSwitchAt != INT64_MIN &&
+                       timeline.hasHistory(n.launchSwitchAt, n.launchSwitchAt)
+                   ? timeline.cycle(timeline.phase(n.launchSwitchAt))
+                   : 0;
+    return timeline.cycle(n.launchSwitchPhase - timeline.origin());
+}
+
 std::uint64_t stretchPrimes() noexcept { return gStretchPrimes.load(std::memory_order_relaxed); }
 
 void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
@@ -1426,10 +1442,16 @@ void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
             // Its loop cycle: the reading's own, or a tape reader's switch's
             // (a tape reader keeps none: round 152 F2). A switch whose block
             // has not run yet starts cold there instead (stretchQuantum).
+            // (Unreached as far as known: executors adopt at the top of a
+            // slice and apply its launches after. Were it reached, a plain
+            // cold start there, as stretchSeek gives a block later.)
             const bool tape = !to.previous->state->preserve;
-            if (tape && old.launchSwitchPending) continue;
+            if (tape && old.launchSwitchPending) {
+                to.previousLive = false;
+                continue;
+            }
             stretchSeekCycle(to, *pl, to.previous->anchor, to.previous->unanchored,
-                             tape ? old.launchSwitchCycle : to.previous->launchCycle, timeline,
+                             tape ? switchCycle(old, timeline) : to.previous->launchCycle, timeline,
                              quantumAt(p, S));
             to.previousLive = true;
         } else {
