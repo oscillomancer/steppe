@@ -1892,6 +1892,23 @@ json::Value ArrangeView::saveLayout() const {
     return v;
 }
 
+json::Value ArrangeView::saveScreenLayout() const {
+    json::Value v = saveLayout();
+    json::Object& saved = v.asObject();
+    if (json::Value* clips = saved.find("clips"); clips && clips->isObject()) {
+        clips->asObject().erase("follow_song");
+        clips->asObject().erase("write_context");
+        if (clips->asObject().empty()) saved.erase("clips");
+    }
+    return v;
+}
+
+void ArrangeView::loadScreenLayout(const json::Value& v) {
+    const SceneLaying kept = sceneLaying_;
+    loadLayout(v);
+    sceneLaying_ = kept;
+}
+
 void ArrangeView::loadLayout(const json::Value& v) {
     views::Viewport vp = viewport();
     auto num = [&](const char* k, auto& out) {

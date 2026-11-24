@@ -1460,6 +1460,16 @@ TEST_CASE("launcher: the scene menu's checks say how scenes are laid; Lay out sc
     CHECK_FALSE(f.view->saveLayout().find("clips"));  // nothing chosen: nothing saved
     f.view->loadLayout(saved);
     CHECK(f.view->sceneLaying() == views::SceneLaying{true, true});
+    // A project choice, not screen layout: a screenset neither stores the
+    // checks nor changes them when recalled, whatever it holds.
+    const json::Value screen = f.view->saveScreenLayout();
+    CHECK_FALSE(screen.find("clips"));
+    f.view->setSceneLaying({});
+    f.view->loadScreenLayout(saved);  // one holding them, as an old file might
+    CHECK(f.view->sceneLaying() == views::SceneLaying{});
+    f.view->setSceneLaying({true, true});
+    f.view->loadScreenLayout(screen);  // one without them (an older screenset)
+    CHECK(f.view->sceneLaying() == views::SceneLaying{true, true});
     // A drop uses them too.
     const ui::Rect intro = header.sceneRect(0);
     const ui::Rect lane = f.view->rowRect(f.row("tr_1"));
@@ -1497,46 +1507,93 @@ TEST_CASE("launcher: the scene menu's checks say how scenes are laid; Lay out sc
     check("launcher.layout.follow")->toggle();
     CHECK(f.view->sceneLaying() == views::SceneLaying{true, false});
     f.snapshot("launcher-layout-dialog.png");
-    // Chorus has no clips: the command's refusal shows, the dialog stays.
+    // Chorus has no clips: the command's refusal shows, by the scene's name
+    // (not sc_3), with its hint and Chorus's row marked; the dialog stays.
     const std::size_t regions = f.app->head().regions.size();
     f.errors.clear();
     REQUIRE(f.root->click("launcher.layout.run"));
     f.sync();
     REQUIRE(f.errors.size() == 1);
     CHECK(f.errors[0].code == "scene.empty");
+    CHECK(f.errors[0].path == "/args/sequence/2/scene");
     REQUIRE(f.root->find("launcher.layout"));
-    auto* status = dynamic_cast<ui::Label*>(f.root->find("launcher.layout.status"));
+    ui::Node* status = f.root->find("launcher.layout.status");
     REQUIRE(status);
-    CHECK(status->text() == f.errors[0].message);
+    CHECK(f.errors[0].message.find("sc_3") != std::string::npos);
+    CHECK(status->valueText().find("sc_3") == std::string::npos);
+    CHECK(status->valueText().find("Chorus") != std::string::npos);
+    CHECK(status->valueText().ends_with("; " + f.errors[0].hint));
+    auto mark = [&](const std::string& row) {
+        auto* m = dynamic_cast<ui::Label*>(f.root->find("launcher.layout.mark." + row));
+        REQUIRE(m);
+        return m->text();
+    };
+    CHECK(mark("2") == "•");
+    CHECK(mark("0").empty());
+    CHECK(mark("from").empty());
     CHECK(check("launcher.layout.use.2")->checked());  // the entries are kept
     // Bars that are not a whole number from 1 are the dialog's to say:
-    // nothing is sent.
+    // nothing is sent. Spaces at the ends are trimmed; one between digits is
+    // not a number.
     check("launcher.layout.use.2")->toggle();
-    field("launcher.layout.bars.1")->setText("two");
     f.errors.clear();
     const std::size_t sentBefore = f.commands.size();
-    REQUIRE(f.root->click("launcher.layout.run"));
-    f.sync();
-    CHECK(f.commands.size() == sentBefore);
-    CHECK(status->text() == "Verse: give its bars as a whole number from 1");
-    field("launcher.layout.bars.1")->setText("0");
-    REQUIRE(f.root->click("launcher.layout.run"));
-    CHECK(f.commands.size() == sentBefore);
+    for (const char* bad : {"two", "0", "1 6", "-2", "1.5", ""}) {
+        field("launcher.layout.bars.1")->setText(bad);
+        REQUIRE(f.root->click("launcher.layout.run"));
+        f.sync();
+        CHECK(f.commands.size() == sentBefore);
+        CHECK(status->valueText() == "Verse: give its bars as a whole number from 1");
+        CHECK(mark("1") == "•");
+    }
     field("launcher.layout.bars.1")->setText("2");
     field("launcher.layout.bar")->setText("");
     REQUIRE(f.root->click("launcher.layout.run"));
     CHECK(f.commands.size() == sentBefore);
-    CHECK(status->text() == "From bar: give a whole number from 1");
-    // Past the command's last bar: its own refusal, with the argument named.
+    CHECK(status->valueText() == "From bar: give a whole number from 1");
+    CHECK(mark("from") == "•");
+    CHECK(mark("1").empty());
+    // A whole number of any length goes to the command, whose limit answers:
+    // Verse named, its row marked, the hint after.
+    field("launcher.layout.bar")->setText("6");
+    for (const char* many : {"100001", "20000000", "99999999999999", " 100001 "}) {
+        field("launcher.layout.bars.1")->setText(many);
+        f.errors.clear();
+        REQUIRE(f.root->click("launcher.layout.run"));
+        f.sync();
+        REQUIRE(f.errors.size() == 1);
+        CHECK(f.errors[0].code == "scene.bars");
+        CHECK(f.errors[0].path == "/args/sequence/1/bars");
+        CHECK(status->valueText() == "Verse: " + f.errors[0].message + "; " + f.errors[0].hint);
+        CHECK(mark("1") == "•");
+    }
+    f.snapshot("launcher-layout-refused.png");
+    field("launcher.layout.bars.1")->setText("2");
+    f.errors.clear();
+    // Past the command's last bar: its own refusal, From bar named and marked.
     field("launcher.layout.bar")->setText("999999");
     REQUIRE(f.root->click("launcher.layout.run"));
     f.sync();
     REQUIRE(f.errors.size() == 1);
     CHECK(f.errors[0].code == "command.invalid_args");
     REQUIRE_FALSE(f.errors[0].details.empty());
-    CHECK(status->text() == f.errors[0].message + ": bar: " + f.errors[0].details[0].message);
+    CHECK(status->valueText().starts_with("From bar: " + f.errors[0].message + ": " +
+                                          f.errors[0].details[0].message));
+    CHECK(mark("from") == "•");
     REQUIRE(f.root->find("launcher.layout"));
     field("launcher.layout.bar")->setText("6");
+    // Nothing checked: Lay out is disabled, and nothing is sent.
+    check("launcher.layout.use.0")->toggle();
+    check("launcher.layout.use.1")->toggle();
+    f.sync();
+    REQUIRE(f.root->find("launcher.layout.run"));
+    CHECK_FALSE(f.root->find("launcher.layout.run")->enabled);
+    (void)f.root->click("launcher.layout.run");
+    f.sync();
+    CHECK(f.commands.size() == sentBefore + 5);
+    check("launcher.layout.use.0")->toggle();
+    check("launcher.layout.use.1")->toggle();
+    CHECK(f.root->find("launcher.layout.run")->enabled);
     // Corrected: Intro for one bar, then Verse for two, from bar 6.
     field("launcher.layout.bars.1")->setText("2");
     REQUIRE(f.root->click("launcher.layout.run"));

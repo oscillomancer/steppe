@@ -1193,6 +1193,12 @@ TEST_CASE("automation lanes: an item's take FX parameter gets a lane on the item
     const auto& pts = f.app->head().envelopes.find(env)->points;
     REQUIRE(pts.size() == 3);
     CHECK(params::toNormalized(spec->spec, pts[1].value) == doctest::Approx(0.75).epsilon(0.05));
+    // The dimmed part edits as anywhere: a click past the item's end adds a
+    // point there too.
+    const float past = body.right() + 30;
+    REQUIRE(past < lanes.right());
+    f.click({past, area.y + area.h * 0.25f});
+    CHECK(f.app->head().envelopes.find(env)->points.size() == 4);
     // The item moved to another track takes its take's lane along.
     const model::Id other = f.view->trackLayout().rows()[*lane + 1].track;
     REQUIRE(other != track);

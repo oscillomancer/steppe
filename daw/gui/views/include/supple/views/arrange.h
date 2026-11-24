@@ -150,6 +150,11 @@ class ArrangeView : public ui::Node {
     // Per-project UI sidecar/screensets: viewport, row heights, follow and takes.
     json::Value saveLayout() const;
     void loadLayout(const json::Value& value);
+    // A screenset's share of it: the same but the scene laying, a choice
+    // about what laying a scene does rather than layout (gui.md §4.15), so a
+    // screenset neither stores it nor changes it when recalled.
+    json::Value saveScreenLayout() const;
+    void loadScreenLayout(const json::Value& value);
     // Clamps the vertical scroll once the children have their bounds (a
     // viewport set before the first layout cannot know the visible height).
     void arrange(const ui::Canvas& canvas, const ui::Rect& r) override;

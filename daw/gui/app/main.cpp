@@ -1326,7 +1326,9 @@ int frontendMain(int argc, char** argv) {
         [&] {
             json::Value v = json::Value::object();
             v["panels"] = panelsSave();
-            v["arrange"] = arrangeSave();
+            // The scene menu's checks are a project choice, not layout: a
+            // screenset neither stores nor restores them.
+            v["arrange"] = shell.arrange()->saveScreenLayout();
             return v;
         },
         [&](const json::Value& v) {
@@ -1334,7 +1336,7 @@ int frontendMain(int argc, char** argv) {
             if (const json::Value* a = v.find("arrange")) {
                 // A layout's row heights replace the current ones entirely.
                 shell.arrange()->trackLayout().clearTrackHeights();
-                arrangeLoad(*a);
+                shell.arrange()->loadScreenLayout(*a);
             }
             root.damageAll();
         });

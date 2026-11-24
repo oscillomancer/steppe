@@ -138,6 +138,11 @@ sizes clamp to the panel minimum and 8192 units, and a position with no visible
 48-unit corner on a current display is discarded. Open panels adopt the new
 project's placement on project replacement. Screensets continue to store the
 mixer dock, the side panel (§4.14) and the arrange layout; floating panels are not screenset entries.
+The arrange layout a screenset stores leaves out the scene menu's two checks
+(`arrange.clips.follow_song`, `write_context`, §4.15): they are a choice
+about what laying a scene does, not layout, so a screenset neither stores
+them nor changes them when recalled (`ArrangeView::saveScreenLayout`,
+`loadScreenLayout`).
 
 Screenset names trim leading and trailing spaces and tabs. Import skips
 empty names and silently keeps the first entry when trimmed names collide.
@@ -1508,7 +1513,8 @@ buttons), bypass vs offline
 (distinct, `reaper-ux.md` addendum), a double click on a row opens that
 effect's own GUI; a left double click on empty chain space (below the last
 row, or under the section's heading when the chain is empty, which says
-nothing more) opens Add plugin, as in the mixer. The input section's empty area adds input FX; a take adds take FX.
+nothing more) opens Add plugin, as in the mixer. The input section's empty
+area adds input FX; a take adds take FX.
 Single and right clicks on empty space do not open the browser. Ctrl+click adds a row to the selection (or takes it out)
 including the active row; effects moved out of the displayed track/take chains
 leave the selection. Shift+click selects the rows from the last one clicked; on a row of a
@@ -3096,11 +3102,20 @@ same heights, scroll and colours.
     (the first whole bar at or after the end of the arrangement), and the
     same two checks, which read and write the same state as the menu's.
     **Lay out** sends the checked scenes in order (no repeats; an agent can
-    repeat a scene). A bars or From bar field that is not a whole number
-    from 1 is said in the dialog and nothing is sent. A refusal shows the
-    command's message in the dialog (and in the status line), with its first
-    listed error when the arguments' form was refused (a bar past the
-    last); the dialog stays open with its entries. Done, it closes.
+    repeat a scene); with none checked it is disabled.
+  - A field is a whole number when it is digits, with spaces only at its
+    ends. One that is not, or is 0 (the commands' own lower limit), is said
+    in the dialog by its row ("Verse: give its bars as a whole number from
+    1", "From bar: …") and nothing is sent. A whole number of any length is
+    sent (held at a billion), so every other limit is the command's.
+  - A refusal shows in the dialog (and in the status line) as the command
+    says it, with each scene id said by the scene's name, the first listed
+    error when the arguments' form was refused, and the hint after. The
+    error's path names the entry (`/sequence/<i>/…`, the i-th checked row)
+    or `/bar`: that row's name goes first unless the message already says
+    it, and a dot in `armed` marks the row (or From bar). The text wraps to
+    the dialog's width. The dialog stays open with its entries; done, it
+    closes.
   - A refusal of `scene.insert` (items already in the span, an empty
     scene, a looping clip whose period is not its content) shows its
     message in the status line and changes nothing.

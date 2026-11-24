@@ -1758,11 +1758,15 @@ each clip keeps its own Follow, set in its inspector; following only the
 key, or forcing a clip to play as written, is set there per clip), and
 **Write harmony to the context track** writes the clips' own key and
 chords onto the context track under the new section, unless the track
-already has points there. The project remembers both. **Lay out scenes…**
+already has points there or the clips disagree about the key or chord at
+some point (the status line says which). The project remembers both, and
+recalling a screenset leaves them as they are. **Lay out scenes…**
 lays several scenes one after the other: tick the scenes you want, set each
 one's bars and the bar to start from, and choose **Lay out**. If it can't
-be done the dialog says why and keeps what you entered. The other way round, right-click a section in the ruler
-and choose **Capture as scene** to make a scene from the items inside it.
+be done the dialog says why, marks the scene it is about with a red dot,
+and keeps what you entered. The other way round, right-click a section in
+the ruler and choose **Capture as scene** to make a scene from the items
+inside it.
 When one of these cannot be done (items already lie in the way, a scene has
 no clips, a section has two items on one track) the status line says why.
 
