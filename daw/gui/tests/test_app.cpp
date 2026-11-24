@@ -324,7 +324,10 @@ TEST_CASE("audio device: the app's wiring says Refresh's refusals in the status 
     // A refused start: the command's message in the status line.
     refuse = true;
     CHECK_FALSE(audio.rescan());
-    CHECK(status().find("device was not found") != std::string::npos);
+    // In the dialog's words with a next step; the command hint is not shown.
+    CHECK(status().find("The default output device was not found. Choose another device") !=
+          std::string::npos);
+    CHECK(status().find("engine.devices") == std::string::npos);
     CHECK(a.app->backend() == nullptr);
     // The status line names ids at once, not from the next sync (round 165 N1).
     shell.setStatus("no track tr_99");

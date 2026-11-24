@@ -102,7 +102,10 @@ class AudioDeviceDialog {
     // engine.start/engine.stop; tests replace them to avoid real devices.
     std::function<Result<json::Value>(const json::Value& args)> startEngine;
     std::function<void()> stopEngine;
-    std::function<void(const std::string&)> onError;
+    std::function<void(const std::string&)> onError;  // the dialog's words (the status line)
+    // The engine's full error where the dialog says it in its own words,
+    // its hint for command callers included: for a log (the app: stderr).
+    std::function<void(const std::string&)> onLog;
     // A launcher capture armed, running or kept uncommitted. Default: the
     // engine's running capture; the app adds the Capture toggle's own.
     std::function<bool()> captureHeld;
@@ -113,6 +116,10 @@ class AudioDeviceDialog {
     void openMenu(const std::string& id, std::vector<ui::MenuItem> items);
     void build(bool reload);  // the dialog's rows; `reload` enumerates again
     void choose(AudioDeviceSettings next);
+    // An error in the dialog's own words, as sentences, never a command name
+    // or hint (that goes to onLog); `fallback`: the cause before "Audio is
+    // running on the default device"; `step`: with what to do next.
+    std::string explain(const Error& e, bool fallback = false, bool step = true);
 
     ui::Root& root_;
     cmd::Dispatcher& dispatcher_;
@@ -122,6 +129,7 @@ class AudioDeviceDialog {
     Save save_;
     std::vector<engine::AudioDevice> devices_;
     std::string enumerateError_, lastError_;
+    std::string logged_;                // the last detail onLog was given
     bool wanted_ = false;               // a start was asked for: changes restart the engine
     bool startedWithFallback_ = false;  // the last start(): Refresh starts the same way
     // The saved device a fallback did not find ("/output_device" or

@@ -3,6 +3,7 @@
 #include "audio_device.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
@@ -82,15 +83,48 @@ std::string missingDevice(const Error& e) {
                                                                                : std::string();
 }
 
-// Why the saved choice did not start, in the dialog's own words: no command
-// names or hints, which are for agents.
-std::string refusedWords(const Error& e, const AudioDeviceSettings& s) {
-    if (const std::string missing = missingDevice(e); !missing.empty()) {
-        const bool input = missing == "/input_device";
-        return std::string(input ? "The input device \"" : "The output device \"") +
-               (input ? s.inputDevice : s.outputDevice) + "\" was not found.";
-    }
-    return "The saved choice was refused: " + e.message + ".";
+// A message as a sentence: a capital first letter and a full stop.
+std::string sentence(std::string text) {
+    if (text.empty()) return text;
+    text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
+    const char last = text.back();
+    if (last != '.' && last != '!' && last != '?') text += '.';
+    return text;
+}
+
+// What went wrong, in the dialog's own words: the engine's message as a
+// sentence, the device or audio system by its name; never a command name or
+// the hint, which is written for command callers. `fallback`: the words
+// before "Audio is running on the default device".
+std::string causeWords(const Error& e, const AudioDeviceSettings& s, bool fallback) {
+    const bool input = e.path == "/input_device";
+    const std::string device = input ? s.inputDevice : s.outputDevice;
+    const std::string which = input ? "The input device \"" : "The output device \"";
+    if (!missingDevice(e).empty())
+        return device.empty() ? std::string(input ? "The default input device was not found."
+                                                  : "The default output device was not found.")
+                              : which + device + "\" was not found.";
+    if (e.code == "backend.device" && (input || e.path == "/output_device"))
+        return "More than one device is named \"" + device + "\".";
+    if (e.code == "backend.device" && e.path == "/host_api")
+        return "The audio system \"" + s.hostApi + "\" was not found.";
+    if (fallback) return "The saved choice was refused: " + e.message + ".";
+    return sentence(e.message);
+}
+
+// What the user can do next, where the cause alone leaves them without a
+// step; "" otherwise.
+std::string nextStep(const Error& e) {
+    if (!missingDevice(e).empty()) return "Choose another device, or Refresh once it is connected.";
+    if (e.code == "backend.device" && e.path == "/host_api") return "Choose another audio system.";
+    if (e.code == "backend.device")
+        return "Rename one in its driver's settings, or choose another audio system.";
+    if (e.code == "backend.open")
+        return "Another app may hold the device: choose another device, or Restart audio when "
+               "it is free.";
+    if (e.code == "backend.unavailable" || e.code == "backend.unsupported")
+        return "Choose another audio system.";
+    return {};
 }
 
 ui::Node& row(ui::Node& form, const std::string& id, const std::string& label) {
@@ -266,12 +300,24 @@ std::vector<engine::AudioDevice> AudioDeviceDialog::devices(bool reload) {
     if (reload || (devices_.empty() && enumerateError_.empty())) {
         auto listed = enumerate();
         devices_ = listed ? std::move(*listed) : std::vector<engine::AudioDevice>{};
-        enumerateError_ = listed ? std::string() : message(listed.error());
+        enumerateError_ = listed ? std::string() : explain(listed.error(), false, false);
     }
     return devices_;
 }
 
 std::string AudioDeviceDialog::hostApiName() const { return resolvedHost(settings_, devices_); }
+
+std::string AudioDeviceDialog::explain(const Error& e, bool fallback, bool step) {
+    // The hint stays in the log, once until a start succeeds.
+    if (onLog && !e.hint.empty() && message(e) != logged_) {
+        logged_ = message(e);
+        onLog("audio device: " + logged_);
+    }
+    std::string words = causeWords(e, settings_, fallback);
+    if (const std::string next = step && !fallback ? nextStep(e) : std::string(); !next.empty())
+        words += " " + next;
+    return words;
+}
 
 Status AudioDeviceDialog::start(bool fallback) {
     wanted_ = true;
@@ -296,7 +342,7 @@ Status AudioDeviceDialog::start(bool fallback) {
             // when it runs at another rate than the one chosen, the engine's
             // rate is named. The missing device's row says so too.
             std::string note =
-                refusedWords(st.error(), settings_) + " Audio is running on the default device";
+                explain(st.error(), true) + " Audio is running on the default device";
             const double rate = app_.engineStatus().sampleRate;
             if (settings_.rate > 0 && rate > 0 && rate != settings_.rate) note += " at " + hz(rate);
             lastError_ = note + ". The choice is kept for when it returns.";
@@ -311,7 +357,8 @@ Status AudioDeviceDialog::start(bool fallback) {
             return {};
         }
     }
-    lastError_ = st ? std::string() : message(st.error());
+    if (st) logged_.clear();  // a later failure is logged again
+    lastError_ = st ? std::string() : explain(st.error());
     if (marked && isOpen())
         build(false);  // the row's "(not found)" goes
     else
@@ -337,7 +384,12 @@ void AudioDeviceDialog::stop() {
 
 Status AudioDeviceDialog::apply(AudioDeviceSettings next) {
     SUPPLE_TRY(validate(next));
-    if (save_) SUPPLE_TRY(save_(next));
+    if (save_)
+        if (Status saved = save_(next); !saved) {
+            Error e = std::move(saved).error();
+            e.message = "the choice could not be saved: " + e.message;
+            return e;
+        }
     settings_ = std::move(next);
     Status st;
     if (wanted_ || app_.backend()) st = restart();
@@ -348,7 +400,7 @@ Status AudioDeviceDialog::apply(AudioDeviceSettings next) {
 void AudioDeviceDialog::choose(AudioDeviceSettings next) {
     // The status lines show a failure too: stderr is not seen from Finder.
     if (auto st = apply(std::move(next)); !st) {
-        lastError_ = message(st.error());
+        lastError_ = explain(st.error());
         if (onError) onError("audio device: " + lastError_);
     }
     if (isOpen()) build(false);  // rows depend on the audio system
@@ -383,6 +435,8 @@ void connectAudioDevice(AudioDeviceDialog& dialog, Shell& shell) {
         std::fprintf(stderr, "%s\n", message.c_str());
         shell.setStatus(message);
     };
+    // The engine's full error, its hint included, goes to stderr only.
+    dialog.onLog = [](const std::string& detail) { std::fprintf(stderr, "%s\n", detail.c_str()); };
     // An engine stop discards a launcher capture: Refresh waits for it.
     dialog.captureHeld = [&shell, &dialog] {
         return shell.capture().lit() || shell.capture().kept() || dialog.engineCapturing();
@@ -644,7 +698,8 @@ void AudioDeviceDialog::build(bool reload) {
     actions.layout.align = ui::Layout::Align::Center;
     actions.emplace<ui::Node>("audio.actions.space").layout.width = ui::SizeRule::fraction();
     actions.emplace<ui::Button>("audio.restart", "Restart audio", [this] {
-        if (auto st = restart(); !st && onError) onError("audio device: " + message(st.error()));
+        // restart() says the failure in lastError_, in the dialog's words.
+        if (auto st = restart(); !st && onError) onError("audio device: " + lastError_);
     });
     actions.emplace<ui::Button>("audio.stop", "Stop audio", [this] { stop(); });
     root_.openPopup(std::move(form), {}, ui::Placement::Center);

@@ -3865,8 +3865,16 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   launcher capture is armed, running or kept uncommitted (an engine stop
   discards it), refused with `audio.capture`. The hint is said in the status
   line on hover. A refused start shows
-  the command's message in the dialog's status and the status line, the
-  engine left stopped and the dialog open with the fresh list. Each choice is saved, then a
+  why in the dialog's status and the status line, the
+  engine left stopped and the dialog open with the fresh list. Every error
+  the dialog shows (a refused start, a choice, Restart audio, Refresh, the
+  native device list) is in the dialog's own words: the engine's message as
+  a sentence, the device or audio system by its name ("The output device
+  "Interface" was not found."), and where that alone gives no next step, what
+  to do ("Choose another device, or Refresh once it is connected."). A
+  command name or the engine's hint, written for command callers, never
+  shows; the full error with its hint goes to the log (`onLog`: stderr), once
+  until a start succeeds. Each choice is saved, then a
   running engine (or one whose start failed) restarts with it at once; a
   stopped one stays stopped. A restart keeps the fallback the last start had:
   after the app came up on the defaults, a choice the device refuses (the

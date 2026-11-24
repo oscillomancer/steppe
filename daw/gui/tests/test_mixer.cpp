@@ -2549,8 +2549,9 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
         calls.push_back("stop");
         (void)f.dispatcher->execute({"engine.stop", json::Value::object(), test});
     };
-    std::vector<std::string> errors;
+    std::vector<std::string> errors, logs;
     audio.onError = [&](const std::string& e) { errors.push_back(e); };
+    audio.onLog = [&](const std::string& e) { logs.push_back(e); };
     REQUIRE(audio.start());
     audio.open();
     f.root->frame(false);
@@ -2590,10 +2591,23 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     CHECK(calls.front() == "stop");
     CHECK(f.app->backend() == nullptr);
     REQUIRE(errors.size() == 1);
-    CHECK(errors[0].find("device was not found") != std::string::npos);
+    // In the dialog's words, with what to do next; the hint, written for
+    // command callers, only in the log.
+    CHECK(audio.lastError() ==
+          "The default output device was not found. Choose another device, "
+          "or Refresh once it is connected.");
+    CHECK(errors[0] == "audio device: " + audio.lastError());
+    REQUIRE(logs.size() == 1);
+    CHECK(logs[0].find("choose an exact name from engine.devices") != std::string::npos);
     REQUIRE(audio.isOpen());
-    CHECK(f.node("audio.status.0")->valueText().find("Not running: ") == 0);
-    CHECK(audio.lastError().find("device was not found") != std::string::npos);
+    CHECK(f.node("audio.status.0")->valueText().find("Not running: The default output") == 0);
+    // Restart audio says it the same way.
+    errors.clear();
+    REQUIRE(f.root->click("audio.restart"));
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0] == "audio device: " + audio.lastError());
+    CHECK(errors[0].find("engine.") == std::string::npos);
+    CHECK(logs.size() == 1);  // the same detail is logged once
     // An engine on the defaults because the saved device was refused at app
     // start: Refresh starts it the same way, so it keeps running, and on the
     // saved device once that is back (round 165 F1).
