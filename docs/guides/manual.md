@@ -1866,12 +1866,15 @@ committing again writes the same performance over itself.
 
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:
-- launching an audio clip while the master playrate keeps the pitch
-  (`launch.playrate`); MIDI clips, and audio clips without it, follow
-  the playrate;
+- launching an audio clip with take FX or take envelopes while the
+  master playrate keeps the pitch (`launch.playrate`); other clips
+  follow the playrate, audio ones time-stretched with the pitch kept, and
+  a launch then lands at least about 61 ms ahead, while its stretcher
+  gets ready;
 - capturing while a launched audio clip plays and the master playrate
   keeps the pitch (`launch.playrate`): stop the clip or turn off preserve
-  pitch first. Otherwise a capture runs under any playrate and through
+  pitch first. Launching an audio clip then ends a capture at its switch,
+  with a warning. Otherwise a capture runs under any playrate and through
   changes to it, and the commit plays the same song positions, not the
   same durations, at another rate.
 

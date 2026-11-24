@@ -784,7 +784,9 @@ revision records step 1 as built.
   step 1 an audio clip then has no player: compile warns
   `launch.playrate`, and its launch is refused with `launch.playrate` (hint:
   turn off the playrate's preserve pitch, or set it to 1 without an
-  envelope). MIDI clips launch. Step 1b plays these audio clips.
+  envelope). MIDI clips launch. Step 1b plays these audio clips. *(Note
+  2026-11-23: step D does, except one read through a take chain; see the
+  revision "S3 step D".)*
 - **MIDI clips** play each event at the first frame whose song position
   reaches it, by the rule timeline MIDI follows on the playrate path
   (`rateEvents`).
@@ -828,7 +830,8 @@ revision records step 1 as built.
 - A placement integrates the rate up to the boundary on the main thread,
   on a 64k-frame copy of the timeline.
 - Limits until later steps:
-  - audio clips under a pitch-keeping playrate (step 1b);
+  - audio clips under a pitch-keeping playrate (step 1b; *note 2026-11-23:*
+    played by step D, but for clips with take chains);
   - a frozen track's print cuts in, not crossfaded, on a playrate plan;
   - when a plan swap changes the trajectory, launched audio reads the new
     one at once, where timeline clips crossfade between the two;
@@ -923,7 +926,8 @@ the boundary.
   pitch. Such a plan arriving while one plays ends a running capture where
   it was heard, with a warning naming the clip. (An audio launch under a
   pitch-keeping rate is refused until step D; then the launch goes ahead
-  and the capture ends at its switch.)
+  and the capture ends at its switch.) *(Note 2026-11-23: so it does; see
+  the revision "S3 step D".)*
 - **The switch crossfade is 240 song samples** under a master playrate
   as at unity, each frame's share by its song position (`launchClock`),
   live always and not only in a capture: a committed item's fade runs in
@@ -1057,6 +1061,71 @@ launched while stopped ...", "a capture of clips with fades commits as
 heard ...", "launch.commit refuses what an item's fades cannot write
 ..."), test_clip_player_rate_commit.cpp (the same capture under 0.75 and
 the envelope), test_clip_launcher.cpp (the conversions).
+
+## Revision (2026-11-23, S3 step D): launched audio under a pitch-keeping playrate
+
+**Context.** With the pitch kept, a playrate plan reads audio through
+stretch converters, which must be seeked and primed before they play: at
+48 kHz an output lookahead of 2880 device frames and an analysis lookahead
+of 2880 source frames, 45 primes. Step 1 therefore refused audio launches
+there (`launch.playrate`). Priming a converter at the switch would cost a
+burst in one callback (Q5), and a converter started late would differ from
+the replay.
+
+**Decision** (the lead's step D design, 2026-11-23).
+- **Three readers per node** with audio clips: 0 plays, 1 goes out, 2
+  warms. At a switch they rotate: what played goes out on reader 1 with its
+  converter's history; a launch warmed up on reader 2 comes in on reader 0.
+- **The warm-up is cooperative and early.** A launch reaches the node
+  `launchWarm` device frames before its switch (`prewarm`): the
+  converter's output lookahead rounded up to whole 64-frame quanta, plus
+  one (2944 frames, about 61 ms, at 48 kHz). Reader 2 seeks there for
+  output from the switch's quantum and primes at most a quantum's worth
+  per quantum played, so it is ready by the switch with no burst.
+  Placement keeps a launch `launchEarly` ahead of the clock (the larger of
+  the clip-chain lead and `launchWarm`), and the early decision and the
+  horizon use it.
+- **Live equals the replay.** Every prime position is a function of the
+  switch's quantum and the trajectory, not of when it runs. The replay
+  delivers the warm-up as a third switch entry, `launchWarm` early. A
+  reading runs every quantum in order from its start (a skipped quantum is
+  run before the next, up to 32); past that, or with no warm-up (a launch
+  from stop, a relocation, a plan that lost the converter), it seeks and
+  primes at once at its quantum, as the replay does.
+- **What it reads:** the player's song frames from the anchor, folded as
+  the song is, before the anchor only in a later loop cycle than the
+  switch's. The switch crossfade and the clip's fades weight its output.
+- **Plan swaps** that keep the rate controls hand the readers to the new
+  plan with their converters, by clip (`carryLaunchReaders`). One that
+  changes the trajectory restarts them cold where they play: an interim,
+  where timeline clips crossfade between trajectories.
+- **Still refused:** an audio clip read through a take chain (take FX or
+  an active take envelope): compile warns `launch.playrate` and its
+  launch is refused, naming it, with the hint to turn off preserve pitch
+  or launch a copy without take FX.
+- **Capture (Q2 b).** A launched audio clip's switch queued while the
+  newest plan keeps the pitch ends a running capture on its boundary, with
+  a warning that it launches an audio clip; arming while one plays stays
+  refused.
+
+**Consequences.**
+- Tests (test_clip_player_rate.cpp): live equals the replay for a scene,
+  a switch between two audio clips and a stop under a pitch-keeping 0.75
+  and an envelope, in both executors, at two block sizes (the envelope at
+  one), and differs from the tape reading; the warm-up primes a quantum's worth a quantum, is
+  ready by the switch and comes in with its history; a plan swap mid-clip
+  stays the replay (cold, it differs by 0.055); a launch made while
+  stopped lands on the play start; the capture ends at an audio launch's
+  switch and commits exactly; a clip with take FX is refused.
+- Each node with audio clips holds three converters under a pitch-keeping
+  plan: about 0.94 MB each, stereo at 48 kHz.
+- An unquantized launch lands up to about 61 ms later than on the tape
+  path.
+- Limits until later D steps: a second launch on a track whose warm-up is
+  under way replaces it, and the first, if it still switches, starts cold
+  at its switch; a trajectory change restarts launched audio cold; clips
+  with take chains are refused; the launcher pane still dims audio clips
+  under a pitch-keeping rate until the GUI follows.
 
 ## Consequences
 

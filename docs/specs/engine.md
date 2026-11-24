@@ -635,7 +635,10 @@ the same.*
   placement and at each service), ends the capture on that switch's
   boundary, the launch not in it, with a warning naming the track; MIDI
   launches on other tracks, and switches clear of a track's audio, are
-  captured (round 117 W1). That end goes with its switch: replaced before
+  captured (round 117 W1). A launched audio clip's switch queued while the
+  newest plan keeps the pitch ends it there as well, wherever the
+  arrangement's audio lies, with a warning that it launches an audio clip
+  (S3 step D: no committed item reads its converter's history). That end goes with its switch: replaced before
   its boundary (another launch on the track) or voided (an edit that leaves
   it nothing to play), it is dropped and the capture runs on; it is kept
   apart from a quantized end, the earlier of the two ending the capture,
@@ -763,9 +766,34 @@ the same.*
     cut). Within the kernel's reach before a switch that lands on such a
     clip's wrap, live reads the pass's end gated at the wrap while the
     commit reads on (the switch reaches the node at its frame): a stated
-    limit, measured up to 0.011. Under a playrate that keeps the pitch an audio clip has no
-    player yet (step 1b): compile warns and its launch is refused with
-    `launch.playrate`.
+    limit, measured up to 0.011.
+  - *Under a playrate that keeps the pitch* (S3 step D) a launched audio
+    clip reads through a stretch converter. A node with audio clips has
+    three readers: 0 plays, 1 goes out (with its converter's history), 2
+    warms the next launch up. A launch reaches the node `launchWarm`
+    before its switch (the converter's output lookahead rounded up to
+    quanta, and one quantum to spare: 2944 frames, about 61 ms, at
+    48 kHz; `prewarm`), and reader 2 seeks there for output from the
+    switch's quantum and primes no more than a quantum's worth per
+    quantum played, so the switch costs no burst. At the switch the
+    readers rotate (`applyLaunch`). Every prime position is a function of
+    the switch's quantum and the trajectory, not of when the prime runs,
+    so the warm-up is the replay's, which takes it as a third switch
+    entry. A reading runs every quantum in order from its start, a
+    quantum a block skipped (no weight there) before the next, up to 32
+    quanta; past that, or with no warm-up (a launch from stop, a
+    relocation, a plan that lost the converter) it seeks and primes at
+    once at its quantum, live and in the replay alike. It reads the
+    player's song frames from the anchor, in loop cycles after the
+    switch's; the switch crossfade and the clip's fades weight its
+    output. Placement keeps a launch `launchEarly` (the larger of the
+    clip-chain lead and `launchWarm`) ahead of the clock. A plan swap that
+    keeps the rate controls hands the readers over with their converters
+    (`carryLaunchReaders`, §1.6); one that changes the trajectory restarts
+    them cold where they play (an interim: timeline clips crossfade
+    between trajectories). An audio clip read through a take chain (take
+    FX or an active take envelope) still has no player there: compile
+    warns and its launch is refused with `launch.playrate`.
   - *Capture* runs in song time (above): placement gives each launch its
     song frame, the boundary's unwrapped song sample, and the capture
     counts song samples from the published rate clock, so a commit lays

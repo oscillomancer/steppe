@@ -328,12 +328,16 @@ instructions are in `docs/guides/installing.md`.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - under a master playrate clips play on the playrate path, live as
-      the replay (ADR-0097, revision 2026-11-21), but while it keeps the
-      pitch an audio clip cannot be launched yet (`launch.playrate`; MIDI
-      clips can); a capture runs in song time under one, refused (or
-      ended, with a warning) while a launched audio clip plays and the
-      playrate keeps the pitch, and ended on its boundary by a switch that
-      cuts arrangement audio while the pitch is kept; its commit meets the
+      the replay (ADR-0097, revision 2026-11-21); while it keeps the pitch
+      a launched audio clip reads through a stretch converter warmed up
+      about 61 ms before its switch, live as the replay (S3 step D), except
+      one read through a take chain (`launch.playrate`); a second launch
+      inside a track's warm-up, or a trajectory change, starts it cold; a
+      capture runs in song time under one, refused (or ended, with a
+      warning) while a launched audio clip plays and the playrate keeps
+      the pitch, and ended on its boundary by a switch that cuts
+      arrangement audio, or launches an audio clip, while the pitch is
+      kept; its commit meets the
       rate-1 standard except within 128 song samples of the capture's
       first and last samples (up to the level of the audio cut there),
       and within 128 song samples before a switch that lands on the wrap
@@ -384,9 +388,10 @@ instructions are in `docs/guides/installing.md`.
   section's Capture as scene (`scene.capture`); their refusals show in the
   status line. The clip menu's Take FX… opens a clip's take chain, and with
   under a pitch-keeping master playrate the pane dims the audio clips (and
-  their scenes' ▶) the engine refuses to launch, by a mirror of the
-  engine's check until the engine reports it (a MIDI-clock chase is not
-  seen). Limits:
+  their scenes' ▶) the engine refused to launch before S3 step D, by a
+  mirror of the engine's check until the engine reports it (a MIDI-clock
+  chase is not seen); the engine now launches those without take chains,
+  and the pane is still to follow. Limits:
   - there is no dialog for `arrangement.build`;
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
