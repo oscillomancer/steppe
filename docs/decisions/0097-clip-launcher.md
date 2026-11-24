@@ -1294,7 +1294,29 @@ tests, in test_clip_player_rate_trajectory.cpp and its `_queued` sibling:
 - the floor for a launch pressed inside the pending window, and the A1 bound at plan level for every
   side.
 
-Phase 2 (the mirror, its keys, the race case, the loop wrap A6) is still to come.
+**Built:** phase 2, the mirror (2026-11-24). `Engine::launchMirrorReadings` reads, in each attempt of
+`prepareRatePlan`, the acknowledged log and the applied slots; `detail::primeLaunchMirror` seeks and
+primes each reading on the new plan before it is published and marks it `PlayerReader::mirror`; the
+carry (and `warmLaunch`, for a warm-up begun after the adoption) takes it only when the player, anchor,
+anchoring, loop cycle and start equal what it would seek, else primes as phase 1 does; a mirror reading
+no executor took keys nothing. *Revision 2026-11-24 (accepted by the co-director with the design):*
+reader 0's key holds no switch quantum (a reading's positions are functions of the frame, and a warm
+start equals a cold one, so where it began does not change what one primed for S gives), and its loop
+cycle is the switch's whole loop passes from the log's song frame under the loop as it is then, not a
+read of the ring; an applied warm-up after S is primed fully (the state its own primes reach). Before
+it, a phase 1 fault found while building it: a reading carried across a change and first read more
+than the catch-up after S ran every quantum since S in one block (469 in one callback); it now starts
+again where it is read, as a primed reading does. Phase 2's tests, in test_clip_player_rate_mirror.cpp
+and its `_queued` sibling, each run with the mirror off as well and equal to it bit for bit:
+- an envelope with one and two launched tracks, and tape to stretch: nothing primed in the run holding
+  S (45 per track there with it off), in both executors;
+- two launches of one clip that differ only in their switch's quantum both found;
+- a launch in a later loop cycle found by the passes from its song frame, and one with a wrap between
+  its anchor and S (A6); the loop's end moved after the switch, a miss (45);
+- the queued launches across a change: a warm-up under way when the change is prepared and switching
+  after S found (the executors prime 4 instead of 94), and the race case, a warm-up begun between the
+  read and the adoption (every one switching before S here, in both executors), missed and primed by
+  the executor as with the mirror off.
 
 ## Consequences
 

@@ -990,6 +990,68 @@ std::optional<Engine::ClipFollowed> Engine::clipFollowed(model::Id track, model:
     return std::nullopt;
 }
 
+// --- Priming a trajectory change's readings ahead (S3 step D4, phase 2) ----------
+
+std::vector<detail::LaunchMirror> Engine::launchMirrorReadings(const detail::Plan& p) const {
+    std::vector<detail::LaunchMirror> out;
+    if (!detail::launchMirror() || !p.rateStretch || p.rateSwitchDevice == INT64_MIN) return out;
+    const std::uint64_t epoch = epoch_.load(std::memory_order_acquire);
+    if (p.handEpoch != epoch) return out;                      // a seek: every launch is relocated
+    const std::int64_t S = p.rateSwitchDevice - p.rateOrigin;  // a stream frame
+    // Applied slots (a warm-up under way, or switched and not yet in the
+    // log), by track: committed ones the controls change voids.
+    std::map<model::Id, detail::LaunchMirror> warming;
+    std::map<model::Id, detail::LaunchMirror> switched;
+    for (const LaunchSlot& slot : *launchSlots_) {
+        if (status(slot.state.load(std::memory_order_acquire)) != LaunchSlot::kApplied ||
+            slot.epoch.load(std::memory_order_relaxed) != epoch ||
+            static_cast<LaunchLogEntry::Action>(slot.action.load(std::memory_order_relaxed)) !=
+                LaunchLogEntry::Action::Clip)
+            continue;
+        detail::LaunchMirror m;
+        m.track = {model::Kind::Track,
+                   static_cast<std::uint32_t>(slot.track.load(std::memory_order_relaxed))};
+        m.clip = {model::Kind::Clip,
+                  static_cast<std::uint32_t>(slot.clip.load(std::memory_order_relaxed))};
+        m.anchor = slot.anchorSample.load(std::memory_order_relaxed);
+        m.songFrame = slot.songFrame.load(std::memory_order_relaxed);
+        const std::int64_t target = slot.target.load(std::memory_order_relaxed);
+        m.warmSwitch = target;
+        // One switched by the time this is read is in the log or will be;
+        // the executors tell (a mismatch is a miss).
+        if (target < playedStream(epoch))
+            switched[m.track] = m;
+        else
+            warming[m.track] = m;
+    }
+    std::map<model::Id, const LaunchLogEntry*> last;
+    for (const LaunchLogEntry& e : launchLog_)
+        if (e.epoch == epoch && e.runningFrame <= S) last[e.track] = &e;
+    for (const detail::Node& n : p.nodes) {
+        if (n.players.empty()) continue;
+        if (const auto w = warming.find(n.id); w != warming.end()) {
+            out.push_back(w->second);                 // reader 2, for S or for its own switch
+            if (w->second.warmSwitch <= S) continue;  // it is what reads at S
+        }
+        const detail::LaunchMirror* reading = nullptr;
+        detail::LaunchMirror fromLog;
+        if (const auto e = last.find(n.id); e != last.end()) {
+            if (e->second->action != LaunchLogEntry::Action::Clip) continue;
+            fromLog.track = n.id;
+            fromLog.clip = e->second->clip;
+            fromLog.anchor = e->second->anchorSample;
+            fromLog.songFrame = e->second->songFrame;
+            reading = &fromLog;
+        }
+        if (const auto sw = switched.find(n.id); sw != switched.end()) reading = &sw->second;
+        if (!reading) continue;
+        detail::LaunchMirror m = *reading;
+        m.warmSwitch = INT64_MIN;  // reader 0, at S
+        out.push_back(m);
+    }
+    return out;
+}
+
 // --- Capturing a performance (ADR-0097 L4) -------------------------------------
 
 // The song's running count (LaunchLogEntry::songFrame's unit) as `epoch`'s

@@ -116,7 +116,10 @@ TEST_CASE("a trajectory change primes launched audio within a warm-up's primes p
     // with a launched audio clip, so two such tracks take 90 there. The cold
     // start before D4 primed as many, in the same callback; what D4 buys
     // with them is a continuous switch, checked here too. Without a change
-    // only cl_2's warm-up primes, two per callback at most.
+    // only cl_2's warm-up primes, two per callback at most. With the mirror
+    // off: phase 2 primes these on the main thread (test_clip_player_rate_
+    // mirror.cpp), the miss path's cost being what this case pins.
+    const MirrorOff off;
     for (const int tracks : {0, 1, 2}) {  // 0: no change, one track
         INFO("tracks " << tracks);
         Project p;

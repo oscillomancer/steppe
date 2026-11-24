@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -556,6 +557,32 @@ inline std::vector<Step> serviced(std::vector<Step> steps, std::int64_t from, st
     std::stable_sort(steps.begin(), steps.end(),
                      [](const Step& a, const Step& b) { return a.cycle < b.cycle; });
     return steps;
+}
+
+// S3 step D4, phase 2: the mirror off while it lives (the miss path, as
+// phase 1 played), so a test can compare what plays with and without it.
+struct MirrorOff {
+    MirrorOff() { detail::setLaunchMirror(false); }
+    ~MirrorOff() { detail::setLaunchMirror(true); }
+    MirrorOff(const MirrorOff&) = delete;
+    MirrorOff& operator=(const MirrorOff&) = delete;
+};
+
+// The stretch primes each run of `live` over (from, to] does, by the frame
+// it ran to (blocks of `block`), those that primed only; `at(frame)` runs
+// before each.
+inline std::vector<std::pair<std::int64_t, std::uint64_t>> primesPerRun(
+    AppLive& live, std::int64_t from, std::int64_t to, std::uint32_t block,
+    const std::function<void(std::int64_t)>& at) {
+    std::vector<std::pair<std::int64_t, std::uint64_t>> out;
+    for (std::int64_t c = from / block + 1; c <= to / block; ++c) {
+        at(c * block);
+        const std::uint64_t before = detail::stretchPrimes();
+        live.until(c * block);
+        if (const std::uint64_t d = detail::stretchPrimes() - before; d > 0)
+            out.push_back({c * block, d});
+    }
+    return out;
 }
 
 }  // namespace clip_player_test

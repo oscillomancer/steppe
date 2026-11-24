@@ -43,6 +43,7 @@ namespace supple::engine {
 
 namespace detail {
 struct Plan;
+struct LaunchMirror;
 class BufferPool;
 struct ChunkRing;
 class SyncRuntime;
@@ -1440,6 +1441,10 @@ class Engine {
         bool looping = false;
     };
     std::optional<HeardSong> heardSong(std::uint64_t epoch) const;
+    // Main thread, preparing `p` (S3 step D4, phase 2): what each track's
+    // launched audio reads at the change's switch, from the acknowledged log
+    // and the applied slots, for detail::primeLaunchMirror.
+    std::vector<detail::LaunchMirror> launchMirrorReadings(const detail::Plan& p) const;
     // Main thread, on a unity plan: the song count at stream 0 of `clock`'s
     // epoch (it moves with the stream there).
     std::int64_t unitySongBase(const LaunchClock& clock) const;

@@ -336,9 +336,10 @@ instructions are in `docs/guides/installing.md`.
       inside a track's warm-up lands after that switch; a compiled
       trajectory change (an envelope edit, preserve pitch toggled) switches
       launched audio where the items switch, crossfaded from the old
-      reading (S3 step D4, phase 1: the new reading is primed on the audio
-      thread, a warm-up's primes for each track with launched audio, in the
-      callback holding the switch, until the main-thread mirror lands), and
+      reading (S3 step D4: the new reading is primed on the main thread
+      as the change is prepared; one the executor does not find there, a
+      launch since or a loop moved, it primes itself, a warm-up's primes
+      for each such track in the callback holding the switch), and
       an audio launch pressed while it is pending, or queued before it and
       not yet begun, can land a boundary later, after its crossfade plus a
       warm-up; a

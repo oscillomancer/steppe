@@ -858,6 +858,12 @@ struct PlayerReader {
     std::unique_ptr<PlayerReader> previous;
     bool previousLive = false;
     bool previousOnly = false;  // no reading of its own for the switch
+    // Seeked and primed by the main thread at prepare (S3 step D4, phase 2:
+    // the mirror) and not yet taken by an executor. Such a reading keys
+    // nothing (stretchQuantum, a carry's `reading`) until an executor finds
+    // it equal to what it would seek and prime itself (carryLaunchAcross,
+    // warmLaunch), so it never plays what the miss path would not.
+    bool mirror = false;
 };
 
 // An audio item ready to play: which source frames land on which samples.
@@ -1739,6 +1745,25 @@ std::int64_t stretchPrimeFrame(std::uint64_t n) noexcept;
 // Quanta a launched clip's stretch converter has run since the process
 // began (a relaxed count, for the tests' per-block bound).
 std::uint64_t stretchQuanta() noexcept;
+// S3 step D4, phase 2 (the mirror): a reading the executors would prime at
+// adoption, read by the main thread from the acknowledged launch log and
+// the applied slots. `warmSwitch` INT64_MIN: what reads at S (reader 0);
+// else a warm-up's switch (a stream frame, Node::launchWarmAt), primed for S
+// when it switches at or before S and for its switch after.
+struct LaunchMirror {
+    Id track, clip;
+    std::int64_t anchor = 0;
+    std::int64_t songFrame = 0;  // LaunchLogEntry::songFrame: its loop passes
+    std::int64_t warmSwitch = INT64_MIN;
+};
+// Seeks and primes on the main thread, before `p` is published, the
+// readers `readings` name, each as carryLaunchAcross (or warmLaunch) would,
+// and marks them PlayerReader::mirror. Not real-time.
+void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings);
+// Tests only: the mirror on (the default) or off, so a test can compare
+// what plays with it against the miss path. Read on the main thread.
+void setLaunchMirror(bool on) noexcept;
+bool launchMirror() noexcept;
 // What a clip chain's input reads in this block: the player's anchor on the
 // input side, or nothing (`on` false).
 struct ClipChainInput {
