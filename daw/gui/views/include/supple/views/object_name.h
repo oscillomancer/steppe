@@ -23,7 +23,7 @@ namespace supple::views {
 // - a take: its name, else as its item or clip;
 // - an envelope: "<track or take>'s <param> automation", else "the <param>
 //   automation";
-// - an automation item: its name, else "<envelope>'s automation item at bar N";
+// - an automation item: its name, else "<envelope> item at bar N";
 // - a section or region: its name, else "the section (range) at bar N";
 // - a marker: its name, else "the marker at bar N";
 // - a tempo or meter change, a key or chord point: "the tempo change at bar

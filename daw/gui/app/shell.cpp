@@ -68,7 +68,7 @@ void Shell::setStatus(const std::string& text) {
     // No id reaches the user: each is said by name (views::objectNames).
     editStatus_ = views::objectNames(app_.head(), text);
     ++noteSerial_;
-    if (counts_) counts_->setText(text);
+    if (counts_) counts_->setText(editStatus_);
 }
 namespace {
 

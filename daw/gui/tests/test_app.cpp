@@ -326,6 +326,9 @@ TEST_CASE("audio device: the app's wiring says Refresh's refusals in the status 
     CHECK_FALSE(audio.rescan());
     CHECK(status().find("device was not found") != std::string::npos);
     CHECK(a.app->backend() == nullptr);
+    // The status line names ids at once, not from the next sync (round 165 N1).
+    shell.setStatus("no track tr_99");
+    CHECK(a.root->find("status")->valueText() == "no track a removed track");
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
