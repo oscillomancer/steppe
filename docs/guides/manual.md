@@ -70,7 +70,8 @@ audio system, the output and input devices, the sample rate and the buffer
 size. Steppe remembers the choice and starts with it next time. Each change
 restarts the running engine at once. Plugged in a device while the dialog is
 open? On macOS and Windows, **Refresh** lists the devices again; audio stops
-for a moment while it does, so it is off while you record.
+for a moment while it does, so it is off while you record or while the
+launcher's Capture is on or still holds a performance.
 
 **Edit > Preferences…** holds the settings that apply to every project, in
 sections: **Audio**, **Recording and import**, **Plug-ins** and **Editing**.

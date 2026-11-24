@@ -3847,7 +3847,10 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   listed (`engine.devices`) and the engine started again (`engine.start`);
   audio stops for a moment, which its hover hint says. A stopped engine is
   only listed for. While recording it is disabled, its hint "Refresh is off
-  while recording", and refused (`audio.recording`). A refused start shows
+  while recording", and refused (`audio.recording`); likewise while a
+  launcher capture is armed, running or kept uncommitted (an engine stop
+  discards it), refused with `audio.capture`. The hint is said in the status
+  line on hover. A refused start shows
   the command's message in the dialog's status and the status line, the
   engine left stopped and the dialog open with the fresh list. Each choice is saved, then a
   running engine (or one whose start failed) restarts with it at once; a

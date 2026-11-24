@@ -1832,7 +1832,7 @@ Engine and hosting:
   on hardware. The dialog lists the devices present when it opens, and its
   Refresh lists them again by stopping the engine, listing and starting it
   (PortAudio rescans only when nothing holds it; audio stops for a moment,
-  and Refresh is off while recording). That a device plugged in since does
+  and Refresh is off while recording or while a launcher capture is held). That a device plugged in since does
   appear after Refresh is unverified on real macOS and Windows hardware: it
   cannot be run here or in CI, where the sequence is tested with the dummy
   backend.

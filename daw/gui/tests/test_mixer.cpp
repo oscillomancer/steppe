@@ -2621,6 +2621,44 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     REQUIRE(errors.size() == 1);
     CHECK(errors[0].find("off while recording") != std::string::npos);
     (void)f.dispatcher->execute({"transport.stop", json::Value::object(), test});
+    arm["armed"] = false;
+    REQUIRE(f.dispatcher->execute({"track.set", arm, test}));
+    // A launcher capture: an engine stop would discard it, so Refresh is off
+    // the same way. The engine's own running capture, then one the app holds
+    // (the Capture toggle armed, or a refused commit kept).
+    json::Value on = json::Value::object();
+    on["on"] = true;
+    REQUIRE(f.dispatcher->execute({"launch.capture", on, test}));
+    REQUIRE(f.dispatcher->execute({"transport.play", json::Value::object(), test}));
+    REQUIRE(f.app->launchCapturing());
+    CHECK_FALSE(audio.recording());
+    audio.refresh();
+    CHECK_FALSE(f.node("audio.refresh")->enabled);
+    CHECK(f.node("audio.refresh")->hint.name.find("launcher captures") != std::string::npos);
+    calls.clear();
+    errors.clear();
+    const Status held = audio.rescan();
+    REQUIRE_FALSE(held);
+    CHECK(held.error().code == "audio.capture");
+    CHECK(calls.empty());
+    CHECK(f.app->backend() != nullptr);
+    REQUIRE(errors.size() == 1);
+    (void)f.dispatcher->execute({"transport.stop", json::Value::object(), test});
+    on["on"] = false;
+    (void)f.dispatcher->execute({"launch.capture", on, test});
+    REQUIRE_FALSE(f.app->launchCapturing());
+    bool kept = true;  // as the app's hook says for a kept performance
+    audio.captureHeld = [&] { return kept; };
+    audio.refresh();
+    CHECK_FALSE(f.node("audio.refresh")->enabled);
+    CHECK(audio.rescan().error().code == "audio.capture");
+    kept = false;
+    audio.refresh();
+    CHECK(f.node("audio.refresh")->enabled);
+    calls.clear();
+    REQUIRE(audio.rescan());
+    CHECK(calls.front() == "stop");
+    CHECK(calls.back() == "start");
 }
 
 TEST_CASE("audio device: the dialog saves each choice and restarts the engine with it") {

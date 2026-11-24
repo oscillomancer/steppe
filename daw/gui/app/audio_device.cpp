@@ -239,6 +239,7 @@ AudioDeviceDialog::AudioDeviceDialog(ui::Root& root, cmd::Dispatcher& dispatcher
     stopEngine = [this] {
         (void)dispatcher_.execute({"engine.stop", json::Value::object(), kOrigin});
     };
+    captureHeld = [this] { return app_.launchCapturing(); };
 }
 
 std::vector<engine::AudioDevice> AudioDeviceDialog::devices(bool reload) {
@@ -339,10 +340,20 @@ bool AudioDeviceDialog::recording() const {
     return transport && transport->recording;
 }
 
+std::string AudioDeviceDialog::refreshBlocked() const {
+    if (recording()) return "Refresh is off while recording";
+    if (captureHeld && captureHeld())
+        return "Refresh is off while the launcher captures or keeps a capture";
+    return {};
+}
+
 Status AudioDeviceDialog::rescan() {
-    if (recording()) {
-        Error refused("audio.recording", "Refresh is off while recording",
-                      "stop recording first: Refresh stops audio for a moment");
+    if (const std::string blocked = refreshBlocked(); !blocked.empty()) {
+        const bool rec = recording();
+        Error refused(rec ? "audio.recording" : "audio.capture", blocked,
+                      rec ? "stop recording first: Refresh stops audio for a moment"
+                          : "end the capture first (Capture in the launcher): an engine stop "
+                            "discards it");
         if (onError) onError("audio device: " + refused.message);
         return refused;
     }
@@ -575,12 +586,13 @@ void AudioDeviceDialog::build(bool reload) {
 }
 
 void AudioDeviceDialog::refresh() {
-    // Refresh stops audio for a moment: off while recording, its hint says why.
+    // Refresh stops audio for a moment: off while recording or while a
+    // capture is held, its hint (said in the status line) says why.
     if (ui::Node* again = root_.find("audio.refresh")) {
-        const bool off = recording();
-        ui::Hint said{off ? "Refresh is off while recording"
-                          : "Refresh: list the audio devices again (audio stops for a moment)",
-                      ""};
+        const std::string blocked = refreshBlocked();
+        const bool off = !blocked.empty();
+        ui::Hint said{
+            off ? blocked : "Refresh: list the audio devices again (audio stops for a moment)", ""};
         if (again->enabled == off || again->hint != said) {
             again->enabled = !off;
             again->hint = said;

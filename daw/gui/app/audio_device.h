@@ -71,11 +71,14 @@ class AudioDeviceDialog {
     // Refresh: lists the devices again. PortAudio sees a device plugged in
     // since only when nothing holds it, so a running engine stops for the
     // listing and starts again (audio stops for a moment). Refused while
-    // recording (audio.recording), which it would put at risk. A failed
-    // start is said in the dialog's status and the status line; the engine
-    // is left stopped, the fresh list shown.
+    // recording (audio.recording), which it would put at risk, and while a
+    // launcher capture is held (audio.capture): an engine stop discards it.
+    // A failed start is said in the dialog's status and through onError; the
+    // engine is left stopped, the fresh list shown.
     Status rescan();
     bool recording() const;
+    // Why Refresh is off now ("" when it is not): recording or a capture.
+    std::string refreshBlocked() const;
     bool isOpen() const;
     void refresh();  // open dialog only; also called by the GUI tick
     const AudioDeviceSettings& settings() const { return settings_; }
@@ -87,6 +90,9 @@ class AudioDeviceDialog {
     std::function<Result<json::Value>(const json::Value& args)> startEngine;
     std::function<void()> stopEngine;
     std::function<void(const std::string&)> onError;
+    // A launcher capture armed, running or kept uncommitted. Default: the
+    // engine's running capture; the app adds the Capture toggle's own.
+    std::function<bool()> captureHeld;
 
   private:
     std::vector<engine::AudioDevice> devices(bool reload);
