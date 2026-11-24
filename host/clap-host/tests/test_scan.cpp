@@ -19,6 +19,8 @@ using namespace supple;
 using namespace supple::host;
 namespace fs = std::filesystem;
 namespace {
+constexpr int kPatientScanMs = 120000;
+constexpr int kShortScanMs = 2000;
 struct ScanTest {
     fs::path dir;
     ScanOptions options;
@@ -30,7 +32,11 @@ struct ScanTest {
         dir = created;
         options.cacheDirectory = dir / "cache";
         options.bridgeExecutable = BRIDGE_PATH;
-        options.timeoutMs = 2000;
+        // A healthy scan may not race a deadline: the scanner child must
+        // start, load the module and answer, and under a sanitizer on a
+        // loaded machine that takes seconds (test_native_host.cpp). A test
+        // of a deadline sets kShortScanMs only for what must not answer.
+        options.timeoutMs = kPatientScanMs;
         if (const char* log = std::getenv("SUPPLE_SCAN_FIXTURE_LOG")) previousLog = log;
         REQUIRE(::setenv("SUPPLE_SCAN_FIXTURE_LOG", (dir / "calls").c_str(), 1) == 0);
     }
@@ -72,6 +78,10 @@ struct ScanTest {
 void touch(const fs::path& path) {
     fs::last_write_time(path, fs::last_write_time(path) + std::chrono::seconds(1));
 }
+int callsOf(const std::map<int, int>& calls, int mode) {
+    const auto found = calls.find(mode);
+    return found == calls.end() ? 0 : found->second;
+}
 std::size_t fdCount() {
     std::size_t count = 0;
     for ([[maybe_unused]] const auto& file : fs::directory_iterator("/proc/self/fd")) ++count;
@@ -85,21 +95,38 @@ TEST_CASE("supervised scan isolates entry crashes/hangs and caches results until
                                       fixture.copy(SCAN_CRASH_PATH, "crash.clap"),
                                       fixture.copy(SCAN_HANG_PATH, "hang.clap")};
     const auto beforeFds = fdCount();
+    // Neither the good module's scan nor the crash may race a deadline; a
+    // hang outlasts any, so only its own scan has a short one.
+    const std::vector<fs::path> goodAndCrash{paths[0], paths[1]};
+    const std::vector<fs::path> hang{paths[2]};
     ScanReport report;
-    auto first = scan(paths, fixture.options, &report);
+    auto first = scan(goodAndCrash, fixture.options, &report);
     REQUIRE(first);
     REQUIRE(first->size() == 1);
     CHECK(first->front().id == "com.suppleaudio.test.scan");
-    REQUIRE(report.failures.size() == 2);
+    REQUIRE(report.failures.size() == 1);
     CHECK(report.failures[0].reason.code == "host.scan.crashed");
     CHECK(report.failures[0].reason.message.find("signal 9") != std::string::npos);
-    CHECK(report.failures[1].reason.code == "host.scan.timeout");
-    CHECK(report.failures[1].reason.hint == "repair/reinstall the module to retry its scan");
-    CHECK(report.failures[1].reason.message == "plugin scanner timed out after 2000 ms");
     CHECK_FALSE(report.failures[0].cached);
-    CHECK_FALSE(report.failures[1].cached);
     CHECK(report.cachedModules == 0);
-    CHECK(fixture.calls() == std::map<int, int>{{0, 1}, {1, 1}, {2, 1}});
+    fixture.options.timeoutMs = kShortScanMs;
+    auto hung = scan(hang, fixture.options, &report);
+    fixture.options.timeoutMs = kPatientScanMs;
+    REQUIRE(hung);
+    CHECK(hung->empty());
+    REQUIRE(report.failures.size() == 1);
+    CHECK(report.failures[0].reason.code == "host.scan.timeout");
+    CHECK(report.failures[0].reason.hint == "repair/reinstall the module to retry its scan");
+    CHECK(report.failures[0].reason.message == "plugin scanner timed out after 2000 ms");
+    CHECK_FALSE(report.failures[0].cached);
+    CHECK(report.cachedModules == 0);
+    // The hang's short deadline starts at its spawn, so its scanner may not
+    // have logged its module's entry by then: the checks that follow compare
+    // with what the first scans left, and decide nothing by that race.
+    const auto base = fixture.calls();
+    CHECK(callsOf(base, 0) == 1);
+    CHECK(callsOf(base, 1) == 1);
+    CHECK(callsOf(base, 2) <= 1);
     auto second = scan(paths, fixture.options, &report);
     REQUIRE(second);
     REQUIRE(second->size() == 1);
@@ -107,20 +134,29 @@ TEST_CASE("supervised scan isolates entry crashes/hangs and caches results until
     CHECK(report.cachedModules == 3);
     CHECK(report.failures[0].cached);
     CHECK(report.failures[1].cached);
-    CHECK(fixture.calls() == std::map<int, int>{{0, 1}, {1, 1}, {2, 1}});
+    CHECK(fixture.calls() == base);
     fixture.options.bridgeExecutable = fixture.dir / "missing";
     REQUIRE(scan(paths, fixture.options, &report));
     CHECK(report.cachedModules == 3);
     REQUIRE(report.failures.size() == 2);
     CHECK(report.failures[0].cached);
     CHECK(report.failures[1].cached);
-    CHECK(fixture.calls() == std::map<int, int>{{0, 1}, {1, 1}, {2, 1}});
+    CHECK(fixture.calls() == base);
     fixture.options.bridgeExecutable = BRIDGE_PATH;
     for (const auto& path : paths) touch(path);
-    auto third = scan(paths, fixture.options, &report);
+    auto third = scan(goodAndCrash, fixture.options, &report);
     REQUIRE(third);
     CHECK(report.cachedModules == 0);
-    CHECK(fixture.calls() == std::map<int, int>{{0, 2}, {1, 2}, {2, 2}});
+    fixture.options.timeoutMs = kShortScanMs;
+    auto thirdHang = scan(hang, fixture.options, &report);
+    fixture.options.timeoutMs = kPatientScanMs;
+    REQUIRE(thirdHang);
+    CHECK(report.cachedModules == 0);
+    const auto again = fixture.calls();
+    CHECK(callsOf(again, 0) == 2);
+    CHECK(callsOf(again, 1) == 2);
+    CHECK(callsOf(again, 2) >= callsOf(base, 2));
+    CHECK(callsOf(again, 2) <= callsOf(base, 2) + 1);
     CHECK(fdCount() == beforeFds);
     for (const auto& file : fs::directory_iterator(fixture.options.cacheDirectory)) {
         auto text = readTextFile(file.path());
@@ -243,17 +279,34 @@ TEST_CASE("scan kills descendants retaining stdout at its deadline") {
     } subreaper;
     ScanTest fixture;
     const auto good = fixture.copy(SCAN_GOOD_PATH, "good.clap");
-    fixture.bridgeScript("sleep 60 &\necho $! > '" + (fixture.dir / "descendant").string() +
+    // The descendant outlives every deadline the case may reach (the 120 s
+    // rung included): a `sleep 60` would end first, and the scan would return
+    // its output instead of timing out. The scan kills it at the deadline.
+    fixture.bridgeScript("sleep 600 &\necho $! > '" + (fixture.dir / "descendant").string() +
                          "'\nexit 0\n");
-    ScanReport report;
-    auto result = scan(std::span<const fs::path>(&good, 1), fixture.options, &report);
-    REQUIRE(result);
-    REQUIRE(report.failures.size() == 1);
-    CHECK(report.failures[0].reason.code == "host.scan.timeout");
-    // No wall-clock assertion: the reported deadline is the behavior under test.
-    std::ifstream descendant(fixture.dir / "descendant");
+    // The deadline is what ends this scan and starts at its spawn, so the
+    // script must have written its pid by then. A start slower than the short
+    // deadline leaves nothing to examine (the scan itself behaved), so it is
+    // asked again with a longer one; touching drops the cached failure.
+    const auto pidFile = fixture.dir / "descendant";
     long pid = 0;
-    REQUIRE(static_cast<bool>(descendant >> pid));
+    for (const int ms : {kShortScanMs, 20000, kPatientScanMs}) {
+        fixture.options.timeoutMs = ms;
+        fs::remove(pidFile);
+        ScanReport report;
+        auto result = scan(std::span<const fs::path>(&good, 1), fixture.options, &report);
+        REQUIRE(result);
+        REQUIRE(report.failures.size() == 1);
+        // No wall-clock assertion: the reported deadline is the behavior under test.
+        CHECK(report.failures[0].reason.code == "host.scan.timeout");
+        auto text = readTextFile(pidFile);
+        if (text && !text->empty() && text->back() == '\n') {
+            pid = std::stol(*text);
+            break;
+        }
+        touch(good);
+    }
+    REQUIRE(pid > 0);
     int status = 0;
     REQUIRE(::waitpid(static_cast<pid_t>(pid), &status, 0) == pid);
     CHECK(WIFSIGNALED(status));

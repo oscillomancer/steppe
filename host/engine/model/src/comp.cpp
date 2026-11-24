@@ -122,6 +122,22 @@ Result<std::vector<CompPiece>> compRun(const Session& s, std::optional<Id> item,
                 for (const Entry& o : others)
                     if (right ? continues(s, at, o) : continues(s, o, at)) found.push_back(o);
                 if (found.empty()) break;
+                // When a piece is fully clamped by its two seams, the piece before it ends exactly
+                // where the piece after it begins, so the piece after continues `at` too. Of such
+                // candidates the nearest is the next piece: drop those another candidate
+                // continues in turn. Anything else stays ambiguous.
+                if (found.size() > 1) {
+                    std::vector<Entry> nearest;
+                    for (const Entry& y : found) {
+                        const bool beyond =
+                            std::any_of(found.begin(), found.end(), [&](const Entry& x) {
+                                return x.id != y.id &&
+                                       (right ? continues(s, x, y) : continues(s, y, x));
+                            });
+                        if (!beyond) nearest.push_back(y);
+                    }
+                    found = std::move(nearest);
+                }
                 if (found.size() > 1)
                     return mismatch(
                         "/item", "more than one item could continue the comp after " + at.id.str());
@@ -145,6 +161,28 @@ Result<std::vector<CompPiece>> compRun(const Session& s, std::optional<Id> item,
                 return mismatch("/items/" + std::to_string(listed[i].second),
                                 listed[i].first.id.str() + " does not continue " +
                                     listed[i - 1].first.id.str());
+            if (i > 0) {
+                // A piece left out of the list that sits between the two (their neighbours touch
+                // when it is clamped to half its core at both seams) would go on playing under
+                // the seam: the comp is the whole run, not the listed pieces alone.
+                const Entry& l = listed[i - 1].first;
+                const Entry& r = listed[i].first;
+                for (const auto& e : s.items) {
+                    if (e.value->track != l.item->track) continue;
+                    if (std::any_of(listed.begin(), listed.end(),
+                                    [&](const auto& x) { return x.first.id == e.id; }))
+                        continue;
+                    const Entry u = entry(e.id);
+                    if (continues(s, l, u) && continues(s, u, r))
+                        return Error("comp.mismatch",
+                                     r.id.str() + " does not follow " + l.id.str() + ": " +
+                                         u.id.str() + " lies between them and is not listed",
+                                     "/items/" + std::to_string(listed[i].second),
+                                     "add " + u.id.str() +
+                                         " to items, or name the comp by one piece in item "
+                                         "(take.comp.get lists the pieces)");
+                }
+            }
             run.push_back(listed[i].first);
         }
     }
@@ -218,19 +256,33 @@ bool joinablePieces(const Session& s, Id left, Id right) {
     return true;
 }
 
+namespace {
+// The index of the take an item plays among its takes.
+std::ptrdiff_t playedIndex(const Item& item) {
+    const auto at = item.activeTake
+                        ? std::find(item.takes.begin(), item.takes.end(), *item.activeTake)
+                        : item.takes.end();
+    return at - item.takes.begin();
+}
+}  // namespace
+
 CompCrossfade compCrossfade(const Session& s, std::span<const CompPiece> run) {
     CompCrossfade out;
-    if (run.size() < 2) return out;
-    out.seconds = 0;
+    bool between = false;  // a seam between different takes: the only kind a crossfade belongs to
+    double longest = 0;
     for (std::size_t i = 0; i + 1 < run.size(); ++i) {
-        const Fade& left = s.items.find(run[i].item)->fadeOut;
-        const Fade& right = s.items.find(run[i + 1].item)->fadeIn;
-        for (const Fade* fade : {&left, &right})
-            if (fade->length > out.seconds) {
-                out.seconds = fade->length;
+        const Item& leftItem = *s.items.find(run[i].item);
+        const Item& rightItem = *s.items.find(run[i + 1].item);
+        if (playedIndex(leftItem) == playedIndex(rightItem)) continue;
+        between = true;
+        for (const Fade* fade : {&leftItem.fadeOut, &rightItem.fadeIn})
+            if (fade->length > longest) {
+                longest = fade->length;
                 out.shape = fade->shape == FadeShape::Linear ? FadeShape::Linear : FadeShape::Cos;
             }
     }
+    if (!between) return CompCrossfade{};  // no such seam (a split item): the default
+    out.seconds = longest;
     return out;
 }
 
@@ -241,12 +293,7 @@ std::vector<std::size_t> seamsOffFrom(const Session& s, std::span<const CompPiec
     std::vector<std::size_t> out;
     const double rate = s.project->sampleRate;
     const auto wanted = static_cast<std::int64_t>(std::llround(read.seconds * rate / 2.0));
-    auto indexOf = [&](const Item& item) {
-        const auto at = item.activeTake
-                            ? std::find(item.takes.begin(), item.takes.end(), *item.activeTake)
-                            : item.takes.end();
-        return at - item.takes.begin();
-    };
+    auto indexOf = [&](const Item& item) { return playedIndex(item); };
     for (std::size_t k = 0; k + 1 < run.size(); ++k) {
         const Item& left = *s.items.find(run[k].item);
         const Item& right = *s.items.find(run[k + 1].item);

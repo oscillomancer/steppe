@@ -40,7 +40,8 @@ a comp's pieces all get the new take. Recording only some tracks of an edit grou
 its pass is left out with `record.frozen_skipped` (the recording is kept with its journal: unfreeze,
 then `project.recover` places it where it was played) and the others are placed. A refused commit
 says its recordings are kept (`project.recover`). A pass inside a comp with hand-set seams makes
-those it leaves in place uniform and warns `record.comp_uniform`. A pass
+A pass inside a comp leaves the seams it does not touch exactly as they were
+(it gives `take.comp` no crossfade). A pass
 that starts before an item, or into a locked or looped one, makes a new item and warns
 `record.stack_skipped`; a pass that runs past the item's end keeps the rest hidden in the take
 (`record.take_beyond_item`). The recorded result says `stacked: true` when the takes went into an
@@ -48,14 +49,21 @@ existing item. `record.set {stack_takes: false}` lays every pass as items, as ol
 the choice is stored in each recording's commit, so undo, redo and merges do not depend on it.
 
 Call `take.comp` again on any piece (or give `items`, the pieces in any order) to move
-seams or change spans. The crossfades are rebuilt for the whole comp, and the same
-call twice changes nothing. `take.comp.get {item}` reads a comp you did not make: besides the pieces it gives the
-`crossfade` (seconds) and `crossfade_shape` the comp has (its longest seam fade, so a seam
+seams or change spans. **Without `crossfade`, the seams your spans do not touch stay exactly as
+they are** (a seam fade you set by hand included), and the seams the call makes or moves get the
+comp's own crossfade (its longest seam fade: one long hand-set seam makes the new ones that long; a
+seam you move on its own keeps its own length and shape; a seam your edit leaves too little room
+beside a new one is rebuilt and shortened); an omitted
+crossfade no longer resets the comp to 10 ms. **Give `crossfade` (and `crossfade_shape`) to
+rebuild every seam alike.** The same call twice changes nothing. `take.comp.get {item}` reads a
+comp you did not make: besides the pieces (with `fade_in`, `fade_out` and their shapes) it gives
+the `crossfade` (seconds) and `crossfade_shape` the comp has (its longest seam fade, so a seam
 shortened by short pieces does not shrink it), and `take.comp` with those and the spans
 rebuilds it unchanged, as long as `uniform` is true. A seam fade you set by hand (another
 length or shape, or a hard cut among crossfaded seams) makes it false and lists the seams that
-differ from the rest in `differing_seams`: `take.comp` would give every seam one length and
-shape, so such a comp is not rebuilt byte for byte, and the listed seams are the ones that change.
+differ from the rest in `differing_seams`, each with its own `crossfade` and `crossfade_shape`:
+informational, since a call without `crossfade` leaves them and one that gives the read-back
+values rewrites them.
 Pieces of the same take beside each other (after a move, say) are joined into one
 piece again, so moving a seam by a few samples gives exactly what the same spans give
 from scratch, MIDI pieces too (a held note stays one note). A boundary where the

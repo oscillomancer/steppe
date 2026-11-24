@@ -576,6 +576,16 @@ inline constexpr double kTransportWaitSeconds = 1.0, kPatientTransportSeconds = 
 double transportWaitSeconds();
 void setTransportWaitSeconds(double seconds);
 
+// The default bound of Engine::awaitRendered() and awaitPlan() (main thread,
+// tests and tools): 10 s. Tests raise it as they do the transport's, so a
+// starved renderer thread never fails a readiness wait: setAwaitSeconds in
+// its own process (0 restores the default), or SUPPLE_TEST_TRANSPORT_PATIENT=1 in
+// the environment of a process it starts (kPatientTransportSeconds). A call
+// that passes its own bound keeps it.
+inline constexpr double kAwaitSeconds = 10.0;
+double awaitSeconds();
+void setAwaitSeconds(double seconds);
+
 // Prepared main-thread rack timing, without instantiating plug-ins for queries.
 struct RackLatencyInfo {
     std::int64_t latency = 0;
@@ -718,11 +728,14 @@ class Engine {
     // render-ahead amount; before the epoch is heard, at least the whole
     // render block its pre-roll waits for), until the renderer can hold no
     // more, or the transport is paused. False on timeout.
-    bool awaitRendered(std::int64_t frames, double timeoutSeconds = 10.0);
+    // Bounded by awaitSeconds() unless a bound is passed.
+    bool awaitRendered(std::int64_t frames) { return awaitRendered(frames, awaitSeconds()); }
+    bool awaitRendered(std::int64_t frames, double timeoutSeconds);
     // Main thread (tests, tools): waits until the renderer has adopted the
     // newest plan and queued it for the callback, whose next cycle adopts it
     // (anticipative; immediately true otherwise, where the next cycle does).
-    bool awaitPlan(double timeoutSeconds = 10.0);
+    bool awaitPlan() { return awaitPlan(awaitSeconds()); }
+    bool awaitPlan(double timeoutSeconds);
     // Audio cycles that found no rendered audio while playing (after the
     // pre-roll of a start or seek).
     std::uint64_t anticipationMisses() const { return misses_.load(); }

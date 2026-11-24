@@ -256,7 +256,12 @@ speed; MIDI, the source beat). A piece cut by `item.split` passes; a copy made b
 `item.duplicate` and placed right after the original holds the same takes but
 another source position, so it is another item, not the next piece, and a comp
 of one leaves the other alone. A run that cannot be followed uniquely (two items
-could continue it) is refused, not guessed.
+could continue it) is refused, not guessed; but candidates that continue one another in turn are
+one chain and the nearest is the next piece: when a piece is clamped to half its core at both seams,
+the piece before it ends exactly where the piece after it begins, so that one continues the piece
+before as well, and the comp `take.comp` just wrote must read back. Pieces named in `items` must
+be the whole run: a piece left out that lies between two listed ones is refused (`comp.mismatch`,
+the hint names it), since it would go on playing under their seam.
 
 **`take.comp {item | items, spans, crossfade?, crossfade_shape?, bypass_groups?}`**
 (edit, one undo step). `spans` is a list of `{from, to, take | index}`:
@@ -265,12 +270,18 @@ or `index` its 0-based position in the item's take order (exactly one). A
 take id may be any piece's: it names an index. Spans are in time order, do
 not overlap and lie inside the run (`from` before `to`, all compared in
 project samples after the time map). Parts of the run no span covers keep their
-current take. `crossfade` is seconds (default 0.01, at least 0) and
-`crossfade_shape` is `cos` (equal power, the default) or `linear`; both apply
-to every seam of the run.
+current take. `crossfade` is seconds (at least 0) and
+`crossfade_shape` is `cos` (equal power) or `linear`. **Given** (either one), they
+apply to every seam of the run, which is rebuilt: a length alone is `cos`, a shape
+alone has the run's own length, and what the run has none of is 0.01 and `cos` (a lone
+item). **Omitted** (both), the seams the spans do not touch stay exactly as stored (*Kept
+seams*, below), hand-set lengths and shapes included, and the seams the call makes or
+moves get the run's own crossfade as `take.comp.get` reads it (10 ms and `cos` for an
+item with no seam yet). An omitted crossfade therefore no longer resets a comp to 10 ms: give
+`crossfade` to make every seam alike.
 
-The result is a pure function of the run's *core* (below), the spans and the
-two crossfade arguments, so a second call with the same arguments changes
+The result is a pure function of the run's *core* (below), the spans, the stored seams
+that are kept and the crossfade arguments, so a second call with the same arguments changes
 nothing:
 
 1. **Core.** The run's seams are the points where neighbouring pieces meet.
@@ -308,7 +319,8 @@ nothing:
    takes' source offsets moved back by `h` samples of item time (the take's
    speed applied, as `item.split` rebases forward), and `L`'s fade-out and
    `R`'s fade-in are `2·h` samples long in `crossfade_shape`. Every seam-side
-   fade is rewritten: `0` for any other seam. Seam points, extensions and fade
+   fade of a rebuilt seam is rewritten (every seam's, when a crossfade is given): `0` for any
+   other seam. Seam points, extensions and fade
    lengths are whole project samples, so the pieces tile on project sample
    boundaries (`time::samplesAt` of one piece's end is the next one's start,
    before extension). A value that differs from the stored one by no more than 1e-9
@@ -322,6 +334,27 @@ nothing:
    item).
 4. The first piece keeps its fade-in and the last its fade-out; the comp's
    outer start and end do not move.
+
+**Kept seams** (no `crossfade`, no `crossfade_shape`): a seam of the run is kept when, after
+the spans are painted, its core sample is still a boundary and the take index on its left and
+right is what it was (the two differing), and the cores beside it still hold it. Steps 1 and 3
+skip it: its pieces keep their extension, fades and take offsets as stored, to the byte, however
+far from it the call works. A boundary a join or a split removes or makes, a seam whose place
+moved and one whose side now plays another take are rebuilt, with the crossfade of the call's
+default (above). A seam moved on its own (exactly one old seam touched and one new, between the
+same two takes: a seam drag) keeps its own length (the longer of its two fades, as `take.comp.get`
+reads it) and shape instead. **Holding the cores:** when a span edge leaves a core beside the seam
+shorter than it was, the seam stays only if its reach fits half of that core: the other piece's
+audio running in (its extension) and the piece's own fade reaching in (its length less its
+extension). Otherwise the seam is touched, so it is rebuilt and clamped with the new one (a kept
+fade left running past a nearer seam would play one take under the next and click). A side whose
+core did not get shorter is as it was and stays. A rebuilt fade is also clamped by the room a kept
+seam leaves in the piece, at that end: the other piece's audio in, or the piece's own fade, as
+the user set it, whichever reaches further, so it never runs into a hand-set one, and the call
+then warns `comp.crossfade_clamped`. A seam between
+takes that cannot be extended (MIDI, warped, envelopes) is still a hard cut where rebuilt; a kept
+one stays as it is. The ids of a piece a split makes are new, as ever; what is kept is
+the seam's geometry and fades.
 
 A crossfade is skipped, with the warning `comp.crossfade_skipped` naming the
 reason, when a take of the run is MIDI or empty, has stretch markers, or has
@@ -381,17 +414,20 @@ too; `crossfade` in seconds, `crossfade_shape` `cos` or `linear`): the longest
 seam-side fade of the run and that fade's shape, so a seam clamped by short pieces
 does not shrink it, and `take.comp` called with the read-back values and the spans
 `take.comp.get` gives rebuilds the same comp (byte for byte) when the run is uniform. A run with no seam (one
-piece) reads the default, 0.01 and `cos`; a run whose seams are all hard cuts reads 0;
+piece, or an item split in two: no seam between different takes) reads the default, 0.01 and `cos`;
+a run whose seams between takes are all hard cuts reads 0;
 a fade of a shape `take.comp` does not offer (a GUI-made one) reads as `cos`.
 
 **Uniform** (`model::compDifferingSeams`; `uniform` and `differing_seams: [{seam, at, left,
-right}]` on `take.comp.get` and `take.comp`): `take.comp` writes every seam with one length
-and shape, so a seam fade edited by hand (another length or shape, a hard cut among crossfaded
-seams, a fade on one side only) is something a re-comp overwrites, and the byte-for-byte claim
-above holds only for a uniform run. The rule: `differing_seams` lists the seams that `take.comp`
-called with the reported `crossfade` and `crossfade_shape` (the longest seam fade and its shape,
-above) and the run's spans would rewrite, so it is exactly what a rebuild with the read-back
-changes. A seam between two takes should have on both sides the fade 2h samples long, h =
+right, crossfade, crossfade_shape}]` on `take.comp.get` and `take.comp`; the pieces carry
+`fade_in_shape` and `fade_out_shape` beside `fade_in` and `fade_out`): a seam fade edited by
+hand (another length or shape, a hard cut among crossfaded seams, a fade on one side only)
+makes the run not uniform. It is informational: a `take.comp` without `crossfade` keeps
+those seams, and one that gives the read-back values rewrites them, so the byte-for-byte claim
+above for the read-back values holds only for a uniform run. The rule: `differing_seams` lists the
+seams that `take.comp` called with the reported `crossfade` and `crossfade_shape` (the longest
+seam fade and its shape, above) and the run's spans would rewrite; each entry carries that
+seam's own `crossfade` (its longer fade, seconds) and `crossfade_shape`. A seam between two takes should have on both sides the fade 2h samples long, h =
 min(crossfade in samples / 2, half of each piece's core), in that shape (a seam clamped by short
 pieces fits); a seam inside one take should have none. `seam` 0 is between the first two pieces
 and `at` is in beats. A comp as `take.comp` made it is uniform; one piece, or hard cuts only, is
@@ -3034,11 +3070,9 @@ on the loop range with a take per pass):
   frozen-track rule of §freeze: arming is a sound edit), `track.freeze` of an armed track fails with
   `freeze.unsupported`, and arming an edit group skips frozen members with a `track.frozen`
   warning, so the leave-out is a backstop for a freeze made behind the app's back. Recovery
-  (`project.recover`, `record.commit` replays) follows the same rule. A pass inside a comp whose
-  seams differed (hand-set lengths, shapes or hard cuts among crossfades) rebuilds those the pass
-  leaves in place as the run's one crossfade, and warns `record.comp_uniform` so that does not
-  happen silently (seams the pass covers are joined away, and a pass over a whole comp warns of
-  none). A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
+  (`project.recover`, `record.commit` replays) follows the same rule. A pass inside a comp
+  leaves the seams it does not touch as they are, hand-set ones included (`take.comp` gives audio
+  no crossfade, so it keeps them; the seams it makes take the run's own crossfade). A commit that fails anywhere (a refused nested `take.comp` included) is rolled back whole:
   the project is as it was and still editable, and the recording is not in it; the refusal's message
   ends "(the recording is kept: project.recover places it)", the journals and files remaining for
   recovery. Not on the refusal of `project.recover`'s own commit (it points back at itself), and a
@@ -3059,10 +3093,9 @@ on the loop range with a take per pass):
   extent (its crossfades taken out), each pass covers a stretch of the timeline, and a newer pass
   hears over an older one. When one pass covers the whole of a lone item, that take is its active
   take, no comp. Otherwise the commit calls `take.comp` on the target in the same transaction
-  (`bypass_groups`; for audio the default crossfade on a lone item and, on an existing comp, the
-  run's own `crossfade` and `crossfade_shape` as `take.comp.get` reports them, so its seams are
-  rebuilt as they were and seams set by hand become uniform; `crossfade: 0` for MIDI, so no
-  `comp.crossfade_skipped`): a span for each stretch, playing the new take's index, and every
+  (`bypass_groups`; no crossfade for audio, so the seams the pass does not touch stay as they are
+  and the ones it makes take the run's own, 10 ms `cos` for a lone item; `crossfade: 0` for MIDI,
+  so no `comp.crossfade_skipped`): a span for each stretch, playing the new take's index, and every
   stretch outside the spans keeps the take its piece played (a comp keeps its pieces there). A pass
   over the whole of a comp of several pieces is one span over the run, which joins the pieces that
   now play one take (kept apart they would swell by 3 dB across each old equal-power seam). The

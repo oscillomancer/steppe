@@ -765,7 +765,12 @@ the same.*
     commit reads on (the switch reaches the node at its frame): a stated
     limit, measured up to 0.011. Under a playrate that keeps the pitch an audio clip has no
     player yet (step 1b): compile warns and its launch is refused with
-    `launch.playrate`.
+    `launch.playrate`. While a clip holds a track, its items' stretch
+    converters still run every quantum, their output unused, so they are
+    current when the arrangement comes back: on a plan that keeps the
+    pitch, and after a switch to tape while the old converter is still
+    read (until the switch and through its crossfade). A skipped converter
+    refused the jump and failed every block after.
   - *Capture* runs in song time (above): placement gives each launch its
     song frame, the boundary's unwrapped song sample, and the capture
     counts song samples from the published rate clock, so a commit lays
@@ -1594,7 +1599,11 @@ ends after the renderer has adopted the plan and queued it for the callback.
 `awaitRendered()` waits for audio in the transport epoch, not for the latest
 plan; while stopped it can return immediately. Fast manual callbacks do not
 pace the renderer like a device clock does. Both waits belong on the
-test/model thread.
+test/model thread. Each is bounded by `awaitSeconds()`, 10 s unless a call
+passes its own bound: tests raise it to 60 s, as they do the transport's wait
+(in process with `setAwaitSeconds`, for a binary a test starts with
+`SUPPLE_TEST_TRANSPORT_PATIENT=1`), so a starved renderer thread never fails
+a readiness wait.
 
 **Device outputs (ADR-0056).** The plan lists the masters with a
 `hw_output` (tr_0 plays to 1/2 unless it says otherwise) as output taps.

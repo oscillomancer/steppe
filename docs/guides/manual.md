@@ -528,13 +528,18 @@ to move the seam, or drag the top of it to make the crossfade longer or
 shorter; Ctrl+click there switches between an equal-power and a linear
 crossfade. One crossfade length and shape serves every seam of a comp, and
 the inspector shows it as **Crossfade** for a selected piece: type 0 for hard
-cuts. Clicking a lane of one piece switches just that piece. To make a comp
+cuts. Changing the crossfade there or at a seam's top sets every seam. Moving
+a seam, or comping again elsewhere, leaves the other seams as they are, even
+one an agent shortened or reshaped by hand. Clicking a lane of one piece
+switches just that piece. To make a comp
 one plain item again, select its pieces and use **Consolidate items**. On a
 track grouped for editing, every track of the group follows: a drag, a click
 on a lane or the take number comps each of them the same way. If one of them
 has been changed on its own since, its seam lines are drawn broken and the
-inspector's **Group** row says which track it differs from; comping again
-brings it back in step. A track of the group with a single take there (a bass beside
+inspector's **Group** row says which track it differs from. Other comp edits
+leave its own seams as they are; dragging the top of a seam (the crossfade) on
+the group, or setting the **Crossfade** in the inspector, brings it back in
+step. A track of the group with a single take there (a bass beside
 the drum takes) is left as it is. If a track cannot follow (a looped or locked
 item, or one that starts or ends elsewhere), the status line says so and nothing
 changes: hold **Alt** while you drag, click or pick a take to comp this track
@@ -552,9 +557,8 @@ looped item, still makes a new item, and the recording says so. If the pass runs
 end, the rest stays in the take, hidden; lengthen the item to hear it. If the item was a comp
 (several pieces of one set of takes), every piece gets the take. If you record only some of the
 tracks of an edit group, the others do not get a take, and the recording says so: arm every track
-of the group to keep their takes level. If the item was a comp whose seams you had set to different
-lengths or shapes, a pass inside it makes them all alike again (the comp's own length and shape) and
-the recording says so (`record.comp_uniform`); a comp whose seams are already alike keeps them. Agents turn this off with
+of the group to keep their takes level. A pass inside a comp leaves the comp's other seams exactly as they were, ones you set by hand
+included. Agents turn this off with
 `record.set {stack_takes: false}` (every pass is then laid as items, as in older versions);
 `record.get` reads it. In the app it is **Edit > Preferences > Recording and import > Record over
 an item**: **New take** (the default) or **Layer on top**, kept with your other preferences; an

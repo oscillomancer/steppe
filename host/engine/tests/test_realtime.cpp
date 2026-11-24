@@ -4171,9 +4171,12 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
     // then. Its start is asked in the callback with the live deadline; a
     // loaded machine can answer it cycles later, and until then each cycle
     // looks for the answer without waiting, so only the first is late
-    // (ADR-0101; CI 44201655657 and the Windows runs on 4809de6c).
+    // (ADR-0101; CI 44201655657 and the Windows runs on 4809de6c). The cycle
+    // that finds the answer also asks its first process() with the live
+    // deadline (startFree runs before the plan), which a loaded machine can
+    // answer late too (ADR-0081; CI 45330926905): one more late cycle.
     int started = 0;
-    std::uint64_t lateBeforeHang = 0;
+    std::uint64_t lateWhileStarting = 0, lateBeforeHang = 0;
     auto run = [&](bool hung, InstancePool& pool, Engine*& out, std::uint64_t& late) {
         host::resetBridgeTiming();
         MediaCache media;
@@ -4190,8 +4193,10 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
                 REQUIRE(started < kStartRoom);
                 backend.run(1);
                 ++started;
-                if (!pool.find(crash)->processing())
+                if (!pool.find(crash)->processing()) {
+                    lateWhileStarting = engine.bridgeLateCycles();
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
             }
             // The longest live wait, against the deadline (the larger of the
             // period, 2.67 ms, and 2 ms): a wait past it says the platform's
@@ -4204,7 +4209,8 @@ TEST_CASE("a hung bridged plug-in on a live track fails within the bound; the re
                                 << (pool.find(crash)->failed() ? pool.find(crash)->failure()
                                                                : std::string("no")));
             lateBeforeHang = engine.bridgeLateCycles();
-            CHECK(lateBeforeHang <= 1);  // its first ask's cycle at most
+            CHECK(lateWhileStarting <= 1);  // its start's first ask's cycle at most
+            CHECK(lateBeforeHang - lateWhileStarting <= 1);  // and its first process()
             REQUIRE(pool.find(crash)->setParam(1, 2));
             backend.run(kCycles);
         } else {
