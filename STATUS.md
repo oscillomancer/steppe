@@ -406,9 +406,10 @@ instructions are in `docs/guides/installing.md`.
     clip's in its pane (a double-click opens its waveform, in seconds, with
     the same Lanes menu and lanes, snapping to a seconds grid, and a key
     button for its one key point), which edits no audio;
-  - an item's take FX have lanes on the timeline, drawn across the whole
-    timeline although only the item's span plays (titled with their item
-    when two items on a track automate the same effect's parameter);
+  - an item's take FX have lanes on the timeline, across the whole
+    timeline and dimmed where they don't play (outside the item, or all of
+    it while another take is heard), titled with their item when two items
+    on a track automate the same effect's parameter;
   - native macOS and Windows CI has not run on it.
 - **Scene ↔ section** (ADR-0097, L4a; session-model "Scene ↔ section"):
   `scene.insert` lays a scene's clips on the timeline as items over whole

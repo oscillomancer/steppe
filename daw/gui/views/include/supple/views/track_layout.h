@@ -12,6 +12,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "supple/model/session.h"
@@ -126,6 +127,9 @@ class TrackLayout {
     std::size_t rowCount() const { return rows_.size(); }
     std::optional<std::size_t> indexOf(model::Id track) const;   // the track's own row
     std::optional<std::size_t> indexOfEnv(model::Id env) const;  // an automation lane
+    // The item and take whose chain holds `fx`, when it is an item's take
+    // effect: its lanes play only over that item, while that take is active.
+    std::optional<std::pair<model::Id, model::Id>> takeFxOwner(model::Id fx) const;
     float envHeight() const;  // an automation lane's height (follows the global height)
 
     float globalHeight() const { return globalHeight_; }
@@ -185,6 +189,7 @@ class TrackLayout {
     std::uint64_t indexed_ = ~std::uint64_t{0};
     std::vector<TrackRow> rows_;
     std::map<model::Id, std::size_t> trackRows_, envRows_;
+    std::map<model::Id, std::pair<model::Id, model::Id>> takeFx_;  // fx: item, take
     std::set<model::Id> scaledEnvs_;
     // The targets a modulation route asks a lane for (compared on a change).
     std::set<std::pair<model::Id, std::string>> modLanes_;

@@ -941,7 +941,12 @@ entry whose `id` is the envelope's parameter (`gui::PluginScales`). An item's ta
 automate on the item's track, in timeline position as the model keeps them:
 a visible envelope (or a modulated parameter) on one has a lane there like
 any other, titled with "(take)" after it, and it follows the item to
-another track. Titles that would be the same say what tells them apart: an
+another track. It plays only over the item (`model::itemSpan`), while its
+take is the active one: the lane is washed with `ground` at 0.55 elsewhere
+(all of it while another take is active), as a held track's items are
+dimmed, its title clear (`Lanes::dimmedLaneSpans`,
+`TrackLayout::takeFxOwner`). Points there are edited as anywhere; the
+engine plays none of them. Titles that would be the same say what tells them apart: an
 effect with another of its name in its chain gets its place there ("Teasel
 2 · Drive"), and a take effect's lane says its item ("(take: Stabs, bar
 14)", the take's name and the item's first bar) when another item on the

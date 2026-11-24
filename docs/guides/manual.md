@@ -1136,6 +1136,11 @@ and write mode the last value holds until you stop or pause. A modulation
 that reaches that parameter through its envelope pauses while you hold it
 and resumes on top of what you recorded.
 
+An item's own effects (its take FX) are automated on the item's track, in
+song time, and their lanes run the whole width of the timeline. They play
+only under the item, and only while that take is the one heard, so the lane
+is dimmed everywhere else; you can still edit points there.
+
 Undo, redo or switching branches while playing starts a fresh automation
 pass at the current position. Earlier moves no longer override the envelope
 or extend their last value to where you stop.
