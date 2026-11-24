@@ -9,6 +9,7 @@
 #include <supple/engine/app.h>
 #include <supple/model/context.h>
 #include <supple/model/schemas.h>
+#include <supple/product.h>
 
 using namespace supple;
 using namespace supple::engine;
@@ -270,7 +271,7 @@ TEST_CASE(
     CHECK(text() == named);
     // A saved project reads alike.
     auto save = json::Value::object();
-    save["path"] = (b.dir.path / "spelling.steppe").string();
+    save["path"] = (b.dir.path / ("spelling." + std::string(supple::product::kSlug))).string();
     REQUIRE(b.bus.execute({"project.save", save, kOrigin}));
     REQUIRE(b.bus.execute({"project.open", save, kOrigin}));
     CHECK(text() == named);

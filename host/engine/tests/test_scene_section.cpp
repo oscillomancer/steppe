@@ -12,6 +12,7 @@
 #include <supple/model/launcher.h>
 #include <supple/model/schemas.h>
 #include <supple/model/take_owner.h>
+#include <supple/product.h>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -516,7 +517,7 @@ TEST_CASE("scene.capture refuses a capture that would take the project past the 
     Song l;
     for (int k = 2; k < 17; ++k) l.run("track.add", "{}");
     for (std::size_t k = 2; k < 964; ++k) l.run("scene.add", "{}");
-    const auto path = l.root / "full-clips.steppe";
+    const auto path = l.root / ("full-clips." + std::string(supple::product::kSlug));
     auto save = json::Value::object();
     save["path"] = path.string();
     l.runArgs("project.save", save);
@@ -580,7 +581,7 @@ TEST_CASE("scene.capture refuses when a clip's audio would not fit beside the ar
     args = j(R"({"track": "tr_2", "scene": "sc_1"})");
     args["audio_file"] = l.wav("b.wav", 1.0, .5f).string();
     l.runArgs("clip.add", args);
-    const auto path = l.root / "full.steppe";
+    const auto path = l.root / ("full." + std::string(supple::product::kSlug));
     auto save = json::Value::object();
     save["path"] = path.string();
     l.runArgs("project.save", save);

@@ -94,8 +94,8 @@ Layout simpleLayout() {
 
 TEST_CASE("maps lines parse with paths ignored and malformed lines skipped") {
     const std::string text =
-        "55d0c8a00000-55d0c8a01000 r--p 00000000 08:01 1234  /home/secret-project/steppe\n"
-        "55d0c8a01000-55d0c8a05000 r-xp 00001000 08:01 1234  /home/secret-project/steppe\n"
+        "55d0c8a00000-55d0c8a01000 r--p 00000000 08:01 1234  /home/secret-project/host\n"
+        "55d0c8a01000-55d0c8a05000 r-xp 00001000 08:01 1234  /home/secret-project/host\n"
         "7f0000000000-7f0000001000 rwxp 00000000 00:00 0\n"
         "7ffc00000000-7ffc00021000 rw-p 00000000 00:00 0   [stack]\n"
         "not a maps line\n"
@@ -175,8 +175,8 @@ TEST_CASE("layout groups mappings into modules and keeps JIT memory anonymous") 
     image.put(0x55d0c8a00000ULL, elf(3, 0, idA));
     image.put(0x7f1000000000ULL, elf(3, 0, idB));
     const auto maps = parseMaps(
-        "55d0c8a00000-55d0c8a01000 r--p 00000000 08:01 1234  /home/secret-project/steppe\n"
-        "55d0c8a01000-55d0c8a05000 r-xp 00001000 08:01 1234  /home/secret-project/steppe\n"
+        "55d0c8a00000-55d0c8a01000 r--p 00000000 08:01 1234  /home/secret-project/host\n"
+        "55d0c8a01000-55d0c8a05000 r-xp 00001000 08:01 1234  /home/secret-project/host\n"
         "7f0000000000-7f0000001000 rwxp 00000000 00:00 0\n"
         "7f1000000000-7f1000002000 r-xp 00000000 08:01 99    /usr/lib/libplugin.so\n");
     const auto layout = buildLayout(maps, image.reader());

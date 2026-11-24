@@ -14,6 +14,7 @@
 #include <supple/model/launcher.h>
 #include <supple/model/schemas.h>
 #include <supple/model/take_owner.h>
+#include <supple/product.h>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -633,7 +634,7 @@ TEST_CASE("clip.memory refuses clip audio that would not fit beside the arrangem
     args = j(R"({"track": "tr_1", "scene": "sc_1"})");
     args["audio_file"] = l.wav("b.wav", 1.0, .5f).string();
     l.runArgs("clip.add", args);
-    const auto path = l.root / "full.steppe";
+    const auto path = l.root / ("full." + std::string(supple::product::kSlug));
     auto save = json::Value::object();
     save["path"] = path.string();
     l.runArgs("project.save", save);
@@ -1289,7 +1290,7 @@ TEST_CASE("clip audio is prepared after the arrangement, in launch order, as far
     args["audio_file"] = l.wav("c.wav", 1.0, .125f).string();
     l.runArgs("clip.add", args);                                      // cl_3
     l.run("clip.duplicate", R"({"clip": "cl_1", "scene": "sc_2"})");  // cl_4
-    const auto path = l.root / "order.steppe";
+    const auto path = l.root / ("order." + std::string(supple::product::kSlug));
     auto save = json::Value::object();
     save["path"] = path.string();
     l.runArgs("project.save", save);

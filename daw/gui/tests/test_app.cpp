@@ -4624,7 +4624,8 @@ TEST_CASE("crash report text: threads, commands, limits and counters are all in 
     REQUIRE(report);
     const auto page = gui::describeReport(*report, "17 Nov 2026, 14:32");
     const auto text = page.text();
-    CHECK(page.headline == "Canary Verb was running when Steppe closed unexpectedly.");
+    CHECK(page.headline ==
+          "Canary Verb was running when " + std::string(product::kName) + " closed unexpectedly.");
     CHECK(page.subtitle.find("Saved 17 Nov 2026, 14:32") == 0);
     CHECK(page.subtitle.find("0.6.0") != std::string::npos);
     CHECK(text.find("segmentation fault (signal 11)") != std::string::npos);

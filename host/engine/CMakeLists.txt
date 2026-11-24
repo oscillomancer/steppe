@@ -84,7 +84,7 @@ if(_engine_linux_tests)
 endif()
 
 if(SUPPLE_BUILD_TESTS)
-  supple_add_tests(engine SOURCES ${_engine_test_sources} LABELS rt SPLIT)
+  supple_add_tests(engine SOURCES ${_engine_test_sources} DEPS supple::product-info LABELS rt SPLIT)
   # Helpers with no test case of their own (a SPLIT entry for them would match nothing).
   target_sources(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/host/clap-host/tests/shared_page.cpp
                                       tests/native_files.cpp tests/native_cpus.cpp

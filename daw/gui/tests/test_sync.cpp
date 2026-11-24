@@ -208,7 +208,8 @@ TEST_CASE("sync: the settings dialog sets, saves and follows an agent's changes"
     dialog.open();
     f.root->frame(false);
     REQUIRE(dialog.isOpen());
-    CHECK(f.node("sync.source.set")->valueText() == "Off (Steppe is the master)");
+    CHECK(f.node("sync.source.set")->valueText() ==
+          "Off (" + std::string(supple::product::kName) + " is the master)");
     CHECK(f.root->find("sync.midi.set") == nullptr);  // rows follow the source
     CHECK(f.node("sync.timecode.value")->valueText() == "30 fps from 00:00:00:00");
     // MIDI clock: its rows appear; each change is saved.
