@@ -1368,6 +1368,44 @@ TEST_CASE("save as gives each project a folder of its own") {
     CHECK(a.app->projectPath() == a.dir / "Mix" / "Mix.json");
 }
 
+TEST_CASE("file actions: Save with undo history keeps main's undo steps in the file") {
+    App a;
+    if (!a.ok) return;
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](std::function<void()> f) { f(); });
+    std::string error;
+    a.actions->onError = [&](const std::string& message) { error = message; };
+    // A project with a file: an edit, then File > Save with undo history….
+    files.saveAs(a.dir / "Kept" / "Kept.json");
+    const auto path = a.app->projectPath();
+    REQUIRE_FALSE(path.empty());
+    const std::size_t tracks = a.tracks();
+    a.key("Ctrl+T");
+    REQUIRE(a.tracks() == tracks + 1);
+    REQUIRE(a.actions->run("ui.file.save_history"));
+    CHECK(error.empty());
+    CHECK(a.app->projectPath() == path);  // in place
+    // Reopened, undo on main takes the edit back: its step was kept.
+    json::Value open = json::Value::object();
+    open["path"] = path.string();
+    REQUIRE(a.dispatcher->execute({"project.open", open, {}}));
+    REQUIRE(a.tracks() == tracks + 1);
+    REQUIRE(a.dispatcher->execute({"history.undo", json::Value::object(), {}}));
+    CHECK(a.tracks() == tracks);
+    // A plain save keeps no undo history: after reopening there is nothing
+    // to undo on main (the menu's entries differ).
+    a.key("Ctrl+T");
+    REQUIRE(a.actions->run("ui.file.save"));
+    REQUIRE(a.dispatcher->execute({"project.open", open, {}}));
+    CHECK_FALSE(a.dispatcher->execute({"history.undo", json::Value::object(), {}}));
+    // The File menu lists it after Save as….
+    const gui::ChromeLayout defaults = gui::ChromeLayout::defaults();
+    const auto& file = defaults.menus.front();
+    const auto at = std::find(file.items.begin(), file.items.end(), "ui.file.save_as");
+    REQUIRE(at != file.items.end());
+    CHECK(*(at + 1) == "ui.file.save_history");
+}
+
 TEST_CASE("file actions: project templates save, start a new project and delete") {
     App a;
     if (!a.ok) return;

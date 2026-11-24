@@ -138,9 +138,10 @@ branch you have not merged yet is still there after quitting and reopening,
 with each of its steps (**View > History and command log**, a tab of the
 side panel), and it can be undone step by step or
 merged into main as before. The file opens on the branch that was current when
-it was saved. Main's own undo history is not kept: after reopening, undo on
-main starts from the saved state. (Agents can keep it with
-`project.save {"history": true}`.) Autosaves keep branches too.
+it was saved. Main's own undo and redo steps are kept only when you save
+with **File > Save with undo history…** (agents use
+`project.save {"history": true}`); after a plain save, undo on main starts
+from the saved state when you reopen. Autosaves keep branches too.
 
 If a program that does not know about branches (an older Steppe, a script)
 changed the file's main project, the saved branches no longer fit it: Steppe

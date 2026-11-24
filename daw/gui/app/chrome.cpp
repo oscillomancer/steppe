@@ -97,9 +97,9 @@ ChromeLayout ChromeLayout::defaults() {
     ChromeLayout l;
     l.menus = {
         {"File",
-         {"ui.file.new", "ui.file.open", "ui.file.recover", "ui.file.save", "ui.file.save_as", "-",
-          "ui.file.template.load", "ui.file.template.save", "-", "ui.file.import", "-",
-          "ui.render.mix", "ui.render", "-", "ui.quit"}},
+         {"ui.file.new", "ui.file.open", "ui.file.recover", "ui.file.save", "ui.file.save_as",
+          "ui.file.save_history", "-", "ui.file.template.load", "ui.file.template.save", "-",
+          "ui.file.import", "-", "ui.render.mix", "ui.render", "-", "ui.quit"}},
         {"Edit",
          {"history.undo", "history.redo", "-", "ui.actions", "ui.mouse", "-", "ui.preferences",
           "ui.audio.device"}},
