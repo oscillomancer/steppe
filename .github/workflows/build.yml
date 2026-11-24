@@ -49,6 +49,12 @@ on:
         description: Junk-fill heap memory (macOS MallocPreScribble and MallocScribble, Linux MALLOC_PERTURB_)
         type: boolean
         default: false
+      # The 10 GB cache store cannot hold every branch run's compiler caches
+      # (CONTRIBUTING.md): main always saves, tags never do, a branch only when asked.
+      save_caches:
+        description: Save this run's compiler caches (a candidate's first run; main always saves, tags never)
+        type: boolean
+        default: false
   push:
     tags: ['ci/**']
 
@@ -116,6 +122,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      # Whether this run saves its compiler caches: main always, a branch when
+      # dispatched with save_caches, a tag never (a tag's caches are readable by
+      # no other ref). The dependency cache keeps its own rule.
+      SAVE_COMPILER_CACHE: ${{ (github.ref == 'refs/heads/main' || (github.ref_type == 'branch' && inputs.save_caches)) && 'true' || 'false' }}
     # Different ci/<branch>-<n> tags still cancel superseded platform builds.
     concurrency:
       group: build-${{ needs.plan.outputs.branch }}-${{ matrix.platform }}
@@ -405,23 +416,24 @@ jobs:
           df -h / "$GITHUB_WORKSPACE"
       # The compiler caches are saved whatever Build and the tests did (always()),
       # so a seed run on main (CONTRIBUTING.md) saves even when its test entry
-      # fails; only an exact hit on the commit's own key skips the save. The
+      # fails; only an exact hit on the commit's own key, or a run that is not
+      # to save (SAVE_COMPILER_CACHE above), skips the save. The
       # dependency cache is saved earlier and only after its steps passed, so a
       # failed install never leaves a half-filled .deps under the exact key.
       - name: Save Linux compiler cache
-        if: always() && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .compiler-cache
           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
       - name: Save Windows compiler cache
-        if: always() && matrix.platform == 'windows' && steps.windows-compiler-cache.outputs.cache-hit != 'true'
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'windows' && steps.windows-compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .compiler-cache
           key: ${{ steps.windows-compiler-cache.outputs.cache-primary-key }}
       - name: Save macOS compiler cache
-        if: always() && matrix.platform == 'macos' && steps.macos-compiler-cache.outputs.cache-hit != 'true'
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'macos' && steps.macos-compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .compiler-cache

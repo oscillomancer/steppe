@@ -92,11 +92,9 @@ run only the platforms needed for the change.
 
 GitHub lets a ref read only its own caches and the default branch's. A new
 branch (and any CI tag) therefore starts cold, a macOS build taking close to an
-hour instead of five minutes, unless `main` holds a cache; a second run on the
-same branch restores that branch's own. Caches saved under a tag ref are
-readable by nothing else. Linux ccache also reuses shared compilation within
-each run's isolated plugin builds. After each merge, seed `main` and drop the
-merged branches' caches:
+hour instead of five minutes, unless `main` holds a cache. Linux ccache also
+reuses shared compilation within each run's isolated plugin builds. After each
+merge, seed `main` and drop the merged branches' caches:
 
 ```sh
 gh workflow run build.yml --ref main -f platforms=all -f tests='^core-json'
@@ -107,8 +105,22 @@ The seed builds everything and runs one small test entry; its save steps run
 whatever the outcome of the tests, so a failed test does not lose the build's
 objects. Once it has finished, delete the superseded seed's caches too (the
 keys end in the commit they were built from: `gh cache list --ref refs/heads/main`).
+
 The store is limited to 10 GB and evicts the least recently used entries
-beyond it. See GitHub's
+beyond it, and a full set of compiler caches is about 2.6 GB (at most 3.7), so
+not every run saves its caches: runs on `main` always do, runs of a CI tag never
+do, and a branch run only with `-f save_caches=true`. Set it on a candidate's
+first run, so that the branch's later runs restore its caches instead of
+`main`'s:
+
+```sh
+gh workflow run build.yml --ref <candidate> -f platforms=all -f save_caches=true
+```
+
+With a seed on `main` (about 2.6 GB) and two candidates holding saved caches
+(about 2.4 GB each) the store holds about 7.4 GB, 10.7 GB if every cache is at
+its size limit. Dependencies are saved only when `main` has none under the
+same key. See GitHub's
 [cache access restrictions](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache).
 
 Linux (`ubuntu-24.04`, Clang 22) builds the existing `dev` preset with all
