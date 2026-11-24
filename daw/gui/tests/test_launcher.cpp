@@ -17,6 +17,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -1244,30 +1245,32 @@ TEST_CASE("launcher: the pane dims what a press would be refused for, as the eng
     agreeWithEngine(f, "1 keeping the pitch");
     f.exec("transport.playrate.set", R"({"rate":1.0,"preserve_pitch":false})");
     CHECK(agreeWithEngine(f, "1, pitch not kept").empty());
-    // A clip just added: while its plan is on its way to the engine a press
-    // answers launch.clip (wait for the edit), and the pane dims it then;
-    // once the plan is there nothing is dimmed. Outro holds only a Bass clip.
+    // A clip with new audio, just added: its load waits for the audio's
+    // preparation, so until then a press answers launch.clip (wait for the
+    // edit) and the pane dims it, and Outro's ▶ with it (Outro holds only
+    // this clip); prepared and loaded, nothing is dimmed.
     f.exec("scene.add", R"({"name":"Outro"})");  // sc_4
-    const Id fresh =
-        id(f.exec("clip.add",
-                  R"({"track":"tr_2","scene":"sc_4","notation":"voice b; 1: C2:w"})")["clip"]
-               .asString()
-               .c_str());
+    const Id fresh = id(addAudioClip(f, "tr_2", "sc_4", writeTone(f, "fresh.wav", 0.4f)).c_str());
+    REQUIRE(f.app->preparingAudio());  // the load waits for it
+    CHECK(agreeWithEngine(f, "a clip added, its audio preparing") == std::set<Id>{fresh});
+    CHECK(f.view->launchRefusals().clips.at(fresh) == "launch.clip");
+    CHECK(f.view->launchRefusals().scenes.at(id("sc_4")) == "launch.clip");
+    // Prepared, then loaded on a later service (a load also waits while a
+    // rate change is in flight, as the one above may be).
+    for (int i = 0; f.app->preparingAudio() || f.app->launchRefusal(fresh); ++i) {
+        REQUIRE(i < 100'000);  // a hang guard, not a timing check
+        f.app->tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     {
-        const std::set<Id> added = agreeWithEngine(f, "a clip added");
+        const std::set<Id> loaded = agreeWithEngine(f, "the added clip prepared and loaded");
         std::string held;
         for (const auto& [clip, code] : f.view->launchRefusals().clips)
             held += clip.str() + " " + code + "; ";
+        for (const auto& [scene, code] : f.view->launchRefusals().scenes)
+            held += scene.str() + " " + code + "; ";
         INFO("refused: " << held);
-        CHECK((added.empty() || (added == std::set<Id>{fresh} &&
-                                 f.view->launchRefusals().clips.at(fresh) == "launch.clip")));
-        const auto since = std::chrono::steady_clock::now();
-        while (f.app->launchRefusal(fresh) &&
-               std::chrono::steady_clock::now() - since < std::chrono::minutes(2)) {
-            f.app->tick();
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-        CHECK(agreeWithEngine(f, "the added clip's plan reached the engine").empty());
+        CHECK(loaded.empty());
     }
     // Freezing needs an item on the track: Bass gets an audio one.
     {
@@ -1290,6 +1293,12 @@ TEST_CASE("launcher: the pane dims what a press would be refused for, as the eng
     f.click(centre(views::LauncherPane::playZone(pane.cellRect(f.row("tr_2"), 1))));
     REQUIRE(f.errors.size() == 2);
     CHECK(f.errors.back().code == "track.frozen");
+    // Outro's dimmed ▶ still asks, and launch.scene's refusal reaches the
+    // status line.
+    const ui::Rect outro = header.sceneRect(3);
+    f.click({outro.x + 8, outro.y + outro.h / 2});
+    REQUIRE(f.errors.size() == 3);
+    CHECK(f.errors.back().code == "launch.scene");
     // Once the print's plan is published the answers are the same.
     const auto start = std::chrono::steady_clock::now();
     while (f.app->engine()->planGeneration() == plans &&
@@ -1855,4 +1864,62 @@ TEST_CASE("launcher: followNotice words key changes, chords, folding, and sums u
           "Verse at bar 3: 2 follow (Kit A, Kit B); 1 laid as written (Root)");
     // Other commands, and refusals' empty answers, say nothing.
     CHECK_FALSE(views::followNotice(s, "clip.duplicate", root, item(moved)));
+}
+
+TEST_CASE("launcher: a fader drag asks for the refusals once a frame while shown, never hidden") {
+    // Round 147 F1: a fader drag sends a coalesced track.set every frame, a
+    // new head version each time, so the refusals' generation moves every
+    // frame. Shown, the pane asks once per frame that moved it, no more;
+    // hidden, it asks nothing during the drag and once when shown again.
+    LauncherFixture f;
+    f.song();
+    views::TcpCallbacks cb;
+    cb.commit = [&](std::string_view command, json::Value args, std::string gesture) {
+        cmd::Origin origin{cmd::Origin::Type::Ui, "gui", {}};
+        origin.gesture = std::move(gesture);
+        REQUIRE(f.dispatcher->execute({std::string(command), std::move(args), std::move(origin)}));
+    };
+    f.view->setTcpCallbacks(std::move(cb));
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    const model::Id drums = *model::Id::parse("tr_1");
+    // One drag of `moves` frames on Drums' fader; the frames in which the
+    // head moved.
+    auto drag = [&](int moves) {
+        ui::Node* fader = f.view->tcpPanel().controlNode(drums, "fader");
+        REQUIRE(fader);
+        const ui::Rect fb = fader->bounds();
+        const ui::Point at{fb.x + fb.w / 2, fb.y + fb.h / 2};
+        std::size_t moved = 0;
+        auto frame = [&](Pointer type, ui::Point p) {
+            const std::uint64_t version = f.app->head().version;
+            f.pointer(type, p);
+            f.sync();
+            moved += f.app->head().version != version;
+        };
+        frame(Pointer::Down, at);
+        for (int i = 1; i <= moves; ++i)
+            frame(Pointer::Move, {at.x - static_cast<float>(i) * 2, at.y});
+        frame(Pointer::Up, {at.x - static_cast<float>(moves) * 2, at.y});
+        return moved;
+    };
+    REQUIRE(f.view->launcherShown());
+    std::size_t before = f.refusals.asked();
+    const double startDb = f.app->head().tracks.find(drums)->volumeDb;
+    const std::size_t moved = drag(12);
+    CHECK(f.app->head().tracks.find(drums)->volumeDb < startDb);  // the drag edited
+    CHECK(moved >= 12);
+    CHECK(f.refusals.asked() - before == moved);  // one ask per frame that moved the head
+    // Hidden: the same drag asks nothing; shown again, one ask, current.
+    f.view->setLauncherShown(false);
+    f.sync();
+    REQUIRE_FALSE(f.view->launcherShown());
+    before = f.refusals.asked();
+    CHECK(drag(12) >= 12);
+    CHECK(f.refusals.asked() == before);
+    f.view->setLauncherShown(true);
+    f.sync();
+    CHECK(f.refusals.asked() == before + 1);
+    agreeWithEngine(f, "shown again after a hidden drag");
+    CHECK(f.errors.empty());
+    f.exec("engine.stop", "{}");
 }

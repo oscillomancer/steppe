@@ -3101,28 +3101,31 @@ same heights, scroll and colours.
   a body at least `LauncherPane::kFadeRoom` (8 units) high and the part shown
   at least 2 units wide. A MIDI clip has no fades and draws none; no text is
   drawn for a fade. A muted clip is dimmed, as a
-  muted item is. The pane dims what a press would be refused for right
-  now, as the engine answers it (`EngineApp::launchRefusal`,
-  `sceneLaunchRefusal`; the app hands the views a `views::LaunchRefusals`):
-  a clip as a muted clip is dimmed, a scene's ▶ in quiet ink at the same
-  0.45. A clip is refused when its track is frozen (`track.frozen`, with the
-  engine running or not), when it is an audio clip with take FX or a take
-  envelope and the running plan keeps the pitch, under a pitch-keeping
-  master playrate or a MIDI-clock chase (`launch.playrate`; other clips
-  launch under any playrate), when its audio did not fit the prepared-audio
-  budget (`launch.memory`), or while the running plan does not hold it yet
-  (`launch.clip`). A scene's ▶ is dimmed when `launch.scene` would refuse:
-  nothing it holds can play, frozen tracks' and memory-skipped clips left
-  out as the command leaves them out (`launch.scene`), or a clip it would
-  launch with the rest is refused (`launch.playrate`); a scene holding one
-  memory-skipped clip launches the rest, so its ▶ stays bright and only
-  that clip dims. Refusals that depend on the transport (no engine running,
-  a relocation, a full queue) are not shown. The app asks again for every
-  clip and scene only when `EngineApp::launchRefusalGeneration` moves (a
-  published plan, an edit, an engine started or stopped, a project opened;
-  `gui::RefusalWatch`, each frame). No text is drawn for a refusal, and the
-  code gives it no look of its own; a click still asks, and the refusal's
-  message reaches the status line.
+  muted item is. The pane dims what a press would be refused for right now, as
+  the engine answers it (`EngineApp::launchRefusal`, `sceneLaunchRefusal`; the
+  app hands the views a `views::LaunchRefusals`): a clip as a muted clip is
+  dimmed, a scene's ▶ in quiet ink at the same 0.45. A clip is refused when
+  its track is frozen (`track.frozen`, with the engine running or not), when
+  it is an audio clip with take FX or a take envelope and the latest published
+  plan keeps the pitch, under a pitch-keeping master playrate or a MIDI-clock
+  chase (`launch.playrate`; other clips launch under any playrate), when its
+  audio did not fit the prepared-audio budget (`launch.memory`), or while the
+  latest published plan does not hold it yet (`launch.clip`: a clip just added
+  waits there while audio is prepared, which holds every load). A scene's ▶ is
+  dimmed when `launch.scene` would refuse: nothing it holds can play, frozen
+  tracks' and memory-skipped clips left out as the command leaves them out
+  (`launch.scene`), or a clip it would launch with the rest is refused
+  (`launch.playrate`, `launch.clip`); a scene holding one memory-skipped clip
+  launches the rest, so its ▶ stays bright and only that clip dims. Refusals
+  that depend on the transport (no engine running, a relocation, a full queue)
+  are not shown. While the pane is shown the app asks again for every clip and
+  scene only when `EngineApp::launchRefusalGeneration` moves (a published
+  plan, an edit, an engine started or stopped, a project opened;
+  `gui::RefusalWatch`, each frame), at most once a frame, so a fader drag,
+  which edits every frame, asks once a frame; while it is hidden nothing is
+  asked, and the first frame it is shown asks if anything moved meanwhile. No
+  text is drawn for a refusal, and the code gives it no look of its own; a
+  click still asks, and the refusal's message reaches the status line.
   - **Launch zone:** a ▶ at the left of the name bar, always drawn (in the
     name bar's ink while idle).
   - **Playing:** the ▶, an outline, and a progress line along the bottom
@@ -3291,12 +3294,16 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   dims; keeping the pitch, the take-envelope audio clip and its scene's ▶ dim
   and the plain audio clip does not (golden `launcher-refused-dark.png`), its
   ▶ click is refused with `launch.playrate` while a MIDI clip's launches; a
-  clip just added dims with `launch.clip` only until its plan reaches the
-  engine; a frozen track's clips dim with `track.frozen` from the edit on and
-  a scene left with nothing to play with `launch.scene`, and stopped the
-  frozen clips stay dimmed while no scene does. A clip whose audio did not fit
-  dims alone with `launch.memory` while its scene's ▶ stays bright and
-  launches the rest; any code set on the view dims the same way.
+  clip with new audio just added dims with `launch.clip`, and the scene
+  holding only it, until its audio is prepared and loaded; a frozen track's
+  clips dim with `track.frozen` from the edit on and a scene left with nothing
+  to play with `launch.scene`, whose dimmed ▶ click is refused with
+  `launch.scene`, and stopped the frozen clips stay dimmed while no scene
+  does. A clip whose audio did not fit dims alone with `launch.memory` while
+  its scene's ▶ stays bright and launches the rest; any code set on the view
+  dims the same way. A fader drag asks for the refusals once per frame that
+  moved the head while the pane is shown, never while it is hidden, and once
+  when it is shown again (a count, not a time).
 - The clip menu's Take FX… handing the app the active take, and the FX
   window opening a clip's take chain.
 - A scene dragged onto the lanes (its ghost, the command, the section and

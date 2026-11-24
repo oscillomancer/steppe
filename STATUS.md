@@ -388,11 +388,12 @@ instructions are in `docs/guides/installing.md`.
   the timeline or inserted at the playhead or the end (`scene.insert`, for
   its longest clip's whole bars, with a drop marker while dragged), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
-  status line. The clip menu's Take FX… opens a clip's take chain. The pane dims the
-  clips (and scenes' ▶) a press would be refused for now, as the engine
-  answers it (`EngineApp::launchRefusal`, `sceneLaunchRefusal`, step E): a
-  frozen track's clips, an audio clip with a take chain while the plan keeps
-  the pitch (a MIDI-clock chase included), a clip whose audio did not fit.
+  status line. The clip menu's Take FX… opens a clip's take chain. The pane
+  dims the clips (and scenes' ▶) a press would be refused for now, as the
+  engine answers it (`EngineApp::launchRefusal`, `sceneLaunchRefusal`, step
+  E): a frozen track's clips, an audio clip with a take chain while the plan
+  keeps the pitch (a MIDI-clock chase included), a clip whose audio did not
+  fit.
   Limits:
   - there is no dialog for `arrangement.build`;
   - Capture sits under Stop all, and in a pane too narrow for it (one or

@@ -5,6 +5,7 @@
 // selection (UiState), commands (the bus, Origin::Ui) and the meter feed.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -45,15 +46,21 @@ views::LaunchViews launchViews(const std::vector<engine::Engine::TrackLaunch>& s
 // What a press on each clip and scene of the head would be refused for now
 // (EngineApp::launchRefusal, sceneLaunchRefusal), by its code.
 views::LaunchRefusals launchRefusals(const engine::EngineApp& app);
-// Keeps the arrange view's refusals current: asks them again whenever
-// EngineApp::launchRefusalGeneration moves (a plan published, an edit, an
-// engine started or stopped, a project opened), and only then. Each frame.
+// Keeps the arrange view's refusals current while its launcher pane is
+// shown: asks them again whenever EngineApp::launchRefusalGeneration moves
+// (a plan published, an edit, an engine started or stopped, a project
+// opened), and only then. While the pane is hidden nothing draws them and
+// nothing is asked (a fader drag edits every frame); the pane shown, the
+// first pass asks if anything moved meanwhile. Each frame.
 class RefusalWatch {
   public:
     void update(const engine::EngineApp& app, views::ArrangeView& view);
+    // How many times the refusals were asked for (tests pin the bound).
+    std::size_t asked() const { return asked_; }
 
   private:
     std::optional<std::uint64_t> seen_;  // nullopt: never asked yet
+    std::size_t asked_ = 0;
 };
 
 class Shell {

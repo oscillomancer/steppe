@@ -1752,7 +1752,9 @@ shows it in the corner of its cell ("Dm", "G dor"), with "→" before it
 when the clip follows. The pane draws a clip dimmed when launching it
 now would be refused: an audio clip with take FX or take envelopes while
 the master playrate keeps the pitch (or follows MIDI clock), a clip
-whose audio didn't fit in memory, or a frozen track's clips. A scene's
+whose audio didn't fit in memory, a frozen track's clips, or a clip
+just added while audio is being prepared (it stays dimmed until the
+audio is ready). A scene's
 ▶ is dimmed when the scene can't launch: nothing in it can play, or a
 clip it would start with the rest is refused. A refusal that depends on
 the transport, such as the engine not running, is not shown. A click

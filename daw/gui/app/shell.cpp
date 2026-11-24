@@ -480,9 +480,11 @@ views::LaunchRefusals launchRefusals(const engine::EngineApp& app) {
 }
 
 void RefusalWatch::update(const engine::EngineApp& app, views::ArrangeView& view) {
+    if (!view.launcherShown()) return;  // asked again when it shows
     const std::uint64_t generation = app.launchRefusalGeneration();
     if (generation == seen_) return;
     seen_ = generation;
+    ++asked_;
     view.setLaunchRefusals(launchRefusals(app));
 }
 
