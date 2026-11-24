@@ -27,7 +27,8 @@ struct CompPiece {
 // sample (a copy placed after the original does not, and is not the next piece).
 // The core of a seam is the middle sample of the overlap.
 // Errors: comp.takes (an item with fewer than two takes), comp.loop, comp.mismatch (`items`
-// that do not continue one another, or two items that could continue the run), each with the
+// that do not continue one another, or two items that could continue the run; candidates that
+// continue one another in turn are one chain, and the nearest is the next piece), each with the
 // path of the argument (`/item`, `/items/k`).
 Result<std::vector<CompPiece>> compRun(const Session&, std::optional<Id> item,
                                        std::span<const Id> items);

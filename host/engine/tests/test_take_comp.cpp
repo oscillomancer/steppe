@@ -1497,6 +1497,52 @@ TEST_CASE("a rebuilt fade does not run into a hand-set fade that reaches far int
     CHECK(clamped);
 }
 
+TEST_CASE("a comp take.comp wrote reads back and edits when a short piece's neighbours touch") {
+    CompFixture f;
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.5,"spans":[{"from":0,"to":1,"index":0},
+                           {"from":1,"to":3,"index":1},{"from":3,"to":4,"index":0}]})");
+    // Undo keeps the id counters, so compare every item and take, not the whole file.
+    const auto everything = [&] {
+        const model::Session head = f.app->head();
+        std::string out;
+        for (const auto& e : head.items)
+            out += e.id.str() + json::writeCanonical(model::toJson(*e.value));
+        for (const auto& e : head.takes)
+            out += e.id.str() + json::writeCanonical(model::toJson(*e.value));
+        return out;
+    };
+    const std::string before = everything();
+    // The drag of the first seam to 0.016 beat before the second, as the GUI's last stop: the short
+    // middle piece (384 samples) is clamped to half its core each side, so its neighbours touch at
+    // one sample.
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":0,"to":2.984,"index":0},
+                                                  {"from":2.984,"to":3,"index":1}]})");
+    const std::string dragged = everything();
+    // Read back from any piece: the comp is the three pieces, in order, whichever is named.
+    for (const auto& p : f.pieces()) {
+        const auto got = f.call("take.comp.get", R"({"item":")" + p.item.str() + R"("})");
+        REQUIRE_MESSAGE(got, (got ? "" : got.error().toString()));
+        REQUIRE(got->find("pieces")->asArray().size() == 3);
+    }
+    // Edited again, from the pieces the read-back gave: the same spans change nothing, and a new
+    // span elsewhere is made.
+    const auto again =
+        f.run("take.comp", R"({"item":"it_1","spans":[{"from":0,"to":2.984,"index":0},
+                                                  {"from":2.984,"to":3,"index":1}]})");
+    CHECK(again.find("pieces")->asArray().size() == 3);
+    CHECK(everything() == dragged);
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":3.5,"to":4,"index":2}]})");
+    CHECK(f.pieces().size() == 4);
+    // Undo goes back through the new span, the repeated call (a step of its own, though it changed
+    // nothing) and the drag.
+    f.run("history.undo");
+    CHECK(everything() == dragged);
+    f.run("history.undo");
+    CHECK(everything() == dragged);
+    f.run("history.undo");
+    CHECK(everything() == before);
+}
+
 TEST_CASE("a seam drag without a crossfade that ends inside the next seam's reach succeeds") {
     CompFixture f;
     // Takes 0, 1, 0 with seams at beats 1 and 3 and a crossfade of 0.5 s (a beat at 120 bpm: half a

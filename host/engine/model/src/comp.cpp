@@ -122,6 +122,22 @@ Result<std::vector<CompPiece>> compRun(const Session& s, std::optional<Id> item,
                 for (const Entry& o : others)
                     if (right ? continues(s, at, o) : continues(s, o, at)) found.push_back(o);
                 if (found.empty()) break;
+                // A piece fully clamped by its two seams ends exactly where the piece after it
+                // begins, so the piece after that continues `at` too. Of such candidates the
+                // nearest is the next piece: drop those another candidate continues in turn.
+                // Anything else stays ambiguous.
+                if (found.size() > 1) {
+                    std::vector<Entry> nearest;
+                    for (const Entry& y : found) {
+                        const bool beyond =
+                            std::any_of(found.begin(), found.end(), [&](const Entry& x) {
+                                return x.id != y.id &&
+                                       (right ? continues(s, x, y) : continues(s, y, x));
+                            });
+                        if (!beyond) nearest.push_back(y);
+                    }
+                    found = std::move(nearest);
+                }
                 if (found.size() > 1)
                     return mismatch(
                         "/item", "more than one item could continue the comp after " + at.id.str());

@@ -256,7 +256,10 @@ speed; MIDI, the source beat). A piece cut by `item.split` passes; a copy made b
 `item.duplicate` and placed right after the original holds the same takes but
 another source position, so it is another item, not the next piece, and a comp
 of one leaves the other alone. A run that cannot be followed uniquely (two items
-could continue it) is refused, not guessed.
+could continue it) is refused, not guessed; but candidates that continue one another in turn are
+one chain and the nearest is the next piece: a piece clamped to half its core at both seams ends
+exactly where the piece after it begins, so that one continues the piece before it as well, and
+the comp `take.comp` just wrote must read back.
 
 **`take.comp {item | items, spans, crossfade?, crossfade_shape?, bypass_groups?}`**
 (edit, one undo step). `spans` is a list of `{from, to, take | index}`:
