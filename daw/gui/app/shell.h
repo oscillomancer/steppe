@@ -11,6 +11,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "app_actions.h"
 #include "fx_attention.h"
