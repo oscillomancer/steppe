@@ -146,7 +146,8 @@ TEST_CASE("after a switch to tape a held track's items come back through the cro
     // the frames where its switch lands just before the return (a skipped
     // old converter then refused the jump: process errors from the return
     // on, at 9984 and 10112 frames before bar 3 in the callback executor
-    // and 10240 in the anticipative one when it was found).
+    // and 10240 in the anticipative one when it was found; the steps reach
+    // some 770 frames past those either way, should placement move them).
     Project p;
     twoTracks(p);
     p.run("scene.add", "{}");  // sc_2
@@ -160,7 +161,7 @@ TEST_CASE("after a switch to tape a held track's items come back through the cro
     Engine::LaunchRequest notes = request("tr_2", "cl_2");
     notes.clip = id(midi.c_str());
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}})
-        for (std::int64_t lead = 9728; lead <= 10496; lead += 128) {
+        for (std::int64_t lead = 9216; lead <= 11008; lead += 128) {
             INFO("anticipative " << options.anticipative << ", load " << lead
                                  << " frames before bar 3");
             constexpr std::uint32_t block = 128;
