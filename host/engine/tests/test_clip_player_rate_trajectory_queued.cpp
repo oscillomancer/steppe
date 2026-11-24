@@ -210,6 +210,7 @@ TEST_CASE("a launch not yet begun when the rate changes, after a seek and withou
                                      << ", sought to " << seek);
                 Project p;
                 twoTracks(p);
+                p.run("track.set", R"({"track": "tr_1", "mute": true})");
                 p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
                 AppLive live(p, options, 128, 48000 * 8);
                 const std::int64_t stopped = seek > 0 ? 8 * 128 : 0;
@@ -243,7 +244,11 @@ TEST_CASE("a launch not yet begun when the rate changes, after a seek and withou
                 REQUIRE(log.size() == 1);
                 const std::int64_t lands = log[0].runningFrame;
                 INFO("lands at " << lands << ", beat " << log[0].anchorBeat);
-                CHECK(loudest(run, lands + 3000, lands + 30000) > 0.01);  // cl_2 plays
+                // cl_2 plays, not tr_2's items: its ramp stays under 0.05
+                // there (tr_1 muted), the items' is past 0.09 (review round
+                // 161 S1).
+                CHECK(loudest(run, lands + 3000, lands + 30000) > 0.01);
+                CHECK(loudest(run, lands + 3000, lands + 30000) < 0.05);
                 if (options.anticipative) {
                     CHECK(log[0].anchorBeat == beat);  // under way: kept
                     CHECK(lands == bar);
@@ -256,6 +261,10 @@ TEST_CASE("a launch not yet begun when the rate changes, after a seek and withou
                         CHECK(lands - bar == twinMoved);
                 } else {
                     CHECK(log[0].anchorBeat == beat + 4);  // voided: a bar later
+                    // The first frame the envelope's trajectory reaches that
+                    // bar from (review round 161 S2): bar 3 from 0, bar 4
+                    // from the seek.
+                    CHECK(lands == (seek > 0 ? 183881 : 251020));
                 }
             }
         }
