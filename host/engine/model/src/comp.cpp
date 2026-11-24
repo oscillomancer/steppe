@@ -124,9 +124,8 @@ Result<std::vector<CompPiece>> compRun(const Session& s, std::optional<Id> item,
                 if (found.empty()) break;
                 // When a piece is fully clamped by its two seams, the piece before it ends exactly
                 // where the piece after it begins, so the piece after continues `at` too. Of such
-                // candidates the
-                // nearest is the next piece: drop those another candidate continues in turn.
-                // Anything else stays ambiguous.
+                // candidates the nearest is the next piece: drop those another candidate
+                // continues in turn. Anything else stays ambiguous.
                 if (found.size() > 1) {
                     std::vector<Entry> nearest;
                     for (const Entry& y : found) {
