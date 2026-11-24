@@ -1132,7 +1132,7 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     f.exec("group.add", R"({"name":"Rhythm","members":["tr_1","tr_2"]})");
     auto last = [](const auto& map) {
         std::string id;
-        for (const auto& e : map) id = e.id.str();
+        for (const auto& entry : map) id = entry.id.str();
         return id;
     };
     const model::Session& more = f.app->head();
