@@ -158,6 +158,15 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
                 // Its clip chains' input takes the launch its lead earlier
                 // (ADR-0097, amended 2026-11-20).
                 floor = std::max(floor, at + detail::launchEarly(n));
+                // Its converter's warm-up never begins before the track's
+                // switch already under way (an applied launch still to
+                // play): reader 2 warms one launch at a time (S3 step D).
+                if (n.launchWarm > 0 && n.id == r.track)
+                    for (const LaunchSlot& s : *launchSlots_)
+                        if (status(s.state.load()) == LaunchSlot::kApplied &&
+                            s.track.load() == r.track.n && s.epoch.load() == clock.epoch &&
+                            s.target.load() >= clock.stream)
+                            floor = std::max(floor, s.target.load() + n.launchWarm);
             }
     // On a playrate plan the song follows the rate timeline (S3).
     if (clock.playing && plan->rateEnabled)

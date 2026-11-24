@@ -1084,7 +1084,10 @@ the replay.
   per quantum played, so it is ready by the switch with no burst.
   Placement keeps a launch `launchEarly` ahead of the clock (the larger of
   the clip-chain lead and `launchWarm`), and the early decision and the
-  horizon use it.
+  horizon use it. A launch is applied from its warm-up's first frame, so
+  a later one on the track does not replace it; reader 2 warms one launch
+  at a time, so placement keeps a launch at least `launchWarm` after the
+  track's applied launch still to switch.
 - **Live equals the replay.** Every prime position is a function of the
   switch's quantum and the trajectory, not of when it runs. The replay
   delivers the warm-up as a third switch entry, `launchWarm` early. A
@@ -1115,17 +1118,19 @@ the replay.
   one), and differs from the tape reading; the warm-up primes a quantum's worth a quantum, is
   ready by the switch and comes in with its history; a plan swap mid-clip
   stays the replay (cold, it differs by 0.055); a launch made while
-  stopped lands on the play start; the capture ends at an audio launch's
-  switch and commits exactly; a clip with take FX is refused.
+  stopped lands on the play start; a launch made during another's warm-up
+  lands after its switch, live as the replay; the capture ends at an audio
+  launch's switch and commits exactly; a clip with take FX is refused.
 - Each node with audio clips holds three converters under a pitch-keeping
   plan: about 0.94 MB each, stereo at 48 kHz.
 - An unquantized launch lands up to about 61 ms later than on the tape
   path.
-- Limits until later D steps: a second launch on a track whose warm-up is
-  under way replaces it, and the first, if it still switches, starts cold
-  at its switch; a trajectory change restarts launched audio cold; clips
-  with take chains are refused; the launcher pane still dims audio clips
-  under a pitch-keeping rate until the GUI follows.
+- A launch made during another's warm-up on its track lands at least
+  `launchWarm` after that one's switch (unquantized, about 61 ms later
+  than it would otherwise).
+- Limits until later D steps: a trajectory change restarts launched audio
+  cold; clips with take chains are refused; the launcher pane still dims
+  audio clips under a pitch-keeping rate until the GUI follows.
 
 ## Consequences
 

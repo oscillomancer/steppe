@@ -787,7 +787,10 @@ the same.*
     player's song frames from the anchor, in loop cycles after the
     switch's; the switch crossfade and the clip's fades weight its
     output. Placement keeps a launch `launchEarly` (the larger of the
-    clip-chain lead and `launchWarm`) ahead of the clock. A plan swap that
+    clip-chain lead and `launchWarm`) ahead of the clock, and at least
+    `launchWarm` after the track's applied launch still to switch (one
+    warm-up at a time; a launch is applied from its warm-up's first frame,
+    so a later one does not replace it). A plan swap that
     keeps the rate controls hands the readers over with their converters
     (`carryLaunchReaders`, §1.6); one that changes the trajectory restarts
     them cold where they play (an interim: timeline clips crossfade

@@ -331,8 +331,9 @@ instructions are in `docs/guides/installing.md`.
       the replay (ADR-0097, revision 2026-11-21); while it keeps the pitch
       a launched audio clip reads through a stretch converter warmed up
       about 61 ms before its switch, live as the replay (S3 step D), except
-      one read through a take chain (`launch.playrate`); a second launch
-      inside a track's warm-up, or a trajectory change, starts it cold; a
+      one read through a take chain (`launch.playrate`); a launch made
+      inside a track's warm-up lands after that switch; a trajectory change
+      starts launched audio cold; a
       capture runs in song time under one, refused (or ended, with a
       warning) while a launched audio clip plays and the playrate keeps
       the pitch, and ended on its boundary by a switch that cuts

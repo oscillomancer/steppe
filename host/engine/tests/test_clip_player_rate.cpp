@@ -266,6 +266,42 @@ TEST_CASE("a launched audio clip's converter carries over a plan swap under a pi
     }
 }
 
+TEST_CASE("a launch made during another's warm-up lands after it, and plays as the replay" *
+          doctest::description("rt")) {
+    // S3 step D: from launchWarm before its switch a launch is applied (its
+    // converter warming on reader 2), so a later launch on the track does
+    // not replace it. Reader 2 warms one launch at a time: a launch made
+    // inside that warm-up is placed no earlier than launchWarm after the
+    // first's switch, so the first still comes in warm. Unquantized it would
+    // otherwise land within it (about 127000 + 128 + 2944). Then cl_2 again
+    // on bar 4. Live is the replay throughout.
+    Project p;
+    twoTracks(p);
+    auto args = j(R"({"track": "tr_2", "scene": "sc_2"})");
+    args["audio_file"] = p.ramp("other.wav", 96000).string();
+    p.runArgs("clip.add", args);  // cl_3
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session s = p.app->head();
+    const std::int64_t frames = 460000 + 16384;
+    constexpr std::int64_t kWarm = 2944;  // at 48 kHz (the plan-level case above)
+    Replays replays;
+    for (const std::uint32_t block : {128u, 512u})
+        for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+            INFO("block " << block << ", anticipative " << options.anticipative);
+            const std::vector<Step> steps{
+                {20, {request("tr_2", "cl_2")}},
+                {(128000 - 1000) / block, {request("tr_2", "cl_3")}, model::LaunchQuantize::None},
+                {(256000 + 4000) / block, {request("tr_2", "cl_2")}}};
+            const Live live = playLive(s, p.app->projectDir(), options, block, frames, steps);
+            REQUIRE_MESSAGE(live.log.size() == 3, describe(live.log) << live.report);
+            CHECK(live.log[0].runningFrame == 128000);
+            CHECK(live.log[1].clip == id("cl_3"));
+            CHECK(live.log[1].runningFrame >= 128000 + kWarm);
+            CHECK(live.log[2].runningFrame == 384000);  // bar 4
+            liveIsReplay(s, p.app->projectDir(), live, 10.0, 460000, replays);
+        }
+}
+
 TEST_CASE("a launch under a master playrate switches where the song reaches its boundary") {
     // The anchor is the first frame whose song position reaches the bar:
     // on the rate timeline the frame before is short of it. And it moves
