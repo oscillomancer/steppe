@@ -245,6 +245,23 @@ jobs:
           df -h / "$GITHUB_WORKSPACE"
           nproc
           du -sh .deps .compiler-cache 2>/dev/null || true
+          # A sampler for the Build step: available memory and free root disk every
+          # 15 s, started detached here, stopped and summarised after Build. The
+          # peak of a green run shows in that summary; a run that dies mid-link
+          # leaves it in the next step's log if the runner survives.
+          cat > "$RUNNER_TEMP/memsampler.sh" <<'SAMPLER'
+          #!/bin/bash
+          # usage: memsampler.sh <log> <pidfile>: "HH:MM:SS MemAvailable_MB RootAvail_MB" every 15 s
+          echo $$ > "$2"
+          while :; do
+            printf '%s %s %s\n' "$(date +%H:%M:%S)" \
+              "$(awk '/^MemAvailable:/ { print int($2 / 1024) }' /proc/meminfo)" \
+              "$(df --output=avail -m / | tail -n 1 | tr -d ' ')" >> "$1"
+            sleep 15
+          done
+          SAMPLER
+          : > "$RUNNER_TEMP/memavail.log"
+          nohup setsid bash "$RUNNER_TEMP/memsampler.sh" "$RUNNER_TEMP/memavail.log" "$RUNNER_TEMP/memsampler.pid" > /dev/null 2>&1 &
       - name: Build
         # Align the environment and explicit CLI limit for predictable
         # compiler concurrency on every runner.
@@ -277,9 +294,18 @@ jobs:
       - name: Linux memory and disk after Build
         if: always() && matrix.platform == 'linux'
         run: |
+          if [[ -f "$RUNNER_TEMP/memsampler.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/memsampler.pid")" 2>/dev/null || true
+          fi
           free -m
           df -h / "$GITHUB_WORKSPACE"
           du -sh build/${{ matrix.preset }} .deps .compiler-cache 2>/dev/null || true
+          if [[ -s "$RUNNER_TEMP/memavail.log" ]]; then
+            echo "Build step samples (time, MemAvailable MB, root free MB): $(wc -l < "$RUNNER_TEMP/memavail.log")"
+            echo "lowest MemAvailable:"; sort -k2,2n "$RUNNER_TEMP/memavail.log" | head -n 1
+            echo "lowest root free:"; sort -k3,3n "$RUNNER_TEMP/memavail.log" | head -n 1
+            echo "last ten:"; tail -n 10 "$RUNNER_TEMP/memavail.log"
+          fi
       - name: Test Linux (software OpenGL under Xvfb)
         if: matrix.platform == 'linux'
         env:
