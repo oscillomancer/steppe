@@ -354,6 +354,34 @@ TEST_CASE("rack.probe: under a master playrate a note is named at the song beat 
     CHECK(probedNotes(f, args) == std::vector<std::string>{"C#4", "E4", "Db4"});
 }
 
+TEST_CASE("rack.probe: the window is heard whole under a master playrate below one") {
+    Fixture f;
+    f.run("track.add", R"({"name": "Synth"})");
+    f.run("rack.add", R"({"track": "tr_1"})");                    // mo_1 Out
+    f.run("module.add", R"({"rack": "rk_1", "type": "notes"})");  // mo_2
+    const char* args = R"({"rack": "rk_1", "ports": ["mo_2.pitch", "mo_2.gate"], "seconds": 2,
+        "notes": "voice v; 1: D4:q E4:q G4:q B4:q"})";
+    const std::vector<std::string> all{"D4", "E4", "G4", "B4"};
+    const auto heard = [&] {
+        json::Value r = f.run("rack.probe", args);
+        std::vector<std::string> names;
+        for (auto& n : r["ports"].asArray()[0]["notes"].asArray())
+            if (n.asString() != "C4") names.push_back(n.asString());  // 0 V, between notes
+        return std::pair{names, r["ports"].asArray()[1]["gates"]["count"].asInt()};
+    };
+    CHECK(heard() == std::pair{all, std::int64_t{4}});
+    // Half speed lasts 4 s of device time for the 2 s of song; the last note is at 3 s.
+    f.run("transport.playrate.set", R"({"rate": 0.5})");
+    CHECK(heard() == std::pair{all, std::int64_t{4}});
+    f.run("transport.playrate.set", R"({"rate": 0.25})");
+    CHECK(heard() == std::pair{all, std::int64_t{4}});
+    // An envelope from full to half speed over the first four beats, then held.
+    f.run("transport.playrate.set", R"({"rate": 1})");
+    f.run("env.add", R"({"track": "tr_0", "param": "playrate",
+        "points": [{"beat": 0, "value": 1}, {"beat": 4, "value": 0.5}]})");
+    CHECK(heard() == std::pair{all, std::int64_t{4}});
+}
+
 TEST_CASE("rack.probe: an audio port's note is named by the context where it was measured") {
     Fixture f;
     f.write("sine", R"(#include <supple/script.h>

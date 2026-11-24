@@ -933,8 +933,12 @@ note is heard at, the default table where none holds (a place before beat 0 read
 That beat is the song position the recorded frame plays, through the tempo map. The render keeps
 the master playrate, so a frame is device time (`seconds` is song time and the render lasts
 `seconds` over the rate) and its song position is read from the render's own clock, which
-integrates the rate (a scalar or an envelope); at unity it is `from_beat` plus the frames over
-the sample rate. A pitch port's `notes` entry is named at the frame its list gained it (a pitch
+integrates the rate (a scalar or an envelope); at unity it is `from_beat` plus the frames over the sample rate. The listener
+holds the whole render: it is sized for `seconds` over the lowest rate the window plays at (the
+project's rate, or the lowest point of the active rate envelope; 0.25 at the least, so up to 40
+device seconds), and the answer's gate counts, rates and pitch window cover all of it. Gate
+`per_second` and `per_beat` divide by song time, so a source that runs on the device clock (a
+free-running LFO) reads off by the rate. A pitch port's `notes` entry is named at the frame its list gained it (a pitch
 heard again later is named at that later time), an audio port's `pitch.note` at the middle of
 the stretch the pitch was read from (the middle of the window), and the description repeats
 those names. The answer depends only on the project (its context points, tempo map and master

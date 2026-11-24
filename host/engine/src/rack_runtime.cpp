@@ -128,7 +128,7 @@ std::shared_ptr<const rack::ModuleType> probeModuleType() {
         seconds.key = seconds.member = "seconds";
         seconds.name = "Seconds";
         seconds.min = 0;
-        seconds.max = 11;
+        seconds.max = kProbeMaxSeconds;
         seconds.def = 2;
         sd::PortModel in;
         in.key = in.member = "in";

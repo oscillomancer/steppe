@@ -59,9 +59,11 @@ using engine::pluginModuleType;
 
 // rack.probe's listener (never saved, in no catalog but a probe's): records
 // the first kProbeChannels channels (voices) of its input, `seconds` (its
-// knob) long.
+// knob) long, in device time: rack.probe's window of up to 10 song seconds lasts
+// that over the lowest master playrate (0.25) at most, and a little more.
 inline constexpr std::string_view kProbeModule = "com.suppleaudio.rack.probe";
 inline constexpr int kProbeChannels = 4;
+inline constexpr double kProbeMaxSeconds = 41;
 std::shared_ptr<const rack::ModuleType> probeModuleType();
 class ProbeModule final : public rack::HostModule {
   public:

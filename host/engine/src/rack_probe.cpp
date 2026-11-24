@@ -105,6 +105,20 @@ double songSecondsAt(const std::vector<std::pair<std::int64_t, double>>& rows, d
 // arguments name the same notes.
 using PlaceAt = std::function<harmony::Place(double frame)>;
 
+// The lowest master playrate the probe's render plays at, never above 1 (above it the render is
+// shorter): the project's rate, or the lowest point of the active rate envelope, as
+// checkRenderRange reads it. A window of `seconds` song seconds lasts `seconds` over this in
+// device time, which is what the listener must be able to hold.
+double lowestPlayrate(const model::Session& s) {
+    double lowest = s.project->playrate.rate;
+    if (const auto envelope = model::activePlayrateEnvelope(s)) {
+        lowest = model::kMaxPlayrate;
+        for (const auto& point : model::effectivePoints(s, *envelope))
+            lowest = std::min(lowest, point.value);
+    }
+    return std::clamp(lowest, model::kMinPlayrate, 1.0);
+}
+
 std::string noteName(int midi, const harmony::Place& place) { return harmony::spell(midi, place); }
 
 std::string fixed(double x, int digits) {
@@ -422,7 +436,8 @@ void registerRackProbe(cmd::Registry& registry) {
             probe.type = std::string(detail::kProbeModule);
             probe.version = "1.0.0";
             probe.params = json::Value::object();
-            probe.params["seconds"] = seconds + 0.01;
+            // Device seconds: the render lasts `seconds` over the lowest playrate.
+            probe.params["seconds"] = seconds / lowestPlayrate(s) + 0.01;
             const Id id = t.create(probe);
             t.create(model::Cable{end->first, {id, "in"}, std::nullopt, ""});
             probes.emplace_back(id, end->second);
