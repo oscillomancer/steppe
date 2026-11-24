@@ -3823,9 +3823,16 @@ bool processNode(Plan& p, std::size_t index, std::int64_t pos, std::uint32_t n,
         // Silent while a launched clip holds the track, a stretch
         // converter still runs every quantum, its output unused: skipped
         // quanta would leave its history behind the song, and it refuses to
-        // jump when the arrangement returns (S3 step D).
+        // jump when the arrangement returns (S3 step D). That includes the
+        // previous plan's converter while it is read: until the switch and
+        // through its crossfade (after a switch to tape, round 142 H1).
+        const auto converts = [&](const Clip& c) {
+            const RateClipState* previous = c.rateState ? c.rateState->previous.get() : nullptr;
+            return p.rateStretch || (p.rateEnabled && previous && previous->preserve &&
+                                     pos - c.deviceShift < p.rateSwitchDevice + p.smoothFrames);
+        };
         for (Clip& c : node.clips)
-            if ((any || p.rateStretch) && transport.playing && c.takeChain < 0)
+            if ((any || converts(c)) && transport.playing && c.takeChain < 0)
                 playClip(p, c, node.launchBuf, pos, n, 0, node.live);
         if (any)
             for (std::uint32_t i = 0; i < n; ++i) {

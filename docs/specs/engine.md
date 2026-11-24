@@ -768,9 +768,11 @@ the same.*
     (`Clip::gateFrom`, set by `launchAudio`; a stretch converter is not
     cut). While a clip holds the track, its items' stretch converters still
     run every quantum, their output unused, so they are current when the
-    arrangement comes back (a skipped converter refused the jump and failed
-    every block after). Within the kernel's reach before a switch that lands on such a
-    clip's wrap, live reads the pass's end gated at the wrap while the
+    arrangement comes back: on a plan that keeps the pitch, and after a
+    switch to tape while the old converter is still read (until the switch
+    and through its crossfade). A skipped converter refused the jump and
+    failed every block after. Within the kernel's reach before a switch
+    that lands on such a clip's wrap, live reads the pass's end gated at the wrap while the
     commit reads on (the switch reaches the node at its frame): a stated
     limit, measured up to 0.011.
   - *Under a playrate that keeps the pitch* (S3 step D) a launched audio
