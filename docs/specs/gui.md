@@ -449,7 +449,7 @@ everywhere:
 | Tempo, meter, key or chord point | "the tempo change (meter change, key, chord) at bar *N*" |
 | Plug-in | its plug-in's name |
 | Send | "the send from *track* to *track*" |
-| Group | "Group *N*", by its place among the groups |
+| Group | "Group *N*", by its place among the groups: also on the mixer's group tab, the VCA strip, a group envelope's lane title and MIDI learn ("Group 2 VCA"); the rename field starts empty |
 | Rack, module | its rack's label; its plug-in's or type's name |
 | Cable, modulation route | "the cable from *module* to *module*"; "the modulation of *parameter*" |
 | Media file | its file name |

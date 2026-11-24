@@ -43,6 +43,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/control_names.h"
+#include "supple/views/envelope_lane.h"
 #include "supple/views/mouse_map.h"
 
 using namespace supple;
@@ -3686,6 +3687,39 @@ TEST_CASE("mixer: a right-click on a VCA's fader learns MIDI for it, elsewhere t
     open(f.centre(f.node("mixer.vca.name.gr_1")));
     CHECK_FALSE(f.root->find("strip.param.menu"));
     CHECK(f.root->popupOpen());  // the group's menu
+}
+
+TEST_CASE("mixer: an unnamed group is drawn as \"Group N\" wherever its name shows") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto a = f.addTrack("channel", "Kick");
+    f.exec("group.add", R"({"name":"Drums","members":[")" + a + R"("]})");
+    f.exec("group.add", R"({"name":"","members":[")" + a + R"("]})");
+    f.exec("vca.add", R"({"group":"gr_2"})");
+    f.refresh();
+    // The tab, the VCA strip's name and an envelope lane's title: as the
+    // track menu and messages call it (views::objectName), by its place.
+    CHECK(f.node("mixer.group.tr_1.gr_1")->valueText() == "Drums");
+    CHECK(f.node("mixer.group.tr_1.gr_2")->valueText() == "Group 2");
+    CHECK(f.node("mixer.vca.name.gr_2")->valueText() == "Group 2");
+    model::Envelope env;
+    env.target.object = *model::Id::parse("gr_2");
+    env.target.param = "volume";
+    CHECK(views::laneTitle(env, f.app->head()).owner == "Group 2");
+    f.exec("group.set", R"({"group":"gr_2","active":false})");
+    f.refresh();
+    CHECK(f.node("mixer.group.tr_1.gr_2")->valueText() == "· Group 2");
+    // MIDI learn on its VCA fader names it too.
+    const ui::Point fader = f.centre(f.node("mixer.vca.fader.gr_2"));
+    f.pointer(ui::PointerEvent::Type::Down, fader, 1, 0, 3);
+    f.pointer(ui::PointerEvent::Type::Up, fader, 1, 0, 3);
+    ui::Node* menu = f.node("strip.param.menu");
+    const ui::Point learn{menu->bounds().x + 40, menu->bounds().y + 13};
+    f.pointer(ui::PointerEvent::Type::Move, learn);
+    f.pointer(ui::PointerEvent::Type::Down, learn);
+    f.pointer(ui::PointerEvent::Type::Up, learn);
+    CHECK(f.node("learn.title")->valueText() == "MIDI learn: Group 2 VCA · Volume");
+    CHECK(f.errors.empty());
 }
 
 TEST_CASE("mixer: a group's tab and a VCA's members and env buttons open their menus beside them") {

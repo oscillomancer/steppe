@@ -60,8 +60,8 @@ std::string ownerName(const model::Session& s, const std::vector<model::Id>& obj
         return std::to_string(objects.size()) + (isRoute(objects.front()) ? " sends" : " tracks");
     const model::Id& id = objects.front();
     if (isVca(id)) {
-        const model::TrackGroup* g = s.groups.find(id);
-        return (g && !g->name.empty() ? g->name + " " : std::string()) + "VCA";
+        // An unnamed group by its place ("Group 2 VCA"), as everywhere.
+        return (s.groups.find(id) ? views::objectName(s, id) + " " : std::string()) + "VCA";
     }
     if (!isRoute(id)) return trackName(s, id);
     const model::Route* r = s.routes.find(id);

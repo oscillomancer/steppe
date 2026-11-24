@@ -1352,8 +1352,9 @@ void Mixer::rebuild(bool keepLists) {
                     "mixer.group.color." + tid + "." + gid.str(), group.color);
                 color.layout.width = ui::SizeRule::fixed(3);
                 color.layout.height = ui::SizeRule::fixed(14);
-                auto& tab = tabs.emplace<ui::Button>("mixer.group." + tid + "." + gid.str(),
-                                                     (group.active ? "" : "· ") + group.name);
+                auto& tab = tabs.emplace<ui::Button>(
+                    "mixer.group." + tid + "." + gid.str(),
+                    (group.active ? "" : "· ") + views::objectName(s, gid));
                 // The group's menu opens at its tab.
                 tab.onClick = [this, gid, tid, b = &tab] {
                     trackMenu_.openGroup(gid, {tid}, b->bounds());
@@ -1575,8 +1576,8 @@ void Mixer::rebuild(bool keepLists) {
         });
         st.node = frame.get();
         frame->emplace<ColorStripe>("mixer.vca.color." + tid, e.value->color);
-        frame->emplace<ui::Label>("mixer.vca.name." + tid, e.value->name, ui::Font::UiBold, "small",
-                                  "ink");
+        frame->emplace<ui::Label>("mixer.vca.name." + tid, views::objectName(s, gid),
+                                  ui::Font::UiBold, "small", "ink");
         frame->emplace<ui::Label>("mixer.vca.badge." + tid, "VCA", ui::Font::Ui, "caption",
                                   "ink-quiet");
         auto& filler = frame->emplace<ui::Node>("mixer.vca.space." + tid);
