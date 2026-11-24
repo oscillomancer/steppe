@@ -202,7 +202,7 @@ FileActions::FileActions(ui::Root& root, AppActions& actions, cmd::Dispatcher& d
     // Main's undo and redo steps kept in the file too (project.save
     // {history: true}, ADR-0076): in place, or where the user chooses for a
     // project that has no file yet. A refusal says why in the status line.
-    actions_.addUi("ui.file.save_history", "File: save with undo history…", [this] {
+    actions_.addUi("ui.file.save_history", "File: save with undo history", [this] {
         if (app_.projectPath().empty())
             return chooseSave([this](auto paths) { saveAs(paths.front(), true); });
         json::Value args = json::Value::object();

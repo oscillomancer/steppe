@@ -2008,7 +2008,7 @@ Session and editing:
 - Squashed history steps keep large invocation arguments; actual squashing
   and graph edits may still traverse retained history.
 - Saved branches (ADR-0076): main's undo history and redo steps are kept only
-  with `project.save {history: true}` (File > Save with undo history… in
+  with `project.save {history: true}` (File > Save with undo history in
   the app). A
   command whose arguments change incompatibly makes a merge of an older
   file's branch stop with an `invalid` conflict. Saving serializes every kept

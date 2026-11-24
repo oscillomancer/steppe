@@ -2352,7 +2352,7 @@ save / Cancel before unsaved changes are lost. Before New, Open or Quit checks
 for unsaved changes, active recording is stopped through `transport.stop`:
 recorded takes become an undoable version, then the normal prompt runs. If
 Stop fails, the error is shown and the requested action does not continue.
-**Save with undo history…** (`ui.file.save_history`, after Save as…) saves
+**Save with undo history** (`ui.file.save_history`, after Save as…) saves
 with `project.save {history: true}` (ADR-0076): in place, or, for a project
 without a file, where the save dialog says. A refusal shows the command's
 message in the status line. Import… (`ui.file.import`, Ctrl+I) takes audio files (WAV, FLAC, MP3) and

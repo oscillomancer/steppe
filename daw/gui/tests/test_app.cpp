@@ -1437,7 +1437,7 @@ TEST_CASE("file actions: Save with undo history keeps main's undo steps in the f
                            [](std::function<void()> f) { f(); });
     std::string error;
     a.actions->onError = [&](const std::string& message) { error = message; };
-    // A project with a file: an edit, then File > Save with undo history….
+    // A project with a file: an edit, then File > Save with undo history.
     files.saveAs(a.dir / "Kept" / "Kept.json");
     const auto path = a.app->projectPath();
     REQUIRE_FALSE(path.empty());
