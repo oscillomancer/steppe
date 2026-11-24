@@ -390,7 +390,7 @@ TEST_CASE("after a seek a launched clip's converter still warms up ahead of its 
             if (!options.anticipative) CHECK(most <= 2);
             ChangeRun run;
             run.heard = live.stop();
-            run.latency = live.latency;
+            run.latency = live.latency + (seek > 0 ? 8 * 128 : 0);  // the cycles before play
             CHECK(loudest(run, log[0].runningFrame + 3000, log[0].runningFrame + 30000) > 0.01);
         }
 }
@@ -448,5 +448,55 @@ TEST_CASE("a plan that moves a track's shift during its launch's warm-up keeps t
         heard.heard = live.stop();
         heard.latency = live.latency;
         CHECK(loudest(heard, 131000, 160000) > 0.01);  // cl_3 plays
+    }
+}
+
+TEST_CASE("after a seek a launched audio clip under a pitch-keeping rate plays as the replay" *
+          doctest::description("rt")) {
+    // Review round 157: the seek of the case above (3 s, so the device runs
+    // 144000 frames ahead of the stream), cl_2 launched on the next bar,
+    // against the offline replay of the log from the seek's position. The
+    // capture holds the eight cycles run stopped before play.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        AppLive live(p, options, 128, 48000 * 6);
+        p.run("transport.seek", R"({"seconds": 3})");
+        live.until(8 * 128);
+        REQUIRE(p.app->transport("play"));
+        live.until(40 * 128);
+        p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 3: running frame 64000
+        live.until(200000);
+        const auto log = p.app->engine()->launchLog();
+        REQUIRE(log.size() == 1);
+        CHECK(log[0].runningFrame == 64000);
+        CHECK(p.app->engine()->processErrors() == 0);
+        const std::vector<float> heard = live.stop();
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.startSeconds = 3.0;
+        settings.endSeconds = 3.0 + 200000 * 0.75 / 48000;
+        settings.blockSize = 128;
+        settings.projectDir = p.app->projectDir();
+        const auto render = [&](std::vector<LaunchLogEntry> launches) {
+            settings.launches = std::move(launches);
+            auto r = renderOffline(p.app->head(), pool, settings);
+            REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+            REQUIRE(r->audio.channels[0].size() >= 180000);
+            return r->audio.channels[0];
+        };
+        const std::vector<float> offline = render(log);
+        const std::uint32_t at = live.latency + 8 * 128;
+        const auto [worst, first] = compare(heard, at, offline, 0, 180000);
+        INFO("worst " << worst << " first at " << first);
+        CHECK(worst == 0.0);
+        CHECK(first == -1);
+        // Without the launch it is not the same.
+        const std::vector<float> plain = render({});
+        const auto [apart, from] = compare(heard, at, plain, 0, 180000);
+        CHECK(apart > 1e-3);
+        CHECK(from >= 60000);  // the same until the switch
     }
 }
