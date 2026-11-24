@@ -1773,7 +1773,7 @@ removes the selected clips. Ctrl+C copies the selected clips; click an empty
 cell and press Ctrl+V to paste them there, laid out as they were. Ctrl+X
 marks clips to move, and the next paste moves them. Copied clips stay in
 their own project: after you open another one, there is nothing to paste. The inspector shows a selected clip's name,
-colour, length, gain, mode, launch quantize, Follow and mute. Follow (key or
+colour, length, gain, fades (an audio clip's), mode, launch quantize, Follow and mute. Follow (key or
 chords) maps the clip's notes onto the song's key or chords, when it is laid
 and when it is launched; it needs a key at the clip's start. When you lay a clip or a
 scene on the timeline, its notes are laid as written and the status line at
@@ -1853,7 +1853,9 @@ that much longer, so the clip is still heard on its boundary. At the
 switch, notes still sounding end and audio crossfades over 5 ms. Returning to the arrangement does not restart a
 note already under way: it sounds from its next start. An audio clip can
 fade in and out on every pass (`clip.set {fade_in, fade_out}`, in seconds,
-with the same shapes as an item's fades). Its own fades replace the 5 ms
+with the same shapes as an item's fades; in the inspector, **Fade in** and
+**Fade out**, each a length and a shape, and the clip's cell shades the faded
+part as an item's fades are shaded). Its own fades replace the 5 ms
 switch: a launched clip with a fade-in starts with its own fade, and a
 clip launched away during its fade-out finishes that fade-out, overlapping
 the incoming clip by up to the fade's length. A clip keeps its

@@ -1330,6 +1330,103 @@ TEST_CASE("inspector: a launcher clip's fields each run clip.set; several clips 
     CHECK_FALSE(f.inView("inspector.clip"));
 }
 
+TEST_CASE(
+    "inspector: an audio clip's Fade in and Fade out are a length and a shape, each edit "
+    "one clip.set; a MIDI clip has neither") {
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> errors;
+    f.actions->onError = [&](const std::string& e) { errors.push_back(e); };
+    audio::AudioData audio;
+    audio.sampleRate = 48000;
+    audio.channels.assign(1, std::vector<float>(96000, 0.25f));
+    const auto path = f.dir / "pad.wav";
+    REQUIRE(audio::writeWav(path, audio));
+    const std::string track = f.exec("track.add", R"({"name":"Pad"})")["track"].asString();
+    f.exec("scene.add", R"({"name":"Verse"})");
+    f.exec("scene.add", R"({"name":"Chorus"})");
+    json::Value add = json::Value::object();
+    add["track"] = track;
+    add["scene"] = "sc_1";
+    add["audio_file"] = path.string();
+    const std::string cl = f.exec("clip.add", *json::write(add))["clip"].asString();
+    const std::string midi =
+        f.exec("clip.add",
+               R"({"track":")" + track + R"(","scene":"sc_2","notation":"voice p; 1: C4:w"})")
+            .find("clip")
+            ->asString();
+    const auto clip = [&]() -> const model::Clip& {
+        return *f.app->head().clips.find(*model::Id::parse(cl));
+    };
+    auto choose = [&](const char* name, const char* value) {
+        auto* d = dynamic_cast<ui::Dropdown*>(f.node(name));
+        REQUIRE(d);
+        d->choose(value);
+        f.pass();
+    };
+    f.side->show("inspector");
+    f.ui.selectedClips = {cl};
+    f.ui.clipsFocused = true;
+    f.pass();
+    REQUIRE(f.inView("inspector.clip"));
+    REQUIRE(f.inView("inspector.clip.fade_in"));
+    REQUIRE(f.inView("inspector.clip.fade_out"));
+    CHECK(f.field("inspector.clip.fade_in").text() == "0.000 s");
+    CHECK(f.text("inspector.clip.fade_in_shape") == "Linear");
+    CHECK(f.field("inspector.clip.fade_out").text() == "0.000 s");
+    CHECK(f.text("inspector.clip.fade_out_shape") == "Linear");
+    // Each edit is one clip.set, one undo step.
+    auto before = f.steps();
+    f.type("inspector.clip.fade_in", "0.25");
+    CHECK(clip().fadeIn.length == 0.25);
+    CHECK(f.field("inspector.clip.fade_in").text() == "0.250 s");
+    CHECK(f.steps() == before + 1);
+    choose("inspector.clip.fade_in_shape", "cos");
+    CHECK(clip().fadeIn.shape == model::FadeShape::Cos);
+    CHECK(f.text("inspector.clip.fade_in_shape") == "Equal power");
+    CHECK(f.steps() == before + 2);
+    f.type("inspector.clip.fade_out", "0.5 s");
+    CHECK(clip().fadeOut.length == 0.5);
+    choose("inspector.clip.fade_out_shape", "slow_fast");
+    CHECK(clip().fadeOut.shape == model::FadeShape::SlowFast);
+    CHECK(f.text("inspector.clip.fade_out_shape") == "Slow, then fast");
+    CHECK(f.steps() == before + 4);
+    CHECK(clip().fadeIn.length == 0.25);  // the fade-out's edits left the fade-in
+    auto look = [&](const char* name) {   // a look, not a golden
+        if (const char* out = std::getenv("SUPPLE_TEST_SNAPSHOTS")) {
+            f.root->damageAll();
+            f.root->frame(false);
+            (void)gui::writePng(std::filesystem::path(out) / name, f.root->readBack());
+        }
+    };
+    look("inspector-clip-fades.png");
+    // Undo takes back one edit: the fade-out's shape.
+    f.exec("history.undo", "{}");
+    f.pass();
+    CHECK(clip().fadeOut.shape == model::FadeShape::Linear);
+    CHECK(clip().fadeOut.length == 0.5);
+    CHECK(f.text("inspector.clip.fade_out_shape") == "Linear");
+    // A refusal reaches the status line (onError), and the field shows the clip's.
+    REQUIRE(errors.empty());
+    f.type("inspector.clip.fade_in", "-1");
+    CHECK(clip().fadeIn.length == 0.25);
+    CHECK(f.field("inspector.clip.fade_in").text() == "0.250 s");
+    REQUIRE(errors.size() == 1);
+    CHECK(errors.back().find("clip.set") != std::string::npos);
+    // A MIDI clip has no fades: neither row.
+    f.ui.selectedClips = {midi};
+    f.pass();
+    REQUIRE(f.inView("inspector.clip"));
+    CHECK_FALSE(f.inView("inspector.clip.fade_in"));
+    CHECK_FALSE(f.inView("inspector.clip.fade_out"));
+    look("inspector-clip-midi.png");
+    // Back on the audio clip: both again.
+    f.ui.selectedClips = {cl};
+    f.pass();
+    CHECK(f.inView("inspector.clip.fade_in"));
+    CHECK(f.text("inspector.clip.fade_in_shape") == "Equal power");
+}
+
 TEST_CASE("inspector: a clip's Follow needs a MIDI clip with a key at its start") {
     Fixture f;
     if (!f.ok) return;
