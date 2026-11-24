@@ -780,6 +780,7 @@ TEST_CASE("launcher: items on one track dropped into cells take the scenes after
         const auto clip = views::clipIn(f.app->head(), track, scene);
         return clip ? f.app->head().clips.find(*clip)->length : -1.0;
     };
+    std::size_t hidden = 0;  // the last drop's cells out of view, while held
     // `press`: the item pressed (at its start); `at`: the point in the cell.
     auto drop = [&](std::vector<model::Id> selection, model::Id press, double beat, std::size_t row,
                     std::size_t column, bool centre, const char* shot = nullptr) {
@@ -798,6 +799,7 @@ TEST_CASE("launcher: items on one track dropped into cells take the scenes after
         f.pointer(Pointer::Move, into);
         f.sync();
         const auto held = std::pair{pane.stats.dropShown, pane.stats.dropTakes};
+        hidden = pane.stats.dropHidden;
         if (shot) f.snapshot(shot);
         f.pointer(Pointer::Up, into);
         f.sync();
@@ -849,6 +851,25 @@ TEST_CASE("launcher: items on one track dropped into cells take the scenes after
     CHECK(f.errors[0].code == "clip.occupied");
     CHECK(f.errors[0].message.find("Root") != std::string::npos);
     CHECK_FALSE(views::clipIn(f.app->head(), bass, intro));  // rolled back
+    // A pane two scenes wide: of Keys's three, Chorus's cell is out of view,
+    // said as "+1" at the pane's edge while held; the drop still makes all
+    // three, and the pane does not scroll.
+    f.view->setLauncherWidth(views::LauncherColumns::kMinWidth);
+    f.sync();
+    held =
+        drop({early, middle, late}, early, 8, f.row("tr_3"), 0, false, "launcher-items-hidden.png");
+    CHECK(held == std::pair<std::size_t, bool>{3, true});
+    CHECK(hidden == 1);
+    CHECK(f.errors.empty());
+    CHECK(lengthIn(keys, chorus) == doctest::Approx(6));
+    f.exec("history.undo", "{}");
+    f.view->setLauncherWidth(0);
+    f.sync();
+    // In a pane wide enough, nothing is out of view.
+    held = drop({early, middle}, early, 8, f.row("tr_3"), 0, false);
+    CHECK(hidden == 0);
+    f.exec("history.undo", "{}");
+    f.sync();
     // The centre of an empty cell (its stop square) takes a drop as the rest
     // of the cell does: outlined as taking, and a clip made.
     held = drop({}, early, 8, f.row("tr_3"), 2, true);

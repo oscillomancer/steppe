@@ -3300,7 +3300,10 @@ same heights, scroll and colours.
   position, and every target cell is outlined while held, `focus` if it
   would take its clip (empty, on a channel; the centre's stop square of an
   empty cell counts as empty) and `meter-clip` if not
-  (`LauncherPane::showDrop`'s cells). The new clips are selected
+  (`LauncherPane::showDrop`'s cells). Cells out of view (scrolled past
+  the pane's scene columns or rows) are counted as "+N" in a small tag at
+  the edge most of them lie beyond, on the pointer's row or column; the
+  pane does not scroll. The new clips are selected
   (`ArrangeView::selectClipsIn`, at the next sync). A refusal of any
   (a taken cell, `clip.occupied`; a row whose track holds no clips) refuses
   them all with `clip.add`'s message. These refuse the drop before

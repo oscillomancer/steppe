@@ -862,6 +862,12 @@ void LauncherPane::paint(ui::Canvas& c) {
             // cell counts as empty). One past the rows or the scenes, or on a
             // lane, refuses the drop, and the cell under the pointer says so.
             const auto column = static_cast<std::ptrdiff_t>(col - cols.scenes.begin());
+            // The scene columns in view: a cell wholly outside them is out of
+            // view, counted for the "+N" at the edge it lies beyond.
+            const ui::Rect shown{b.x, b.y, cols.scenesRight() - b.x, b.h};
+            std::size_t right = 0, left = 0, below = 0, above = 0;
+            c.save();
+            c.clip(shown);
             bool allIn = !dropRefused_;
             bool pointerTakes = !clipIn(s, tracks.rows()[over->row].track, *over->scene) &&
                                 tracks.rows()[over->row].type == model::StripType::Channel &&
@@ -883,16 +889,47 @@ void LauncherPane::paint(ui::Canvas& c) {
                     pointerTakes = takes;  // drawn last, with the drop's verdict
                     continue;
                 }
-                c.strokeRect(
-                    cellRect(static_cast<std::size_t>(row), static_cast<std::size_t>(scene))
-                        .inset(2),
-                    takes ? t.color("focus") : t.color("meter-clip"), 1.5f);
+                const ui::Rect cell =
+                    cellRect(static_cast<std::size_t>(row), static_cast<std::size_t>(scene));
+                if (cell.intersect(shown).empty()) {
+                    right += cell.x >= shown.right();
+                    left += cell.right() <= shown.x;
+                    below += cell.x < shown.right() && cell.right() > shown.x &&
+                             cell.y >= shown.bottom();
+                    above += cell.x < shown.right() && cell.right() > shown.x &&
+                             cell.bottom() <= shown.y;
+                    ++stats.dropHidden;
+                }
+                c.strokeRect(cell.inset(2), takes ? t.color("focus") : t.color("meter-clip"), 1.5f);
                 ++stats.dropShown;
             }
             stats.dropTakes = allIn && pointerTakes;
-            c.strokeRect(cellRect(over->row, static_cast<std::size_t>(column)).inset(2),
-                         stats.dropTakes ? t.color("focus") : t.color("meter-clip"), 1.5f);
+            const ui::Rect under = cellRect(over->row, static_cast<std::size_t>(column));
+            c.strokeRect(under.inset(2), stats.dropTakes ? t.color("focus") : t.color("meter-clip"),
+                         1.5f);
             ++stats.dropShown;
+            // The cells out of view, as "+N" at the edge most of them lie
+            // beyond: on the pointer's row at the right or left, in its
+            // column at the bottom or top. The pane does not scroll.
+            if (stats.dropHidden > 0) {
+                const std::string more = "+" + std::to_string(stats.dropHidden);
+                const float w = 26, h = 16;
+                const float midY =
+                    std::clamp(under.y + under.h / 2, shown.y + h / 2, shown.bottom() - h / 2);
+                const float midX =
+                    std::clamp(under.x + under.w / 2, shown.x + w / 2, shown.right() - w / 2);
+                const std::size_t most = std::max({right, left, below, above});
+                const ui::Rect tag =
+                    most == right   ? ui::Rect{shown.right() - w - 2, midY - h / 2, w, h}
+                    : most == left  ? ui::Rect{shown.x + 2, midY - h / 2, w, h}
+                    : most == below ? ui::Rect{midX - w / 2, shown.bottom() - h - 2, w, h}
+                                    : ui::Rect{midX - w / 2, shown.y + 2, w, h};
+                c.fillRect(tag, t.color("panel"));
+                c.strokeRect(tag, t.color("focus"), 1.0f);
+                c.text(tag, more, ui::Font::UiBold, t.type("caption"), t.color("focus"),
+                       ui::kCenter | ui::kMiddle);
+            }
+            c.restore();
         } else if (col != cols.scenes.end()) {
             // A clip in hand: the cell under it takes it or refuses it.
             const auto column = static_cast<std::size_t>(col - cols.scenes.begin());

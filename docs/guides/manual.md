@@ -1809,7 +1809,8 @@ at the same distance from the item you hold, as when you move them.
 Several items on one track go into that scene and the ones after it, in
 the order they play: the first into the scene you drop on, the next into
 the one after it. One undo takes them all back. Every cell they will
-fill is outlined while you hold them. If any of them can't go (its cell is
+fill is outlined while you hold them; cells scrolled out of view are
+counted in a small "+2"-style tag at the pane's edge. If any of them can't go (its cell is
 taken, its row is not a channel, it would fall off the track list, there
 are not enough scenes after the one you drop on, or it is on a hidden
 track or in a closed folder), none is made and the status line says why.

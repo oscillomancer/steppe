@@ -252,7 +252,8 @@ class LauncherPane : public ui::Node {
         std::vector<std::string> keys;   // their key marks as drawn ("Dm"; "" for none)
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
-        bool dropTakes = false;  // the cell under a drop outlined as taking it (focus)
+        bool dropTakes = false;      // the cell under a drop outlined as taking it (focus)
+        std::size_t dropHidden = 0;  // a drop's cells out of view, said as "+N" at the edge
         int refused = 0;  // clips drawn dimmed: a press is refused (ArrangeView::launchRefusals)
         std::vector<model::Id> refusedClips;  // those clips, in drawing order
         std::size_t notes = 0, columns = 0, pending = 0, fades = 0;  // the last paintGl's
