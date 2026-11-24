@@ -1198,8 +1198,9 @@ and switching about 61 ms later (option B), so the two stay in step.
   (a take chain of about 40 ms or more anywhere in the project), reader 1 can still be busy at adoption
   while a warm-up switching at or before S is pending, and compile gives each node with audio clips a
   second extra state. Both are allocated at compile.
-- **How long the old trajectory is kept.** On a plan with audio players under stretch, `rateSafeDevice`
-  is S + max(`smoothFrames`, ⌈`launchFadeFrames` / 0.25⌉) + `rateSourceBehind` + 64 (round 145 A1):
+- **How long the old trajectory is kept.** When the outgoing or the incoming plan has audio players under
+  stretch (a switch to tape included, re-check C1), `rateSafeDevice` is
+  S + max(`smoothFrames`, ⌈`launchFadeFrames` / 0.25⌉) + `rateSourceBehind` + 64 (round 145 A1):
   the next compiled change or scalar edit cannot be adopted, and take trajectory 0 away, while an
   outgoing reader still reads it. That is about 10 ms later than items alone need, at 48 kHz.
 - **Nothing is freed on an audio executor.** A primed reader the node does not take, and an old state
@@ -1222,7 +1223,9 @@ and switching about 61 ms later (option B), so the two stay in step.
 - **Tape on either side.** A switch to tape plays the old stretch reader as `previous` through the
   crossfade, converting while it is read. A switch from tape primes the new reader and fades from the
   tape reading, which keeps no history. A launch the tape plan applied without a warm-up (tape has none)
-  that switches after the adoption starts cold on the stretch plan: step D's bounded cold start.
+  that switches after the adoption takes the miss path (re-check C3): the executor primes it at adoption,
+  for S or as far as its warm-up's credit stands, within 45 primes, or it warms as usual when its warm-up
+  has not begun; it never starts cold at its switch.
 
 **Tests.** No replay spans a controls change (an offline render has one session), so the tests check:
 - continuity at S (no step larger than the material's own) and, after the crossfade, the reading equal
@@ -1236,7 +1239,8 @@ and switching about 61 ms later (option B), so the two stay in step.
   which would read the slot again). Two nodes miss in one block; the output equals the matched path's,
   and each block's primes stay within 45 per reader, under rtsan (A3, A5);
 - an old rate of 0.25 with a switch one quantum before S, then a second change at the earliest
-  admission: the outgoing reader's crossfade completes (A1);
+  admission: the outgoing reader's crossfade completes, with the second plan both stretched and tape
+  (A1, C1);
 - a transport loop wrap between a clip's anchor and S (A6);
 - the mirror and the carry at plan level with explicit readings; the placement floor while a change is
   pending, judged by the callback for a live node; and both tape directions.

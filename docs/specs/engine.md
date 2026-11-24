@@ -830,7 +830,7 @@ the same.*
       or the warming launch that switches at or before S. On a match it
       takes the primed reader. On a miss it primes the same reading
       itself, there and then: at most 45 primes per reader (a warm-up's
-      length), so N nodes that miss in one block cost N times that, and
+      length), so N readers that miss in one block cost N times that, and
       a miss changes CPU only, not what plays. Either way the old reader
       0 plays on the old trajectory (`previousTimelines`) until S and
       crossfades into the new one over `smoothFrames`, as an item does,
@@ -846,8 +846,9 @@ the same.*
       take chain of 40 ms or more) gives each such node a second.
       Both are allocated at compile.
     - The old trajectory is kept until every reader that reads it is
-      done: on a plan with audio players under stretch `rateSafeDevice`
-      is S + max(`smoothFrames`, ceil(`launchFadeFrames` / 0.25)) +
+      done: when the outgoing or the incoming plan has audio players
+      under stretch (a switch to tape included), `rateSafeDevice` is
+      S + max(`smoothFrames`, ceil(`launchFadeFrames` / 0.25)) +
       `rateSourceBehind` + 64, so the next change cannot be adopted while
       an outgoing reader still reads the old trajectory (about 10 ms
       later than items alone need, at 48 kHz).
@@ -872,8 +873,10 @@ the same.*
     the crossfade, converting while it is read. A switch from tape primes
     the new reader and fades from the tape one, which keeps no history;
     a launch the tape plan applied with no warm-up (tape has none) and
-    which switches after the adoption starts cold on the stretch plan,
-    step D's bounded cold start.
+    which switches after the adoption takes the miss path: the executor
+    primes it at adoption (for S, or as far as its warm-up's credit
+    stands), within 45 primes, or it warms as usual when its warm-up has
+    not begun, so it does not start cold at its switch.
     An audio clip read through a take chain (take
     FX or an active take envelope) still has no player there: compile
     warns and its launch is refused with `launch.playrate`.
