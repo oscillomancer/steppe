@@ -3669,7 +3669,8 @@ TEST_CASE("shell: a refused edit from the track panel or the timeline reaches th
     a.root->frame(false);
     REQUIRE(shell.arrange()->gestures().onError);
     shell.arrange()->gestures().onError(Error("item.locked", "it_1 is locked"));
-    CHECK(status->text() == "it_1 is locked");
+    // Named at once (the new project has no it_1), never the id.
+    CHECK(status->text() == "a removed item is locked");
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
