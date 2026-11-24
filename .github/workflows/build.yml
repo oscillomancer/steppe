@@ -236,10 +236,14 @@ jobs:
         with:
           path: .deps
           key: ${{ steps.cache.outputs.cache-primary-key }}
-      # Memory and disk around the Linux build and tests, so a runner that is
-      # lost leaves the last reading before it (the lost job's own log is gone).
+      # Memory and disk around the Linux build and tests, printed into the job
+      # log. A run whose runner is lost keeps none of this: the two lost runs'
+      # logs were gone entirely. The readings help when the runner survives to
+      # the next logging step, and a green run shows its peak. They only report,
+      # so none of them may fail a run (continue-on-error).
       - name: Linux memory and disk before Build
         if: matrix.platform == 'linux'
+        continue-on-error: true
         run: |
           free -m
           df -h / "$GITHUB_WORKSPACE"
@@ -247,8 +251,8 @@ jobs:
           du -sh .deps .compiler-cache 2>/dev/null || true
           # A sampler for the Build step: available memory and free root disk every
           # 15 s, started detached here, stopped and summarised after Build. The
-          # peak of a green run shows in that summary; a run that dies mid-link
-          # leaves it in the next step's log if the runner survives.
+          # summary shows the peak of a green run, and of a Build that fails with
+          # the runner still alive; a lost runner prints nothing.
           cat > "$RUNNER_TEMP/memsampler.sh" <<'SAMPLER'
           #!/bin/bash
           # usage: memsampler.sh <log> <pidfile>: "HH:MM:SS MemAvailable_MB RootAvail_MB" every 15 s
@@ -293,6 +297,7 @@ jobs:
           fi
       - name: Linux memory and disk after Build
         if: always() && matrix.platform == 'linux'
+        continue-on-error: true
         run: |
           if [[ -f "$RUNNER_TEMP/memsampler.pid" ]]; then
             kill "$(cat "$RUNNER_TEMP/memsampler.pid")" 2>/dev/null || true
@@ -302,8 +307,8 @@ jobs:
           du -sh build/${{ matrix.preset }} .deps .compiler-cache 2>/dev/null || true
           if [[ -s "$RUNNER_TEMP/memavail.log" ]]; then
             echo "Build step samples (time, MemAvailable MB, root free MB): $(wc -l < "$RUNNER_TEMP/memavail.log")"
-            echo "lowest MemAvailable:"; sort -k2,2n "$RUNNER_TEMP/memavail.log" | head -n 1
-            echo "lowest root free:"; sort -k3,3n "$RUNNER_TEMP/memavail.log" | head -n 1
+            echo "lowest MemAvailable:"; sort -k2,2n "$RUNNER_TEMP/memavail.log" | sed -n 1p
+            echo "lowest root free:"; sort -k3,3n "$RUNNER_TEMP/memavail.log" | sed -n 1p
             echo "last ten:"; tail -n 10 "$RUNNER_TEMP/memavail.log"
           fi
       - name: Test Linux (software OpenGL under Xvfb)
@@ -347,6 +352,7 @@ jobs:
           ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
       - name: Linux memory and disk after tests
         if: always() && matrix.platform == 'linux'
+        continue-on-error: true
         run: |
           free -m
           df -h / "$GITHUB_WORKSPACE"
