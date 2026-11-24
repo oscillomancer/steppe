@@ -210,7 +210,13 @@ jobs:
             echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CCACHE_MAXSIZE=500M" >> "$GITHUB_ENV"
-            cmake --preset dev -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            # At most two links at a time (compiles stay at the build's own width): the
+            # last dozen executables are about 600 MB each with debug info, and six
+            # GNU ld links at once are the likely cause of the runner lost mid-build
+            # (runs 45285459726, 45314588844). The nested plugin projects do not read
+            # these and build with one job already.
+            cmake --preset dev -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_JOB_POOLS=link=2 -DCMAKE_JOB_POOL_LINK=link
           elif [[ '${{ matrix.platform }}' == macos ]]; then
             echo "CCACHE_DIR=$GITHUB_WORKSPACE/.compiler-cache" >> "$GITHUB_ENV"
             echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
@@ -230,6 +236,15 @@ jobs:
         with:
           path: .deps
           key: ${{ steps.cache.outputs.cache-primary-key }}
+      # Memory and disk around the Linux build and tests, so a runner that is
+      # lost leaves the last reading before it (the lost job's own log is gone).
+      - name: Linux memory and disk before Build
+        if: matrix.platform == 'linux'
+        run: |
+          free -m
+          df -h / "$GITHUB_WORKSPACE"
+          nproc
+          du -sh .deps .compiler-cache 2>/dev/null || true
       - name: Build
         # Align the environment and explicit CLI limit for predictable
         # compiler concurrency on every runner.
@@ -259,6 +274,12 @@ jobs:
           else
             exit 1
           fi
+      - name: Linux memory and disk after Build
+        if: always() && matrix.platform == 'linux'
+        run: |
+          free -m
+          df -h / "$GITHUB_WORKSPACE"
+          du -sh build/${{ matrix.preset }} .deps .compiler-cache 2>/dev/null || true
       - name: Test Linux (software OpenGL under Xvfb)
         if: matrix.platform == 'linux'
         env:
@@ -298,6 +319,11 @@ jobs:
             export MallocPreScribble=1 MallocScribble=1
           fi
           ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
+      - name: Linux memory and disk after tests
+        if: always() && matrix.platform == 'linux'
+        run: |
+          free -m
+          df -h / "$GITHUB_WORKSPACE"
       - name: Save Linux compiler cache
         if: always() && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
