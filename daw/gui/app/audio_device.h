@@ -68,6 +68,14 @@ class AudioDeviceDialog {
     Status restart();  // stop if running, then start
     void stop();
     void open();  // lists the devices present now
+    // Refresh: lists the devices again. PortAudio sees a device plugged in
+    // since only when nothing holds it, so a running engine stops for the
+    // listing and starts again (audio stops for a moment). Refused while
+    // recording (audio.recording), which it would put at risk. A failed
+    // start is said in the dialog's status and the status line; the engine
+    // is left stopped, the fresh list shown.
+    Status rescan();
+    bool recording() const;
     bool isOpen() const;
     void refresh();  // open dialog only; also called by the GUI tick
     const AudioDeviceSettings& settings() const { return settings_; }

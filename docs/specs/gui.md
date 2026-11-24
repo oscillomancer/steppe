@@ -3840,7 +3840,16 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   **PipeWire graph** (Request, shared with other apps, or Force). A short note says what the choices mean on that system, and
   status lines show the running backend, rate, block, device period and
   output latency, a needed restart, or why the engine is not running.
-  Restart audio and Stop audio buttons follow. Each choice is saved, then a
+  Restart audio and Stop audio buttons follow. For the native device the
+  heading has **Refresh** (`AudioDeviceDialog::rescan`), which lists the
+  devices again: PortAudio sees a device plugged in since only when nothing
+  holds it, so a running engine is stopped (`engine.stop`), the devices
+  listed (`engine.devices`) and the engine started again (`engine.start`);
+  audio stops for a moment, which its hover hint says. A stopped engine is
+  only listed for. While recording it is disabled, its hint "Refresh is off
+  while recording", and refused (`audio.recording`). A refused start shows
+  the command's message in the dialog's status and the status line, the
+  engine left stopped and the dialog open with the fresh list. Each choice is saved, then a
   running engine (or one whose start failed) restarts with it at once; a
   stopped one stays stopped. The native input opens all its channels up to
   32. At app start a refused saved choice retries the backend's defaults; the

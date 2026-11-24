@@ -1829,8 +1829,13 @@ Engine and hosting:
   PipeWire, or the rate and quantum are forced on the graph while the engine
   runs. Whether a given PipeWire server grants a suggested rate, and how
   CoreAudio, WASAPI and ASIO devices take each rate and buffer, are untested
-  on hardware. The dialog lists the devices present when it opens; there is no
-  hotplug refresh while it stays open.
+  on hardware. The dialog lists the devices present when it opens, and its
+  Refresh lists them again by stopping the engine, listing and starting it
+  (PortAudio rescans only when nothing holds it; audio stops for a moment,
+  and Refresh is off while recording). That a device plugged in since does
+  appear after Refresh is unverified on real macOS and Windows hardware: it
+  cannot be run here or in CI, where the sequence is tested with the dummy
+  backend.
   Refusing native MIDI inputs are skipped with structured startup warnings;
   audio and other inputs keep running. CoreMIDI/WinMM use bounded per-port queues,
   timestamp mapping, bounded per-port merging, routing/learn/recording and

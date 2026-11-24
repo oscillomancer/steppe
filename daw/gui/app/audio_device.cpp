@@ -334,6 +334,28 @@ void AudioDeviceDialog::openMenu(const std::string& id, std::vector<ui::MenuItem
 
 void AudioDeviceDialog::open() { build(true); }
 
+bool AudioDeviceDialog::recording() const {
+    const auto transport = app_.transport("get");
+    return transport && transport->recording;
+}
+
+Status AudioDeviceDialog::rescan() {
+    if (recording()) {
+        Error refused("audio.recording", "Refresh is off while recording",
+                      "stop recording first: Refresh stops audio for a moment");
+        if (onError) onError("audio device: " + refused.message);
+        return refused;
+    }
+    const bool running = app_.backend() != nullptr;
+    if (running) stopEngine();  // PortAudio rescans only when nothing holds it
+    devices(true);
+    Status st;
+    if (running) st = start(false);  // says a refusal in lastError_
+    if (!st && onError) onError("audio device: " + lastError_);
+    if (isOpen()) build(false);  // the fresh list, and the status
+    return st;
+}
+
 void AudioDeviceDialog::build(bool reload) {
     if (root_.popupOpen()) root_.closePopups();
     const std::string backend = effectiveBackend(settings_);
@@ -351,6 +373,9 @@ void AudioDeviceDialog::build(bool reload) {
     header.layout.align = ui::Layout::Align::Center;
     header.emplace<ui::Label>("audio.title", "Audio device", ui::Font::UiBold, "body")
         .layout.width = ui::SizeRule::fraction();
+    // The native devices only: JACK and the dummy list none here.
+    if (backend == "portaudio")
+        header.emplace<ui::Button>("audio.refresh", "Refresh", [this] { (void)rescan(); });
     header.emplace<ui::Button>("audio.close", "Close", [this] { root_.closePopups(); });
 
     auto button = [&](const std::string& id, const std::string& label, const std::string& text,
@@ -550,6 +575,18 @@ void AudioDeviceDialog::build(bool reload) {
 }
 
 void AudioDeviceDialog::refresh() {
+    // Refresh stops audio for a moment: off while recording, its hint says why.
+    if (ui::Node* again = root_.find("audio.refresh")) {
+        const bool off = recording();
+        ui::Hint said{off ? "Refresh is off while recording"
+                          : "Refresh: list the audio devices again (audio stops for a moment)",
+                      ""};
+        if (again->enabled == off || again->hint != said) {
+            again->enabled = !off;
+            again->hint = said;
+            again->invalidate();
+        }
+    }
     auto* first = dynamic_cast<ui::Label*>(root_.find("audio.status.0"));
     if (!first) return;
     std::string text;

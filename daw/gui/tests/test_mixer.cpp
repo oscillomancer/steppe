@@ -2519,6 +2519,110 @@ TEST_CASE("audio device: settings become engine.start arguments") {
     CHECK(gui::effectiveBackend({}) == gui::defaultAudioBackend());
 }
 
+TEST_CASE("audio device: Refresh stops the engine, lists the devices again and starts it") {
+    Fixture f;
+    if (!f.ok) return;
+    gui::AudioDeviceSettings initial;
+    initial.backend = "portaudio";
+    gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, initial, {});
+    std::vector<std::string> calls;  // the order: stop, list, start
+    std::vector<engine::AudioDevice> present = fakeDevices();
+    bool refuse = false;
+    audio.enumerate = [&] {
+        calls.push_back("list");
+        return Result<std::vector<engine::AudioDevice>>(present);
+    };
+    const cmd::Origin test{cmd::Origin::Type::Test, "t", {}};
+    audio.startEngine = [&](const json::Value& args) -> Result<json::Value> {
+        calls.push_back("start");
+        if (refuse)
+            return Error("backend.device", "device was not found", "/output_device",
+                         "choose an exact name from engine.devices");
+        json::Value dummy = json::Value::object();  // a device-free engine stands in
+        dummy["backend"] = "dummy";
+        dummy["block"] = args.find("block")->asInt();
+        return f.dispatcher->execute({"engine.start", dummy, test});
+    };
+    audio.stopEngine = [&] {
+        calls.push_back("stop");
+        (void)f.dispatcher->execute({"engine.stop", json::Value::object(), test});
+    };
+    std::vector<std::string> errors;
+    audio.onError = [&](const std::string& e) { errors.push_back(e); };
+    REQUIRE(audio.start());
+    audio.open();
+    f.root->frame(false);
+    REQUIRE(f.root->find("audio.refresh"));
+    CHECK(f.node("audio.refresh")->enabled);
+    CHECK(f.node("audio.refresh")->hint.name.find("audio stops for a moment") != std::string::npos);
+    CHECK(f.node("audio.refresh")->valueText() == "Refresh");
+    // A device plugged in since: Refresh stops the engine, lists, starts.
+    present.push_back({"Windows WASAPI", "USB Mic", 2, 0, 48000, false, false});
+    calls.clear();
+    REQUIRE(f.root->click("audio.refresh"));
+    f.root->frame(false);
+    REQUIRE(calls.size() >= 3);
+    CHECK(calls[0] == "stop");
+    CHECK(calls[1] == "list");
+    CHECK(calls.back() == "start");
+    CHECK(f.app->backend() != nullptr);  // running again
+    CHECK(errors.empty());
+    REQUIRE(audio.isOpen());
+    REQUIRE(f.root->click("audio.input.set"));
+    bool listed = false;
+    ui::Node* inputs = f.root->find("audio.input.menu");
+    REQUIRE(inputs);
+    for (const ui::MenuItem& item : ui::menuItems(*inputs))
+        listed = listed || item.label.find("USB Mic") != std::string::npos;
+    CHECK(listed);
+    f.root->closePopups();
+    audio.open();
+    f.root->frame(false);
+    // The start refused: said in the dialog and the status line, the engine
+    // left stopped, the dialog open with the fresh list.
+    refuse = true;
+    present.push_back({"Windows WASAPI", "Headphones", 0, 2, 48000, false, false});
+    calls.clear();
+    REQUIRE(f.root->click("audio.refresh"));
+    f.root->frame(false);
+    CHECK(calls.front() == "stop");
+    CHECK(f.app->backend() == nullptr);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("device was not found") != std::string::npos);
+    REQUIRE(audio.isOpen());
+    CHECK(f.node("audio.status.0")->valueText().find("Not running: ") == 0);
+    CHECK(audio.lastError().find("device was not found") != std::string::npos);
+    // Stopped, Refresh only lists: nothing is started behind the user's back.
+    refuse = false;
+    errors.clear();
+    calls.clear();
+    REQUIRE(audio.rescan());
+    CHECK(calls == std::vector<std::string>{"list"});
+    CHECK(f.app->backend() == nullptr);
+    // Recording: Refresh is off, says why, and stops nothing.
+    REQUIRE(audio.start());
+    json::Value arm = json::Value::object();  // the master records its output
+    arm["track"] = "tr_0";
+    arm["armed"] = true;
+    REQUIRE(f.dispatcher->execute({"track.set", arm, test}));
+    REQUIRE(f.dispatcher->execute({"transport.record", json::Value::object(), test}));
+    REQUIRE(audio.recording());
+    audio.open();
+    f.root->frame(false);
+    CHECK_FALSE(f.node("audio.refresh")->enabled);
+    CHECK(f.node("audio.refresh")->hint.name == "Refresh is off while recording");
+    calls.clear();
+    errors.clear();
+    const Status refused = audio.rescan();
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "audio.recording");
+    CHECK(calls.empty());
+    CHECK(f.app->backend() != nullptr);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].find("off while recording") != std::string::npos);
+    (void)f.dispatcher->execute({"transport.stop", json::Value::object(), test});
+}
+
 TEST_CASE("audio device: the dialog saves each choice and restarts the engine with it") {
     Fixture f;
     if (!f.ok) return;
