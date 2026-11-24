@@ -2980,7 +2980,8 @@ lanes, on the one row model: its rows are `TrackLayout`'s rows, with the
 same heights, scroll and colours.
 - **Shown.** It is shown by View > Clip launcher (`ui.clips`, ticked while
   shown) and saved in the UI sidecar (`arrange.clips: {shown, width,
-  full}`, each only once chosen). The sidecar's entry wins. Only when there
+  full, follow_song, write_context}`, each only once chosen; the last two
+  are the scene menu's checks, below). The sidecar's entry wins. Only when there
   is none does the project decide: one with scenes opens with it shown, and
   one without (a new project too) hides it.
 - **Width.** Unset, it is wide enough for its columns (every scene, the +
@@ -3062,7 +3063,8 @@ same heights, scroll and colours.
     under the pointer (`scene.insert {scene, bar, bars}`) for its longest
     clip's length rounded up to whole bars from that bar
     (`views::sceneBars`; an audio clip's seconds through the tempo map),
-    as items and a section named after it, one undo step. While it is held
+    as items and a section named after it, one undo step, with the scene
+    menu's two checks (below). While it is held
     over the lanes the ghost layer draws a drop marker at that bar in
     `focus`, a light wash over the span and each clip's copy on its track
     (`ItemGestures::showSceneGhost`).
@@ -3070,10 +3072,39 @@ same heights, scroll and colours.
     first bar line at or after the playhead), **Insert at end** (from the
     first bar line at or after the end of the last item or section,
     `views::barAfterArrangement`), both `scene.insert` for the same bars,
-    and Delete (`scene.remove`, with its clips).
+    two checks, **Lay out scenes…**, and Delete (`scene.remove`, with its
+    clips).
+  - **The checks** say how every scene is laid on the timeline, by a drop,
+    Insert or Lay out scenes… (`views::SceneLaying`, one state per project
+    view, saved in the sidecar's `arrange.clips`; both unchecked by default,
+    for the drop and the menu alike). **Follow the song's key and chords**
+    sends `follow: chords`; unchecked, `follow` is not sent, so each clip
+    keeps its own Follow (the clip inspector's). `follow: key` and
+    `follow: none` for a whole scene stay with the clips' own Follow and
+    with agents; the check is not the whole of `follow`. **Write harmony to
+    the context track** sends `write_context`: the clips' own key and
+    chords go onto the context track under each section that has none. A
+    pick toggles its check and closes the menu.
+  - **Lay out scenes…** opens a dialog for `arrangement.build`: every scene
+    in pane order, each with a check (on) and its bars (its longest clip's
+    whole bars where it would land after the ones before it), **From bar**
+    (the first whole bar at or after the end of the arrangement), and the
+    same two checks, which read and write the same state as the menu's.
+    **Lay out** sends the checked scenes in order (no repeats; an agent can
+    repeat a scene). A bars or From bar field that is not a whole number
+    from 1 is said in the dialog and nothing is sent. A refusal shows the
+    command's message in the dialog (and in the status line), with its first
+    listed error when the arguments' form was refused (a bar past the
+    last); the dialog stays open with its entries. Done, it closes.
   - A refusal of `scene.insert` (items already in the span, an empty
     scene, a looping clip whose period is not its content) shows its
     message in the status line and changes nothing.
+  - What laying did goes to the status line (`views::followNotice`): each
+    clip that follows or was laid as written in another key, and, with
+    write_context, a section whose harmony was not written ("Verse's harmony
+    is not written: the context track has points there", "… its clips
+    disagree at bar 9"); `arrangement.build`'s head names the scene, or
+    counts them ("3 scenes from bar 5").
   - A last header cell, **+**, adds a scene (`scene.add`).
 - **Arr.** A narrow last column, 22 units, holds per track a dot that is lit
   in `playing` while the track follows the arrangement. A click on an unlit

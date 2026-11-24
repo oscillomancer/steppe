@@ -16,6 +16,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "supple/base/result.h"
@@ -69,6 +70,19 @@ struct LauncherCallbacks {
     // What laying clips on the timeline did with their keys (followNotice),
     // for the status line; not called when there is nothing to say.
     std::function<void(const std::string&)> onNotice;
+};
+
+// How a scene is laid on the timeline (gui.md §4.15): the scene menu's two
+// checks, which a scene dropped on the lanes and Lay out scenes… use too.
+// One state per project view, saved in the UI sidecar.
+struct SceneLaying {
+    // follow: chords, the song's key and chords under each item; unset, the
+    // command is not told, so each clip keeps its own Follow.
+    bool followSong = false;
+    // write_context: the clips' own key and chords onto the context track
+    // under each section that has none.
+    bool writeContext = false;
+    bool operator==(const SceneLaying&) const = default;
 };
 
 // The pane's geometry, shared by its body and its header cell: one column
@@ -285,8 +299,19 @@ class LauncherHeader : public ui::Node {
     std::optional<std::size_t> sceneAt(ui::Point p) const;
     ui::Rect sceneRect(std::size_t column) const;
     // A scene laid on the timeline (scene.insert) from `bar`, for its
-    // longest clip's whole bars; a refusal goes to onError.
+    // longest clip's whole bars, as the view's SceneLaying says; a refusal
+    // goes to onError.
     bool insertScene(model::Id scene, int bar);
+    // Scenes laid out one after the other from `bar` (arrangement.build),
+    // each for its bars, as the view's SceneLaying says; a refusal goes to
+    // onError and is returned.
+    Result<json::Value> layOut(const std::vector<std::pair<model::Id, std::int64_t>>& sequence,
+                               int bar);
+    // The scene menu's Lay out scenes…: the scenes in pane order, each with
+    // a check and its bars (its longest clip's whole bars), a start bar (the
+    // first whole bar after the arrangement) and the laying's two checks.
+    // Lay out runs layOut; a refusal shows in the dialog, which stays open.
+    void openLayOut();
 
   private:
     void openSceneMenu(model::Id scene, ui::Point at);

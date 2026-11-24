@@ -382,14 +382,20 @@ instructions are in `docs/guides/installing.md`.
   stopped returns the tracks to the arrangement; the cell also lights for
   an agent's capture), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for
-  its longest clip's whole bars, with a drop marker while dragged), and a
+  its longest clip's whole bars, with a drop marker while dragged), the
+  scene menu's Lay out scenes… (`arrangement.build`, a dialog), with two
+  remembered checks for all three (follow the song's key and chords,
+  write the clips' harmony to the context track), and a
   section's Capture as scene (`scene.capture`); their refusals show in the
   status line. The clip menu's Take FX… opens a clip's take chain, and with
   under a pitch-keeping master playrate the pane dims the audio clips (and
   their scenes' ▶) the engine refuses to launch, by a mirror of the
   engine's check until the engine reports it (a MIDI-clock chase is not
   seen). Limits:
-  - there is no dialog for `arrangement.build`;
+  - Lay out scenes… lays each scene once, in pane order (an agent's
+    `arrangement.build` can repeat one), and the checks send only
+    `follow: chords` (key-only or as-written laying stays with each clip's
+    own Follow);
   - Capture sits under Stop all, and in a pane too narrow for it (one or
     two scenes) Arrangement is not drawn, as before;
   - an item dragged into a cell makes a clip of the pressed item only;

@@ -183,6 +183,10 @@ class ArrangeView : public ui::Node {
     // project has scenes.
     void setLauncherShown(std::optional<bool> shown);
     std::optional<bool> launcherChoice() const { return launcherChoice_; }
+    // How scenes are laid on the timeline (the scene menu's checks; saved in
+    // the layout's "clips" object).
+    const SceneLaying& sceneLaying() const { return sceneLaying_; }
+    void setSceneLaying(SceneLaying laying) { sceneLaying_ = laying; }
     bool launcherShown() const;
     // Its width as laid out; set by dragging its right edge (0: wide enough
     // for its columns). Dragged all the way it fills the view and the lanes
@@ -296,6 +300,7 @@ class ArrangeView : public ui::Node {
     LauncherHeader* launcherHeader_ = nullptr;
     ui::Node* lanesColumn_ = nullptr;
     std::optional<bool> launcherChoice_;
+    SceneLaying sceneLaying_;
     float launcherWidth_ = 0;  // 0: fit the columns
     bool launcherFull_ = false;
     float launcherScroll_ = 0;

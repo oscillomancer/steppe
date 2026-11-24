@@ -1814,7 +1814,8 @@ Result<json::Value> ArrangeView::runLauncher(const std::string& command, json::V
                      "wire ArrangeView::setLauncherCallbacks");
     // Clips laid on the timeline: what they did with their keys goes to the
     // status line (gui.md §4.15).
-    const bool lays = command == "item.add" || command == "scene.insert";
+    const bool lays =
+        command == "item.add" || command == "scene.insert" || command == "arrangement.build";
     const json::Value asked = lays ? args : json::Value();
     auto r = launcherCallbacks_.run(command, std::move(args));
     if (!r && launcherCallbacks_.onError) launcherCallbacks_.onError(r.error());
@@ -1871,11 +1872,14 @@ json::Value ArrangeView::saveLayout() const {
     if (chordRowChoice_) v["chords"] = *chordRowChoice_;  // View > Chords chose
     // The clip launcher (gui.md §4.15): what View > Clip launcher chose, its
     // dragged width and whether it fills the view.
-    if (launcherChoice_ || launcherWidth_ > 0 || launcherFull_) {
+    if (launcherChoice_ || launcherWidth_ > 0 || launcherFull_ || sceneLaying_ != SceneLaying{}) {
         json::Value clips = json::Value::object();
         if (launcherChoice_) clips["shown"] = *launcherChoice_;
         if (launcherWidth_ > 0) clips["width"] = static_cast<double>(launcherWidth_);
         if (launcherFull_) clips["full"] = true;
+        // How scenes are laid on the timeline (the scene menu's checks).
+        if (sceneLaying_.followSong) clips["follow_song"] = true;
+        if (sceneLaying_.writeContext) clips["write_context"] = true;
         v["clips"] = std::move(clips);
     }
     json::Value heights = json::Value::object();
@@ -1924,6 +1928,11 @@ void ArrangeView::loadLayout(const json::Value& v) {
             shown && shown->isBool() ? std::optional<bool>(shown->asBool()) : std::nullopt;
         setLauncherWidth(width && width->isNumber() ? static_cast<float>(width->asDouble()) : 0.0f,
                          full && full->isBool() && full->asBool());
+        auto flag = [clips](const char* key) {
+            const json::Value* x = clips && clips->isObject() ? clips->find(key) : nullptr;
+            return x && x->isBool() && x->asBool();
+        };
+        sceneLaying_ = {flag("follow_song"), flag("write_context")};
     }
     trackLayout().clearTakesExpanded();
     if (const json::Value* ex = v.find("expanded_takes"); ex && ex->isArray())

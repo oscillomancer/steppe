@@ -1746,7 +1746,17 @@ from the bar you drop it on, for as many whole bars as its longest clip
 needs, with a marker showing where while you drag. **Insert at playhead**
 and **Insert at end** in its menu do the same from the next bar line at the
 playhead, or after the last item or section. Each makes a section named
-after the scene. The other way round, right-click a section in the ruler
+after the scene. Two checks in the same menu say how the clips are laid,
+for a drop too: **Follow the song's key and chords** lays the MIDI clips so
+they sound in the key and chords of the song where they land (unchecked,
+each clip keeps its own Follow, set in its inspector; following only the
+key, or forcing a clip to play as written, is set there per clip), and
+**Write harmony to the context track** writes the clips' own key and
+chords onto the context track under the new section, unless the track
+already has points there. The project remembers both. **Lay out scenes…**
+lays several scenes one after the other: tick the scenes you want, set each
+one's bars and the bar to start from, and choose **Lay out**. If it can't
+be done the dialog says why and keeps what you entered. The other way round, right-click a section in the ruler
 and choose **Capture as scene** to make a scene from the items inside it.
 When one of these cannot be done (items already lie in the way, a scene has
 no clips, a section has two items on one track) the status line says why.
