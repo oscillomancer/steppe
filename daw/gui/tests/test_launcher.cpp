@@ -1077,6 +1077,64 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     CHECK(f.errors[0].code == "scene.empty");
     CHECK(f.errors[0].message.find("sc_") == std::string::npos);
     CHECK(f.errors[0].message.find("Chorus") != std::string::npos);
+    // Items, takes, envelopes and sections too. An unnamed MIDI item on Keys
+    // at bar 5: its track and bar; its take, as its item.
+    const json::Value made =
+        f.exec("item.add", R"({"track":"tr_3","position":16,"length":4,"notation":"1: C4:w"})");
+    const model::Id item = *model::Id::parse(made.find("item")->asString());
+    const model::Item* it = f.app->head().items.find(item);
+    REQUIRE(it);
+    REQUIRE(it->activeTake);
+    const model::Session& now = f.app->head();
+    CHECK(views::launcherNames(now, item.str() + " is in the way") ==
+          "Keys's item at bar 5 is in the way");
+    CHECK(views::launcherNames(now, it->activeTake->str() + " is warped") ==
+          "Keys's item at bar 5 is warped");
+    const json::Value env = f.exec("env.add", R"({"track":"tr_2","param":"volume"})");
+    CHECK(views::launcherNames(f.app->head(),
+                               env.find("env")->asString() + " has automation items") ==
+          "Bass's volume automation has automation items");
+    f.exec("region.add", R"({"start":8,"end":16})");
+    f.exec("region.add", R"({"start":16,"end":20,"name":"Bridge"})");
+    std::vector<std::string> regions;
+    for (const auto& entry : f.app->head().regions) regions.push_back(entry.id.str());
+    REQUIRE(regions.size() == 2);
+    CHECK(views::launcherNames(f.app->head(), regions[0] + " and " + regions[1]) ==
+          "the section at bar 3 and Bridge");
+    CHECK(views::launcherNames(f.app->head(), "it_99, tk_99, en_99, rg_99") ==
+          "a removed item, a removed take, a removed envelope, a removed section");
+    // The pane draws what refusals say: an unnamed scene as "Scene 4", an
+    // unnamed clip by its track and scene, never an id.
+    f.root->damageAll();
+    f.root->frame(false);
+    CHECK(header.stats.names == std::vector<std::string>{"Intro", "Verse", "Chorus", "Scene 4"});
+    for (const std::string& drawn : f.view->launcherPane().stats.names) {
+        CHECK(drawn.find("cl_") == std::string::npos);
+        CHECK(drawn.find("sc_") == std::string::npos);
+    }
+    const auto keysClip = std::find_if(
+        f.view->launcherPane().stats.names.begin(), f.view->launcherPane().stats.names.end(),
+        [](const std::string& drawn) { return drawn.starts_with("Keys"); });
+    CHECK(keysClip != f.view->launcherPane().stats.names.end());
+    // Insert at playhead over that item: scene.insert.occupied names it.
+    f.errors.clear();
+    f.view->setPlayhead(f.app->head().timeMap->secondsAt(16));  // bar 5
+    f.click({header.sceneRect(2).x + 40, header.sceneRect(2).y + 8}, 0, 1, 3);
+    menu = f.root->find("launcher.scene.menu");
+    REQUIRE(menu);
+    std::function<void()> atPlayhead;
+    for (const auto& row : ui::menuItems(*menu))
+        if (row.label == "Insert at playhead") atPlayhead = row.run;
+    f.root->closePopups();
+    REQUIRE(atPlayhead);
+    f.exec("clip.add", R"({"track":"tr_3","scene":"sc_3","notation":"1: C4:w"})");
+    atPlayhead();
+    f.sync();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "scene.insert.occupied");
+    CHECK(f.errors[0].message.find("Keys's item at bar 5") != std::string::npos);
+    for (const char* prefix : {"it_", "tr_", "sc_", "cl_", "tk_"})
+        CHECK(f.errors[0].message.find(prefix) == std::string::npos);
 }
 
 TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected, in both themes") {

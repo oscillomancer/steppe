@@ -766,7 +766,11 @@ class Ruler : public ui::Node {
                     add("Capture as scene", [this, id = entry.id] {
                         json::Value args = json::Value::object();
                         args["region"] = id.str();
-                        execute("scene.capture", std::move(args));
+                        if (!callbacks.run) return;
+                        // Its refusal names what is in the way, as the pane's do.
+                        if (auto r = callbacks.run("scene.capture", std::move(args));
+                            !r && callbacks.onError)
+                            callbacks.onError(launcherNames(view_.session(), r.error()));
                     });
                 break;
             }

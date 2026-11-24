@@ -138,13 +138,20 @@ int barAtOrAfter(const time::TimeMap& map, double beat);
 // its last item or section (bar 1 when it is empty).
 int barAfterArrangement(const model::Session& session);
 
-// A launcher refusal as the user reads it (gui.md §4.15): each clip, track
-// and scene id in the text (sc_3, cl_2, tr_1) said by name, so no id reaches
-// the user: a scene's name, else "Scene N" by its place in the pane; a
-// track's, else "an unnamed track"; a clip's, else "<track>'s clip in
-// <scene>" ("a removed …" for one that is gone). The rest of the command's
-// words are kept. The Error form does the message, the hint and each listed
-// error.
+// What the launcher calls an object (gui.md §4.15), the same in the pane and
+// in its refusals, never an id: a scene's name, else "Scene N" by its place
+// in the pane; a track's, else "an unnamed track"; a clip's, else "<track>'s
+// clip in <scene>"; an item's label, else "<track>'s item at bar N"; a take's
+// name, else its item's or clip's words; an envelope as "<track or take>'s
+// <param> automation" ("the <param> automation" on another object); a
+// section's name, else "the section at bar N"; "a removed …" for one that
+// is gone. Another kind of id is said as its id.
+std::string launcherName(const model::Session& session, model::Id id);
+// A launcher refusal as the user reads it: each scene, clip, track, item,
+// take, envelope and section id in the text (sc_3, cl_2, tr_1, it_4, tk_7,
+// en_3, rg_2) said by launcherName, so no such id reaches the user. The rest
+// of the command's words are kept. The Error form does the message, the
+// hint and each listed error.
 std::string launcherNames(const model::Session& session, std::string_view text);
 Error launcherNames(const model::Session& session, Error error);
 
@@ -329,6 +336,7 @@ class LauncherHeader : public ui::Node {
         bool glyphCells = false;     // Stop all, Arrangement and Capture drawn as glyphs
         int refused = 0;             // scenes whose ▶ is dimmed (ArrangeView::launchRefusals)
         std::vector<model::Id> refusedScenes;  // those scenes, in column order
+        std::vector<std::string> names;        // the scenes' names as drawn
     } stats;
     // The scene column under x in the headers' row, and its ▶.
     std::optional<std::size_t> sceneAt(ui::Point p) const;

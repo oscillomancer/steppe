@@ -1728,7 +1728,8 @@ launches the scene; double-click its name to rename it, drag it sideways
 to reorder the scenes, and right-click it for Rename, Colour, Insert at
 playhead, Insert at end, the two checks for how scenes are laid, Lay out
 scenes… and Delete (all described below). The **+** after the last scene
-adds one.
+adds one; until you name it, it shows as "Scene" and its place, such as
+"Scene 4".
 
 Stop all, Arrangement and Capture sit in one row. In a narrow pane they
 show as small symbols (a square, two bars and a dot); rest the pointer on
@@ -1778,8 +1779,9 @@ the ruler and choose **Capture as scene** to make a scene from the items
 inside it.
 When one of these cannot be done (items already lie in the way, a scene has
 no clips, a section has two items on one track) the status line says why. It
-names the clips, tracks and scenes involved; one without a name is called
-by where it is, such as "Scene 4" or "Bass's clip in Verse".
+names the clips, items, tracks, scenes and sections involved; one without
+a name is called by where it is, such as "Scene 4", "Bass's clip in Verse"
+or "Keys's item at bar 5", the same words the clip launcher shows for it.
 
 In a cell, no click does two things:
 - a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds

@@ -1012,6 +1012,9 @@ TEST_CASE("ruler: a section's menu captures it as a launcher scene; a refusal sa
     pick(2);
     REQUIRE(f.errors.size() == 1);
     CHECK(f.errors[0].code == "scene.capture.empty");
+    // Named as the launcher's refusals are (views::launcherNames), not by id.
+    CHECK(f.errors[0].message.starts_with("Gap ("));
+    CHECK(f.errors[0].message.find("rg_") == std::string::npos);
     f.errors.clear();
     CHECK(f.app->head().scenes.size() == 0);
     // With an item filling it: a scene named after it, one clip.

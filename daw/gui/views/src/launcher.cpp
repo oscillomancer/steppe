@@ -14,6 +14,7 @@
 #include "supple/harmony/harmony.h"
 #include "supple/model/context.h"
 #include "supple/model/follow.h"
+#include "supple/model/take_owner.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/canvas.h"
 #include "supple/ui/forms.h"
@@ -235,29 +236,71 @@ void addLaying(json::Value& args, const SceneLaying& laying) {
 }  // namespace
 
 namespace {
-// A scene as the user knows it: its name, else its place in the pane.
-std::string sceneWords(const model::Session& s, model::Id id) {
-    const model::Scene* sc = s.scenes.find(id);
-    if (sc && !sc->name.empty()) return sc->name;
-    const std::vector<model::Id> order = launcherColumns(s).scenes;
-    const auto at = std::find(order.begin(), order.end(), id);
-    return at == order.end() ? std::string("a removed scene")
-                             : "Scene " + std::to_string(at - order.begin() + 1);
-}
-std::string trackWords(const model::Session& s, model::Id id) {
-    const model::Track* t = s.tracks.find(id);
-    if (!t) return "a removed track";
-    return t->name.empty() ? std::string("an unnamed track") : t->name;
-}
-std::string clipWords(const model::Session& s, model::Id id) {
-    const model::Clip* c = s.clips.find(id);
-    if (!c) return "a removed clip";
-    if (!c->name.empty()) return c->name;
-    return trackWords(s, c->track) + "'s clip in " + sceneWords(s, c->scene);
+std::string barWords(const model::Session& s, double beat) {
+    return "bar " + std::to_string(s.timeMap->barBeat(std::max(0.0, beat)).bar);
 }
 }  // namespace
 
+std::string launcherName(const model::Session& s, model::Id id) {
+    const std::string text = id.str();
+    auto is = [&](std::string_view prefix) { return text.starts_with(prefix); };
+    if (is("sc_")) {
+        const model::Scene* sc = s.scenes.find(id);
+        if (sc && !sc->name.empty()) return sc->name;
+        const std::vector<model::Id> order = launcherColumns(s).scenes;
+        const auto at = std::find(order.begin(), order.end(), id);
+        return at == order.end() ? std::string("a removed scene")
+                                 : "Scene " + std::to_string(at - order.begin() + 1);
+    }
+    if (is("tr_")) {
+        const model::Track* t = s.tracks.find(id);
+        if (!t) return "a removed track";
+        return t->name.empty() ? std::string("an unnamed track") : t->name;
+    }
+    if (is("cl_")) {
+        const model::Clip* c = s.clips.find(id);
+        if (!c) return "a removed clip";
+        if (!c->name.empty()) return c->name;
+        return launcherName(s, c->track) + "'s clip in " + launcherName(s, c->scene);
+    }
+    if (is("it_")) {
+        const model::Item* it = s.items.find(id);
+        if (!it) return "a removed item";
+        if (std::string label = Lanes::itemLabel(s, *it); !label.empty()) return label;
+        return launcherName(s, it->track) + "'s item at " +
+               barWords(s, model::itemSpan(s, *it).startBeat);
+    }
+    if (is("tk_")) {
+        const model::Take* tk = s.takes.find(id);
+        if (!tk) return "a removed take";
+        if (!tk->name.empty()) return tk->name;
+        const auto owner = model::takeOwner(s, id);
+        return owner ? launcherName(s, *owner) : std::string("a take");
+    }
+    if (is("en_")) {
+        const model::Envelope* en = s.envelopes.find(id);
+        if (!en) return "a removed envelope";
+        const std::string object = en->target.object.str();
+        const std::string what =
+            en->target.param.empty() ? std::string("automation") : en->target.param + " automation";
+        if (object.starts_with("tr_") || object.starts_with("tk_"))
+            return launcherName(s, en->target.object) + "'s " + what;
+        return "the " + what;
+    }
+    if (is("rg_")) {
+        const model::Region* rg = s.regions.find(id);
+        if (!rg) return "a removed section";
+        if (!rg->name.empty()) return rg->name;
+        const double start =
+            rg->timebase == model::Timebase::Time ? s.timeMap->beatAt(rg->start) : rg->start;
+        return "the section at " + barWords(s, start);
+    }
+    return text;
+}
+
 std::string launcherNames(const model::Session& s, std::string_view text) {
+    static constexpr std::string_view kPrefixes[] = {"sc_", "cl_", "tr_", "it_",
+                                                     "tk_", "en_", "rg_"};
     auto word = [&](std::size_t i) {
         return i < text.size() &&
                (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_');
@@ -265,16 +308,14 @@ std::string launcherNames(const model::Session& s, std::string_view text) {
     std::string out;
     for (std::size_t i = 0; i < text.size();) {
         const std::string_view rest = text.substr(i);
-        const bool prefix =
-            rest.starts_with("sc_") || rest.starts_with("cl_") || rest.starts_with("tr_");
+        const bool prefix = std::any_of(std::begin(kPrefixes), std::end(kPrefixes),
+                                        [&](std::string_view p) { return rest.starts_with(p); });
         if (prefix && (i == 0 || !word(i - 1))) {
             std::size_t end = i + 3;
             while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
             if (end > i + 3 && !word(end)) {
                 if (const auto id = model::Id::parse(std::string(text.substr(i, end - i)))) {
-                    out += rest.starts_with("sc_")   ? sceneWords(s, *id)
-                           : rest.starts_with("cl_") ? clipWords(s, *id)
-                                                     : trackWords(s, *id);
+                    out += launcherName(s, *id);
                     i = end;
                     continue;
                 }
@@ -861,7 +902,8 @@ void LauncherPane::paint(ui::Canvas& c) {
                            .withAlpha(dim),
                        ui::kRight | ui::kMiddle);
             stats.keys.push_back(strip > 0 ? keyMark : std::string());
-            std::string label = clip->name.empty() ? id->str() : clip->name;
+            // An unnamed clip by the words a refusal uses (launcherName).
+            std::string label = launcherName(s, *id);
             const std::string fit =
                 c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
             if (!fit.empty())
@@ -1439,6 +1481,7 @@ void LauncherHeader::paint(ui::Canvas& c) {
     const model::Session& s = view_.session();
     stats.refused = 0;
     stats.refusedScenes.clear();
+    stats.names.clear();
     c.fillRect(b, t.color("panel"));
     c.fillRect({b.x, b.bottom() - 1, b.w, 1}, t.color("rule"));
     c.fillRect({b.right() - 1, b.y, 1, b.h}, t.color("rule"));
@@ -1513,8 +1556,10 @@ void LauncherHeader::paint(ui::Canvas& c) {
             drawPlay(c, {cell.x + 1, cell.y, 14, cell.h},
                      t.color("ink-quiet").withAlpha(refused ? 0.45f : 1.0f));
         if (playing) c.strokeRect(cell.inset(1), t.color("playing"), 1.5f);
-        const std::string name = scene->name.empty() ? cols.scenes[col].str() : scene->name;
+        // An unnamed scene by its place, as a refusal says it (launcherName).
+        const std::string name = launcherName(s, cols.scenes[col]);
         const std::string fit = c.elide(name, ui::Font::Ui, caption, cell.w - 19);
+        stats.names.push_back(fit);
         if (!fit.empty())
             c.text({cell.x + 15, cell.y, cell.w - 16, cell.h}, fit, ui::Font::Ui, caption,
                    t.color("ink"), ui::kLeft | ui::kMiddle);
@@ -1752,7 +1797,6 @@ void LauncherHeader::openLayOut() {
         }
     };
     for (std::size_t i = 0; i < scenes.size(); ++i) {
-        const model::Scene* sc = s.scenes.find(scenes[i]);
         const std::int64_t bars = sceneBars(s, scenes[i], at);
         at += static_cast<int>(bars);
         const std::string n = std::to_string(i);
@@ -1760,9 +1804,8 @@ void LauncherHeader::openLayOut() {
         line.layout.gap = 4;
         line.emplace<ui::Label>("launcher.layout.mark." + n, "", ui::Font::UiBold, "small", "armed")
             .layout.width = ui::SizeRule::fixed(8);
-        auto& use = line.emplace<ui::Checkbox>(
-            "launcher.layout.use." + n,
-            sc && !sc->name.empty() ? sc->name : launcherNames(s, scenes[i].str()), true);
+        auto& use = line.emplace<ui::Checkbox>("launcher.layout.use." + n,
+                                               launcherName(s, scenes[i]), true);
         use.layout.width = ui::SizeRule::fraction();
         use.onToggle = [runnable, recompute](bool) {
             runnable();
