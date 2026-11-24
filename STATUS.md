@@ -388,7 +388,8 @@ instructions are in `docs/guides/installing.md`.
   paste; the clipboard empties when another project opens), the inspector's clip fields (an audio clip's Fade in and Fade out,
   each a length and a shape) and the scene count in the status
   line. An audio clip's cell draws its fades as an item's are drawn. The piano roll opens MIDI clips. L4 adds the header's Capture
-  toggle (armed while lit; a stop, seek or loop change commits the
+  toggle (in one row with Stop all and Arrangement, the three drawn as
+  named glyph cells in a pane too narrow for their words; armed while lit; a stop, seek or loop change commits the
   performance with `launch.commit` and arms the next; a refused commit
   keeps the performance, dark, for the next click; a commit made while
   stopped returns the tracks to the arrangement; the cell also lights for
@@ -404,8 +405,6 @@ instructions are in `docs/guides/installing.md`.
   fit.
   Limits:
   - there is no dialog for `arrangement.build`;
-  - Capture sits under Stop all, and in a pane too narrow for it (one or
-    two scenes) Arrangement is not drawn, as before;
   - a MIDI clip's take envelopes and take FX envelopes are edited in its
     roll (clip-time lanes, with point selection, the marquee, moves,
     shapes, copy and paste and the lane's menu as on the timeline, one lane

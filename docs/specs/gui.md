@@ -2994,10 +2994,15 @@ same heights, scroll and colours.
   (`tcp.wheel`): the rows scroll together.
 - **The header cell (amendment L-h).** Above the scene headers, the pane
   takes a cell in the arrange header row, beside the ruler, as wide as the
-  pane. It holds **Stop all** (`launch.stop`, every track) and
-  **Arrangement** (`launch.arrangement`, every track back to the timeline),
-  the header's uniform cells, and under Stop all **Capture** (L4; a cell
-  that does not fit the pane is not drawn).
+  pane. It holds, in one row, **Stop all** (`launch.stop`, every track),
+  **Arrangement** (`launch.arrangement`, every track back to the timeline)
+  and **Capture** (L4), the header's uniform cells (56, 84 and 66 units,
+  6 apart, 8 from the edge). In a pane too narrow for their words (under
+  234 units: one or two scenes) all three are glyph cells, 22 units each:
+  a square for Stop all, two staggered bars for Arrangement and Capture's
+  dot alone. Each says its name as its hint (`LauncherHeader::hintAt`,
+  the status line's), and none overlaps another or the pane's edge at any
+  width the pane allows.
 - **Capture** behaves as recording does. A click arms it
   (`launch.capture {on: true}`: from the position heard now, or where
   playing starts), and it is lit while armed, as the transport's record

@@ -279,13 +279,21 @@ class LauncherHeader : public ui::Node {
     ui::Rect arrangementRect() const;
     ui::Rect scenesRow() const;
     ui::Rect addRect() const;  // the + cell after the last scene
-    // The Capture toggle, under Stop all: lit while armed
+    // The Capture toggle, after Arrangement: lit while armed
     // (ArrangeView::captureArmed).
     ui::Rect captureRect() const;
+    // Stop all, Arrangement and Capture sit in one row. Where their words
+    // don't fit (a pane one or two scenes wide), all three are glyph cells
+    // (kGlyphCell wide) whose names are their hints, so none overlaps at
+    // any width the pane allows.
+    static constexpr float kGlyphCell = 22;
+    bool glyphCells() const;
+    ui::Hint hintAt(ui::Point p) const override;
     // What the last paint drew (tests).
     struct Stats {
         bool captureLit = false;
         bool captureEnding = false;  // lit, outlined dashed (ArrangeView::captureEnding)
+        bool glyphCells = false;     // Stop all, Arrangement and Capture drawn as glyphs
         int refused = 0;             // scenes whose ▶ is dimmed (ArrangeView::launchRefusals)
         std::vector<model::Id> refusedScenes;  // those scenes, in column order
     } stats;

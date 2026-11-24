@@ -1189,19 +1189,39 @@ ui::Rect LauncherHeader::scenesRow() const {
     return {b.x, b.bottom() - h, b.w, h};
 }
 
+namespace {
+// The header's row of cells: their widths with words, the gap and margin.
+// Each as wide as its words need with a little room (Capture's after its
+// dot), so the words fit a pane three scenes wide.
+constexpr float kStopWide = 56, kArrangementWide = 84, kCaptureWide = 66, kCellGap = 6,
+                kCellMargin = 8;
+}  // namespace
+
+bool LauncherHeader::glyphCells() const {
+    return bounds().w <
+           2 * kCellMargin + kStopWide + kArrangementWide + kCaptureWide + 2 * kCellGap;
+}
+
 ui::Rect LauncherHeader::stopRect() const {
     const ui::Rect b = bounds();
-    return {b.x + 8, b.y + 8, 64, 20};
+    return {b.x + kCellMargin, b.y + 8, glyphCells() ? kGlyphCell : kStopWide, 20};
 }
 
 ui::Rect LauncherHeader::arrangementRect() const {
     const ui::Rect s = stopRect();
-    return {s.right() + 6, s.y, 92, s.h};
+    return {s.right() + kCellGap, s.y, glyphCells() ? kGlyphCell : kArrangementWide, s.h};
 }
 
 ui::Rect LauncherHeader::captureRect() const {
-    const ui::Rect s = stopRect();
-    return {s.x, s.bottom() + 6, s.w, s.h};
+    const ui::Rect a = arrangementRect();
+    return {a.right() + kCellGap, a.y, glyphCells() ? kGlyphCell : kCaptureWide, a.h};
+}
+
+ui::Hint LauncherHeader::hintAt(ui::Point p) const {
+    if (stopRect().contains(p)) return {"Stop all", {}};
+    if (arrangementRect().contains(p)) return {"Arrangement", {}};
+    if (captureRect().contains(p)) return {"Capture", {}};
+    return hint;
 }
 
 ui::Rect LauncherHeader::addRect() const {
@@ -1223,19 +1243,34 @@ void LauncherHeader::paint(ui::Canvas& c) {
     c.fillRect({b.x, b.bottom() - 1, b.w, 1}, t.color("rule"));
     c.fillRect({b.right() - 1, b.y, 1, b.h}, t.color("rule"));
     const float caption = t.type("caption");
-    // Stop and arrangement, for every track: the header's uniform cells.
+    // Stop and arrangement, for every track: the header's uniform cells,
+    // their words or, where those don't fit, a glyph each (the name is the
+    // hint): a square for Stop all, two staggered bars (the timeline's items)
+    // for Arrangement.
+    const bool glyphs = glyphCells();
+    stats.glyphCells = glyphs;
     for (const auto& [r, label] :
          {std::pair{stopRect(), "Stop all"}, std::pair{arrangementRect(), "Arrangement"}}) {
-        if (r.right() > b.right()) continue;
         c.fillRound(r, 3, t.color("raised"));
         c.strokeRound(r, 3, t.color("rule"));
-        c.text(r, label, ui::Font::Ui, caption, t.color("ink"), ui::kCenter | ui::kMiddle);
+        if (!glyphs) {
+            c.text(r, label, ui::Font::Ui, caption, t.color("ink"), ui::kCenter | ui::kMiddle);
+            continue;
+        }
+        const float cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+        if (r == stopRect()) {
+            c.fillRect({cx - 4, cy - 4, 8, 8}, t.color("ink"));
+        } else {
+            c.fillRect({cx - 6, cy - 4, 8, 3}, t.color("ink"));
+            c.fillRect({cx - 2, cy + 1, 8, 3}, t.color("ink"));
+        }
     }
     // Capture, as the transport's record button: a red dot, the cell lit
     // while armed; ending on its boundary, outlined dashed as a queued cell.
     stats.captureLit = view_.captureArmed();
     stats.captureEnding = stats.captureLit && view_.captureEnding();
-    if (const ui::Rect r = captureRect(); r.right() <= b.right() && r.bottom() <= scenesRow().y) {
+    {
+        const ui::Rect r = captureRect();
         const ui::Color red = t.color("armed");
         if (stats.captureEnding) {
             c.fillRound(r, 3, red.withAlpha(0.2f));
@@ -1247,10 +1282,12 @@ void LauncherHeader::paint(ui::Canvas& c) {
             c.fillRound(r, 3, t.color("raised"));
             c.strokeRound(r, 3, t.color("rule"));
         }
-        c.fillCircle({r.x + 10, r.y + r.h / 2}, 3.5f,
+        // As a glyph, the dot alone, centred.
+        c.fillCircle({glyphs ? r.x + r.w / 2 : r.x + 10, r.y + r.h / 2}, 3.5f,
                      stats.captureLit ? red : t.color("ink-quiet"));
-        c.text({r.x + 16, r.y, r.w - 18, r.h}, "Capture", ui::Font::Ui, caption, t.color("ink"),
-               ui::kCenter | ui::kMiddle);
+        if (!glyphs)
+            c.text({r.x + 16, r.y, r.w - 18, r.h}, "Capture", ui::Font::Ui, caption, t.color("ink"),
+                   ui::kCenter | ui::kMiddle);
     }
     // The scene headers: a ▶ and the name, in the marker row's height.
     const ui::Rect row = scenesRow();

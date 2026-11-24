@@ -733,6 +733,66 @@ TEST_CASE("launcher: selected items dragged into a cell make a clip each, in one
     CHECK(f.app->head().clips.size() == clips);
 }
 
+TEST_CASE("launcher: Stop all, Arrangement and Capture share one row; narrow, they are glyphs") {
+    LauncherFixture f;
+    f.song();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    auto apart = [](const ui::Rect& a, const ui::Rect& b) {
+        return a.right() <= b.x || b.right() <= a.x || a.bottom() <= b.y || b.bottom() <= a.y;
+    };
+    std::vector<float> widths{views::LauncherColumns::kMinWidth, 180, 200, 233, 234, 260, 400};
+    bool sawGlyphs = false, sawWords = false;
+    for (const float width : widths) {
+        f.view->setLauncherWidth(width);
+        f.sync();
+        f.root->damageAll();
+        f.root->frame(false);
+        const ui::Rect b = header.bounds();
+        const ui::Rect stop = header.stopRect(), arr = header.arrangementRect(),
+                       cap = header.captureRect();
+        INFO("width " << width);
+        // One row, inside the header and above the scene names, apart.
+        CHECK(stop.y == arr.y);
+        CHECK(arr.y == cap.y);
+        for (const ui::Rect& r : {stop, arr, cap}) {
+            CHECK(r.x >= b.x);
+            CHECK(r.right() <= b.right());
+            CHECK(r.bottom() <= header.scenesRow().y);
+        }
+        CHECK(apart(stop, arr));
+        CHECK(apart(arr, cap));
+        CHECK(apart(stop, cap));
+        CHECK(header.stats.glyphCells == header.glyphCells());
+        if (header.glyphCells()) {
+            sawGlyphs = true;
+            CHECK(stop.w == views::LauncherHeader::kGlyphCell);
+            CHECK(cap.w == views::LauncherHeader::kGlyphCell);
+        } else {
+            sawWords = true;
+        }
+        // Each says its name where the pointer rests, words or glyph.
+        CHECK(header.hintAt({stop.x + stop.w / 2, stop.y + stop.h / 2}).name == "Stop all");
+        CHECK(header.hintAt({arr.x + arr.w / 2, arr.y + arr.h / 2}).name == "Arrangement");
+        CHECK(header.hintAt({cap.x + cap.w / 2, cap.y + cap.h / 2}).name == "Capture");
+        if (width == views::LauncherColumns::kMinWidth) f.snapshot("launcher-header-glyphs.png");
+        if (width == 260) f.snapshot("launcher-header-words.png");
+    }
+    CHECK(sawGlyphs);
+    CHECK(sawWords);
+    // A pane fitted to three scenes (the + cell and Arr after them) has the words.
+    f.view->setLauncherWidth(0);
+    f.sync();
+    CHECK(f.view->launcherWidth() >= 3 * views::LauncherColumns::kColumn);
+    CHECK_FALSE(header.glyphCells());
+    // The glyph cells still press: Stop all and Capture at the narrowest.
+    f.view->setLauncherWidth(views::LauncherColumns::kMinWidth);
+    f.sync();
+    f.commands.clear();
+    const ui::Rect stop = header.stopRect();
+    f.click({stop.x + stop.w / 2, stop.y + stop.h / 2});
+    CHECK(f.commands == std::vector<std::string>{"launch.stop"});
+}
+
 TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected, in both themes") {
     LauncherFixture f;
     f.song();

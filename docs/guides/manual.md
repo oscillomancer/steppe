@@ -1723,7 +1723,11 @@ launches the scene; double-click its name to rename it, drag it sideways
 to reorder the scenes, and right-click it for Rename, Colour, Insert at
 playhead, Insert at end and Delete. The **+** after the last scene adds one.
 
-**Capture**, under Stop all, records what you launch the way the record
+Stop all, Arrangement and Capture sit in one row. In a narrow pane they
+show as small symbols (a square, two bars and a dot); rest the pointer on
+one and the status line names it.
+
+**Capture**, after Arrangement, records what you launch the way the record
 button records audio. Click it so it lights, then play and launch clips and
 scenes. When you stop (or seek, or change the loop) the performance is
 written onto the timeline as items, in one undo step, and Capture stays lit
