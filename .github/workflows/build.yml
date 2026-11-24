@@ -182,6 +182,29 @@ jobs:
       # Ninja/clang-cl still need the Windows SDK and link.exe environment.
       - uses: ilammy/msvc-dev-cmd@v1
         if: matrix.platform == 'windows'
+      # Real-time scanning sees every process start and every file the build writes. The runner
+      # is disposable, so its workspace and temp folders are excluded; the state is printed before
+      # and after, to read what the runner had (round: test-time study, section 12). A refusal
+      # (tamper protection, no rights) leaves the run unchanged.
+      - name: Windows Defender state and exclusion
+        if: matrix.platform == 'windows'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          function Show-Defender($label) {
+            "--- Defender $label"
+            Get-MpComputerStatus | Select-Object AMRunningMode, RealTimeProtectionEnabled, BehaviorMonitorEnabled, IoavProtectionEnabled | Format-List | Out-String | Write-Host
+            $p = Get-MpPreference
+            $p.ExclusionPath | ForEach-Object { "path exclusion: $_" } | Write-Host
+            $p.ExclusionProcess | ForEach-Object { "process exclusion: $_" } | Write-Host
+          }
+          Show-Defender 'before'
+          # The workspace holds the build tree, ccache and .deps; the build tools' own reads
+          # (headers, libraries, compilers) are covered by excluding the processes.
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:TEMP
+          Add-MpPreference -ExclusionProcess 'clang-cl.exe', 'lld-link.exe', 'link.exe', 'cl.exe', 'ninja.exe', 'cmake.exe', 'ctest.exe', 'ccache.exe'
+          Show-Defender 'after'
       - name: Windows dependencies (vcpkg binary cache)
         if: matrix.platform == 'windows'
         run: |
@@ -321,6 +344,30 @@ jobs:
           SAMPLER
           : > "$RUNNER_TEMP/memavail.log"
           nohup setsid bash "$RUNNER_TEMP/memsampler.sh" "$RUNNER_TEMP/memavail.log" "$RUNNER_TEMP/memsampler.pid" > /dev/null 2>&1 &
+      # CPU use every 15 s through Build and the tests: "HH:MM:SS cpu% availableMB". It shows how much of
+      # the step the CPU idles in (sleeping or waiting tests, a serial tail); ctest reports no CPU time.
+      # Started detached here, summarised after Build and after the tests, stopped by its pid.
+      - name: Windows CPU sampler
+        if: matrix.platform == 'windows'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:RUNNER_TEMP 'cpusampler.ps1'
+          $log = Join-Path $env:RUNNER_TEMP 'cpu.log'
+          $pidfile = Join-Path $env:RUNNER_TEMP 'cpusampler.pid'
+          Set-Content -Encoding ascii -Path $log -Value $null
+          @'
+          param($log, $pidfile)
+          $PID | Out-File -Encoding ascii $pidfile
+          while ($true) {
+            $c = (Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
+            $m = (Get-Counter '\Memory\Available MBytes' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
+            ('{0} {1:N0} {2:N0}' -f (Get-Date -Format 'HH:mm:ss'), $c, $m) | Out-File -Append -Encoding ascii $log
+            Start-Sleep -Seconds 15
+          }
+          '@ | Set-Content -Encoding ascii -Path $script
+          Start-Process -FilePath pwsh -ArgumentList '-NoProfile', '-File', $script, $log, $pidfile -WindowStyle Hidden
       # ccache keeps its counters in the cache directory, so a restored cache
       # carries the last run's: zero them to read this run's hit rate.
       - name: Compiler cache statistics reset
@@ -381,6 +428,14 @@ jobs:
             echo "ccache log: $(wc -l < "$CCACHE_LOGFILE") lines; rejected compiles by reason:"
             grep -i 'unsupported' "$CCACHE_LOGFILE" | sed -E 's/^\[[^]]*\] *//' | sort | uniq -c | sort -rn | sed -n 1,20p || true
           fi
+      - name: Windows CPU use after Build
+        if: always() && matrix.platform == 'windows'
+        continue-on-error: true
+        run: |
+          log="$RUNNER_TEMP/cpu.log"
+          wc -l < "$log" > "$RUNNER_TEMP/cpu-build-lines"
+          echo "Build: samples, mean CPU busy, samples under 50% busy, mean available MB"
+          awk 'NF >= 2 { n++; s += $2; m += $3; if ($2 < 50) low++ } END { if (n) printf "%d samples, mean %.0f%%, %d under 50%% (%.0f%%), %.0f MB available\n", n, s / n, low, 100 * low / n, m / n }' "$log"
       - name: Test Linux (software OpenGL under Xvfb)
         if: matrix.platform == 'linux'
         env:
@@ -420,6 +475,20 @@ jobs:
             export MallocPreScribble=1 MallocScribble=1
           fi
           ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
+      - name: Windows CPU use after tests
+        if: always() && matrix.platform == 'windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/cpu.log"
+          if [[ -f "$RUNNER_TEMP/cpusampler.pid" ]]; then
+            taskkill //PID "$(tr -d '\r\n ' < "$RUNNER_TEMP/cpusampler.pid")" //F > /dev/null 2>&1 || true
+          fi
+          from=$(( $(cat "$RUNNER_TEMP/cpu-build-lines" 2> /dev/null || echo 0) + 1 ))
+          echo "Tests: samples, mean CPU busy, samples under 50% busy, mean available MB"
+          tail -n +"$from" "$log" | awk 'NF >= 2 { n++; s += $2; m += $3; if ($2 < 50) low++ } END { if (n) printf "%d samples, mean %.0f%%, %d under 50%% (%.0f%%), %.0f MB available\n", n, s / n, low, 100 * low / n, m / n }'
+          echo "busy % over the test step, one value per 15 s:"
+          tail -n +"$from" "$log" | awk 'NF >= 2 { printf "%s ", $2 } END { print "" }'
       - name: Linux memory and disk after tests
         if: always() && matrix.platform == 'linux'
         continue-on-error: true
