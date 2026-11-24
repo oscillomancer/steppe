@@ -937,6 +937,9 @@ TEST_CASE("isolation: a hanging plugin is killed at the deadline") {
     REQUIRE(c.startProcessing());
     REQUIRE(c.setParam(1, 2.0));  // hang in the next process()
     Buffers buf(256);
+    // The binary's deadline is patient (bridge_patience.cpp): this instance's
+    // own, short one is set only for the call that must hang.
+    c.setCallDeadlineMs(200);
     REQUIRE(c.process(buf.block(256)));
     CHECK(c.failed());
     CHECK(c.failure().find("stopped responding") != std::string::npos);
