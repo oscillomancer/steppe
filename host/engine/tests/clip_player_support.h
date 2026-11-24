@@ -133,6 +133,7 @@ using Loop = std::optional<std::pair<double, double>>;
 // decided after bar 2 finds its next bar past the loop end: the song wraps
 // before that anchor too, and it lands on bar 2 of the next pass.
 inline const Loop kWrapBeforeAnchor = std::pair{1.0, 3.0};
+// A step with no requests and no load only services the engine.
 struct Step {
     std::int64_t cycle;
     std::vector<Engine::LaunchRequest> requests;
@@ -220,6 +221,7 @@ inline Live playLive(const model::Session& s, const fs::path& dir, const EngineO
             REQUIRE(engine.load(*step.load, dir));
             continue;
         }
+        if (step.requests.empty()) continue;  // a service alone, as the app's tick
         auto placed = engine.launch(step.requests, step.quantize);
         REQUIRE_MESSAGE(placed, (placed ? std::string() : placed.error().toString()));
         report += "\n  step at frame " + std::to_string(step.cycle * block) + ": placed epoch " +

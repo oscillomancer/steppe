@@ -1128,7 +1128,8 @@ the replay.
   refused.
 
 **Consequences.**
-- Tests (test_clip_player_rate.cpp): live equals the replay for a scene,
+- Tests (test_clip_player_rate_stretch.cpp; the refusal in
+  test_clip_player_rate.cpp): live equals the replay for a scene,
   a switch between two audio clips and a stop under a pitch-keeping 0.75
   and an envelope, in both executors, at two block sizes (the envelope at
   one), and differs from the tape reading; the warm-up primes a quantum's worth a quantum, is
@@ -1140,8 +1141,10 @@ the replay.
   during the warm-up; a rate change during the warm-up still switches; a
   launch made while stopped lands on the play start; a launch made during
   another's warm-up lands after its switch, live as the replay, also at
-  32-frame blocks; MIDI, stop and return launches keep the tape path's
-  timing; the capture ends at an audio launch's switch and commits
+  32-frame blocks; a stop, a return or a MIDI clip pressed during it,
+  quantized or not, lands after its switch and wins, live as the replay;
+  MIDI, stop and return launches keep the tape path's timing; the capture
+  ends at an audio launch's switch and commits
   exactly; a clip with take FX is refused.
 - Each node with audio clips holds three converters under a pitch-keeping
   plan: about 0.94 MB each, stereo at 48 kHz.

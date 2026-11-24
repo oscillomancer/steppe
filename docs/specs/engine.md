@@ -766,7 +766,10 @@ the same.*
     samples, and the arrangement's tape items read nothing past it after a
     switch away, nor before the anchor while a switch back fades them in
     (`Clip::gateFrom`, set by `launchAudio`; a stretch converter is not
-    cut). Within the kernel's reach before a switch that lands on such a
+    cut). While a clip holds the track, its items' stretch converters still
+    run every quantum, their output unused, so they are current when the
+    arrangement comes back (a skipped converter refused the jump and failed
+    every block after). Within the kernel's reach before a switch that lands on such a
     clip's wrap, live reads the pass's end gated at the wrap while the
     commit reads on (the switch reaches the node at its frame): a stated
     limit, measured up to 0.011.
@@ -790,8 +793,9 @@ the same.*
     what a warm-up would, else at its own quantum; its loop cycle is the
     switch frame's either way (`Node::launchSwitchAt`, set by the first
     block after the switch). The worst cold restart is 45 primes and 32
-    quanta of catch-up in one block (48 kHz). It reads the player's song frames from the
-    anchor, in loop cycles after the switch's; the switch crossfade and
+    quanta of catch-up in one block (48 kHz). It reads the player's song
+    frames from the anchor, in loop cycles after the switch's; the switch
+    crossfade and
     the clip's fades weight its output. Going out it plays on as the clip
     repeats, without the tape path's held pass or cut at the crossfade's
     end: its converter has read some 5000 song frames past a switch before
@@ -972,7 +976,11 @@ the same.*
   - An entry of another epoch is not applied by an executor in a newer
     one, except the remaining targets of an applied entry (above).
     `service()` places missed, voided and old-epoch entries again, alone,
-    from the current position. It drops, with a
+    from the current position: a launch the renderer overtook while it was
+    placed lands at most one service interval (the app's tick) plus the
+    floor (render-ahead, a block, its lead or warm-up) after it was
+    pressed when unquantized, and on the next boundary after that
+    otherwise. It drops, with a
   warning, any waiting entry whose track or clip the latest plan cannot
   play (frozen, removed, or a master playrate active), so an edit never
   leaves a launch to fire later. Applied entries come back

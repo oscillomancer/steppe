@@ -92,8 +92,8 @@ if(SUPPLE_BUILD_TESTS)
   # The longest engine file under ThreadSanitizer: it ran past the presets'
   # 600 s on a busy machine and took 363 s alone.
   set_tests_properties(engine.tests.test_realtime_playrate PROPERTIES TIMEOUT 1200)
-  # One case each, about 5 min under ThreadSanitizer at -j 3 (the preset runs
-  # 6): a minute in dev.
+  # About 5 min under ThreadSanitizer at -j 3 (the preset runs 6), a minute
+  # or so in dev: one case each, rate_stretch eight shorter ones.
   set_tests_properties(engine.tests.test_clip_player_rate_chain engine.tests.test_clip_player_rate_wrap
                        engine.tests.test_clip_player_rate_fades engine.tests.test_clip_player_rate_stretch
                        PROPERTIES TIMEOUT 1200)
