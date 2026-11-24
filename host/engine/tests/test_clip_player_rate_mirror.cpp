@@ -22,6 +22,7 @@ struct MirrorRun {
     std::uint32_t latency = 0;
     std::vector<std::pair<std::int64_t, std::uint64_t>> around;  // primes per run about S
     std::int64_t switched = 0;
+    std::int64_t S = INT64_MIN;  // the change's switch as prepared, a stream frame
 };
 
 // twoTracks' cl_2 (with two tracks, cl_3 on a third track like tr_2 as
@@ -56,11 +57,13 @@ MirrorRun changeRun(const EngineOptions& options, int tracks, Change kind, bool 
     MirrorRun out;
     out.around = primesPerRun(live, 150016, 280064, block, [&](std::int64_t f) {
         if (f != 200064) return;
+        live.settle();  // no attempt late: the S an unloaded run gets (round 166 T1)
         if (kind == Change::Envelope)
             p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
                              R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
         else
             p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        out.S = preparedSwitchForTests(*p.app->engine());
     });
     CHECK(p.app->engine()->processErrors() == 0);
     const auto log = p.app->engine()->launchLog();
@@ -77,8 +80,12 @@ std::uint64_t primes(const MirrorRun& r) {
     return n;
 }
 
-// The first frame where two runs differ, or -1.
+// The first frame where two runs differ, or -1. Two runs whose change
+// switched at different frames differ for that alone (review round 166),
+// so that is checked first, and said.
 std::int64_t firstDifference(const MirrorRun& a, const MirrorRun& b) {
+    INFO("switches at " << a.S << " and " << b.S);
+    REQUIRE(a.S == b.S);
     if (a.latency != b.latency || a.heard.size() != b.heard.size()) return 0;
     for (std::size_t k = 0; k < a.heard.size(); ++k)
         if (a.heard[k] != b.heard[k]) return std::int64_t(k);
@@ -123,8 +130,10 @@ TEST_CASE("two launches that differ only in their switch's quantum both find the
     // sooner, into another quantum; both readings are found at S, and each
     // plays what the miss path plays.
     const auto wobble = [](Project& p, AppLive& live) {
+        live.settle();
         p.run("transport.playrate.set", R"({"rate": 0.8, "preserve_pitch": true})");
         live.until(60032);
+        live.settle();
         p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
     };
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {

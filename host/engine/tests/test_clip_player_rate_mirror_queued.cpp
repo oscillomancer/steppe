@@ -17,6 +17,7 @@ struct MirrorRun {
     std::vector<float> heard;
     std::uint32_t latency = 0;
     std::vector<std::pair<std::int64_t, std::uint64_t>> around;  // primes per run about S
+    std::int64_t S = INT64_MIN;  // the change's switch as prepared, a stream frame
 };
 
 std::uint64_t primes(const MirrorRun& r) {
@@ -25,7 +26,12 @@ std::uint64_t primes(const MirrorRun& r) {
     return n;
 }
 
+// The first frame where two runs differ, or -1; first that their change
+// switched at the same frame, without which they differ for that alone
+// (review round 166).
 std::int64_t firstDifference(const MirrorRun& a, const MirrorRun& b) {
+    INFO("switches at " << a.S << " and " << b.S);
+    REQUIRE(a.S == b.S);
     if (a.latency != b.latency || a.heard.size() != b.heard.size()) return 0;
     for (std::size_t k = 0; k < a.heard.size(); ++k)
         if (a.heard[k] != b.heard[k]) return std::int64_t(k);
@@ -61,14 +67,19 @@ MirrorRun loopRun(const EngineOptions& options, LoopCase loop, bool mirror) {
     p.run("launch.clip", R"({"clip": "cl_2"})");
     const std::int64_t switched = later ? 384000 : 128000;
     live.until(switched + 1024);
-    if (loop == LoopCase::Moved)
+    if (loop == LoopCase::Moved) {
+        live.settle();
         p.run("transport.loop", R"({"start_seconds": 0, "end_seconds": 10, "enabled": true})");
+    }
     // The change: 16000 after the switch in cycle 1, or after the wrap.
     const std::int64_t change = later ? 400000 : 272000;
     live.until(change - 128);
     MirrorRun out;
     out.around = primesPerRun(live, change - 128, change + 80000, block, [&](std::int64_t f) {
-        if (f == change) addEnvelope(p);
+        if (f != change) return;
+        live.settle();  // no attempt late: the S an unloaded run gets (round 166 T1)
+        addEnvelope(p);
+        out.S = preparedSwitchForTests(*p.app->engine());
     });
     CHECK(p.app->engine()->processErrors() == 0);
     const auto log = p.app->engine()->launchLog();
@@ -147,7 +158,10 @@ TEST_CASE("launches queued across a trajectory change play the same with the mir
             p.run("launch.clip", R"({"clip": "cl_3"})");  // bar 3
             const std::int64_t lag = c.anticipative ? 9793 : 9601;
             live.until(256000 - lag - c.d);
+            live.settle();  // no attempt late: the S an unloaded run gets (round 166 T1)
             addEnvelope(p);
+            MirrorRun& out = runs[mirror ? 0 : 1];
+            out.S = preparedSwitchForTests(*p.app->engine());
             std::uint64_t executed = 0;  // primed by the executors, not the main thread
             for (std::int64_t f = 256000 - lag - c.d + 1024; f < 420000; f += 1024) {
                 const std::uint64_t before = detail::stretchPrimes();
@@ -158,7 +172,6 @@ TEST_CASE("launches queued across a trajectory change play the same with the mir
             primed[mirror ? 0 : 1] = executed;
             CHECK(p.app->engine()->processErrors() == 0);
             REQUIRE(p.app->engine()->launchLog().size() == 2);
-            MirrorRun& out = runs[mirror ? 0 : 1];
             out.heard = live.stop();
             out.latency = live.latency;
         }
