@@ -391,6 +391,8 @@ Result<Engine::LaunchPlaced> Engine::launch(std::span<const LaunchRequest> reque
 }
 
 std::optional<Error> Engine::launchRefused(const detail::Plan& plan, const LaunchRequest& r) const {
+    // The scene (r.scene) is not read: EngineApp::launchRefusals answers a
+    // scene from its clips' refusals, asked without it (round 149 S2).
     const bool clip = r.action == LaunchLogEntry::Action::Clip;
     // With the pitch kept, launched audio warms a stretch converter up
     // (S3 step D); one read through its take chain has no player yet.

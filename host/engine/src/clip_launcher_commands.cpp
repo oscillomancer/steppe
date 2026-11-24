@@ -46,19 +46,32 @@ void warnClipsRemoved(cmd::Context& ctx, const std::vector<Id>& clips, const std
              path);
 }
 
-SceneLaunch sceneLaunchRequests(const model::Session& s, Id scene, const std::vector<Id>& skipped) {
-    SceneLaunch out;
-    for (Id track : tracksInDisplayOrder(s))
-        for (const auto& e : s.clips) {
-            if (e.value->scene != scene || e.value->track != track) continue;
-            if (s.tracks.find(track)->freeze)
-                out.left.push_back({"track.frozen", track, e.id});
-            else if (std::find(skipped.begin(), skipped.end(), e.id) != skipped.end())
-                out.left.push_back({"launch.memory", track, e.id});
+std::map<Id, SceneLaunch> sceneLaunches(const model::Session& s, const std::vector<Id>& skipped) {
+    std::map<Id, std::vector<Id>> byTrack;  // each track's clips, in the session's order
+    for (const auto& e : s.clips) byTrack[e.value->track].push_back(e.id);
+    std::map<Id, SceneLaunch> out;
+    for (Id track : tracksInDisplayOrder(s)) {
+        const auto clips = byTrack.find(track);
+        if (clips == byTrack.end()) continue;
+        const bool frozen = s.tracks.find(track)->freeze.has_value();
+        for (Id clip : clips->second) {
+            const Id scene = s.clips.find(clip)->scene;
+            SceneLaunch& selection = out[scene];
+            if (frozen)
+                selection.left.push_back({"track.frozen", track, clip});
+            else if (std::find(skipped.begin(), skipped.end(), clip) != skipped.end())
+                selection.left.push_back({"launch.memory", track, clip});
             else
-                out.requests.push_back({track, LaunchLogEntry::Action::Clip, e.id, scene});
+                selection.requests.push_back({track, LaunchLogEntry::Action::Clip, clip, scene});
         }
+    }
     return out;
+}
+
+SceneLaunch sceneLaunchRequests(const model::Session& s, Id scene, const std::vector<Id>& skipped) {
+    auto all = sceneLaunches(s, skipped);
+    const auto found = all.find(scene);
+    return found == all.end() ? SceneLaunch{} : std::move(found->second);
 }
 
 Error sceneHasNoClip(Id scene) {

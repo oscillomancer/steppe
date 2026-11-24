@@ -1119,8 +1119,11 @@ the same.*
   `EngineApp::launchRefusals()` gives every clip's and scene's answer in
   one pass (`clips` and `scenes` maps, refused ones only), equal entry for
   entry to the per-id calls: it reads `clipsSkipped` and the display order
-  once and groups clips by scene, so a pane's recompute costs
-  O(C log C + T) plus each clip's plan check (round 147 F1).
+  once and takes every scene's selection from `sceneLaunches`, the one
+  function launch.scene and the per-scene answer also take theirs from
+  (round 149 S1), so a pane's recompute costs O(C log C + T), a scan of
+  the memory-skipped clips per clip, and each clip's plan check (round
+  147 F1).
   `EngineApp::launchRefusalGeneration()` moves whenever an answer can
   change: a published plan (each engine's count is folded into a base
   that survives a restart), an engine starting or stopping, a session

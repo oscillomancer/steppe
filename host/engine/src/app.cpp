@@ -5667,31 +5667,20 @@ EngineApp::LaunchRefusals EngineApp::launchRefusals() const {
         for (const auto& e : s.clips)
             if (auto refused = clipRefusal(s, e.id)) out.clips.emplace(e.id, std::move(*refused));
         if (!engine_) return;  // launch.scene: engine.stopped
-        // launch.scene's selection for every scene at once
-        // (sceneLaunchRequests): each scene's clips in track display order,
-        // each track's in the session's order, frozen tracks' and
-        // memory-skipped clips left out.
-        const std::vector<model::Id> skipped = engine_->clipsSkipped();
-        std::map<model::Id, std::vector<model::Id>> byTrack;
-        for (const auto& e : s.clips) byTrack[e.value->track].push_back(e.id);
-        std::map<model::Id, std::vector<model::Id>> byScene;
-        for (const model::Id track : tracksInDisplayOrder(s)) {
-            const auto clips = byTrack.find(track);
-            if (clips == byTrack.end() || s.tracks.find(track)->freeze) continue;
-            for (const model::Id clip : clips->second)
-                if (std::find(skipped.begin(), skipped.end(), clip) == skipped.end())
-                    byScene[s.clips.find(clip)->scene].push_back(clip);
-        }
+        // launch.scene's selection for every scene at once, the one the
+        // per-scene answer and the press take; each request's refusal is the
+        // clip's above (Engine::launchRefused does not read the scene).
+        const auto selections = sceneLaunches(s, engine_->clipsSkipped());
         for (const auto& e : s.scenes) {
-            const auto selection = byScene.find(e.id);
-            if (selection == byScene.end()) {
+            const auto selection = selections.find(e.id);
+            if (selection == selections.end() || selection->second.requests.empty()) {
                 Error none = sceneHasNoClip(e.id);
                 none.path = "/args/scene";
                 out.scenes.emplace(e.id, std::move(none));
                 continue;
             }
-            for (const model::Id clip : selection->second)
-                if (const auto refused = out.clips.find(clip); refused != out.clips.end()) {
+            for (const Engine::LaunchRequest& r : selection->second.requests)
+                if (const auto refused = out.clips.find(r.clip); refused != out.clips.end()) {
                     Error first = refused->second;
                     first.path = "/args/scene";
                     out.scenes.emplace(e.id, std::move(first));
