@@ -171,10 +171,11 @@ struct CompFixture {
 struct Seam {
     std::int64_t at;
     std::size_t left, right;
+    std::int64_t half = -1;  // this seam's own half-length in samples; -1: the shared one
 };
 
 // What the master should be: each stretch's take, crossfaded over `half` samples either side of
-// every seam with the shape's gains, from the takes' own renders.
+// every seam (or the seam's own half) with the shape's gains, from the takes' own renders.
 std::vector<double> expected(const std::vector<std::vector<float>>& refs,
                              const std::vector<Seam>& seams, std::size_t first, std::int64_t half,
                              model::FadeShape shape) {
@@ -185,9 +186,10 @@ std::vector<double> expected(const std::vector<std::vector<float>>& refs,
             if (static_cast<std::int64_t>(n) >= s.at) index = s.right;
         out[n] = static_cast<double>(refs[index][n]);
         for (const Seam& s : seams) {
-            const std::int64_t j = static_cast<std::int64_t>(n) - (s.at - half);
-            if (half > 0 && j >= 0 && j < 2 * half) {
-                const double f = static_cast<double>(2 * half);
+            const std::int64_t h = s.half >= 0 ? s.half : half;
+            const std::int64_t j = static_cast<std::int64_t>(n) - (s.at - h);
+            if (h > 0 && j >= 0 && j < 2 * h) {
+                const double f = static_cast<double>(2 * h);
                 out[n] = static_cast<double>(refs[s.left][n]) *
                              model::fadeGain(shape, 0, (f - static_cast<double>(j)) / f) +
                          static_cast<double>(refs[s.right][n]) *
@@ -804,6 +806,11 @@ TEST_CASE("take.comp moving a MIDI seam again and again gives what the same span
                                       R"(,"index":0},{"from":)" + seam + R"(,"to":8,"index":1}]})");
         // However the seam moves, there is one piece for each take: two, not one per move.
         CHECK(last.find("pieces")->asArray().size() == 2);
+        // A comp that is hard cuts already takes hard cuts for the seam it moves: nothing is
+        // skipped, so no comp.crossfade_skipped (and no warnings at all).
+        if (const json::Value* warnings = last.find("warnings"))
+            for (const auto& w : warnings->asArray())
+                CHECK(w.find("code")->asString() != "comp.crossfade_skipped");
     }
     const auto want =
         b.run("take.comp", R"({"item":"it_2","spans":[{"from":2.25,"to":8,"index":1}]})");
@@ -825,8 +832,11 @@ TEST_CASE("take.comp moving a MIDI seam again and again gives what the same span
     REQUIRE(heard.size() == 2);
     CHECK(heard[0].find("C4") != std::string::npos);
     CHECK(heard[1].find("G4") != std::string::npos);
-    for (const auto& w : last.find("warnings")->asArray())
-        CHECK(w.find("code")->asString() != "comp.midi_boundary");
+    // (A comp that is hard cuts already takes hard cuts for the seams it moves: no
+    // comp.crossfade_skipped, and so no warnings at all.)
+    if (const json::Value* warnings = last.find("warnings"))
+        for (const auto& w : warnings->asArray())
+            CHECK(w.find("code")->asString() != "comp.midi_boundary");
 }
 
 TEST_CASE("take.comp warns where MIDI pieces of one take cannot be joined") {
@@ -1315,4 +1325,373 @@ TEST_CASE("take.comp.get on a group lists the members, and a member that differs
     CHECK_FALSE(other.find("uniform")->asBool());
     REQUIRE(other.find("differing_members")->asArray().size() == 1);
     CHECK(other.find("differing_members")->asArray()[0].asString() == "tr_2");
+}
+
+// Keeping the seams a take.comp does not touch (section 9 of the takes design): without a
+// crossfade, a seam whose place and takes are unchanged is left exactly as stored.
+namespace {
+// An item's and its takes' canonical JSON, to compare byte for byte.
+std::string stored(const CompFixture& f, model::Id item) {
+    const model::Session head = f.app->head();
+    const auto& it = *head.items.find(item);
+    std::string out = json::writeCanonical(model::toJson(it));
+    for (const auto& take : it.takes)
+        out += json::writeCanonical(model::toJson(*head.takes.find(take)));
+    return out;
+}
+// Four pieces on it_1 (takes 0, 1, 2, 0; seams at beats 1, 2, 3), every seam 0.1 s linear.
+void fourPieces(CompFixture& f,
+                const char* crossfade = R"("crossfade":0.1,"crossfade_shape":"linear",)") {
+    f.run("take.comp", std::string(R"({"item":"it_1",)") + crossfade +
+                           R"("spans":[{"from":0,"to":1,"index":0},{"from":1,"to":2,"index":1},
+                                       {"from":2,"to":3,"index":2},{"from":3,"to":4,"index":0}]})");
+}
+const json::Value* pieceEndingAt(const json::Value& result, double beat) {
+    for (const auto& p : result.find("pieces")->asArray())
+        if (std::abs(p.find("to")->asDouble() - beat) < 1e-6) return &p;
+    return nullptr;
+}
+// Every item and take as stored (undo keeps the id counters, so not the whole file).
+std::string everything(CompFixture& f) {
+    const model::Session head = f.app->head();
+    std::string out;
+    for (const auto& e : head.items)
+        out += e.id.str() + json::writeCanonical(model::toJson(*e.value));
+    for (const auto& e : head.takes)
+        out += e.id.str() + json::writeCanonical(model::toJson(*e.value));
+    return out;
+}
+// A comp take.comp wrote must read back and edit from any of its pieces, the first and the last
+// included (a piece clamped to half its core at both seams makes its neighbours touch): read it
+// from each, and comp it again with the spans the read-back gives, which changes nothing.
+void readsBackAndEditsFromEveryPiece(CompFixture& f, std::size_t count) {
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == count);
+    const std::string stored = everything(f);
+    for (const auto& piece : pieces) {
+        const auto got = f.call("take.comp.get", R"({"item":")" + piece.item.str() + R"("})");
+        REQUIRE_MESSAGE(got, (got ? "" : got.error().toString()));
+        REQUIRE(got->find("pieces")->asArray().size() == count);
+        std::string spans;
+        for (const auto& p : got->find("pieces")->asArray()) {
+            char one[160];
+            std::snprintf(one, sizeof one, R"({"from":%.17g,"to":%.17g,"index":%lld})",
+                          p.find("from")->asDouble(), p.find("to")->asDouble(),
+                          static_cast<long long>(p.find("index")->asInt()));
+            spans += (spans.empty() ? "" : ",") + std::string(one);
+        }
+        const auto again = f.call(
+            "take.comp", R"({"item":")" + piece.item.str() + R"(","spans":[)" + spans + "]}");
+        REQUIRE_MESSAGE(again, (again ? "" : again.error().toString()));
+        CHECK(again->find("pieces")->asArray().size() == count);
+        CHECK(everything(f) == stored);
+    }
+}
+}  // namespace
+
+TEST_CASE("a hand-set seam survives a re-comp elsewhere, byte for byte, and undo restores it") {
+    CompFixture f;
+    fourPieces(f);
+    auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 4);
+    // The seam at beat 1 set by hand: shorter fades, the other shape.
+    for (const char* edit : {R"(,"fade_out":0.03,"fade_out_shape":"cos"})"})
+        f.run("item.set", R"({"item":")" + pieces[0].item.str() + R"(")" + edit);
+    f.run("item.set",
+          R"({"item":")" + pieces[1].item.str() + R"(","fade_in":0.03,"fade_in_shape":"cos"})");
+    REQUIRE_FALSE(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+    const std::string a = stored(f, pieces[0].item), b = stored(f, pieces[1].item);
+    const std::string before = everything(f);
+    // Moves the seam at beat 3 to 3.5, without a crossfade: seams 1 and 2 are not touched.
+    const auto result =
+        f.run("take.comp", R"({"item":"it_1","spans":[{"from":3,"to":3.5,"index":2}]})");
+    CHECK(stored(f, pieces[0].item) == a);  // the hand-set seam's left piece
+    CHECK(stored(f, pieces[1].item) ==
+          b);  // its right piece, which is also the end of the seam at 2
+    // The new seam takes the run's own crossfade (the longest fade, 0.1 s, and its shape).
+    const json::Value* moved = pieceEndingAt(result, 3.5);
+    REQUIRE(moved != nullptr);
+    CHECK(moved->find("fade_out")->asDouble() == doctest::Approx(0.1));
+    CHECK(moved->find("fade_out_shape")->asString() == "linear");
+    // Still a comp with a hand-set seam: read back as such, with that seam's own values.
+    const auto got = f.run("take.comp.get", R"({"item":"it_1"})");
+    CHECK_FALSE(got.find("uniform")->asBool());
+    REQUIRE(got.find("differing_seams")->asArray().size() == 1);
+    const auto& seam = got.find("differing_seams")->asArray()[0];
+    CHECK(seam.find("seam")->asInt() == 0);
+    CHECK(seam.find("crossfade")->asDouble() == doctest::Approx(0.03));
+    CHECK(seam.find("crossfade_shape")->asString() == "cos");
+    // One undo step gives the project back byte for byte.
+    f.run("history.undo");
+    CHECK(everything(f) == before);
+}
+
+TEST_CASE("a given crossfade rebuilds every seam, hand-set ones included") {
+    CompFixture f;
+    fourPieces(f);
+    const auto pieces = f.pieces();
+    f.run("item.set", R"({"item":")" + pieces[1].item.str() + R"(","fade_in":0.03})");
+    REQUIRE_FALSE(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.1,"crossfade_shape":"linear",
+                           "spans":[{"from":3,"to":3.5,"index":2}]})");
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("uniform")->asBool());
+}
+
+TEST_CASE("a seam dragged on its own keeps its own length and shape") {
+    CompFixture f;
+    fourPieces(f);
+    const auto pieces = f.pieces();
+    // The seam at beat 2: shape cos and 0.06 s by hand (its extension stays 0.05 s a side), where
+    // the run's crossfade is 0.1 s linear.
+    f.run("item.set",
+          R"({"item":")" + pieces[1].item.str() + R"(","fade_out":0.06,"fade_out_shape":"cos"})");
+    f.run("item.set",
+          R"({"item":")" + pieces[2].item.str() + R"(","fade_in":0.06,"fade_in_shape":"cos"})");
+    REQUIRE(f.run("take.comp.get", R"({"item":"it_1"})").find("crossfade")->asDouble() ==
+            doctest::Approx(0.1));
+    // The drag: the seam to beat 2.5, the spans around it, no crossfade.
+    const auto result = f.run("take.comp", R"({"item":"it_1","spans":[{"from":1,"to":2.5,"index":1},
+                                                                       {"from":2.5,"to":3,"index":2}]})");
+    const json::Value* moved = pieceEndingAt(result, 2.5);
+    REQUIRE(moved != nullptr);
+    CHECK(moved->find("fade_out_shape")->asString() == "cos");  // not the run's linear
+    CHECK(moved->find("fade_out")->asDouble() ==
+          doctest::Approx(0.06));  // what it read as, not 0.1
+    // The other seams are as they were: linear, 0.1 s.
+    const json::Value* first = pieceEndingAt(result, 1);
+    REQUIRE(first != nullptr);
+    CHECK(first->find("fade_out_shape")->asString() == "linear");
+    CHECK(first->find("fade_out")->asDouble() == doctest::Approx(0.1));
+}
+
+TEST_CASE(
+    "a span edge nearer than a seam's reach rebuilds that seam, and the render has no click") {
+    CompFixture f;
+    const auto refs = f.references();
+    // Three pieces, 0.4 s seams (0.2 s a side) on pieces of 0.5, 0.5 and 1 s.
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.4,"spans":[{"from":0,"to":1,"index":0},
+                           {"from":1,"to":2,"index":1},{"from":2,"to":4,"index":2}]})");
+    // The edge at beat 1.25 leaves the middle piece 0.125 s: the seam at beat 1 (0.2 s a side)
+    // no longer fits beside the new one, so it is not kept: both are rebuilt and clamped.
+    auto result =
+        f.call("take.comp", R"({"item":"it_1","spans":[{"from":1.25,"to":4,"index":2}]})");
+    REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+    const json::Value* newer = pieceEndingAt(*result, 1.25);
+    const json::Value* older = pieceEndingAt(*result, 1);
+    REQUIRE(newer != nullptr);
+    REQUIRE(older != nullptr);
+    // Half the middle piece's core each side: 0.0625 s, fades of 0.125 s, not a hard cut and not
+    // the stored 0.4 s that would run past the new seam.
+    CHECK(newer->find("fade_out")->asDouble() == doctest::Approx(0.125));
+    CHECK(older->find("fade_out")->asDouble() == doctest::Approx(0.125));
+    bool clamped = false;
+    if (const json::Value* warnings = result->find("warnings"))
+        for (const auto& w : warnings->asArray())
+            clamped = clamped || w.find("code")->asString() == "comp.crossfade_clamped";
+    CHECK(clamped);
+    // No piece fades for longer than it is, and the left piece ends before the new seam's fade.
+    const auto stored = f.pieces();
+    REQUIRE(stored.size() == 3);
+    for (const auto& p : stored)
+        CHECK((p.fadeIn + p.fadeOut) * f.rate() <= static_cast<double>(p.end - p.start) + 1e-6);
+    CHECK(stored[0].end <= 30000 - 3000 + 1);  // the new seam, beat 1.25 = 30000, less its half
+    readsBackAndEditsFromEveryPiece(f, 3);     // the outer pieces touch at one sample
+    // The sum of the gains is flat across both seams: the render is what the gains give.
+    const std::vector<Seam> seams = {{24000, 0, 1}, {30000, 1, 2}};
+    CHECK(worst(f.render(), expected(refs, seams, 0, 3000, model::FadeShape::Cos)) < 1e-5);
+}
+
+TEST_CASE("a kept seam and rebuilt ones render as their own halves say") {
+    CompFixture f;
+    const auto refs = f.references();
+    // Takes 0, 1, 2 over 0..1, 1..3 and 3..4 beats with 0.4 s seams: half 9600 samples each.
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.4,"spans":[{"from":0,"to":1,"index":0},
+                           {"from":1,"to":3,"index":1},{"from":3,"to":4,"index":2}]})");
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 3);
+    const std::string left = stored(f, pieces[0].item);
+    CHECK(worst(f.render(), expected(refs, {{24000, 0, 1}, {72000, 1, 2}}, 0, 9600,
+                                     model::FadeShape::Cos)) < 1e-5);
+    // Take 0 over the last quarter, no crossfade: the seam at beat 1 is kept as stored, the one
+    // at beat 3 now has 0.125 s of piece to its right and is rebuilt, and so is the new one at
+    // 3.25; both are clamped to 3000 samples a side.
+    const auto result =
+        f.run("take.comp", R"({"item":"it_1","spans":[{"from":3.25,"to":4,"index":0}]})");
+    CHECK(result.find("pieces")->asArray().size() == 4);
+    CHECK(stored(f, pieces[0].item) == left);
+    const std::vector<Seam> seams = {{24000, 0, 1, 9600}, {72000, 1, 2, 3000}, {78000, 2, 0, 3000}};
+    CHECK(worst(f.render(), expected(refs, seams, 0, 0, model::FadeShape::Cos)) < 1e-5);
+    CHECK(f.pieces()[0].fadeOut * f.rate() == doctest::Approx(19200.0));  // the kept seam
+    CHECK(f.pieces()[1].fadeOut * f.rate() == doctest::Approx(6000.0));   // the rebuilt one
+}
+
+TEST_CASE("a rebuilt fade does not run into a hand-set fade that reaches far into its piece") {
+    CompFixture f;
+    fourPieces(f, R"("crossfade":0.1,)");  // 0.1 s seams, cos
+    const auto pieces = f.pieces();
+    // The middle piece's fade-in set to 0.45 s by hand: 0.4 s into its core of 0.5 s.
+    f.run("item.set", R"({"item":")" + pieces[1].item.str() + R"(","fade_in":0.45})");
+    // The take on the far side of the seam at beat 2 changes, in place: that seam is rebuilt,
+    // the one at beat 1 (its core as it was) is kept. The rebuilt fade has the room left.
+    auto result = f.call("take.comp", R"({"item":"it_1","spans":[{"from":2,"to":3,"index":0}]})");
+    REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+    const json::Value* rebuilt = pieceEndingAt(*result, 2);
+    REQUIRE(rebuilt != nullptr);
+    // The wanted half is the run's longest fade (0.45 s) over two, clamped by the room: 0.1 s.
+    CHECK(rebuilt->find("fade_out")->asDouble() == doctest::Approx(0.2));
+    const auto now = f.pieces();
+    CHECK(now[1].fadeIn == doctest::Approx(0.45));  // the hand-set fade is as set
+    CHECK((now[1].fadeIn + now[1].fadeOut) * f.rate() <=
+          static_cast<double>(now[1].end - now[1].start) + 1e-6);
+    bool clamped = false;
+    if (const json::Value* warnings = result->find("warnings"))
+        for (const auto& w : warnings->asArray())
+            clamped = clamped || w.find("code")->asString() == "comp.crossfade_clamped";
+    CHECK(clamped);
+}
+
+TEST_CASE("a comp take.comp wrote reads back and edits when a short piece's neighbours touch") {
+    CompFixture f;
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.5,"spans":[{"from":0,"to":1,"index":0},
+                           {"from":1,"to":3,"index":1},{"from":3,"to":4,"index":0}]})");
+    const std::string before = everything(f);
+    // The drag of the first seam to 0.016 beat before the second, as the GUI's last stop: the short
+    // middle piece (384 samples) is clamped to half its core each side, so its neighbours touch at
+    // one sample.
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":0,"to":2.984,"index":0},
+                                                  {"from":2.984,"to":3,"index":1}]})");
+    const std::string dragged = everything(f);
+    // Read back from every piece, and comped again from each with the spans it gave: no change.
+    readsBackAndEditsFromEveryPiece(f, 3);
+    CHECK(everything(f) == dragged);
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":3.5,"to":4,"index":2}]})");
+    CHECK(f.pieces().size() == 4);
+    // Undo goes back through the new span, the three repeated calls (a step each, though they
+    // changed nothing) and the drag.
+    f.run("history.undo");
+    for (int i = 0; i < 4; ++i) {
+        CHECK(everything(f) == dragged);
+        f.run("history.undo");
+    }
+    CHECK(everything(f) == before);
+}
+
+TEST_CASE("items that skip a clamped middle piece are refused, naming the piece left out") {
+    CompFixture f;
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.5,"spans":[{"from":0,"to":1,"index":0},
+                           {"from":1,"to":3,"index":1},{"from":3,"to":4,"index":0}]})");
+    f.run("take.comp", R"({"item":"it_1","spans":[{"from":0,"to":2.984,"index":0},
+                                                  {"from":2.984,"to":3,"index":1}]})");
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 3);
+    const std::string a = pieces[0].item.str(), b = pieces[1].item.str(), c = pieces[2].item.str();
+    // The outer pieces touch at one sample, so C continues A, but B lies between them.
+    const std::string before = everything(f);
+    const auto refused = f.call("take.comp", R"({"items":[")" + a + R"(",")" + c +
+                                                 R"("],"spans":[{"from":0,"to":1,"index":1}]})");
+    REQUIRE_FALSE(refused);
+    CHECK(refused.error().code == "comp.mismatch");
+    CHECK(refused.error().path == "/args/items/1");
+    CHECK(refused.error().hint.find(b) != std::string::npos);
+    CHECK(refused.error().message.find(b) != std::string::npos);
+    CHECK(everything(f) == before);
+    // With the middle one listed it is the comp, and the span splits the first piece: four.
+    f.run("take.comp", R"({"items":[")" + a + R"(",")" + b + R"(",")" + c +
+                           R"("],"spans":[{"from":0,"to":1,"index":1}]})");
+    CHECK(f.pieces().size() == 4);
+}
+
+TEST_CASE("two items that could both continue a piece, without one continuing the other, refuse") {
+    CompFixture f;
+    f.run("take.comp", kSpans);
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 4);
+    // An in-place copy of the second piece starts where it does: both continue the first piece,
+    // neither continues the other, so the run is not guessed (it is not a chain).
+    const std::string at = beatsText(f.app->head().items.find(pieces[1].item)->position);
+    f.run("item.duplicate", R"({"item":")" + pieces[1].item.str() + R"(","to":)" + at + "}");
+    const std::string first = pieces[0].item.str();
+    f.refused("take.comp.get", R"({"item":")" + first + R"("})", "comp.mismatch", "/item");
+    f.refused("take.comp", R"({"item":")" + first + R"(","spans":[{"from":1,"to":2,"index":0}]})",
+              "comp.mismatch", "/item");
+}
+
+TEST_CASE("a seam drag without a crossfade that ends inside the next seam's reach succeeds") {
+    CompFixture f;
+    // Takes 0, 1, 0 with seams at beats 1 and 3 and a crossfade of 0.5 s (a beat at 120 bpm: half a
+    // beat of extension each side), as a GUI drag meets it.
+    f.run("take.comp", R"({"item":"it_1","crossfade":0.5,"spans":[{"from":0,"to":1,"index":0},
+                           {"from":1,"to":3,"index":1},{"from":3,"to":4,"index":0}]})");
+    // The drag: the first seam is taken to 2.984, 16 thousandths of a beat before the second seam,
+    // with no crossfade given. The second seam (0.5 beat a side) cannot stay beside it.
+    auto result = f.call("take.comp", R"({"item":"it_1","spans":[{"from":0,"to":2.984,"index":0},
+                                                                  {"from":2.984,"to":3,"index":1}]})");
+    REQUIRE_MESSAGE(result, (result ? "" : result.error().toString()));
+    CHECK(result->find("pieces")->asArray().size() == 3);
+    // No fade is longer than its piece.
+    const auto pieces = f.pieces();
+    REQUIRE(pieces.size() == 3);
+    for (const auto& p : pieces)
+        CHECK((p.fadeIn + p.fadeOut) * f.rate() <= static_cast<double>(p.end - p.start) + 1e-6);
+    // Both seams of the short piece are rebuilt and clamped to its core: 16 thousandths of a beat
+    // is 384 samples, so 192 a side.
+    CHECK(pieces[1].fadeIn * f.rate() == doctest::Approx(384.0));
+    CHECK(pieces[1].fadeOut * f.rate() == doctest::Approx(384.0));
+    readsBackAndEditsFromEveryPiece(f, 3);
+    bool clamped = false;
+    if (const json::Value* warnings = result->find("warnings"))
+        for (const auto& w : warnings->asArray())
+            clamped = clamped || w.find("code")->asString() == "comp.crossfade_clamped";
+    CHECK(clamped);
+}
+
+TEST_CASE(
+    "take.comp without a crossfade on a split item makes the default crossfade, not hard cuts") {
+    CompFixture f;
+    f.run("item.split", R"({"item":"it_1","at":2})");  // two pieces of one take: no seam to read
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("crossfade")->asDouble() ==
+          doctest::Approx(0.01));
+    const auto result =
+        f.run("take.comp", R"({"item":"it_1","spans":[{"from":0.5,"to":1.5,"index":1}]})");
+    const json::Value* seam = pieceEndingAt(result, 0.5);
+    REQUIRE(seam != nullptr);
+    CHECK(seam->find("fade_out")->asDouble() == doctest::Approx(0.01));
+    CHECK(seam->find("fade_out_shape")->asString() == "cos");
+    const json::Value* other = pieceEndingAt(result, 1.5);
+    REQUIRE(other != nullptr);
+    CHECK(other->find("fade_out")->asDouble() == doctest::Approx(0.01));
+    // And what the GUI and a recording pass read from the run says the same.
+    CHECK(f.run("take.comp.get", R"({"item":"it_1"})").find("crossfade")->asDouble() ==
+          doctest::Approx(0.01));
+}
+
+TEST_CASE("an edit group member keeps its own seams and gives new ones its own crossfade") {
+    GroupFixture f;
+    // Each track comped alone with a crossfade of its own: 0.04 s linear on tr_1, 0.08 s cos on
+    // tr_2.
+    f.run("take.comp", R"({"item":"it_1","bypass_groups":true,"crossfade":0.04,
+        "crossfade_shape":"linear","spans":[{"from":2,"to":4,"index":1}]})");
+    f.run("take.comp", R"({"item":"it_2","bypass_groups":true,"crossfade":0.08,
+        "crossfade_shape":"cos","spans":[{"from":2,"to":4,"index":1}]})");
+    const auto one = f.pieces(GroupFixture::track(1)), two = f.pieces(GroupFixture::track(2));
+    REQUIRE(one.size() == 2);
+    REQUIRE(two.size() == 2);
+    const std::string a = stored(f, one[0].item), b = stored(f, two[0].item);
+    // The group comp, no crossfade, over beat 3 to 3.5: a new seam on every member, the seam at
+    // beat 2 left alone on both.
+    const auto result =
+        f.run("take.comp", R"({"item":"it_1","spans":[{"from":3,"to":3.5,"index":2}]})");
+    CHECK(stored(f, one[0].item) == a);
+    CHECK(stored(f, two[0].item) == b);
+    const json::Value* lead = pieceEndingAt(result, 3);
+    REQUIRE(lead != nullptr);
+    CHECK(lead->find("fade_out")->asDouble() == doctest::Approx(0.04));
+    CHECK(lead->find("fade_out_shape")->asString() == "linear");
+    REQUIRE(result.find("members")->asArray().size() == 1);
+    const json::Value* member = nullptr;
+    for (const auto& p : result.find("members")->asArray()[0].find("pieces")->asArray())
+        if (std::abs(p.find("to")->asDouble() - 3) < 1e-6) member = &p;
+    REQUIRE(member != nullptr);
+    CHECK(member->find("fade_out")->asDouble() == doctest::Approx(0.08));
+    CHECK(member->find("fade_out_shape")->asString() == "cos");
 }

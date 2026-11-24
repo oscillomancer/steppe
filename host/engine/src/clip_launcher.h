@@ -6,6 +6,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -88,9 +89,9 @@ void warnClipsRemoved(cmd::Context& ctx, const std::vector<model::Id>& clips,
 std::vector<model::Id> tracksInDisplayOrder(const model::Session& s);
 
 // launch.scene's selection (step E): the scene's clips in track display
-// order, leaving out frozen tracks' clips (track.frozen) and those in
-// `skipped`, whose audio did not fit the prepared-audio budget
-// (launch.memory). EngineApp::sceneLaunchRefusal makes the same choice.
+// order, each track's in the session's order, leaving out frozen tracks'
+// clips (track.frozen) and those in `skipped`, whose audio did not fit the
+// prepared-audio budget (launch.memory).
 struct SceneLaunch {
     struct Left {
         const char* code;  // track.frozen or launch.memory
@@ -99,6 +100,13 @@ struct SceneLaunch {
     std::vector<Engine::LaunchRequest> requests;
     std::vector<Left> left;
 };
+// Every scene's selection at once, by scene (a scene with no clip has no
+// entry): the one place the choice is made, so launch.scene,
+// EngineApp::sceneLaunchRefusal and EngineApp::launchRefusals cannot drift
+// apart (round 149 S1).
+std::map<model::Id, SceneLaunch> sceneLaunches(const model::Session& s,
+                                               const std::vector<model::Id>& skipped);
+// One scene's selection, from sceneLaunches.
 SceneLaunch sceneLaunchRequests(const model::Session& s, model::Id scene,
                                 const std::vector<model::Id>& skipped);
 // launch.scene's error when its selection is empty.

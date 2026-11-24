@@ -270,7 +270,8 @@ instructions are in `docs/guides/installing.md`.
   (`follows`), `item.consolidate` (MIDI; what sounds is preserved and checked,
   `item.follow_merge`), `take.extract` from a clip, `clip.add {item}` and
   `scene.capture` (a following take's context becomes the clip's), `take.add`,
-  a MIDI overdub that leaves a following item alone (`record.follow_kept`), the
+  a MIDI overdub that leaves a following item alone (`record.follow_kept`; the other record modes
+  make a heard take of a following item, ADR-0103), the
   `context.no_key` warning on every context edit, and `session.describe`. The
   engine plays a take's `follow` (X4c, engine.md "Following at playback"). There
   is no `item.glue`: `item.consolidate` renders and merges, `item.heal` rejoins
@@ -332,8 +333,15 @@ instructions are in `docs/guides/installing.md`.
       a launched audio clip reads through a stretch converter warmed up
       about 61 ms before its switch, live as the replay (S3 step D), except
       one read through a take chain (`launch.playrate`); a launch made
-      inside a track's warm-up lands after that switch; a trajectory change
-      starts launched audio cold; a
+      inside a track's warm-up lands after that switch; a compiled
+      trajectory change (an envelope edit, preserve pitch toggled) switches
+      launched audio where the items switch, crossfaded from the old
+      reading (S3 step D4, phase 1: the new reading is primed on the audio
+      thread, a warm-up's primes for each track with launched audio, in the
+      callback holding the switch, until the main-thread mirror lands), and
+      an audio launch pressed while it is pending, or queued before it and
+      not yet begun, can land a boundary later, after its crossfade plus a
+      warm-up; a
       capture runs in song time under one, refused (or ended, with a
       warning) while a launched audio clip plays and the playrate keeps
       the pitch, and ended on its boundary by a switch that cuts
@@ -344,8 +352,7 @@ instructions are in `docs/guides/installing.md`.
       and within 128 song samples before a switch that lands on the wrap
       of a clip laid per period (up to 0.011 in the test);
       there a frozen track's print
-      cuts in without the crossfade, and launched audio does not crossfade
-      between trajectories when a plan swap changes the rate;
+      cuts in without the crossfade;
     - freezing, or removing the playing clip, crossfades an audio clip
       out, but a clip with a take chain stops dead (its chain leaves with
       the plan), and so does one removed by an edit that comes before the
@@ -1084,6 +1091,27 @@ instructions are in `docs/guides/installing.md`.
   explode onto tracks or along the track, delete one, Ctrl-drag one out, and
   render the selected items through their FX (MIDI to audio) in place, in
   place deleting the FX, or as a new take. Trims act on every selected item.
+- **Recording over an item** (ADR-0103, session-model "Recording over an item"): a pass that
+  starts inside an unlocked, non-looping item of the track is a new take of it, heard where it was
+  recorded (the item's extent stays; the rest plays what it did, through a `take.comp` of the pass's
+  stretch made in the same commit, so a punch-in splits the item into before, the pass and after; a
+  pass over the whole item is heard whole; a comp's pieces all get the take; a following take
+  stays as another take; loop passes append in order, the newest heard over the loop); a pass that starts before an item, or into a locked or looped
+  one, is a new item with `record.stack_skipped`; `record.get` / `record.set {stack_takes}` (default
+  true, a machine setting that lasts for the process). The decision is stored in `record.commit`
+  (`stack`), so replays do not read the setting; `project.recover` never stacks. The GUI keeps it
+  as Preferences > Recording and import > Record over an item (New take / Layer on top,
+  `stack_recorded_takes`, applied at start and on change; a newer version's preferences file is
+  kept as `preferences.json.<schema>.bak` (numbered, never overwritten) before a save, and the app says it is using
+  defaults), and every warning of a recording's commit
+  (each a `record.warning` event) reaches its status line, whatever stopped the recording; a
+  headless session keeps no
+  setting between runs. Limits: recording only some tracks of an edit
+  group leaves the others' take counts behind, so a later group `take.comp` playing the new index is
+  refused with `comp.group_takes` (the commit warns `record.stack_group` naming them); `midi_overdub`
+  is unchanged; a frozen track's recording is left out with `record.frozen_skipped` (kept with its
+  journal for `project.recover` after unfreezing, the other tracks' placed; arming a frozen track and freezing an armed one are
+  refused).
 - **Comping** (session-model §1.5.1): `take.comp {item|items, spans, crossfade?,
   crossfade_shape?}` and `take.comp.get` make a comp from an item's takes (a loop
   recording's passes): the item is split where the take changes, every piece keeps all
@@ -1094,7 +1122,9 @@ instructions are in `docs/guides/installing.md`.
   the file marks a comp: the run of pieces is found by adjacency and equal takes.
   The GUI comps with `take.comp` (a swipe, a lane click in a comp), draws each seam
   between takes, moves one by a drag and sets the comp's crossfade by dragging a seam's
-  top or in the inspector, keeping a comp's crossfade on every re-comp.
+  top or in the inspector. Its re-comps and seam drags send no crossfade, so a seam set by
+  hand elsewhere stays as stored; only the crossfade handle and the inspector's Crossfade
+  send one, which rebuilds every seam.
   Limits: one crossfade length and shape per comp (a hard cut is the whole comp's);
   a looped item's swipe splits and switches with hard cuts until its Loop is off;
   on a track grouped for edits every comp gesture is the group's `take.comp` (Alt
@@ -1104,13 +1134,17 @@ instructions are in `docs/guides/installing.md`.
   seams are hard cuts, with `comp.crossfade_skipped`, for MIDI or
   empty takes, takes with stretch markers and takes or take FX with envelopes; a looped
   item is refused; fixed lanes are not built (`Item.lane` is stored and not played);
-  a record pass over an item still lays an overlapping item rather than a take of it;
   after a tempo change a Beats-timebase seam's overlap and its fades (seconds) disagree
   until `take.comp` is called again; a boundary that cannot be joined (edited notes, a gain)
   stays, and between MIDI pieces of one take a held note sounds again there
-  (`comp.midi_boundary`); a seam fade edited by hand (another length or shape) is overwritten
-  by the next `take.comp`, which gives every seam one length and shape: `take.comp.get` says
-  `uniform: false` and lists the seams a rebuild with the read-back would rewrite. An item in an
+  (`comp.midi_boundary`); a `take.comp` without `crossfade` keeps the seams its spans do not touch
+  exactly as stored (a hand-set fade included, unless a span edge leaves it too little room beside
+  a new seam, when it is rebuilt and clamped; a seam moved on its own keeps its own length and
+  shape; new seams take the comp's crossfade, the default 10 ms when the item has no seam between
+  takes), so an omitted crossfade no longer resets a comp
+  to 10 ms, and a given one rebuilds every seam alike; `take.comp.get` says `uniform: false`
+  for a hand-set seam, informationally, with that seam's own crossfade and shape in
+  `differing_seams` and the fade shapes on the pieces. An item in an
   edit group is comped with every other track of the group that has items over the same stretch
   (matched by the run's extent: however it is cut or crossfaded, a whole item beside a split lead
   is comped to the spans; same spans and take indices, one undo step, `members` in the result;
@@ -1977,7 +2011,8 @@ GUI:
   They run in every other preset that builds the GUI, and the DAW's own GUI
   tests run under `tsan`. They open a window on the screen, so they run only
   when `SUPPLE_EDITOR_PROBE_TEST=1` (set by native CI) and show as skipped on
-  a developer's machine otherwise; the macOS probe (`mac-embedding`) is not
+  a developer's machine otherwise (the exported projects `plugin.export.source` builds leave their
+  copies of the probes out of the nested run the same way); the macOS probe (`mac-embedding`) is not
   gated and still opens its own Cocoa window locally.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.

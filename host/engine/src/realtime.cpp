@@ -1182,7 +1182,7 @@ std::atomic<double> gTransportWaitSeconds{0};  // 0: the default or the environm
 double transportWaitSeconds() {
     if (const double set = gTransportWaitSeconds.load(std::memory_order_relaxed); set > 0)
         return set;
-    static const double fromEnvironment = environmentFlagEnabled("SUPPLE_TRANSPORT_PATIENT")
+    static const double fromEnvironment = environmentFlagEnabled("SUPPLE_TEST_TRANSPORT_PATIENT")
                                               ? kPatientTransportSeconds
                                               : kTransportWaitSeconds;
     return fromEnvironment;
@@ -1191,6 +1191,23 @@ double transportWaitSeconds() {
 void setTransportWaitSeconds(double seconds) {
     gTransportWaitSeconds.store(std::isfinite(seconds) && seconds > 0 ? seconds : 0,
                                 std::memory_order_relaxed);
+}
+
+namespace {
+std::atomic<double> gAwaitSeconds{0};  // 0: the default or the environment's
+}  // namespace
+
+double awaitSeconds() {
+    if (const double set = gAwaitSeconds.load(std::memory_order_relaxed); set > 0) return set;
+    static const double fromEnvironment = environmentFlagEnabled("SUPPLE_TEST_TRANSPORT_PATIENT")
+                                              ? kPatientTransportSeconds
+                                              : kAwaitSeconds;
+    return fromEnvironment;
+}
+
+void setAwaitSeconds(double seconds) {
+    gAwaitSeconds.store(std::isfinite(seconds) && seconds > 0 ? seconds : 0,
+                        std::memory_order_relaxed);
 }
 
 Status Engine::awaitTransport(double timeoutSeconds) {

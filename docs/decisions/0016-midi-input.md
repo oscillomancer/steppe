@@ -72,6 +72,9 @@ neither be played live nor record.
    memory until stop); a recording longer than the ring holds is not lost —
    the main thread drains the rings every service() call while recording.
 
+**Note, 2026-11-23:** `midi_replace` and `input` now make a take of the item under the pass instead of
+a new item layered over it (ADR-0103); `midi_overdub` is as written here.
+
 ## Consequences
 
 - An LLM can arm a track on a MIDI keyboard and record a performance, then

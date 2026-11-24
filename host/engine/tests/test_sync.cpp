@@ -1405,7 +1405,7 @@ TEST_CASE("midi outputs: the engine writes the clock members and raises an older
     const auto bytes = readFile(options.midiPreferencesFile).value();
     const auto doc = json::parse(std::string(bytes.begin(), bytes.end())).value();
     CHECK(doc.find("schema")->asString() == kPreferencesSchema);
-    CHECK(std::string(kPreferencesSchema) == "supple.preferences/1.10");
+    CHECK(std::string(kPreferencesSchema) == "supple.preferences/1.11");
     CHECK(doc.find("lock_memory")->asBool());  // the GUI's members are kept
     const auto* synth = doc.find("midi_outputs")->find("Synth");
     REQUIRE(synth);
@@ -1419,6 +1419,41 @@ TEST_CASE("midi outputs: the engine writes the clock members and raises an older
     const auto later = readFile(options.midiPreferencesFile).value();
     CHECK(std::string(later.begin(), later.end()).find("supple.preferences/1.12") !=
           std::string::npos);
+    // Round 134 G2: and the newer version's file is kept beside it, once, before the first write
+    // over it: the backup holds what that version wrote, not this write's result.
+    const auto backup = dir / "preferences.json.supple.preferences-1.12.bak";
+    CHECK(newerPreferencesBackup(options.midiPreferencesFile, "supple.preferences/1.12") == backup);
+    REQUIRE(fs::exists(backup));
+    auto text = [](const fs::path& file) {
+        const auto read = readFile(file).value();
+        return std::string(read.begin(), read.end());
+    };
+    CHECK(text(backup) == R"({"schema":"supple.preferences/1.12"})");
+    // The engine keeps the newer label, so its own write still reads as newer: it is not taken for
+    // the newer version's next round and copied again.
+    REQUIRE(bus->execute(
+        {"midi.outputs.set", json::parse(R"({"port": "Synth", "spp": true})").value(), kOrigin}));
+    CHECK(text(backup) == R"({"schema":"supple.preferences/1.12"})");  // the first copy stays
+    const auto backup2 = dir / "preferences.json.supple.preferences-1.12.2.bak";
+    CHECK_FALSE(fs::exists(backup2));
+    // The newer version writes again: that round gets the next name, never over the first.
+    const std::string again = R"({"future":true,"schema":"supple.preferences/1.12"})";
+    REQUIRE(writeFileAtomic(options.midiPreferencesFile, again));
+    REQUIRE(bus->execute(
+        {"midi.outputs.set", json::parse(R"({"port": "Synth", "mtc": false})").value(), kOrigin}));
+    CHECK(text(backup) == R"({"schema":"supple.preferences/1.12"})");
+    REQUIRE(fs::exists(backup2));
+    CHECK(text(backup2) == again);
+    CHECK(newerPreferencesBackup(options.midiPreferencesFile, "supple.preferences/1.12", 2) ==
+          backup2);
+    // What counts as newer: a higher minor of 1, or a higher major; not this one, an older one or
+    // a label that is not a preferences schema.
+    CHECK(preferencesSchemaNewer("supple.preferences/1.12"));
+    CHECK(preferencesSchemaNewer("supple.preferences/2.0"));
+    CHECK_FALSE(preferencesSchemaNewer(kPreferencesSchema));
+    CHECK_FALSE(preferencesSchemaNewer("supple.preferences/1.9"));
+    CHECK_FALSE(preferencesSchemaNewer("supple.preferences/1.x"));
+    CHECK_FALSE(preferencesSchemaNewer("supple.project/9.0"));
     bus.reset();
     app.reset();
     fs::remove_all(dir);
@@ -1545,11 +1580,17 @@ TEST_CASE("midi clock output: engine stop sends Stop from a running cycle") {
     run("item.add", R"({"track": "tr_1", "notation": "voice a; 1: C4:w"})");
     run("route.add", R"({"from": "tr_1", "to_midi": "Synth", "midi": {}})");
     run("transport.play", "{}");
-    for (int i = 0; i < 300 && !app->engine()->syncConfig().outputs[0].transport; ++i) {
+    // The paced device runs on the clock; what the stop path is shown after is
+    // audio time, a quarter second of it played, not 300 ms of wall time (a
+    // thread the runner does not schedule for that long has sent nothing). The
+    // guard only bounds a device that never runs.
+    const auto giveUp = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while ((!app->engine()->syncConfig().outputs[0].transport ||
+            app->engine()->transport().sample < static_cast<std::int64_t>(kRate / 4)) &&
+           std::chrono::steady_clock::now() < giveUp) {
         app->tick();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
     app->tick();
     app->stopEngine();
     const auto& sent = backend.midiCapture();

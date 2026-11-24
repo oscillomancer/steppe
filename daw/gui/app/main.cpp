@@ -360,8 +360,9 @@ int frontendMain(int argc, char** argv) {
     gui::Shell* eventShell = nullptr;
     gui::SideBrowser* eventBrowser = nullptr;
     auto publish = [&] {
-        for (auto& [topic, payload] : (*app)->takeEvents()) {
-            if (eventShell && topic == "record.error") eventShell->recordingError(payload);
+        auto events = (*app)->takeEvents();
+        if (eventShell) eventShell->engineEvents(events);  // record.error and record.warning
+        for (auto& [topic, payload] : events) {
             if (eventBrowser && topic == "audition.error") eventBrowser->auditionFailed(payload);
             if (server) server->publish(topic, payload);
         }
@@ -705,15 +706,21 @@ int frontendMain(int argc, char** argv) {
     // into the mouse modifiers.
     const fs::path prefsFile = gui::Preferences::defaultFile(product::kSlug);
     gui::Preferences prefs;
+    std::string prefsNotice;  // a newer version's file: said in the UI, not only here
     if (!o.offscreen) {
-        if (auto loaded = gui::Preferences::load(prefsFile))
+        if (auto loaded = gui::Preferences::load(prefsFile)) {
             prefs = *loaded;
-        else
+        } else {
             std::fprintf(stderr, "preferences: %s (using the defaults)\n",
                          loaded.error().toString().c_str());
+            if (loaded.error().code == "preferences.newer")
+                prefsNotice = loaded.error().message + "; " + loaded.error().hint + ".";
+        }
     }
     gui::PreferencesDialog preferences(root, **app, mouseDialog, prefs,
                                        o.offscreen ? fs::path{} : prefsFile);
+    preferences.fileNotice = prefsNotice;
+    if (!prefsNotice.empty()) shell.setStatus(prefsNotice);
     preferences.onError = [](const std::string& message) {
         std::fprintf(stderr, "%s\n", message.c_str());
     };
