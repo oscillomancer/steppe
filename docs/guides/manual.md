@@ -1870,7 +1870,9 @@ clip is playing. Not yet:
   master playrate keeps the pitch (`launch.playrate`); other clips
   follow the playrate, audio ones time-stretched with the pitch kept, and
   a launch then lands at least about 61 ms ahead, while its stretcher
-  gets ready (anything launched on that track meanwhile lands after it);
+  gets ready (anything launched on that track meanwhile lands after it),
+  and a launch pressed while a playrate change takes effect, or queued
+  before it and not yet begun, can land a boundary later;
 - capturing while a launched audio clip plays and the master playrate
   keeps the pitch (`launch.playrate`): stop the clip or turn off preserve
   pitch first. Launching an audio clip then ends a capture at its switch,

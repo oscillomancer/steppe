@@ -192,6 +192,18 @@ Result<Engine::LaunchPlaced> Engine::placeLaunch(std::span<const LaunchRequest> 
                         if (detail::launchWarms(n, was, wasPlayer))
                             floor = std::max(floor, s.target.load() + (warms ? n.launchWarm : 1));
                     }
+                // While a trajectory change is pending (S3 step D4): until the
+                // callback, the slowest executor, has played its switch and
+                // the crossfade, a warming launch switches at least the
+                // crossfade plus its warm-up after the switch, so its warm-up
+                // runs on the new trajectory alone (stream = device -
+                // rateOrigin).
+                if (warms && n.id == r.track && plan->rateEnabled &&
+                    plan->rateSwitchDevice != INT64_MIN) {
+                    const std::int64_t change = plan->rateSwitchDevice - plan->rateOrigin;
+                    if (clock.stream < change + plan->smoothFrames)
+                        floor = std::max(floor, change + plan->smoothFrames + n.launchWarm);
+                }
             }
     // On a playrate plan the song follows the rate timeline (S3).
     if (clock.playing && plan->rateEnabled)
