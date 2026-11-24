@@ -73,7 +73,8 @@ void lookAtSlot(const supple::diagnostics::detail::Packet& packet,
 // A bridged crash plug-in is made to misbehave in its next process(), and the host then makes a
 // main-thread request, which is where it observes the bridge's end.
 bool misbehave(const supple::host::PluginInfo& info, double mode,
-               const std::shared_ptr<supple::host::BridgeProcess>& shared = nullptr) {
+               const std::shared_ptr<supple::host::BridgeProcess>& shared = nullptr,
+               int hangDeadlineMs = 0) {
     auto made = shared ? supple::host::Instance::create(info, {}, true, shared)
                        : supple::host::Instance::create(info, {}, true);
     if (!made) return false;
@@ -88,6 +89,9 @@ bool misbehave(const supple::host::PluginInfo& info, double mode,
     block.outputs = outputs;
     block.inputChannels = block.outputChannels = 1;
     block.frames = 64;
+    // The deadline that ends a hang is the instance's own, set only for the call that hangs: the
+    // process-wide one stays patient for the create, activate and start before it.
+    if (hangDeadlineMs > 0) instance.setCallDeadlineMs(hangDeadlineMs);
     (void)instance.process(block);
     if (mode == 5.0) {
         // The instance passes this block and faults when the bridge destroys it: the host lets
@@ -185,8 +189,8 @@ int body(int argc, char** argv) {
         supple::host::setBridgeExecutable(BRIDGE_PATH);
         const auto crash = find("com.suppleaudio.test.crash");
         if (mode == "bridged-hang") {
-            supple::host::setBridgeDeadlineMs(200);
-            if (!misbehave(crash, 2.0)) return 6;
+            supple::host::setBridgeDeadlineMs(60'000);
+            if (!misbehave(crash, 2.0, nullptr, 200)) return 6;
         } else {
             // Mode 4 is a real crash on every platform (a signal, an access violation); mode 1
             // would end a Windows bridge with exit code 3, which is not a crash to the host.
