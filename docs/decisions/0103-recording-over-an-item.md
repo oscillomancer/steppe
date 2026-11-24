@@ -49,8 +49,10 @@ timeline start have clipped it).
    MIDI, `bypass_groups`), and everything outside it keeps playing what it played, in a comp as
    well: the item becomes the pieces before, the pass, and after, as `take.comp` makes them (one
    undo step). The seams of an existing comp are rebuilt from the crossfade `take.comp.get`
-   reports (a user's 40 ms linear comp stays 40 ms linear; seams that differed by hand become
-   uniform, as any `take.comp` makes them, and `record.comp_uniform` says so). A pass that covers the whole of a lone item makes the
+   reports (a pass gives `take.comp` no crossfade, so the seams it does not touch stay exactly as they were,
+   hand-set ones included, and the seams it makes take the comp's own; amended 2026-11-23 by the
+   design of section 9, "take.comp that keeps the seams it does not touch": the first version made
+   them all uniform and warned `record.comp_uniform`, now retired). A pass that covers the whole of a lone item makes the
    new take heard whole with no comp; over a whole comp of several pieces it goes through
    `take.comp` with a single span, which joins the neighbours that now play one take (kept apart
    they would swell by 3 dB across each old equal-power seam). Loop passes are appended in order, one

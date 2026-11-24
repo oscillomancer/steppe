@@ -3251,11 +3251,6 @@ struct StackTarget {
     Id target;
     std::vector<Id> pieces;
     std::int64_t coreStart = 0, coreEnd = 0;  // the run's extent, crossfades taken out
-    // A comp's own crossfade (what take.comp.get reports), so that a pass over part of it rebuilds
-    // the seams as they were; unset for a lone item (take.comp's default).
-    std::optional<model::CompCrossfade> crossfade;
-    std::vector<std::int64_t>
-        differingSeams;  // hand-set seams (timeline samples) a rebuild makes uniform
     std::optional<RecordingWarning> skipped;
 };
 
@@ -3314,9 +3309,6 @@ StackTarget stackTarget(const model::Session& s, const RecordedTake& r, const It
         for (const auto& p : *run) pieces.push_back(p.item);
         out.coreStart = run->front().coreStart;
         out.coreEnd = run->back().coreEnd;
-        out.crossfade = model::compCrossfade(s, *run);
-        for (const std::size_t k : model::compDifferingSeams(s, *run))
-            out.differingSeams.push_back((*run)[k].coreEnd);
     }
     for (Id piece : pieces) {
         const model::Item& it = *s.items.find(piece);
@@ -3428,29 +3420,9 @@ Result<std::size_t> hearPasses(const StackEnv& env, model::EditTxn& t, const mod
         true;  // the pass is this track's; its group's other tracks are not comped
     if (midi) {
         args["crossfade"] = 0.0;
-    } else if (st.crossfade) {  // the comp's own, so the seams away from the pass stay as they were
-        // Seams the pass covers are joined away, not made uniform: only those that stay count.
-        const auto remaining = std::count_if(
-            st.differingSeams.begin(), st.differingSeams.end(), [&](std::int64_t seam) {
-                return std::none_of(heard.begin(), heard.end(),
-                                    [&](const Heard& h) { return h.lo < seam && seam < h.hi; });
-            });
-        if (remaining > 0)
-            warnings.push_back(
-                {"record.comp_uniform",
-                 "the seams of " + st.target.str() + "'s comp differed (" +
-                     std::to_string(remaining) + " of them, by hand); the pass made them all " +
-                     std::to_string(std::lround(st.crossfade->seconds * 1000.0)) + " ms, " +
-                     (st.crossfade->shape == model::FadeShape::Linear ? "linear" : "equal-power"),
-                 "/crossfade",
-                 "take.comp.get lists the seams that differed before; set a seam's own "
-                 "crossfade again with take.comp",
-                 {},
-                 {}});
-        args["crossfade"] = st.crossfade->seconds;
-        args["crossfade_shape"] =
-            st.crossfade->shape == model::FadeShape::Linear ? "linear" : "cos";
     }
+    // Audio gives no crossfade: take.comp keeps the seams the pass does not touch as they are and
+    // gives the ones it makes the run's own (10 ms, cos, for a lone item).
     auto spans = json::Value::array();
     for (const Heard& h : heard) {
         auto span = json::Value::object();
