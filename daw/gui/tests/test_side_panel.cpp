@@ -39,6 +39,7 @@
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/comp_view.h"
 #include "supple/views/envelope_lane.h"
 
 using namespace supple;
@@ -1510,5 +1511,50 @@ TEST_CASE("inspector: a grouped comp piece that differs from its group names the
     // Close's own pieces are the reference: no row there.
     f.ui.selectedItems = {comp["pieces"].asArray()[1].find("item")->asString()};
     f.pass();
+    CHECK_FALSE(f.inView("inspector.group"));
+    // An ordinary comp gesture on Close (the lane click on its last piece, which
+    // joins it to the middle one) sends no crossfade: Room keeps the seam it
+    // set alone, and its row still says it differs.
+    auto roomPieces = [&] {
+        std::vector<std::pair<double, std::string>> out;
+        for (const auto& e : f.app->head().items)
+            if (e.value->track.str() == tracks[1] && e.value->takes.size() == 2)
+                out.emplace_back(e.value->position, e.id.str());
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    {
+        const model::Session& s = f.app->head();
+        const model::Id last =
+            *model::Id::parse(comp["pieces"].asArray()[2].find("item")->asString());
+        const auto view = views::compOf(s, last);
+        REQUIRE(view);
+        const json::Value args = views::compPieceArgs(s, *view, last, 1);
+        CHECK_FALSE(args.find("crossfade"));
+        REQUIRE(f.dispatcher->execute({"take.comp", args, kTest}));
+    }
+    f.pass();
+    REQUIRE(roomPieces().size() == 2);
+    CHECK(f.app->head().items.find(*model::Id::parse(roomPieces()[1].second))->fadeIn.length ==
+          doctest::Approx(0.3));
+    f.ui.selectedItems = {roomPieces()[1].second};
+    f.pass();
+    REQUIRE(f.inView("inspector.group"));
+    CHECK(f.text("inspector.group") == "Differs from Close");
+    // The Crossfade field on Close sets the comp's crossfade at every seam of
+    // every member: Room is in step again, and its row goes.
+    std::string closePiece;
+    for (const auto& e : f.app->head().items)
+        if (e.value->track.str() == tracks[0] && e.value->takes.size() == 2)
+            closePiece = e.id.str();
+    f.ui.selectedItems = {closePiece};
+    f.pass();
+    REQUIRE(f.inView("inspector.crossfade"));
+    f.type("inspector.crossfade", "0.02");
+    f.pass();
+    f.ui.selectedItems = {roomPieces()[1].second};
+    f.pass();
+    CHECK(f.app->head().items.find(*model::Id::parse(roomPieces()[1].second))->fadeIn.length ==
+          doctest::Approx(0.02));
     CHECK_FALSE(f.inView("inspector.group"));
 }

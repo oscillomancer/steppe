@@ -1934,12 +1934,79 @@ TEST_CASE("an edit-grouped track comps every member with take.comp; a member tha
         for (const auto& seam : leadSeams) CHECK_FALSE(seam.differs);
         for (const auto& seam : roomSeams) CHECK(seam.differs);
     }
-    // A lane click on a lead piece re-comps the group: the member is in step again.
-    const ui::Rect p = f.rectOf(idOf(f, pieces[0]));
-    f.click(laneAt(p, 2, 1 - heard, p.x + p.w * 0.5f));
-    REQUIRE(sent.size() == 3);
-    CHECK(sent[2][0].command == "take.comp");
+    auto differing = [&] {
+        json::Value ask = json::Value::object();
+        ask["item"] = it.str();
+        const auto back = f.dispatcher->execute({"take.comp.get", ask, kUi});
+        REQUIRE(back);
+        std::vector<std::string> out;
+        for (const auto& t : back->find("differing_members")->asArray())
+            out.push_back(t.asString());
+        return out;
+    };
+    // An ordinary gesture on the lead sends no crossfade, so each member
+    // keeps the seams its spans do not touch: a lane click on the lead's last
+    // piece (it joins the middle one) leaves the member's first seam, faded
+    // for it alone, as it is. The member still differs, its line still broken.
+    {
+        const ui::Rect p = f.rectOf(idOf(f, pieces[2]));
+        f.click(laneAt(p, 2, 1 - heard, p.x + p.w * 0.5f));
+        REQUIRE(sent.size() == 3);
+        CHECK(sent[2][0].command == "take.comp");
+        CHECK_FALSE(sent[2][0].args.find("crossfade"));
+        const auto leadSeams = f.view->lanes().compSeams(leadRow);
+        const auto roomSeams = f.view->lanes().compSeams(roomRow);
+        REQUIRE(leadSeams.size() == 1);
+        REQUIRE(roomSeams.size() == 1);
+        CHECK_FALSE(leadSeams[0].differs);
+        CHECK(roomSeams[0].differs);
+        REQUIRE(piecesOf(f, room).size() == 2);
+        CHECK(piecesOf(f, room)[1]->fadeIn.length == doctest::Approx(0.3));
+        CHECK(differing() == std::vector<std::string>{room.str()});
+    }
+    // The crossfade handle on the lead sends the comp's crossfade, which
+    // remakes every seam of every member: the member is in step again.
+    const double pps = f.view->viewport().pixelsPerSecond;
+    auto dragHandle = [&](std::size_t row, double seconds, unsigned mods) {
+        const auto seam = f.view->lanes().compSeams(row).at(0);
+        const ui::Rect hr = f.rectOf(seam.right);
+        const float x = f.view->lanes().xAt(seam.seconds);
+        REQUIRE(f.view->gestures().hit({x, hr.y + 3}));
+        REQUIRE(f.view->gestures().hit({x, hr.y + 3})->zone == views::ItemGestures::Drag::CompFade);
+        f.drag({x, hr.y + 3}, {x + static_cast<float>(seconds / 2 * pps), hr.y + 3}, mods);
+    };
+    dragHandle(leadRow, 0.5, ui::kShift);
+    REQUIRE(sent.size() == 4);
+    REQUIRE(sent[3][0].args.find("crossfade"));
+    CHECK_FALSE(sent[3][0].args.find("bypass_groups"));
     for (const auto& seam : f.view->lanes().compSeams(roomRow)) CHECK_FALSE(seam.differs);
+    CHECK(differing().empty());
+    // Held with Alt, the member's handle sets its crossfade alone (1 s): it
+    // differs again. A seam drag on the lead, without Alt, moves the seam on
+    // both; the member's moved seam takes its own crossfade, not the lead's,
+    // and it still differs until the lead's crossfade is set again.
+    dragHandle(roomRow, 1.0, ui::kShift | ui::kAlt);
+    REQUIRE(sent.size() == 5);
+    CHECK(sent[4][0].args.find("bypass_groups"));
+    CHECK(piecesOf(f, room)[1]->fadeIn.length == doctest::Approx(1.0).epsilon(0.02));
+    CHECK(piecesOf(f, track)[1]->fadeIn.length == doctest::Approx(0.5).epsilon(0.02));
+    CHECK(differing() == std::vector<std::string>{room.str()});
+    {
+        const auto seam = f.view->lanes().compSeams(leadRow).at(0);
+        const ui::Rect sr = f.rectOf(seam.right);
+        const float x = f.view->lanes().xAt(seam.seconds), y = sr.y + sr.h / 2;
+        f.drag({x, y}, {x + 12, y}, ui::kShift);
+        REQUIRE(sent.size() == 6);
+        CHECK_FALSE(sent[5][0].args.find("crossfade"));
+        CHECK_FALSE(sent[5][0].args.find("bypass_groups"));
+        CHECK(f.view->lanes().compSeams(roomRow).at(0).seconds ==
+              doctest::Approx(f.view->lanes().compSeams(leadRow).at(0).seconds));
+        CHECK(f.view->lanes().compSeams(leadRow).at(0).seconds > seam.seconds);
+        CHECK(piecesOf(f, room)[1]->fadeIn.length == doctest::Approx(1.0).epsilon(0.02));
+        CHECK(piecesOf(f, track)[1]->fadeIn.length == doctest::Approx(0.5).epsilon(0.02));
+        CHECK(f.view->lanes().compSeams(roomRow).at(0).differs);
+        CHECK(differing() == std::vector<std::string>{room.str()});
+    }
 }
 
 // A two-take item on a new track and a second track grouped with it for edits:

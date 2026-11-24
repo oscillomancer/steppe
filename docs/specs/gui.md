@@ -1095,7 +1095,10 @@ per-seam length; an agent's hand-set seam keeps its own until the crossfade is
 set). **On a track grouped for
 edits** (`model::linkedTracks`, attribute `edit`) every one of these is the same
 `take.comp`, which comps every other track of the group with items over the
-stretch alike (session-model §1.5.1, Edit groups); a click on a lone item there,
+stretch with the same spans (session-model §1.5.1, Edit groups). Each member
+keeps the seams the spans do not touch, and a seam it gets takes its own
+crossfade, so only the crossfade handle and the inspector's Crossfade field,
+which send the crossfade, make every member's seams the comped track's. A click on a lone item there,
 its badge and the Takes list send `take.comp` over the whole item rather than
 `take.activate` (which would switch it alone), so the members follow
 (`views::compPieceOf`). A member whose comp the engine reads as differing from
@@ -1103,8 +1106,11 @@ the group's (`take.comp.get`'s `differing_members`, asked for the group's first
 track in the order `take.comp` takes members, `views::compDiffersFrom`: other
 spans, takes, crossfade or shape, from an edit that bypassed the group) draws its
 seam lines broken, every other 4 units, and the inspector shows a **Group** row,
-"Differs from Close", for one selected piece of it; any comp gesture on the group
-brings it back in step. A member's comp with no seam of its own shows the
+"Differs from Close", for one selected piece of it. The crossfade handle or the
+Crossfade field on the group brings it back in step. The other gestures send no
+crossfade, so a seam that differs stays as it is, broken, with the row, unless
+the gesture joins it away (a lane click that gives the pieces beside it one
+take). A member's comp with no seam of its own shows the
 difference only in the inspector. A **looped item** keeps the swipe it had before
 `take.comp`, which refuses it (`comp.loop`): `item.split` at the swipe's ends and
 `take.activate` of the middle, with hard cuts, until its Loop is turned off. Its
@@ -2904,7 +2910,7 @@ inspector adds no command:
 | Gain (`inspector.gain_db`) | "-3.0 dB" | A number, with or without "dB" | `gain_db` |
 | Fade in, Fade out (`inspector.fade_in`, `inspector.fade_out`) | "0.400 s"; for a comp piece only at the comp's outer ends (its first piece's fade in, its last's fade out) | A number, with or without "s" | `fade_in`, `fade_out` |
 | Crossfade (`inspector.crossfade`, `inspector.crossfade_shape`) | One selected piece of a comp with a seam between takes (session-model §1.5.1): the comp's crossfade, "0.010 s" (`views::compCrossfade`), and its shape, Equal power or Linear | A number, with or without "s" (0: a hard cut), or a choice | `take.comp` with the comp's spans (`views::compSpans`) and the new length or shape, for every seam; one undo step |
-| Group (`inspector.group`) | One selected comp piece on a track grouped for edits whose comp the engine reads as differing from the group's (`views::compDiffersFrom`): "Differs from Close", the group's first track; no row when it is in step | read only | (a comp gesture brings it back in step) |
+| Group (`inspector.group`) | One selected comp piece on a track grouped for edits whose comp the engine reads as differing from the group's (`views::compDiffersFrom`): "Differs from Close", the group's first track; no row when it is in step | read only | (the crossfade handle or the Crossfade field on the group brings it back in step; other comp gestures leave a differing seam as it is) |
 | Mute, Loop, Lock (`inspector.mute`, `.loop`, `.locked`) | Cells (§4.2), lit when on | A click | `mute`, `loop`, `locked` |
 | File (`inspector.file`) | An audio item's file path, then its rate, channels and length | Read only | |
 | Follow (`inspector.follow`), Bake (`inspector.bake`) | One item whose heard take is MIDI (ADR-0098 amended): None, Key or Chords, and a Bake cell, enabled while it follows. Key and Chords say why when they cannot be chosen: "(no key in the song here)" for a take with no context over a song with no key, "(needs a key in its context)" for one whose first key is unreadable | A choice: `take.set {follow}`, on a take with no context together with `context`, the song's key and chords under the item (`gui::takeFollowArgs`). Bake: `take.bake`, one undo step, and the status line says what it wrote | |
