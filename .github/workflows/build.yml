@@ -363,8 +363,11 @@ jobs:
           while ($true) {
             $c = (Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
             $m = (Get-Counter '\Memory\Available MBytes' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
-            # F0, not N0: N0 writes 12,345 and awk would read 12.
-            ('{0} {1:F0} {2:F0}' -f (Get-Date -Format 'HH:mm:ss'), $c, $m) | Out-File -Append -Encoding ascii $log
+            # F0, not N0: N0 writes 12,345 and awk would read 12. A counter that returns nothing
+            # writes NA, so the other column never shifts into its place (memory read as CPU %).
+            $cs = if ($null -ne $c) { '{0:F0}' -f $c } else { 'NA' }
+            $ms = if ($null -ne $m) { '{0:F0}' -f $m } else { 'NA' }
+            "$(Get-Date -Format 'HH:mm:ss') $cs $ms" | Out-File -Append -Encoding ascii $log
             Start-Sleep -Seconds 15
           }
           '@ | Set-Content -Encoding ascii -Path $script
@@ -436,7 +439,7 @@ jobs:
           log="$RUNNER_TEMP/cpu.log"
           wc -l < "$log" > "$RUNNER_TEMP/cpu-build-lines"
           echo "Build: samples, mean CPU busy, samples under 50% busy, mean available MB"
-          awk 'NF >= 2 { n++; s += $2; m += $3; if ($2 < 50) low++ } END { if (n) printf "%d samples, mean %.0f%%, %d under 50%% (%.0f%%), %.0f MB available\n", n, s / n, low, 100 * low / n, m / n }' "$log"
+          awk 'NF >= 3 { if ($2 != "NA") { n++; s += $2; if ($2 < 50) low++ } if ($3 != "NA") { k++; m += $3 } } END { if (n) printf "%d samples, mean %.0f%%, %d under 50%% (%.0f%%), ", n, s / n, low, 100 * low / n; else printf "no CPU samples, "; if (k) printf "%.0f MB available\n", m / k; else print "no memory samples" }' "$log"
       - name: Test Linux (software OpenGL under Xvfb)
         if: matrix.platform == 'linux'
         env:
@@ -487,7 +490,7 @@ jobs:
           fi
           from=$(( $(cat "$RUNNER_TEMP/cpu-build-lines" 2> /dev/null || echo 0) + 1 ))
           echo "Tests: samples, mean CPU busy, samples under 50% busy, mean available MB"
-          tail -n +"$from" "$log" | awk 'NF >= 2 { n++; s += $2; m += $3; if ($2 < 50) low++ } END { if (n) printf "%d samples, mean %.0f%%, %d under 50%% (%.0f%%), %.0f MB available\n", n, s / n, low, 100 * low / n, m / n }'
+          tail -n +"$from" "$log" | awk 'NF >= 3 { if ($2 != "NA") { n++; s += $2; if ($2 < 50) low++ } if ($3 != "NA") { k++; m += $3 } } END { if (n) printf "%d samples, mean %.0f%%, %d under 50%% (%.0f%%), ", n, s / n, low, 100 * low / n; else printf "no CPU samples, "; if (k) printf "%.0f MB available\n", m / k; else print "no memory samples" }'
           echo "busy % over the test step, one value per 15 s:"
           tail -n +"$from" "$log" | awk 'NF >= 2 { printf "%s ", $2 } END { print "" }'
       - name: Linux memory and disk after tests
