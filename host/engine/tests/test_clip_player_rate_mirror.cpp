@@ -108,6 +108,7 @@ TEST_CASE("the mirror primes a trajectory change's launched audio before its swi
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("from tape " << (c.kind == Change::FromTape) << ", tracks " << c.tracks
                               << ", anticipative " << options.anticipative);
+            const MirrorBudget budget(openForRenderer(options));
             const MirrorRun with = changeRun(options, c.tracks, c.kind, true);
             const MirrorRun without = changeRun(options, c.tracks, c.kind, false);
             CHECK(with.around.empty());
@@ -138,6 +139,7 @@ TEST_CASE("two launches that differ only in their switch's quantum both find the
     };
     for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
         INFO("anticipative " << options.anticipative);
+        const MirrorBudget budget(openForRenderer(options));
         const MirrorRun plain = changeRun(options, 1, Change::Envelope, true);
         const MirrorRun moved = changeRun(options, 1, Change::Envelope, true, wobble);
         const MirrorRun movedOff = changeRun(options, 1, Change::Envelope, false, wobble);
@@ -297,4 +299,84 @@ TEST_CASE("a change primed again leaves no earlier attempt's mirror reading to t
     CHECK(r.anchor == anchor);
     CHECK(r.startQuantum == detail::quantumAt(to, warmSwitch));
     CHECK(r.primes == 10u);  // as far as the warm-up had come, not the earlier 45
+}
+
+TEST_CASE("the mirror primes within the hand's slack, and what it leaves plays the same" *
+          doctest::description("rt")) {
+    // Review round 166 F: the first attempt primes reader by reader while
+    // the hand stays more than one of the frontier's steps past it (frames,
+    // no clock); a reader left is a miss, which its executor primes. Two
+    // launched tracks, both readers 0 for S: stopped (the hook) after 0, 1
+    // and all of them, the executors prime the rest, 45 each, and every
+    // sample is the miss path's at the same S. With the engine's own slack:
+    // the callback's hand is its render-ahead past what has played, room
+    // for both; a renderer caught up leaves it under a render block past
+    // its frontier, so none (the executors prime both, as with it off).
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        const MirrorRun without = changeRun(options, 2, Change::Envelope, false);
+        REQUIRE(primes(without) == 90u);
+        for (const int k : {0, 1, kAllReaders}) {
+            INFO("budget " << k);
+            const MirrorBudget budget(k);
+            const MirrorRun with = changeRun(options, 2, Change::Envelope, true);
+            CHECK(primes(with) == 45u * std::uint64_t(2 - std::min(k, 2)));
+            CHECK(firstDifference(with, without) == -1);
+        }
+        const MirrorRun own = changeRun(options, 2, Change::Envelope, true);
+        CHECK(primes(own) == (options.anticipative ? 90u : 0u));
+        CHECK(firstDifference(own, without) == -1);
+    }
+}
+
+TEST_CASE("the mirror primes the reading heard first first") {
+    // Review round 166 F: what a tight budget leaves to the executors is
+    // predictable: readings by the device frame they are first read (S,
+    // or a warm-up's own switch after S), then as given. Given a warm-up
+    // switching after S before reader 0's reading for S, a budget of one
+    // primes reader 0.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+    const model::Session before = p.app->head();
+    p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
+                     R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
+    const model::Session after = p.app->head();
+    InstancePool pool = makePool();
+    MediaCache media;
+    const auto planOf = [&](const model::Session& s) {
+        auto plan = detail::compile(s, pool, 0, 128).value();
+        plan.media = &media;
+        plan.projectDir = p.app->projectDir();
+        REQUIRE(detail::prepare(plan, s));
+        return plan;
+    };
+    auto from = planOf(before);
+    auto to = planOf(after);
+    REQUIRE(detail::prepareRateSources(from, 0, 0.0, nullptr));
+    from.timelines[0]->ensure(160000);
+    REQUIRE(detail::configureRateTransition(to, &from, *from.timelines[0], 100000));
+    REQUIRE(to.rateControlsChanged);
+    const std::int64_t S = to.rateSwitchDevice;
+    to.timelines[0]->ensure(S + 20000);
+    detail::Node& node = *std::find_if(to.nodes.begin(), to.nodes.end(),
+                                       [](const auto& n) { return n.id == id("tr_2"); });
+    detail::LaunchMirror later;  // a warm-up switching after S: reader 2
+    later.track = id("tr_2");
+    later.clip = id("cl_2");
+    later.anchor = 96000;
+    later.warmSwitch = S + 2000 - to.rateOrigin;  // a stream frame
+    detail::LaunchMirror atS = later;             // what reads at S: reader 0
+    atS.warmSwitch = INT64_MIN;
+    int asked = 0;
+    detail::primeLaunchMirror(to, {later, atS}, [&] { return asked++ < 1; });
+    CHECK(asked == 2);  // asked again before the second, refused
+    CHECK(node.launchReaders[0].mirror);
+    CHECK_FALSE(node.launchReaders[2].mirror);
+    // With room for both, both, in the same order.
+    asked = 0;
+    detail::primeLaunchMirror(to, {later, atS}, [&] { return ++asked > 0; });
+    CHECK(asked == 2);
+    CHECK(node.launchReaders[0].mirror);
+    CHECK(node.launchReaders[2].mirror);
 }

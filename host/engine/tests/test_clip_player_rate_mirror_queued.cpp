@@ -105,6 +105,7 @@ TEST_CASE("a looped launch finds the mirror's reading by its switch's cycle; a l
         for (const LoopCase loop :
              {LoopCase::LaterCycle, LoopCase::Moved, LoopCase::WrappedSince}) {
             INFO("anticipative " << options.anticipative << ", loop case " << int(loop));
+            const MirrorBudget budget(openForRenderer(options));
             const MirrorRun with = loopRun(options, loop, true);
             const MirrorRun without = loopRun(options, loop, false);
             // All of them about S (the renderer's can fall into two of its
@@ -136,6 +137,7 @@ TEST_CASE("launches queued across a trajectory change play the same with the mir
     for (const Case c : {Case{false, -2000}, Case{false, -300}, Case{true, -300}, Case{true, -30},
                          Case{true, 200}, Case{true, 2500}}) {
         INFO("anticipative " << c.anticipative << ", d " << c.d);
+        const MirrorBudget budget(c.anticipative ? kAllReaders : -1);
         MirrorRun runs[2];
         std::uint64_t primed[2] = {0, 0};  // by the executors over the run, with and without
         for (const bool mirror : {true, false}) {

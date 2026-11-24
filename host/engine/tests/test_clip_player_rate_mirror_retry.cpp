@@ -38,6 +38,7 @@ std::int64_t firstDifference(const RetryRun& a, const RetryRun& b) {
 RetryRun queuedRun(const EngineOptions& options, std::int64_t d, bool mirror, int late) {
     std::optional<MirrorOff> off;
     if (!mirror) off.emplace();
+    const MirrorBudget budget(openForRenderer(options));
     Project p;
     twoTracks(p);
     auto args = j(R"({"track": "tr_2", "scene": "sc_2"})");
@@ -82,15 +83,17 @@ TEST_CASE("a change prepared again switches later, and the mirror plays the miss
     // One late attempt puts the hand, so S, at least a quantum later; a
     // second, later again: what plays changes with S alone (the mirror off
     // in both runs). With the mirror on and the same attempts late, S is
-    // the same and so is every sample: an earlier attempt's readings were
-    // for an S that is not this one's. The callback case: a reading for S
-    // marked once prepared (reader 0, cl_2's); the renderer's: the warm-up
-    // under way at S (d -30) and switching after it (d 200).
+    // the same and so is every sample. Only the first attempt primes
+    // (round 166 F): a retry's readers are misses, none left marked once
+    // prepared, where with no attempt late the callback case marks reader
+    // 0 for S (cl_2's). The renderer's: the warm-up under way at S (d -30)
+    // and switching after it (d 200).
     for (const Case c : {Case{false, -300}, Case{true, -30}, Case{true, 200}}) {
         INFO("anticipative " << c.anticipative << ", d " << c.d);
         const EngineOptions options = c.anticipative ? EngineOptions{.workers = 0} : kInCallback;
         RetryRun previous = queuedRun(options, c.d, false, 0);
         REQUIRE(previous.S != INT64_MIN);
+        if (!c.anticipative) CHECK(queuedRun(options, c.d, true, 0).marked > 0);
         for (const int late : {1, 2}) {
             INFO(late << " late");
             const RetryRun with = queuedRun(options, c.d, true, late);
@@ -102,7 +105,7 @@ TEST_CASE("a change prepared again switches later, and the mirror plays the miss
             REQUIRE(with.S == without.S);
             CHECK(firstDifference(with, without) == -1);
             if (!c.anticipative) {
-                CHECK(with.marked > 0);
+                CHECK(with.marked == 0);  // the retry primed nothing
                 CHECK(without.marked == 0);
             }
             previous = without;

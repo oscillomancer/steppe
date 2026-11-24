@@ -1760,12 +1760,22 @@ struct LaunchMirror {
 // readers `readings` name, each as carryLaunchAcross (or warmLaunch) would,
 // and marks them PlayerReader::mirror; any reader an earlier call marked and
 // this one does not prime is unmarked and unkeyed (empty `readings`: all).
-// Not real-time.
-void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings);
+// In a fixed order, the reading heard first first: by the device frame it
+// is first read (S, or a warm-up's own switch after S), then as `readings`
+// gives them (the plan's node order). `more`, when given, is asked before
+// each reader it would prime; once it says no, the rest are left to their
+// executors (misses). Not real-time.
+void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings,
+                       const std::function<bool()>& more = {});
 // Tests only: the mirror on (the default) or off, so a test can compare
 // what plays with it against the miss path. Read on the main thread.
 void setLaunchMirror(bool on) noexcept;
 bool launchMirror() noexcept;
+// Tests only: the mirror's budget in readers: -1 (the default) the hand's
+// slack (prepareRatePlan), else this many readers whatever the slack, as if
+// the slack fell under the reserve after them (review round 166 F).
+void setLaunchMirrorBudget(int readers) noexcept;
+int launchMirrorBudget() noexcept;
 // What a clip chain's input reads in this block: the player's anchor on the
 // input side, or nothing (`on` false).
 struct ClipChainInput {

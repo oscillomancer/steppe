@@ -1337,6 +1337,23 @@ what plays, and the mirror still plays the miss path's samples there; three fail
 seek, which keeps no mark (red before the change) and plays the same with the mirror. At plan level, a
 reading primed and then not primed again is not taken (red before: the carry took its 45 primes).
 
+*Revision 2026-11-24 (review round 166 F, accepted by the co-director):* the mirror's main-thread
+priming lengthens the timed attempt, so on a loaded machine it made a retry (S later) and the recovery
+seek (audible, and it ends a running capture) likelier. The mirror is an economy, so it may never be
+the reason an attempt is late: only the first attempt primes, reader by reader while
+`handStream - (frontier + granularity)` exceeds one of the frontier's steps (a render block for the
+renderer, a device block for the callback: the most the frontier moves at once), in frames and engine
+state, never a clock; the readings go in a fixed order, the one heard first first (by the device frame
+first read, then node order), so what a tight budget drops is what is heard last; a reading not primed
+is a miss. What it still buys: the in-callback executor, whose hand is its render-ahead past what has
+played, keeps every reading primed off the device callback, where the miss path would run 45 primes per
+track inside the callback holding S; a renderer caught up has under a render block of slack and primes
+nothing unless its preparation margin, or its own lag, gives more (its misses run on the renderer,
+within its render-ahead, not in the device callback). Tests, no clock: a hook stops the budget after
+0, 1 and all readers of two launched tracks, every sample the miss path's at the same S; with the
+engine's own slack the callback primes both and a caught-up renderer neither; a retry primes nothing;
+at plan level a budget of one primes the reading heard first though given second.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

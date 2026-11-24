@@ -588,6 +588,24 @@ struct MirrorOff {
     MirrorOff& operator=(const MirrorOff&) = delete;
 };
 
+// The mirror's budget in readers for its scope (review round 166 F): -1
+// the engine's own (the hand's slack), else that many. A renderer caught up
+// leaves the hand under a render block past its frontier, so the engine
+// primes nothing for it: the renderer's cases that check what the mirror
+// primes open it (kAllReaders).
+inline constexpr int kAllReaders = std::numeric_limits<int>::max();
+struct MirrorBudget {
+    explicit MirrorBudget(int readers) { detail::setLaunchMirrorBudget(readers); }
+    ~MirrorBudget() { detail::setLaunchMirrorBudget(-1); }
+    MirrorBudget(const MirrorBudget&) = delete;
+    MirrorBudget& operator=(const MirrorBudget&) = delete;
+};
+// The renderer's cases open the budget; the callback's keep the engine's
+// (its hand is its render-ahead past what has played: room for all).
+inline int openForRenderer(const EngineOptions& options) {
+    return options.anticipative ? kAllReaders : -1;
+}
+
 // The stretch primes each run of `live` over (from, to] does, by the frame
 // it ran to (blocks of `block`), those that primed only; `at(frame)` runs
 // before each.

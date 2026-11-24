@@ -1560,12 +1560,18 @@ void carryLaunchReaders(Node& old, Node& n) SUPPLE_RT {
 
 namespace {
 std::atomic<bool> gLaunchMirror{true};
+std::atomic<int> gLaunchMirrorBudget{-1};
 }  // namespace
 
 void setLaunchMirror(bool on) noexcept { gLaunchMirror.store(on, std::memory_order_relaxed); }
 bool launchMirror() noexcept { return gLaunchMirror.load(std::memory_order_relaxed); }
+void setLaunchMirrorBudget(int readers) noexcept {
+    gLaunchMirrorBudget.store(readers, std::memory_order_relaxed);
+}
+int launchMirrorBudget() noexcept { return gLaunchMirrorBudget.load(std::memory_order_relaxed); }
 
-void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings) {
+void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings,
+                       const std::function<bool()>& more) {
     // These readings replace any the plan holds: prepareRatePlan prepares
     // again when it is late (S then later) or as a seek when it fails, and
     // a reader an earlier attempt primed is none of this one's. The key
@@ -1584,9 +1590,24 @@ void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings) {
             }
     const std::int64_t S = p.rateSwitchDevice;
     if (S == INT64_MIN || !p.rateControlsChanged || !p.rateStretch) return;
+    // The reading heard first first, so what a tight budget leaves to the
+    // executors is what is heard last (review round 166 F): by the device
+    // frame it is first read, S for a reading for S (reader 0, or a warm-up
+    // switching at or before it), a later warm-up's own switch; then in the
+    // order given (the plan's node order).
+    const auto heard = [&](const LaunchMirror& m) {
+        return m.warmSwitch == INT64_MIN ? S : std::max(S, m.warmSwitch + p.rateOrigin);
+    };
+    std::vector<const LaunchMirror*> order;
+    order.reserve(readings.size());
+    for (const LaunchMirror& m : readings) order.push_back(&m);
+    std::stable_sort(order.begin(), order.end(), [&](const LaunchMirror* a, const LaunchMirror* b) {
+        return heard(*a) < heard(*b);
+    });
     dsp::DenormalGuard denormals;
-    for (const LaunchMirror& m : readings)
+    for (const LaunchMirror* reading : order)
         for (Node& n : p.nodes) {
+            const LaunchMirror& m = *reading;
             if (n.id != m.track || !p.previousTimelines[n.live ? 1 : 0]) continue;
             const ClipPlayer* pl = playerIn(n, m.clip);
             if (!pl || pl->midi || pl->chain >= 0 || !pl->audio.data) continue;
@@ -1605,7 +1626,8 @@ void primeLaunchMirror(Plan& p, const std::vector<LaunchMirror>& readings) {
             const int latency = r.state->stretch->lookahead();
             timeline.ensure(q + latency + kRateQuantum);
             if (!timeline.hasHistory(q - kRateQuantum, q + latency))
-                continue;  // the executor primes it (the miss path)
+                continue;                 // the executor primes it (the miss path)
+            if (more && !more()) return;  // the budget is spent: the rest are misses
             // Its loop cycle: a warm-up after S takes its switch frame's, as
             // warmLaunch does; a switch at or before S its whole loop passes
             // from the log (a frame long past is no longer in the ring).

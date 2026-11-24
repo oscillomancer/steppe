@@ -346,13 +346,34 @@ Status Engine::prepareRatePlan(detail::Plan& p) {
                 result = detail::configureRateTransition(p, previous, old, handDevice);
                 // What launched audio reads at the switch, primed here
                 // rather than on the audio thread at adoption (S3 step D4,
-                // phase 2), within this attempt's timed preparation.
-                // Built only when the controls change: else no carry takes
-                // them (review round 163 S3). Called every attempt, so this
-                // attempt's readings replace an earlier one's (round 166).
-                detail::primeLaunchMirror(p, result && p.rateControlsChanged
-                                                 ? launchMirrorReadings(p)
-                                                 : std::vector<detail::LaunchMirror>{});
+                // phase 2). Built only when the controls change: else no
+                // carry takes them (review round 163 S3). Called every
+                // attempt, so this attempt's readings replace an earlier
+                // one's (round 166). The mirror is an economy, never the
+                // reason an attempt is late (round 166 F): only the first
+                // attempt primes (a retry's readers are misses), and only
+                // while the hand stays more than one of the frontier's steps
+                // past it, reader by reader, in frames and engine state: the
+                // renderer's frontier moves a render block at a time, the
+                // callback's (what has played) a device block. A reading
+                // not primed is a miss, which its executor primes, the same
+                // samples.
+                const std::int64_t step = options_.anticipative
+                                              ? static_cast<std::int64_t>(options_.renderBlock)
+                                              : static_cast<std::int64_t>(config_.blockSize);
+                int primed = 0;
+                const auto more = [&] {
+                    if (const int budget = detail::launchMirrorBudget(); budget >= 0)
+                        return primed++ < budget;  // tests: as if the slack ran out there
+                    if (handStream - (frontier() + granularity) <= step) return false;
+                    ++primed;
+                    return true;
+                };
+                detail::primeLaunchMirror(p,
+                                          attempt == 0 && result && p.rateControlsChanged
+                                              ? launchMirrorReadings(p)
+                                              : std::vector<detail::LaunchMirror>{},
+                                          more);
                 const auto elapsed =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
                 ratePreparationSeconds_ = std::max(elapsed, ratePreparationSeconds_ * .9);

@@ -851,6 +851,29 @@ the same.*
       quantum, which a retry moves; one after S is primed again by every
       attempt), but a seek plan's warm-up could meet a mark it was not
       primed for.
+    - The mirror's budget (review round 166 F). The mirror is an economy,
+      never the reason an attempt is late: only the first attempt primes (a
+      retry's readers are misses), reader by reader, and only while the
+      hand stays more than one of the frontier's steps past the frontier:
+      `handStream - (frontier + granularity) > step`, in frames from engine
+      state, no clock. The step (the reserve) is the most the frontier can
+      move at once: one render block (`EngineOptions::renderBlock`) for the
+      anticipative renderer, which renders a whole block once it is under
+      its render-ahead, and one device block for the in-callback executor,
+      whose frontier is what has played. So the next move of the frontier
+      cannot by itself overtake an attempt the mirror is priming in; one
+      reader's priming outlasting more than one move can. The readings are
+      primed in a fixed order, the one heard first first: by the device
+      frame each is first read (S for a reading for S, reader 0 or a
+      warm-up switching at or before S; a later warm-up's own switch), then
+      in the plan's node order; what a tight budget leaves is what is heard
+      last. A reading not primed is a miss, the same samples. In practice
+      the in-callback executor's hand is its render-ahead past what has
+      played, room for every reading; a renderer caught up leaves the hand
+      under a render block past its frontier (two quanta and the
+      preparation margin), so it primes only when that margin
+      (`ratePreparationSeconds_`, on a backend that owns its thread) or a
+      renderer still catching up gives more than a render block.
     - At adoption, the executor that runs the node (the renderer for a
       rendered node, the callback for a live one, each at `handAt` in its
       stream) compares each key with what it holds for S: its reader 0,
