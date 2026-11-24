@@ -161,7 +161,7 @@ double contentLength(const model::Session& s, const model::Take& take);
 
 // Whether launch.commit lays a stretch of `clip` (its active take `take`) as
 // one looped item: its period is its content's pass, from the start, with no
-// loop window inside it. Otherwise it lays one item per period, and the
+// loop window inside it and no fade. Otherwise it lays one item per period, and the
 // launched player on a playrate plan reads each period as that item does.
 bool clipLaysAsOneItem(const model::Session& s, const model::Clip& clip, const model::Take& take);
 
@@ -192,10 +192,13 @@ void nameItemFromClip(model::EditTxn& t, const model::Clip& clip, const model::I
 // a `once` clip lasts its length or the span if shorter; a `loop` clip the
 // span, as one looping item when it repeats within the span, which only a
 // loop over the whole content with a length of whole repeats allows
-// (scene.insert.period otherwise). Takes are copied as for item.add {clip}.
-Result<model::Id> layClipOnTimeline(model::EditTxn& t, const model::Session& s,
-                                    const model::Clip& clip, double startBeat, double endBeat,
-                                    bool pooled, const std::string& path);
+// (scene.insert.period otherwise). An audio clip with a fade that repeats is
+// laid one item per pass instead, each faded as its pass (S3 step C). Takes
+// are copied as for item.add {clip}. The items laid, in order.
+Result<std::vector<model::Id>> layClipOnTimeline(model::EditTxn& t, const model::Session& s,
+                                                 const model::Clip& clip, double startBeat,
+                                                 double endBeat, bool pooled,
+                                                 const std::string& path);
 
 // session.describe's scene section (session-model "Scenes and clips"), or
 // nothing when there are no scenes.

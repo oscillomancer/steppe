@@ -1006,6 +1006,58 @@ pitch-keeping rate a switch that cuts arrangement audio ends the capture
 there"), the refusal and the end for audio clips ("a launched audio clip
 under a pitch-keeping rate ..."); test_sync.cpp the clock chase.
 
+## Revision (2026-11-23, S3 step C): an audio clip's own fades
+
+**Context.** An item's fades shaped its edges, but a clip had none, so
+`clip.add {item}` dropped them and a clip could only cut in and out. A
+clip's fades must shape every pass, and the 5 ms switch fades then meet
+the clip's own on the same edge (a double fade-in at every launch, and a
+switch fade-out on top of a fade-out under way). Take volume envelopes
+cannot carry a fade shape exactly (they are in dB, and no envelope shape
+is a fade curve), so they cannot replace the refusals below.
+
+**Decision** (the lead's Q4 specification, accepted 2026-11-22).
+- **Model.** An audio clip has `fade_in` and `fade_out` (schema 2.22),
+  an item's fade objects; a MIDI clip holds none (`clip.unsupported`).
+  An item's fades go into its clip and back (`clip.add {item}`,
+  `scene.capture`, `item.add {clip}`); laid on the timeline, an audio
+  clip with fades that repeats becomes one item per pass.
+- **G applies after the reading,** every pass by the output frame's
+  phase: in `playerFrame` at unity, on the tape converter's output at the
+  frame's song position under a playrate, as an item's fade, and after a
+  clip chain. A clip with a fade is laid one item per pass.
+- **Its fades stand in for the switch's.** An incoming clip with a
+  fade-in takes no switch fade-in. A clip switched away where the switch's
+  5 ms would reach its pass's fade-out (P - Lout - F < phase < P) takes no
+  switch fade-out: it plays at weight 1 under its fade-out to the pass's
+  end and reads nothing after. (Review round 135, H1: the region reaches
+  F before the fade-out, since a switch quantized to the fade-out's start
+  rounds to a sample either side of it with the tempo.)
+  Switched exactly on a pass's end, it has begun the next pass and goes
+  out over the 5 ms from its fade-in. A further switch while a stand-in
+  sounds cuts it.
+- **The commit** lays each piece with the clip's fades on its pass edges
+  and the switch's where they do not stand in, and refuses what an item's
+  fades cannot write with `launch.commit.fade`, keeping the performance:
+  a piece starting inside the fade-in, one a loop wrap ends inside the
+  fade-out, and a stand-in cut by a switch or crossed by a loop wrap. A
+  clip still playing at the capture's end inside its fade-out played on
+  live, so its piece runs to its pass's end under its fade-out (review
+  round 135, H2); `scene.insert` and `arrangement.build` lay a pass their
+  span cuts inside its fade-out the same way.
+
+**Consequences.** A launched clip with a fade-in starts with its own fade,
+not the 5 ms ramp on it; a clip launched away during its fade-out
+finishes that fade-out over the incoming clip. Captures that begin inside
+a clip's fade-in or wrap inside a fade are refused rather than written
+wrong. Tests:
+test_clip_player.cpp ("an audio clip's fades shape every pass ...", "a
+clip's own fades stand in for a switch's ...", "a clip with a fade-in
+launched while stopped ...", "a capture of clips with fades commits as
+heard ...", "launch.commit refuses what an item's fades cannot write
+..."), test_clip_player_rate_commit.cpp (the same capture under 0.75 and
+the envelope), test_clip_launcher.cpp (the conversions).
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

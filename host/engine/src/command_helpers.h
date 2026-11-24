@@ -88,6 +88,17 @@ struct Empty {};
 
 inline schema::Schema<Empty> emptySchema() { return schema::object<Empty>("empty").build(); }
 
+// An item's or a clip's fade shape (item.set, clip.set).
+inline schema::Schema<model::FadeShape> fadeShapeSchema() {
+    return schema::enumeration<model::FadeShape>({{model::FadeShape::Linear, "linear"},
+                                                  {model::FadeShape::Slow, "slow"},
+                                                  {model::FadeShape::Fast, "fast"},
+                                                  {model::FadeShape::SlowFast, "slow_fast"},
+                                                  {model::FadeShape::FastSlow, "fast_slow"},
+                                                  {model::FadeShape::Cos, "cos"},
+                                                  {model::FadeShape::Exp, "exp"}});
+}
+
 struct TextResult {
     std::string text;
 };

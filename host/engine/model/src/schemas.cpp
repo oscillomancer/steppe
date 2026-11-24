@@ -1349,6 +1349,10 @@ const Schema<Clip>& schemaOf<Clip>() {
         dflt(b, d.mute);
         b.field("gain_db", &Clip::gainDb, num().range(kSilenceDb, 24));
         dflt(b, d.gainDb);
+        b.field("fade_in", &Clip::fadeIn, fadeSchema());
+        dflt(b, d.fadeIn);
+        b.field("fade_out", &Clip::fadeOut, fadeSchema());
+        dflt(b, d.fadeOut);
         b.field("context", &Clip::context, schema::arrayOf(schemaOf<ContextPoint>()));
         dflt(b, d.context);
         b.field("follow", &Clip::follow, followSchema("clip.follow_reset", "clip"));
@@ -1673,11 +1677,12 @@ Result<Session> projectFromJson(const json::Value& input, std::vector<schema::Wa
         auto migrated = migrateProject1(std::move(doc), warnings);
         if (!migrated) return std::move(migrated).error();
         doc = std::move(*migrated);
-    } else if (version->minor > 21 && warnings)  // 2.14: branches; 2.15: autosaved_through;
+    } else if (version->minor > 22 && warnings)  // 2.14: branches; 2.15: autosaved_through;
                                                  // 2.16: modulation; 2.17: context;
                                                  // 2.18: scenes, clips; 2.19: clip take FX
                                                  // envelopes in clip time; 2.20: clip context;
-                                                 // 2.21: take context and follow
+                                                 // 2.21: take context and follow;
+                                                 // 2.22: clip fades
         warnings->push_back(
             {"project.newer_minor", "loading a newer project minor version", "/schema"});
     // Before 2.10 a Notes module heard only its source track's own MIDI, never

@@ -296,6 +296,17 @@ instructions are in `docs/guides/installing.md`.
     over 5 ms.
   - A clip's phase is a function of the song position and its anchor.
     `once` and the loop window play as specified.
+  - An audio clip's `fade_in` and `fade_out` (schema 2.22, S3 step C)
+    fade every pass, at unity and under a playrate, and stand in for a
+    switch's 5 ms fades: a launched clip with a fade-in starts with it
+    alone, and one switched away at or up to 5 ms before its fade-out
+    plays it out to its pass's end. `launch.commit` lays such a clip one
+    item per pass with its fades, as heard, a capture ending inside a
+    fade-out included (the piece plays out to its pass's end); what an
+    item's fades cannot write (a capture beginning inside a fade-in, a
+    loop wrap inside a fade, a fade-out cut by a further switch) is refused
+    with `launch.commit.fade`. A `clip.set` of a clip's length or
+    fade-out while its fade-out stands in moves the stand-in's end at once.
   - `launch.state` (and `Engine::launchState()` for the GUI) reports what
     each track plays as heard, the clip's position, and what is queued.
   - The engine logs every applied launch. The tests replay that log
@@ -362,8 +373,9 @@ instructions are in `docs/guides/installing.md`.
   gesture in §4.15 is in: launch, select, stop, create, open, move and
   copy, drags to and from the timeline, the clip and scene menus, rename,
   scene reordering, Delete, copy and paste (a cut moves the clips at the
-  paste; the clipboard empties when another project opens), the inspector's clip fields and the scene count in the status
-  line. The piano roll opens MIDI clips. L4 adds the header's Capture
+  paste; the clipboard empties when another project opens), the inspector's clip fields (an audio clip's Fade in and Fade out,
+  each a length and a shape) and the scene count in the status
+  line. An audio clip's cell draws its fades as an item's are drawn. The piano roll opens MIDI clips. L4 adds the header's Capture
   toggle (armed while lit; a stop, seek or loop change commits the
   performance with `launch.commit` and arms the next; a refused commit
   keeps the performance, dark, for the next click; a commit made while
@@ -401,7 +413,8 @@ instructions are in `docs/guides/installing.md`.
   items of a track, an item across or after the section's start, a warped
   take. MIDI is copied unless `pooled`. Limits: capture reads whole items
   only (it never splits or trims), a master's items are skipped with a
-  warning, and fades are not kept (as in the item and clip conversion). A clip
+  warning, and an audio item's fades are kept (schema 2.22; a repeating
+  audio clip with fades is laid one item per pass). A clip
   whose loop period is not its content (a gap after it, a length shorter than
   it) is refused with `scene.insert.period`: it is not laid out yet.
 - **Clip launcher, capture** (ADR-0097, step L4's engine half; engine.md
@@ -1978,7 +1991,8 @@ GUI:
   They run in every other preset that builds the GUI, and the DAW's own GUI
   tests run under `tsan`. They open a window on the screen, so they run only
   when `SUPPLE_EDITOR_PROBE_TEST=1` (set by native CI) and show as skipped on
-  a developer's machine otherwise; the macOS probe (`mac-embedding`) is not
+  a developer's machine otherwise (the exported projects `plugin.export.source` builds leave their
+  copies of the probes out of the nested run the same way); the macOS probe (`mac-embedding`) is not
   gated and still opens its own Cocoa window locally.
 - Automation-item point editing requires an amplitude magnitude above 0.000000001; restore
   the amplitude before editing a flattened item.

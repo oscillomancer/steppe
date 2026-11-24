@@ -36,7 +36,13 @@ which read an editor's pixels off the shared screen and so run as
 `plugin.<name>.embedding`, one plugin at a time (a `RESOURCE_LOCK`). They
 take over a window on the screen the suite runs on, so `EditorProbes.cmake`
 runs them only when `SUPPLE_EDITOR_PROBE_TEST=1` (native CI sets it) and
-reports them skipped otherwise.
+reports them skipped otherwise. `plugin.export.source` builds each exported
+project and runs its own tests, which include the same probes
+(`x11-embedding`, `x11-embedding-overlapped`, `win32-embedding`,
+`win32-embedding-no-host-timer`): `source_export.cmake` leaves those out of the
+nested run unless `SUPPLE_EDITOR_PROBE_TEST=1`, so a local run does not open a
+window on the desktop. The template's tests are untouched; only the monorepo's
+selection of them differs.
 Built plugins land in `build/<preset>/plugins/clap/`.
 
 `template/` is the plugin template at a released framework version, a

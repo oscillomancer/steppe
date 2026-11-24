@@ -31,6 +31,7 @@
 #include "supple/engine/offline.h"
 #include "supple/engine/realtime.h"
 #include "supple/model/env_shape.h"
+#include "supple/model/fade_shape.h"
 #include "supple/params/params.h"
 #include "supple/time/timeline.h"
 #include "workers.h"
@@ -908,6 +909,24 @@ struct ClipPlayer {
     // track (ADR-0097, amended 2026-11-20).
     int chain = -1;
 };
+// An audio clip's own fades (`audio.fadeIn`/`fadeOut`, S3 step C, Q4 rule
+// 1) at `phase` song samples into a pass of its period: an item's fades at
+// k = phase on an item one period long, so a pass's committed item fades
+// alike. 0 past the period's end where it has a fade-out (a pass held on
+// past it reads nothing heard).
+inline double clipFade(const ClipPlayer& pl, double phase) SUPPLE_RT {
+    const Clip& c = pl.audio;
+    double fade = 1.0;
+    if (c.fadeIn > 0 && phase < double(c.fadeIn))
+        fade *= model::fadeGain(c.fadeInShape, c.fadeInCurve, phase / double(c.fadeIn));
+    if (c.fadeOut > 0 && phase >= double(pl.periodFrames - c.fadeOut))
+        fade *= model::fadeGain(c.fadeOutShape, c.fadeOutCurve,
+                                (double(pl.periodFrames) - phase) / double(c.fadeOut));
+    return fade;
+}
+inline bool clipFades(const ClipPlayer& pl) SUPPLE_RT {
+    return !pl.midi && (pl.audio.fadeIn > 0 || pl.audio.fadeOut > 0);
+}
 // What a channel plays (engine.md §1.4.2): transport state, carried across
 // plan swaps by node and clip id, never in the model.
 struct LaunchState {
@@ -1685,6 +1704,10 @@ void clipChainMidi(const Plan& p, const Node& n, int player, const ClipChainInpu
 // false where it is not heard.
 bool clipChainTicks(const Plan& p, const Node& n, int player, double song,
                     std::int64_t& ticks) SUPPLE_RT;
+// An audio clip's own fades where `player` is heard at song position `song`
+// (fractional on a playrate plan), by its phase in the pass (clipFade); 1
+// where it has none or is not heard.
+double clipChainFade(const Node& n, int player, double song) SUPPLE_RT;
 // Where a clip chain stage's clip-time lanes read (ParamLane::clipTime): the
 // player its input reads (`in`), the block at timeline `pos`, the chain's
 // lead less the stage's `before`.

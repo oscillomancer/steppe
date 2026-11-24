@@ -287,6 +287,13 @@ void compileClipPlayers(Plan& p, Node& n, const Session& s) {
                     const auto [pl_, pr] = balanceSides(take->pan / 100.0);
                     c.gainL = g * pl_;
                     c.gainR = g * pr;
+                    // Its own fades, shaping each pass (S3 step C).
+                    c.fadeIn = time::samplesAt(clip.fadeIn.length, p.rate);
+                    c.fadeOut = time::samplesAt(clip.fadeOut.length, p.rate);
+                    c.fadeInShape = clip.fadeIn.shape;
+                    c.fadeOutShape = clip.fadeOut.shape;
+                    c.fadeInCurve = clip.fadeIn.curve;
+                    c.fadeOutCurve = clip.fadeOut.curve;
                 }
             }
             // A period that is not whole beats drifts from the bar grid.
@@ -466,7 +473,46 @@ std::int64_t passOf(const ClipPlayer& pl, std::int64_t q) SUPPLE_RT {
 // fade-out does not jump to the period's start, as its committed piece
 // reads on past the period's end (review round 113).
 std::int64_t heldPass(const ClipPlayer& pl, std::int64_t anchor, std::int64_t hold) SUPPLE_RT {
-    return pl.periodItems && hold != INT64_MAX ? passOf(pl, hold - 1 - anchor) : INT64_MIN;
+    if (!pl.periodItems || hold == INT64_MAX) return INT64_MIN;
+    // A clip with fades switched exactly on a pass's end has begun its next
+    // pass: its committed piece is that pass's, the crossfade long, with its
+    // own fade-in and the switch's fade-out (S3 step C, Q4, accepted test).
+    const std::int64_t q = hold - anchor;
+    if (clipFades(pl) && q > 0 && q % pl.periodFrames == 0) return passOf(pl, q);
+    return passOf(pl, q - 1);
+}
+
+// Q4 rule 3 (S3 step C): an audio clip with a fade-in coming in takes no
+// switch fade-in. Every launch starts it at its pass's start, so its own
+// fade-in shapes it from the switch.
+bool incomingStandsIn(const Node& n) SUPPLE_RT {
+    const LaunchState& L = n.launch;
+    if (L.kind != LaunchState::Kind::Clip || L.player < 0) return false;
+    const ClipPlayer& pl = n.players[static_cast<std::size_t>(L.player)];
+    return !pl.midi && pl.audio.fadeIn > 0;
+}
+
+// Q4 rule 4: the song sample where `player`, anchored at `anchor`, going out
+// at a switch on song sample `start`, ends. Where the switch's crossfade
+// would reach that pass's fade-out (P - Lout - F < phase < P, phase not 0:
+// on a pass's end it has begun the next pass) it plays on at weight 1, under
+// its own fade-out, to the pass's end and reads nothing after it; else the
+// switch's crossfade ends it. The region reaches F before the fade-out
+// (review round 135, H1): a switch quantized to the fade-out's start lands a
+// sample either side of it as the tempo rounds, and it must play its fade
+// out either way, which no 5 ms fade on top of it could be committed as.
+std::int64_t outgoingEnd(const Node& n, int player, std::int64_t anchor,
+                         std::int64_t start) SUPPLE_RT {
+    const std::int64_t crossfade = start + n.launchFadeFrames;
+    if (player < 0 || start == kFadeAtNext) return crossfade;
+    const ClipPlayer& pl = n.players[static_cast<std::size_t>(player)];
+    if (pl.midi || pl.audio.fadeOut <= 0 || pl.periodFrames <= 0) return crossfade;
+    const std::int64_t q = start - anchor;
+    if (q <= 0) return crossfade;
+    const std::int64_t phase = q - passOf(pl, q) * pl.periodFrames;
+    if (phase == 0 || phase + n.launchFadeFrames <= pl.periodFrames - pl.audio.fadeOut)
+        return crossfade;
+    return start + (pl.periodFrames - phase);
 }
 
 // An audio player's sample at song sample `t`, anchored at `anchor`, scaled
@@ -493,6 +539,8 @@ void playerFrame(const ClipPlayer& pl, std::int64_t anchor, bool unanchored, std
     const auto fi = static_cast<std::size_t>(f);
     const std::size_t right = ch.size() > 1 ? 1 : 0;
     float l = ch[0][fi], r = ch[right][fi];
+    // Its own fades by the phase (S3 step C); a clip chain's apply after it.
+    if (!raw && clipFades(pl)) weight *= clipFade(pl, double(phase));
     switch (c.mode) {
         case model::ChannelMode::Normal:
             break;
@@ -633,10 +681,22 @@ void playerRate(const Plan& p, const Node& n, PlayerReader& reader, const ClipPl
     const PlayrateTimeline& timeline = *p.timelines[n.live ? 1 : 0];
     // The output's loop pass: a later one read ahead plays before the anchor.
     const std::int64_t pass = timeline.cycle(timeline.phase(pos - n.timelineShift));
+    const bool fades = !raw && clipFades(pl);
+    const std::int64_t held = heldPass(pl, anchor, hold);
     for (std::uint32_t i = 0; i < frames; ++i) {
-        const double w = weight(i);
+        double w = weight(i);
         if (w == 0.0) continue;
         const std::int64_t device = pos + i + ahead - n.timelineShift;
+        if (fades) {
+            // Its own fades at the frame's song position in its pass, as a
+            // committed item's (rate_sources.cpp, playRateClip) from the
+            // pass's start (S3 step C).
+            const double absolute = timeline.absolutePosition(device);
+            const auto s = static_cast<std::int64_t>(std::floor(absolute - timeline.origin()));
+            const std::int64_t k = held != INT64_MIN && s >= hold ? held : passOf(pl, s - anchor);
+            w *=
+                clipFade(pl, absolute - (double(anchor + k * pl.periodFrames) + timeline.origin()));
+        }
         const std::int64_t q = quantumAt(p, device);
         const RateClipState& st =
             playerQuantum(reader, pl, anchor, unanchored, pass, timeline, q, until, hold);
@@ -677,6 +737,13 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
     const std::int64_t F = n.launchFadeFrames;
     const bool fading = L.fadeFrom != -2 && clock0 < double(L.fadeStart + F);
     const bool arrangement = L.kind == LaunchState::Kind::Arrangement;
+    // What goes out ends at the crossfade's end, or at its pass's end where
+    // its own fade-out stands in for the switch's (Q4 rule 4).
+    const std::int64_t outEnd = L.fadeFrom >= 0
+                                    ? outgoingEnd(n, L.fadeFrom, L.fadeAnchorSample, L.fadeStart)
+                                    : L.fadeStart + F;
+    const bool standsOut = L.fadeFrom >= 0 && outEnd != L.fadeStart + F;
+    const bool goingOut = L.fadeFrom >= 0 && clock0 < double(outEnd);
     // The arrangement as the commit cuts it, on the playrate path (S3 B):
     // after a switch away its items read nothing past the crossfade's end,
     // and while a switch back from a clip fades them in, nothing before it.
@@ -687,7 +754,7 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
         c.gateFrom = gateFrom;
         c.gateUntil = gateUntil;
     }
-    if (arrangement && !fading) return;  // the arrangement alone: nothing changes
+    if (arrangement && !fading && !goingOut) return;  // the arrangement alone: nothing changes
     // x: how far into the crossfade frame i is, 0 to 1 (1 past it), by its
     // song position (launchClock).
     const auto x = [&](std::uint32_t i) {
@@ -711,7 +778,7 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
                           bool unanchored, auto&& weight, std::int64_t hold) SUPPLE_RT {
         if (p.rateEnabled)
             playerRate(p, n, n.launchReaders[reader], pl, anchor, unanchored, pos, 0, frames,
-                       weight, into, false, reader == 1 ? L.fadeStart + F : INT64_MAX, hold);
+                       weight, into, false, reader == 1 ? outEnd : INT64_MAX, hold);
         else
             for (std::uint32_t i = 0; i < frames; ++i)
                 playerFrame(pl, anchor, unanchored, song0 + i, weight(i), into, i, false, hold);
@@ -719,12 +786,29 @@ void launchAudio(Plan& p, Node& n, Stereo& into, std::int64_t pos, std::uint32_t
     // (A player with a take chain plays through it: processTake.)
     if (L.kind == LaunchState::Kind::Clip && L.player >= 0) {
         const ClipPlayer& pl = n.players[static_cast<std::size_t>(L.player)];
-        if (!pl.midi && pl.chain < 0) play(pl, 0, L.anchorSample, L.unanchored, x, INT64_MAX);
+        // Its own fade-in stands in for the switch's (Q4 rule 3).
+        const auto whole = [](std::uint32_t) { return 1.0; };
+        if (!pl.midi && pl.chain < 0) {
+            if (incomingStandsIn(n))
+                play(pl, 0, L.anchorSample, L.unanchored, whole, INT64_MAX);
+            else
+                play(pl, 0, L.anchorSample, L.unanchored, x, INT64_MAX);
+        }
     }
     const auto out = [&](std::uint32_t i) { return 1.0 - x(i); };
-    if (fading && L.fadeFrom >= 0) {
+    if (goingOut) {
         const ClipPlayer& pl = n.players[static_cast<std::size_t>(L.fadeFrom)];
-        if (!pl.midi && pl.chain < 0) play(pl, 1, L.fadeAnchorSample, false, out, L.fadeStart);
+        // Standing in: whole until its pass's end, nothing after (Q4 rule 4).
+        const auto stand = [&](std::uint32_t i) {
+            const double clock = i == 0 ? clock0 : launchClock(p, n, pos + i);
+            return clock < double(outEnd) ? 1.0 : 0.0;
+        };
+        if (!pl.midi && pl.chain < 0) {
+            if (standsOut)
+                play(pl, 1, L.fadeAnchorSample, false, stand, L.fadeStart);
+            else
+                play(pl, 1, L.fadeAnchorSample, false, out, L.fadeStart);
+        }
     }
     if (fading && L.fadeFrom == -3) {
         const ClipPlayer& pl = n.retiring[static_cast<std::size_t>(L.fadeRetiring)];
@@ -768,6 +852,12 @@ void addRetiring(Plan& to, const Plan& from) {
             r.audio.mode = pl.audio.mode;
             r.audio.gainL = pl.audio.gainL;
             r.audio.gainR = pl.audio.gainR;
+            r.audio.fadeIn = pl.audio.fadeIn;  // its own fades (S3 step C)
+            r.audio.fadeOut = pl.audio.fadeOut;
+            r.audio.fadeInShape = pl.audio.fadeInShape;
+            r.audio.fadeOutShape = pl.audio.fadeOutShape;
+            r.audio.fadeInCurve = pl.audio.fadeInCurve;
+            r.audio.fadeOutCurve = pl.audio.fadeOutCurve;
             r.periodFrames = pl.periodFrames;
             r.loopStartFrames = pl.loopStartFrames;
             r.loopFrames = pl.loopFrames;
@@ -1012,7 +1102,8 @@ ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT {
         // on through the switch's crossfade, as launchAudio's does, and on the
         // playrate path nothing past its end (S3 B).
         if (pl.midi) return in;
-        until = a.anchorSample + n.launchFadeFrames;
+        until = current ? outgoingEnd(n, player, L.anchorSample, a.anchorSample)
+                        : a.anchorSample + n.launchFadeFrames;
         hold = a.anchorSample;
     }
     if (current) return {true, L.anchorSample, L.anchorBeat, L.unanchored, until, hold};
@@ -1021,7 +1112,7 @@ ClipChainInput clipChainInput(const Node& n, int player) SUPPLE_RT {
                 L.fadeAnchorSample,
                 L.fadeAnchorBeat,
                 false,
-                L.fadeStart + n.launchFadeFrames,
+                outgoingEnd(n, player, L.fadeAnchorSample, L.fadeStart),
                 L.fadeStart};
     return in;
 }
@@ -1030,7 +1121,8 @@ bool clipChainHeard(const Node& n, int player, double clock) SUPPLE_RT {
     const LaunchState& L = n.launch;
     if (player < 0) return false;
     if (L.kind == LaunchState::Kind::Clip && L.player == player) return true;
-    return L.fadeFrom == player && clock < double(L.fadeStart + n.launchFadeFrames);
+    return L.fadeFrom == player &&
+           clock < double(outgoingEnd(n, player, L.fadeAnchorSample, L.fadeStart));
 }
 
 double launchWeight(const Node& n, int player, double clock) SUPPLE_RT {
@@ -1039,8 +1131,16 @@ double launchWeight(const Node& n, int player, double clock) SUPPLE_RT {
     const bool fading = L.fadeFrom != -2 && clock < double(L.fadeStart + F);
     const double x = fading ? std::clamp((clock - double(L.fadeStart)) / double(F), 0.0, 1.0) : 1.0;
     double w = 0;
-    if (L.kind == LaunchState::Kind::Clip && L.player == player) w += x;
-    if (fading && L.fadeFrom == player) w += 1.0 - x;
+    // Coming in with a fade-in, or going out inside its fade-out, the clip's
+    // own fade stands in for the switch's (Q4 rules 3 and 4).
+    if (L.kind == LaunchState::Kind::Clip && L.player == player) w += incomingStandsIn(n) ? 1.0 : x;
+    if (L.fadeFrom == player && player >= 0) {
+        const std::int64_t end = outgoingEnd(n, player, L.fadeAnchorSample, L.fadeStart);
+        if (end != L.fadeStart + F)
+            w += clock < double(end) ? 1.0 : 0.0;
+        else if (fading)
+            w += 1.0 - x;
+    }
     return w;
 }
 
@@ -1176,6 +1276,22 @@ bool clipChainTicks(const Plan& p, const Node& n, int player, double song,
         anchorBeat + std::floor((beat - anchorBeat) / pl.periodBeats) * pl.periodBeats;
     ticks = std::llround((beat - base) * kClipBeatTicks);
     return true;
+}
+
+double clipChainFade(const Node& n, int player, double song) SUPPLE_RT {
+    if (player < 0) return 1.0;
+    const ClipPlayer& pl = n.players[static_cast<std::size_t>(player)];
+    if (!clipFades(pl) || pl.periodFrames <= 0) return 1.0;
+    const LaunchState& L = n.launch;
+    std::int64_t anchor = 0;
+    if (L.kind == LaunchState::Kind::Clip && L.player == player)
+        anchor = L.anchorSample;
+    else if (L.fadeFrom == player)
+        anchor = L.fadeAnchorSample;
+    else
+        return 1.0;
+    const auto q = static_cast<std::int64_t>(std::floor(song - double(anchor)));
+    return clipFade(pl, song - double(anchor + passOf(pl, q) * pl.periodFrames));
 }
 
 bool clipLanePosition(const ClipLaneSource& c, std::uint32_t frame, std::int64_t& at) SUPPLE_RT {

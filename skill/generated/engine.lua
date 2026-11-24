@@ -269,6 +269,10 @@ q = nil
 ---@field color? string
 ---@field mute? boolean
 ---@field gain_db? number
+---@field fade_in? number Seconds of take time, from each pass's start.
+---@field fade_in_shape? "linear"|"slow"|"fast"|"slow_fast"|"fast_slow"|"cos"|"exp"
+---@field fade_out? number Seconds of take time, to each pass's end.
+---@field fade_out_shape? "linear"|"slow"|"fast"|"slow_fast"|"fast_slow"|"cos"|"exp"
 ---@field length? number
 ---@field loop? table
 ---@field mode? "loop"|"once"
@@ -1158,7 +1162,7 @@ q = nil
 ---@field sections table[]
 ---@field mismatches? table[] Each launched stretch of a MIDI clip copied under a key that is not the clip's, as its context.mismatch warning says it.
 ---@field from number
----@field to number
+---@field to number The capture's end, or later where a clip still fading out at it plays out to its pass's end.
 ---@field warnings? table[]
 
 ---@class Steppe.launch_scene_args
@@ -2716,7 +2720,7 @@ q = nil
 ---@field duplicate fun(args: Steppe.clip_duplicate_args): Steppe.clip_duplicate_result Copy a clip and its takes to an empty cell.
 ---@field move fun(args: Steppe.clip_move_args): Steppe.clip_move_result Move a clip to an empty cell in another scene, channel or both.
 ---@field remove fun(args: Steppe.clip_remove_args): Steppe.clip_remove_result Remove a clip with its takes (unpooled sources go too).
----@field set fun(args: Steppe.clip_set_args): Steppe.clip_set_result Set a clip's name, colour, mute, gain, length, loop, mode or quantize.
+---@field set fun(args: Steppe.clip_set_args): Steppe.clip_set_result Set a clip's name, colour, mute, gain, fades, length, loop, mode or quantize.
 
 ---@class Steppe.context
 ---@field at fun(args?: Steppe.context_at_args): Steppe.context_at_result What key, chord and section hold at a beat or bar.

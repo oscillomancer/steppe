@@ -563,7 +563,12 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "arrangement, its clip, stopped and held stretches replace the arrangement there "
             "(its items are split, trimmed or removed); each clip becomes copies of its takes "
             "at the phase it was heard, its MIDI copied unless pooled, and the 5 ms switch "
-            "crossfades become item fades. Tracks that followed the arrangement are untouched, "
+            "crossfades become item fades; an audio clip's own fades go on its pieces' pass "
+            "edges, standing in for a switch's as they did live; a clip still fading out at the "
+            "capture's end is laid to its pass's end, the track's items under that tail removed "
+            "and the next one split with a 5 ms fade-in, and to says where it ends. Tracks that "
+            "followed the "
+            "arrangement are untouched, "
             "and so is the arrangement a loop repeated. A scene launched whole (launch.scene: "
             "every clip that could play started on one boundary) also writes a section named "
             "after it, from that boundary until one of its tracks is launched again or the "
@@ -613,7 +618,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
                                   "Each launched stretch of a MIDI clip copied under a key that "
                                   "is not the clip's, as its context.mismatch warning says it."))
                        .field("from", &CommitDone::from, schema::number())
-                       .field("to", &CommitDone::to, schema::number())
+                       .field("to", &CommitDone::to,
+                              schema::number().doc(
+                                  "The capture's end, or later where a clip still fading out at "
+                                  "it plays out to its pass's end."))
                        .build();
         c.errors = {
             {"engine.stopped", "the engine is not running", "engine.start first"},
@@ -626,7 +634,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
              "undo the change, or capture the performance again"},
             {"item.locked", "a locked item is in the way", "unlock it with item.set first"},
             {"clip.unsupported", "a clip's loop window has no item equivalent",
-             "set its loop to the whole content, or off"}};
+             "set its loop to the whole content, or off"},
+            {"launch.commit.fade", "a piece would start or end inside a clip's own fade",
+             "capture again with the switches and loop wraps outside the clip's fades, or set "
+             "its fades to 0 (clip.set); the performance is kept"}};
         c.examples = {
             {"A captured bar of cl_1",
              j(R"({"performance": {"sample_rate": 48000, "start": 0, "frames": 96000,

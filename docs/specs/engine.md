@@ -650,12 +650,32 @@ the same.*
   stretch becomes copies of the clip's takes, split where a loop wrap
   moved the song, each piece starting at the phase the song gave it (the
   take's start offset): one looped item when the clip's period is its
-  content's whole pass, else one item per period. An audio piece starting
+  content's whole pass and it has no fade, else one item per period. An audio piece starting
   at a switch from the arrangement or a clip fades in over 5 ms; one
   ending at a switch runs 5 ms on and fades out, the crossfade as items.
   The arrangement a loop repeated is not copied. What it writes plays as
   the capture was heard: exactly away from the switches, and to rounding
   through the fades.
+  An audio clip with fades (S3 step C, Q4) is laid one item per pass,
+  each with the clip's fade-in where it starts on a pass's start and its
+  fade-out where it ends on a pass's end. A switch's fades give way to
+  them as live: a piece starting on a pass's start with a fade-in takes no
+  5 ms fade-in (rule 3); a switch whose 5 ms would reach the pass's
+  fade-out runs the piece on to the pass's end under the clip's fade-out,
+  with no 5 ms fade-out (rule 4); a switch exactly on a pass's end lays
+  the next pass's first 5 ms, with the clip's fade-in and the switch's
+  fade-out. A clip still playing at the capture's end inside its pass's
+  fade-out played on live: its piece runs to the pass's end under its
+  fade-out, past the capture's end, the arrangement under it cleared and
+  fading in after it, and the reply's `to` covers it (review round 135).
+  A loop wrap's refusal says how many samples (and ms) into the fade-out
+  the wrap falls, so a rounding case shows as one. An item's fade runs from its own
+  edge, so what a piece would cut out of a clip's fade is refused with
+  `launch.commit.fade`, naming the clip, the track and the beat, the
+  performance kept (rule 7): a piece starting inside the fade-in (the
+  capture's start or a loop wrap there), one a loop wrap ends inside the
+  fade-out, and a stand-in that a further switch cuts (rule 5) or a loop
+  wrap crosses.
   A scene launched whole also writes a section. `launch.scene` logs each
   clip it starts with the scene's id, all on one running frame; the commit
   writes a section for a scene whose launches at a frame all still hold (a
@@ -701,14 +721,38 @@ the same.*
     its handover; service places them again. A launch whose every slot was
     missed while it was placed is placed again at once (`launch()`, up to
     three tries).
+  - *An audio clip's fades* (S3 step C, Q4 rule 1) shape every pass: the
+    output frame's gain is an item's fades at k = its phase in the pass,
+    on an item one period long (`clipFade`), after the reading: in
+    `playerFrame` on the unity path, on the tape converter's output at the
+    frame's song position on the playrate path (as `playRateClip` fades an
+    item), and after a clip chain, as an item's fades follow its take
+    chain. A pass held on past the period's end reads 0 under a fade-out.
+  - *A clip's own fade stands in for a switch's* (Q4 rules 3 and 4): an
+    audio clip with a fade-in comes in at weight 1, shaped by its fade-in
+    from the switch, with no switch fade-in (`incomingStandsIn`); one
+    switched away where the crossfade would reach its pass's fade-out
+    (P − Lout − F < phase < P, not on the pass's end) plays on at weight 1
+    under its fade-out to the pass's end and reads nothing after it
+    (`outgoingEnd`, for the player, a clip chain's input and its weight).
+    The region reaches F before the fade-out because a switch quantized to
+    the fade-out's start lands a sample either side of it as the tempo
+    rounds (review round 135, H1). What comes in fades in as usual or
+    stands in. A clip with fades switched exactly on a pass's end has
+    begun its next pass: it goes out over the crossfade in that pass, from
+    its fade-in (`heldPass`). The stand-in's end is read from the playing
+    plan: an edit of the clip's length or fade-out while it stands in
+    (`clip.set`) moves it at once, and a shorter fade-out can end it at
+    once, as a clip edit changes a playing clip.
   - *Audio* reads through a tape converter per player reading
     (`PlayerReader`): positions are the frames' unwrapped song positions,
     and its source folds them over the loop and maps them by the player's
     phase rule. It keeps no state between quanta, so a launch primes
     nothing. A clip that a commit lays one item per period
     (`clipLaysAsOneItem` false: its period is not its content's whole pass
-    from the start) reads each period alone, silent outside it, as that
-    item does, so the converter does not read across a period's wrap; a
+    from the start, or it has a fade) reads each period alone, silent
+    outside it, as that item does, so the converter does not read across a
+    period's wrap; a
     quantum that crosses one is read again for its later frames
     (`PlayerReader::later`). A switch's outgoing side reads nothing past
     its crossfade, as the commit's pieces: the clip fading out (or a clip
@@ -2777,7 +2821,7 @@ harness. See the tooling README for schemas, limits and invocation details.
   with `restarted: true` (below). The 1 s is `transportWaitSeconds()`: tests raise
   it to 60 s, so a starved runner never becomes a refusal (in process with
   `setTransportWaitSeconds`, for a binary a test starts with
-  `SUPPLE_TRANSPORT_PATIENT=1`, which every engine and GUI ctest entry
+  `SUPPLE_TEST_TRANSPORT_PATIENT=1`, which every engine and GUI ctest entry
   sets), and a test of the refusal sets a short bound of its own.
   `transport.stop` returns to where play started. `<slug>-engine play FILE`
   plays a project through the device from the CLI.

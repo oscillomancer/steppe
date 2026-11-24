@@ -35,6 +35,13 @@ if(SUPPLE_BUILD_TESTS)
   supple_target_defaults(sandbox-optimize.tests)
   add_test(NAME sandbox-optimize.tests COMMAND sandbox-optimize.tests)
   set_tests_properties(sandbox-optimize.tests PROPERTIES LABELS "sandbox;slow;tsan-skip")
+  # The optimizer renders the real synth hundreds of times and scores every render. Under ASan and
+  # UBSan the suite takes about ten times the dev run (376 s alone against 36 s) and went over the
+  # preset's 600 s on a loaded machine, so that preset gets a safety stop with room (as the stepped
+  # reset checks do under TSan); the others keep the preset's.
+  if(SUPPLE_SANITIZE MATCHES "address")
+    set_property(TEST sandbox-optimize.tests PROPERTY TIMEOUT 1800)
+  endif()
   # Marram comes from the stock plugins' build (plugins/clap).
   add_dependencies(sandbox-optimize.tests clap-host-fixtures)
   target_compile_definitions(sandbox-optimize.tests PRIVATE
