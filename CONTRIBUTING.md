@@ -87,17 +87,51 @@ Use `ci/<branch>-<n>` with a new number each time. Annotate with
 `platforms=linux`, `platforms=macos` or `platforms=windows` to target only
 one platform; unannotated tags run all. Superseded builds cancel per branch
 and platform, including across different tag numbers. Delete remote CI tags
-once their runs finish. Dependencies and Linux compiler output are cached;
+once their runs finish. Dependencies and the compiler output (ccache, on all three platforms) are cached;
 run only the platforms needed for the change.
 
-GitHub isolates caches by ref: a fresh CI tag cannot restore a cache saved
-under another tag. Caches help same-ref reruns and, after integration,
-manual runs on the same branch. Linux ccache also reuses shared compilation
-within each run's isolated plugin builds. See GitHub's
+GitHub lets a ref read only its own caches and the default branch's. A new
+branch (and any CI tag) therefore starts cold, a macOS build taking close to an
+hour instead of five minutes, unless `main` holds a cache. Linux ccache also
+reuses shared compilation within each run's isolated plugin builds. After each
+merge, seed `main` and drop the merged branches' caches:
+
+```sh
+gh workflow run build.yml --ref main -f platforms=all -f tests='^core-json'
+gh cache delete --all --ref refs/heads/<merged-branch> --succeed-on-no-caches
+```
+
+The seed builds everything (leave `targets` empty: a narrowed run on `main` saves
+a partial cache under a newer key, which a later restore then prefers) and runs
+one small test entry; its save steps run
+whatever the outcome of the tests, so a failed test does not lose the build's
+objects. Once it has finished, delete the superseded seed's caches too (the
+keys end in the commit they were built from: `gh cache list --ref refs/heads/main`).
+
+The store is limited to 10 GB and evicts the least recently used entries
+beyond it, and a full set of compiler caches is about 2.6 GB (at most 3.7), so
+not every run saves its caches: runs on `main` always do, runs of a CI tag never
+do, and a branch run only with `-f save_caches=true`. Set it on a candidate's
+first run, so that the branch's later runs restore its caches instead of
+`main`'s:
+
+```sh
+gh workflow run build.yml --ref <candidate> -f platforms=all -f save_caches=true
+```
+
+GitHub refuses an input the ref's own `build.yml` does not declare, so this works
+only on a branch that contains the `save_caches` input (one based on a `main`
+that has it).
+
+With a seed on `main` (about 2.6 GB) and two candidates holding saved caches
+(about 2.4 GB each) the store holds about 7.4 GB, 10.7 GB if every cache is at
+its size limit. Dependencies are saved only when `main` has none under the
+same key. See GitHub's
 [cache access restrictions](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache).
 
 Linux (`ubuntu-24.04`, Clang 22) builds the existing `dev` preset with all
-its tests, under Xvfb and software OpenGL. SDL3 and the pinned CLAP validator
+its tests, under Xvfb and software OpenGL; CI adds `-gline-tables-only` (as the
+macOS preset has it) to keep the executables, and the compiler cache, small. SDL3 and the pinned CLAP validator
 are built and cached in the runner's workspace; Ubuntu 24.04 predates SDL3.
 macOS (`macos-15`, arm64) uses
 AppleClang and the system libc++, with deployment target 14.4. Its build preset
@@ -117,7 +151,10 @@ AppleClang's advisory `-Wperf-constraint-implies-noexcept` is suppressed
 when supported for the existing RT signatures; `nonblocking` annotations
 and the other warnings remain enabled.
 Windows (`windows-2022`, x64) uses clang-cl, Ninja
-and the Windows SDK, with vcpkg SDL3/zlib and a binary cache. Windows
+and the Windows SDK, with vcpkg SDL3/zlib and a binary cache. CI builds it with
+ccache and embedded debug information (`-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded`,
+`/Z7`, which clang-cl already treats `/Zi` as), so that ccache can cache the
+objects; the `windows` preset is unchanged. Windows
 10 1903 is the minimum (ADR-0044: every executable runs with the UTF-8 code page). No packaging or installers run here. Local platform
 commands are `cmake --workflow --preset macos` or `windows`; the latter
 requires `VCPKG_ROOT` and an initialized Windows SDK environment.

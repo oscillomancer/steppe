@@ -49,6 +49,12 @@ on:
         description: Junk-fill heap memory (macOS MallocPreScribble and MallocScribble, Linux MALLOC_PERTURB_)
         type: boolean
         default: false
+      # The 10 GB cache store cannot hold every branch run's compiler caches
+      # (CONTRIBUTING.md): main always saves, tags never do, a branch only when asked.
+      save_caches:
+        description: Save this run's compiler caches (a candidate's first run; main always saves, tags never)
+        type: boolean
+        default: false
   push:
     tags: ['ci/**']
 
@@ -116,6 +122,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      # Whether this run saves its compiler caches: main always, a branch when
+      # dispatched with save_caches, a tag never (a tag's caches are readable by
+      # no other ref). The dependency cache keeps its own rule.
+      SAVE_COMPILER_CACHE: ${{ (github.ref == 'refs/heads/main' || (github.ref_type == 'branch' && inputs.save_caches)) && 'true' || 'false' }}
     # Different ci/<branch>-<n> tags still cancel superseded platform builds.
     concurrency:
       group: build-${{ needs.plan.outputs.branch }}-${{ matrix.platform }}
@@ -183,6 +194,24 @@ jobs:
           validator=$(tools/validator/build.sh)
           echo "CLAP_VALIDATOR_BIN=$validator" >> "$GITHUB_ENV"
 
+      # ccache for clang-cl, from Chocolatey (preinstalled on the runner image). A failed
+      # or stalled install (continue-on-error covers a failure, the timeout a hang) leaves
+      # the build uncached, not broken: Configure checks that ccache runs.
+      - name: Windows ccache
+        if: matrix.platform == 'windows'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          choco install ccache -y --no-progress --limit-output
+          ccache --version
+      - name: Restore Windows compiler cache
+        if: matrix.platform == 'windows'
+        id: windows-compiler-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .compiler-cache
+          key: clangcl-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: clangcl-${{ runner.arch }}-
       # Shared core libraries are compiled in several isolated plugin builds.
       - name: Restore Linux compiler cache
         if: matrix.platform == 'linux'
@@ -209,14 +238,21 @@ jobs:
             # defaults even when the exported project's command has no flags.
             echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
-            echo "CCACHE_MAXSIZE=500M" >> "$GITHUB_ENV"
+            # 500M was full (the saved cache was 483 to 544 MB) and a restored cache
+            # saved almost no build time; macOS at 1G does not fill up.
+            echo "CCACHE_MAXSIZE=1.5G" >> "$GITHUB_ENV"
             # At most two links at a time (compiles stay at the build's own width): the
             # last dozen executables are about 600 MB each with debug info, and six
             # GNU ld links at once are the likely cause of the runner lost mid-build
             # (runs 45285459726, 45314588844). The nested plugin projects do not read
             # these and build with one job already.
+            # Line tables only, as the macOS preset has it: the outputs are much
+            # smaller (links, disk, and the ccache limit), assertions and unoptimized code
+            # stay on and backtraces keep file and line. CI only; the dev preset is unchanged,
+            # and the isolated plugin projects keep their own Debug flags.
             cmake --preset dev -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-              -DCMAKE_JOB_POOLS=link=2 -DCMAKE_JOB_POOL_LINK=link
+              -DCMAKE_JOB_POOLS=link=2 -DCMAKE_JOB_POOL_LINK=link \
+              -DCMAKE_CXX_FLAGS_DEBUG=-gline-tables-only
           elif [[ '${{ matrix.platform }}' == macos ]]; then
             echo "CCACHE_DIR=$GITHUB_WORKSPACE/.compiler-cache" >> "$GITHUB_ENV"
             echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
@@ -226,7 +262,25 @@ jobs:
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
             echo "CCACHE_MAXSIZE=1G" >> "$GITHUB_ENV"
             cmake --preset macos -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          elif [[ '${{ matrix.platform }}' == windows ]] && ccache --version > /dev/null 2>&1; then
+            echo "CCACHE_DIR=$(cygpath -m "$GITHUB_WORKSPACE/.compiler-cache")" >> "$GITHUB_ENV"
+            echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
+            echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+            echo "CCACHE_MAXSIZE=1G" >> "$GITHUB_ENV"
+            # Run 45420333801: 817 of 2190 compiles were uncacheable, 796 as "unsupported
+            # compiler option". The log names the options; the stats step summarises it.
+            echo "CCACHE_LOGFILE=$(cygpath -m "$RUNNER_TEMP")/ccache.log" >> "$GITHUB_ENV"
+            # ccache cannot cache an object whose debug information goes to a PDB at
+            # compile time (/Zi); /Z7 embeds it, and clang-cl treats /Zi as /Z7 already, so
+            # the objects are the same. CI only: the windows preset is unchanged, and the
+            # isolated plugin builds (60% of the compiles) take the setting from here.
+            # CMP0141 is unset in code whose cmake_minimum_required is below 3.25 (the
+            # setting is then ignored there and /Zi stays), so its default is NEW too.
+            cmake --preset windows -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
           else
+            echo "::warning title=No ccache::ccache is missing or does not run; this Windows build is uncached"
             cmake --preset ${{ matrix.preset }}
           fi
       # Preserve expensive dependencies even when the compiler/test stage fails.
@@ -266,6 +320,11 @@ jobs:
           SAMPLER
           : > "$RUNNER_TEMP/memavail.log"
           nohup setsid bash "$RUNNER_TEMP/memsampler.sh" "$RUNNER_TEMP/memavail.log" "$RUNNER_TEMP/memsampler.pid" > /dev/null 2>&1 &
+      # ccache keeps its counters in the cache directory, so a restored cache
+      # carries the last run's: zero them to read this run's hit rate.
+      - name: Compiler cache statistics reset
+        continue-on-error: true
+        run: ccache --zero-stats
       - name: Build
         # Align the environment and explicit CLI limit for predictable
         # compiler concurrency on every runner.
@@ -310,6 +369,16 @@ jobs:
             echo "lowest MemAvailable:"; sort -k2,2n "$RUNNER_TEMP/memavail.log" | sed -n 1p
             echo "lowest root free:"; sort -k3,3n "$RUNNER_TEMP/memavail.log" | sed -n 1p
             echo "last ten:"; tail -n 10 "$RUNNER_TEMP/memavail.log"
+          fi
+      - name: Compiler cache statistics after Build
+        if: always()
+        continue-on-error: true
+        run: |
+          ccache --show-stats --verbose
+          ccache --show-config | grep -E '^\(.*\) (cache_dir|max_size) ' || true
+          if [[ -n "${CCACHE_LOGFILE:-}" && -f "$CCACHE_LOGFILE" ]]; then
+            echo "ccache log: $(wc -l < "$CCACHE_LOGFILE") lines; rejected compiles by reason:"
+            grep -i 'unsupported' "$CCACHE_LOGFILE" | sed -E 's/^\[[^]]*\] *//' | sort | uniq -c | sort -rn | sed -n 1,20p || true
           fi
       - name: Test Linux (software OpenGL under Xvfb)
         if: matrix.platform == 'linux'
@@ -356,14 +425,26 @@ jobs:
         run: |
           free -m
           df -h / "$GITHUB_WORKSPACE"
+      # The compiler caches are saved whatever Build and the tests did (always()),
+      # so a seed run on main (CONTRIBUTING.md) saves even when its test entry
+      # fails; only an exact hit on the commit's own key, or a run that is not
+      # to save (SAVE_COMPILER_CACHE above), skips the save. The
+      # dependency cache is saved earlier and only after its steps passed, so a
+      # failed install never leaves a half-filled .deps under the exact key.
       - name: Save Linux compiler cache
-        if: always() && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'linux' && steps.compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .compiler-cache
           key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+      - name: Save Windows compiler cache
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'windows' && steps.windows-compiler-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .compiler-cache
+          key: ${{ steps.windows-compiler-cache.outputs.cache-primary-key }}
       - name: Save macOS compiler cache
-        if: always() && matrix.platform == 'macos' && steps.macos-compiler-cache.outputs.cache-hit != 'true'
+        if: always() && env.SAVE_COMPILER_CACHE == 'true' && matrix.platform == 'macos' && steps.macos-compiler-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .compiler-cache
