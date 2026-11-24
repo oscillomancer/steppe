@@ -902,8 +902,9 @@ void LauncherPane::paint(ui::Canvas& c) {
                            .withAlpha(dim),
                        ui::kRight | ui::kMiddle);
             stats.keys.push_back(strip > 0 ? keyMark : std::string());
-            // An unnamed clip by the words a refusal uses (launcherName).
-            std::string label = launcherName(s, *id);
+            // An unnamed clip draws no name: its row and column say its
+            // track and scene (refusals still call it launcherName's words).
+            const std::string label = clip->name;
             const std::string fit =
                 c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
             if (!fit.empty())

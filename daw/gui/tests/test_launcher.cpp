@@ -1103,19 +1103,14 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
           "the section at bar 3 and Bridge");
     CHECK(views::launcherNames(f.app->head(), "it_99, tk_99, en_99, rg_99") ==
           "a removed item, a removed take, a removed envelope, a removed section");
-    // The pane draws what refusals say: an unnamed scene as "Scene 4", an
-    // unnamed clip by its track and scene, never an id.
+    // The header draws what refusals say: an unnamed scene as "Scene 4".
     f.root->damageAll();
     f.root->frame(false);
     CHECK(header.stats.names == std::vector<std::string>{"Intro", "Verse", "Chorus", "Scene 4"});
-    for (const std::string& drawn : f.view->launcherPane().stats.names) {
-        CHECK(drawn.find("cl_") == std::string::npos);
-        CHECK(drawn.find("sc_") == std::string::npos);
-    }
-    const auto keysClip = std::find_if(
-        f.view->launcherPane().stats.names.begin(), f.view->launcherPane().stats.names.end(),
-        [](const std::string& drawn) { return drawn.starts_with("Keys"); });
-    CHECK(keysClip != f.view->launcherPane().stats.names.end());
+    // An unnamed clip's cell draws no name (its row and column say it),
+    // never an id: the song's three named clips, then Scene 4's empty name.
+    CHECK(f.view->launcherPane().stats.names ==
+          std::vector<std::string>{"Kit A", "Kit B", "Root", ""});
     // Insert at playhead over that item: scene.insert.occupied names it.
     f.errors.clear();
     f.view->setPlayhead(f.app->head().timeMap->secondsAt(16));  // bar 5

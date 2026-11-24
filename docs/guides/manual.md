@@ -1781,7 +1781,8 @@ When one of these cannot be done (items already lie in the way, a scene has
 no clips, a section has two items on one track) the status line says why. It
 names the clips, items, tracks, scenes and sections involved; one without
 a name is called by where it is, such as "Scene 4", "Bass's clip in Verse"
-or "Keys's item at bar 5", the same words the clip launcher shows for it.
+or "Keys's item at bar 5". A clip without a name shows no name in its cell,
+since its row and column already say its track and scene.
 
 In a cell, no click does two things:
 - a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds

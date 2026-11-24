@@ -3135,7 +3135,8 @@ same heights, scroll and colours.
     and in its refusals (`views::launcherName`), never by id: a scene by its
     name, else "Scene N" by its place in the pane (the header draws it so);
     a track by its name, else "an unnamed track"; a clip by its name, else
-    "<track>'s clip in <scene>" (the cell draws it so, cut to fit); an item
+    "<track>'s clip in <scene>" (its cell draws no name: the row and column
+    say it); an item
     by its label (§4.3), else "<track>'s item at bar N"; a take by its name,
     else as its item or clip; an envelope as "<track or take>'s <param>
     automation" ("the <param> automation" on a plugin, route or group); a
