@@ -1182,6 +1182,25 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
         CHECK(f.errors[0].message.find(prefix) == std::string::npos);
 }
 
+// Round 165 F5: the lanes' drawn labels are this paint's, also when the GL
+// layers failed (paintGl, which resets the stats, then draws nothing).
+TEST_CASE("lanes: the drawn labels are each paint's own when the GL layers failed") {
+    LauncherFixture f;
+    f.song();
+    f.exec("item.add", R"({"track":"tr_3","position":0,"length":4,"notation":"1: C4:w"})");
+    f.exec("item.add", R"({"track":"tr_2","position":4,"length":4,"notation":"1: C2:w"})");
+    f.root->damageAll();
+    f.root->frame(false);
+    const std::size_t drawn = f.view->lanes().stats().labels.size();
+    REQUIRE(drawn > 0);
+    f.view->lanes().failGlForTests();
+    for (int i = 0; i < 3; ++i) {
+        f.root->damageAll();
+        f.root->frame(false);
+        CHECK(f.view->lanes().stats().labels.size() == drawn);
+    }
+}
+
 TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected, in both themes") {
     LauncherFixture f;
     f.song();

@@ -50,6 +50,9 @@ class LaneLabels : public ui::Node {
         // The visible take envelopes by take, in the session's order within
         // one, gathered once: each item then finds its own without a scan.
         takeEnvelopes_.clear();
+        // What this paint draws (also when the GL layers failed and
+        // paintGl's reset never runs; round 165 F5).
+        lanes_.stats_.labels.clear();
         for (const auto& e : s.envelopes)
             if (e.value->visible && e.value->target.object.kind == model::Kind::Take)
                 takeEnvelopes_.push_back({e.value->target.object, &*e.value});
