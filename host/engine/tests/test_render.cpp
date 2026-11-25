@@ -3,8 +3,10 @@
 // Render settings, presets and the processing chain (ADR-0055, engine.md §3).
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
@@ -456,4 +458,35 @@ TEST_CASE("a dry run checks the cover without reading it; a render reads it") {
     auto mix = r.run("render.mix", R"({"name":"c","end_beat":1,"outputs":[{"format":"flac"}],
         "metadata":{"cover":"cover.png"}})");
     CHECK(holds(mix["path"].asString(), "image/png"));
+}
+
+TEST_CASE(
+    "a broken user render default answers a code each render.* command declares (round "
+    "180 F4)") {
+    // resolveFor reads the default (readPreset), and json::parse answers
+    // json.parse.<what>: the json.parse.* family every render, the settings
+    // and the presets that read it declare. The reviewer's probe D.
+    Rig r;
+    r.song();
+    r.run("render.preset.save", R"({"default":true,"settings":{"tail_s":1}})");
+    const fs::path file = r.dir.path / "render-presets" / "default.json";
+    REQUIRE(fs::exists(file));
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << "{\"settings\": {\"tail_s\": 1,}";  // a truncated, hand-edited file
+    }
+    // render.regions resolves the same way (resolveFor), once it has regions.
+    for (const char* name : {"render.mix", "render.stems", "render.dry-run", "render.settings",
+                             "render.preset.list", "render.preset.load"}) {
+        INFO(name);
+        const std::string args =
+            std::string_view(name) == "render.preset.load" ? R"({"default": true})" : "{}";
+        const Error e = r.fails(name, args);
+        INFO("code " << e.code << " | hint " << e.hint);
+        CHECK(e.code.rfind("json.parse.", 0) == 0);
+        const cmd::CommandInfo* info = r.registry.find(name);
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& s) { return s.code == "json.parse.*"; }));
+    }
 }

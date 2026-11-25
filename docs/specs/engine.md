@@ -2361,17 +2361,24 @@ render's own `range` and `performance`.
 
 **Refusals.** One code per cause; a client words a refusal from the code
 and the path's index, never from the hint, which names commands for
-command callers. `render.mix`, `render.stems`, `render.regions` and
-`render.dry-run` declare every code they answer, the resolvers' they pass
-through included (the offline pass's, the file and audio writers', and
-the id resolver's `cl.unknown` and `tr.unknown`), in their registry
-entries (`cmd::CommandInfo::errors`: code, when, hint;
+command callers. Every `render.*` command (`render.mix`, `render.stems`,
+`render.regions`, `render.dry-run`, `render.settings`, the
+`render.queue.*` and `render.preset.*` commands) declares every code it
+answers, the resolvers' it passes through included (source preparation's
+`media.budget`, `warp.*` and `engine.stretch`, the offline pass's, the
+file and audio writers', and `cl.unknown` for a performance's clip), in
+its registry entry (`cmd::CommandInfo::errors`: code, when, hint;
 `skill/generated/engine/render.md` lists them), so a client's table of
-wordings can be checked against the registry. Schema codes of a
-malformed argument are every command's and are not listed; a broken
-user render default answers through them and the `file.*` codes. A test
-lints the render sources, the offline pass and the writers for codes no
-render command declares (round 178 F5).
+wordings can be checked against the registry alone. `render.queue.add`
+declares what planning a render answers, `render.queue.run` what a render
+does. Schema codes of a malformed argument are every command's and are
+not listed. A broken render default or preset file answers the `file.*`
+read codes, a schema code, or `json.parse.<what>` (the JSON parser's),
+declared as the family `json.parse.*` by every command that reads one: a
+client matches a family's code by its prefix. A test lints the files
+these commands reach (the render sources, source preparation, the
+offline pass, the preset files, the JSON parser and the writers) for
+codes none of them declares (round 178 F5, round 180 F3 and F4).
 
 | Case | Code | Path |
 | --- | --- | --- |
