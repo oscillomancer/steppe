@@ -331,10 +331,8 @@ instructions are in `docs/guides/installing.md`.
     is as heard (`as_heard`, `not_heard_because`; engine.md §3.1, ADR-0097
     revision 2026-11-24); a capture from a play start renders bit for bit
     as heard. The render dialog does not offer it yet (the gui-lead's) and
-    says renders play the arrangement while a clip holds a track. Limits:
-    a launch placed with quantize none under a master playrate can render
-    up to a few stream frames earlier than it played, which as_heard does
-    not show; native macOS and Windows CI has not run on it.
+    says renders play the arrangement while a clip holds a track. Limit:
+    native macOS and Windows CI has not run on it.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - under a master playrate clips play on the playrate path, live as

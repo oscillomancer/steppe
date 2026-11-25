@@ -204,6 +204,48 @@ TEST_CASE("under a master playrate a performance's song frames play where live p
     CHECK(worst == 0.0);
 }
 
+TEST_CASE(
+    "under a slow master playrate an immediate launch renders where it played (round 174 F1)") {
+    // Quantize none: live places it on the next whole song sample, at or
+    // after the floor, so the render's first frame reaching that sample is
+    // the stream frame live switched on. At 0.25 with 126-frame blocks the
+    // floor's song position is fractional (21 * 126 * 0.25 = 661.5), as at
+    // 0.6 with 128-frame blocks.
+    for (const auto& [rate, block] : {std::pair{0.25, 126u}, std::pair{0.6, 128u}}) {
+        INFO("rate " << rate << " block " << block);
+        Project p;
+        twoTracks(p);
+        json::Value set = j(R"({"preserve_pitch": false})");
+        set["rate"] = rate;
+        p.runArgs("transport.playrate.set", set);
+        const model::Session s = p.app->head();
+        const Live heard = playLive(s, p.app->projectDir(), kInCallback, block, 48000 * 4,
+                                    {{20, {request("tr_1", "cl_1")}, model::LaunchQuantize::None}});
+        REQUIRE(heard.log.size() == 1);
+        // On a whole song sample: the song frame is where it switched.
+        CHECK(double(heard.log[0].songFrame) <= rate * double(heard.log[0].runningFrame) + 1e-6);
+        CHECK(double(heard.log[0].songFrame) > rate * double(heard.log[0].runningFrame - 1));
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 1.5;
+        settings.blockSize = kBlock;
+        settings.projectDir = p.app->projectDir();
+        std::vector<LaunchLogEntry> song = heard.log;
+        song[0].runningFrame = heard.log[0].songFrame;
+        settings.launches = song;
+        settings.launchesInSong = true;
+        auto r = renderOffline(s, pool, settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        const std::vector<float>& fromSong = r->audio.channels[0];
+        const std::int64_t to = std::min(std::int64_t(fromSong.size()),
+                                         std::int64_t(heard.left.size()) - heard.latency - block);
+        REQUIRE(to > heard.log[0].runningFrame + 4096);
+        const auto [worst, first] = compare(heard.left, heard.latency, fromSong, 0, to);
+        INFO("first differing frame " << first << ", launch at " << heard.log[0].runningFrame);
+        CHECK(worst == 0.0);
+    }
+}
+
 TEST_CASE("a clip removed and restored within one block leaves the capture edited (G2)") {
     // A client that sends without waiting: the executors may skip the plan
     // without cl_1 and play on, though a return was recorded. The capture

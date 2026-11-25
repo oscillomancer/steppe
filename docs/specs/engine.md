@@ -821,7 +821,11 @@ the same.*
     copy of the running rate timeline from the executor's published clock
     (with the scalar edits after it and the envelope), finds the quantize
     boundary from the floor's song position, and targets the first frame
-    whose unwrapped song position reaches it (`placeRateLaunch`). A rate
+    whose unwrapped song position reaches it (`placeRateLaunch`). With
+    quantize none the boundary is the next whole song sample at or after
+    the floor's position, so a launch switches at most 1/rate device
+    frames after its floor, on the frame a render of its song frame
+    switches on too (round 174 F1). A rate
     control still on its way to the executors answers `launch.later`. A
     scalar edit voids the pending launches past its frame
     (`voidRateLaunches`), and a plan with other rate controls those after
@@ -2224,11 +2228,9 @@ checks it against the version without a plan; `applyPerformance` sets the
 render's range, loop and launches (`OfflineSettings::launches` with
 `launchesInSong`), and the offline pre-pass that walks the rate timeline
 converts each launch's song frame to the first stream frame whose song
-position reaches it. That is live placement's rule for a quantized
-boundary; a launch placed with quantize none under a playrate logs the
-song frame its position had fallen to, so it can play earlier than live
-did, by less than one song sample's worth of stream frames (at most four
-at the slowest playrate; a known limit, which as_heard does not show). The capture's facts are recorded
+position reaches it. That is live placement's rule (§1.4.2, under
+a master playrate), which places a launch with quantize none on the next
+whole song sample too, so the two switch on the same stream frame. The capture's facts are recorded
 by the engine (`Engine::CaptureFacts`: from the play start, an edit, a
 playrate change, live input, a dropout, a plug-in failure), fixed when
 the capture ends.

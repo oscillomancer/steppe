@@ -294,19 +294,21 @@ Result<Engine::LaunchPlaced> Engine::placeRateLaunch(const detail::Plan& plan, s
     const auto sampleOf = [&](double beat) { return time::samplesAt(tm.secondsAt(beat), rate); };
     LaunchPlaced out;
     out.epoch = epoch;
-    if (quantize == model::LaunchQuantize::None) {
-        out.stream = floor;
-        out.anchorSample = static_cast<std::int64_t>(std::floor(songFloor));
-        out.anchorBeat = beatOf(double(out.anchorSample));
-        // The anchor on the unwrapped count: a whole number of loop passes
-        // from the position, which rounding settles.
-        out.songFrame = std::llround(copy.phase(first) - (songFloor - double(out.anchorSample)));
-        return out;
-    }
-    double beat = boundaryAt(tm, beatOf(songFloor), quantize);
-    std::int64_t anchor = sampleOf(beat);
+    // Quantize none: the next whole song sample, at or after the floor, so
+    // the render's first-frame rule (offline.cpp placeLaunches) switches on
+    // the same stream frame as the executor; at most 1/rate device frames
+    // after the floor (round 174 F1).
+    const bool none = quantize == model::LaunchQuantize::None;
+    double beat = none ? 0.0 : boundaryAt(tm, beatOf(songFloor), quantize);
+    std::int64_t anchor = none ? static_cast<std::int64_t>(std::ceil(songFloor)) : sampleOf(beat);
+    if (none) beat = beatOf(double(anchor));
     double distance = double(anchor) - songFloor;
-    if (copy.looping() && songFloor < copy.loopEnd() && double(anchor) >= copy.loopEnd()) {
+    if (none && copy.looping() && songFloor < copy.loopEnd() && double(anchor) >= copy.loopEnd()) {
+        anchor = static_cast<std::int64_t>(copy.loopStart());  // wrapped first
+        beat = beatOf(double(anchor));
+        distance = copy.loopEnd() - songFloor;
+    } else if (!none && copy.looping() && songFloor < copy.loopEnd() &&
+               double(anchor) >= copy.loopEnd()) {
         // The loop wraps first: the first boundary inside it after its start.
         const auto start = static_cast<std::int64_t>(copy.loopStart());
         beat = boundaryAt(tm, beatOf(double(start)), quantize);
@@ -317,8 +319,10 @@ Result<Engine::LaunchPlaced> Engine::placeRateLaunch(const detail::Plan& plan, s
         }
         distance = (copy.loopEnd() - songFloor) + double(anchor - start);
     }
-    // The first device frame whose (unwrapped) song position reaches it.
-    const double reach = copy.phase(first) + distance;
+    // The first device frame whose (unwrapped) song position reaches it:
+    // without a loop the position is the unwrapped count, so the whole
+    // sample itself, as the render compares it.
+    const double reach = copy.looping() ? copy.phase(first) + distance : double(anchor);
     constexpr std::int64_t kChunk = kRing / 4;
     // At the slowest rate the song takes four frames a sample; a little more.
     const std::int64_t limit =
