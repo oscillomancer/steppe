@@ -829,7 +829,7 @@ Kind: `action`. Exposure: `mcp-tool`.
 - `backend.host_api.not_found`: the host API was not found Hint: choose an exact host_api from engine.devices
 - `backend.busy`: another stream or process holds the device Hint: stop it, then start again
 - `backend.driver`: the ASIO driver or the JACK server did not start Hint: close other apps using the driver, or start PipeWire with pipewire-jack
-- `backend.rate`: the device does not support the rate Hint: choose a supported rate, or omit rate for the device's own
+- `backend.rate`: the device does not support the rate (ASIO: or is absent) Hint: name a rate engine.devices lists as the device's default_rate
 - `backend.config`: device format is invalid Hint: check rate and channel capacities
 - `backend.unavailable`: JACK is not installed Hint: install pipewire-jack
 - `backend.open`: the device did not open for another reason Hint: check engine.devices, rate and channels

@@ -3679,7 +3679,7 @@ in the code, set where the backend holds the PortAudio error number and host API
 | `backend.device.invalid` | `paInvalidDevice`: the device is gone, or (WASAPI) held in exclusive mode by another app |
 | `backend.busy` | `paDeviceUnavailable`: held by another stream of this process (ASIO), or taken over by another app (Core Audio hog mode) |
 | `backend.driver` | the driver or server did not start: on ASIO `paUnanticipatedHostError` (the driver failed to load or `ASIOInit`, as when another app holds a single-client driver); on JACK, no server answered |
-| `backend.rate` | `paInvalidSampleRate` only: the device does not run at the rate (`/rate`) |
+| `backend.rate` | `paInvalidSampleRate` only: the device does not run at the rate (`/rate`); on ASIO also an interface that is not present (`ASE_NotPresent` maps to it), which the engine cannot tell apart. An omitted rate is the project's, so the hint names engine.devices' `default_rate` |
 | `backend.unavailable` | the JACK library is missing or lacks the JACK API |
 | `backend.config` | an invalid rate, block or channel request, or an invalid stream rate returned |
 | `backend.open` | any other failure (another PortAudio error, port registration or activation on JACK, the device monitor) |

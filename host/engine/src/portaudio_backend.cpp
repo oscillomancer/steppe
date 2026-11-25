@@ -25,7 +25,8 @@ Error failure(const detail::PortAudioApi& api, PaError error, const char* path, 
     std::string text = api.errorText(error);
     if (error == paInvalidSampleRate)
         return Error("backend.rate", std::move(text), "/rate",
-                     "choose a rate the device supports, or omit rate for the device's own");
+                     "name a rate the device supports: engine.devices lists its default_rate; on "
+                     "ASIO also check that the interface is connected");
     if (error == paDeviceUnavailable)
         return Error("backend.busy", std::move(text), path,
                      "another stream or process holds the device: stop it, then start again");
