@@ -550,6 +550,59 @@ TEST_CASE(
     r.run("render.settings", "{}");  // readable again
 }
 
+TEST_CASE("a named preset that cannot be read answers its code at /name, as the default's") {
+    // render.preset.load {name} reads the file through findRenderPreset,
+    // which puts the reader's errors under /name (round 184 F2's follow-up).
+    Rig r;
+    r.run("render.preset.save", R"({"name":"Archive","settings":{"tail_s":1}})");
+    const fs::path file = r.dir.path / "render-presets" / "Archive.json";
+    REQUIRE(fs::exists(file));
+    const char* load = R"({"name":"Archive"})";
+    {
+#ifdef _WIN32
+        const test::ExclusiveHold held(file);
+        REQUIRE(held.held());
+#else
+        if (::geteuid() == 0) {
+            MESSAGE("running as root: a mode-000 file can still be read; skipped");
+            return;
+        }
+        fs::permissions(file, fs::perms::none);
+        struct Restore {
+            fs::path path;
+            ~Restore() {
+                std::error_code ec;
+                fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, ec);
+            }
+        } restore{file};
+#endif
+        const Error e = r.fails("render.preset.load", load);
+        INFO("code " << e.code << " | path " << e.path << " | hint " << e.hint);
+        CHECK(e.code == "file.open");
+        CHECK(e.path == "/args/name");
+        const cmd::CommandInfo* info = r.registry.find("render.preset.load");
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& s) { return s.code == "file.open"; }));
+    }
+    r.run("render.preset.load", load);  // readable again
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << "{\"settings\": {\"tail_s\": 1,}";
+    }
+    const Error parse = r.fails("render.preset.load", load);
+    CHECK(parse.code.rfind("json.parse.", 0) == 0);
+    CHECK(parse.path == "/args/name");
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << R"({"schema": "supple.render-preset/1.0", "name": "Archive",)"
+            << R"( "settings": {"tail_s": "long"}})";
+    }
+    const Error member = r.fails("render.preset.load", load);
+    INFO("code " << member.code << " | path " << member.path);
+    CHECK(member.path.rfind("/args/name/settings/", 0) == 0);
+}
+
 TEST_CASE(
     "a preset that cannot be removed answers render.preset_write, not preset_unknown (round "
     "183 S2)") {
