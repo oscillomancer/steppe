@@ -2423,10 +2423,14 @@ newer autosave ask at the click. The safe-load question for a crash-suspect
 plug-in (Open, recovery, the newer autosave, a template) is a later window
 of the same kind: when it is answered, a changed version or branch, a
 recording, a lit capture or another kept take asks the discard decision
-again (which finalizes) instead of loading; the plug-in answers are set back
-with the load that did not happen, so the load asks them again after the new
-decision (`FileActions::checked`): asking the plug-in question again after
-the new decision is by design.
+again (which finalizes) instead of loading (`FileActions::checked`). The
+load that did not happen sets back the overrides its answers made
+("separate process", "not loaded"), and the new decision is asked on the
+next pass, never from inside the answer, so a load after it always starts
+from the plug-in's normal load. After the new decision the load runs its
+check again: a plug-in answered "separate process" or "not loaded" is asked
+about again (by design); one answered "normally" is not, because that answer
+cleared its crash reports before the load.
 A save (or project template)
 that comes back with warnings (a plug-in whose state could not be read keeps
 its earlier state) opens a popup listing them. Open and Save as start in the
@@ -3536,7 +3540,11 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   not counted; a capture an agent starts, or a take refused, while Open's
   dialog is open is asked about again before the project opens; an edit,
   or an agent's capture, while the safe-load question is open asks the
-  discard decision again, then the plug-in question (`test_app.cpp`).
+  discard decision again on the next pass with the overrides set back, and
+  then the plug-in question again unless it was answered "normally"; with
+  nothing to save the plug-in question comes back from the normal load and
+  the project never opens overridden (`test_app.cpp`, a rig that answers
+  modes and settled reports as the engine does).
 - The pane against the engine (step E): at every step the clips drawn dimmed
   and the scenes whose ▶ is dimmed are exactly those
   `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the

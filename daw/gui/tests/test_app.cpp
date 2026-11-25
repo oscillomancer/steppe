@@ -5324,11 +5324,17 @@ struct SafeLoadRig {
     bool stock = false, bridgeable = true, listed = true;
     bool second = false;  // a second suspect plug-in in the same listing
     int checks = 0;
-    json::Value lastArgs;                      // what the last check asked about
-    std::function<void()> afterCheck;          // runs once the check has read the file
-    std::string failFor;                       // a plug-in id whose override the engine refuses
-    std::map<std::string, std::string> modes;  // the mode each plug-in was last set to
-    std::string canaryId = "com.acme.canary";  // the suspect plug-in's id (a real one for F4)
+    json::Value lastArgs;                       // what the last check asked about
+    std::function<void()> afterCheck;           // runs once the check has read the file
+    std::string failFor;                        // a plug-in id whose override the engine refuses
+    std::map<std::string, std::string> modes;   // the mode each plug-in was last set to
+    std::string canaryId = "com.acme.canary";   // the suspect plug-in's id (a real one for F4)
+    std::vector<std::function<void()>> posted;  // the app's later passes (FileActions' post)
+    // As the engine answers project.plugins: an override's mode, and no
+    // suspect once its reports are settled. Off for the tests that model
+    // each open as a new run of the app, where overrides (which hold until
+    // the app quits) are gone and remembered choices apply again.
+    bool engineModes = true;
 
     explicit SafeLoadRig(int width = 1000, int height = 640,
                          const std::filesystem::path& scratch = {})
@@ -5354,7 +5360,9 @@ struct SafeLoadRig {
                 p["format"] = "clap";
                 p["id"] = canaryId;
                 p["name"] = "Canary";
-                p["mode"] = "normal";
+                // As the engine answers: the mode an override set, and no
+                // suspect once its reports are settled (a "normally" answer).
+                p["mode"] = engineModes ? mode(canaryId) : std::string("normal");
                 p["stock"] = stock;
                 p["bridgeable"] = bridgeable;
                 auto resolved = json::Value::object();
@@ -5368,14 +5376,14 @@ struct SafeLoadRig {
                 auto incidents = json::Value::array();
                 incidents.push_back(json::Value("aa11"));
                 suspect["incidents"] = std::move(incidents);
-                p["suspect"] = std::move(suspect);
+                if (!engineModes || !isSettled("aa11")) p["suspect"] = std::move(suspect);
                 plugins.push_back(std::move(p));
                 if (second) {
                     auto q = json::Value::object();
                     q["format"] = "clap";
                     q["id"] = "com.acme.second";
                     q["name"] = "Second";
-                    q["mode"] = "normal";
+                    q["mode"] = engineModes ? mode("com.acme.second") : std::string("normal");
                     q["stock"] = false;
                     q["bridgeable"] = true;
                     auto resolved2 = json::Value::object();
@@ -5388,7 +5396,7 @@ struct SafeLoadRig {
                     auto incidents2 = json::Value::array();
                     incidents2.push_back(json::Value("bb22"));
                     suspect2["incidents"] = std::move(incidents2);
-                    q["suspect"] = std::move(suspect2);
+                    if (!engineModes || !isSettled("bb22")) q["suspect"] = std::move(suspect2);
                     plugins.push_back(std::move(q));
                 }
             }
@@ -5432,9 +5440,26 @@ struct SafeLoadRig {
         };
         load.onStatus = [this](const std::string& text) { statuses.push_back(text); };
         load.now = [] { return std::int64_t{1763400000000}; };
-        files = std::make_unique<gui::FileActions>(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui,
-                                                   a.window->sdl(), [](auto task) { task(); });
+        files = std::make_unique<gui::FileActions>(
+            *a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+            [this](auto task) { posted.push_back(std::move(task)); });
         files->setSafeLoad(&load);
+    }
+    std::string mode(const std::string& id) const {
+        auto at = modes.find(id);
+        return at == modes.end() ? std::string("normal") : at->second;
+    }
+    bool isSettled(const std::string& incident) const {
+        return std::find(settled.begin(), settled.end(), incident) != settled.end();
+    }
+    // The app's next passes: what FileActions posted runs, as the loop runs it.
+    void pump() {
+        while (!posted.empty()) {
+            auto task = std::move(posted.front());
+            posted.erase(posted.begin());
+            task();
+        }
+        a.root->frame(false);
     }
     // Choose a row of the question and go on with it (a click chooses; Continue acts).
     void pick(const char* row) {
@@ -5733,6 +5758,7 @@ TEST_CASE("safe-load: an undo sets back only what this open changed (round 6c-a 
     // put the plug-in back on the normal load: that restarts it in process under the project that
     // is still open and loses its unsaved state.
     SafeLoadRig r;
+    r.engineModes = false;  // each open as a new run: the remembered choice applies again
     const gui::RememberedLoad canary{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
                                      "Acme", "1.2.0",           1};
     r.rules = {canary};
@@ -5804,6 +5830,7 @@ TEST_CASE("safe-load: nothing suspect, nothing asked; a stock plug-in has two ch
 TEST_CASE(
     "safe-load: remembering is for an exact build, and a new crash undoes a remembered Normal") {
     SafeLoadRig r;
+    r.engineModes = false;  // each open as a new run: the remembered choice applies again
     auto ask = [&] {
         r.files->openPath(r.file);
         r.a.root->frame(false);
@@ -5988,7 +6015,7 @@ TEST_CASE(
         r.a.app->setFixedClock(1'125'000);
         r.a.app->tick();
         r.pick("safeload.disable");
-        r.a.root->frame(false);
+        r.pump();
         // The edit made while the question was open asks the discard decision
         // again (review round 171 F1), then the plug-in question again.
         CHECK(r.a.app->head().project->name == "Even later");
@@ -6012,23 +6039,77 @@ TEST_CASE(
 
 TEST_CASE("safe-load: an edit made while the question is open asks the discard decision again") {
     // Review round 171 F1: the question can stay open; an agent's edit then
-    // is not opened over unasked. The load asks the plug-in question again
-    // after the new decision (the answers were set back with the load).
+    // is not opened over unasked. Round 173: the new decision is asked on a
+    // later pass, after the load that did not happen set its overrides back.
+    // A "separate process" or "not loaded" answer is then asked again; a
+    // "normally" answer has settled the reports and is not.
     SafeLoadRig r;
+    const bool normal = [&] {
+        bool n = false;
+        SUBCASE("answered not loaded") {}
+        SUBCASE("answered normally") { n = true; }
+        return n;
+    }();
     r.ask();
     REQUIRE(r.a.root->find("safeload"));
     REQUIRE(r.a.dispatcher->execute({"track.add", json::parse(R"({"name":"Late"})").value(), {}}));
-    r.pick("safeload.normal");
+    r.pick(normal ? "safeload.normal" : "safeload.disable");
     r.a.root->frame(false);
     CHECK(r.name() == "Open now");  // not opened
+    // Set back before anything else happens: nothing loads with it.
+    CHECK(r.mode(r.canaryId) == "normal");
+    REQUIRE_FALSE(r.a.root->find("file.confirm"));  // asked on the next pass
+    r.pump();
     REQUIRE(r.a.root->find("file.confirm"));
     CHECK(r.a.root->find("file.confirm.text")->valueText() == "The project has unsaved changes.");
     REQUIRE(r.a.root->click("file.confirm.discard"));
     r.a.root->frame(false);
+    if (normal) {
+        // Its reports are settled: nothing to ask, the project opens.
+        CHECK_FALSE(r.a.root->find("safeload"));
+        CHECK(r.name() == "Saved");
+        CHECK(r.mode(r.canaryId) == "normal");
+        return;
+    }
     REQUIRE(r.a.root->find("safeload"));
     CHECK(r.checks == 2);
-    r.pick("safeload.normal");
+    r.pick("safeload.disable");
     CHECK(r.name() == "Saved");
+    CHECK(r.mode(r.canaryId) == "disable");  // the person's choice holds
+}
+
+TEST_CASE(
+    "safe-load: a re-ask with nothing to save asks the plug-in again, never loads overridden") {
+    // Review round 173 F1: a clean project and no kept take (an agent's
+    // capture that launched nothing) while the question is open. The new
+    // decision needs no question, so the load starts again at once; it must
+    // see the plug-in back on its normal load and ask, not open with the
+    // first answer's override and then have it set back under the project.
+    SafeLoadRig r;
+    gui::CaptureControl capture(*r.a.app, *r.a.dispatcher);
+    r.files->setCapture(&capture);
+    REQUIRE(r.a.dispatcher->execute(
+        {"engine.start", json::parse(R"({"backend":"dummy"})").value(), {}}));
+    REQUIRE_FALSE(r.files->dirty());
+    r.ask();
+    REQUIRE(r.a.root->find("safeload"));
+    REQUIRE(r.a.dispatcher->execute({"launch.capture", json::parse(R"({"on":true})").value(), {}}));
+    REQUIRE(capture.lit());
+    r.pick("safeload.disable");
+    r.a.root->frame(false);
+    CHECK(r.name() == "Open now");
+    r.pump();
+    // Nothing to save: the plug-in is asked about again, from its normal load.
+    CHECK_FALSE(capture.lit());
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.name() == "Open now");
+    CHECK(r.mode(r.canaryId) == "normal");
+    r.pick("safeload.disable");
+    CHECK(r.name() == "Saved");
+    CHECK(r.mode(r.canaryId) == "disable");
+    REQUIRE_FALSE(r.overrides.empty());
+    CHECK(r.overrides.back() == std::pair<std::string, std::string>{r.canaryId, "disable"});
+    (void)r.a.dispatcher->execute({"engine.stop", json::Value::object(), {}});
 }
 
 TEST_CASE("safe-load: a capture an agent starts while the question is open is finalized first") {
@@ -6060,8 +6141,8 @@ TEST_CASE("safe-load: a capture an agent starts while the question is open is fi
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     const std::uint64_t before = r.a.app->head().version;
-    r.pick("safeload.normal");
-    r.a.root->frame(false);
+    r.pick("safeload.bridge");
+    r.pump();
     // Finalized (the take committed, one undo step), then asked again.
     CHECK(r.name() == "Open now");
     CHECK_FALSE(capture.lit());
@@ -6071,8 +6152,9 @@ TEST_CASE("safe-load: a capture an agent starts while the question is open is fi
     REQUIRE(r.a.root->click("file.confirm.discard"));
     r.a.root->frame(false);
     REQUIRE(r.a.root->find("safeload"));
-    r.pick("safeload.normal");
+    r.pick("safeload.bridge");
     CHECK(r.name() == "Saved");
+    CHECK(r.mode(r.canaryId) == "bridge");
     run("engine.stop", "{}");
 }
 

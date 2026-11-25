@@ -233,6 +233,12 @@ open, any button cancels the old request with a notice, leaving the replacement
 project untouched. File and folder dialog results are also ignored with a notice
 if the project was replaced; open the dialog again. If edits arrive
 while Open is waiting, Steppe asks about unsaved changes again before opening.
+The same holds while it asks how to load a plug-in that crashed before: if
+the project changes or a launcher capture runs meanwhile, it checks for
+unsaved changes again (asking if there are any), then asks again about any
+plug-in you chose to run in
+a separate process or not to load (one you chose to load normally is not
+asked about again).
 
 **File > Import…** (Ctrl+I) brings in audio files (WAV, FLAC, MP3) and MIDI
 files (`.mid`) at the playhead: one file onto the selected track, several onto

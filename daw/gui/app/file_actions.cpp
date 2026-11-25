@@ -647,9 +647,14 @@ void FileActions::checked(const std::string& what, json::Value args,
     // The safe-load question stays open as long as the person leaves it: what
     // the discard decision covered can change meanwhile (an agent's edit or
     // capture, a take refused). Then the decision is asked again, which
-    // finalizes, instead of loading (review round 171 F1). The answers given
-    // are set back with the load that did not happen, so the load asks them
-    // again after the new decision.
+    // finalizes, instead of loading (review round 171 F1). The load that did
+    // not happen sets back the overrides its answers made (SafeLoad::finish's
+    // undo, once this returns false), so the new decision is asked on a later
+    // pass, never from inside the answer: a load run now would see the
+    // plug-in still overridden, ask nothing, open, and then have its choice
+    // reverted under it (review round 173 F1). A "normally" answer has
+    // settled the plug-in's reports already, so only the others are asked
+    // again.
     const auto generation = app_.projectGeneration();
     const auto version = app_.head().version;
     const auto branch = app_.versions().branch();
@@ -663,7 +668,10 @@ void FileActions::checked(const std::string& what, json::Value args,
                              (app_.engine() && app_.engine()->recording()) ||
                              (capture_ && (capture_->lit() || keptTake() != take));
         if (!changed) return then(found);
-        confirmDiscard(what, [this, what, again, then] { checked(what, again, then); });
+        post_([this, generation, what, again, then] {
+            if (!currentProject(generation)) return;
+            confirmDiscard(what, [this, what, again, then] { checked(what, again, then); });
+        });
         return false;
     });
 }
