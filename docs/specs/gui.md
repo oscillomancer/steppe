@@ -2271,23 +2271,26 @@ project is drawn in the quiet ink, with "from your default" on hover.
       words (the capture began while playing; the session or a clip it
       played changed during it, an edit or a clip's return to the
       arrangement; the playback rate changed during it; live input was heard;
-      audio dropped out during it; a plug-in failed during it; the engine
+      audio dropped out during it; a plug-in failed before or during it; the engine
       stopped, or the audio device restarted, during it, from the capture's
       `endedBy`; an unknown reason as its code in words). After a render
       the results start with the same line, from the render's own result,
       and the status line adds ", as heard" or ", not as heard". The dialog
       never sends `as_heard: true`.
     - Every refusal the dialog shows (the preview, Render, a failed job, the
-      Ask check, Add to queue, presets, settings) reads in the dialog's words
-      from its code and path, never the engine's message, its hint, a path
-      or a command name (`RenderDialog::refusalWords`, the audio device
-      dialog's rule). For a performance: no capture; another sample rate; a
+      Ask check, Add to queue, presets, settings, a field's own error) is
+      shown once, on the red line under the sections: the preview area and
+      the status line keep to their own jobs (the files; what an action
+      did). It reads in the dialog's words from its code and path, never the
+      engine's message, its hint, a path or a command name
+      (`RenderDialog::refusalWords`, the audio device dialog's rule), and
+      says what plays ("A clip the launcher plays …", "A clip the capture
+      played …"). For a performance: no capture; another sample rate; a
       looped capture under a master playback rate; more than 100,000
-      launches; launches out of order, or a clip not on its track (a
-      launches path ending `/clip`); a track or clip not in this version; a
-      frozen track; a clip that cannot play at the master playback rate; a
-      clip over the memory budget; End not after Start; a capture with no
-      running time. The render's own codes (the file name, a file that
+      launches; launches out of order; a launch that names no clip; a clip
+      not on its track; a track or clip not in this version; a frozen track;
+      a clip that cannot play at the master playback rate; a clip over the
+      memory budget; End not after Start; a capture with no running time. The render's own codes (the file name, a file that
       exists, normalization, the format, the frame budget, presets, the
       queue, a missing or changed media file, a failed plug-in) have theirs.
       One it does not know reads "The render could not be made." (or the

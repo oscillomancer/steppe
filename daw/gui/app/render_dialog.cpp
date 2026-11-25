@@ -110,6 +110,18 @@ std::string sourceKey(RenderDialog::Source s) {
 // A reason a performance render is not as heard (engine.md §3.1), in the
 // dialog's words; "" for given and from_launcher, which only say the source
 // is not a capture. An unknown reason reads as its code in words.
+// A capture's span in beats as a render plays it: a looped capture that ran
+// past the loop's end covers the song up to the loop's end, which it plays as
+// wraps (engine.md §3.1, the result's range).
+std::pair<double, double> capturedSpan(const engine::EngineApp::CaptureView& v,
+                                       const time::TimeMap& tm) {
+    double last = v.endBeat;
+    const auto& c = v.capture;
+    if (c.loop.active() && v.sampleRate > 0 && c.startSample + c.frames > c.loop.end)
+        last = std::min(last, tm.beatAt(static_cast<double>(c.loop.end) / v.sampleRate));
+    return {v.startBeat, last};
+}
+
 std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEnd endedBy) {
     if (reason == "began_mid_run") return "the capture began while playing";
     // An edit, or a clip's return to the arrangement (removed, frozen or
@@ -118,7 +130,7 @@ std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEn
     if (reason == "playrate_changed") return "the playback rate changed during it";
     if (reason == "live_input") return "live input was heard";
     if (reason == "dropout") return "audio dropped out during it";
-    if (reason == "plugin_failed") return "a plug-in failed during it";
+    if (reason == "plugin_failed") return "a plug-in failed before or during it";
     if (reason == "ended_by_engine")
         return endedBy == engine::EngineApp::CaptureEnd::Device
                    ? "the audio device restarted during it"
@@ -197,7 +209,7 @@ RenderDialog::~RenderDialog() = default;
 void RenderDialog::load(const json::Value& args) {
     auto result = dispatcher_.execute({"render.settings", args, kUiOrigin});
     if (!result) {
-        setStatus(refusalWords(result.error(), "The render settings could not be read."));
+        showRefusal(refusalWords(result.error(), "The render settings could not be read."));
         return;
     }
     settings_ = *result->find("effective");
@@ -570,6 +582,17 @@ void RenderDialog::markDirty() {
     lastEditMs_ = nowMs();
 }
 
+void RenderDialog::showRefusal(std::string words) {
+    // Once, on the red line: the preview area and the status line keep to
+    // their own jobs (the files; what an action did).
+    refusalText_ = std::move(words);
+    if (diagnostic_) diagnostic_->setText(refusalText_);
+    if (refusalText_.empty()) return;
+    previewText_.clear();
+    if (previewBlock_) previewBlock_->setText("");
+    setStatus("");
+}
+
 void RenderDialog::setStatus(std::string message) {
     statusText_ = views::objectNames(app_.head(), message);
     if (status_) status_->setText(statusText_);
@@ -698,13 +721,13 @@ void RenderDialog::buildHeader(ui::Node& page) {
     preset.onChange = [this](const std::string& name) {
         if (name.empty()) return;
         if (auto loaded = loadPreset(name); !loaded)
-            setStatus(refusalWords(loaded.error(), "The preset could not be loaded."));
+            showRefusal(refusalWords(loaded.error(), "The preset could not be loaded."));
     };
     header.emplace<ui::Button>("render.preset.save", "Save preset…", [this] { openPresetName(); });
     header.emplace<ui::Button>("render.preset.delete", "Delete preset", [this] {
         if (presetName_.empty()) return;
         if (auto deleted = deletePreset(presetName_); !deleted)
-            setStatus(refusalWords(deleted.error(), "The preset could not be deleted."));
+            showRefusal(refusalWords(deleted.error(), "The preset could not be deleted."));
     });
     header.emplace<ui::Button>("render.close", "Close", [this] { close(); });
 }
@@ -1418,7 +1441,7 @@ void RenderDialog::buildFooter(ui::Node& page) {
     actions.emplace<ui::Button>("render.queue.add", "Add to queue", [this] { addToQueue(); });
     actions.emplace<ui::Button>("render.default", "Save as default", [this] {
         if (auto saved = saveAsDefault(); !saved)
-            setStatus(refusalWords(saved.error(), "The preset could not be saved."));
+            showRefusal(refusalWords(saved.error(), "The preset could not be saved."));
         else
             setStatus("saved as your default");
     });
@@ -1460,7 +1483,7 @@ void RenderDialog::openPresetName() {
         const std::string chosen = name.text();
         root_.closePopup();
         if (auto saved = savePreset(chosen); !saved)
-            setStatus(refusalWords(saved.error(), "The preset could not be saved."));
+            showRefusal(refusalWords(saved.error(), "The preset could not be saved."));
         else
             setStatus("saved preset " + chosen);
     };
@@ -1514,7 +1537,8 @@ void RenderDialog::openExisting(const json::Value& existing) {
         buttons.emplace<ui::Button>(id, label, [this, ifExists = std::string(mode)] {
             root_.closePopup();
             if (auto written = writeSettings(); !written) {
-                setStatus(refusalWords(written.error(), "The render settings could not be saved."));
+                showRefusal(
+                    refusalWords(written.error(), "The render settings could not be saved."));
                 return;
             }
             json::Value a = renderArgs(true);
@@ -1638,13 +1662,10 @@ Status RenderDialog::deletePreset(const std::string& name) {
 void RenderDialog::refreshPreview() {
     dirty_ = false;
     if (auto valid = validate(); !valid) {
-        previewText_ = valid.error().message;
-        setStatus(previewText_);
-        if (diagnostic_) diagnostic_->setText(previewText_);
-        if (previewBlock_) previewBlock_->setText(previewText_);
+        showRefusal(valid.error().message);
         return;
     }
-    if (diagnostic_) diagnostic_->setText("");
+    showRefusal("");
     json::Value args = renderArgs(false);
     args.asObject().erase("analyze");
     args["operation"] = sourceKey(source());
@@ -1653,12 +1674,9 @@ void RenderDialog::refreshPreview() {
     if (!result) {
         // In the dialog's words (never a path, the message or the hint,
         // which names commands).
-        previewText_ = refusalWords(result.error());
         asHeardText_.clear();
         if (asHeard_) asHeard_->setText("");
-        setStatus(previewText_);
-        if (diagnostic_) diagnostic_->setText(previewText_);
-        if (previewBlock_) previewBlock_->setText(previewText_);
+        showRefusal(refusalWords(result.error()));
         if (renderButton_) renderButton_->setText("Render");
         return;
     }
@@ -1726,7 +1744,7 @@ void RenderDialog::refreshPreview() {
 void RenderDialog::startJob(std::string command, json::Value args) {
     auto result = dispatcher_.execute({command, std::move(args), kUiOrigin});
     if (!result) {
-        setStatus(refusalWords(result.error()));
+        showRefusal(refusalWords(result.error()));
         return;
     }
     if (const json::Value* id = result->find("job"); id && id->isString()) {
@@ -1746,7 +1764,7 @@ void RenderDialog::run() {
         return;
     }
     if (auto valid = validate(); !valid) {
-        setStatus(valid.error().message);
+        showRefusal(valid.error().message);
         return;
     }
     if (ask_) {
@@ -1756,7 +1774,7 @@ void RenderDialog::run() {
         args["if_exists"] = "overwrite";
         auto dry = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin});
         if (!dry) {
-            setStatus(refusalWords(dry.error()));
+            showRefusal(refusalWords(dry.error()));
             return;
         }
         json::Value existing = json::Value::array();
@@ -1768,7 +1786,7 @@ void RenderDialog::run() {
         }
     }
     if (auto written = writeSettings(); !written) {
-        setStatus(refusalWords(written.error(), "The render settings could not be saved."));
+        showRefusal(refusalWords(written.error(), "The render settings could not be saved."));
         return;
     }
     mixJob_ = false;
@@ -1777,11 +1795,11 @@ void RenderDialog::run() {
 
 void RenderDialog::addToQueue() {
     if (auto valid = validate(); !valid) {
-        setStatus(valid.error().message);
+        showRefusal(valid.error().message);
         return;
     }
     if (auto written = writeSettings(); !written) {
-        setStatus(refusalWords(written.error(), "The render settings could not be saved."));
+        showRefusal(refusalWords(written.error(), "The render settings could not be saved."));
         return;
     }
     json::Value a = renderArgs(false);
@@ -1801,8 +1819,7 @@ void RenderDialog::addToQueue() {
             // The capture the queue pins is the one this call resolves, now:
             // its own span and version, never a range the dialog showed
             // before it was replaced.
-            first = capture->startBeat;
-            last = capture->endBeat;
+            std::tie(first, last) = capturedSpan(*capture, tm);
             what = "last capture as played (v" + std::to_string(capture->capture.version) + ")";
         }
         const int a0 = tm.barBeat(first).bar;
@@ -1813,7 +1830,7 @@ void RenderDialog::addToQueue() {
     q["args"] = std::move(a);
     auto result = dispatcher_.execute({"render.queue.add", std::move(q), kUiOrigin});
     if (!result) {
-        setStatus(refusalWords(result.error(), "The render could not be queued."));
+        showRefusal(refusalWords(result.error(), "The render could not be queued."));
         return;
     }
     setStatus("queued " + text(result->find("label")));
@@ -2053,7 +2070,7 @@ void RenderDialog::openResultMenu(std::size_t index, const ui::Rect& anchor) {
                      return;
                  }
                  if (made.error().code != "branch.exists") {
-                     setStatus(refusalWords(made.error(), "The branch could not be made."));
+                     showRefusal(refusalWords(made.error(), "The branch could not be made."));
                      return;
                  }
              }
@@ -2070,7 +2087,7 @@ void RenderDialog::pollJob() {
     argsJson["job"] = job_;
     auto status = dispatcher_.execute({"job.get", std::move(argsJson), kUiOrigin});
     if (!status) {
-        setStatus(refusalWords(status.error()));
+        showRefusal(refusalWords(status.error()));
         job_.clear();
         return;
     }
@@ -2195,6 +2212,11 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
         e.path.starts_with("/args") ? std::string_view(e.path).substr(5) : std::string_view(e.path);
     const bool clip = path.ends_with("/clip");
     const bool perf = performance();
+    // What plays: the capture as it played, or the launcher as it plays now.
+    const bool captured = plays_ == Plays::Capture;
+    const std::string aClip = captured ? "A clip the capture played" : "A clip the launcher plays";
+    const std::string aTrack =
+        captured ? "A track the capture played on" : "A track the launcher plays on";
     // A performance (engine.md §3.1's refusals).
     if (c == "launch.capture") return "There is no capture to render.";
     if (c == "render.performance.sample_rate")
@@ -2206,23 +2228,25 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
     if (c == "render.performance.too_many")
         return "The capture has more than 100,000 launches. Commit it in the launcher, then "
                "render the arrangement.";
-    if (c == "render.performance.launches")
-        return clip ? "A clip it plays is not on its track in this version."
-                    : "The capture's launches are out of order.";
+    if (c == "render.performance.clip_track" || (c == "render.performance.launches" && clip))
+        return aClip + " is not on its track in this version.";
+    if (c == "render.performance.no_clip") return "The capture names no clip for a launch.";
+    if (c == "render.performance.launches") return "The capture's launches are out of order.";
     // An id the version lacks: the resolver's code names its kind (tr., cl.).
     if (c == "track.unknown" || c == "tr.unknown")
-        return perf ? "A track it plays is not in this version."
+        return perf ? aTrack + " is not in this version."
                     : "A track to render is not in this version.";
-    if (c == "track.frozen") return "A track it plays is frozen in this version.";
-    if (c == "launch.playrate") return "A clip it plays cannot play at the master playback rate.";
-    if (c == "launch.memory") return "A clip it plays is over the memory budget.";
+    if (c == "track.frozen") return aTrack + " is frozen in this version.";
+    if (c == "launch.playrate") return aClip + " cannot play at the master playback rate.";
+    if (c == "launch.memory") return aClip + " is over the memory budget.";
     if (clip && (c.starts_with("clip.") || c.starts_with("cl.")))
-        return "A clip it plays is not in this version.";
+        return aClip + " is not in this version.";
     if (c == "render.not_as_heard") return "It would not render as heard.";
     if (c == "render.empty") {
         if (path.ends_with("/end_beat")) return "End is not after Start.";
         if (path.ends_with("/frames")) return "The capture has no running time.";
-        return "There is nothing to render in this range.";
+        return source() == Source::Regions ? "No checked region has anything to render."
+                                           : "There is nothing to render in this range.";
     }
     // The settings.
     if (c == "render.args") {
@@ -2233,7 +2257,8 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
         if (path == "/handles_s") return "A seamless loop cannot have handles.";
         if (path == "/limit_true_peak_db")
             return "Stems that share the master's gain cannot be limited one by one.";
-        if (path.starts_with("/performance")) return "A performance renders its own range.";
+        if (path.starts_with("/performance") || path == "/start_beat" || path == "/end_beat")
+            return "A performance renders its own range.";
         return "These render settings cannot be used together.";
     }
     if (c == "render.path")
@@ -2335,8 +2360,7 @@ void RenderDialog::buildPerformanceRange(ui::Node& body) {
             first = perfRange_->first;
             last = perfRange_->second;
         } else if (capture) {
-            first = capture->startBeat;
-            last = capture->endBeat;
+            std::tie(first, last) = capturedSpan(*capture, tm);
         }
         std::string line = "Bars " + inspectorBarsText(first, tm) + " \u2013 " +
                            inspectorBarsText(last, tm) + " \u00b7 " +

@@ -89,6 +89,9 @@ class RenderDialog {
     std::string pattern() const;
     const std::string& preview() const { return previewText_; }
     const std::string& statusText() const { return statusText_; }
+    // The red line: a refusal (the engine's, in the dialog's words, or a
+    // field's), shown there only; "" when there is none.
+    const std::string& refusal() const { return refusalText_; }
     // Start a render as a job; the id is empty when the command failed.
     const std::string& job() const { return job_; }
     void run();
@@ -177,6 +180,7 @@ class RenderDialog {
                      std::function<Status(double)> apply);
     void markDirty();
     void setStatus(std::string text);
+    void showRefusal(std::string words);  // the red line ("" clears it)
     Status validate() const;
     json::Value selectors() const;
     json::Value renderArgs(bool forJob) const;
@@ -247,7 +251,7 @@ class RenderDialog {
     // The checked regions when not all are (a one-off selector, never written).
     std::optional<std::vector<std::string>> regions_;
     std::string presetName_;
-    std::string previewText_, statusText_, job_, folderText_;
+    std::string previewText_, statusText_, refusalText_, job_, folderText_;
     bool mixJob_ = false;  // the job is File → Mix
     std::vector<std::string> resultFiles_;
     json::Value results_ = json::Value::array();

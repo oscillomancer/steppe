@@ -533,7 +533,7 @@ TEST_CASE("the render dialog: the launcher's Start and End are checked as one ra
     // Refused by the dialog's own check: the preview names the field.
     const auto refused = [&] {
         f.render->refreshPreview();
-        return f.render->preview().find("end after the start") != std::string::npos;
+        return f.render->refusal().find("end after the start") != std::string::npos;
     };
     SUBCASE("End typed after a Start past it") {
         f.render->setField("render.perf.start", "9");
@@ -557,8 +557,7 @@ TEST_CASE("the render dialog: the launcher's Start and End are checked as one ra
         json::Value p = f.render->renderArguments()["performance"];
         CHECK(p["start_beat"].asDouble() < p["end_beat"].asDouble());
         f.render->refreshPreview();
-        CHECK(f.render->preview().find("End is not after Start") == std::string::npos);
-        CHECK(f.render->preview().find("end_beat") == std::string::npos);
+        CHECK(f.render->refusal().empty());
     }
     f.render->close();
 }
@@ -583,9 +582,10 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         {"render.loop", "/performance/loop"},
         {"render.performance.too_many", "/performance/launches"},
         {"render.performance.launches", "/performance/launches/2/frame"},
-        {"render.performance.launches", "/performance/launches/2/clip"},
+        {"render.performance.no_clip", "/performance/launches/2/clip"},
+        {"render.performance.clip_track", "/performance/launches/2/clip"},
         {"track.unknown", "/performance/launches/1/track"},
-        {"track.frozen", "/performance/launches/1/track"},
+        {"track.frozen", "/performance/launches/1/clip"},
         {"launch.playrate", "/performance/launches/1/clip"},
         {"launch.memory", "/performance/launches/1/clip"},
         {"clip.unknown", "/performance/launches/1/clip"},
@@ -600,6 +600,8 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         {"render.args", "/handles_s"},
         {"render.args", "/limit_true_peak_db"},
         {"render.args", "/performance"},
+        {"render.args", "/start_beat"},
+        {"render.args", "/end_beat"},
         {"render.args", "/sample_rate"},
         {"render.path", "/pattern"},
         {"render.pattern", "/pattern"},
@@ -649,10 +651,16 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         CHECK(words != "The render could not be made.");  // each one known
     }
     CHECK(logged.empty());
-    // The /clip launches case is not "out of order".
-    CHECK(f.render->refusalWords(Error("render.performance.launches", text,
+    // A clip of another track is not "out of order", and the words say what
+    // plays.
+    CHECK(f.render->refusalWords(Error("render.performance.clip_track", text,
                                        "/args/performance/launches/0/clip", hint)) ==
-          "A clip it plays is not on its track in this version.");
+          "A clip the launcher plays is not on its track in this version.");
+    // Regions: nothing to render is said of the regions.
+    f.render->setSource(gui::RenderDialog::Source::Regions);
+    CHECK(f.render->refusalWords(Error("render.empty", text, "/args", hint)) ==
+          "No checked region has anything to render.");
+    f.render->setSource(gui::RenderDialog::Source::Master);
     // Unknown: one plain sentence; the whole error in the log.
     CHECK(f.render->refusalWords(Error("engine.something_new", text, "/args/x", hint)) ==
           "The render could not be made.");
@@ -702,13 +710,22 @@ TEST_CASE("the render dialog: Render and the queue say a refusal in the dialog's
         CHECK(s.find("cl_1") == std::string::npos);
         CHECK(s.find("queue:") == std::string::npos);
     };
-    CHECK(f.render->preview() == "A clip it plays is not in this version.");
+    // Once, on the red line (round 175 re-check): the preview area and the
+    // status line say nothing of it.
+    const std::string words = "A clip the launcher plays is not in this version.";
+    CHECK(f.render->refusal() == words);
+    CHECK(f.render->preview().empty());
+    CHECK(f.render->statusText().empty());
+    REQUIRE(f.uiRoot().find("render.diagnostic"));
+    CHECK(f.uiRoot().find("render.diagnostic")->valueText() == words);
     f.render->run();
-    CHECK(f.render->statusText() == "A clip it plays is not in this version.");
-    clean(f.render->statusText());
+    CHECK(f.render->refusal() == words);
+    CHECK(f.render->statusText().empty());
+    clean(f.render->refusal());
     f.render->addToQueue();
-    CHECK(f.render->statusText() == "A clip it plays is not in this version.");
-    clean(f.render->statusText());
+    CHECK(f.render->refusal() == words);
+    CHECK(f.render->statusText().empty());
+    clean(f.render->refusal());
     CHECK(logged.empty());  // every refusal here has words
     f.render->close();
 }
@@ -865,6 +882,56 @@ TEST_CASE("the render dialog's Last capture: as heard, on the version it played 
     f.render->close();
 }
 
+TEST_CASE("the render dialog: a looped capture's range ends at the loop's end") {
+    // engine.md §3.1 (round 174 F4): a capture that ran past the loop's end
+    // covers the song up to it, played as wraps; the range line says so
+    // before the dry run answers and after, and so does the queue's label.
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return r ? *r : json::Value();
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    run("transport.loop", R"({"start_beat": 0, "end_beat": 4, "enabled": true})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    run("launch.capture", R"({"on": true})");
+    run("launch.clip", R"({"clip": "cl_1"})");
+    if (!run("launch.state", "{}")["playing"].asBool()) run("transport.play", "{}");
+    backend.run(3 * 48000 / 256);  // six beats at 120: one wrap of the bar
+    f.app->tick();
+    run("transport.stop", "{}");
+    backend.run(1);
+    f.app->tick();
+    const auto capture = f.app->launchCapture();
+    REQUIRE(capture);
+    REQUIRE(capture->capture.loop.active());
+    REQUIRE(capture->endBeat > 4);  // its running length is past the loop's end
+    f.render->open();
+    f.render->setPlays(gui::RenderDialog::Plays::Capture);
+    f.frame();
+    REQUIRE(f.uiRoot().find("render.perf.range"));
+    CHECK(f.uiRoot().find("render.perf.range")->valueText().rfind("Bars 1.1.000 – 2.1.000", 0) ==
+          0);
+    f.render->setDebounceMs(0);
+    f.render->refreshPreview();
+    f.frame();
+    CHECK(f.uiRoot().find("render.perf.range")->valueText().rfind("Bars 1.1.000 – 2.1.000", 0) ==
+          0);
+    f.render->addToQueue();
+    CHECK(f.render->statusText().find("bars 1–1") != std::string::npos);
+    f.render->close();
+}
+
 TEST_CASE("the render dialog: a capture at another sample rate is not offered") {
     Fixture f;
     if (!f.ok) return;
@@ -972,9 +1039,9 @@ TEST_CASE("render numeric fields reject non-finite values and overflowing intege
         f.render->setField(field, value);
         f.render->addToQueue();
         CHECK(f.app->renderQueue().empty());
-        CHECK(f.render->statusText().find(field) != std::string::npos);
+        CHECK(f.render->refusal().find(field) != std::string::npos);
         f.render->refreshPreview();
-        CHECK(f.render->preview().find(field) != std::string::npos);
+        CHECK(f.render->refusal().find(field) != std::string::npos);
         f.render->run();
         CHECK(f.render->job().empty());
         f.render->setField(field, "");
@@ -1027,7 +1094,7 @@ TEST_CASE("render Start and End are bars and beats as the ruler writes them, typ
     CHECK(f.render->settings().find("start_beat")->asDouble() == doctest::Approx(9.5));
     f.render->addToQueue();
     CHECK(f.app->renderQueue().empty());
-    CHECK(f.render->statusText().find("render.start") != std::string::npos);
+    CHECK(f.render->refusal().find("render.start") != std::string::npos);
 }
 
 TEST_CASE("the FX chain: browser, bypass/offline, reorder, remove, parameters, favourites") {
