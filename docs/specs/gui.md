@@ -2311,8 +2311,11 @@ project is drawn in the quiet ink, with "from your default" on hover.
       loop set, no track to render as a stem, no checked region. The
       render's own codes (the file name or the renders folder, a file that
       exists, normalization, the format, the frame budget, presets, the
-      queue, a missing or changed media file, a failed plug-in, a file that
-      could not be written) have theirs.
+      queue, a missing, changed or unreadable media file, a failed or
+      missing plug-in, a file that could not be written, an unsupported
+      format, a cancelled render) have theirs. A test walks every code the
+      commands the dialog calls declare in the registry (the four renders,
+      a job's own codes included, presets and the queue).
       One it does not know reads "The render could not be made." (or the
       action's own sentence: the preset, the settings, the queue), and the
       whole error goes to the log (`onLog`, stderr).

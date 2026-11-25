@@ -615,7 +615,8 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
          {"/performance/launches/2/frame", "/performance/launches/2/clip"}},
         {"render.performance.no_clip", {"/performance/launches/2/clip"}},
         {"render.performance.clip_track", {"/performance/launches/2/clip"}},
-        {"clip.unknown", {"/performance/launches/1/clip"}},
+        {"cl.unknown", {"/performance/launches/1/clip"}},
+        {"tr.unknown", {"/performance/launches/1/track"}},
         {"track.frozen", {"/performance/launches/1/clip"}},
         {"launch.playrate", {"/performance/launches/1/clip"}},
         {"launch.memory", {"/performance/launches/1/clip"}},
@@ -637,12 +638,19 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         if (!path.empty()) CHECK(words.find(path) == std::string::npos);
         CHECK(words != "The render could not be made.");  // each one known
     };
+    // The commands the dialog calls that answer in render codes: the four
+    // renders (a job's own codes included, 3293e01c), presets and the queue.
     std::set<std::string> declared;
-    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
+    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run",
+                             "render.preset.save", "render.preset.load", "render.preset.delete",
+                             "render.queue.add", "render.queue.remove", "render.queue.run"}) {
         const cmd::CommandInfo* command = f.registry.find(name);
-        REQUIRE(command);
-        CHECK_FALSE(command->errors.empty());
+        REQUIRE_MESSAGE(command, name);
         for (const cmd::ErrorSpec& e : command->errors) declared.insert(e.code);
+    }
+    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
+        INFO(name);
+        CHECK_FALSE(f.registry.find(name)->errors.empty());
     }
     for (const std::string& code : declared) {
         const auto at = paths.find(code);
@@ -655,40 +663,12 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         INFO(code);
         CHECK(declared.count(code) == 1);
     }
-    // Not declared by the render commands, and still the dialog's to word:
-    // the offline pass and the file writers behind a job (render.job.get),
-    // the id resolver's own codes, and the other commands the dialog calls
-    // (presets, the queue, a branch).
-    for (const auto& [code, path] : std::vector<std::pair<std::string, std::string>>{
-             {"engine.media_missing", ""},
-             {"engine.media_changed", ""},
-             {"engine.media_too_long", ""},
-             {"engine.blob_missing", ""},
-             {"engine.bridge_failed", ""},
-             {"engine.fx_failed", ""},
-             {"engine.patch_unpatchable", ""},
-             {"engine.process_error", ""},
-             {"engine.range", ""},
-             {"file.write", ""},
-             {"file.open", ""},
-             {"file.sync", ""},
-             {"audio.write", ""},
-             {"audio.encode", ""},
-             {"file.sync_published", ""},
-             {"file.sync_directory", ""},
-             {"plugin.unknown", ""},
-             {"cl.unknown", "/performance/launches/1/clip"},
-             {"tr.unknown", "/performance/launches/1/track"},
-             {"render.preset_unknown", ""},
-             {"render.preset_factory", ""},
-             {"render.preset_name", ""},
-             {"render.preset_write", ""},
-             {"render.queue_unknown", ""},
-             {"render.queue_empty", ""},
-             {"branch.unknown", ""},
-         }) {
-        CHECK(declared.count(code) == 0);  // once declared, the walk above has it
-        check(code, path);
+    // Not declared by any command the dialog calls, and still the dialog's
+    // to word: a preset name the settings refuse, and a preset that could
+    // not be written. Once declared, the walk above has them.
+    for (const char* code : {"render.preset_name", "render.preset_write"}) {
+        CHECK(declared.count(code) == 0);
+        check(code, "");
     }
     CHECK(logged.empty());
     // A clip of another track is not "out of order", and the words say what
@@ -4307,7 +4287,10 @@ TEST_CASE("audit3: active render refuses additional launches") {
     f.render->runQueue();
     CHECK(f.render->job() == "probe-1");
     CHECK(starts == 1);
-    CHECK(f.uiRoot().find("render.status")->valueText().find("active") != std::string::npos);
+    // Refused on the red line (round 179 F2), not the status line.
+    CHECK(f.uiRoot().find("render.diagnostic")->valueText() ==
+          "A render is already running: wait for it to finish.");
+    CHECK(f.uiRoot().find("render.status")->valueText().find("already") == std::string::npos);
 }
 
 TEST_CASE("render preview has one deadline only while an open dialog is dirty") {

@@ -2360,9 +2360,13 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
     if (c == "render.queue_empty") return "Nothing is queued.";
     if (c == "job.cancelled") return "The render was cancelled.";
     // The offline render itself.
-    if (c == "engine.media_missing") return "A file it plays is missing.";
-    if (c == "engine.media_changed") return "A file it plays changed on disk.";
-    if (c == "engine.media_too_long") return "A file it plays is too long to load.";
+    if (c == "engine.media_missing") return "A file the render plays is missing.";
+    if (c == "engine.media_changed") return "A file the render plays changed on disk.";
+    if (c == "engine.media_too_long") return "A file the render plays is too long to load.";
+    // The readers and decoders behind it.
+    if (c == "file.read" || c == "audio.open" || c == "audio.read" || c == "audio.decode")
+        return "A file the render plays cannot be read.";
+    if (c == "file.too_large") return "A file the render reads is too large to load.";
     if (c == "engine.blob_missing") return "A piece of the project's data is missing.";
     if (c == "engine.bridge_failed" || c == "engine.fx_failed" || c == "engine.patch_unpatchable" ||
         c == "engine.start_failed" || c == "engine.process_error")
@@ -2373,6 +2377,9 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
         c == "file.sync_directory" || c == "audio.write" || c == "audio.encode")
         return "The file could not be written. Check that the renders folder is on a drive "
                "with space and can be written to.";
+    if (c == "audio.format") return "This output format or bit depth is not supported.";
+    if (c == "audio.cancelled") return "The render was cancelled.";
+    if (c == "engine.block_size") return "The render's block size is out of range.";
     if (c == "engine.too_long" || c == "engine.range" || c == "engine.tail")
         return "The range is too long to render.";
     if (onLog)
