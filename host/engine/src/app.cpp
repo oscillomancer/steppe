@@ -1910,15 +1910,20 @@ bool captureBegun(const Engine::LaunchCapture& c) { return c.placed && c.frames 
 // newer one has begun: when that is asked does not change what is kept
 // (review round 168 S4).
 std::optional<EngineApp::CaptureView> EngineApp::launchCapture() {
-    if (engine_)
-        if (auto c = engine_->launchCapture(); c && (captureBegun(*c) || !keptCapture_)) {
-            if (captureBegun(*c) && keptCapture_) {  // the newer one ran: it replaces it
-                keptCapture_.reset();
-                pruneCommitPins();
-            }
-            const double rate = engine_->config().sampleRate;
-            return described(CaptureView{std::move(*c), rate, false, CaptureEnd::None});
-        }
+    auto own = engine_ ? engine_->launchCapture() : std::nullopt;
+    if (own && captureBegun(*own) && keptCapture_)  // the newer one ran: it replaces it
+        keptCapture_.reset();
+    // A pin no capture names any more goes at once: a kept capture replaced,
+    // or the engine's replaced by a newer one (review round 168 recheck 2 S3).
+    if (!commitPins_.empty())
+        std::erase_if(commitPins_, [&](const auto& pin) {
+            return !(own && own->committedIn == pin.first) &&
+                   !(keptCapture_ && keptCapture_->capture.committedIn == pin.first);
+        });
+    if (own && (captureBegun(*own) || !keptCapture_)) {
+        const double rate = engine_->config().sampleRate;
+        return described(CaptureView{std::move(*own), rate, false, CaptureEnd::None});
+    }
     if (!keptCapture_) return std::nullopt;
     return described(*keptCapture_);
 }
@@ -1942,18 +1947,26 @@ EngineApp::CaptureCommit EngineApp::captureCommit(const Engine::LaunchCapture& c
     // squashed or collected. Committed while the head reaches it: by first
     // parents (an undo takes it back, a redo restores it), or through a
     // merge of a line that holds it.
-    return reachesCommit(versions_->headVersion(versions_->branch()), in) ? CaptureCommit::Committed
-                                                                          : CaptureCommit::Undone;
+    std::set<std::uint64_t> seen;
+    return reachesCommit(versions_->headVersion(versions_->branch()), in, seen)
+               ? CaptureCommit::Committed
+               : CaptureCommit::Undone;
 }
 
-bool EngineApp::reachesCommit(std::uint64_t at, std::uint64_t in) const {
+bool EngineApp::reachesCommit(std::uint64_t at, std::uint64_t in,
+                              std::set<std::uint64_t>& seen) const {
     const model::VersionStore& store = *versions_;
-    while (at > in) {  // ids grow from parent to child
+    while (at > in) {  // ids grow from parent to child, replays included
+        if (!seen.insert(at).second) return false;  // walked from here already
         const model::Version* v = store.version(at);
-        if (!v) return false;                // not on a retained line: say it is uncommitted
-        if (v->replayOf == in) return true;  // the commit, replayed by a merge
+        // Not retained (a source step a budget squash folded away): say it
+        // is uncommitted, the side that warns.
+        if (!v) return false;
+        // A merge's replayed step stands for its source (review round 168
+        // recheck 2 F1): the commit itself, or a later step of its line.
+        if (v->replayOf >= in && reachesCommit(v->replayOf, in, seen)) return true;
         // A merge's last step: its second parent is the merged branch's head.
-        if (v->parents.size() > 1 && reachesCommit(v->parents[1], in)) return true;
+        if (v->parents.size() > 1 && reachesCommit(v->parents[1], in, seen)) return true;
         if (v->parents.empty()) return false;
         at = v->parents[0];
     }

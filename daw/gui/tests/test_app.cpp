@@ -5989,6 +5989,16 @@ TEST_CASE(
         r.a.app->tick();
         r.pick("safeload.disable");
         r.a.root->frame(false);
+        // The edit made while the question was open asks the discard decision
+        // again (review round 171 F1), then the plug-in question again.
+        CHECK(r.a.app->head().project->name == "Even later");
+        REQUIRE(r.a.root->find("file.confirm.discard"));
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK(r.lastArgs.find("autosave_file")->asString() == asked);
+        r.pick("safeload.disable");
+        r.a.root->frame(false);
         CHECK(r.a.app->head().project->name == "After the save");
     }
     SUBCASE("Cancel recovers nothing and leaves the file's project open") {
@@ -5998,6 +6008,72 @@ TEST_CASE(
         CHECK(r.overrides.empty());
         CHECK_FALSE(r.a.root->find("file.recovered"));
     }
+}
+
+TEST_CASE("safe-load: an edit made while the question is open asks the discard decision again") {
+    // Review round 171 F1: the question can stay open; an agent's edit then
+    // is not opened over unasked. The load asks the plug-in question again
+    // after the new decision (the answers were set back with the load).
+    SafeLoadRig r;
+    r.ask();
+    REQUIRE(r.a.root->find("safeload"));
+    REQUIRE(r.a.dispatcher->execute({"track.add", json::parse(R"({"name":"Late"})").value(), {}}));
+    r.pick("safeload.normal");
+    r.a.root->frame(false);
+    CHECK(r.name() == "Open now");  // not opened
+    REQUIRE(r.a.root->find("file.confirm"));
+    CHECK(r.a.root->find("file.confirm.text")->valueText() == "The project has unsaved changes.");
+    REQUIRE(r.a.root->click("file.confirm.discard"));
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.checks == 2);
+    r.pick("safeload.normal");
+    CHECK(r.name() == "Saved");
+}
+
+TEST_CASE("safe-load: a capture an agent starts while the question is open is finalized first") {
+    SafeLoadRig r;
+    gui::CaptureControl capture(*r.a.app, *r.a.dispatcher);
+    r.files->setCapture(&capture);
+    auto run = [&](const std::string& command, const std::string& args) {
+        auto res = r.a.dispatcher->execute({command, json::parse(args).value(), {}});
+        INFO(command << ": " << (res ? std::string() : res.error().toString()));
+        REQUIRE(res);
+    };
+    run("track.add", R"({"type":"channel","name":"Drums"})");
+    run("scene.add", R"({"name":"Intro"})");
+    run("clip.add",
+        R"({"track":"tr_1","scene":"sc_1","notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    run("engine.start", R"({"backend":"dummy"})");
+    r.ask();  // past the unsaved changes' question
+    REQUIRE(r.a.root->find("safeload"));
+    // While the question is open, an agent captures.
+    run("launch.capture", R"({"on":true})");
+    run("launch.clip", R"({"clip":"cl_1"})");
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        r.a.app->tick();
+        capture.service();
+        const auto c = r.a.app->launchCapture();
+        if (c && !c->capture.launches.empty() && c->capture.frames > 48000) break;
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const std::uint64_t before = r.a.app->head().version;
+    r.pick("safeload.normal");
+    r.a.root->frame(false);
+    // Finalized (the take committed, one undo step), then asked again.
+    CHECK(r.name() == "Open now");
+    CHECK_FALSE(capture.lit());
+    CHECK(r.a.app->head().version == before + 1);
+    CHECK_FALSE(r.a.app->captureUncommitted());
+    REQUIRE(r.a.root->find("file.confirm"));
+    REQUIRE(r.a.root->click("file.confirm.discard"));
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("safeload"));
+    r.pick("safeload.normal");
+    CHECK(r.name() == "Saved");
+    run("engine.stop", "{}");
 }
 
 TEST_CASE("safe-load: two suspects on a recovery path are asked one after the other") {

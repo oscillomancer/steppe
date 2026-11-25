@@ -1995,7 +1995,11 @@ the commit is refused with `launch.commit.fade` and the performance kept:
 set the clip's fades to 0, or capture it again. MIDI is copied, so editing the
 items leaves the clips alone; `launch.commit {pooled: true}` shares it
 instead. Stopping, seeking or changing the loop ends a capture, and
-committing again writes the same performance over itself.
+committing again writes the same performance over itself. Removing a clip
+while it plays returns its track to the arrangement, and a capture keeps
+that as you heard it: the clip up to there, then the arrangement. The
+commit then refuses, naming the removed clip and keeping the capture; undo
+the removal and commit again.
 
 The render dialog's **Plays** row chooses what a mix or stems render plays:
 the **Arrangement**; the **Last capture**, exactly as you heard it, on the

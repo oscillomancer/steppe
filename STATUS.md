@@ -379,6 +379,12 @@ instructions are in `docs/guides/installing.md`.
       after it; a take of an agent's capture stays kept (the Capture cell
       shows it; a click commits it, and Quit, New and Open finalize it);
       the pane never arms over an uncommitted take;
+    - a clip removed (or frozen, or past the memory budget) while a capture
+      runs is kept up to its track's return to the arrangement, which is
+      recorded up to one block after the plan reached the executors, or not
+      at all when a playrate change is on its way (`launch.later`): the
+      commit writes the clip's stretch to there (after the removal is
+      undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
