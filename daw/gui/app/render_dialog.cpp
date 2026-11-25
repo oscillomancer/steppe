@@ -149,10 +149,13 @@ std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEn
     if (reason == "dropout") return "audio dropped out during it";
     if (reason == "plugin_failed") return "a plug-in failed before or during it";
     // A launch ack lost to a full ring: the log misses a launch that was
-    // heard, for this capture and every later one until the engine restarts.
+    // heard, for this capture and every later one of that engine. Every
+    // engine stop drops the Engine that holds it (EngineApp::haltEngine), so
+    // Restart audio, Stop audio and a start, a new rate or buffer, or the
+    // engine's own device restart all begin clean.
     if (reason == "launch_unlogged")
-        return "a launch was lost from the log since the audio started (Restart audio starts "
-               "clean)";
+        return "a launch was lost from the log since the audio started (Restart audio in Edit > "
+               "Audio device starts clean)";
     if (reason == "ended_by_engine")
         return endedBy == engine::EngineApp::CaptureEnd::Device
                    ? "the audio device restarted during it"

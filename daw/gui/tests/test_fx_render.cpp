@@ -579,8 +579,8 @@ TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words")
         CHECK_FALSE(words.empty());
         CHECK(words != asCode);
     }
-    CHECK(gui::RenderDialog::reasonWords("launch_unlogged", End::None).find("Restart audio") !=
-          std::string::npos);
+    CHECK(gui::RenderDialog::reasonWords("launch_unlogged", End::None)
+              .find("Restart audio in Edit > Audio device") != std::string::npos);
     CHECK(gui::RenderDialog::reasonWords("given", End::None).empty());
     CHECK(gui::RenderDialog::reasonWords("from_launcher", End::None).empty());
     CHECK(gui::RenderDialog::reasonWords("something_new", End::None) == "something new");
