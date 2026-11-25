@@ -919,14 +919,30 @@ TEST_CASE("the render dialog: a looped capture's range ends at the loop's end") 
     f.render->open();
     f.render->setPlays(gui::RenderDialog::Plays::Capture);
     f.frame();
-    REQUIRE(f.uiRoot().find("render.perf.range"));
-    CHECK(f.uiRoot().find("render.perf.range")->valueText().rfind("Bars 1.1.000 – 2.1.000", 0) ==
-          0);
+    // The span in bars, and the time the render runs: the wraps make it
+    // longer than the span, and the line says it looped (co-director's
+    // ruling on render 198).
+    const std::string head = "Bars 1.1.000 – 2.1.000, looped · 0:";
+    const double ran = static_cast<double>(capture->capture.frames) / 48000;  // about 3 s
+    const auto lineSeconds = [&] {
+        REQUIRE(f.uiRoot().find("render.perf.range"));
+        const std::string line = f.uiRoot().find("render.perf.range")->valueText();
+        INFO(line);
+        REQUIRE(line.rfind(head, 0) == 0);
+        return std::stod(line.substr(head.size()));
+    };
+    CHECK(lineSeconds() == doctest::Approx(ran).epsilon(1e-4));
     f.render->setDebounceMs(0);
     f.render->refreshPreview();
     f.frame();
-    CHECK(f.uiRoot().find("render.perf.range")->valueText().rfind("Bars 1.1.000 – 2.1.000", 0) ==
-          0);
+    CHECK(lineSeconds() == doctest::Approx(ran).epsilon(1e-4));
+    // The line's time is the file's length in the preview (Tail is off; the
+    // preview says it to the hundredth).
+    const std::string preview = f.render->preview();
+    INFO(preview);
+    const auto open = preview.find('(');
+    REQUIRE(open != std::string::npos);
+    CHECK(std::abs(std::stod(preview.substr(open + 1)) - lineSeconds()) <= 0.005);
     f.render->addToQueue();
     CHECK(f.render->statusText().find("bars 1–1") != std::string::npos);
     f.render->close();

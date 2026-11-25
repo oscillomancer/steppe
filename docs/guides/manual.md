@@ -2015,7 +2015,9 @@ performance render plays once over its own range, and its file name gets
 " performance" added to the mix's or the stems' name, which you can change
 (a name you type stays when you switch between Master mix and Stems). If
 the last capture changes while the dialog is open, the dialog shows the new
-one. While the arrangement is chosen
+one. Last capture's range shows the bars it covers and how long the file
+runs; a capture that went round a loop says "looped", and its file is longer
+than those bars because it plays each time round. While the arrangement is chosen
 and a clip is playing, the dialog says the clips playing now are not in the
 render. An agent can render a performance too: `render.mix` (or
 `render.stems`, `render.dry-run`, `render.queue.add`) with

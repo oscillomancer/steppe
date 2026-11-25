@@ -122,6 +122,15 @@ std::pair<double, double> capturedSpan(const engine::EngineApp::CaptureView& v,
     return {v.startBeat, last};
 }
 
+// Last capture's range line: the span in bars, and the time the render runs,
+// the file's length (its running length; under a loop it plays the wraps,
+// so it can be longer than the span, and the line says it looped).
+std::string captureRangeLine(double first, double last, double seconds, bool looped,
+                             const time::TimeMap& tm) {
+    return "Bars " + inspectorBarsText(first, tm) + " \u2013 " + inspectorBarsText(last, tm) +
+           (looped ? ", looped" : "") + " \u00b7 " + timeText(std::max(0.0, seconds));
+}
+
 std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEnd endedBy) {
     if (reason == "began_mid_run") return "the capture began while playing";
     // An edit, or a clip's return to the arrangement (removed, frozen or
@@ -631,6 +640,7 @@ void RenderDialog::open() {
     launcherStart_.reset();
     launcherEnd_.reset();
     perfRange_.reset();
+    perfRun_.reset();
     asHeardText_.clear();
     if (plays_ == Plays::Capture && !captureUnavailable().empty()) plays_ = Plays::Arrangement;
     captureKey_ = captureKey();
@@ -1706,6 +1716,15 @@ void RenderDialog::refreshPreview() {
     if (performance()) {
         if (const json::Value* range = result->find("range"); range && range->isObject())
             perfRange_ = std::pair{num(range->find("start_beat")), num(range->find("end_beat"))};
+        // The running length the render plays, and whether it wrapped a loop.
+        if (const json::Value* p = result->find("performance"); p && p->isObject()) {
+            const double rate = num(p->find("sample_rate"));
+            const double start = num(p->find("start")), frames = num(p->find("frames"));
+            const json::Value* loop = p->find("loop");
+            const bool wrapped =
+                loop && loop->isObject() && start + frames > num(loop->find("end"));
+            if (rate > 0) perfRun_ = std::pair{frames / rate, wrapped};
+        }
         if (plays_ == Plays::Capture) {
             const auto capture = app_.launchCapture();
             const auto endedBy = capture ? capture->endedBy : engine::EngineApp::CaptureEnd::None;
@@ -1724,10 +1743,11 @@ void RenderDialog::refreshPreview() {
         if (auto* line = dynamic_cast<ui::Label*>(root_.find("render.perf.range"));
             line && perfRange_ && plays_ == Plays::Capture) {
             const time::TimeMap& tm = *app_.head().timeMap;
-            std::string text = "Bars " + inspectorBarsText(perfRange_->first, tm) + " \u2013 " +
-                               inspectorBarsText(perfRange_->second, tm) + " \u00b7 " +
-                               timeText(std::max(0.0, tm.secondsAt(perfRange_->second) -
-                                                          tm.secondsAt(perfRange_->first)));
+            const double seconds =
+                perfRun_ ? perfRun_->first
+                         : tm.secondsAt(perfRange_->second) - tm.secondsAt(perfRange_->first);
+            std::string text = captureRangeLine(perfRange_->first, perfRange_->second, seconds,
+                                                perfRun_ && perfRun_->second, tm);
             if (captureRunning_) text += " so far";
             line->setText(text);
         }
@@ -2150,6 +2170,7 @@ json::Value RenderDialog::performanceArg() const {
 void RenderDialog::setPlays(Plays p) {
     plays_ = p;
     perfRange_.reset();
+    perfRun_.reset();
     asHeardText_.clear();
     errors_.erase("render.perf.start");
     errors_.erase("render.perf.end");
@@ -2317,6 +2338,7 @@ void RenderDialog::followCapture() {
     captureKey_ = key;
     if (plays_ == Plays::Capture && !key) plays_ = Plays::Arrangement;
     perfRange_.reset();
+    perfRun_.reset();
     asHeardText_.clear();
     markDirty();
     rebuild();
@@ -2355,16 +2377,24 @@ void RenderDialog::buildPerformanceRange(ui::Node& body) {
         // Read-only: the capture's own span, the dry run's once it answers.
         const auto capture = app_.launchCapture();
         captureRunning_ = capture && !capture->kept && capture->capture.on;
-        double first = 0, last = 0;
+        double first = 0, last = 0, seconds = 0;
+        bool looped = false;
         if (perfRange_) {
             first = perfRange_->first;
             last = perfRange_->second;
         } else if (capture) {
             std::tie(first, last) = capturedSpan(*capture, tm);
         }
-        std::string line = "Bars " + inspectorBarsText(first, tm) + " \u2013 " +
-                           inspectorBarsText(last, tm) + " \u00b7 " +
-                           timeText(std::max(0.0, tm.secondsAt(last) - tm.secondsAt(first)));
+        if (perfRun_) {
+            std::tie(seconds, looped) = *perfRun_;
+        } else if (capture && capture->sampleRate > 0) {
+            const auto& c = capture->capture;
+            seconds = static_cast<double>(c.frames) / capture->sampleRate;
+            looped = c.loop.active() && c.startSample + c.frames > c.loop.end;
+        } else {
+            seconds = tm.secondsAt(last) - tm.secondsAt(first);
+        }
+        std::string line = captureRangeLine(first, last, seconds, looped, tm);
         if (captureRunning_) line += " so far";
         r.emplace<ui::Label>("render.perf.range", line, ui::Font::Ui, "caption", "ink");
     } else {

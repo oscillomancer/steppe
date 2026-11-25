@@ -2251,7 +2251,10 @@ project is drawn in the quiet ink, with "from your default" on hover.
     - Under either, the Range row gives way to the performance's own range
       (Last capture: a read-only line, "Bars 1.1.000 – 3.1.000 · 0:04.000",
       the dry run's `range` once it answers, "so far" while the capture
-      runs, the preview asked again once a second meanwhile), and no
+      runs, the preview asked again once a second meanwhile; the time is the
+      running length, the file's length in the preview, and a capture that
+      wrapped a loop says so: "Bars 1.1.000 – 2.1.000, looped · 0:03.000",
+      the bars the song span it covers, the time longer by its wraps), and no
       `bounds` or `regions` is sent; `seamless_loop: false` is, since the
       engine refuses a seamless loop with a performance even when only the
       project's saved settings turn it on (a saved range is ignored). The

@@ -244,6 +244,8 @@ class RenderDialog {
     std::optional<CaptureKey> captureKey_;
     std::string asHeardText_;
     std::optional<std::pair<double, double>> perfRange_;  // the dry run's range, beats
+    // The dry run's running length in seconds, and whether it wrapped a loop.
+    std::optional<std::pair<double, bool>> perfRun_;
     bool captureRunning_ = false;    // what the capture's range line says ("so far")
     std::uint64_t lastPerfMs_ = 0;   // the last dry run for a running capture
     bool captureOffered_ = false;    // Last capture could be chosen at the last build
