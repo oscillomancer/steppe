@@ -980,6 +980,13 @@ class Engine {
     // first. Collects the executors' acknowledgements first.
     std::optional<LaunchCapture> launchCapture();
     bool launchCapturing() const { return capture_.on; }  // main thread
+    // Main thread: this engine has lost a launch ack (a full ring), so the
+    // launch log, and launch.state's tracks, may miss a launch that was
+    // heard; sticky for the engine's life (round 178 F4).
+    bool launchesUnlogged() const {
+        return launchAcksLost_ ||
+               launchAcksDropped_.load(std::memory_order_relaxed) != launchAcksDropSeen_;
+    }
     // Main thread: launch.commit wrote the capture in `version`
     // (EngineApp's captureUncommitted, the stop's warning).
     void markCaptureCommitted(std::uint64_t version) { capture_.committedIn = version; }
@@ -1360,8 +1367,14 @@ class Engine {
     // handoff): a node that changed class without a carry (while stopped,
     // or a late handoff) restarts on the arrangement; one whose old state
     // was not the arrangement is acked as a return (round 176 F1).
-    void ackClassMoves(detail::Plan& old, const detail::Plan& next, bool continuous,
+    // `carried`: the renderer carried the live region into `next`
+    // (Plan::liveCarried), so a join kept its launch.
+    void ackClassMoves(detail::Plan& old, const detail::Plan& next, bool carried,
                        std::uint64_t epoch, std::int64_t stream) SUPPLE_RT;
+    // The callback: the last handoff it skipped (an old-epoch rate plan),
+    // which the next one's class moves are judged against; kept while the
+    // callback's own plan holds it alive (oldestInUse), reset at adoption.
+    detail::Plan* classBase_ = nullptr;
     void ackReturns(detail::Plan& next, int liveClass, bool renderer, std::uint64_t epoch,
                     std::int64_t stream) SUPPLE_RT;
     std::atomic<std::uint64_t> returnAcksDropped_{0};  // a full ring: the main thread falls back

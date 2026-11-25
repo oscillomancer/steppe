@@ -446,6 +446,7 @@ TEST_CASE("a launch ack lost to a full ring leaves every later capture not as he
     p.run("launch.capture", R"({"on": true})");  // from the play start
     REQUIRE(p.app->transport("play"));
     live.until(20 * kBlock);
+    CHECK_FALSE(p.run("launch.state", "{}")["unlogged"].asBool());
     REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
     p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 2, frame 96000
     live.backend.run(760 - 20);                   // past it, with no service
@@ -460,6 +461,9 @@ TEST_CASE("a launch ack lost to a full ring leaves every later capture not as he
     std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
     CHECK(why == R"(["launch_unlogged"])");
+    // launch.state says what it knows: the log may miss a launch (round
+    // 178 F4); its tracks may be stale.
+    CHECK(p.run("launch.state", "{}")["unlogged"].asBool());
     // Begun later: still not as heard for it.
     p.run("launch.capture", R"({"on": true})");
     live.until(1200 * kBlock);
@@ -548,4 +552,62 @@ TEST_CASE("a return on a latency-delayed track is logged on its timeline (round 
         INFO("first differing frame " << first << ", return at " << live.log[2].runningFrame);
         CHECK(worst == 0.0);
     }
+}
+
+TEST_CASE(
+    "a join the renderer carried keeps its clip when the callback takes it out of step (round 178 "
+    "F1)") {
+    // The renderer adopts the monitor-on plan while playing and carries cl_1
+    // into tr_1's live node; the callback takes it after a stop, or a seek,
+    // not continuously. tr_1 plays cl_1 on, and no return is logged.
+    for (const bool seek : {false, true}) {
+        INFO((seek ? "a seek" : "a stop") << " between the two adoptions");
+        Project p;
+        twoTracks(p);
+        AppLive live(p, EngineOptions{.workers = 0}, kBlock, 48000 * 8);
+        Engine& e = *p.app->engine();
+        REQUIRE(p.app->transport("play"));
+        live.until(live.cycles * kBlock + 20 * kBlock);
+        p.run("launch.clip", R"({"clip": "cl_1"})");
+        live.until(live.cycles * kBlock + 1000 * kBlock);
+        REQUIRE(playsOf(p, "tr_1") == "clip");
+        p.run("track.set",
+              R"({"track": "tr_1", "armed": true, "record_midi": "*", "monitor": "on"})");
+        while (!e.awaitPlan()) {
+        }  // queued for the callback; no callback cycle since
+        REQUIRE(EngineTestAccess::latestPlan(e).liveCarried);
+        if (seek)
+            p.run("transport.seek", R"({"seconds": 1})");
+        else
+            REQUIRE(p.app->transport("stop"));
+        live.until(live.cycles * kBlock + 100 * kBlock);
+        // Live nodes are the callback's, which runs on this thread (Manual).
+        const detail::Node* n = detail::findNode(EngineTestAccess::latestPlan(e), id("tr_1"));
+        REQUIRE(n);
+        CHECK(n->launch.kind == detail::LaunchState::Kind::Clip);
+        CHECK(EngineTestAccess::launchReturns(e).empty());
+        CHECK(playsOf(p, "tr_1") == "clip");
+    }
+}
+
+TEST_CASE("a launch ack lost just before the capture ends still marks it (round 178 F3)") {
+    // The drop is not serviced before launch.capture off closes the capture.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 6);
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 2, frame 96000
+    live.backend.run(760 - 20);                   // past it, with no service
+    live.cycles = 760;
+    REQUIRE(EngineTestAccess::launchAcksDropped(*p.app->engine()) == 1);
+    EngineTestAccess::emptyLaunchRing(*p.app->engine());  // only the filler
+    p.run("launch.capture", R"({"on": false})");          // no service since the drop
+    live.until(800 * kBlock);
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why.find("\"launch_unlogged\"") != std::string::npos);
 }

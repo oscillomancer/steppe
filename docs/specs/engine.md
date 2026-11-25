@@ -615,17 +615,22 @@ the same.*
   return logged twice (by track, epoch and generation) is dropped and
   counted (`returnAcksDuplicated_`, never expected: the carries are
   disjoint by class).
-  The anticipative executor carries a node across the live region only
-  at a continuous handoff (playing, at the handoff frame), so a track
-  that joins or leaves it otherwise (a monitor change while stopped, or
-  a monitor release ADR-0014's keepLive defers to the stop) restarts on
-  the arrangement and its launched clip stops. The callback acks that as
-  a return when it adopts the plan (`Engine::ackClassMoves`, before
-  `adoptLive`), for each node whose class changed without that carry and
-  whose state in its previous plan was not the arrangement (its own live
-  nodes, and rendered ones the renderer left when it adopted a newer
-  plan): the log, `launch.state` and the next capture agree (round 176
-  F1). Carrying the clip across instead would have the renderer read a
+  The anticipative renderer carries a node into the live region only
+  when it adopts a plan while playing (its continuable carry, recorded on
+  the plan as `Plan::liveCarried`, which a relocation does not clear);
+  such a join keeps its launch whatever the callback's handoff turns out
+  to be (a stop, a seek, a late adoption). A track that joins otherwise
+  (a monitor change while stopped), or leaves (only while stopped:
+  ADR-0014's keepLive defers a release to the stop), restarts on the
+  arrangement and its launched clip stops. The callback acks that as a
+  return when it adopts the plan (`Engine::ackClassMoves`, before
+  `adoptLive`), for each node whose class changed without the carry and
+  whose state in the plan it compares with was not the arrangement: its
+  previous plan, or the last handoff it skipped (an old-epoch rate plan,
+  judged too, so a class move inside a skipped plan is not lost); its own
+  live nodes, and rendered ones the renderer left when it adopted a
+  newer plan. The log, `launch.state` and the next capture agree (round
+  176 F1, round 178 F1 and F2). Carrying the clip across instead would have the renderer read a
   live node the callback is still running, so the clip's stop is a
   stated limit (STATUS).
   A full ring drops a return ack and counts it (`returnAcksDropped_`).
@@ -646,8 +651,12 @@ the same.*
   that was heard, which no render can replay, and frame 0 of any later
   capture may depend on it: when the count moves the main thread warns,
   and a capture running then and every capture placed after it, for the
-  engine's life, is not as heard (`launch_unlogged`, §3.1). A new engine
-  (Restart audio) starts clean.
+  engine's life, is not as heard (`launch_unlogged`, §3.1), including
+  one that closes before that service (`captureFacts` reads the count
+  too, round 178 F3); `launch.state` then reports `unlogged: true` for
+  the engine's life, since its tracks' entries may be stale (round 178
+  F4: which launch was lost cannot be told exactly, so none is
+  restored). A new engine (Restart audio) starts clean.
   A capture includes each return within its span in the log's order, and
   one with a return is not as heard (`edited_during`, §3.1), for the
   edit behind it alone: a return comes from a plan compiled for an edit
@@ -2371,7 +2380,9 @@ Two launches of one track on one frame are not an error: the last given
 holds, as in launch.commit. A given object's other defects keep the
 schema's own codes and paths.
 
-**Capture facts for clients.** `launch.state` gains `capture_version`
+**Capture facts for clients.** `launch.state` gains `unlogged` (false
+until the engine has lost a launch ack, then true for its life: the
+tracks' entries may be stale; §1.4.2) and `capture_version`
 (the session version the capture began on) beside `capturing`,
 `capture_ends` and `capture_kept`, whenever there is a capture, and with
 the engine stopped for a kept one; `launch.capture`'s result gains

@@ -1307,6 +1307,9 @@ Engine::CaptureFacts Engine::captureFacts() const {
     f.pluginFailed = f.pluginFailed ||
                      processErrors_.load(std::memory_order_relaxed) != capture_.errors ||
                      pluginFailedNow();
+    // A launch ack dropped since the last service (round 178 F3).
+    f.launchUnlogged = f.launchUnlogged ||
+                       launchAcksDropped_.load(std::memory_order_relaxed) != launchAcksDropSeen_;
     return f;
 }
 
@@ -1552,7 +1555,7 @@ void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::u
     if (any) notifyMain();
 }
 
-void Engine::ackClassMoves(detail::Plan& old, const detail::Plan& next, bool continuous,
+void Engine::ackClassMoves(detail::Plan& old, const detail::Plan& next, bool carried,
                            std::uint64_t epoch, std::int64_t stream) SUPPLE_RT {
     // `old` is the callback's previous plan: its live nodes are the
     // callback's own, and the renderer left its rendered ones when it
@@ -1561,7 +1564,9 @@ void Engine::ackClassMoves(detail::Plan& old, const detail::Plan& next, bool con
     for (const detail::Node& n : next.nodes) {
         const detail::Node* o = detail::findNode(old, n.id);
         if (!o || o->live == n.live) continue;
-        if (n.live && continuous) continue;  // the renderer carried it (continuable)
+        // The renderer carried it: it kept its launch, or lost it and acked
+        // that itself (round 178 F1: by the carry, not the handoff).
+        if (n.live && carried) continue;
         if (o->launch.kind == detail::LaunchState::Kind::Arrangement) continue;
         LaunchAck ack;
         ack.track = n.id.n;
