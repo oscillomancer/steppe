@@ -2234,7 +2234,9 @@ first use, and no plug-in code runs early to warm it.
     `matrix` and custom bounds.
   - `render.preset.load {name}` (edit): replaces `project.render`.
   - `render.preset.delete {name | default: true}` (action). Factory presets
-    cannot be overwritten or deleted.
+    cannot be overwritten or deleted. No file answers `render.preset_unknown`;
+    a file that cannot be removed (a read-only folder, a file in use on
+    Windows) answers `render.preset_write` (round 183).
 
   Files are `<data>/<slug>/render-presets/<name>.json` (the user default is
   `default.json`), canonical `supple.render-preset/1.0`. Under `--workdir`
@@ -2377,8 +2379,13 @@ read codes, a schema code, or `json.parse.<what>` (the JSON parser's),
 declared as the family `json.parse.*` by every command that reads one: a
 client matches a family's code by its prefix. A test lints the files
 these commands reach (the render sources, source preparation, the
-offline pass, the preset files, the JSON parser and the writers) for
-codes none of them declares (round 178 F5, round 180 F3 and F4).
+offline pass, the preset files, the JSON parser and the writers) per
+command: each render against the render sources, less the codes one
+render answers and another does not (`region.unknown`; a performance's
+codes, not `render.regions`'; the job's, not the dry run's), the preset
+commands and `render.settings` against the preset files, and
+`render.queue.add` and `render.queue.run` against the dry run's and
+`render.mix`'s lists (round 178 F5, round 180 F3 and F4, round 183 F1).
 
 | Case | Code | Path |
 | --- | --- | --- |
