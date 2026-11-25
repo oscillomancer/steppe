@@ -242,21 +242,26 @@ std::function<void(DialogLifetime::Paths)> FileActions::guardDialog(
     const auto generation = app_.projectGeneration();
     const auto version = app_.head().version;
     const auto branch = app_.versions().branch();
-    return dialogs_.guard(
-        post_, [this, generation, version, branch, opening, done = std::move(done)](auto paths) {
-            if (paths.empty()) return;
-            auto current = [this, generation] { return currentProject(generation); };
-            if (!current()) return;
-            auto complete = [current, done, paths = std::move(paths)] {
-                // A replacement can also happen while the renewed prompt is open.
-                if (current()) done(paths);
-            };
-            if (opening && (app_.head().version != version || app_.versions().branch() != branch ||
-                            (app_.engine() && app_.engine()->recording())))
-                confirmDiscard("Open another project?", std::move(complete));
-            else
-                complete();
-        });
+    // The launcher's take the first question finalized (or was told it
+    // would lose): a capture begun, or a take refused, while the dialog is
+    // open needs the question again (review round 170 F1).
+    const std::string take = opening ? keptTake() : std::string();
+    return dialogs_.guard(post_, [this, generation, version, branch, take, opening,
+                                  done = std::move(done)](auto paths) {
+        if (paths.empty()) return;
+        auto current = [this, generation] { return currentProject(generation); };
+        if (!current()) return;
+        auto complete = [current, done, paths = std::move(paths)] {
+            // A replacement can also happen while the renewed prompt is open.
+            if (current()) done(paths);
+        };
+        if (opening && (app_.head().version != version || app_.versions().branch() != branch ||
+                        (app_.engine() && app_.engine()->recording()) ||
+                        (capture_ && (capture_->lit() || keptTake() != take))))
+            confirmDiscard("Open another project?", std::move(complete));
+        else
+            complete();
+    });
 }
 
 Result<json::Value> FileActions::exec(const std::string& command, json::Value args) {

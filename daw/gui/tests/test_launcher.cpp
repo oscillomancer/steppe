@@ -1396,6 +1396,9 @@ TEST_CASE("launcher: a take kept across Restart audio is committed by the pane")
     capture.service();
     CHECK(refused.empty());
     CHECK(f.app->head().version == before + 1);  // the kept take, one undo step
+    // Nothing arms by itself after an engine stop (round 170 F3).
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(f.app->launchCapturing());
     bool laid = false;
     for (const auto& e : f.app->head().items) laid = laid || e.value->track == drums;
     CHECK(laid);

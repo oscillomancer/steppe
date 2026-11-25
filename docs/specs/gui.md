@@ -2411,7 +2411,12 @@ if an intervening save made the new revision clean.
 Native file/folder results capture the project generation and are dropped with
 a short notice if the project was replaced before delivery. Open rechecks the
 session version and branch after the dialog; changes require a fresh discard
-decision. Recording started meanwhile is stopped before that decision too.
+decision. Recording started meanwhile is stopped before that decision too,
+and so is a launcher capture: one lit when the file is chosen, or a kept take
+other than the one the first decision covered (`CaptureControl::takeKey`),
+is finalized and asked about again before `project.open`. Open is the only
+native dialog before a project is replaced; templates, recovery and the
+newer autosave ask at the click.
 A save (or project template)
 that comes back with warnings (a plug-in whose state could not be read keeps
 its earlier state) opens a popup listing them. Open and Save as start in the
@@ -3146,9 +3151,13 @@ same heights, scroll and colours.
   to draw (`ArrangeView::setCaptureArmed`).
 - **A take the engine ended is committed** (ADR-0097, a capture kept).
   When an engine stop (Stop audio, Restart audio, a device choice) or a
-  device restart ends a capture, the app keeps the take
-  (`EngineApp::launchCapture`), and the pane's next pass commits it, one
-  undo step, also while no engine runs. The status line says so in the
+  device restart ends a capture the Capture toggle armed or is ending, the
+  app keeps the take (`EngineApp::launchCapture`), and the pane's next pass
+  commits it, one undo step, also while no engine runs. A capture another
+  caller armed (an agent's `launch.capture`) is not committed at a stop, as
+  at a transport stop: its take stays kept, shown by the outline dot below;
+  a click commits it, and Quit, New and Open finalize it like any kept
+  take. The status line says so in the
   pane's words: "The engine stopped during the capture: its take (bars
   3–18, 2 launches) is committed." ("The audio device restarted during the
   capture" for a device restart). Nothing arms by itself after an engine
@@ -3514,7 +3523,9 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   frame (`test_launcher.cpp`). Quit commits a launcher take before the
   usual question; a refused one is named on a clean project, Cancel keeps
   it, and after unlocking Quit commits it; a take whose commit was undone is
-  not counted (`test_app.cpp`).
+  not counted; a capture an agent starts, or a take refused, while Open's
+  dialog is open is asked about again before the project opens
+  (`test_app.cpp`).
 - The pane against the engine (step E): at every step the clips drawn dimmed
   and the scenes whose ▶ is dimmed are exactly those
   `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the
