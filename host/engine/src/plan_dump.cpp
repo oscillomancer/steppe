@@ -764,8 +764,8 @@ std::string dumpPlan(const Plan& p) {
                                   liveGraph, rendererInstances, liveInstances, modules,
                                   rendererModules, liveModules, rendererMeterNodes, liveMeterNodes,
                                   meterNodes, frontier, rateOutput, frontierRings, recordTaps,
-                                  recordRings, handAt, handEpoch, handContinuable, split, deviceIn,
-                                  deviceInChannels, deviceRecording, hardwareMidi,
+                                  recordRings, handAt, handEpoch, handContinuable, liveCarried,
+                                  split, deviceIn, deviceInChannels, deviceRecording, hardwareMidi,
                                   midiInputsSettings, midiOutputsSettings, hardwareLead,
                                   hardwareLeadBase, deviceMidi, deviceMidiOffset, processedInputs] =
         p;

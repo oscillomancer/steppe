@@ -397,10 +397,12 @@ instructions are in `docs/guides/installing.md`.
       ack lost that way (returns share its ring, so a burst of several
       hundred returns can do it) is counted, warned, and makes every
       capture from then on not as heard (`launch_unlogged`) until the
-      engine restarts; with the anticipative executor a track that joins
-      or leaves the live region while stopped (a monitor change, or a
-      monitor release deferred to the stop) stops its launched clip,
-      reported as a return to the arrangement: the
+      engine restarts, and `launch.state` says `unlogged: true` (its
+      tracks may then be stale; which launch was lost is not restored);
+      with the anticipative executor a track that joins the live region
+      while stopped (a monitor change) or leaves it (only at a stop)
+      stops its launched clip, reported as a return to the arrangement
+      (a join while playing keeps it): the
       commit writes the clip's stretch to there (after the removal is
       undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one

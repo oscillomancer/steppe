@@ -6,8 +6,13 @@
 // own ctest entry.
 #include <supple/audio/audio_file.h>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <optional>
+#include <regex>
+#include <set>
 #include <thread>
 #include "clip_player_support.h"
 #include "engine_test_access.h"
@@ -446,6 +451,7 @@ TEST_CASE("a launch ack lost to a full ring leaves every later capture not as he
     p.run("launch.capture", R"({"on": true})");  // from the play start
     REQUIRE(p.app->transport("play"));
     live.until(20 * kBlock);
+    CHECK_FALSE(p.run("launch.state", "{}")["unlogged"].asBool());
     REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
     p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 2, frame 96000
     live.backend.run(760 - 20);                   // past it, with no service
@@ -460,6 +466,9 @@ TEST_CASE("a launch ack lost to a full ring leaves every later capture not as he
     std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
     CHECK(why == R"(["launch_unlogged"])");
+    // launch.state says what it knows: the log may miss a launch (round
+    // 178 F4); its tracks may be stale.
+    CHECK(p.run("launch.state", "{}")["unlogged"].asBool());
     // Begun later: still not as heard for it.
     p.run("launch.capture", R"({"on": true})");
     live.until(1200 * kBlock);
@@ -548,4 +557,124 @@ TEST_CASE("a return on a latency-delayed track is logged on its timeline (round 
         INFO("first differing frame " << first << ", return at " << live.log[2].runningFrame);
         CHECK(worst == 0.0);
     }
+}
+
+TEST_CASE(
+    "a join the renderer carried keeps its clip when the callback takes it out of step (round 178 "
+    "F1)") {
+    // The renderer adopts the monitor-on plan while playing and carries cl_1
+    // into tr_1's live node; the callback takes it after a stop, or a seek,
+    // not continuously. tr_1 plays cl_1 on, and no return is logged.
+    for (const bool seek : {false, true}) {
+        INFO((seek ? "a seek" : "a stop") << " between the two adoptions");
+        Project p;
+        twoTracks(p);
+        AppLive live(p, EngineOptions{.workers = 0}, kBlock, 48000 * 8);
+        Engine& e = *p.app->engine();
+        REQUIRE(p.app->transport("play"));
+        live.until(live.cycles * kBlock + 20 * kBlock);
+        p.run("launch.clip", R"({"clip": "cl_1"})");
+        live.until(live.cycles * kBlock + 1000 * kBlock);
+        REQUIRE(playsOf(p, "tr_1") == "clip");
+        p.run("track.set",
+              R"({"track": "tr_1", "armed": true, "record_midi": "*", "monitor": "on"})");
+        while (!e.awaitPlan()) {
+        }  // queued for the callback; no callback cycle since
+        REQUIRE(EngineTestAccess::latestPlan(e).liveCarried);
+        if (seek)
+            p.run("transport.seek", R"({"seconds": 1})");
+        else
+            REQUIRE(p.app->transport("stop"));
+        live.until(live.cycles * kBlock + 100 * kBlock);
+        // Live nodes are the callback's, which runs on this thread (Manual).
+        const detail::Node* n = detail::findNode(EngineTestAccess::latestPlan(e), id("tr_1"));
+        REQUIRE(n);
+        CHECK(n->launch.kind == detail::LaunchState::Kind::Clip);
+        CHECK(EngineTestAccess::launchReturns(e).empty());
+        CHECK(playsOf(p, "tr_1") == "clip");
+    }
+}
+
+TEST_CASE("a launch ack lost just before the capture ends still marks it (round 178 F3)") {
+    // The drop is not serviced before launch.capture off closes the capture.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 6);
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 2, frame 96000
+    live.backend.run(760 - 20);                   // past it, with no service
+    live.cycles = 760;
+    REQUIRE(EngineTestAccess::launchAcksDropped(*p.app->engine()) == 1);
+    EngineTestAccess::emptyLaunchRing(*p.app->engine());  // only the filler
+    p.run("launch.capture", R"({"on": false})");          // no service since the drop
+    live.until(800 * kBlock);
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why.find("\"launch_unlogged\"") != std::string::npos);
+}
+
+TEST_CASE("the render commands declare every code their sources answer (round 178 F5)") {
+    // A lint over what a render or render job can answer: each code an
+    // Error(...) in the render sources, the offline pass and the writers
+    // names is declared by render.mix, render.stems, render.regions or
+    // render.dry-run, unless it is a schema code (every command's) or one
+    // these files answer for other commands (below). A new code fails here
+    // until it is declared.
+    Project p;
+    std::set<std::string> declared;
+    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
+        const cmd::CommandInfo* info = p.registry.find(name);
+        REQUIRE(info);
+        for (const cmd::ErrorSpec& e : info->errors) declared.insert(e.code);
+    }
+    const std::set<std::string> elsewhere = {
+        "render.queue_empty", "render.queue_unknown",  "render.preset_factory",
+        "render.preset_name", "render.preset_unknown", "render.preset_write",
+        "freeze.tail_limit",  "freeze.tail_changed",   "freeze.tail_pending",
+        "file.exists",     // files.cpp's create-exclusive, which renders do not use
+        "base64.invalid",  // files.cpp's base64 decoder, likewise
+    };
+    const std::filesystem::path root =
+        std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+    REQUIRE(std::filesystem::exists(root / "host/engine/src/offline.cpp"));
+    std::vector<std::string> undeclared;
+    for (const char* file :
+         {"host/engine/src/render_commands.cpp", "host/engine/src/render_performance.cpp",
+          "host/engine/src/render_chain.cpp", "host/engine/src/offline.cpp",
+          "libs/core-base/src/files.cpp", "libs/audio-file/src/audio_file.cpp",
+          "libs/audio-file/src/flac_encode.cpp", "libs/audio-file/src/metadata.cpp",
+          "libs/audio-codecs/src/mp3.cpp", "libs/audio-codecs/src/vorbis.cpp"}) {
+        std::ifstream in(root / file);
+        REQUIRE_MESSAGE(in, file);
+        const std::string text{std::istreambuf_iterator<char>(in), {}};
+        // Each Error( call's first argument, to its first comma at depth 0.
+        for (std::size_t at = text.find("Error("); at != std::string::npos;
+             at = text.find("Error(", at + 6)) {
+            if (at > 0 &&
+                (std::isalnum(static_cast<unsigned char>(text[at - 1])) || text[at - 1] == '_'))
+                continue;  // argsError(, launchesError(: helpers, scanned where they call Error(
+            std::size_t end = at + 6;
+            for (int depth = 0; end < text.size(); ++end) {
+                const char c = text[end];
+                if (c == '(') ++depth;
+                if (c == ')' && depth-- == 0) break;
+                if (c == ',' && depth == 0) break;
+            }
+            static const std::regex code(R"re("([a-z0-9_]+\.[a-z0-9_.]+)")re");
+            const std::string first = text.substr(at + 6, end - at - 6);
+            for (std::sregex_iterator i(first.begin(), first.end(), code), e; i != e; ++i) {
+                const std::string c = (*i)[1];
+                if (c.rfind("schema.", 0) == 0 || declared.count(c) || elsewhere.count(c)) continue;
+                undeclared.push_back(c + " (" + file + ")");
+            }
+        }
+    }
+    std::string list;
+    for (const std::string& u : undeclared) list += u + "\n";
+    INFO("undeclared:\n" << list);
+    CHECK(undeclared.empty());
 }

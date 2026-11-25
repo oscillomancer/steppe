@@ -51,6 +51,7 @@ struct LaunchStateResult {
     std::optional<double> captureEnds;
     std::optional<bool> captureKept;
     std::optional<std::int64_t> captureVersion;
+    bool unlogged = false;
     std::vector<LaunchTrackState> tracks;
 };
 struct CaptureArg {
@@ -401,8 +402,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "stop or a device restart, or the one a newer capture replaces once that hears a "
             "frame: both can hold at once. capture_version: the session version the capture "
             "launch.commit and render {performance: \"captured\"} take began on (its default "
-            "version to render). With the engine stopped it answers for a kept capture (no "
-            "tracks).";
+            "version to render). unlogged: false until this engine has lost a launch's report "
+            "from the audio path (a full queue), then true for the engine's life: the tracks' "
+            "entries may then be stale, and no capture is as heard; restarting the audio clears "
+            "it. With the engine stopped it answers for a kept capture (no tracks).";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto queued = schema::object<LaunchQueued>("launch_queued")
@@ -431,11 +434,12 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("capture_kept", &LaunchStateResult::captureKept, schema::boolean())
                        .field("capture_version", &LaunchStateResult::captureVersion,
                               schema::integer().min(0))
+                       .field("unlogged", &LaunchStateResult::unlogged, schema::boolean())
                        .field("tracks", &LaunchStateResult::tracks, schema::arrayOf(track))
                        .build();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"}};
         c.examples = {{"Before any launch", j("{}"), j(R"({"playing": false, "capturing": false,
-                    "tracks": [{"track": "tr_1", "plays": "arrangement"}]})"),
+                    "unlogged": false, "tracks": [{"track": "tr_1", "plays": "arrangement"}]})"),
                        "song_with_clip_running"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<LaunchStateResult> {
             EngineApp& app = engine::app(ctx);
@@ -451,6 +455,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
                 out.captureVersion = static_cast<std::int64_t>(capture->capture.version);
             if (!engine) return out;  // stopped: the kept capture alone
             out.capturing = (*engine)->launchCapturing();
+            out.unlogged = (*engine)->launchesUnlogged();
             if (const auto own = (*engine)->launchCapture(); own && own->on)
                 out.captureEnds = own->endsBeat;
             const double rate = (*engine)->config().sampleRate;

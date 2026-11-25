@@ -1183,6 +1183,7 @@ q = nil
 ---@field capture_ends? number
 ---@field capture_kept? boolean
 ---@field capture_version? integer
+---@field unlogged boolean
 ---@field tracks table[]
 ---@field warnings? table[]
 

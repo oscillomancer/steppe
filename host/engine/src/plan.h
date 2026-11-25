@@ -1472,6 +1472,11 @@ struct Plan {
     // it also adopts exactly at handAt, playing, in that epoch (adoptLive's
     // `continuous`); otherwise it starts them afresh.
     bool handContinuable = false;
+    // The renderer carried the live region from its previous plan into this
+    // one (its continuable carry), whatever the callback's handoff turns out
+    // to be (a stop, a seek, a late adoption): such a join keeps its launch
+    // (round 178 F1). Kept when a relocation clears handContinuable.
+    bool liveCarried = false;
     // Two executors at work (anticipative engine with live nodes): frontier
     // edges read their rings, not their sources' taps.
     bool split = false;

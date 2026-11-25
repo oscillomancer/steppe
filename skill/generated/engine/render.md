@@ -104,8 +104,34 @@ Kind: `query`. Exposure: `mcp-exec`.
 - `render.empty`: the render would write nothing Hint: add items or a range
 - `render.source`: branch and version are both given Hint: give one of them
 - `history.version`: no such version Hint: history.list shows the versions
+- `branch.unknown`: no such branch Hint: branch.list shows the branches
+- `engine.range`: the range is empty or out of bounds Hint: give an end after the start
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed while it rendered Hint: fx.restart it
+- `engine.media_missing`: an item's audio file is missing Hint: relink or remove it
+- `engine.media_changed`: an item's audio file changed on disk Hint: relink it
+- `engine.media_too_long`: an item's audio file is too long to hold Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: fx.restart it, or re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `plugin.unknown`: a plug-in is not available to the render Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path's folder and permissions
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk and permissions
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a written file's folder cannot be synced Hint: check the disk
+- `file.sync_published`: a file was written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: an audio format or depth is not supported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
 - `render.pattern`: the file name pattern does not parse Hint: fix the token or filter named
-- `render.path`: a destination escapes the renders folder, collides or cannot be made Hint: change pattern
+- `render.path`: a destination is outside renders, taken or unwritable Hint: change pattern
 - `render.exists`: a destination exists, or no free numbered name is left Hint: if_exists overwrite, number or skip
 - `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
 - `render.format`: an output format is unknown Hint: use a format render.settings lists
@@ -113,21 +139,22 @@ Kind: `query`. Exposure: `mcp-exec`.
 - `render.masters`: masters names a track that is not a master Hint: track.list
 - `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
 - `render.loop`: a loop that cannot be followed Hint: render without the loop
-- `track.unknown`: a track the call or a performance names is not in the version Hint: track.list
+- `track.unknown`: a named track is not in the version Hint: track.list
 - `track.strip_type`: the mix output is not a master Hint: name a master
-- `engine.too_long`: the render is too long, or too long once the playrate expands it Hint: render a shorter range
+- `engine.too_long`: the render is too long Hint: render a shorter range
 - `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
 - `region.unknown`: a region the call names is not in the version Hint: region.list
-- `launch.capture`: performance "captured" with no capture, or none with running time Hint: launch.capture {on: true}, play, then render
+- `launch.capture`: "captured" with no capture to play Hint: launch.capture {on: true}, play, then render
 - `render.performance.sample_rate`: the performance runs at another rate than the project Hint: launch.commit it and render the timeline
 - `render.performance.launches`: launches out of frame order, or past frames Hint: give the launches in frame order, each within frames
 - `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
 - `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
 - `render.performance.clip_track`: a launch's clip belongs to another track Hint: give the clip's own track
-- `clip.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `cl.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `tr.unknown`: a track id is not in the version Hint: track.list
 - `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
 - `launch.playrate`: an audio clip the engine refuses under the master playrate Hint: launch.commit it and render the timeline
-- `render.not_as_heard`: as_heard: true, and the performance is not as heard Hint: act on the first reason, or leave as_heard out
+- `render.not_as_heard`: as_heard: true for one not as heard Hint: act on the first reason, or leave as_heard out
 
 ### Examples
 
@@ -246,8 +273,34 @@ Kind: `action`. Exposure: `mcp-tool`.
 - `render.empty`: the render would write nothing Hint: add items or a range
 - `render.source`: branch and version are both given Hint: give one of them
 - `history.version`: no such version Hint: history.list shows the versions
+- `branch.unknown`: no such branch Hint: branch.list shows the branches
+- `engine.range`: the range is empty or out of bounds Hint: give an end after the start
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed while it rendered Hint: fx.restart it
+- `engine.media_missing`: an item's audio file is missing Hint: relink or remove it
+- `engine.media_changed`: an item's audio file changed on disk Hint: relink it
+- `engine.media_too_long`: an item's audio file is too long to hold Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: fx.restart it, or re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `plugin.unknown`: a plug-in is not available to the render Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path's folder and permissions
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk and permissions
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a written file's folder cannot be synced Hint: check the disk
+- `file.sync_published`: a file was written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: an audio format or depth is not supported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
 - `render.pattern`: the file name pattern does not parse Hint: fix the token or filter named
-- `render.path`: a destination escapes the renders folder, collides or cannot be made Hint: change pattern
+- `render.path`: a destination is outside renders, taken or unwritable Hint: change pattern
 - `render.exists`: a destination exists, or no free numbered name is left Hint: if_exists overwrite, number or skip
 - `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
 - `render.format`: an output format is unknown Hint: use a format render.settings lists
@@ -255,23 +308,24 @@ Kind: `action`. Exposure: `mcp-tool`.
 - `render.masters`: masters names a track that is not a master Hint: track.list
 - `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
 - `render.loop`: a loop that cannot be followed Hint: render without the loop
-- `track.unknown`: a track the call or a performance names is not in the version Hint: track.list
+- `track.unknown`: a named track is not in the version Hint: track.list
 - `track.strip_type`: the mix output is not a master Hint: name a master
-- `engine.too_long`: the render is too long, or too long once the playrate expands it Hint: render a shorter range
+- `engine.too_long`: the render is too long Hint: render a shorter range
 - `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
 - `render.stale_target`: the project or branch changed while it rendered Hint: render again
 - `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
 - `job.cancelled`: the render job was cancelled Hint: render again
-- `launch.capture`: performance "captured" with no capture, or none with running time Hint: launch.capture {on: true}, play, then render
+- `launch.capture`: "captured" with no capture to play Hint: launch.capture {on: true}, play, then render
 - `render.performance.sample_rate`: the performance runs at another rate than the project Hint: launch.commit it and render the timeline
 - `render.performance.launches`: launches out of frame order, or past frames Hint: give the launches in frame order, each within frames
 - `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
 - `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
 - `render.performance.clip_track`: a launch's clip belongs to another track Hint: give the clip's own track
-- `clip.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `cl.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `tr.unknown`: a track id is not in the version Hint: track.list
 - `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
 - `launch.playrate`: an audio clip the engine refuses under the master playrate Hint: launch.commit it and render the timeline
-- `render.not_as_heard`: as_heard: true, and the performance is not as heard Hint: act on the first reason, or leave as_heard out
+- `render.not_as_heard`: as_heard: true for one not as heard Hint: act on the first reason, or leave as_heard out
 - `launch.memory`: a launch's clip is past the memory budget Hint: launch.commit it and render the timeline
 
 ### Examples
@@ -787,8 +841,34 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `render.empty`: the render would write nothing Hint: add items or a range
 - `render.source`: branch and version are both given Hint: give one of them
 - `history.version`: no such version Hint: history.list shows the versions
+- `branch.unknown`: no such branch Hint: branch.list shows the branches
+- `engine.range`: the range is empty or out of bounds Hint: give an end after the start
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed while it rendered Hint: fx.restart it
+- `engine.media_missing`: an item's audio file is missing Hint: relink or remove it
+- `engine.media_changed`: an item's audio file changed on disk Hint: relink it
+- `engine.media_too_long`: an item's audio file is too long to hold Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: fx.restart it, or re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `plugin.unknown`: a plug-in is not available to the render Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path's folder and permissions
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk and permissions
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a written file's folder cannot be synced Hint: check the disk
+- `file.sync_published`: a file was written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: an audio format or depth is not supported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
 - `render.pattern`: the file name pattern does not parse Hint: fix the token or filter named
-- `render.path`: a destination escapes the renders folder, collides or cannot be made Hint: change pattern
+- `render.path`: a destination is outside renders, taken or unwritable Hint: change pattern
 - `render.exists`: a destination exists, or no free numbered name is left Hint: if_exists overwrite, number or skip
 - `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
 - `render.format`: an output format is unknown Hint: use a format render.settings lists
@@ -796,9 +876,9 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `render.masters`: masters names a track that is not a master Hint: track.list
 - `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
 - `render.loop`: a loop that cannot be followed Hint: render without the loop
-- `track.unknown`: a track the call or a performance names is not in the version Hint: track.list
+- `track.unknown`: a named track is not in the version Hint: track.list
 - `track.strip_type`: the mix output is not a master Hint: name a master
-- `engine.too_long`: the render is too long, or too long once the playrate expands it Hint: render a shorter range
+- `engine.too_long`: the render is too long Hint: render a shorter range
 - `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
 - `region.unknown`: a region the call names is not in the version Hint: region.list
 - `render.stale_target`: the project or branch changed while it rendered Hint: render again
@@ -1033,8 +1113,34 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `render.empty`: the render would write nothing Hint: add items or a range
 - `render.source`: branch and version are both given Hint: give one of them
 - `history.version`: no such version Hint: history.list shows the versions
+- `branch.unknown`: no such branch Hint: branch.list shows the branches
+- `engine.range`: the range is empty or out of bounds Hint: give an end after the start
+- `engine.block_size`: the block size is out of range Hint: 1 .. 8192
+- `engine.fx_failed`: a plug-in could not be loaded Hint: fx.restart it
+- `engine.bridge_failed`: a bridged plug-in failed Hint: fx.restart it
+- `engine.process_error`: a plug-in failed while it rendered Hint: fx.restart it
+- `engine.media_missing`: an item's audio file is missing Hint: relink or remove it
+- `engine.media_changed`: an item's audio file changed on disk Hint: relink it
+- `engine.media_too_long`: an item's audio file is too long to hold Hint: trim it
+- `engine.blob_missing`: a plug-in state blob is missing Hint: fx.restart it, or re-save
+- `engine.patch_unpatchable`: a rack patch cannot be compiled Hint: fix the patch
+- `plugin.unknown`: a plug-in is not available to the render Hint: plugin.list
+- `file.open`: a file cannot be opened Hint: check the path's folder and permissions
+- `file.read`: a file cannot be read Hint: check it exists and is readable
+- `file.too_large`: a file is too large to read Hint: use a smaller file
+- `file.write`: a file cannot be written Hint: check the disk and permissions
+- `file.sync`: a written file cannot be synced Hint: check the disk
+- `file.sync_directory`: a written file's folder cannot be synced Hint: check the disk
+- `file.sync_published`: a file was written but not synced Hint: check the disk
+- `audio.open`: an audio file cannot be opened Hint: check the path
+- `audio.read`: an audio file cannot be read Hint: check the file
+- `audio.decode`: an audio file cannot be decoded Hint: check the file
+- `audio.format`: an audio format or depth is not supported Hint: change outputs
+- `audio.write`: an audio file cannot be written Hint: check the disk
+- `audio.encode`: an encoder or tag writer failed Hint: change outputs
+- `audio.cancelled`: an encoder was cancelled Hint: render again
 - `render.pattern`: the file name pattern does not parse Hint: fix the token or filter named
-- `render.path`: a destination escapes the renders folder, collides or cannot be made Hint: change pattern
+- `render.path`: a destination is outside renders, taken or unwritable Hint: change pattern
 - `render.exists`: a destination exists, or no free numbered name is left Hint: if_exists overwrite, number or skip
 - `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
 - `render.format`: an output format is unknown Hint: use a format render.settings lists
@@ -1042,23 +1148,24 @@ Kind: `action`. Exposure: `mcp-exec`.
 - `render.masters`: masters names a track that is not a master Hint: track.list
 - `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
 - `render.loop`: a loop that cannot be followed Hint: render without the loop
-- `track.unknown`: a track the call or a performance names is not in the version Hint: track.list
+- `track.unknown`: a named track is not in the version Hint: track.list
 - `track.strip_type`: the mix output is not a master Hint: name a master
-- `engine.too_long`: the render is too long, or too long once the playrate expands it Hint: render a shorter range
+- `engine.too_long`: the render is too long Hint: render a shorter range
 - `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
 - `render.stale_target`: the project or branch changed while it rendered Hint: render again
 - `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
 - `job.cancelled`: the render job was cancelled Hint: render again
-- `launch.capture`: performance "captured" with no capture, or none with running time Hint: launch.capture {on: true}, play, then render
+- `launch.capture`: "captured" with no capture to play Hint: launch.capture {on: true}, play, then render
 - `render.performance.sample_rate`: the performance runs at another rate than the project Hint: launch.commit it and render the timeline
 - `render.performance.launches`: launches out of frame order, or past frames Hint: give the launches in frame order, each within frames
 - `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
 - `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
 - `render.performance.clip_track`: a launch's clip belongs to another track Hint: give the clip's own track
-- `clip.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `cl.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `tr.unknown`: a track id is not in the version Hint: track.list
 - `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
 - `launch.playrate`: an audio clip the engine refuses under the master playrate Hint: launch.commit it and render the timeline
-- `render.not_as_heard`: as_heard: true, and the performance is not as heard Hint: act on the first reason, or leave as_heard out
+- `render.not_as_heard`: as_heard: true for one not as heard Hint: act on the first reason, or leave as_heard out
 - `launch.memory`: a launch's clip is past the memory budget Hint: launch.commit it and render the timeline
 
 ### Examples
