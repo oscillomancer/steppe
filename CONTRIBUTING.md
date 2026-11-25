@@ -154,7 +154,11 @@ Windows (`windows-2022`, x64) uses clang-cl, Ninja
 and the Windows SDK, with vcpkg SDL3/zlib and a binary cache. CI builds it with
 ccache and embedded debug information (`-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded`,
 `/Z7`, which clang-cl already treats `/Zi` as), so that ccache can cache the
-objects; the `windows` preset is unchanged. Windows
+objects; the `windows` preset is unchanged. ccache 4.14.1 and later skip the
+compiles that carry the project's `/clang:` flags (warnings, `-ffp-contract=off`,
+`-fwrapv`), about 36% of them, as unsafe to cache; this is left on purpose, since
+an older ccache would give up that guard and a different spelling of the flags is
+not equivalent. Windows
 10 1903 is the minimum (ADR-0044: every executable runs with the UTF-8 code page). No packaging or installers run here. Local platform
 commands are `cmake --workflow --preset macos` or `windows`; the latter
 requires `VCPKG_ROOT` and an initialized Windows SDK environment.
