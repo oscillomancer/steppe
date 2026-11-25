@@ -107,6 +107,27 @@ std::string sourceKey(RenderDialog::Source s) {
                                               : "regions";
 }
 
+// A reason a performance render is not as heard (engine.md §3.1), in the
+// dialog's words; "" for given and from_launcher, which only say the source
+// is not a capture. An unknown reason reads as its code in words.
+std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEnd endedBy) {
+    if (reason == "began_mid_run") return "the capture began while playing";
+    if (reason == "edited_during") return "the session was edited during it";
+    if (reason == "playrate_changed") return "the playback rate changed during it";
+    if (reason == "live_input") return "live input was heard";
+    if (reason == "dropout") return "audio dropped out during it";
+    if (reason == "plugin_failed") return "a plug-in failed during it";
+    if (reason == "ended_by_engine")
+        return endedBy == engine::EngineApp::CaptureEnd::Device
+                   ? "the audio device restarted during it"
+                   : "the engine stopped during it";
+    if (reason == "other_version") return "it is rendered on another version than it played on";
+    if (reason == "given" || reason == "from_launcher") return {};
+    std::string words = reason;
+    std::replace(words.begin(), words.end(), '_', ' ');
+    return words;
+}
+
 ui::Node& row(ui::Node& parent, const std::string& id, float height = 26) {
     auto& r = parent.emplace<ui::Node>(id);
     r.layout.dir = ui::Layout::Dir::Row;
@@ -263,6 +284,27 @@ void RenderDialog::setField(const std::string& id, const std::string& typed) {
         return {};
     };
     const bool unset = typed.empty();
+    if (id == "render.pattern" && performance()) {
+        // A performance's file name is one-off: the project's pattern stays.
+        perfPattern_ = typed;
+        markDirty();
+        if (patternField_ && patternField_->text() != typed) patternField_->setText(typed);
+        return;
+    }
+    if (id == "render.perf.start" || id == "render.perf.end") {
+        raw_[id] = typed;
+        errors_.erase(id);
+        markDirty();
+        const auto beat = inspectorParseBars(typed, *app_.head().timeMap);
+        if (!beat) {
+            errors_[id] = beat.error().message;
+            return;
+        }
+        (id == "render.perf.start" ? launcherStart_ : launcherEnd_) = *beat;
+        if (launcherStart_ && launcherEnd_ && *launcherEnd_ <= *launcherStart_)
+            errors_[id] = "end after the start";
+        return;
+    }
     if (id == "render.pattern") {
         json::Value p = settings_.find("pattern") ? *settings_.find("pattern") : json::Value();
         if (!p.isObject()) {
@@ -480,6 +522,17 @@ json::Value RenderDialog::renderArgs(bool forJob) const {
     json::Value a = settings_;
     const json::Value chosen = selectors();
     for (const auto& m : chosen.asObject()) a[m.key] = m.value;
+    if (performance()) {
+        // The performance's range is its own: bounds and the loop do not
+        // apply (render.args refuses them). Last capture renders on the
+        // version it played on, the command's default.
+        for (const char* key : {"bounds", "start_beat", "end_beat", "seamless_loop", "regions"})
+            a.asObject().erase(key);
+        if (plays_ == Plays::Capture)
+            for (const char* key : {"version", "branch"}) a.asObject().erase(key);
+        a["performance"] = performanceArg();
+        if (perfPattern_) a["pattern"] = *perfPattern_;
+    }
     // A mix carries no per-file analysis unless it is asked for; the dialog
     // lists its loudness.
     if (source() == Source::Master) a["analyze"] = "summary";
@@ -526,6 +579,13 @@ void RenderDialog::open() {
     versionChoice_ = "current";
     regions_.reset();
     ask_ = false;
+    perfPattern_.reset();
+    launcherStart_.reset();
+    launcherEnd_.reset();
+    perfRange_.reset();
+    asHeardText_.clear();
+    if (plays_ == Plays::Capture && !captureUnavailable().empty()) plays_ = Plays::Arrangement;
+    if (plays_ != Plays::Arrangement) setPlays(plays_);
     auto page = buildPage();
     root_.openPopup(std::move(page), {}, ui::Placement::Center, [this] {
         page_ = nullptr;
@@ -533,6 +593,7 @@ void RenderDialog::open() {
         scroll_ = nullptr;
         status_ = nullptr;
         diagnostic_ = nullptr;
+        asHeard_ = nullptr;
         previewBlock_ = nullptr;
         resultsBlock_ = nullptr;
         resultsRow_ = nullptr;
@@ -631,35 +692,71 @@ void RenderDialog::buildSource(ui::Node& body) {
                                               [this, src = s](bool) { setSource(src); });
         t.layout.width = ui::SizeRule::fixed(96);
         t.setOn(current == s);
+        // A performance renders its own range: Regions render the arrangement.
+        if (s == Source::Regions && plays_ != Plays::Arrangement) {
+            t.enabled = false;
+            t.hint = {"A performance renders its own range", {}};
+        }
     }
     auto& gap = sources.emplace<ui::Node>("render.sources.gap");
     gap.layout.width = ui::SizeRule::fixed(20);
     caption(sources, "render.version.label", "Version", 50);
-    std::vector<Choice> versions{{"current", "Current"}};
-    for (const auto& name : app_.versions().branches())
-        if (name != app_.versions().branch())
-            versions.push_back({"branch:" + name, "Branch " + name});
-    if (versionChoice_.starts_with("version:"))
-        versions.push_back({versionChoice_, "Version " + versionChoice_.substr(8)});
-    versions.push_back({"earlier", "Earlier version…"});
-    auto& version = sources.emplace<ui::Dropdown>("render.version", versions, versionChoice_);
-    version.layout.width = ui::SizeRule::fixed(170);
-    version.onChange = [this](const std::string& v) {
-        if (v == "earlier") {
-            chooseVersion();
-            return;
+    if (performance() && plays_ == Plays::Capture) {
+        // Last capture renders on the version it played on (engine.md §3.1).
+        const auto capture = app_.launchCapture();
+        sources.emplace<ui::Label>(
+            "render.version.played",
+            capture ? "As played (v" + std::to_string(capture->capture.version) + ")"
+                    : std::string("As played"),
+            ui::Font::Ui, "caption", "ink");
+    } else {
+        std::vector<Choice> versions{{"current", "Current"}};
+        for (const auto& name : app_.versions().branches())
+            if (name != app_.versions().branch())
+                versions.push_back({"branch:" + name, "Branch " + name});
+        if (versionChoice_.starts_with("version:"))
+            versions.push_back({versionChoice_, "Version " + versionChoice_.substr(8)});
+        versions.push_back({"earlier", "Earlier version…"});
+        auto& version = sources.emplace<ui::Dropdown>("render.version", versions, versionChoice_);
+        version.layout.width = ui::SizeRule::fixed(170);
+        version.onChange = [this](const std::string& v) {
+            if (v == "earlier") {
+                chooseVersion();
+                return;
+            }
+            versionChoice_ = v;
+            markDirty();
+        };
+    }
+    // What the mix or stems play (engine.md §3.1): the arrangement, the
+    // launcher's last capture as heard, or the launcher as it plays now.
+    auto& plays = row(body, "render.plays");
+    caption(plays, "render.plays.label", "Plays", 50);
+    const std::string noCapture = captureUnavailable();
+    captureOffered_ = noCapture.empty();
+    for (const auto& [p, id, label] :
+         {std::tuple{Plays::Arrangement, "render.plays.arrangement", "Arrangement"},
+          std::tuple{Plays::Capture, "render.plays.capture", "Last capture"},
+          std::tuple{Plays::Launcher, "render.plays.launcher", "Launcher"}}) {
+        auto& t = plays.emplace<ui::Toggle>(id, label, "accent",
+                                            [this, play = p](bool) { setPlays(play); });
+        t.layout.width = ui::SizeRule::fixed(96);
+        t.setOn(plays_ == p);
+        if (p != Plays::Arrangement && current == Source::Regions) {
+            t.enabled = false;
+            t.hint = {"Regions render the arrangement", {}};
+        } else if (p == Plays::Capture && !noCapture.empty()) {
+            t.enabled = false;
+            t.hint = {noCapture, {}};
         }
-        versionChoice_ = v;
-        markDirty();
-    };
-    // Renders play the arrangement only (ADR-0097): said while a clip holds
-    // a track (nothing is said with no engine); tick() follows launches.
+    }
+    // The clips playing now are not in an arrangement render (ADR-0097):
+    // said while a clip holds a track; tick() follows launches.
     clipsHeld_ = clipsHeld();
-    if (clipsHeld_)
+    if (clipsHeld_ && !performance())
         body.emplace<ui::Label>("render.clips.note",
-                                "Renders play the arrangement: the clips playing now are "
-                                "not in them.",
-                                ui::Font::Ui, "caption", "ink-quiet");
+                                "The clips playing now are not in this render.", ui::Font::Ui,
+                                "caption", "ink-quiet");
     const model::Session& s = app_.head();
     // Several masters (ADR-0056): which of them the mix renders, a file each.
     if (current == Source::Master && s.project->masters.size() > 1) {
@@ -775,49 +872,53 @@ void RenderDialog::buildSource(ui::Node& body) {
 
 void RenderDialog::buildRange(ui::Node& body) {
     heading(body, "render.h.range", "Range");
-    auto& r = row(body, "render.range.row");
-    const std::string bounds = text(settings_.find("bounds"), "project");
-    // The time selection is the loop range drawn on the ruler, whether or not
-    // looping is on (bounds "loop").
-    const auto& loop = app_.loop();
-    std::vector<Choice> choices{{"project", "Entire project"},
-                                {"loop", "Time selection", loop.end > loop.start},
-                                {"custom", "Custom"}};
-    auto& range = r.emplace<ui::Dropdown>("render.range", choices, bounds);
-    range.layout.width = ui::SizeRule::fixed(150);
-    range.quiet = fromDefault("bounds");
-    range.onChange = [this](const std::string& v) { set("bounds", v, true); };
-    const model::Session& s = app_.head();
-    double first = 0, last = model::lastItemBeat(s);
-    if (bounds == "loop" && loop.end > loop.start) {
-        first = s.timeMap->beatAt(loop.start);
-        last = s.timeMap->beatAt(loop.end);
-    } else if (bounds == "custom") {
-        first = num(settings_.find("start_beat"), 0);
-        last = num(settings_.find("end_beat"), last);
+    if (performance())
+        buildPerformanceRange(body);
+    else {
+        auto& r = row(body, "render.range.row");
+        const std::string bounds = text(settings_.find("bounds"), "project");
+        // The time selection is the loop range drawn on the ruler, whether or not
+        // looping is on (bounds "loop").
+        const auto& loop = app_.loop();
+        std::vector<Choice> choices{{"project", "Entire project"},
+                                    {"loop", "Time selection", loop.end > loop.start},
+                                    {"custom", "Custom"}};
+        auto& range = r.emplace<ui::Dropdown>("render.range", choices, bounds);
+        range.layout.width = ui::SizeRule::fixed(150);
+        range.quiet = fromDefault("bounds");
+        range.onChange = [this](const std::string& v) { set("bounds", v, true); };
+        const model::Session& s = app_.head();
+        double first = 0, last = model::lastItemBeat(s);
+        if (bounds == "loop" && loop.end > loop.start) {
+            first = s.timeMap->beatAt(loop.start);
+            last = s.timeMap->beatAt(loop.end);
+        } else if (bounds == "custom") {
+            first = num(settings_.find("start_beat"), 0);
+            last = num(settings_.find("end_beat"), last);
+        }
+        // In the ruler's format: bars and beats in the field (the transport's
+        // "3.1.000", typed back the same way), the time beside it.
+        const bool custom = bounds == "custom";
+        for (const auto& [id, label, value] :
+             {std::tuple{"render.start", "Start", first}, std::tuple{"render.end", "End", last}}) {
+            caption(r, std::string(id) + ".label", label, 34);
+            const std::string bars = inspectorBarsText(value, *s.timeMap);
+            auto& field = r.emplace<ui::TextField>(
+                id, raw_.count(id) ? raw_[id] : (custom ? bars : std::string()), bars);
+            field.layout.width = ui::SizeRule::fixed(72);
+            field.enabled = custom;
+            field.onChange = [this, field = std::string(id)](const std::string& t) {
+                setField(field, t);
+            };
+            caption(r, std::string(id) + ".time", timeText(s.timeMap->secondsAt(value)), 64);
+        }
+        char beats[32];
+        std::snprintf(beats, sizeof beats, "%g", std::max(0.0, last - first));
+        const std::string length =
+            std::string("Length ") + beats + " beats \u00b7 " +
+            timeText(std::max(0.0, s.timeMap->secondsAt(last) - s.timeMap->secondsAt(first)));
+        r.emplace<ui::Label>("render.length", length, ui::Font::Ui, "caption", "ink-quiet");
     }
-    // In the ruler's format: bars and beats in the field (the transport's
-    // "3.1.000", typed back the same way), the time beside it.
-    const bool custom = bounds == "custom";
-    for (const auto& [id, label, value] :
-         {std::tuple{"render.start", "Start", first}, std::tuple{"render.end", "End", last}}) {
-        caption(r, std::string(id) + ".label", label, 34);
-        const std::string bars = inspectorBarsText(value, *s.timeMap);
-        auto& field = r.emplace<ui::TextField>(
-            id, raw_.count(id) ? raw_[id] : (custom ? bars : std::string()), bars);
-        field.layout.width = ui::SizeRule::fixed(72);
-        field.enabled = custom;
-        field.onChange = [this, field = std::string(id)](const std::string& t) {
-            setField(field, t);
-        };
-        caption(r, std::string(id) + ".time", timeText(s.timeMap->secondsAt(value)), 64);
-    }
-    char beats[32];
-    std::snprintf(beats, sizeof beats, "%g", std::max(0.0, last - first));
-    const std::string length =
-        std::string("Length ") + beats + " beats \u00b7 " +
-        timeText(std::max(0.0, s.timeMap->secondsAt(last) - s.timeMap->secondsAt(first)));
-    r.emplace<ui::Label>("render.length", length, ui::Font::Ui, "caption", "ink-quiet");
     auto& tail = row(body, "render.tail.row");
     const double tailS = num(settings_.find("tail_s"));
     auto& on = tail.emplace<ui::Checkbox>("render.tail.on", "Tail (s)", tailS > 0);
@@ -856,7 +957,8 @@ void RenderDialog::buildOutput(ui::Node& body) {
     });
     auto& name = row(body, "render.name.row");
     caption(name, "render.pattern.label", "File name", 130);
-    patternField_ = &name.emplace<ui::TextField>("render.pattern", pattern());
+    patternField_ = &name.emplace<ui::TextField>(
+        "render.pattern", performance() && perfPattern_ ? *perfPattern_ : pattern());
     patternField_->layout.width = ui::SizeRule::fraction();
     patternField_->onChange = [this](const std::string& t) { setField("render.pattern", t); };
     patternField_->onSubmit = [this](const std::string&) { refreshPreview(); };
@@ -1179,6 +1281,11 @@ void RenderDialog::buildProcessing(ui::Node& body) {
     auto& loop = fold.body().emplace<ui::Checkbox>(
         "render.seamless", "Seamless loop (fold the tail into the start)", seamless);
     loop.onToggle = [this](bool v) { set("seamless_loop", v, true); };
+    // A performance plays once, from its own start (render.args refuses it).
+    if (performance()) {
+        loop.enabled = false;
+        loop.hint = {"A performance plays once: no seamless loop", {}};
+    }
 }
 
 void RenderDialog::buildMetadata(ui::Node& body) {
@@ -1510,11 +1617,18 @@ void RenderDialog::refreshPreview() {
     args.asObject().erase("analyze");
     args["operation"] = sourceKey(source());
     auto result = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin});
+    lastPerfMs_ = nowMs();
     if (!result) {
         std::string where = result.error().path;
         if (where.starts_with("/args")) where = where.substr(5);
-        previewText_ =
-            (where.empty() ? std::string() : where.substr(1) + ": ") + result.error().message;
+        // A performance's refusal in the dialog's words (never a path or the
+        // hint, which names commands).
+        const std::string words = performance() ? performanceRefusal(result.error()) : "";
+        previewText_ = !words.empty() ? words
+                                      : (where.empty() ? std::string() : where.substr(1) + ": ") +
+                                            result.error().message;
+        asHeardText_.clear();
+        if (asHeard_) asHeard_->setText("");
         setStatus(previewText_);
         if (diagnostic_) diagnostic_->setText(previewText_);
         if (previewBlock_) previewBlock_->setText(previewText_);
@@ -1542,6 +1656,38 @@ void RenderDialog::refreshPreview() {
         }
     if (lines.empty()) lines = "no files";
     previewText_ = lines;
+    // Last capture: whether the render is what was heard, before the render.
+    asHeardText_.clear();
+    if (performance()) {
+        if (const json::Value* range = result->find("range"); range && range->isObject())
+            perfRange_ = std::pair{num(range->find("start_beat")), num(range->find("end_beat"))};
+        if (plays_ == Plays::Capture) {
+            const auto capture = app_.launchCapture();
+            const auto endedBy = capture ? capture->endedBy : engine::EngineApp::CaptureEnd::None;
+            if (flag(result->find("as_heard"))) {
+                asHeardText_ = "As heard";
+            } else {
+                std::string why;
+                if (const json::Value* reasons = result->find("not_heard_because");
+                    reasons && reasons->isArray())
+                    for (const auto& r : reasons->asArray())
+                        if (const std::string w = notHeardWord(text(&r), endedBy); !w.empty())
+                            why += (why.empty() ? "" : ", ") + w;
+                asHeardText_ = why.empty() ? "Not as heard" : "Not as heard: " + why;
+            }
+        }
+        if (auto* line = dynamic_cast<ui::Label*>(root_.find("render.perf.range"));
+            line && perfRange_ && plays_ == Plays::Capture) {
+            const time::TimeMap& tm = *app_.head().timeMap;
+            std::string text = "Bars " + inspectorBarsText(perfRange_->first, tm) + " \u2013 " +
+                               inspectorBarsText(perfRange_->second, tm) + " \u00b7 " +
+                               timeText(std::max(0.0, tm.secondsAt(perfRange_->second) -
+                                                          tm.secondsAt(perfRange_->first)));
+            if (captureRunning_) text += " so far";
+            line->setText(text);
+        }
+    }
+    if (asHeard_) asHeard_->setText(asHeardText_);
     setStatus(std::to_string(count) + (count == 1 ? " file" : " files"));
     if (previewBlock_) previewBlock_->setText(previewText_);
     if (renderButton_)
@@ -1615,6 +1761,27 @@ void RenderDialog::addToQueue() {
     a.asObject().erase("analyze");
     json::Value q = json::Value::object();
     q["command"] = commandName();
+    // A performance says what it plays in the queue's list; the engine
+    // stores the resolved object, so later launches do not change it.
+    if (performance()) {
+        const time::TimeMap& tm = *app_.head().timeMap;
+        double first = 0, last = 0;
+        if (plays_ == Plays::Launcher) {
+            first = launcherStart_.value_or(0.0);
+            last = launcherEnd_.value_or(first);
+        } else if (perfRange_) {
+            first = perfRange_->first;
+            last = perfRange_->second;
+        } else if (const auto capture = app_.launchCapture()) {
+            first = capture->startBeat;
+            last = capture->endBeat;
+        }
+        const int a0 = tm.barBeat(first).bar;
+        const int a1 = tm.barBeat(std::max(first, last - 1e-6)).bar;
+        q["label"] = std::string(source() == Source::Stems ? "stems" : "mix") + " \u00b7 " +
+                     (plays_ == Plays::Capture ? "last capture as played" : "launcher") +
+                     ", bars " + std::to_string(a0) + "\u2013" + std::to_string(a1);
+    }
     q["args"] = std::move(a);
     auto result = dispatcher_.execute({"render.queue.add", std::move(q), kUiOrigin});
     if (!result) {
@@ -1758,8 +1925,35 @@ void RenderDialog::showResults(const json::Value& result, bool cancelled) {
     for (const auto& s : skipped.asArray())
         lines += (lines.empty() ? "" : "\n") + baseName(text(s.find("path"))) + "  skipped (" +
                  text(s.find("reason")) + ")";
+    // Last capture: whether what was rendered is what was heard, from the
+    // render's own result (a running capture's range can differ from the
+    // dry run's).
+    std::string heard;
+    if (performance() && plays_ == Plays::Capture) {
+        const json::Value* r = &result;
+        if (const json::Value* renders = result.find("renders");
+            renders && renders->isArray() && renders->size())
+            r = &renders->at(0);
+        if (const json::Value* as = r->find("as_heard"); as && as->isBool()) {
+            heard = as->asBool() ? ", as heard" : ", not as heard";
+            const auto capture = app_.launchCapture();
+            std::string why;
+            if (const json::Value* reasons = r->find("not_heard_because");
+                reasons && reasons->isArray())
+                for (const auto& reason : reasons->asArray())
+                    if (const std::string w = notHeardWord(
+                            text(&reason),
+                            capture ? capture->endedBy : engine::EngineApp::CaptureEnd::None);
+                        !w.empty())
+                        why += (why.empty() ? "" : ", ") + w;
+            lines = (as->asBool()  ? std::string("As heard")
+                     : why.empty() ? std::string("Not as heard")
+                                   : "Not as heard: " + why) +
+                    (lines.empty() ? "" : "\n" + lines);
+        }
+    }
     setStatus((cancelled ? "cancelled; " : "") + std::to_string(resultFiles_.size()) +
-              (resultFiles_.size() == 1 ? " file rendered" : " files rendered"));
+              (resultFiles_.size() == 1 ? " file rendered" : " files rendered") + heard);
     refreshQueueButton();
     if (resultsBlock_) resultsBlock_->setText(lines.empty() ? "no files" : lines);
     if (resultsRow_) {
@@ -1887,6 +2081,139 @@ void RenderDialog::pollJob() {
             opener(std::filesystem::path(resultFiles_.front()).parent_path());
 }
 
+bool RenderDialog::performance() const {
+    return plays_ != Plays::Arrangement && source() != Source::Regions;
+}
+
+json::Value RenderDialog::performanceArg() const {
+    if (plays_ == Plays::Capture) return "captured";
+    json::Value p = json::Value::object();
+    p["from"] = "launcher";
+    p["start_beat"] = launcherStart_.value_or(0.0);
+    p["end_beat"] = launcherEnd_.value_or(launcherStart_.value_or(0.0) + 4.0);
+    return p;
+}
+
+void RenderDialog::setPlays(Plays p) {
+    plays_ = p;
+    perfRange_.reset();
+    asHeardText_.clear();
+    errors_.erase("render.perf.start");
+    errors_.erase("render.perf.end");
+    raw_.erase("render.perf.start");
+    raw_.erase("render.perf.end");
+    if (p != Plays::Arrangement && !perfPattern_) perfPattern_ = pattern() + " performance";
+    if (p == Plays::Launcher && (!launcherStart_ || !launcherEnd_)) defaultLauncherRange();
+    markDirty();
+    rebuild();
+}
+
+std::string RenderDialog::captureUnavailable() {
+    const auto capture = app_.launchCapture();
+    if (!capture || capture->capture.frames <= 0) return "No capture";
+    const double project = app_.head().project->sampleRate;
+    if (project > 0 && capture->sampleRate > 0 && std::abs(capture->sampleRate - project) > 0.5) {
+        char line[200];
+        std::snprintf(line, sizeof line,
+                      "Captured at %g\u00a0Hz; the project runs at %g\u00a0Hz. Commit it in the "
+                      "launcher, then render the arrangement.",
+                      capture->sampleRate, project);
+        return line;
+    }
+    return {};
+}
+
+void RenderDialog::defaultLauncherRange() {
+    const model::Session& s = app_.head();
+    const time::TimeMap& tm = *s.timeMap;
+    const auto transport = app_.transport("get");
+    const double at = transport ? std::max(0.0, transport->beat) : 0.0;
+    const int firstBar = tm.barBeat(at).bar;
+    const double start = tm.beatOfBar(firstBar);
+    // The longest clip playing, in beats: a MIDI clip's period is in beats,
+    // an audio clip's in seconds of played time.
+    double longest = 0;
+    for (const auto& t : app_.launchState()) {
+        if (t.plays != engine::Engine::TrackLaunch::Plays::Clip &&
+            t.plays != engine::Engine::TrackLaunch::Plays::Held)
+            continue;
+        const model::Clip* clip = s.clips.find(t.clip);
+        if (!clip || clip->length <= 0) continue;
+        const double beats = clip->kind == model::ClipKind::Midi
+                                 ? clip->length
+                                 : tm.beatAt(tm.secondsAt(start) + clip->length) - start;
+        longest = std::max(longest, beats);
+    }
+    int lastBar = firstBar + 4;
+    if (longest > 0) {
+        lastBar = firstBar + 1;
+        while (tm.beatOfBar(lastBar) < start + longest - 1e-9) ++lastBar;
+    }
+    launcherStart_ = start;
+    launcherEnd_ = tm.beatOfBar(lastBar);
+}
+
+std::string RenderDialog::performanceRefusal(const Error& e) const {
+    const std::string& c = e.code;
+    const bool clip = e.path.ends_with("/clip");
+    if (c == "launch.capture") return "There is no capture to render.";
+    if (c == "render.performance.sample_rate")
+        return "The capture was made at another sample rate than the project's. Commit it in "
+               "the launcher, then render the arrangement.";
+    if (c == "render.loop")
+        return "A looped capture cannot be rendered under a master playback rate. Commit it in "
+               "the launcher, then render the arrangement.";
+    if (c == "render.performance.too_many")
+        return "The capture has more than 100,000 launches. Commit it in the launcher, then "
+               "render the arrangement.";
+    if (c == "render.performance.launches") return "The capture's launches are out of order.";
+    if (c == "track.unknown") return "A track it plays on is not in this version.";
+    if (c == "launch.playrate") return "A clip it plays cannot play at the master playback rate.";
+    if (c == "launch.memory") return "A clip it plays is over the memory budget.";
+    if (clip && c.starts_with("clip.")) return "A clip it plays is not in this version.";
+    return {};
+}
+
+void RenderDialog::buildPerformanceRange(ui::Node& body) {
+    const model::Session& s = app_.head();
+    const time::TimeMap& tm = *s.timeMap;
+    auto& r = row(body, "render.range.row");
+    if (plays_ == Plays::Capture) {
+        // Read-only: the capture's own span, the dry run's once it answers.
+        const auto capture = app_.launchCapture();
+        captureRunning_ = capture && !capture->kept && capture->capture.on;
+        double first = 0, last = 0;
+        if (perfRange_) {
+            first = perfRange_->first;
+            last = perfRange_->second;
+        } else if (capture) {
+            first = capture->startBeat;
+            last = capture->endBeat;
+        }
+        std::string line = "Bars " + inspectorBarsText(first, tm) + " \u2013 " +
+                           inspectorBarsText(last, tm) + " \u00b7 " +
+                           timeText(std::max(0.0, tm.secondsAt(last) - tm.secondsAt(first)));
+        if (captureRunning_) line += " so far";
+        r.emplace<ui::Label>("render.perf.range", line, ui::Font::Ui, "caption", "ink");
+    } else {
+        // The launcher from Start to End, in bars as the transport writes them.
+        for (const auto& [id, label, value] :
+             {std::tuple{"render.perf.start", "Start", launcherStart_.value_or(0.0)},
+              std::tuple{"render.perf.end", "End", launcherEnd_.value_or(0.0)}}) {
+            caption(r, std::string(id) + ".label", label, 34);
+            const std::string bars = inspectorBarsText(value, tm);
+            auto& field = r.emplace<ui::TextField>(id, raw_.count(id) ? raw_[id] : bars, bars);
+            field.layout.width = ui::SizeRule::fixed(72);
+            field.onChange = [this, field = std::string(id)](const std::string& t) {
+                setField(field, t);
+            };
+            caption(r, std::string(id) + ".time", timeText(tm.secondsAt(value)), 64);
+        }
+    }
+    asHeard_ = &body.emplace<ui::Label>("render.asheard", asHeardText_, ui::Font::Ui, "caption",
+                                        asHeardText_ == "As heard" ? "ink" : "ink-quiet");
+}
+
 bool RenderDialog::clipsHeld() const {
     const auto state = app_.launchState();
     return std::any_of(state.begin(), state.end(), [](const engine::Engine::TrackLaunch& t) {
@@ -1898,6 +2225,17 @@ void RenderDialog::tick() {
     if (!job_.empty()) pollJob();
     if (!page_) return;
     if (clipsHeld() != clipsHeld_) rebuild();  // a launch changed what the line says
+    // A capture begun or gone while the dialog is open: Last capture follows,
+    // asked once a second (launchCapture walks the history).
+    if (nowMs() - lastOfferMs_ >= 1000) {
+        lastOfferMs_ = nowMs();
+        if (captureUnavailable().empty() != captureOffered_) rebuild();
+    }
+    // A running capture grows: its range and as-heard line follow it, once a
+    // second (the render takes the frames at the moment it starts).
+    if (performance() && plays_ == Plays::Capture && captureRunning_ &&
+        nowMs() - lastPerfMs_ >= 1000)
+        markDirty();
     if (dirty_ && nowMs() - lastEditMs_ >= static_cast<std::uint64_t>(debounceMs_))
         refreshPreview();
 }

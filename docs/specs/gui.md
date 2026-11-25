@@ -2224,12 +2224,58 @@ project is drawn in the quiet ink, with "from your default" on hover.
   loaded into the dialog only, written to the project only on Render),
   **Save preset…** (asks for a name), **Delete preset**, Close.
 - **Source:** a segmented control: Master mix | Stems | Regions.
-  - While a clip holds any track (`EngineApp::launchState()` says a track
-    plays something other than the arrangement), a quiet caption under it
-    says "Renders play the arrangement: the clips playing now are not in
-    them." (ADR-0097; `render.clips.note`). The dialog's frame pass reads
-    the launch state, so the caption comes and goes with launches while
-    the dialog is open.
+  - **Plays** (engine.md §3.1, ADR-0097): Arrangement | Last capture |
+    Launcher (`RenderDialog::Plays`), for Master mix and Stems. It is a
+    one-off selector: never written to the project's settings or a preset,
+    kept while the app runs, and back on Arrangement when the capture it
+    chose is gone. File > Mix always plays the arrangement.
+    - **Last capture** renders `performance: "captured"`, the capture
+      `EngineApp::launchCapture()` returns (also after an engine stop), on
+      the version it played on: the Version dropdown gives way to "As
+      played (vN)", and no `version` is sent. It is off while there is no
+      capture with running time (hint "No capture") or the capture ran at
+      another device rate than the project's (hint "Captured at 44100 Hz;
+      the project runs at 48000 Hz. Commit it in the launcher, then render
+      the arrangement.").
+    - **Launcher** renders `{from: "launcher", start_beat, end_beat}`:
+      Start and End fields in bars, typed as the transport writes them;
+      Start defaults to the playhead's bar, End to Start plus the longest
+      clip playing, in whole bars (four bars when none plays, which renders
+      the arrangement over that range).
+    - Under either, the Range row gives way to the performance's own range
+      (Last capture: a read-only line, "Bars 1.1.000 – 3.1.000 · 0:04.000",
+      the dry run's `range` once it answers, "so far" while the capture
+      runs, the preview asked again once a second meanwhile), and no
+      `bounds`, `seamless_loop` or `regions` is sent: the Regions toggle and
+      the seamless loop are off, with hints saying why, and under Regions
+      the Plays toggles are off ("Regions render the arrangement").
+    - The file name gets " performance" after the pattern, editable and
+      one-off (`pattern` in the call; the project's pattern stays).
+    - **As heard** (Last capture): the dry run's `as_heard` shows under the
+      range, "As heard" or "Not as heard: " and the reasons in the dialog's
+      words (the capture began while playing; the session was edited
+      during it; the playback rate changed during it; live input was heard;
+      audio dropped out during it; a plug-in failed during it; the engine
+      stopped, or the audio device restarted, during it, from the capture's
+      `endedBy`; an unknown reason as its code in words). After a render
+      the results start with the same line, from the render's own result,
+      and the status line adds ", as heard" or ", not as heard". The dialog
+      never sends `as_heard: true`.
+    - A performance's refusal reads in the dialog's words from its code
+      (no capture; another sample rate; a looped capture under a master
+      playback rate; more than 100,000 launches; launches out of order; a
+      track or clip not in this version; a clip that cannot play at the
+      master playback rate; a clip over the memory budget), never its path
+      or hint (`RenderDialog::performanceRefusal`).
+    - Add to queue labels the entry "mix · last capture as played, bars
+      1–2" or "mix · launcher, bars 3–4"; the engine stores the resolved
+      performance.
+  - While Arrangement plays and a clip holds any track
+    (`EngineApp::launchState()` says a track plays something other than the
+    arrangement), a quiet caption under it says "The clips playing now are
+    not in this render." (ADR-0097; `render.clips.note`). The dialog's frame
+    pass reads the launch state, so the caption comes and goes with launches
+    while the dialog is open.
   - Master mix, when the project has more than one master, shows a checklist
     of the masters (All / None; the main master alone by default) that edits
     `masters`: each checked master renders its own file (ADR-0056). Unchecking

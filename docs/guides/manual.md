@@ -1994,8 +1994,14 @@ items leaves the clips alone; `launch.commit {pooled: true}` shares it
 instead. Stopping, seeking or changing the loop ends a capture, and
 committing again writes the same performance over itself.
 
-Renders play the arrangement only; the render dialog says so while a
-clip is playing. Not yet:
+The render dialog's **Plays** row chooses what a mix or stems render plays:
+the **Arrangement**; the **Last capture**, exactly as you heard it, on the
+version it played on (the dialog says "As heard", or why not, before you
+render); or the **Launcher** as it plays now, from Start to End. A
+performance render plays once over its own range, and its file name gets
+" performance" added, which you can change. While the arrangement is chosen
+and a clip is playing, the dialog says the clips playing now are not in the
+render. Not yet:
 - launching an audio clip with take FX or take envelopes while the
   master playrate keeps the pitch (`launch.playrate`); other clips
   follow the playrate, audio ones time-stretched with the pitch kept, and

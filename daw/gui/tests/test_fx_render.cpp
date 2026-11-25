@@ -33,6 +33,7 @@
 #include "supple/gui/png.h"
 #include "supple/host/clap_host.h"
 #include "supple/json/write.h"
+#include "supple/time/timeline.h"
 #include "supple/ui/forms.h"
 #include "supple/ui/list.h"
 #include "supple/ui/popup.h"
@@ -377,6 +378,210 @@ TEST_CASE("the render dialog says renders leave out the clips playing now") {
     f.render->tick();  // the app's frame pass
     f.frame();
     CHECK(f.uiRoot().find("render.clips.note"));
+    f.render->close();
+}
+
+TEST_CASE("the render dialog's Plays row: a performance renders its own range, once") {
+    // engine.md §3.1: Last capture or Launcher sends `performance`, never
+    // bounds, regions or a seamless loop; Regions play the arrangement. The
+    // file name gets an editable " performance", never written.
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    f.render->open();
+    f.frame();
+    // No capture: Last capture is off, and its hint says why.
+    auto* capture = f.uiRoot().find("render.plays.capture");
+    REQUIRE(capture);
+    CHECK_FALSE(capture->enabled);
+    CHECK(capture->hint.name == "No capture");
+    CHECK(f.render->plays() == gui::RenderDialog::Plays::Arrangement);
+    CHECK_FALSE(f.render->renderArguments().find("performance"));
+    const std::string pattern = f.render->pattern();
+    f.render->setPlays(gui::RenderDialog::Plays::Launcher);
+    f.frame();
+    json::Value a = f.render->renderArguments();
+    REQUIRE(a.find("performance"));
+    CHECK(a["performance"]["from"].asString() == "launcher");
+    CHECK(a["performance"]["start_beat"].asDouble() == 0);
+    CHECK(a["performance"]["end_beat"].asDouble() == 16);  // four bars: nothing plays
+    for (const char* key : {"bounds", "start_beat", "end_beat", "seamless_loop", "regions"})
+        CHECK_MESSAGE(!a.find(key), key);
+    // The file name: the pattern plus " performance", one-off.
+    CHECK(a["pattern"].asString() == pattern + " performance");
+    auto* name = dynamic_cast<ui::TextField*>(f.uiRoot().find("render.pattern"));
+    REQUIRE(name);
+    CHECK(name->text() == pattern + " performance");
+    f.render->setField("render.pattern", "take {project}");
+    CHECK(f.render->renderArguments()["pattern"].asString() == "take {project}");
+    CHECK_FALSE(f.render->projectSettings().find("pattern"));
+    // Regions and the seamless loop are off under a performance.
+    CHECK_FALSE(f.uiRoot().find("render.src.regions")->enabled);
+    CHECK_FALSE(f.uiRoot().find("render.seamless")->enabled);
+    CHECK_FALSE(f.uiRoot().find("render.range"));  // the arrangement's range row is gone
+    REQUIRE(f.uiRoot().find("render.perf.start"));
+    // The launcher's range, typed in bars as the transport writes them.
+    f.render->setField("render.perf.start", "3");
+    f.render->setField("render.perf.end", "5");
+    CHECK(f.render->renderArguments()["performance"]["start_beat"].asDouble() == 8);
+    CHECK(f.render->renderArguments()["performance"]["end_beat"].asDouble() == 16);
+    // Regions: the Plays toggles are off, and nothing is sent.
+    f.render->setSource(gui::RenderDialog::Source::Regions);
+    f.frame();
+    CHECK_FALSE(f.uiRoot().find("render.plays.launcher")->enabled);
+    CHECK(f.uiRoot().find("render.plays.launcher")->hint.name == "Regions render the arrangement");
+    CHECK_FALSE(f.render->renderArguments().find("performance"));
+    f.render->close();
+}
+
+TEST_CASE("the render dialog's Launcher range starts at the playhead's bar, for the clip playing") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return r ? *r : json::Value();
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    // Six beats: the range rounds up to whole bars (two).
+    run("clip.add",
+        R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:w | C3:h"})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    run("launch.clip", R"({"clip": "cl_1"})");
+    backend.run(4);
+    f.app->tick();
+    f.render->open();
+    f.render->setPlays(gui::RenderDialog::Plays::Launcher);
+    f.frame();
+    json::Value p = f.render->renderArguments()["performance"];
+    const auto transport = f.app->transport("get");
+    REQUIRE(transport);
+    const time::TimeMap& tm = *f.app->head().timeMap;
+    const double start = tm.beatOfBar(tm.barBeat(transport->beat).bar);
+    CHECK(p["start_beat"].asDouble() == doctest::Approx(start));
+    CHECK(p["end_beat"].asDouble() == doctest::Approx(start + 8));
+    f.render->close();
+}
+
+TEST_CASE("the render dialog's Last capture: as heard, on the version it played on") {
+    // engine.md §3.1: "captured" renders the capture as heard; the dialog
+    // asks the dry run before the render and shows why not in its words.
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return r ? *r : json::Value();
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    const auto take = [&](bool edit) {
+        run("launch.capture", R"({"on": true})");
+        run("launch.clip", R"({"clip": "cl_1"})");
+        backend.run(96000 / 256);
+        f.app->tick();
+        if (edit) run("track.set", R"({"track": "tr_1", "volume_db": -3})");
+        backend.run(96000 / 256);
+        f.app->tick();
+        run("transport.stop", "{}");
+        f.app->tick();
+    };
+    take(false);
+    REQUIRE(f.app->launchCapture());
+    const std::uint64_t played = f.app->launchCapture()->capture.version;
+    f.render->open();
+    f.render->setDebounceMs(0);
+    CHECK(f.uiRoot().find("render.plays.capture")->enabled);
+    f.render->setPlays(gui::RenderDialog::Plays::Capture);
+    f.render->refreshPreview();
+    f.frame();
+    json::Value a = f.render->renderArguments();
+    CHECK(a["performance"].asString() == "captured");
+    CHECK_FALSE(a.find("version"));  // the capture's own, the command's default
+    REQUIRE(f.uiRoot().find("render.version.played"));
+    CHECK(f.uiRoot().find("render.version.played")->valueText() ==
+          "As played (v" + std::to_string(played) + ")");
+    CHECK(f.render->asHeardText() == "As heard");
+    REQUIRE(f.uiRoot().find("render.perf.range"));
+    CHECK(f.uiRoot().find("render.perf.range")->valueText().rfind("Bars 1.1.000 – ", 0) == 0);
+    f.snapshot("render-last-capture.png");
+    // The render through the dialog's arguments equals the command's own.
+    json::Value mine = f.render->renderArguments();
+    mine.asObject().erase("analyze");
+    mine["operation"] = "mix";
+    json::Value theirs = json::Value::object();
+    theirs["performance"] = "captured";
+    theirs["operation"] = "mix";
+    json::Value dryMine = run("render.dry-run", json::writeCompact(mine));
+    json::Value dryTheirs = run("render.dry-run", json::writeCompact(theirs));
+    CHECK(json::writeCompact(dryMine["performance"]) ==
+          json::writeCompact(dryTheirs["performance"]));
+    f.render->close();
+    // An edit during the take: not as heard, said in the dialog's words.
+    take(true);
+    f.render->open();
+    f.render->setPlays(gui::RenderDialog::Plays::Capture);
+    f.render->refreshPreview();
+    CHECK(f.render->asHeardText() == "Not as heard: the session was edited during it");
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: a capture at another sample rate is not offered") {
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    // The device grants 44100 where the project runs at 48000.
+    engine::DummyBackend backend(
+        {.mode = engine::DummyBackend::Mode::Manual, .grantedRate = 44100});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    run("launch.capture", R"({"on": true})");
+    run("launch.clip", R"({"clip": "cl_1"})");
+    backend.run(88200 / 256);
+    f.app->tick();
+    run("transport.stop", "{}");
+    f.app->tick();
+    REQUIRE(f.app->launchCapture());
+    REQUIRE(f.app->launchCapture()->sampleRate == 44100);
+    f.render->open();
+    f.frame();
+    auto* capture = f.uiRoot().find("render.plays.capture");
+    REQUIRE(capture);
+    CHECK_FALSE(capture->enabled);
+    CHECK(capture->hint.name ==
+          "Captured at 44100 Hz; the project runs at 48000 Hz. Commit it in the launcher, "
+          "then render the arrangement.");
     f.render->close();
 }
 

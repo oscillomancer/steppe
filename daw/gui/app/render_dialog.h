@@ -20,6 +20,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "supple/engine/app.h"
@@ -62,6 +63,22 @@ class RenderDialog {
     enum class Source { Master, Stems, Regions };
     void setSource(Source source);
     Source source() const;
+    // What a mix or stems render plays (gui.md §4.8, engine.md §3.1): the
+    // arrangement; the launcher's last capture, as it was heard, on the
+    // version it played on ("captured"); or the launcher as it plays now,
+    // over Start and End ({from: "launcher"}). A one-off selector, never
+    // written to the project or a preset; kept while the app runs, and
+    // Arrangement again when the capture it chose is gone. Regions always
+    // play the arrangement.
+    enum class Plays { Arrangement, Capture, Launcher };
+    void setPlays(Plays plays);
+    Plays plays() const { return plays_; }
+    // Why Last capture cannot be chosen now ("" when it can): no capture
+    // with running time, or one made at another sample rate.
+    std::string captureUnavailable();
+    // Last capture's line from the dry run: "As heard", or "Not as heard:
+    // <reasons>" in the dialog's words ("" for the other sources).
+    const std::string& asHeardText() const { return asHeardText_; }
     // add_to_project: the rendered files become items on new tracks (engine).
     void setAddToProject(bool on);
     bool addToProject() const;
@@ -79,8 +96,8 @@ class RenderDialog {
     void runQueue();
     std::vector<std::string> resultFiles() const { return resultFiles_; }
     // Edits a field as typing would (tests, scripts). Ids: render.pattern,
-    // .start, .end, .tail, .sample_rate, .bit_depth, .format, .secondary,
-    // .channels, .normalize, .target, .limit, .mode, .tap, .handles,
+    // .start, .end, .perf.start, .perf.end (the launcher's range), .tail, .sample_rate, .bit_depth,
+    // .format, .secondary, .channels, .normalize, .target, .limit, .mode, .tap, .handles,
     // .threshold, .meta.<member>; other ids are ignored.
     void setField(const std::string& id, const std::string& text);
     // The settings the dialog would render with (complete) and the members it
@@ -162,6 +179,17 @@ class RenderDialog {
     void chooseVersion();
     void openResultMenu(std::size_t index, const ui::Rect& anchor);
     bool clipsHeld() const;  // a track plays a clip, held or stopped: not the arrangement
+    // A performance applies: Last capture or Launcher, and not Regions.
+    bool performance() const;
+    // The performance selector for the commands (engine.md §3.1).
+    json::Value performanceArg() const;
+    // The launcher's default range: from the playhead's bar for the longest
+    // clip playing, in whole bars (four when none plays).
+    void defaultLauncherRange();
+    // A refusal of a performance in the dialog's words, from its code and
+    // path (never its hint); empty for one it does not know.
+    std::string performanceRefusal(const Error& e) const;
+    void buildPerformanceRange(ui::Node& body);
 
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
@@ -175,6 +203,17 @@ class RenderDialog {
     bool ask_ = false;                       // if_exists "Ask" (never written)
     std::string versionChoice_ = "current";  // "current", "branch:<name>", "version:<n>"
     bool clipsHeld_ = false;                 // what the Source section's clips line says
+    Plays plays_ = Plays::Arrangement;
+    std::optional<double> launcherStart_, launcherEnd_;  // beats
+    // The file name under a performance: the pattern plus " performance",
+    // editable, one-off (never written).
+    std::optional<std::string> perfPattern_;
+    std::string asHeardText_;
+    std::optional<std::pair<double, double>> perfRange_;  // the dry run's range, beats
+    bool captureRunning_ = false;    // what the capture's range line says ("so far")
+    std::uint64_t lastPerfMs_ = 0;   // the last dry run for a running capture
+    bool captureOffered_ = false;    // Last capture could be chosen at the last build
+    std::uint64_t lastOfferMs_ = 0;  // when tick() last asked
     // The checked regions when not all are (a one-off selector, never written).
     std::optional<std::vector<std::string>> regions_;
     std::string presetName_;
@@ -191,6 +230,7 @@ class RenderDialog {
     ui::ScrollView* scroll_ = nullptr;
     ui::Label* status_ = nullptr;
     ui::Label* diagnostic_ = nullptr;
+    ui::Label* asHeard_ = nullptr;
     ui::TextBlock* previewBlock_ = nullptr;
     ui::TextBlock* resultsBlock_ = nullptr;
     ui::Node* resultsRow_ = nullptr;
