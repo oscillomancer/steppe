@@ -152,10 +152,11 @@ std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEn
     // heard, for this capture and every later one of that engine. Every
     // engine stop drops the Engine that holds it (EngineApp::haltEngine), so
     // Restart audio, Stop audio and a start, a new rate or buffer, or the
-    // engine's own device restart all begin clean.
+    // engine's own device restart all begin clean, for a new capture: one
+    // kept across the restart keeps its reason, so the words hold for both.
     if (reason == "launch_unlogged")
-        return "a launch was lost from the log since the audio started (Restart audio in Edit > "
-               "Audio device starts clean)";
+        return "a launch was lost from the log before or during it (a new capture after Restart "
+               "audio in Edit > Audio device starts clean)";
     if (reason == "ended_by_engine")
         return endedBy == engine::EngineApp::CaptureEnd::Device
                    ? "the audio device restarted during it"
@@ -613,6 +614,7 @@ void RenderDialog::showRefusal(std::string words, bool ofPreview) {
     // dry run, Render, the Ask check): an action's refusal (a preset, the
     // settings, the queue, a branch, a job) leaves them as they were.
     refusalText_ = std::move(words);
+    refusalOfPreview_ = ofPreview && !refusalText_.empty();
     if (diagnostic_) diagnostic_->setText(refusalText_);
     if (refusalText_.empty()) return;
     if (ofPreview) {
@@ -625,8 +627,14 @@ void RenderDialog::showRefusal(std::string words, bool ofPreview) {
 void RenderDialog::setStatus(std::string message) {
     statusText_ = views::objectNames(app_.head(), message);
     if (status_) status_->setText(statusText_);
-    // An action that succeeded: the red line's refusal is over.
-    if (!statusText_.empty() && !refusalText_.empty()) {
+}
+
+void RenderDialog::actionDone(std::string message) {
+    setStatus(std::move(message));
+    // An action that succeeded: an action's refusal is over. A refusal of
+    // the render the files describe stays until a preview succeeds (Render
+    // is still refused), and a job's progress never clears one.
+    if (!refusalText_.empty() && !refusalOfPreview_) {
         refusalText_.clear();
         if (diagnostic_) diagnostic_->setText("");
     }
@@ -1478,7 +1486,7 @@ void RenderDialog::buildFooter(ui::Node& page) {
         if (auto saved = saveAsDefault(); !saved)
             showRefusal(refusalWords(saved.error(), "The preset could not be saved."));
         else
-            setStatus("saved as your default");
+            actionDone("saved as your default");
     });
     status_ = &actions.emplace<ui::Label>("render.status", statusText_, ui::Font::Ui, "caption",
                                           "ink-quiet");
@@ -1520,7 +1528,7 @@ void RenderDialog::openPresetName() {
         if (auto saved = savePreset(chosen); !saved)
             showRefusal(refusalWords(saved.error(), "The preset could not be saved."));
         else
-            setStatus("saved preset " + chosen);
+            actionDone("saved preset " + chosen);
     };
     name.onSubmit = [save](const std::string&) { save(); };
     buttons.emplace<ui::Button>("render.preset.ok", "Save", save);
@@ -1654,7 +1662,7 @@ Status RenderDialog::loadPreset(const std::string& name) {
             presetName_ = name;
             markDirty();
             rebuild();
-            setStatus("loaded preset " + name + "; Render writes it to the project");
+            actionDone("loaded preset " + name + "; Render writes it to the project");
             return {};
         }
     return Error("render.preset_unknown", "no preset " + name, "/name",
@@ -1688,7 +1696,7 @@ Status RenderDialog::deletePreset(const std::string& name) {
     if (!deleted) return std::move(deleted).error();
     presetName_.clear();
     if (page_) rebuild();
-    setStatus("deleted preset " + name);
+    actionDone("deleted preset " + name);
     return {};
 }
 
@@ -1805,7 +1813,7 @@ void RenderDialog::startJob(std::string command, json::Value args) {
 
 void RenderDialog::run() {
     if (!job_.empty()) {
-        setStatus("a render job is already active; wait for it to finish");
+        showRefusal("A render is already running: wait for it to finish.");
         return;
     }
     if (auto valid = validate(); !valid) {
@@ -1878,7 +1886,7 @@ void RenderDialog::addToQueue() {
         showRefusal(refusalWords(result.error(), "The render could not be queued."));
         return;
     }
-    setStatus("queued " + text(result->find("label")));
+    actionDone("queued " + text(result->find("label")));
     refreshQueueButton();
 }
 
@@ -1918,7 +1926,7 @@ void RenderDialog::openQueue() {
         (void)dispatcher_.execute({"render.queue.remove", std::move(a), kUiOrigin});
         root_.closePopup();
         refreshQueueButton();
-        setStatus("queue cleared");
+        actionDone("queue cleared");
     });
     buttons.emplace<ui::Button>("render.queue.close", "Close", [this] { root_.closePopup(); });
     root_.openPopup(std::move(panel), {}, ui::Placement::Center);
@@ -1926,7 +1934,7 @@ void RenderDialog::openQueue() {
 
 void RenderDialog::runQueue() {
     if (!job_.empty()) {
-        setStatus("a render job is already active; wait for it to finish");
+        showRefusal("A render is already running: wait for it to finish.");
         return;
     }
     json::Value a = json::Value::object();
@@ -2096,7 +2104,7 @@ void RenderDialog::openResultMenu(std::size_t index, const ui::Rect& anchor) {
                      return dispatcher_.execute({"item.add", item, kUiOrigin});
                  });
              if (done)
-                 setStatus("added to the project");
+                 actionDone("added to the project");
              else
                  showRefusal(
                      refusalWords(done.error(), "The render could not be added to the project."));
@@ -2112,7 +2120,7 @@ void RenderDialog::openResultMenu(std::size_t index, const ui::Rect& anchor) {
                  a["version"] = version;
                  auto made = dispatcher_.execute({"branch.create", a, kUiOrigin});
                  if (made) {
-                     setStatus("switched to branch " + a["name"].asString());
+                     actionDone("switched to branch " + a["name"].asString());
                      return;
                  }
                  if (made.error().code != "branch.exists") {
@@ -2359,9 +2367,10 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
     if (c == "engine.bridge_failed" || c == "engine.fx_failed" || c == "engine.patch_unpatchable" ||
         c == "engine.start_failed" || c == "engine.process_error")
         return "A plug-in failed during the render.";
+    if (c == "plugin.unknown") return "A plug-in the render uses is not installed.";
     // The file writers and the encoders.
-    if (c == "file.write" || c == "file.open" || c == "file.sync" || c == "audio.write" ||
-        c == "audio.encode")
+    if (c == "file.write" || c == "file.open" || c == "file.sync" || c == "file.sync_published" ||
+        c == "file.sync_directory" || c == "audio.write" || c == "audio.encode")
         return "The file could not be written. Check that the renders folder is on a drive "
                "with space and can be written to.";
     if (c == "engine.too_long" || c == "engine.range" || c == "engine.tail")

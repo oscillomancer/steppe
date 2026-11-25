@@ -2276,9 +2276,10 @@ project is drawn in the quiet ink, with "from your default" on hover.
       played changed during it, an edit or a clip's return to the
       arrangement; the playback rate changed during it; live input was heard;
       audio dropped out during it; a plug-in failed before or during it; a
-      launch was lost from the log since the audio started (Restart audio in
-      Edit > Audio device starts clean: every engine stop drops the engine
-      that holds the loss), `launch_unlogged`; the engine
+      launch was lost from the log before or during it (a new capture after
+      Restart audio in Edit > Audio device starts clean: every engine stop
+      drops the engine that holds the loss, and a capture kept across it
+      keeps the reason), `launch_unlogged`; the engine
       stopped, or the audio device restarted, during it, from the capture's
       `endedBy`; an unknown reason as its code in words). After a render
       the results start with the same line, from the render's own result,
@@ -2288,10 +2289,14 @@ project is drawn in the quiet ink, with "from your default" on hover.
       Ask check, Add to queue, Add to the project, presets, settings,
       Branch from this version, a field's own error) is shown once, on the
       red line under the sections; the status line keeps to what an action
-      did, and an action that succeeds clears the red line. The files go
-      only when the render they describe is refused (the preview, Render,
-      the Ask check, a field's error); an action's refusal leaves them as
-      they were. It reads in the dialog's words from its code and path
+      did and a job's progress. The files go only when the render they
+      describe is refused (the preview, Render, the Ask check, a field's
+      error), and that refusal stays until a preview succeeds, since Render
+      is still refused. An action's refusal leaves the files as they were,
+      and an action that succeeds clears it; a job's progress or its end
+      never clears a refusal. Render or Run queue while a job runs is
+      refused there too: "A render is already running: wait for it to
+      finish." It reads in the dialog's words from its code and path
       together (one code can have several causes), never the engine's
       message, its hint, a path or a command name
       (`RenderDialog::refusalWords`, the audio device dialog's rule), and

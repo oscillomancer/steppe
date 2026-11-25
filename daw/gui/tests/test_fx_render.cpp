@@ -579,8 +579,11 @@ TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words")
         CHECK_FALSE(words.empty());
         CHECK(words != asCode);
     }
-    CHECK(gui::RenderDialog::reasonWords("launch_unlogged", End::None)
-              .find("Restart audio in Edit > Audio device") != std::string::npos);
+    // True for a capture kept across Restart audio too (round 179 F3): the
+    // restart is for a new capture.
+    CHECK(gui::RenderDialog::reasonWords("launch_unlogged", End::None) ==
+          "a launch was lost from the log before or during it (a new capture after Restart audio "
+          "in Edit > Audio device starts clean)");
     CHECK(gui::RenderDialog::reasonWords("given", End::None).empty());
     CHECK(gui::RenderDialog::reasonWords("from_launcher", End::None).empty());
     CHECK(gui::RenderDialog::reasonWords("something_new", End::None) == "something new");
@@ -671,6 +674,9 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
              {"file.sync", ""},
              {"audio.write", ""},
              {"audio.encode", ""},
+             {"file.sync_published", ""},
+             {"file.sync_directory", ""},
+             {"plugin.unknown", ""},
              {"cl.unknown", "/performance/launches/1/clip"},
              {"tr.unknown", "/performance/launches/1/track"},
              {"render.preset_unknown", ""},
@@ -957,11 +963,15 @@ TEST_CASE(
     CHECK(f.render->refusal() == "That preset is not found.");
     CHECK(f.render->preview() == files);
     CHECK(f.render->statusText().empty());
+    // An action that succeeds clears an action's refusal, with no tick and
+    // no refresh (round 179 probe A): Delete preset reports on the status
+    // line only.
     REQUIRE(f.render->savePreset("r177"));
-    f.render->tick();
-    f.frame();
+    preset->onChange("gone");
+    REQUIRE(f.render->refusal() == "That preset is not found.");
+    REQUIRE(f.render->deletePreset("r177"));
+    CHECK(f.render->statusText() == "deleted preset r177");
     CHECK(f.render->refusal().empty());
-    CHECK(f.render->preview() == files);
 
     // A renders folder under a folder that cannot be written: the job fails.
     const auto locked = f.dir / "locked";
@@ -992,6 +1002,81 @@ TEST_CASE(
           "The file name or the renders folder cannot be used: check the folder, or choose "
           "another name.");
     CHECK(f.render->statusText().empty());
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: a refusal of the preview outlives an action's success") {
+    // Round 179 F1 (probe B): Save as default rebuilds nothing, so nothing
+    // asks the preview again; the refusal of the render the files describe
+    // stays on the red line, as Render is still refused.
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute(
+        {"track.add", json::parse(R"({"name": "Bass"})").value(), kTestOrigin}));
+    f.render->open();
+    f.render->setDebounceMs(0);
+    f.frame();
+    f.render->setField("render.end", "3");
+    f.render->refreshPreview();
+    REQUIRE_FALSE(f.render->preview().empty());
+    f.render->setSource(gui::RenderDialog::Source::Regions);  // no region: nothing to render
+    f.render->refreshPreview();
+    f.frame();
+    const std::string refused = f.render->refusal();
+    REQUIRE(refused == "No checked region has anything to render.");
+    REQUIRE(f.render->preview().empty());
+    for (int i = 0; i < 12; ++i) {
+        f.render->tick();
+        f.frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    REQUIRE(f.render->refusal() == refused);
+    REQUIRE(f.click("render.default"));
+    for (int i = 0; i < 3; ++i) {
+        f.render->tick();
+        f.frame();
+    }
+    CHECK(f.render->statusText() == "saved as your default");
+    CHECK(f.render->refusal() == refused);
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: a running job's refusals stay on the red line") {
+    // Round 179 F2 (probe C): Render while a job runs is refused on the red
+    // line, and the job's progress lines never clear a refusal.
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute(
+        {"track.add", json::parse(R"({"name": "Bass"})").value(), kTestOrigin}));
+    f.render->open();
+    f.render->setDebounceMs(0);
+    f.frame();
+    f.render->setField("render.end", "200");  // a job long enough to report progress
+    f.render->refreshPreview();
+    auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    f.render->run();
+    if (f.render->job().empty()) {
+        MESSAGE("the job ended at once; not checked");
+        return;
+    }
+    f.render->run();
+    CHECK(f.render->refusal() == "A render is already running: wait for it to finish.");
+    CHECK(f.render->statusText().find("already") == std::string::npos);
+    preset->onChange("gone");
+    REQUIRE(f.render->refusal() == "That preset is not found.");
+    int polls = 0;
+    for (; polls < 200 && !f.render->job().empty(); ++polls) {
+        f.render->tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    INFO("after " << polls << " polls: status " << f.render->statusText());
+    CHECK(f.render->refusal() == "That preset is not found.");
+    for (int i = 0; i < 6000 && !f.render->job().empty(); ++i) {
+        f.render->tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(f.render->refusal() == "That preset is not found.");  // nor does its end
     f.render->close();
 }
 

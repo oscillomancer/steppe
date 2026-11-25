@@ -183,7 +183,9 @@ class RenderDialog {
     void numberField(const std::string& id, const std::string& text,
                      std::function<Status(double)> apply);
     void markDirty();
-    void setStatus(std::string text);
+    void setStatus(std::string text);  // what an action did, or a job's progress
+    // An action that succeeded: its status, and an action's refusal is over.
+    void actionDone(std::string text);
     // The red line ("" clears it); `ofPreview`: the render the files
     // describe was refused, so they go too.
     void showRefusal(std::string words, bool ofPreview = false);
@@ -260,7 +262,8 @@ class RenderDialog {
     std::optional<std::vector<std::string>> regions_;
     std::string presetName_;
     std::string previewText_, statusText_, refusalText_, job_, folderText_;
-    bool mixJob_ = false;  // the job is File → Mix
+    bool refusalOfPreview_ = false;  // the red line refuses the render the files describe
+    bool mixJob_ = false;            // the job is File → Mix
     std::vector<std::string> resultFiles_;
     json::Value results_ = json::Value::array();
     bool dirty_ = true;
