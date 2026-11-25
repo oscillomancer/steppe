@@ -2262,6 +2262,15 @@ TEST_CASE("launcher: a locked item under a fade-out's tail counts in a refused t
     REQUIRE(capture.set(true));
     const double b0 = f.exec("launch.clip", R"({"clip":"cl_3"})")["beat"].asDouble();
     REQUIRE(f.runUntil([&] { return f.playingBeat() >= b0 + 1; }, b0, "Root heard", service));
+    SUBCASE("the pad alone") {}
+    SUBCASE("Kit A, then the pad: the run's last launch has the tail") {
+        // Review round 173 re-check H1: the refusal names Kit A, the run's
+        // first launch; the tail is the pad's.
+        const double kit = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+        REQUIRE(kit >= b0 + 4);
+        REQUIRE(
+            f.runUntil([&] { return f.playingBeat() >= kit + 1; }, kit, "Kit A heard", service));
+    }
     const double b1 = f.exec("launch.clip", R"({"clip":")" + pad + R"("})")["beat"].asDouble();
     REQUIRE(b1 >= b0 + 4);
     const auto lockAt = [&](double beat) {
@@ -2283,7 +2292,7 @@ TEST_CASE("launcher: a locked item under a fade-out's tail counts in a refused t
     capture.service();
     REQUIRE(refused.size() == 1);
     CHECK(refused[0].code == "item.locked");
-    CHECK(refused[0].path.ends_with("/performance/launches/1"));
+    CHECK(refused[0].path.ends_with("/performance/launches/1"));  // Drums' first launch
     REQUIRE(f.app->launchCapture());
     REQUIRE(f.app->launchCapture()->endBeat < b1 + 8);  // the tail's item is past the take
     const std::string line = capture.keptLine();

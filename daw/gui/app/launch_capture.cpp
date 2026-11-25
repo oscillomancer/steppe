@@ -82,10 +82,19 @@ std::string CaptureControl::refusalWords(const Error& e) {
         // The commit clears under an audio clip's fade-out still sounding at
         // the take's end, at most one period past it (launch_commit's
         // playsOutTo): the window reaches that far, so an item locked there
-        // is counted (review round 173 F4). A MIDI clip ends at the take.
+        // is counted (review round 173 F4). The refusal names the first
+        // launch of the run away from the arrangement; the tail is the last
+        // one's, the last launch on that track in the take (round 173
+        // re-check H1). A MIDI clip, a return or a stop ends at the take.
         double last = v ? v->endBeat : 0;
-        if (const model::Clip* clip = at ? s.clips.find(at->clip) : nullptr;
-            v && clip && clip->kind != model::ClipKind::Midi && clip->length > 0 &&
+        const engine::LaunchLogEntry* tail = nullptr;
+        if (at && v)
+            for (const auto& l : v->capture.launches)
+                if (l.track == at->track) tail = &l;
+        if (const model::Clip* clip = tail && tail->action == engine::LaunchLogEntry::Action::Clip
+                                          ? s.clips.find(tail->clip)
+                                          : nullptr;
+            clip && clip->kind != model::ClipKind::Midi && clip->length > 0 &&
             clip->fadeOut.length > 0)
             last = s.timeMap->beatAt(s.timeMap->secondsAt(v->endBeat) + clip->length);
         const model::Item* found = nullptr;
