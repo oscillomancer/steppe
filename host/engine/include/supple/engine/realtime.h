@@ -1363,6 +1363,10 @@ class Engine {
     // returned it to the arrangement (carryLaunch); older entries no longer
     // say what it plays.
     std::map<model::Id, std::size_t> launchReset_;
+    // Main thread: each such return as an arrangement launch, placed where
+    // an immediate one would have been (quantize none) when the engine took
+    // the plan, so a capture running then records it (launchCapture).
+    std::vector<LaunchLogEntry> launchReturns_;
     std::uint64_t launchCheckedGen_ = UINT64_MAX;  // the plan generation last checked
     // The rate controls of the plan last checked (serviceLaunches): a
     // change voids the launches placed on the old trajectory.
@@ -1438,6 +1442,9 @@ class Engine {
         LoopRange loop;
         bool placed = false;  // LaunchCapture's
         std::uint64_t version = 0, committedIn = 0;
+        // launchReset_ as it stood when it began: what each track played
+        // then is judged by it, not by a reset since (a clip removed later).
+        std::map<model::Id, std::size_t> resets;
     };
     CaptureState capture_;
     void placeCapture();       // a pending start, once the clock reads

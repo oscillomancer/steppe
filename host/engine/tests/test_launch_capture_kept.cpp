@@ -297,6 +297,7 @@ TEST_CASE("an undo of the commit makes a kept capture uncommitted again; a redo 
     live.emplace(p, kInCallback, kBlock, 48000 * 4);
     CHECK(warningsOf(p.run("launch.capture", R"({"on": true})")).find("this capture replaces") !=
           std::string::npos);
+    (void)p.run("engine.stop", "{}");  // before its backend goes with `live`
     live.reset();
 }
 
@@ -387,6 +388,10 @@ TEST_CASE("a commit merged into main from a branch counts as committed") {
     p.run("branch.create", R"({"name": "idea"})");
     (void)p.run("launch.commit", "{}");
     CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    // An edit after it on the branch: the merge's last step replays that,
+    // so the merge finds the commit through its replays or second parent
+    // (review round 168 recheck 2 S2).
+    p.run("track.add", R"({"name": "On idea"})");
     p.run("branch.switch", R"({"name": "main"})");
     CHECK(commitOf(p) == EngineApp::CaptureCommit::Undone);  // main has not got it
     p.run("track.add", R"({"name": "Main moved"})");
@@ -428,4 +433,157 @@ TEST_CASE("a rolled-back launch.commit leaves the capture unmarked") {
     CHECK(commitOf(p) == EngineApp::CaptureCommit::None);
     CHECK(p.app->captureUncommitted());
     CHECK(p.app->captureKeptWarning());
+}
+
+TEST_CASE("a commit stays committed while edits after it squash history") {
+    // Review round 168 recheck 2 F2: without the pin, a budget squash folds
+    // the commit's version into the next one, and the walk passes below it.
+    Project p;
+    p.run("project.set", R"({"history_budget_bytes": 1})");
+    keptTake(p);
+    (void)p.run("launch.commit", "{}");
+    p.run("track.add", R"({"name": "E1"})");
+    p.run("track.add", R"({"name": "E2"})");
+    p.run("track.add", R"({"name": "E3"})");
+    CHECK(p.run("history.list", "{}")["truncated"].asBool());
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    CHECK_FALSE(p.app->captureUncommitted());
+}
+
+TEST_CASE("a commit merged twice stays committed when only the last merged step is undone") {
+    // Review round 168 recheck 2 F1: committed on a, merged into c, then c
+    // merged into main (two replayed steps, neither a fast-forward). Undoing
+    // only main's last merged step leaves the head on a replay of c's
+    // replay of the commit: a replayed step stands for its source.
+    Project p;
+    keptTake(p);
+    p.run("branch.create", R"({"name": "a"})");
+    (void)p.run("launch.commit", "{}");
+    p.run("branch.switch", R"({"name": "main"})");
+    p.run("track.add", R"({"name": "Main 1"})");
+    p.run("branch.create", R"({"name": "c"})");
+    json::Value first = p.run("branch.merge", R"({"from": "a", "into": "c"})");
+    CHECK_FALSE(first["fast_forward"].asBool());
+    p.run("track.add", R"({"name": "On c"})");
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    p.run("branch.switch", R"({"name": "main"})");
+    p.run("track.add", R"({"name": "Main 2"})");
+    json::Value second = p.run("branch.merge", R"({"from": "c"})");
+    CHECK_FALSE(second["fast_forward"].asBool());
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    p.run("history.undo", "{}");  // c's own edit, replayed last
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    CHECK_FALSE(p.app->captureUncommitted());
+    p.run("history.undo", "{}");  // the commit's replay too: undone
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Undone);
+}
+
+namespace {
+// Plays cl_1 from bar 2 (frame 96000), captures from frame 100096 to
+// 150016 with `midway` run at frame 120064, and ends the capture.
+template <class F>
+void heldTake(Project& p, AppLive& live, F&& midway) {
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(782 * kBlock);  // 100096
+    p.run("launch.capture", R"({"on": true})");
+    live.until(938 * kBlock);  // 120064
+    midway();
+    live.until(150016);
+    p.run("launch.capture", R"({"on": false})");
+}
+
+json::Value commitResult(Project& p) {
+    json::Value out = json::Value::object();
+    out["commit"] = p.run("launch.commit", "{}");
+    return out;
+}
+
+// launch.commit refused for the removed cl_1, the capture kept.
+void refusedForRemovedClip(Project& p) {
+    const auto before = p.app->launchCapture();
+    REQUIRE(before);
+    auto r = p.bus->execute({"launch.commit", json::Value::object(), kOrigin});
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "launch.commit");
+    CHECK(r.error().path == "/args/performance/launches/0/clip");
+    CHECK(r.error().message.find("cl_1") != std::string::npos);
+    const auto after = p.app->launchCapture();
+    REQUIRE(after);
+    CHECK(after->capture.launches.size() == before->capture.launches.size());
+}
+}  // namespace
+
+TEST_CASE("a clip removed after its capture keeps what it played, and commits once restored") {
+    // Q3 (round 168): the clip playing as the capture began stays in it
+    // when a plan returns its track to the arrangement later; the commit
+    // refuses the removed clip, and after the removal is undone writes what
+    // a commit before the removal writes.
+    json::Value twin;
+    {
+        Project q;
+        twoTracks(q);
+        AppLive live(q, kInCallback, kBlock, 48000 * 4);
+        heldTake(q, live, [] {});
+        twin = commitResult(q);
+    }
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    heldTake(p, live, [] {});
+    const auto taken = p.app->launchCapture();
+    REQUIRE(taken);
+    REQUIRE(taken->capture.launches.size() == 1);  // cl_1, from frame 0
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    const auto kept = p.app->launchCapture();
+    REQUIRE(kept);
+    CHECK(kept->capture.launches.size() == 1);
+    refusedForRemovedClip(p);
+    p.run("history.undo", "{}");
+    CHECK(commitResult(p) == twin);
+}
+
+TEST_CASE("a clip removed mid-capture is kept up to its return to the arrangement") {
+    // Q3 (round 168): the plan's return is an arrangement launch where an
+    // immediate launch.arrangement would have landed: the same capture and
+    // commit as that launch, once the removal is undone.
+    const model::Id tr1{model::Kind::Track, 1};
+    json::Value twin;
+    std::vector<LaunchLogEntry> twinLaunches;
+    {
+        Project q;
+        twoTracks(q);
+        AppLive live(q, kInCallback, kBlock, 48000 * 4);
+        heldTake(q, live, [&] {
+            const Engine::LaunchRequest back{tr1, LaunchLogEntry::Action::Arrangement, {}, {}};
+            REQUIRE(q.app->engine()->launch(std::span(&back, 1), model::LaunchQuantize::None));
+        });
+        twinLaunches = q.app->launchCapture()->capture.launches;
+        twin = commitResult(q);
+    }
+    REQUIRE(twinLaunches.size() == 2);
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    heldTake(p, live, [&] { p.run("clip.remove", R"({"clip": "cl_1"})"); });
+    const auto view = p.app->launchCapture();
+    REQUIRE(view);
+    const auto& got = view->capture.launches;
+    REQUIRE(got.size() == 2);
+    CHECK(got[0].action == LaunchLogEntry::Action::Clip);
+    CHECK(got[0].runningFrame == 0);
+    CHECK(got[1].action == LaunchLogEntry::Action::Arrangement);
+    CHECK(got[1].track == tr1);
+    // Heard from the first block after the removal.
+    const std::int64_t back = view->capture.startSample + got[1].runningFrame;
+    CHECK(back >= 120064);
+    CHECK(back <= 120064 + 2 * kBlock);
+    CHECK(got[1].runningFrame == twinLaunches[1].runningFrame);
+    CHECK(got[1].songFrame == twinLaunches[1].songFrame);
+    CHECK(got[1].anchorSample == twinLaunches[1].anchorSample);
+    CHECK(got[1].anchorBeat == twinLaunches[1].anchorBeat);
+    refusedForRemovedClip(p);
+    p.run("history.undo", "{}");
+    CHECK(commitResult(p) == twin);
 }
