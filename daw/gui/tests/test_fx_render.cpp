@@ -442,8 +442,9 @@ TEST_CASE("the render dialog's Plays row: a performance renders its own range, o
     auto* seamless = dynamic_cast<ui::Checkbox*>(f.uiRoot().find("render.seamless"));
     REQUIRE(seamless);
     CHECK_FALSE(seamless->enabled);
-    CHECK_FALSE(seamless->checked());              // the saved loop does not apply
-    CHECK_FALSE(f.uiRoot().find("render.range"));  // the arrangement's range row is gone
+    CHECK_FALSE(seamless->checked());                // the saved loop does not apply
+    CHECK_FALSE(f.uiRoot().find("render.asheard"));  // no empty row for the launcher
+    CHECK_FALSE(f.uiRoot().find("render.range"));    // the arrangement's range row is gone
     REQUIRE(f.uiRoot().find("render.perf.start"));
     // The launcher's range, typed in bars as the transport writes them.
     f.render->setField("render.perf.start", "3");
@@ -572,6 +573,16 @@ TEST_CASE("the render dialog's Last capture: as heard, on the version it played 
     json::Value dryTheirs = run("render.dry-run", json::writeCompact(theirs));
     CHECK(json::writeCompact(dryMine["performance"]) ==
           json::writeCompact(dryTheirs["performance"]));
+    // Back to the arrangement: the as-heard line goes with the rebuild, and a
+    // preview after it writes to nothing left behind (asan: no dangling label).
+    f.render->setPlays(gui::RenderDialog::Plays::Arrangement);
+    f.render->refreshPreview();
+    f.frame();
+    CHECK_FALSE(f.uiRoot().find("render.asheard"));
+    f.render->setPlays(gui::RenderDialog::Plays::Capture);
+    f.render->refreshPreview();
+    f.frame();
+    CHECK(f.render->asHeardText() == "As heard");
     f.render->close();
     // An edit during the take: not as heard, said in the dialog's words.
     take(true);

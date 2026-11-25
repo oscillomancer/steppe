@@ -644,6 +644,7 @@ void RenderDialog::rebuild() {
     body_->clear();
     patternField_ = nullptr;
     folder_ = nullptr;
+    asHeard_ = nullptr;  // only Last capture builds it again
     buildSource(*body_);
     buildRange(*body_);
     buildOutput(*body_);
@@ -2216,8 +2217,10 @@ void RenderDialog::buildPerformanceRange(ui::Node& body) {
             caption(r, std::string(id) + ".time", timeText(tm.secondsAt(value)), 64);
         }
     }
-    asHeard_ = &body.emplace<ui::Label>("render.asheard", asHeardText_, ui::Font::Ui, "caption",
-                                        asHeardText_ == "As heard" ? "ink" : "ink-quiet");
+    // The last capture's as-heard line; the launcher has none, so no empty row.
+    if (plays_ == Plays::Capture)
+        asHeard_ = &body.emplace<ui::Label>("render.asheard", asHeardText_, ui::Font::Ui, "caption",
+                                            asHeardText_ == "As heard" ? "ink" : "ink-quiet");
 }
 
 bool RenderDialog::clipsHeld() const {
