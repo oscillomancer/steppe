@@ -297,6 +297,7 @@ TEST_CASE("an undo of the commit makes a kept capture uncommitted again; a redo 
     live.emplace(p, kInCallback, kBlock, 48000 * 4);
     CHECK(warningsOf(p.run("launch.capture", R"({"on": true})")).find("this capture replaces") !=
           std::string::npos);
+    (void)p.run("engine.stop", "{}");  // before its backend goes with `live`
     live.reset();
 }
 
