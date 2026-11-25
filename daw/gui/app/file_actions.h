@@ -146,7 +146,11 @@ class FileActions {
     void showNotice(const std::string& id, const std::string& title, const std::string& text);
     // Runs `project.plugins {args}` through safe-load, then `then` with its result; nothing when
     // the question is cancelled. Without safe-load, `then` at once with an empty object.
-    void checked(json::Value args, std::function<bool(const json::Value&)> then);
+    // `what` titles the discard question asked again when the decision's
+    // revision, a recording or the launcher's take changed while the
+    // safe-load question was open.
+    void checked(const std::string& what, json::Value args,
+                 std::function<bool(const json::Value&)> then);
     SafeLoad* safeLoad_ = nullptr;
     CaptureControl* capture_ = nullptr;
     ui::Root& root_;

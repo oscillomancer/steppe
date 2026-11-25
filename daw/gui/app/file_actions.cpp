@@ -482,35 +482,38 @@ void FileActions::recoverProjectAutosave(const std::string& autosave, std::uint6
         json::Value check = json::Value::object();
         check["autosave"] = true;
         if (!autosave.empty()) check["autosave_file"] = autosave;
-        checked(std::move(check), [this, autosave, same](const json::Value& found) {
-            if (!same()) {
-                showError(
-                    "Another project was opened while the question was open; nothing was "
-                    "loaded.");
-                return false;
-            }
-            json::Value args = json::Value::object();
-            args["autosave"] = true;
-            // The file the check read is the file recovered.
-            if (!autosave.empty())
-                args["autosave_file"] = autosave;
-            else if (const json::Value* read = found.find("autosave"); read && read->isString())
-                args["autosave_file"] = read->asString();
-            auto r = exec("project.recover", std::move(args));
-            if (!r) return false;
-            ui_.selectedTracks.clear();
-            ui_.selectedItems.clear();
-            // Not marked saved: the file on disk is still the older version.
-            std::string text =
-                "Opened the newest autosave in place of the saved file. It is not saved yet: "
-                "save it to keep it.";
-            if (const json::Value* warnings = r->find("warnings"); warnings && warnings->isArray())
-                for (const auto& w : warnings->asArray())
-                    if (const json::Value* m = w.find("message"); m && m->isString())
-                        text += "\n" + m->asString();
-            showNotice("file.recovered", "Recovered the autosave", text);
-            return true;
-        });
+        checked(
+            "Open the newer autosave?", std::move(check),
+            [this, autosave, same](const json::Value& found) {
+                if (!same()) {
+                    showError(
+                        "Another project was opened while the question was open; nothing was "
+                        "loaded.");
+                    return false;
+                }
+                json::Value args = json::Value::object();
+                args["autosave"] = true;
+                // The file the check read is the file recovered.
+                if (!autosave.empty())
+                    args["autosave_file"] = autosave;
+                else if (const json::Value* read = found.find("autosave"); read && read->isString())
+                    args["autosave_file"] = read->asString();
+                auto r = exec("project.recover", std::move(args));
+                if (!r) return false;
+                ui_.selectedTracks.clear();
+                ui_.selectedItems.clear();
+                // Not marked saved: the file on disk is still the older version.
+                std::string text =
+                    "Opened the newest autosave in place of the saved file. It is not saved yet: "
+                    "save it to keep it.";
+                if (const json::Value* warnings = r->find("warnings");
+                    warnings && warnings->isArray())
+                    for (const auto& w : warnings->asArray())
+                        if (const json::Value* m = w.find("message"); m && m->isString())
+                            text += "\n" + m->asString();
+                showNotice("file.recovered", "Recovered the autosave", text);
+                return true;
+            });
     });
 }
 
@@ -531,33 +534,35 @@ void FileActions::recoverSession(const std::string& session, const std::string& 
     confirmDiscard("Recover \"" + title + "\"?", [this, session, title] {
         json::Value check = json::Value::object();
         check["session"] = session;
-        checked(std::move(check), [this, session, title](const json::Value&) {
-            json::Value args = json::Value::object();
-            args["session"] = session;
-            auto r = exec("project.recover", std::move(args));
-            if (!r) return false;
-            ui_.selectedTracks.clear();
-            ui_.selectedItems.clear();
-            // Not marked saved: it is unsaved until the user saves it.
-            std::string text;
-            if (const json::Value* a = r->find("autosave"); a && a->isString())
-                text = "Opened from its newest readable autosave.";
-            else
-                text = "It had no autosave: a new project holds what could be put back.";
-            if (const json::Value* back = r->find("recovered");
-                back && back->isArray() && !back->asArray().empty())
-                text += " " +
-                        plural(static_cast<std::int64_t>(back->asArray().size()), "recording was",
-                               "recordings were") +
-                        " put back (Undo removes them).";
-            text += " It is not saved yet: save it to keep it.";
-            if (const json::Value* warnings = r->find("warnings"); warnings && warnings->isArray())
-                for (const auto& w : warnings->asArray())
-                    if (const json::Value* m = w.find("message"); m && m->isString())
-                        text += "\n" + m->asString();
-            showNotice("file.recovered", "Recovered \"" + title + "\"", text);
-            return true;
-        });
+        checked("Recover \"" + title + "\"?", std::move(check),
+                [this, session, title](const json::Value&) {
+                    json::Value args = json::Value::object();
+                    args["session"] = session;
+                    auto r = exec("project.recover", std::move(args));
+                    if (!r) return false;
+                    ui_.selectedTracks.clear();
+                    ui_.selectedItems.clear();
+                    // Not marked saved: it is unsaved until the user saves it.
+                    std::string text;
+                    if (const json::Value* a = r->find("autosave"); a && a->isString())
+                        text = "Opened from its newest readable autosave.";
+                    else
+                        text = "It had no autosave: a new project holds what could be put back.";
+                    if (const json::Value* back = r->find("recovered");
+                        back && back->isArray() && !back->asArray().empty())
+                        text += " " +
+                                plural(static_cast<std::int64_t>(back->asArray().size()),
+                                       "recording was", "recordings were") +
+                                " put back (Undo removes them).";
+                    text += " It is not saved yet: save it to keep it.";
+                    if (const json::Value* warnings = r->find("warnings");
+                        warnings && warnings->isArray())
+                        for (const auto& w : warnings->asArray())
+                            if (const json::Value* m = w.find("message"); m && m->isString())
+                                text += "\n" + m->asString();
+                    showNotice("file.recovered", "Recovered \"" + title + "\"", text);
+                    return true;
+                });
     });
 }
 
@@ -633,18 +638,40 @@ void FileActions::showError(const std::string& message) {
     if (actions_.onError) actions_.onError(message);
 }
 
-void FileActions::checked(json::Value args, std::function<bool(const json::Value&)> then) {
+void FileActions::checked(const std::string& what, json::Value args,
+                          std::function<bool(const json::Value&)> then) {
     if (!safeLoad_) {
         (void)then(json::Value::object());
         return;
     }
-    safeLoad_->check(std::move(args), std::move(then));
+    // The safe-load question stays open as long as the person leaves it: what
+    // the discard decision covered can change meanwhile (an agent's edit or
+    // capture, a take refused). Then the decision is asked again, which
+    // finalizes, instead of loading (review round 171 F1). The answers given
+    // are set back with the load that did not happen, so the load asks them
+    // again after the new decision.
+    const auto generation = app_.projectGeneration();
+    const auto version = app_.head().version;
+    const auto branch = app_.versions().branch();
+    const std::string take = keptTake();
+    json::Value again = args;
+    safeLoad_->check(std::move(args), [this, what, generation, version, branch, take,
+                                       again = std::move(again),
+                                       then = std::move(then)](const json::Value& found) {
+        if (!currentProject(generation)) return false;
+        const bool changed = app_.head().version != version || app_.versions().branch() != branch ||
+                             (app_.engine() && app_.engine()->recording()) ||
+                             (capture_ && (capture_->lit() || keptTake() != take));
+        if (!changed) return then(found);
+        confirmDiscard(what, [this, what, again, then] { checked(what, again, then); });
+        return false;
+    });
 }
 
 void FileActions::openPath(const std::filesystem::path& path) {
     json::Value check = json::Value::object();
     check["path"] = path.string();
-    checked(std::move(check), [this, path](const json::Value& found) {
+    checked("Open another project?", std::move(check), [this, path](const json::Value& found) {
         json::Value args = json::Value::object();
         args["path"] = path.string();
         // The bytes the check read are the bytes opened.
@@ -907,7 +934,7 @@ void FileActions::loadTemplate(const std::string& name) {
     json::Value check = json::Value::object();
     check["path"] = where;
     check["template"] = true;
-    checked(std::move(check), load);
+    checked("Start a new project from \"" + name + "\"?", std::move(check), load);
 }
 
 Status FileActions::import(const std::vector<std::filesystem::path>& files) {
