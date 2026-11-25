@@ -1387,8 +1387,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `track.duplicate {tracks}` (each copy right after its original: settings,
   both chains with live settings, items and takes — unpooled MIDI copied —,
   sends, record input, and the envelopes on the track, its plug-ins, sends and
-  takes; not a folder's children, sends into it or item groups; masters are
-  refused), `track.list` (q); templates `track.template.save {track, name}`
+  takes; the modulation routes into its take FX (Modulation, M5; the routes
+  into its chain and input-chain FX are not copied); not a folder's children,
+  sends into it or item groups; masters are refused), `track.list` (q); templates `track.template.save {track, name}`
   (a), `track.template.load {name}` (a new strip under the master),
   `track.template.list` (q), `track.template.delete` (a).
   `track.move` defaults `parent` to the current parent and `index` to the
@@ -2126,26 +2127,80 @@ record the base only.
 `modulation.cycle` at the route's path with a hint.
 - The source module exists, is a Mod Out, and `input` is one of its inputs.
 - The target object exists.
-- An FX target is in a track's chain or input chain (not a take's chain or
-  a plugin module).
+- An FX target is in a track's chain or input chain, or (step M5, amended
+  2026-11-25) in a take's chain, the take an item's or a clip's; never in a
+  plugin module.
 - A track target is a channel or buss for `width`.
 - A route target carries audio between strips or is a rack send.
 - No two routes share both source input and target.
 - No cycle: each route is an edge from its source's rack to the node that
-  applies its target (the target FX's track, the track, or the node that
-  applies a send's level), counted with the routes, parent sends and racks
-  of §3.
+  applies its target (the target FX's track; for a take FX, the track that
+  holds its take's item or clip; the track; or the node that applies a
+  send's level), counted with the routes, parent sends and racks of §3.
 - At most 4096 routes per project.
 
 Removing the source module, or the target's FX, track or route, removes its
 modulation routes, and the command warns with `modulation.removed` naming
-them, at `/modulations/<id>`. A route whose target stops fitting (a
+them, at `/modulations/<id>`. For a take FX, removing its take, or its item or
+clip (directly, or with its scene or track), counts as removing the FX. So
+does a bake that replaces the takes (`item.consolidate`, `item.apply-fx
+{mode: replace}`). A route whose target stops fitting (a
 modulated send turned MIDI or moved to other ends by `route.set`) is
 removed the same way, with the same warning. Routes whose target is in a frozen track belong to its freeze hash.
 Editing or removing them fails with `track.frozen`. Their source lies
 outside the print, as a sidechain's does: removing the source module (or
 its rack or home track) still removes such a route, and the frozen track
 keeps playing its print.
+
+**Take FX (step M5, ADR-0096 amended 2026-11-25; the contract, not yet
+built).** The target of a route to a take FX is stored as any FX target is,
+`{object: fx_*, param}`, and no field is added.
+- **Its track.** The take's item or clip decides the track. That track
+  gives the route's node, its freeze, and the `track` filter of
+  `modulation.list`.
+- **Shared rules.** A take FX takes the same parameters, refusals and
+  depth as a chain FX: modulatable, or reached through an active envelope
+  (M4). A frozen track fails with `track.frozen`.
+- **`modulation.list`.** It adds `owner`, `{item, take}` or `{clip, take}`,
+  to a route whose target is a take FX.
+
+**Copies (a copy sounds like the original; the co-director's ruling of
+2026-11-25, Nate's to overrule).**
+- **What is copied.** A command that copies a take also copies, in the same
+  undo step, each route whose target is an FX of the copied chain, onto the
+  copy's FX. The copy keeps the route's source, parameter, depth, `enabled`
+  and `lane`.
+- **The commands.** They are the commands that copy takes (`copyTake`):
+  - `item.duplicate`, `item.paste` and `item.split`;
+  - `item.add {clip}`, `clip.add {item}`, `scene.capture` and
+    `clip.duplicate`;
+  - `scene.insert`, `arrangement.build`, `track.duplicate` and
+    `launch.commit`;
+  - the new take of a MIDI overdub, and a follow merge.
+- **A split.** `item.split` leaves both halves with the routes: the right
+  half's FX are copies, each with its own routes.
+- **Heal.** `item.heal` joins pieces only when their FX match route by route
+  (the same source, parameter, depth, `enabled` and `lane`), and refuses
+  otherwise with `item.heal_fx`. The right-hand routes go with the
+  right-hand FX, with `modulation.removed`.
+- **A route that cannot be copied.** It is dropped, and the command warns
+  `modulation.not_copied` at `/modulations/<id>` of the original. The
+  message names the copy's FX and the reason:
+  - `source`: the source does not exist in the destination, such as a paste
+    from a retained version whose Mod Out has since been removed;
+  - `cycle`: the copy lands on a track the source rack hears.
+  - The rest of the copy goes ahead.
+- **Too many routes.** A copy that would take the project past 4096 routes
+  is refused whole with `modulation.limit` at the command's copied object,
+  with a hint to remove routes first.
+- **Not copied.** A route whose source is inside the copied chain and whose
+  target is outside it is not copied. Today a source is always a rack's
+  Mod Out, so the case cannot arise.
+- **Moves.** A command that moves a take to another track keeps its routes:
+  `item.move`, `clip.move`, `take.extract`, and `item.explode-takes {mode:
+  tracks}`. A move that would close a cycle is refused with
+  `modulation.cycle` at the command's track argument, naming the route,
+  with a hint to remove the route or choose another track.
 
 **Commands.**
 - `modulation.add` and `modulation.set` also check what the model cannot
@@ -2171,7 +2226,7 @@ keeps playing its print.
   (`modulation.depth`): ±1 for a plug-in parameter, ±48 dB for a volume,
   ±200 % for pan and width.
 - Errors: `modulation.source`, `modulation.target`, `modulation.envelope`,
-  `modulation.duplicate`,
+  `modulation.duplicate`, `modulation.not_copied` (a warning on a copy, M5),
   `modulation.cycle` (naming the route that closes it), `modulation.depth`,
   `modulation.limit`. Each carries `code`, `message`, `path` and a `hint`.
 - Stacking: an enabled route added (`modulation.add`, and `modulate`, which adds

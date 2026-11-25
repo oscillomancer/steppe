@@ -142,7 +142,12 @@ a structural edit while the preceding plan remains prepared.
   `delay = S(v) + b - S(u) - a`. Pre-FX taps have offset zero, other main
   taps and auxiliary source channels use the source chain latency. Key
   destinations use `stage.before`; main sums and auxiliary destinations use
-  zero. Each auxiliary link participates separately. Padding remains on
+  zero. Each auxiliary link participates separately. A modulation edge's
+  destination offset (§1.4.1) can be negative: for a mixer target in a chain
+  of under 32 samples, and for a take-chain stage, whose chain runs ahead of
+  the track. The same two formulas hold. The edge sets a minimum on the
+  target's forward arrival: the source's arrival plus `a` less `b`. The
+  delay stays non-negative. Padding remains on
   shorter fan-out paths; independent sources arrive at a sum aligned without
   padding the faster source. Parallel FX retain their internal alignment.
 - The same main-master anchor is used in realtime and offline plans. Nodes
@@ -301,7 +306,8 @@ until it is released.
 - **Edges.** Every route, enabled or not, is an edge from its source rack's
   node to the node that applies its target; `enabled` only zeroes its
   contribution (ADR-0096, amendment M-l). That is the track for an FX in a chain
-  and for a track's mixer targets; for a send's level it is the node that
+  or in a take's chain (the track that holds the take's item or clip; M5,
+  below) and for a track's mixer targets; for a send's level it is the node that
   applies the level (the source strip, or the rack for a rack send). The
   edge orders the source first in `topoOrder`, is a dependency in both
   executors' schedules, and joins the latency solve (§1.3) as a sidechain
@@ -321,6 +327,55 @@ until it is released.
   A late source path delays the target as a sidechain does. Cycles are
   refused at edit time (`modulation.cycle`); self-modulation is not
   supported.
+- **Take FX targets (M5, ADR-0096 amended 2026-11-25; the contract, not yet
+  built).** A route into an FX of a take's chain is an edge into the track
+  that holds the take's item or clip.
+  - **`ModEdge`.** It names its chain (`takeChain`, an index into
+    `Node::takeChains`, found by the take's id) and the stage in it
+    (`takeStage`). `prepare` binds the CLAP id and the `mods` slots or the
+    lane (M4) on that stage, as on a chain stage.
+  - **A take the plan does not play.** When the plan compiles no chain for
+    the take (an inactive take, an item the plan leaves out), the edge
+    keeps `takeChain` −1. Its `before` is 0, as a frozen track's FX's, and
+    it sends nothing.
+  - **Its `before`.** A take chain runs ahead of the track: an item's chain
+    by its own latency (`TakeChain::latency`), a clip's chain by the node's
+    `launchLead`. Stage k of the chain therefore processes timeline sample
+    t where the track's input plays t − (lead − before_k). The edge's
+    `before` is `itemShift − S + before_k − lead`. Here `itemShift − S` is
+    0 on a channel, and the chain's latency on a master, whose items play
+    after its chain.
+  - **The solve.** That `before` is never positive. §1.3's formulas take it
+    unchanged: the target's forward arrival rises to the source's arrival
+    plus the tap less `before`. Where the track has less read-ahead than
+    the take chain's lead, the track waits for its source, by at most the
+    lead plus the tap. A late source path does the same (above).
+  - **A negative `before` elsewhere.** It is not new to the solve. A mixer
+    target's is already negative under 32 samples of chain latency.
+  - **The delay.** It runs every block at the node (`processNode` step 0),
+    whether or not the take chain runs, so the values stay
+    timeline-aligned for a chain entered mid-block.
+  - **Delivery.** `processTake` and `processClipChain` call
+    `modulateStage` for each of their stages after the stage's automation,
+    on the node's absolute grid. That is the same grid as the track's
+    chain, with the same origin.
+  - **When a chain does not run.** A chain that does not run in a block
+    (outside its item, a clip not playing or coming in, stopped) is sent
+    nothing, and its memo goes stale.
+  - **Resets.** A chain starts afresh when it is entered, and a clip's at
+    each launch. That `reset()` moves `modulationEpoch()`, so its first
+    grid point sends every modulated parameter, as after a play start.
+  - **Carrying across compiles.** `carryStages` already carries take-chain
+    stages, so the memo and the slots carry as on a chain stage.
+  - **Lanes.** A take FX lane bound to a route (M4) sends its summed value
+    at its usual points. On a clip, those points are in clip time (§1.4.2,
+    C2), and the 32-frame points follow the node's grid.
+  - **Under a master playrate.** The lead, `before_k` and the delay are in
+    device frames, as for a chain stage.
+  - **What it costs.** Modulating a take FX can add up to its chain's lead
+    to its track's arrival, and only where the track lacks that much
+    read-ahead. The added cost reaches the output's latency only when this
+    path is the longest.
 - **Liveness.** A modulation edge propagates liveness both ways, like a MIDI
   edge (§2.1): a live source makes its target live, and a live target pulls
   its source live. A route's source and target therefore always share an
@@ -5066,7 +5121,10 @@ No special normalization of drifting stored FX state is performed. Corresponding
 FX envelopes retain their full matching original curves/automation. Take-relative
 envelopes may join constant or linear seam continuations, with copied automation
 rebased to the original origin. An unrecoverable nonlinear seam refuses with
-`item.heal_envelope`; differing stored FX refuse with `item.heal_fx`. Other
+`item.heal_envelope`; differing stored FX refuse with `item.heal_fx`, and so do
+corresponding FX whose modulation routes differ (the same source, parameter,
+depth, `enabled` and `lane` per route; ADR-0096 M5, the contract). The
+right-hand routes go with the right-hand FX (`modulation.removed`). Other
 incompatibilities use `item.heal_incompatible`, all with a Consolidate hint.
 
 All original left-side warp peers must be represented by compatible selected

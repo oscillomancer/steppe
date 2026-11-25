@@ -41,6 +41,95 @@ bound to that parameter's automation lane (§"Targets", Step M4).
 - **Recording.** A write mode records what the plug-in reports minus the
   route's current offset, clamped to the range.
 
+*Amended 2026-11-25 (step M5, take FX targets; the contract, written before
+the code):* a route may target an FX in a take's chain, on an arrangement
+item's take or a launcher clip's. Everything above holds for it, with the
+differences below.
+- **Targets.** The parameters are the same as for a chain FX: CLAP
+  parameters flagged modulatable, or any automatable continuous parameter
+  through its envelope (M4). The lane of a clip's take FX runs in clip time
+  (ADR-0097, amended 2026-11-20, C2), and its base is what that lane plays.
+  The FX of plugin modules stay out of scope.
+- **The target's node.** It is the track that holds the take's item or
+  clip. That track is the edge's end for order, cycles, liveness, freeze
+  and the latency solve, as the track of a chain FX is. A take belongs to
+  one item or one clip, so a route reaches at most one stage.
+  - The plan compiles a take chain only for a take it plays. A route into
+    the FX of any other take (an inactive take, an item the plan leaves
+    out) is still an edge, by amendment M-l: its `before` is 0, as for a
+    frozen track's FX, and it sends nothing.
+  - Activating that take compiles, as a take activation always does.
+- **Timing: a negative `before`.** A take chain runs ahead of its track by
+  its lead `L`: an item's chain by its own latency, a launcher clip's by the
+  node's launch lead.
+  - Where the track's input plays timeline sample t, stage k of the chain
+    is already processing t + (L − before_k).
+  - So the value for t must arrive that much earlier. The edge's `before`
+    is before_k − L, plus the chain latency for a master's items, which
+    play after the master's chain. It is never positive.
+  - The solve's formulas are unchanged. A negative `before` raises the
+    target's forward arrival (source arrival + tap − before), and the delay
+    S(target) + before − S(source) − tap stays non-negative.
+  - Where the track has less read-ahead than the take chain's lead, the
+    track waits for its source. That is the existing rule that a late
+    source path delays its target, with a larger requirement: at most L
+    plus the source's tap.
+  - A negative `before` is not new to the solve. A mixer target's is
+    already negative when its chain has under 32 samples of latency
+    (Lookahead, below).
+  - Under a master playrate all of this is in device frames, as now.
+- **Delivery.** Unchanged.
+  - `PARAM_MOD` goes out on the absolute 32-frame grid of the node's
+    position, which every stage of that node shares.
+  - The memo carries by (fx, param) and goes stale on the instance's
+    epoch.
+  - A take chain starts afresh each time it is entered, and a clip's at
+    each launch. That reset moves the instance's `modulationEpoch`, so the
+    first grid point after it sends every modulated parameter, as a play
+    start does.
+  - A chain that does not run in a block is sent nothing, and its memo
+    goes stale.
+- **Copies: a copy sounds like the original.** This is the co-director's
+  ruling of 2026-11-25; Nate may overrule it.
+  - **What is copied.** A command that copies a take also copies, in the
+    same undo step, each route whose target is an FX of the copied chain.
+    The copy targets the copy's FX, with the same source, parameter,
+    depth, `enabled` and `lane`.
+  - **Which commands.** Every command that copies a take: duplicating,
+    pasting or splitting an item; laying a clip on the timeline (by hand,
+    a scene insert or an arrangement build); capturing items into clips;
+    duplicating a clip or a track; committing a performance; an overdub's
+    new take; a MIDI merge.
+  - **A split.** Both halves keep the routes: the right half's FX are
+    copies, each with its own routes.
+  - **Dropped routes.** A route is not copied when its source does not
+    exist in the destination. Today that is a paste from a retained
+    version whose Mod Out has since been removed. A route is also not
+    copied when the copy would close a cycle, because the copy lands on a
+    track the source rack hears.
+    - The command then answers a `modulation.not_copied` warning per
+      route, never silently.
+    - A copy into another project would drop every route, because its
+      ids name other objects there. No command makes one today.
+  - **Routes out of the chain.** A route whose source is inside the copied
+    chain and whose target is outside it is not copied. Today that case
+    cannot arise: a source is a rack's Mod Out, never a take FX.
+  - **The route limit.** A copy that would take the project past 4096
+    routes is refused whole, with `modulation.limit`.
+- **Moves.** A command that changes the track holding the take keeps its
+  routes: moving an item or clip to another track, extracting a take, or
+  exploding takes onto tracks. One that would close a cycle is refused
+  with `modulation.cycle`, naming the route.
+- **Heal.** `item.heal` joins pieces only when their routes match FX by FX,
+  as their stored FX must; it refuses otherwise with `item.heal_fx`.
+- **Removal.** Removing a take FX, its take, or its item or clip (directly,
+  or with its scene or track) removes its routes with `modulation.removed`,
+  as `fx.remove` does. A bake that replaces the takes (`item.consolidate`,
+  `item.apply-fx {mode: replace}`) removes the baked FX and their routes
+  the same way.
+- **Freeze.** The routes into take FX on a frozen track are in its freeze
+  hash, as its take envelopes are.
+
 ## Context
 
 Nate asked for modulators: any parameter can be modulated, and racks are the
@@ -171,7 +260,8 @@ The same rule holds for every new kind (amendment G-c).
   - VST3 parameters. The VST3 host never sets the flag
     (`vst3_host.cpp`, parameter info), and it drops `ParamMod` events.
   - CLAP parameters without the flag, or flagged read-only or bypass.
-  - Take FX and the FX of plugin modules: later.
+  - Take FX and the FX of plugin modules: later. (Take FX: step M5,
+    amended 2026-11-25, above.)
   - Switches: mute, solo, bypass, phase invert, mono.
   - Playrate and tempo.
   - A route that closes a cycle.
@@ -373,6 +463,7 @@ inert.
 | M2b | builder | The other stock plug-ins mark their continuous parameters modulatable (never ones that restart the plug-in or change latency) |
 | M3 | gui-lead | One parameter menu, the same in the mixer and the track panel: MIDI learn…, Modulate ▸ (greyed where `fx.describe` reports the parameter not `modulatable`, M-b), Show lane. MIDI learn moves off the bare right-click into that menu, with a dated note on ADR-0058 and the manual's change (M-k). The `mod` slot lists the racks of the strip's track that hold a Mod Out. Rings and bars, lanes keyed by target, the FX parameter list. gui.md and the ADR-0058 note come with M3 |
 | M4 | lead | Modulation through an envelope (above) |
+| M5 | lead | Take FX targets, items' and clips' (amended 2026-11-25, above): the model and the commands, the copy rule, the edge into a take-chain stage with its negative `before`, and the runtime pass on take-chain stages |
 
 ## Consequences
 
