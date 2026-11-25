@@ -2377,8 +2377,14 @@ does. Schema codes of a malformed argument are every command's and are
 not listed. A broken render default or preset file answers the `file.*`
 read codes, a schema code, or `json.parse.<what>` (the JSON parser's),
 declared as the family `json.parse.*` by every command that reads one: a
-client matches a family's code by its prefix. A test lints the files
-these commands reach (the render sources, source preparation, the
+client matches a family's code by its prefix. An error from reading the
+user's render default has its path under `/default`, in every command
+that loads it (the renders, the dry run, `render.queue.add` and `.run`,
+`render.settings`, `render.preset.list`, `render.preset.load` with
+`default`, and `render.preset.save` without `settings`): the file's own
+codes at `/args/default`, a member's at `/args/default/settings/…`. That
+tells a reader's `file.open` from a writer's, which share the code. A
+test lints the files these commands reach (the render sources, source preparation, the
 offline pass, the preset files, the JSON parser and the writers) per
 command: each render against the render sources, less the codes one
 render answers and another does not (`region.unknown`; a performance's

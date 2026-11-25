@@ -18,6 +18,7 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+#include "native_files.h"
 #include "render_commands.h"
 
 using namespace supple;
@@ -488,11 +489,65 @@ TEST_CASE(
         const Error e = r.fails(name, args);
         INFO("code " << e.code << " | hint " << e.hint);
         CHECK(e.code.rfind("json.parse.", 0) == 0);
+        CHECK(e.path == "/args/default");  // read from the default (round 184 F2)
         const cmd::CommandInfo* info = r.registry.find(name);
         REQUIRE(info);
         CHECK(std::any_of(info->errors.begin(), info->errors.end(),
                           [](const cmd::ErrorSpec& s) { return s.code == "json.parse.*"; }));
     }
+    // A member the schema refuses keeps its place in the file, under /default.
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << R"({"schema": "supple.render-preset/1.0", "name": "default",)"
+            << R"( "settings": {"tail_s": "long"}})";
+    }
+    const Error member = r.fails("render.mix", "{}");
+    INFO("code " << member.code << " | path " << member.path);
+    CHECK(member.path.rfind("/args/default/settings/", 0) == 0);
+}
+
+TEST_CASE(
+    "a render default that cannot be read answers file.open at /default, told from a write "
+    "(round 184 F2)") {
+    // file.open is core-base's code for a file that cannot be opened, to
+    // read or to write. Only the path says the default was being read.
+    Rig r;
+    r.song();
+    r.run("render.preset.save", R"({"default":true,"settings":{"tail_s":1}})");
+    const fs::path file = r.dir.path / "render-presets" / "default.json";
+    REQUIRE(fs::exists(file));
+    {
+#ifdef _WIN32
+        // Another program holding the file open without sharing.
+        const test::ExclusiveHold held(file);
+        REQUIRE(held.held());
+#else
+        if (::geteuid() == 0) {
+            MESSAGE("running as root: a mode-000 file can still be read; skipped");
+            return;
+        }
+        fs::permissions(file, fs::perms::none);
+        struct Restore {
+            fs::path path;
+            ~Restore() {
+                std::error_code ec;
+                fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write, ec);
+            }
+        } restore{file};
+#endif
+        for (const char* name : {"render.mix", "render.settings"}) {
+            INFO(name);
+            const Error e = r.fails(name, "{}");
+            INFO("code " << e.code << " | path " << e.path << " | hint " << e.hint);
+            CHECK(e.code == "file.open");
+            CHECK(e.path == "/args/default");
+            const cmd::CommandInfo* info = r.registry.find(name);
+            REQUIRE(info);
+            CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                              [](const cmd::ErrorSpec& s) { return s.code == "file.open"; }));
+        }
+    }
+    r.run("render.settings", "{}");  // readable again
 }
 
 TEST_CASE(

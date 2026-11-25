@@ -47,7 +47,9 @@ int outputSampleRate(const rs::Output& output, int chainRate);
 // The render-presets folder: AppOptions::renderPresetDir, else
 // <workdir>/render-presets.
 std::filesystem::path renderPresetDir(const EngineApp& app);
-// The user's default (default.json), if there is one.
+// The user's default (default.json), if there is one. An error reading it
+// (file.*, json.parse.*, a schema code) has a path under /default, so a
+// caller tells it from a write's (engine.md §3.1).
 Result<std::optional<rs::Settings>> loadRenderDefault(const EngineApp& app);
 struct RenderPreset {
     std::string name;

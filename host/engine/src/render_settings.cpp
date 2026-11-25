@@ -70,6 +70,14 @@ Result<rs::Settings> readPreset(const fs::path& path) {
     }
     return presetSettings(std::move(decoded->settings));
 }
+
+// Puts an error from reading the user's default under /default: the file's
+// own codes (file.*, json.parse.*) at /default, a member's at
+// /default/settings/....
+void markDefault(Error& error) {
+    error.path = "/default" + error.path;
+    for (auto& detail : error.details) markDefault(detail);
+}
 }  // namespace
 
 rs::Settings projectRenderSettings(const model::Project& project) {
@@ -212,7 +220,13 @@ Result<std::optional<rs::Settings>> loadRenderDefault(const EngineApp& app) {
     std::error_code ec;
     if (!fs::exists(path, ec)) return std::optional<rs::Settings>{};
     auto settings = readPreset(path);
-    if (!settings) return std::move(settings).error();
+    if (!settings) {
+        // file.open is the readers' and the writers' code alike: the path
+        // tells a caller this one came from reading the default (round 184).
+        auto error = std::move(settings).error();
+        markDefault(error);
+        return error;
+    }
     return std::optional<rs::Settings>(std::move(*settings));
 }
 
