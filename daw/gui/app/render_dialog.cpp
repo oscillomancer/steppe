@@ -112,7 +112,9 @@ std::string sourceKey(RenderDialog::Source s) {
 // is not a capture. An unknown reason reads as its code in words.
 std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEnd endedBy) {
     if (reason == "began_mid_run") return "the capture began while playing";
-    if (reason == "edited_during") return "the session was edited during it";
+    // An edit, or a clip's return to the arrangement (removed, frozen or
+    // over the memory budget) during it.
+    if (reason == "edited_during") return "the session or a clip it played changed during it";
     if (reason == "playrate_changed") return "the playback rate changed during it";
     if (reason == "live_input") return "live input was heard";
     if (reason == "dropout") return "audio dropped out during it";
@@ -524,10 +526,13 @@ json::Value RenderDialog::renderArgs(bool forJob) const {
     for (const auto& m : chosen.asObject()) a[m.key] = m.value;
     if (performance()) {
         // The performance's range is its own: bounds and the loop do not
-        // apply (render.args refuses them). Last capture renders on the
-        // version it played on, the command's default.
-        for (const char* key : {"bounds", "start_beat", "end_beat", "seamless_loop", "regions"})
+        // apply (render.args refuses them). A saved bounds is ignored, but a
+        // saved seamless loop would be refused, so the call turns it off.
+        // Last capture renders on the version it played on, the command's
+        // default.
+        for (const char* key : {"bounds", "start_beat", "end_beat", "regions"})
             a.asObject().erase(key);
+        a["seamless_loop"] = false;
         if (plays_ == Plays::Capture)
             for (const char* key : {"version", "branch"}) a.asObject().erase(key);
         a["performance"] = performanceArg();
@@ -1253,7 +1258,8 @@ void RenderDialog::buildLoudness(ui::Node& body) {
 
 void RenderDialog::buildProcessing(ui::Node& body) {
     const json::Value& trim = member("trim");
-    const bool seamless = flag(settings_.find("seamless_loop"));
+    // A performance plays once: the saved loop does not apply to it.
+    const bool seamless = flag(settings_.find("seamless_loop")) && !performance();
     const bool set_ = flag(trim.find("start")) || flag(trim.find("end")) || seamless;
     auto& fold = body.emplace<ui::FoldSection>("render.processing", "Processing", set_);
     std::string summary;

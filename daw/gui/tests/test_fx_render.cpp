@@ -383,7 +383,8 @@ TEST_CASE("the render dialog says renders leave out the clips playing now") {
 
 TEST_CASE("the render dialog's Plays row: a performance renders its own range, once") {
     // engine.md §3.1: Last capture or Launcher sends `performance`, never
-    // bounds, regions or a seamless loop; Regions play the arrangement. The
+    // bounds or regions, and turns a saved seamless loop off (the engine
+    // refuses one with a performance); Regions play the arrangement. The
     // file name gets an editable " performance", never written.
     Fixture f;
     if (!f.ok) return;
@@ -394,6 +395,9 @@ TEST_CASE("the render dialog's Plays row: a performance renders its own range, o
     run("track.add", R"({"name": "Bass"})");
     run("scene.add", R"({"name": "A"})");
     run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    // Saved with a seamless loop and a tail, and a saved range.
+    run("project.set",
+        R"({"render": {"seamless_loop": true, "tail_s": 2, "bounds": "custom", "start_beat": 4, "end_beat": 12}})");
     f.render->open();
     f.frame();
     // No capture: Last capture is off, and its hint says why.
@@ -411,8 +415,20 @@ TEST_CASE("the render dialog's Plays row: a performance renders its own range, o
     CHECK(a["performance"]["from"].asString() == "launcher");
     CHECK(a["performance"]["start_beat"].asDouble() == 0);
     CHECK(a["performance"]["end_beat"].asDouble() == 16);  // four bars: nothing plays
-    for (const char* key : {"bounds", "start_beat", "end_beat", "seamless_loop", "regions"})
+    for (const char* key : {"bounds", "start_beat", "end_beat", "regions"})
         CHECK_MESSAGE(!a.find(key), key);
+    REQUIRE(a.find("seamless_loop"));
+    CHECK_FALSE(a["seamless_loop"].asBool());
+    {
+        // The engine takes it: the saved loop is not refused, the saved range
+        // not used.
+        json::Value dry = a;
+        dry.asObject().erase("analyze");
+        dry["operation"] = "mix";
+        auto r = f.dispatcher->execute({"render.dry-run", dry, kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        CHECK((*r)["range"]["start_beat"].asDouble() == 0);
+    }
     // The file name: the pattern plus " performance", one-off.
     CHECK(a["pattern"].asString() == pattern + " performance");
     auto* name = dynamic_cast<ui::TextField*>(f.uiRoot().find("render.pattern"));
@@ -423,7 +439,10 @@ TEST_CASE("the render dialog's Plays row: a performance renders its own range, o
     CHECK_FALSE(f.render->projectSettings().find("pattern"));
     // Regions and the seamless loop are off under a performance.
     CHECK_FALSE(f.uiRoot().find("render.src.regions")->enabled);
-    CHECK_FALSE(f.uiRoot().find("render.seamless")->enabled);
+    auto* seamless = dynamic_cast<ui::Checkbox*>(f.uiRoot().find("render.seamless"));
+    REQUIRE(seamless);
+    CHECK_FALSE(seamless->enabled);
+    CHECK_FALSE(seamless->checked());              // the saved loop does not apply
     CHECK_FALSE(f.uiRoot().find("render.range"));  // the arrangement's range row is gone
     REQUIRE(f.uiRoot().find("render.perf.start"));
     // The launcher's range, typed in bars as the transport writes them.
@@ -452,7 +471,8 @@ TEST_CASE("the render dialog's Launcher range starts at the playhead's bar, for 
     run("scene.add", R"({"name": "A"})");
     // Six beats: the range rounds up to whole bars (two).
     run("clip.add",
-        R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:w | C3:h"})");
+        R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:w | C3:h r:h"})");
+    run("clip.set", R"({"clip": "cl_1", "length": 6})");
     engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
     struct StopEngine {
         engine::EngineApp& app;
@@ -499,12 +519,27 @@ TEST_CASE("the render dialog's Last capture: as heard, on the version it played 
     const auto take = [&](bool edit) {
         run("launch.capture", R"({"on": true})");
         run("launch.clip", R"({"clip": "cl_1"})");
+        // Stopped, a launch only queues: play (the second take follows a stop).
+        if (!run("launch.state", "{}")["playing"].asBool()) run("transport.play", "{}");
         backend.run(96000 / 256);
         f.app->tick();
-        if (edit) run("track.set", R"({"track": "tr_1", "volume_db": -3})");
+        // An edit that compiles a plan (a mix parameter alone does not).
+        if (edit) {
+            run("item.add", R"({"track": "tr_1", "bar": 3, "notation": "voice bass; 1: E3:w"})");
+            // The engine loads it once its sources are prepared (a worker),
+            // on a later pass.
+            const auto start = std::chrono::steady_clock::now();
+            while (f.app->engine()->latestSession()->items.empty()) {
+                REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(1));
+                backend.run(1);
+                f.app->tick();
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        }
         backend.run(96000 / 256);
         f.app->tick();
         run("transport.stop", "{}");
+        backend.run(1);  // the stop heard, so the next take sees it stopped
         f.app->tick();
     };
     take(false);
@@ -543,7 +578,8 @@ TEST_CASE("the render dialog's Last capture: as heard, on the version it played 
     f.render->open();
     f.render->setPlays(gui::RenderDialog::Plays::Capture);
     f.render->refreshPreview();
-    CHECK(f.render->asHeardText() == "Not as heard: the session was edited during it");
+    CHECK(f.render->asHeardText() ==
+          "Not as heard: the session or a clip it played changed during it");
     f.render->close();
 }
 

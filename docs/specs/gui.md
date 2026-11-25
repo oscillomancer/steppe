@@ -2246,15 +2246,19 @@ project is drawn in the quiet ink, with "from your default" on hover.
       (Last capture: a read-only line, "Bars 1.1.000 – 3.1.000 · 0:04.000",
       the dry run's `range` once it answers, "so far" while the capture
       runs, the preview asked again once a second meanwhile), and no
-      `bounds`, `seamless_loop` or `regions` is sent: the Regions toggle and
-      the seamless loop are off, with hints saying why, and under Regions
-      the Plays toggles are off ("Regions render the arrangement").
+      `bounds` or `regions` is sent; `seamless_loop: false` is, since the
+      engine refuses a seamless loop with a performance even when only the
+      project's saved settings turn it on (a saved range is ignored). The
+      Regions toggle and the seamless loop are off, with hints saying why,
+      the loop shown unchecked, and under Regions the Plays toggles are off
+      ("Regions render the arrangement").
     - The file name gets " performance" after the pattern, editable and
       one-off (`pattern` in the call; the project's pattern stays).
     - **As heard** (Last capture): the dry run's `as_heard` shows under the
       range, "As heard" or "Not as heard: " and the reasons in the dialog's
-      words (the capture began while playing; the session was edited
-      during it; the playback rate changed during it; live input was heard;
+      words (the capture began while playing; the session or a clip it
+      played changed during it, an edit or a clip's return to the
+      arrangement; the playback rate changed during it; live input was heard;
       audio dropped out during it; a plug-in failed during it; the engine
       stopped, or the audio device restarted, during it, from the capture's
       `endedBy`; an unknown reason as its code in words). After a render
