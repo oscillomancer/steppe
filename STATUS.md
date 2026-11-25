@@ -381,8 +381,13 @@ instructions are in `docs/guides/installing.md`.
       the pane never arms over an uncommitted take;
     - a clip removed (or frozen, or past the memory budget) while a capture
       runs is kept up to its track's return to the arrangement, which is
-      recorded up to one block after the plan reached the executors, or not
-      at all when a playrate change is on its way (`launch.later`): the
+      recorded at unity up to an immediate launch's floor after the plan
+      reached the executors (about a block in-callback, a render block or
+      two with the anticipative renderer), under a master playrate where
+      the plan hands over, or not at all when a playrate change is on its
+      way (`launch.later`); a removal undone within one executor block (a
+      client that sends without waiting) still cuts the clip in the
+      capture, though the executors played it on: the
       commit writes the clip's stretch to there (after the removal is
       undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one
