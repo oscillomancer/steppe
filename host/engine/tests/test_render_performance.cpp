@@ -7,6 +7,7 @@
 #include <supple/audio/audio_file.h>
 #include <optional>
 #include "clip_player_support.h"
+#include "engine_test_access.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -253,10 +254,10 @@ json::Value laterCapture(Project& p, AppLive& live, F&& edit) {
 }
 }  // namespace
 
-TEST_CASE("a removal undone before the executors took it leaves the track uncertain (K1)") {
-    // The executors may have skipped the plan without cl_1: launch.state
-    // says so, and a later capture with no edit of its own is not as heard,
-    // until tr_1 is launched again.
+TEST_CASE("a removal undone before the executors took it is not a return (round 172 K1)") {
+    // The executor went from the plan with cl_1 to the one with it again:
+    // it never returned tr_1, and acked nothing. launch.state says cl_1,
+    // and a later capture with no edit of its own lacks only a play start.
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 5);
@@ -264,29 +265,30 @@ TEST_CASE("a removal undone before the executors took it leaves the track uncert
         p.run("clip.remove", R"({"clip": "cl_1"})");
         p.run("history.undo", "{}");  // no block between
     });
-    CHECK(playsOf(p, "tr_1") == "uncertain");
-    CHECK_FALSE(dry["as_heard"].asBool());
+    CHECK(playsOf(p, "tr_1") == "clip");
+    CHECK(EngineTestAccess::launchReturns(*p.app->engine()).empty());
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
-    CHECK(why.find("\"launch_state_uncertain\"") != std::string::npos);
-    CHECK(why.find("\"edited_during\"") == std::string::npos);
-    // Launched again: known.
-    p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 3, frame 192000
-    live.until(1600 * kBlock);
-    CHECK(playsOf(p, "tr_1") == "clip");
+    CHECK(why == R"(["began_mid_run"])");
 }
 
-TEST_CASE("a removal the executors took, then an edit, leaves no uncertainty (K1)") {
+TEST_CASE("a removal the executors took, then its undo, is a return (round 174)") {
+    // The executor returned tr_1 at the removal's next block; the undo brings
+    // cl_1 back to the plan, not to the track: launch.state says the
+    // arrangement, and a capture after both lacks only a play start.
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 4);
     json::Value dry = laterCapture(p, live, [&] {
         p.run("clip.remove", R"({"clip": "cl_1"})");
         live.until(801 * kBlock);  // a block: the executor takes the plan
-        p.run("track.add", R"({"name": "After"})");
+        p.run("history.undo", "{}");
     });
-    CHECK(playsOf(p, "tr_1") != "uncertain");  // (no clips: not listed)
+    CHECK(playsOf(p, "tr_1") == "arrangement");
+    const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
+    REQUIRE(returns.size() == 1);
+    CHECK(returns[0].runningFrame == 800 * std::int64_t(kBlock));
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
-    CHECK(why.find("\"launch_state_uncertain\"") == std::string::npos);
+    CHECK(why == R"(["began_mid_run"])");
 }

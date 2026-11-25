@@ -766,24 +766,9 @@ void Engine::serviceLaunches() {
     for (auto* ring : {rendererLaunchAcks_.get(), callbackLaunchAcks_.get()}) {
         LaunchAck ack;
         while (ring->pop(ack)) {
-            if (ack.returned) {  // where the executor really returned the track
-                LaunchLogEntry r;
-                r.runningFrame = ack.stream;
-                r.track = {model::Kind::Track, static_cast<std::uint32_t>(ack.track)};
-                r.action = LaunchLogEntry::Action::Arrangement;
-                if (ack.clip != 0)
-                    r.clip = {model::Kind::Clip, static_cast<std::uint32_t>(ack.clip)};
-                r.epoch = ack.epoch;
-                LaunchClock clock;
-                r.songFrame = launchClock(clock) && clock.epoch == ack.epoch
-                                  ? unitySongBase(clock) + ack.stream
-                                  : -1;
-                const bool seen = std::any_of(ackedReturns_.begin(), ackedReturns_.end(),
-                                              [&](const LaunchLogEntry& e) {
-                                                  return e.track == r.track && e.epoch == r.epoch &&
-                                                         e.runningFrame == r.runningFrame;
-                                              });
-                if (!seen) ackedReturns_.push_back(r);
+            if (ack.returned) {  // where an executor returned the track
+                logReturn(ack);
+                added = true;
                 continue;
             }
             added = true;
@@ -800,36 +785,10 @@ void Engine::serviceLaunches() {
             if (ack.scene != 0)
                 e.scene = model::Id{model::Kind::Scene, static_cast<std::uint32_t>(ack.scene)};
             launchLog_.push_back(e);
-            launchSeq_.push_back(launchSeqNext_++);
-            // A launch on the track: what it plays is known again.
-            std::erase(launchUncertain_, e.track);
-            std::erase_if(unseenReturns_,
-                          [&](const UnseenReturn& u) { return u.track == e.track; });
+            launchIsReturn_.push_back(0);
         }
     }
-    // A return whose plan the executors have taken was heard (round 172 K1).
-    if (!unseenReturns_.empty()) {
-        const std::uint64_t seen = oldestInUse();
-        std::erase_if(unseenReturns_, [&](const UnseenReturn& u) { return seen >= u.generation; });
-    }
-    if (added) {  // the two executors' acks interleave: sorted, each with its sequence
-        std::vector<std::size_t> order(launchLog_.size());
-        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
-        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-            const LaunchLogEntry &x = launchLog_[a], &y = launchLog_[b];
-            return x.epoch != y.epoch ? x.epoch < y.epoch : x.runningFrame < y.runningFrame;
-        });
-        std::vector<LaunchLogEntry> log;
-        std::vector<std::uint64_t> seq;
-        log.reserve(order.size());
-        seq.reserve(order.size());
-        for (const std::size_t i : order) {
-            log.push_back(launchLog_[i]);
-            seq.push_back(launchSeq_[i]);
-        }
-        launchLog_ = std::move(log);
-        launchSeq_ = std::move(seq);
-    }
+    if (added) sortLaunchLog();  // the two executors' acks interleave
     // Waiting for a track or clip the latest plan cannot play (frozen,
     // removed, an audio clip under a pitch-keeping playrate): dropped, with
     // a warning.
@@ -870,54 +829,54 @@ void Engine::serviceLaunches() {
                                 " is an audio clip, which a capture cannot write as heard while "
                                 "the master playrate keeps the pitch");
         }
-    // A track whose last launch's clip the latest plan lacks is back on the
-    // arrangement (carryLaunch does the same in the executors).
+    // A track whose newest launch the latest plan cannot play goes back to
+    // the arrangement in the executors as they adopt it (carryLaunch), which
+    // they ack (logReturn). Under a playrate that is at the plan's handAt:
+    // its song frame is placed now, before the song passes it.
     if (added || publishedGen_ != launchCheckedGen_) {
         launchCheckedGen_ = publishedGen_;
-        std::map<model::Id, std::size_t> last;
-        for (std::size_t i = 0; i < launchLog_.size(); ++i) last[launchLog_[i].track] = i;
-        for (const auto& [track, i] : last) {
-            const LaunchLogEntry& e = launchLog_[i];
-            const auto reset = launchReset_.find(track);
-            if (e.action != LaunchLogEntry::Action::Clip ||
-                (reset != launchReset_.end() && reset->second > launchSeq_[i]))
-                continue;
-            const detail::Node* n = plan ? nodeOf(*plan, track) : nullptr;
-            if (!n || n->players.empty() || detail::playerOf(*n, e.clip) < 0) {
-                launchReset_[track] = launchSeqNext_;
-                // At unity the executors take only the latest plan, so one
-                // replaced before they reach it may never be heard (K1).
-                if (plan && !plan->rateEnabled)
-                    unseenReturns_.push_back({track, e.clip, plan->generation});
-                // A return placed by bound, or none placed (launch.later):
-                // not as heard (edited_during), also where only the
-                // prepared sources changed (a clip past the memory budget).
-                if (capture_.on && !capture_.pending && !capture_.closed)
-                    capture_.facts.edited = true;
-                // Heard as a return to the arrangement: where an immediate
-                // launch.arrangement would land now (the app services the
-                // engine right after each load), for a running capture.
-                const LaunchRequest back{track, LaunchLogEntry::Action::Arrangement, {}, {}};
-                auto placed = placeLaunch(std::span(&back, 1), model::LaunchQuantize::None);
-                // A playrate plan hands over at handAt (prepared here, on the
-                // control thread), which the executors wait for: not before.
-                if (placed && plan && plan->rateEnabled && plan->handEpoch == placed->epoch &&
-                    plan->handAt > placed->stream)
-                    placed = placeRateLaunch(*plan, placed->epoch, plan->handAt,
-                                             model::LaunchQuantize::None);
-                if (placed) {
-                    LaunchLogEntry r;
-                    r.runningFrame = placed->stream;
-                    r.track = track;
-                    r.action = LaunchLogEntry::Action::Arrangement;
-                    r.anchorSample = placed->anchorSample;
-                    r.anchorBeat = placed->anchorBeat;
-                    r.songFrame = placed->songFrame;
-                    r.epoch = placed->epoch;
-                    launchReturns_.push_back({r, launchSeqNext_});
-                }
+        if (plan && plan->rateEnabled)
+            for (const model::Id track : tracksLosingLaunch(plan)) {
+                const bool placedAlready = std::any_of(
+                    returnPlaces_.begin(), returnPlaces_.end(), [&](const ReturnPlace& r) {
+                        return r.track == track && r.generation == plan->generation;
+                    });
+                if (placedAlready) continue;
+                if (auto placed = placeRateLaunch(*plan, plan->handEpoch, plan->handAt,
+                                                  model::LaunchQuantize::None))
+                    returnPlaces_.push_back(
+                        {track, plan->generation, plan->handEpoch, plan->handAt, *placed});
             }
+    }
+    // A return ack lost to a full ring: each track the latest plan cannot
+    // play is logged as returned where an immediate launch.arrangement
+    // would land (the bound the control thread had before the acks), and a
+    // capture running is not as heard (edited_during).
+    if (const auto dropped = returnAcksDropped_.load(std::memory_order_relaxed);
+        dropped != returnAcksDropSeen_) {
+        returnAcksDropSeen_ = dropped;
+        if (capture_.on && !capture_.pending && !capture_.closed) capture_.facts.edited = true;
+        bool any = false;
+        for (const model::Id track : tracksLosingLaunch(plan)) {
+            const LaunchRequest back{track, LaunchLogEntry::Action::Arrangement, {}, {}};
+            const auto placed = placeLaunch(std::span(&back, 1), model::LaunchQuantize::None);
+            if (!placed) continue;
+            LaunchLogEntry r;
+            r.runningFrame = placed->stream;
+            r.track = track;
+            r.action = LaunchLogEntry::Action::Arrangement;
+            r.anchorSample = placed->anchorSample;
+            r.anchorBeat = placed->anchorBeat;
+            r.songFrame = placed->songFrame;
+            r.epoch = placed->epoch;
+            launchLog_.push_back(r);
+            launchIsReturn_.push_back(1);
+            any = true;
         }
+        if (any) sortLaunchLog();
+        warnings_.push_back(
+            "launch: the audio path's report of a return to the arrangement was lost (its queue "
+            "was full): placed where an immediate launch.arrangement would land");
     }
     for (LaunchSlot& s : *launchSlots_) {
         std::uint64_t st = s.state.load(std::memory_order_acquire);
@@ -986,14 +945,13 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
         if (n.players.empty()) continue;
         TrackLaunch tl;
         tl.track = n.id;
-        // The newest heard entry since the track's reset; a newer one not
-        // heard yet is what it has queued.
-        const auto reset = launchReset_.find(n.id);
-        const std::uint64_t from = reset == launchReset_.end() ? 0 : reset->second;
+        // The newest heard entry (a return included); a newer one not heard
+        // yet is what it has queued. A clip the plan lacks is not played: the
+        // arrangement, until its executor's return is logged.
         const LaunchLogEntry* heard = nullptr;
         for (std::size_t i = launchLog_.size(); i-- > 0;) {
             const LaunchLogEntry& e = launchLog_[i];
-            if (e.track != n.id || launchSeq_[i] < from) continue;
+            if (e.track != n.id) continue;
             if (e.epoch == epoch && e.runningFrame + n.timelineShift > played) {
                 if (!tl.queued) {
                     LaunchPending q;
@@ -1040,11 +998,6 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
                           : pl.followed == detail::FollowOutcome::Key ? TrackLaunch::Followed::Key
                                                                       : TrackLaunch::Followed::None;
             tl.followBudget = pl.followBudget;
-        }
-        if (launchUncertain(n.id)) {  // round 172 K1: not known until its next launch
-            tl.plays = TrackLaunch::Plays::Uncertain;
-            tl.clip = {};
-            tl.position.reset();
         }
         out.push_back(std::move(tl));
     }
@@ -1100,10 +1053,7 @@ std::optional<model::Id> Engine::audioUnderStretch() const {
     for (std::size_t i = 0; i < launchLog_.size(); ++i) last[launchLog_[i].track] = i;
     for (const auto& [track, i] : last) {
         const LaunchLogEntry& e = launchLog_[i];
-        const auto reset = launchReset_.find(track);
-        if (e.action != LaunchLogEntry::Action::Clip ||
-            (reset != launchReset_.end() && reset->second > launchSeq_[i]))
-            continue;
+        if (e.action != LaunchLogEntry::Action::Clip) continue;  // returned: logged
         const model::Clip* clip = latest_->clips.find(e.clip);
         if (!clip || clip->kind == model::ClipKind::Midi) continue;
         // A clip played once sounds only in its pass from its anchor, which a
@@ -1179,14 +1129,12 @@ bool Engine::cutsArrangementAudio(const LaunchRequest& r, std::int64_t anchor) c
         if (audio) break;
     }
     if (!audio) return false;
-    // On the arrangement: no launch yet, the newest returned it, or a plan
-    // that lacks its clip did.
+    // On the arrangement: no launch yet, or the newest returned it (a
+    // plan's return included, once its executor acked it).
     bool arrangement = true;
     for (std::size_t i = launchLog_.size(); i-- > 0;)
         if (launchLog_[i].track == r.track) {
-            const auto reset = launchReset_.find(r.track);
-            arrangement = launchLog_[i].action == LaunchLogEntry::Action::Arrangement ||
-                          (reset != launchReset_.end() && reset->second > launchSeq_[i]);
+            arrangement = launchLog_[i].action == LaunchLogEntry::Action::Arrangement;
             break;
         }
     return arrangement != (r.action == LaunchLogEntry::Action::Arrangement);
@@ -1312,13 +1260,11 @@ void Engine::placeCapture() {
     capture_.epoch = clock.epoch;
     capture_.startSong = song;
     capture_.version = latest_ ? latest_->version : 0;
-    capture_.resets = launchReset_;
     // As heard: where it began, and the counters now.
     capture_.facts = {};
     capture_.facts.fromPlayStart = fromPlayStart;
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     capture_.facts.liveInput = plan && plan->anyLive;
-    capture_.facts.uncertain = !launchUncertain_.empty();
     capture_.misses = misses_.load(std::memory_order_relaxed);
     capture_.bridgeLate = bridgeLate_.load(std::memory_order_relaxed);
     capture_.xruns = backend_ ? backend_->status().xruns : 0;
@@ -1513,8 +1459,8 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
         out.endsBeat = capture_.endBeat;
     }
     // What each track played as the capture began: its newest entry by
-    // then, unless a plan had returned it to the arrangement by then (a
-    // return after it, such as a clip removed later, is a launch within).
+    // then, a plan's return included (one after it, such as a clip removed
+    // later, is a launch within).
     std::map<model::Id, std::size_t> before;
     for (std::size_t i = 0; i < launchLog_.size(); ++i) {
         const LaunchLogEntry& e = launchLog_[i];
@@ -1522,26 +1468,14 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
             before[e.track] = i;
     }
     for (const auto& [track, i] : before) {
-        // A reset by then counts once its return was heard by the start; one
-        // heard after it is a launch within, which cuts the clip there (round
-        // 172 F3). One with no return recorded (launch.later) counts.
-        const auto reset = capture_.resets.find(track);
-        if (reset != capture_.resets.end() && reset->second > launchSeq_[i]) {
-            const LaunchLogEntry* back = returnFor(track, reset->second);
-            if (!back || back->epoch < capture_.epoch ||
-                (back->epoch == capture_.epoch && back->songFrame <= start))
-                continue;
-        }
         LaunchLogEntry first = launchLog_[i];
         if (first.action == LaunchLogEntry::Action::Arrangement) continue;
         first.runningFrame = 0;
         first.epoch = capture_.epoch;
         out.launches.push_back(first);
     }
-    // Then each return a plan made and each launch within it, in frame
-    // order, a return first at a frame it shares (a launch there came after
-    // it), and none that a launch applied after its plan precedes or meets
-    // (round 172 F1).
+    // Then each launch within it, in frame order: the log's, where a return
+    // comes first at a frame it shares (a launch there came after it).
     const std::size_t firsts = out.launches.size();
     const auto within = [&](const LaunchLogEntry& e) {
         if (e.epoch != capture_.epoch || e.songFrame <= start || e.songFrame >= end) return;
@@ -1549,37 +1483,12 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
         in.runningFrame = e.songFrame - start;
         out.launches.push_back(in);
     };
-    for (const LaunchReturn& r : launchReturns_)
-        if (!returnSuperseded(r)) within(r.entry);
     for (const LaunchLogEntry& e : launchLog_) within(e);
     std::stable_sort(out.launches.begin() + static_cast<std::ptrdiff_t>(firsts), out.launches.end(),
                      [](const LaunchLogEntry& a, const LaunchLogEntry& b) {
                          return a.runningFrame < b.runningFrame;
                      });
     return out;
-}
-
-bool Engine::launchUncertain(model::Id track) const {
-    return std::find(launchUncertain_.begin(), launchUncertain_.end(), track) !=
-           launchUncertain_.end();
-}
-
-void Engine::judgeUnseenReturns(const detail::Plan& next) {
-    if (unseenReturns_.empty()) return;
-    // What the executors have taken: conservative, since an executor that has
-    // loaded a plan stores its generation later in that block.
-    const std::uint64_t seen = oldestInUse();
-    std::erase_if(unseenReturns_, [&](UnseenReturn& u) {
-        if (seen >= u.generation) return true;  // taken: the return was heard
-        const detail::Node* n = nodeOf(next, u.track);
-        if (!n || n->players.empty() || detail::playerOf(*n, u.clip) < 0) {
-            u.generation = next.generation;  // the newer plan returns it too
-            return false;
-        }
-        if (!launchUncertain(u.track)) launchUncertain_.push_back(u.track);
-        if (capture_.on && !capture_.pending && !capture_.closed) capture_.facts.uncertain = true;
-        return true;
-    });
 }
 
 void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::uint64_t epoch,
@@ -1590,7 +1499,6 @@ void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::u
         n.launchReturned = false;
         LaunchAck ack;
         ack.track = n.id.n;
-        ack.clip = n.launchReturnedClip.n;
         ack.epoch = epoch;
         ack.action = static_cast<std::uint8_t>(LaunchLogEntry::Action::Arrangement);
         ack.stream = stream;
@@ -1603,20 +1511,102 @@ void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::u
     if (any) notifyMain();
 }
 
-const LaunchLogEntry* Engine::returnFor(model::Id track, std::uint64_t after) const {
-    for (const LaunchReturn& r : launchReturns_)
-        if (r.entry.track == track && r.after == after) return &r.entry;
-    return nullptr;
+void Engine::sortLaunchLog() {
+    // By epoch and frame; at a shared frame a return first, else as drained.
+    std::vector<std::size_t> order(launchLog_.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        const LaunchLogEntry &x = launchLog_[a], &y = launchLog_[b];
+        if (x.epoch != y.epoch) return x.epoch < y.epoch;
+        if (x.runningFrame != y.runningFrame) return x.runningFrame < y.runningFrame;
+        return launchIsReturn_[a] > launchIsReturn_[b];
+    });
+    std::vector<LaunchLogEntry> log;
+    std::vector<std::uint8_t> returns;
+    log.reserve(order.size());
+    returns.reserve(order.size());
+    for (const std::size_t i : order) {
+        log.push_back(launchLog_[i]);
+        returns.push_back(launchIsReturn_[i]);
+    }
+    launchLog_ = std::move(log);
+    launchIsReturn_ = std::move(returns);
 }
 
-bool Engine::returnSuperseded(const LaunchReturn& r) const {
-    for (std::size_t i = 0; i < launchLog_.size(); ++i) {
+std::vector<model::Id> Engine::tracksLosingLaunch(const detail::Plan* plan) const {
+    std::map<model::Id, std::size_t> last;
+    for (std::size_t i = 0; i < launchLog_.size(); ++i) last[launchLog_[i].track] = i;
+    std::vector<model::Id> out;
+    for (const auto& [track, i] : last) {
         const LaunchLogEntry& e = launchLog_[i];
-        if (launchSeq_[i] >= r.after && e.track == r.entry.track && e.epoch == r.entry.epoch &&
-            e.songFrame <= r.entry.songFrame)
-            return true;
+        if (e.action == LaunchLogEntry::Action::Arrangement) continue;
+        const detail::Node* n = plan ? nodeOf(*plan, track) : nullptr;
+        if (!n || n->players.empty() ||
+            (e.action == LaunchLogEntry::Action::Clip && detail::playerOf(*n, e.clip) < 0))
+            out.push_back(track);
     }
-    return false;
+    return out;
+}
+
+void Engine::logReturn(const LaunchAck& ack) {
+    const model::Id track{model::Kind::Track, static_cast<std::uint32_t>(ack.track)};
+    const ReturnKey key{track, ack.epoch, ack.generation};
+    if (std::find(returnKeys_.begin(), returnKeys_.end(), key) != returnKeys_.end()) {
+        ++returnAcksDuplicated_;  // never expected: the carries are disjoint by class
+        return;
+    }
+    returnKeys_.push_back(key);
+    LaunchLogEntry r;
+    r.runningFrame = ack.stream;
+    r.track = track;
+    r.action = LaunchLogEntry::Action::Arrangement;
+    r.epoch = ack.epoch;
+    // Its plan: at unity the song moves with the stream; under a playrate
+    // its handAt was placed when it was published (serviceLaunches).
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    for (const auto& candidate : plans_)
+        if (candidate->generation == ack.generation) plan = candidate.get();
+    const auto place = std::find_if(
+        returnPlaces_.begin(), returnPlaces_.end(),
+        [&](const ReturnPlace& p) { return p.track == track && p.generation == ack.generation; });
+    LaunchClock clock;
+    if (place != returnPlaces_.end() && place->epoch == ack.epoch && place->stream == ack.stream) {
+        r.anchorSample = place->placed.anchorSample;
+        r.anchorBeat = place->placed.anchorBeat;
+        r.songFrame = place->placed.songFrame;
+    } else if (plan && !plan->rateEnabled && latest_ && launchClock(clock) &&
+               clock.epoch == ack.epoch) {
+        r.songFrame = unitySongBase(clock) + ack.stream;
+        // The song sample there: folded by the transport loop, as placeLaunch
+        // folds an immediate launch's.
+        const std::int64_t d = ack.stream - clock.stream;
+        std::int64_t at = d >= 0 ? songAfter(clock.loop, clock.pos, d) : clock.pos + d;
+        if (d < 0 && clock.loop.active() && clock.pos >= clock.loop.start &&
+            clock.pos < clock.loop.end && at < clock.loop.start)
+            at += clock.loop.end - clock.loop.start;
+        r.anchorSample = std::max<std::int64_t>(at, 0);
+        r.anchorBeat = latest_->timeMap->beatAt(double(r.anchorSample) / config_.sampleRate);
+    } else {
+        // Neither known (a playrate plan placed too late, or no clock in its
+        // epoch): where an immediate launch.arrangement would land.
+        const LaunchRequest back{track, LaunchLogEntry::Action::Arrangement, {}, {}};
+        if (const auto placed = placeLaunch(std::span(&back, 1), model::LaunchQuantize::None)) {
+            r.anchorSample = placed->anchorSample;
+            r.anchorBeat = placed->anchorBeat;
+            r.songFrame = placed->songFrame + (ack.stream - placed->stream);
+        } else {
+            r.songFrame = ack.stream;
+        }
+    }
+    std::erase_if(returnPlaces_, [&](const ReturnPlace& p) {
+        return p.track == track && p.generation <= ack.generation;
+    });
+    // The executors' crossfade into the arrangement is not the replay's
+    // switch, and a return comes from a plan compiled for an edit anyway:
+    // a capture running is not as heard (edited_during).
+    if (capture_.on && !capture_.pending && !capture_.closed) capture_.facts.edited = true;
+    launchLog_.push_back(r);
+    launchIsReturn_.push_back(1);
 }
 
 std::vector<model::Id> Engine::clipsSkipped() const {

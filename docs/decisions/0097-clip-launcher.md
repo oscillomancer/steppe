@@ -1353,6 +1353,19 @@ a clip past the memory budget. Not rendered: plug-in state from before the start
 changes during a capture (one version is rendered), a loop under a master playrate, and a capture at
 another device rate (launch.commit converts it).
 
+### Revision 2026-11-25: the executors report a return to the arrangement
+
+Before it, the control thread guessed where a plan that lacked a track's clip returned the track
+(an immediate launch's floor, or the playrate plan's handAt), kept the guesses beside the log, and
+could not tell a plan the executors skipped (a removal undone before any executor block), which it
+then marked uncertain. Decided (the co-director, after review rounds 172 and 174): `carryLaunch`
+marks the node, the executor that adopts the plan acks the return through its launch-ack ring at
+its own adoption frame, and the main thread logs it as an ordinary arrangement launch. A skipped
+plan logs nothing; `launch.state`'s "uncertain" and the `launch_state_uncertain` reason are gone. A
+lost ack (a full ring) falls back to the guess, with a warning, and the capture is not as heard. A
+capture with a return stays not as heard (`edited_during`): the executors' retiring crossfade is
+not the replay's switch. engine.md §1.4.2 has the rules.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

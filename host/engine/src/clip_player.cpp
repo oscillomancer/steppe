@@ -443,9 +443,6 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
                       (n.players.empty() && L.kind != LaunchState::Kind::Arrangement);
     n.launchReturned = lost;
     if (lost) {
-        n.launchReturnedClip = before.kind == LaunchState::Kind::Clip && before.player >= 0
-                                   ? old.players[static_cast<std::size_t>(before.player)].clip
-                                   : Id{};
         L = LaunchState{};
         n.releaseHeld = true;  // the clip's notes end
         if (retiring >= 0) {   // its audio crossfades into the arrangement

@@ -981,7 +981,6 @@ Status Engine::loadNow(const model::Session& session, const std::filesystem::pat
     if (!writeHolds_.empty()) detail::publishMix(*plan, session, writeHolds_);
     holdsPending_ = false;
     staleCurves_.clear();
-    judgeUnseenReturns(*plan);  // a return this plan replaces before it was seen (K1)
     latestPlan_.store(plan.get(), std::memory_order_release);
     // The callback's instances: the live nodes', or all of them without the
     // renderer (ADR-0086).

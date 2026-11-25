@@ -587,52 +587,49 @@ the same.*
   (ADR-0097, revision 2026-11-20, batch 3).
   A plan that returns a track to the arrangement because it lacks the
   clip the track plays (the clip removed, its track frozen, or past the
-  memory budget) is a launch too: `launchReturns_` records it as an
-  arrangement launch placed where an immediate `launch.arrangement`
-  (quantize none) would land when the engine takes the plan (the app
-  services the engine right after each load). At unity that is a bound,
-  not the frame itself: the executors report no adoption frame, and the
-  return may be recorded after the frame the plan reached them, by up to
-  an immediate launch's floor (about a device block in-callback; with
-  the anticipative renderer its render block, possibly two). Under a
-  master playrate the plan hands over at its `handAt`, which the control
-  thread prepared and the executors wait for, and the return is placed
-  there, never earlier. Where the placement answers `launch.later` (a
-  playrate change on its way), no return is recorded and the clip's
-  stretch runs on in the capture. A capture includes each recorded return
-  within its span, in frame order with the logged launches, the return
-  first at a frame they share; a launch of the track applied after the
-  plan (later in the log than the reset) at or before the return's frame
-  supersedes it, since it was heard after the return (round 172 F1);
-  "after" is by drain sequence, since the log is re-sorted when the two
-  executors' acks interleave. A removal undone before any executor block
-  (a client that sends without waiting) still records its return,
-  though at unity the executors skip the plan between and play the clip
-  on: the control thread cannot tell that a plan was never adopted
-  without a word from the audio path (`stoppedGen_` is stored after the
-  load). The stale reset outlives the capture: until the track's next
-  launch `launch.state` would report the track on the arrangement while
-  the clip plays, a later capture would omit the clip at frame 0, and
-  `audioUnderStretch` and `cutsArrangementAudio` judge the track by it.
-  So the engine marks such a track uncertain (round 172 K1): in
-  `Engine::loadNow`, before a newer plan is published, a unity return
-  whose plan generation is above `oldestInUse()` (the executors were not
-  seen to take it) and whose clip the newer plan has leaves its track
-  uncertain until the next ack drained for it (a newer plan that also
-  lacks the clip carries the return instead). The mark is conservative
-  and can be a false alarm: an executor that had loaded the plan but not
-  yet stored its generation did return the track. `launch.state` then
-  reports `plays: "uncertain"` with no clip or position, and a capture
-  begun or running while any track is uncertain is not as heard
-  (`launch_state_uncertain`, §3.1). Under a playrate every queued plan
-  is adopted, so it does not arise. The real fix is a follow-up: a
-  return ack from `carryLaunch` through the existing ack rings, which
-  touches the audio path (rtsan and tsan legs). A capture with either kind of
-  return is not as heard (`edited_during`, §3.1), whether or not the
-  session itself changed (a clip past the memory budget). What each track played as a capture began is judged by the resets as they
-  stood then (`CaptureState::resets`), a reset counting only once its
-  return was heard by the start (one heard after it is a launch within,
-  which cuts the clip there; one with none recorded counts), so removing
+  memory budget; or all its players gone while it held or stopped) is a
+  launch too, and the executors report it. `carryLaunch` marks the node
+  (`Node::launchReturned`); the executor that adopts the plan (the
+  in-callback cycle after its `carryMix`, the renderer in
+  `publishRendererPlan` before the callback can see the plan, the
+  callback after `adoptLive` for its live region) pushes one `LaunchAck`
+  per marked node to its own ack ring, with `returned`, the plan's
+  generation and its own adoption stream frame, and clears the mark. The
+  main thread logs it as an arrangement launch (`Engine::logReturn`): at
+  the executor's frame, the frame it was heard from. Its song frame at
+  unity is the epoch's start plus that frame; under a master playrate
+  the executor adopts at the plan's `handAt`, and the song frame is the
+  next whole song sample there (the launches' convention, below),
+  placed when the plan is published, before the song passes it, and
+  taken only by an ack in the same epoch at that frame; otherwise, and
+  where no clock serves, where an immediate `launch.arrangement` would
+  land. The log sorts by epoch and frame with a return first at a frame
+  it shares, since a launch there was applied after the adoption. A plan
+  the executors skip (at unity they take only the latest; a removal
+  undone before any executor block) returns nothing and logs nothing,
+  and a removal the executors took stays a return when it is undone. A
+  return logged twice (by track, epoch and generation) is dropped and
+  counted (`returnAcksDuplicated_`, never expected: the carries are
+  disjoint by class).
+  A full ring drops a return ack and counts it (`returnAcksDropped_`).
+  When the count moves the main thread logs a return for each track whose
+  newest launch the latest plan cannot play, where an immediate
+  `launch.arrangement` would land, warns, and marks a running capture
+  not as heard (`edited_during`). `launch.state` never shows a clip the
+  plan lacks (it reports such a track on the arrangement). A dropped
+  return whose clip a later plan restored before the drop was seen is not
+  recovered: the track then reads as playing the clip. A ring holds 1,024
+  acks, so that takes a plan dropping clips on more than a thousand
+  tracks at once. A launch ack that finds its ring full is dropped
+  uncounted (`launch_runtime.cpp`, `(void)push`): with 256 launch slots
+  it cannot happen today (round 174 risk 8, a found gap).
+  A capture includes each return within its span in the log's order, and
+  one with a return is not as heard (`edited_during`, §3.1): the
+  executors crossfade the clip's audio into the arrangement (the retiring
+  fade), which the replay's switch does not, and a return comes from a
+  plan compiled for an edit or a change of the prepared sources (a clip
+  past the memory budget) anyway. What each track played as a capture
+  began is its newest entry by the start, a return included, so removing
   a clip later, in the capture
   or after it, never drops what was heard: the capture keeps the clip's
   stretch and the return, and `launch.commit` refuses the removed clip

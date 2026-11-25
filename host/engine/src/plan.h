@@ -1161,7 +1161,6 @@ struct Node {
     // carryLaunch returned it to the arrangement at this adoption (its clip
     // lost): the adopting executor acks it once and clears it.
     bool launchReturned = false;
-    Id launchReturnedClip;
     std::int64_t launchFadeFrames = 0;
     const float* arrangementGain = nullptr;
     std::vector<float> arrangementGains;
