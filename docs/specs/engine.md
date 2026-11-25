@@ -610,9 +610,24 @@ the same.*
   though at unity the executors skip the plan between and play the clip
   on: the control thread cannot tell that a plan was never adopted
   without a word from the audio path (`stoppedGen_` is stored after the
-  load), so the capture cuts the clip there (a known limit; such a
-  capture is edited, so not as heard). Under a playrate every queued
-  plan is adopted, so it does not arise. A capture with either kind of
+  load). The stale reset outlives the capture: until the track's next
+  launch `launch.state` would report the track on the arrangement while
+  the clip plays, a later capture would omit the clip at frame 0, and
+  `audioUnderStretch` and `cutsArrangementAudio` judge the track by it.
+  So the engine marks such a track uncertain (round 172 K1): in
+  `Engine::loadNow`, before a newer plan is published, a unity return
+  whose plan generation is above `oldestInUse()` (the executors were not
+  seen to take it) and whose clip the newer plan has leaves its track
+  uncertain until the next ack drained for it (a newer plan that also
+  lacks the clip carries the return instead). The mark is conservative
+  and can be a false alarm: an executor that had loaded the plan but not
+  yet stored its generation did return the track. `launch.state` then
+  reports `plays: "uncertain"` with no clip or position, and a capture
+  begun or running while any track is uncertain is not as heard
+  (`launch_state_uncertain`, §3.1). Under a playrate every queued plan
+  is adopted, so it does not arise. The real fix is a follow-up: a
+  return ack from `carryLaunch` through the existing ack rings, which
+  touches the audio path (rtsan and tsan legs). A capture with either kind of
   return is not as heard (`edited_during`, §3.1), whether or not the
   session itself changed (a clip past the memory budget). What each track played as a capture began is judged by the resets as they
   stood then (`CaptureState::resets`), a reset counting only once its
@@ -2264,6 +2279,7 @@ used, and a `bounds` in the call is refused. `tail_s`, `trim`,
 | --- | --- |
 | `began_mid_run` | the capture did not begin at a play start |
 | `edited_during` | a plan compiled during it for anything but launches (any session edit) |
+| `launch_state_uncertain` | a track's launch state was uncertain while it began or ran: a clip's removal undone before the executors were seen to take it (§1.4.2) |
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
 | `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |

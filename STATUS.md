@@ -392,8 +392,12 @@ instructions are in `docs/guides/installing.md`.
       two with the anticipative renderer), under a master playrate where
       the plan hands over, or not at all when a playrate change is on its
       way (`launch.later`); a removal undone within one executor block (a
-      client that sends without waiting) still cuts the clip in the
-      capture, though the executors played it on: the
+      client that sends without waiting) still records the return, though
+      the executors may have played on: the track is then reported
+      `uncertain` by `launch.state` until its next launch, and a capture
+      begun or running meanwhile is not as heard
+      (`launch_state_uncertain`; the mark can be a false alarm; the real
+      fix, a return ack from the audio path, is a follow-up): the
       commit writes the clip's stretch to there (after the removal is
       undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one

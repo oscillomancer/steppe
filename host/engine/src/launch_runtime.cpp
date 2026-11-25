@@ -781,7 +781,16 @@ void Engine::serviceLaunches() {
                 e.scene = model::Id{model::Kind::Scene, static_cast<std::uint32_t>(ack.scene)};
             launchLog_.push_back(e);
             launchSeq_.push_back(launchSeqNext_++);
+            // A launch on the track: what it plays is known again.
+            std::erase(launchUncertain_, e.track);
+            std::erase_if(unseenReturns_,
+                          [&](const UnseenReturn& u) { return u.track == e.track; });
         }
+    }
+    // A return whose plan the executors have taken was heard (round 172 K1).
+    if (!unseenReturns_.empty()) {
+        const std::uint64_t seen = oldestInUse();
+        std::erase_if(unseenReturns_, [&](const UnseenReturn& u) { return seen >= u.generation; });
     }
     if (added) {  // the two executors' acks interleave: sorted, each with its sequence
         std::vector<std::size_t> order(launchLog_.size());
@@ -856,6 +865,10 @@ void Engine::serviceLaunches() {
             const detail::Node* n = plan ? nodeOf(*plan, track) : nullptr;
             if (!n || n->players.empty() || detail::playerOf(*n, e.clip) < 0) {
                 launchReset_[track] = launchSeqNext_;
+                // At unity the executors take only the latest plan, so one
+                // replaced before they reach it may never be heard (K1).
+                if (plan && !plan->rateEnabled)
+                    unseenReturns_.push_back({track, e.clip, plan->generation});
                 // A return placed by bound, or none placed (launch.later):
                 // not as heard (edited_during), also where only the
                 // prepared sources changed (a clip past the memory budget).
@@ -1007,6 +1020,11 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
                           : pl.followed == detail::FollowOutcome::Key ? TrackLaunch::Followed::Key
                                                                       : TrackLaunch::Followed::None;
             tl.followBudget = pl.followBudget;
+        }
+        if (launchUncertain(n.id)) {  // round 172 K1: not known until its next launch
+            tl.plays = TrackLaunch::Plays::Uncertain;
+            tl.clip = {};
+            tl.position.reset();
         }
         out.push_back(std::move(tl));
     }
@@ -1280,6 +1298,7 @@ void Engine::placeCapture() {
     capture_.facts.fromPlayStart = fromPlayStart;
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     capture_.facts.liveInput = plan && plan->anyLive;
+    capture_.facts.uncertain = !launchUncertain_.empty();
     capture_.misses = misses_.load(std::memory_order_relaxed);
     capture_.bridgeLate = bridgeLate_.load(std::memory_order_relaxed);
     capture_.xruns = backend_ ? backend_->status().xruns : 0;
@@ -1518,6 +1537,29 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
                          return a.runningFrame < b.runningFrame;
                      });
     return out;
+}
+
+bool Engine::launchUncertain(model::Id track) const {
+    return std::find(launchUncertain_.begin(), launchUncertain_.end(), track) !=
+           launchUncertain_.end();
+}
+
+void Engine::judgeUnseenReturns(const detail::Plan& next) {
+    if (unseenReturns_.empty()) return;
+    // What the executors have taken: conservative, since an executor that has
+    // loaded a plan stores its generation later in that block.
+    const std::uint64_t seen = oldestInUse();
+    std::erase_if(unseenReturns_, [&](UnseenReturn& u) {
+        if (seen >= u.generation) return true;  // taken: the return was heard
+        const detail::Node* n = nodeOf(next, u.track);
+        if (!n || n->players.empty() || detail::playerOf(*n, u.clip) < 0) {
+            u.generation = next.generation;  // the newer plan returns it too
+            return false;
+        }
+        if (!launchUncertain(u.track)) launchUncertain_.push_back(u.track);
+        if (capture_.on && !capture_.pending && !capture_.closed) capture_.facts.uncertain = true;
+        return true;
+    });
 }
 
 const LaunchLogEntry* Engine::returnFor(model::Id track, std::uint64_t after) const {

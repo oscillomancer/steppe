@@ -889,7 +889,10 @@ class Engine {
     // heard (an applied launch not yet heard is still queued), and its
     // queued launch. The GUI's telemetry and launch.state read it.
     struct TrackLaunch {
-        enum class Plays : std::uint8_t { Arrangement, Clip, Held, Stopped };
+        // Uncertain: a removal of its clip was undone before the executors
+        // were seen to take it, so whether it plays the clip is not known
+        // until its next launch (round 172 K1).
+        enum class Plays : std::uint8_t { Arrangement, Clip, Held, Stopped, Uncertain };
         model::Id track;
         Plays plays = Plays::Arrangement;
         model::Id clip;                  // Clip and Held
@@ -933,6 +936,10 @@ class Engine {
         bool liveInput = false;      // a plan monitoring live input played during it
         bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
         bool pluginFailed = false;   // a processing error (processErrors)
+        // A track's launch state was uncertain while it began or ran: a plan
+        // without the clip it played was replaced before the executors were
+        // seen to take it (round 172 K1).
+        bool uncertain = false;
         bool operator==(const CaptureFacts&) const = default;
     };
     struct LaunchCapture {
@@ -1392,6 +1399,18 @@ class Engine {
         std::uint64_t after = 0;
     };
     std::vector<LaunchReturn> launchReturns_;
+    // Main thread: a unity return whose plan the executors were not yet
+    // seen to take (oldestInUse() below its generation). A newer plan that
+    // has the clip replacing it then leaves the track uncertain until its
+    // next launch (round 172 K1); one that lacks it too carries it.
+    struct UnseenReturn {
+        model::Id track, clip;
+        std::uint64_t generation = 0;
+    };
+    std::vector<UnseenReturn> unseenReturns_;
+    std::vector<model::Id> launchUncertain_;
+    bool launchUncertain(model::Id track) const;
+    void judgeUnseenReturns(const detail::Plan& next);  // loadNow, before publishing it
     // The return recorded for `track`'s reset at drain sequence `after`.
     const LaunchLogEntry* returnFor(model::Id track, std::uint64_t after) const;
     // Whether a log entry applied after `r`'s plan precedes or meets it.

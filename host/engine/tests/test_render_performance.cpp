@@ -202,3 +202,91 @@ TEST_CASE("under a master playrate a performance's song frames play where live p
     INFO("first differing frame " << first);
     CHECK(worst == 0.0);
 }
+
+TEST_CASE("a clip removed and restored within one block leaves the capture edited (G2)") {
+    // A client that sends without waiting: the executors may skip the plan
+    // without cl_1 and play on, though a return was recorded. The capture
+    // says it is not as heard.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(800 * kBlock);
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    p.run("history.undo", "{}");
+    live.until(1000 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    CHECK_FALSE(dry["as_heard"].asBool());
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why.find("\"edited_during\"") != std::string::npos);
+    // A capture with no edit is as heard, so the reason is the edit's.
+    CHECK(why.find("\"began_mid_run\"") == std::string::npos);
+}
+
+namespace {
+std::string playsOf(Project& p, const char* track) {
+    json::Value state = p.run("launch.state", "{}");
+    for (const auto& t : state["tracks"].asArray())
+        if (t.find("track")->asString() == track) return t.find("plays")->asString();
+    return "";
+}
+
+// cl_1 playing from bar 2, then `edit` at frame 102400, then a capture
+// from 115200 to 128000, begun with no edit since.
+template <class F>
+json::Value laterCapture(Project& p, AppLive& live, F&& edit) {
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(800 * kBlock);
+    edit();
+    live.until(900 * kBlock);
+    p.run("launch.capture", R"({"on": true})");
+    live.until(1000 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    return p.run("render.dry-run", R"({"performance": "captured"})");
+}
+}  // namespace
+
+TEST_CASE("a removal undone before the executors took it leaves the track uncertain (K1)") {
+    // The executors may have skipped the plan without cl_1: launch.state
+    // says so, and a later capture with no edit of its own is not as heard,
+    // until tr_1 is launched again.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 5);
+    json::Value dry = laterCapture(p, live, [&] {
+        p.run("clip.remove", R"({"clip": "cl_1"})");
+        p.run("history.undo", "{}");  // no block between
+    });
+    CHECK(playsOf(p, "tr_1") == "uncertain");
+    CHECK_FALSE(dry["as_heard"].asBool());
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why.find("\"launch_state_uncertain\"") != std::string::npos);
+    CHECK(why.find("\"edited_during\"") == std::string::npos);
+    // Launched again: known.
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 3, frame 192000
+    live.until(1600 * kBlock);
+    CHECK(playsOf(p, "tr_1") == "clip");
+}
+
+TEST_CASE("a removal the executors took, then an edit, leaves no uncertainty (K1)") {
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    json::Value dry = laterCapture(p, live, [&] {
+        p.run("clip.remove", R"({"clip": "cl_1"})");
+        live.until(801 * kBlock);  // a block: the executor takes the plan
+        p.run("track.add", R"({"name": "After"})");
+    });
+    CHECK(playsOf(p, "tr_1") != "uncertain");  // (no clips: not listed)
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why.find("\"launch_state_uncertain\"") == std::string::npos);
+}
