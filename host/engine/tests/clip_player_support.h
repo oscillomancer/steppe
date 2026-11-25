@@ -35,6 +35,8 @@ void lateAttemptsForTests(Engine& e, int attempts);
 // The newest prepared trajectory change's switch S, a stream frame
 // (INT64_MIN: none, or a seek).
 std::int64_t preparedSwitchForTests(const Engine& e);
+// The transport's epoch (a seek starts a new one).
+std::uint64_t epochForTests(const Engine& e);
 }  // namespace supple::engine
 
 namespace clip_player_test {
