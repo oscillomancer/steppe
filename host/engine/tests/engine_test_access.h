@@ -167,5 +167,13 @@ struct EngineTestAccess {
     }
     static auto event(const Engine& e) { return e.rendererEvent_.load(); }
     static detail::Recorder& recorder(Engine& e) { return *e.recorderOwned_; }
+    // The latest plan's handover (a playrate plan's, prepared on the main
+    // thread) and the returns to the arrangement the engine recorded.
+    static std::int64_t latestHandAt(const Engine& e) { return e.latestPlan_.load()->handAt; }
+    static std::vector<LaunchLogEntry> launchReturns(const Engine& e) {
+        std::vector<LaunchLogEntry> out;
+        for (const auto& r : e.launchReturns_) out.push_back(r.entry);
+        return out;
+    }
 };
 }  // namespace supple::engine

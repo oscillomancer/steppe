@@ -590,15 +590,25 @@ the same.*
   memory budget) is a launch too: `launchReturns_` records it as an
   arrangement launch placed where an immediate `launch.arrangement`
   (quantize none) would land when the engine takes the plan (the app
-  services the engine right after each load). That is a bound, not the
-  frame itself: the return may be recorded up to one block after the
-  frame the plan reached the executors, which report no adoption frame.
-  Where the placement answers `launch.later` (a playrate change on its
-  way), no return is recorded and the clip's stretch runs on in the
-  capture. A capture includes each recorded return within its span, in
-  frame order with the logged launches. What each
-  track played as a capture began is judged by the resets as they stood
-  then (`CaptureState::resets`), so removing a clip later, in the capture
+  services the engine right after each load). At unity that is a bound,
+  not the frame itself: the executors report no adoption frame, and the
+  return may be recorded after the frame the plan reached them, by up to
+  an immediate launch's floor (about a device block in-callback; with
+  the anticipative renderer its render block, possibly two). Under a
+  master playrate the plan hands over at its `handAt`, which the control
+  thread prepared and the executors wait for, and the return is placed
+  there, never earlier. Where the placement answers `launch.later` (a
+  playrate change on its way), no return is recorded and the clip's
+  stretch runs on in the capture. A capture includes each recorded return
+  within its span, in frame order with the logged launches, the return
+  first at a frame they share; a launch of the track applied after the
+  plan (later in the log than the reset) at or before the return's frame
+  supersedes it, since it was heard after the return (round 172 F1). What
+  each track played as a capture began is judged by the resets as they
+  stood then (`CaptureState::resets`), a reset counting only once its
+  return was heard by the start (one heard after it is a launch within,
+  which cuts the clip there; one with none recorded counts), so removing
+  a clip later, in the capture
   or after it, never drops what was heard: the capture keeps the clip's
   stretch and the return, and `launch.commit` refuses the removed clip
   with `launch.commit` at `/performance/launches/N/clip`, the capture
