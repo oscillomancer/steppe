@@ -22,9 +22,11 @@
 #include <vector>
 
 #include "app_actions.h"
+#include "audio_device.h"
 #include "launch_capture.h"
 #include "shell.h"
 #include "supple/audio/audio_file.h"
+#include "supple/engine/realtime.h"
 #include "supple/gui/png.h"
 #include "supple/gui/window.h"
 #include "supple/json/parse.h"
@@ -1360,6 +1362,430 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: a take kept across Restart audio is committed by the pane") {
+    // Review round 168 F1: a restart of the audio engine while Capture is
+    // lit keeps the take (EngineApp); the pane's next pass commits it, as a
+    // stop would have, though the new engine has no capture of its own.
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    const auto service = [&] { capture.service(); };
+    REQUIRE(f.runUntil(playing, at, "Kit A heard", service));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Kit A", service));
+    CHECK(f.app->head().items.empty());
+    const std::uint64_t before = f.app->head().version;
+    // Restart audio: the engine stops (the take is kept, and said) and starts.
+    f.exec("engine.stop", "{}");
+    CHECK(f.app->captureUncommitted());
+    REQUIRE(f.app->captureKeptWarning());
+    CHECK(f.app->captureKeptWarning()->find("was running when the engine stopped") !=
+          std::string::npos);
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    capture.service();
+    CHECK(refused.empty());
+    CHECK(f.app->head().version == before + 1);  // the kept take, one undo step
+    // Nothing arms by itself after an engine stop (round 170 F3).
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(f.app->launchCapturing());
+    bool laid = false;
+    for (const auto& e : f.app->head().items) laid = laid || e.value->track == drums;
+    CHECK(laid);
+    CHECK_FALSE(f.app->captureUncommitted());
+    // Not written twice: a later pass finds it committed.
+    capture.service();
+    CHECK(f.app->head().version == before + 1);
+    // Undone, the commit is declined: another restart keeps the take, and
+    // the pane's pass (which commits a capture it finds gone) does not
+    // write it again; it arms a new capture, as a click would.
+    f.exec("history.undo", "{}");
+    CHECK(f.app->launchCapture()->commit == engine::EngineApp::CaptureCommit::Undone);
+    f.exec("engine.stop", "{}");
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(f.app->launchCapture());
+    CHECK(f.app->launchCapture()->kept);
+    capture.service();
+    REQUIRE(capture.set(true));
+    CHECK(capture.armed());
+    CHECK(f.app->launchCapturing());
+    CHECK(refused.empty());
+    CHECK(f.app->head().version == before);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
+namespace {
+// Capture armed by the pane, Kit A launched and a beat of it heard, as the
+// app's loop sees it (the shell's pass: service).
+void captureKitA(LauncherFixture& f, gui::CaptureControl& capture) {
+    REQUIRE(capture.set(true));
+    const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    const auto service = [&] { capture.service(); };
+    REQUIRE(f.runUntil(playing, at, "Kit A heard", service));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Kit A", service));
+}
+bool laidOnDrums(const model::Session& s) {
+    bool laid = false;
+    for (const auto& e : s.items) laid = laid || e.value->track == *model::Id::parse("tr_1");
+    return laid;
+}
+}  // namespace
+
+TEST_CASE("launcher: Stop audio, then Start: the pane commits the kept take and arms nothing") {
+    // Review round 168 F1: the engine stops while Capture is lit; the app
+    // keeps the take. The pane's next pass, with no engine, commits it (one
+    // undo step) and says so in its own words; after Start nothing is armed,
+    // so the next Play replaces nothing.
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    std::vector<std::string> said;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    capture.onNotice = [&](const std::string& n) { said.push_back(n); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    captureKitA(f, capture);
+    const std::uint64_t before = f.app->head().version;
+    f.exec("engine.stop", "{}");
+    REQUIRE(f.app->captureUncommitted());
+    capture.service();
+    CHECK(refused.empty());
+    CHECK(f.app->head().version == before + 1);
+    CHECK(laidOnDrums(f.app->head()));
+    CHECK_FALSE(f.app->captureUncommitted());
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(capture.lit());
+    CHECK(capture.keptLine().empty());
+    REQUIRE(said.size() == 1);
+    INFO(said[0]);
+    CHECK(said[0].rfind("The engine stopped during the capture: its take (bar", 0) == 0);
+    CHECK(said[0].find(", 1 launch) is committed.") != std::string::npos);
+    CHECK(said[0].find("launch.commit") == std::string::npos);  // no command names
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    capture.service();
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(f.app->launchCapturing());
+    CHECK(f.app->head().version == before + 1);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE(
+    "launcher: Restart audio in the audio dialog: the pane says what the stop kept, committed") {
+    // Round 168: the dialog's stop discards engine.stop's warning; the pane
+    // says it instead, in its own words, from the app's view of the take.
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<std::string> said;
+    capture.onNotice = [&](const std::string& n) { said.push_back(n); };
+    gui::AudioDeviceSettings settings;
+    settings.backend = "dummy";
+    gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, settings, {});
+    REQUIRE(audio.start());
+    captureKitA(f, capture);
+    const std::uint64_t before = f.app->head().version;
+    REQUIRE(audio.restart());
+    capture.service();
+    CHECK(f.app->head().version == before + 1);
+    CHECK_FALSE(capture.armed());
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].rfind("The engine stopped during the capture: its take (", 0) == 0);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: a device restart while capturing commits the take; nothing arms after it") {
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    std::vector<std::string> said;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    capture.onNotice = [&](const std::string& n) { said.push_back(n); };
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Thread, .paced = true});
+    struct Stop {
+        engine::EngineApp& app;
+        ~Stop() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256}, {}));
+    captureKitA(f, capture);
+    const std::uint64_t before = f.app->head().version;
+    backend.requestRestart("the device went away");
+    f.app->tick();  // stops the engine, keeping the take (endedBy Device)
+    REQUIRE(f.app->launchCapture());
+    CHECK(f.app->launchCapture()->endedBy == engine::EngineApp::CaptureEnd::Device);
+    for (int pass = 0; pass < 3; ++pass) {  // the restart's own passes too
+        capture.service();
+        f.app->tick();
+    }
+    CHECK(refused.empty());
+    CHECK(f.app->head().version == before + 1);
+    CHECK(laidOnDrums(f.app->head()));
+    CHECK_FALSE(f.app->captureUncommitted());
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(f.app->launchCapturing());
+    REQUIRE(said.size() == 1);
+    CHECK(said[0].rfind("The audio device restarted during the capture: its take (", 0) == 0);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE(
+    "launcher: a refused take kept across Stop audio shows kept; a click commits it, then arms") {
+    // The refused take outlives the engine. The cell shows it kept, with the
+    // refusal in the pane's words; a click while still locked is refused and
+    // never arms over it (the next Play would replace it); unlocked, a click
+    // commits the kept take, not the new engine's empty capture.
+    LauncherFixture f;
+    f.song();
+    f.exec("item.add",
+           R"({"track":"tr_1","bar":1,"notation":"voice d; 1: C2:w | C2:w | C2:w | C2:w | )"
+           R"(C2:w | C2:w | C2:w | C2:w"})");
+    const std::string item = f.app->head().items.begin()->id.str();
+    auto lock = [&](bool on) {
+        f.exec("item.set",
+               R"({"item":")" + item + R"(","locked":)" + (on ? "true" : "false") + "}");
+    };
+    lock(true);
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    captureKitA(f, capture);
+    const std::uint64_t locked = f.app->head().version;
+    f.exec("engine.stop", "{}");
+    capture.service();
+    REQUIRE(refused.size() == 1);
+    CHECK(refused[0].code == "item.locked");
+    CHECK(refused[0].path.ends_with("/performance/launches/0"));  // the launch it met
+    CHECK_FALSE(capture.armed());
+    CHECK(capture.kept());
+    const std::string line = capture.keptLine();
+    INFO(line);
+    CHECK(line.rfind("A take is kept, not committed: bar", 0) == 0);
+    // In the pane's words, from the refusal's code and the model.
+    CHECK(line.find("Its commit was refused: the item at bar 1 on Drums is locked.") !=
+          std::string::npos);
+    CHECK(line.find("Click Capture to commit it.") != std::string::npos);
+    CHECK(line.find("item.set") == std::string::npos);  // never the hint
+    // The cell: dark, its dot in outline, the line its hint.
+    f.view->setCaptureKept(line);
+    f.sync();
+    views::LauncherHeader& header = f.view->launcherHeader();
+    CHECK(header.stats.captureKept);
+    CHECK_FALSE(header.stats.captureLit);
+    CHECK(header.hintAt(centre(header.captureRect())).name == line);
+    // Refresh is not held by a kept take (the stop keeps it); it is while a
+    // capture is armed or runs (gui::refreshHeldBy, the app's hook).
+    {
+        gui::AudioDeviceSettings settings;
+        settings.backend = "dummy";
+        gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, settings, {});
+        audio.enumerate = [] {
+            return Result<std::vector<engine::AudioDevice>>(std::vector<engine::AudioDevice>{});
+        };
+        audio.captureHeld = gui::refreshHeldBy(capture);
+        REQUIRE(audio.start());  // Refresh restarts a running engine
+        CHECK(audio.refreshBlocked().empty());
+        REQUIRE(audio.rescan());
+        CHECK(f.app->engine() != nullptr);
+        capture.service();
+        CHECK(capture.kept());  // still the app's, still refused
+        CHECK(f.app->head().version == locked);
+    }
+    capture.service();
+    CHECK(capture.kept());
+    // Still locked: refused, nothing armed, the take still the app's.
+    const Status again = capture.set(true);
+    REQUIRE_FALSE(again);
+    CHECK_FALSE(capture.armed());
+    CHECK_FALSE(f.app->launchCapturing());
+    CHECK(f.app->captureUncommitted());
+    CHECK(capture.keptLine().find("Click Capture again to drop it and arm.") != std::string::npos);
+    lock(false);
+    const std::uint64_t unlocked = f.app->head().version;
+    REQUIRE(capture.set(true));
+    CHECK(f.app->head().version == unlocked + 1);
+    CHECK(f.app->head().version > locked);
+    CHECK_FALSE(f.app->captureUncommitted());
+    CHECK(capture.armed());
+    CHECK(capture.keptLine().empty());
+    CHECK(gui::refreshHeldBy(capture)());  // armed: Refresh would cut it short
+    f.view->setCaptureKept(capture.keptLine());
+    f.sync();
+    CHECK_FALSE(header.stats.captureKept);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: a kept take's refusal is worded from its code and path") {
+    // The clip it played deleted after a refused commit (the app's kept
+    // copy: the engine's own capture drops a removed clip's launches):
+    // launch.commit at /performance/launches/N/clip, said from launch N.
+    LauncherFixture f;
+    f.song();
+    f.exec("item.add",
+           R"({"track":"tr_1","bar":1,"notation":"voice d; 1: C2:w | C2:w | C2:w | C2:w"})");
+    const std::string item = f.app->head().items.begin()->id.str();
+    f.exec("item.set", R"({"item":")" + item + R"(","locked":true})");
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    captureKitA(f, capture);
+    // Kept by the app across Stop audio (its commit refused by the lock).
+    f.exec("engine.stop", "{}");
+    capture.service();
+    REQUIRE(refused.size() == 1);
+    REQUIRE(capture.kept());
+    f.exec("clip.remove", R"({"clip":"cl_1"})");
+    const Status again = capture.set(true);
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == "launch.commit");
+    const std::string line = capture.keptLine();
+    INFO(line);
+    CHECK(line.find("Its commit was refused: a clip it played was deleted.") != std::string::npos);
+    CHECK(line.find("cl_1") == std::string::npos);
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: a refused take's words name the launch its refusal met") {
+    // Review round 173 F3: the refusal's /performance/launches/N names the
+    // launch's track (only its locked items count) and, for a clip's loop
+    // window, the launch's clip on its track.
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    const auto lockOn = [&](const char* track, const char* notation) {
+        const std::size_t had = f.app->head().items.size();
+        f.exec("item.add", std::string(R"({"track":")") + track + R"(","bar":1,"notation":")" +
+                               notation + R"("})");
+        REQUIRE(f.app->head().items.size() == had + 1);
+        std::string id;
+        for (const auto& e : f.app->head().items)
+            if (e.value->track == *model::Id::parse(track) && !e.value->locked) id = e.id.str();
+        f.exec("item.set", R"({"item":")" + id + R"(","locked":true})");
+    };
+    std::string line;
+    const auto refuse = [&](const char* code) {
+        f.exec("engine.stop", "{}");
+        capture.service();
+        REQUIRE(refused.size() == 1);
+        CHECK(refused[0].code == code);
+        CHECK(refused[0].path.ends_with("/performance/launches/0"));
+        REQUIRE(capture.kept());
+        line = capture.keptLine();
+    };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    SUBCASE("two locked items on the launch's track") {
+        lockOn("tr_1", "voice d; 1: C2:w");
+        f.exec("item.add", R"({"track":"tr_1","bar":2,"notation":"voice d; 1: C2:w | C2:w"})");
+        for (const auto& e : f.app->head().items)
+            if (!e.value->locked)
+                f.exec("item.set", R"({"item":")" + e.id.str() + R"(","locked":true})");
+        captureKitA(f, capture);
+        // Into bar 2: both items under the take, in Kit A's way.
+        REQUIRE(f.runUntil([&] { return f.playingBeat() >= 6; }, 6, "bar 2",
+                           [&] { capture.service(); }));
+        refuse("item.locked");
+        INFO(line);
+        CHECK(line.find("Its commit was refused: a locked item on Drums is in the way.") !=
+              std::string::npos);
+    }
+    SUBCASE("a locked item on another launched track is not counted") {
+        // Bass follows the arrangement until Root lands, past its item: the
+        // item is under the take but not in the way, and Drums' one is named.
+        lockOn("tr_1", "voice d; 1: C2:w | C2:w | C2:w | C2:w");
+        lockOn("tr_2", "voice b; 1: C2:w | C2:w");
+        captureKitA(f, capture);
+        const auto service = [&] { capture.service(); };
+        REQUIRE(f.runUntil([&] { return f.playingBeat() >= 8; }, 8, "past Bass's item", service));
+        const double rootAt = f.exec("launch.clip", R"({"clip":"cl_3"})")["beat"].asDouble();
+        CHECK(rootAt >= 8);
+        REQUIRE(f.runUntil([&] { return f.playingBeat() >= rootAt + 1; }, rootAt, "Root heard",
+                           service));
+        refuse("item.locked");
+        INFO(line);
+        CHECK(line.find("Its commit was refused: the item at bar 1 on Drums is locked.") !=
+              std::string::npos);
+    }
+    SUBCASE("a clip's loop window names the clip on its track") {
+        captureKitA(f, capture);
+        f.exec("clip.set", R"({"clip":"cl_1","length":8,"loop":{"on":true,"start":1,"length":2}})");
+        refuse("clip.unsupported");
+        INFO(line);
+        CHECK(line.find("Its commit was refused: Kit A on Drums loops only part of its content, "
+                        "which an item cannot.") != std::string::npos);
+    }
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: a take whose commit was undone is declined: a click arms over it") {
+    // Q1 (co-director): the undone take is not committed again, not shown
+    // kept; a click arms, and the take stays the app's (redo restores it)
+    // until the new capture hears a frame, which the status line says once.
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    std::vector<std::string> said;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    capture.onNotice = [&](const std::string& n) { said.push_back(n); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    captureKitA(f, capture);
+    REQUIRE(capture.set(false));  // ends it on the quantize boundary
+    const auto service = [&] { capture.service(); };
+    REQUIRE(
+        f.runUntil([&] { return !capture.lit(); }, f.playingBeat() + 4, "the end heard", service));
+    f.exec("transport.stop", "{}");
+    REQUIRE(laidOnDrums(f.app->head()));
+    f.exec("history.undo", "{}");
+    REQUIRE(f.app->launchCapture());
+    CHECK(f.app->launchCapture()->commit == engine::EngineApp::CaptureCommit::Undone);
+    capture.service();
+    CHECK(capture.keptLine().empty());
+    CHECK_FALSE(capture.kept());
+    const std::uint64_t undone = f.app->head().version;
+    said.clear();
+    REQUIRE(capture.set(true));
+    CHECK(capture.armed());
+    CHECK(f.app->head().version == undone);  // not committed again
+    CHECK(f.app->launchCapture()->kept);     // the declined take, until a frame
+    CHECK(said.empty());
+    f.exec("transport.play", "{}");
+    // The beat bound is the transport's, wherever the stop left it.
+    REQUIRE(f.runUntil([&] { return !f.app->launchCapture()->kept; }, 1e6, "the new capture heard",
+                       service));
+    capture.service();
+    REQUIRE(said.size() == 1);
+    CHECK(said[0] == "The earlier capture was replaced by this one.");
+    CHECK(f.app->head().version == undone);
+    REQUIRE(capture.set(false));
+    f.exec("engine.stop", "{}");
+    CHECK(refused.empty());
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: Capture turned off while playing ends on the next bar, then commits") {
     // gui.md §4.15: off while playing ends the capture on the project's launch
     // quantize boundary, as a launch made then would land; the commit follows
@@ -1687,7 +2113,10 @@ TEST_CASE("launcher: a refused capture commit keeps the performance; a click com
     CHECK_FALSE(capture.kept());
     CHECK(capture.armed());
     CHECK(f.app->head().version == locked);
+    // Dropped: the app keeps no copy of it either (ADR-0097, a capture kept).
+    CHECK_FALSE(f.app->captureUncommitted());
     REQUIRE(capture.set(false));
+    CHECK(f.app->head().version == locked);
     f.exec("engine.stop", "{}");
     CHECK(f.errors.empty());
 }
@@ -1805,6 +2234,73 @@ std::string addAudioClip(LauncherFixture& f, const char* track, const char* scen
     return f.exec("clip.add", *json::write(add))["clip"].asString();
 }
 }  // namespace
+
+TEST_CASE("launcher: a locked item under a fade-out's tail counts in a refused take's words") {
+    // Review round 173 F4: the commit clears under an audio clip's fade-out
+    // still sounding at the take's end, past endBeat. A locked item there is
+    // the one in the way; a locked item earlier on the track, where it still
+    // followed the arrangement, must not be named instead.
+    LauncherFixture f;
+    f.song();
+    REQUIRE(f.app->head().timeMap->secondsAt(4) == doctest::Approx(2));  // 120 bpm, 4/4
+    // Twelve beats a pass, the last eight fading out.
+    const std::string pad = addAudioClip(f, "tr_1", "sc_3", [&] {
+        audio::AudioData tone;
+        tone.sampleRate = 48000;
+        tone.channels.assign(1, std::vector<float>(6 * 48000, 0.3f));
+        const auto path = f.dir / "pad.wav";
+        REQUIRE(audio::writeWav(path, tone));
+        return path.string();
+    }());
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","fade_out":4})");
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    const auto service = [&] { capture.service(); };
+    // The take starts with Root on Bass; Drums follows the arrangement.
+    REQUIRE(capture.set(true));
+    const double b0 = f.exec("launch.clip", R"({"clip":"cl_3"})")["beat"].asDouble();
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= b0 + 1; }, b0, "Root heard", service));
+    SUBCASE("the pad alone") {}
+    SUBCASE("Kit A, then the pad: the run's last launch has the tail") {
+        // Review round 173 re-check H1: the refusal names Kit A, the run's
+        // first launch; the tail is the pad's.
+        const double kit = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+        REQUIRE(kit >= b0 + 4);
+        REQUIRE(
+            f.runUntil([&] { return f.playingBeat() >= kit + 1; }, kit, "Kit A heard", service));
+    }
+    const double b1 = f.exec("launch.clip", R"({"clip":")" + pad + R"("})")["beat"].asDouble();
+    REQUIRE(b1 >= b0 + 4);
+    const auto lockAt = [&](double beat) {
+        json::Value add = json::Value::object();
+        add["track"] = "tr_1";
+        add["bar"] = static_cast<int>(beat / 4) + 1;
+        add["notation"] = "voice d; 1: C2:w";
+        f.exec("item.add", *json::write(add));
+        for (const auto& e : f.app->head().items)
+            if (!e.value->locked)
+                f.exec("item.set", R"({"item":")" + e.id.str() + R"(","locked":true})");
+    };
+    lockAt(b0);      // under the take, before the pad: not in the way
+    lockAt(b1 + 8);  // past the take's end, under the pad's fade-out
+    // Stopped six beats into the pad's pass: inside its fade-out.
+    REQUIRE(
+        f.runUntil([&] { return f.playingBeat() >= b1 + 6; }, b1 + 6, "into the fade", service));
+    f.exec("engine.stop", "{}");
+    capture.service();
+    REQUIRE(refused.size() == 1);
+    CHECK(refused[0].code == "item.locked");
+    CHECK(refused[0].path.ends_with("/performance/launches/1"));  // Drums' first launch
+    REQUIRE(f.app->launchCapture());
+    REQUIRE(f.app->launchCapture()->endBeat < b1 + 8);  // the tail's item is past the take
+    const std::string line = capture.keptLine();
+    INFO(line);
+    CHECK(line.find("Its commit was refused: a locked item on Drums is in the way.") !=
+          std::string::npos);
+    CHECK(f.errors.empty());
+}
 
 TEST_CASE("launcher: the pane dims what a press would be refused for, as the engine answers") {
     // Step E: the pane no longer copies the engine's rule; it asks

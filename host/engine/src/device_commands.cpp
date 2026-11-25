@@ -12,6 +12,9 @@ namespace {
 
 enum class BackendArg { Jack, Dummy, PortAudio };
 
+struct EngineStopDone {
+    std::optional<std::vector<std::string>> warnings;
+};
 struct EngineDevicesArgs {
     std::optional<BackendArg> backend;
 };
@@ -396,18 +399,30 @@ void registerDeviceCommands(cmd::Registry& registry) {
         addChecked(registry, std::move(c));
     }();
     [&] {
-        Command<NoArgs, Empty> c;
+        Command<NoArgs, EngineStopDone> c;
         c.name = "engine.stop";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Stop real-time playback and release the audio device.";
+        c.description =
+            "A clip launcher capture is kept, not lost: one running ends here, at what was heard. "
+            "warnings names a capture launch.commit has not written; it stays committable "
+            "after the engine starts again (launch.state's capture_kept).";
         c.tags = {"engine"};
         c.args = schema::object<NoArgs>("no_args").build();
-        c.result = emptySchema();
+        c.result =
+            schema::object<EngineStopDone>("engine_stop_done")
+                .field("warnings", &EngineStopDone::warnings, schema::arrayOf(schema::string()))
+                .build();
         c.examples = {{"Stop", j("{}"), j("{}"), "engine_running"}};
-        c.run = [](const NoArgs&, Context& ctx) -> Result<Empty> {
-            app(ctx).stopEngine();
-            return Empty{};
+        c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStopDone> {
+            EngineApp& a = app(ctx);
+            a.stopEngine();
+            EngineStopDone out;
+            // The same line a client in-process reads (captureKeptWarning).
+            if (auto warning = a.captureKeptWarning())
+                out.warnings = std::vector<std::string>{std::move(*warning)};
+            return out;
         };
         addChecked(registry, std::move(c));
     }();

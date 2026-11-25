@@ -18,6 +18,7 @@ struct RetryRun {
     std::vector<float> heard;
     std::uint32_t latency = 0;
     std::int64_t S = INT64_MIN;  // the change's switch as prepared (none: a seek)
+    std::uint64_t seeks = 0;     // epochs begun from the edit on (review round 167 S2)
 };
 
 // The first frame where two runs differ, or -1; first that their change
@@ -52,6 +53,7 @@ RetryRun queuedRun(const EngineOptions& options, std::int64_t d, int late) {
     const std::int64_t lag = options.anticipative ? 9793 : 9601;
     live.until(256000 - lag - d);
     live.settle();
+    const std::uint64_t epoch = epochForTests(*p.app->engine());
     lateAttemptsForTests(*p.app->engine(), late);
     p.run("env.add", R"({"track": "tr_0", "param": "playrate", "points": [)"
                      R"({"beat": 0, "value": 0.75}, {"beat": 40, "value": 0.95}]})");
@@ -63,6 +65,7 @@ RetryRun queuedRun(const EngineOptions& options, std::int64_t d, int late) {
         p.app->engine()->service();  // as the app's tick
     }
     CHECK(p.app->engine()->processErrors() == 0);
+    out.seeks = epochForTests(*p.app->engine()) - epoch;
     out.heard = live.stop();
     out.latency = live.latency;
     return out;
@@ -87,11 +90,13 @@ TEST_CASE("late preparation attempts move a change's switch later; three end in 
         const EngineOptions options = c.anticipative ? EngineOptions{.workers = 0} : kInCallback;
         RetryRun previous = queuedRun(options, c.d, 0);
         REQUIRE(previous.S != INT64_MIN);
+        CHECK(previous.seeks == 0);
         for (const int late : {1, 2}) {
             INFO(late << " late");
             const RetryRun run = queuedRun(options, c.d, late);
             INFO("switches at " << previous.S << " (one fewer late) and " << run.S);
             CHECK(run.S >= previous.S + detail::kRateQuantum);
+            CHECK(run.seeks == 0);                           // a retry is no seek
             const bool moved = run.heard != previous.heard;  // S moved: what plays moved
             CHECK(moved);
             if (late == 1) CHECK(firstDifference(run, queuedRun(options, c.d, late)) == -1);
@@ -99,6 +104,7 @@ TEST_CASE("late preparation attempts move a change's switch later; three end in 
         }
         const RetryRun sought = queuedRun(options, c.d, 3);
         CHECK(sought.S == INT64_MIN);
+        CHECK(sought.seeks == 1);  // the recovery seek, a new epoch
         CHECK(firstDifference(sought, queuedRun(options, c.d, 3)) == -1);
     }
 }

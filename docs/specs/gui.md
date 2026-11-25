@@ -2358,6 +2358,38 @@ save / Cancel before unsaved changes are lost. Before New, Open or Quit checks
 for unsaved changes, active recording is stopped through `transport.stop`:
 recorded takes become an undoable version, then the normal prompt runs. If
 Stop fails, the error is shown and the requested action does not continue.
+The launcher's capture is finalized the same way, before the same checks
+(`CaptureControl::finalize`, the one place a question could replace the
+commit): a running or ending capture ends now and its take is committed,
+one undo step, as turning Capture off does; so is a take the app kept
+across an engine stop or a device restart. The normal prompt then covers
+it. When that commit is refused, the take is kept and the prompt asks even
+for a clean project, naming it in the GUI's own words: "The launcher take
+(bars 1–2, 1 launch) could not be committed: the item at bar 1 on Drums is
+locked. It will be lost." With nothing else unsaved there is nothing to
+save, so the buttons are the action's own verb (the title's first word:
+Quit, Open, Start, Recover) and Cancel, Cancel focused; with unsaved changes
+too, the line ends "It will be lost; Save saves the project without it." and
+the buttons are Save / Don't save / Cancel. Cancel keeps the take, so the
+user can fix what the refusal names. The refusal is worded from its code
+and path and the model, never its message or hint
+(`CaptureControl::refusalWords`). Each refusal's path names the launch it
+met (`/performance/launches/N`): `item.locked` names the one locked item
+under the take on that launch's track; when the last launch on that track
+in the take is an audio clip with a fade-out, the search reaches one period
+of it past the take's end, the most the commit clears under a fade-out
+still sounding there (it does not check that the clip still sounds, so a
+harmless item there can only make the words general, never wrong), and
+reads "a locked item on Drums is in the way" when there are several; `launch.commit` at a launch's `/track` or
+`/clip` says the track is gone or no longer a channel, or the clip is gone
+or changed; `launch.commit.fade` and `clip.unsupported` name the launch's
+clip and track ("a piece of Kit A on Drums would start or end inside its
+own fade"; "Kit A on Drums loops only part of its content, which an item
+cannot"); any other refusal reads "could not be written to the
+arrangement". A take whose commit the user
+undid is declined: neither committed nor counted. The decision also
+records the kept take (`CaptureControl::takeKey`), and a different one
+asks again.
 **Save with undo history** (`ui.file.save_history`, after Save as…) saves
 with `project.save {history: true}` (ADR-0076): in place, or, for a project
 without a file, where the save dialog says. A refusal shows the command's
@@ -2369,9 +2401,10 @@ arrange view are told apart the same way. An imported MIDI item plays through
 its channel's instrument, so a new track needs one before it is heard.
 File > Quit, its shortcut (Cmd+Q on macOS), SDL quit and main-window close
 all dispatch the same `ui.quit` action. An open popup only gates interactive
-Quit when recording or unsaved changes require a decision; a clean, idle
-project can quit immediately. Hidden/finite runs still stop recording, even
-though they suppress the prompt and ignore the popup gate.
+Quit when recording, a lit or kept capture, or unsaved changes require a
+decision; a clean, idle project can quit immediately. Hidden/finite runs
+still stop recording and commit the capture, even though they suppress the
+prompt and ignore the popup gate.
 Discard decisions belong to the project generation that opened the prompt.
 Every button, including Cancel, checks that generation before stopping recording,
 saving or continuing. If the project was replaced, the old request is cancelled
@@ -2385,7 +2418,24 @@ if an intervening save made the new revision clean.
 Native file/folder results capture the project generation and are dropped with
 a short notice if the project was replaced before delivery. Open rechecks the
 session version and branch after the dialog; changes require a fresh discard
-decision. Recording started meanwhile is stopped before that decision too.
+decision. Recording started meanwhile is stopped before that decision too,
+and so is a launcher capture: one lit when the file is chosen, or a kept take
+other than the one the first decision covered (`CaptureControl::takeKey`),
+is finalized and asked about again before `project.open`. Open is the only
+native dialog before a project is replaced; templates, recovery and the
+newer autosave ask at the click. The safe-load question for a crash-suspect
+plug-in (Open, recovery, the newer autosave, a template) is a later window
+of the same kind: when it is answered, a changed version or branch, a
+recording, a lit capture or another kept take asks the discard decision
+again (which finalizes) instead of loading (`FileActions::checked`). The
+load that did not happen sets back the overrides its answers made
+("separate process", "not loaded"), and the new decision is asked on the
+next pass, never from inside the answer, so a load after it always starts
+from the plug-in's normal load. After the new decision the load runs its
+check again: a plug-in answered "separate process" or "not loaded" is asked
+about again (by design); one answered "normally" is not, because that answer
+settled its crash reports before the load (they stay, but no longer make it
+a suspect).
 A save (or project template)
 that comes back with warnings (a plug-in whose state could not be read keeps
 its earlier state) opens a popup listing them. Open and Save as start in the
@@ -3114,10 +3164,40 @@ same heights, scroll and colours.
   performance is kept. The next click commits it first and, if that
   succeeds, arms. If it is refused again, the cell stays dark and the
   status line says one more click drops the performance and arms; that
-  click tries the commit once more first. Opening another project, or the
-  engine stopping, drops it. The app services
+  click tries the commit once more first. Opening another project drops
+  it. The app services
   it once a pass (`CaptureControl::service`) and gives the view the state
   to draw (`ArrangeView::setCaptureArmed`).
+- **A take the engine ended is committed** (ADR-0097, a capture kept).
+  When an engine stop (Stop audio, Restart audio, a device choice) or a
+  device restart ends a capture the Capture toggle armed or is ending, the
+  app keeps the take (`EngineApp::launchCapture`), and the pane's next pass
+  commits it, one undo step, also while no engine runs. A capture another
+  caller armed (an agent's `launch.capture`) is not committed at a stop, as
+  at a transport stop: its take stays kept, shown by the outline dot below;
+  a click commits it, and Quit, New and Open finalize it like any kept
+  take. The status line says so in the
+  pane's words: "The engine stopped during the capture: its take (bars
+  3–18, 2 launches) is committed." ("The audio device restarted during the
+  capture" for a device restart). Nothing arms by itself after an engine
+  stop: the cell goes dark. What is uncommitted is the app's answer
+  (`captureUncommitted`, the view's `commit`), not the pane's copy, so a
+  click after a restart commits the kept take, never the new engine's empty
+  capture, and a click never arms over an uncommitted take.
+- **A kept take shows.** While a take is kept uncommitted (its commit
+  refused, or one an agent's capture left), the cell is dark with its dot
+  drawn in outline in `armed` (`ArrangeView::setCaptureKept`,
+  `CaptureControl::keptLine`). Its hint says what is kept, why and what a
+  click does: "A take is kept, not committed: bars 1–2, 1 launch. Its
+  commit was refused: the item at bar 1 on Drums is locked. Click Capture
+  to commit it." The refusal is worded as in the unsaved-work question
+  (§4.11), from its code and path; it never shows a command name, an engine
+  message or hint.
+- **A take whose commit was undone is declined.** It is not committed
+  again and not shown kept; a click arms a new capture over it. The app
+  keeps it, so redo still restores it, until the new capture hears a frame;
+  the status line then says once "The earlier capture was replaced by this
+  one."
 
 **Columns.**
 - **Scenes.** There is one column per scene in `order`, 64 units wide. Its
@@ -3449,7 +3529,30 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   commits it. Off while playing ends on the next bar, then commits; the
   cell is dashed meanwhile, and a second click ends it at once and commits.
   An agent's quantized end dashes the cell too, and a click then ends the
-  capture at once and commits it.
+  capture at once and commits it. A take kept across Restart audio is
+  committed by the pane's next pass; after Stop audio, the pass with no
+  engine commits it and says so, and nothing is armed after Start; a device
+  restart (`DummyBackend::requestRestart`) commits it the same way, said as
+  the device's. A refused take kept across Stop audio shows kept (the
+  outline dot, the hint with the refusal and no hint text of the engine's);
+  a click while still locked is refused and arms nothing, and after
+  unlocking a click commits the kept take, then arms. A take whose commit
+  was undone is not shown kept; a click arms without committing it, and the
+  status line says once that it was replaced when the new capture hears a
+  frame (`test_launcher.cpp`). Quit commits a launcher take before the
+  usual question; a refused one is named on a clean project, Cancel keeps
+  it, and after unlocking Quit commits it; a take whose commit was undone is
+  not counted; a capture an agent starts, or a take refused, while Open's
+  dialog is open is asked about again before the project opens; an edit,
+  or an agent's capture, while the safe-load question is open asks the
+  discard decision again on the next pass with the overrides set back, and
+  then the plug-in question again unless it was answered "normally"; with
+  nothing to save the plug-in question comes back from the normal load and
+  the project never opens overridden (`test_app.cpp`, a rig that answers
+  modes and settled reports as the engine does). A refused take's words are
+  driven per launch: two locked items, a locked item on another launched
+  track, a loop window, and a locked item under a fade-out's tail, also
+  when the run's first launch is another clip (`test_launcher.cpp`).
 - The pane against the engine (step E): at every step the clips drawn dimmed
   and the scenes whose ▶ is dimmed are exactly those
   `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the
@@ -3862,8 +3965,10 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   audio stops for a moment, which its hover hint says. A stopped engine is
   only listed for. While recording it is disabled, its hint "Refresh is off
   while recording", and refused (`audio.recording`); likewise while a
-  launcher capture is armed, running or kept uncommitted (an engine stop
-  discards it), refused with `audio.capture`. The hint is said in the status
+  launcher capture is armed or running, which the stop would cut short
+  ("Refresh is off while the launcher captures", `audio.capture`,
+  `gui::refreshHeldBy`). A kept take does not hold it: the stop keeps the
+  take, and the pane commits it. The hint is said in the status
   line on hover. A refused start shows
   why in the dialog's status and the status line, the
   engine left stopped and the dialog open with the fresh list. Every error

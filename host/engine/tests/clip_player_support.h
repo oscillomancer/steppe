@@ -35,6 +35,8 @@ void lateAttemptsForTests(Engine& e, int attempts);
 // The newest prepared trajectory change's switch S, a stream frame
 // (INT64_MIN: none, or a seek).
 std::int64_t preparedSwitchForTests(const Engine& e);
+// The transport's epoch (a seek starts a new one).
+std::uint64_t epochForTests(const Engine& e);
 }  // namespace supple::engine
 
 namespace clip_player_test {
@@ -437,6 +439,14 @@ struct AppLive {
           backend({.mode = DummyBackend::Mode::Manual, .captureFrames = frames}) {
         REQUIRE(p.app->startEngine(backend, {.sampleRate = 48000, .blockSize = block}, options));
     }
+    // An engine still running stops before its backend goes with this
+    // object, so a test cannot leave the app stopping it through a freed
+    // backend later (round 168 recheck 3).
+    ~AppLive() {
+        if (p.app->engine()) p.app->stopEngine();
+    }
+    AppLive(const AppLive&) = delete;
+    AppLive& operator=(const AppLive&) = delete;
     // Runs until `frame` of the stream has played.
     void until(std::int64_t frame) {
         const std::int64_t n = frame / block - cycles;

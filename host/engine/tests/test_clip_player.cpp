@@ -1924,6 +1924,7 @@ TEST_CASE("a played-out tail clears the arrangement under it, undone byte for by
     auto refused = p.bus->execute({"launch.commit", args, kOrigin});
     REQUIRE_FALSE(refused);
     CHECK(refused.error().code == "item.locked");
+    CHECK(refused.error().path == "/args/performance/launches/0");  // which launch met it
     CHECK(model::serializeProject(p.app->head()) == locked);
 }
 
@@ -2108,6 +2109,12 @@ TEST_CASE("launch.commit refuses what an item's fades cannot write of a clip's f
         const Result<json::Value> r = run();
         REQUIRE_FALSE(r);
         CHECK(r.error().code == "launch.commit.fade");
+        // The launch whose stretch it is, by index: a launch of cl_1.
+        const std::string prefix = "/args/performance/launches/";
+        REQUIRE(r.error().path.rfind(prefix, 0) == 0);
+        const std::string index = r.error().path.substr(prefix.size());
+        REQUIRE_FALSE(index.empty());
+        CHECK(index.find_first_not_of("0123456789") == std::string::npos);
         CHECK(r.error().message.find("cl_1 on tr_1 " + std::string(what)) == 0);
         CHECK(r.error().message.find(" at beat ") != std::string::npos);
         CHECK(model::serializeProject(p.app->head()) == before);
@@ -2276,7 +2283,9 @@ TEST_CASE("launch.commit: history, undo, pooling and refusals") {
         REQUIRE_FALSE(r);
         return r.error();
     };
-    CHECK(fails("launch.commit", j("{}")).code == "engine.stopped");
+    // Stopped with nothing kept: nothing to commit (a kept capture commits
+    // with the engine stopped, ADR-0097 revision 2026-11-24).
+    CHECK(fails("launch.commit", j("{}")).code == "launch.capture");
     CHECK(fails("launch.capture", j(R"({"on": true})")).code == "engine.stopped");
     // tr_1 plays cl_1 from bar 2 for a bar: a performance given outright,
     // as history records it.
@@ -2333,10 +2342,20 @@ TEST_CASE("launch.commit: history, undo, pooling and refusals") {
     json::Value lock = j(R"({"locked": true})");
     lock["item"] = arrangementItem;
     p.runArgs("item.set", lock);
-    CHECK(fails("launch.commit", args).code == "item.locked");
+    const Error lockedIn = fails("launch.commit", args);
+    CHECK(lockedIn.code == "item.locked");
+    CHECK(lockedIn.path == "/args/performance/launches/0");  // the launch that met it
     CHECK(p.app->head().items.size() == before);
     lock["locked"] = false;
     p.runArgs("item.set", lock);
+    // A loop window an item cannot express: refused, naming the launch.
+    p.run("clip.set",
+          R"({"clip": "cl_1", "length": 8, "loop": {"on": true, "start": 1, "length": 2}})");
+    const Error window = fails("launch.commit", args);
+    CHECK(window.code == "clip.unsupported");
+    CHECK(window.path == "/args/performance/launches/0");
+    CHECK(p.app->head().items.size() == before);
+    p.run("history.undo", "{}");
     // A clip removed since the capture.
     p.run("clip.remove", R"({"clip": "cl_1"})");
     const Error stale = fails("launch.commit", args);

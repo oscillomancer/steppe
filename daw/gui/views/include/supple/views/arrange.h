@@ -224,6 +224,10 @@ class ArrangeView : public ui::Node {
     // drawn as a queued cell is, dashed, until the engine has heard it.
     void setCaptureEnding(bool ending);
     bool captureEnding() const { return captureEnding_; }
+    // A take is kept, not committed (CaptureControl::keptLine): the cell
+    // draws its dot in outline, and the line is its hover hint. Empty: none.
+    void setCaptureKept(std::string line);
+    const std::string& captureKept() const { return captureKept_; }
     // The launcher's selection (gui.md §4.15): clips (a click on a body; Ctrl
     // adds), or one empty cell (a click beside its square) where a clip can
     // be made or pasted. A click on the lanes clears it.
@@ -324,6 +328,7 @@ class ArrangeView : public ui::Node {
     LaunchRefusals launchRefusals_;
     bool captureArmed_ = false;
     bool captureEnding_ = false;
+    std::string captureKept_;
     std::vector<model::Id> selectedClips_;
     std::optional<Cell> selectedCell_;
     float launcherRoom() const;  // the widest the pane is before it fills the view

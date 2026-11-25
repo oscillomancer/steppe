@@ -20,6 +20,7 @@ struct SDL_Window;
 
 namespace supple::gui {
 
+class CaptureControl;
 class SafeLoad;
 
 // Native callbacks may race shutdown; posted completions run on the UI thread.
@@ -64,9 +65,11 @@ class FileActions {
     // Menu/shortcut and native window-close requests share the registered action.
     void registerQuit(std::function<void()> quit, bool prompt = true);
     bool dirty() const;  // changes since the last save/open/new
-    // Finalizes recording through Stop, then runs `then` if nothing would be
-    // lost; otherwise asks Save / Don't save / Cancel. A Stop error aborts.
-    // Hidden/finite test runs suppress the prompt, but still finalize recording.
+    // Finalizes recording through Stop and the launcher's capture through its
+    // commit (CaptureControl::finalize), then runs `then` if nothing would be
+    // lost; otherwise asks Save / Don't save / Cancel, naming a take whose
+    // commit was refused. A Stop error aborts. Hidden/finite test runs
+    // suppress the prompt, but still finalize recording and the capture.
     void confirmDiscard(const std::string& what, std::function<void()> then, bool prompt = true);
     // Native results belong to the project that opened the dialog. For Open,
     // changed revisions require a fresh discard decision before delivery.
@@ -76,6 +79,9 @@ class FileActions {
     // Before a project, a recovery or a template loads, ask about the plug-ins a crash report
     // points at (safe-load, topic 7d). Without one nothing is asked.
     void setSafeLoad(SafeLoad* safeLoad) { safeLoad_ = safeLoad; }
+    // The launcher's Capture (the shell's, which outlives this), whose take
+    // the unsaved-work question finalizes and counts. Without one, none is.
+    void setCapture(CaptureControl* capture) { capture_ = capture; }
     void openPath(const std::filesystem::path& path);
     // In projectFolderPath(); `history` keeps main's undo history too.
     void saveAs(const std::filesystem::path& path, bool history = false);
@@ -120,6 +126,9 @@ class FileActions {
     bool currentProject(std::uint64_t generation);
     void showDiscard(const std::string& what, std::function<void()> then);
     bool revalidateDiscard(const std::shared_ptr<DiscardRequest>& request);
+    // Stop's recording and the capture's commit; false when Stop failed.
+    bool finalize();
+    std::string keptTake();  // CaptureControl::takeKey, empty without one
     void chooseSave(std::function<void(DialogLifetime::Paths)> done);
     std::string dialogStart() const;  // the project's file, else mediaHome()
     Result<json::Value> exec(const std::string& command, json::Value args);
@@ -137,8 +146,13 @@ class FileActions {
     void showNotice(const std::string& id, const std::string& title, const std::string& text);
     // Runs `project.plugins {args}` through safe-load, then `then` with its result; nothing when
     // the question is cancelled. Without safe-load, `then` at once with an empty object.
-    void checked(json::Value args, std::function<bool(const json::Value&)> then);
+    // `what` titles the discard question asked again when the decision's
+    // revision, a recording or the launcher's take changed while the
+    // safe-load question was open.
+    void checked(const std::string& what, json::Value args,
+                 std::function<bool(const json::Value&)> then);
     SafeLoad* safeLoad_ = nullptr;
+    CaptureControl* capture_ = nullptr;
     ui::Root& root_;
     AppActions& actions_;
     cmd::Dispatcher& dispatcher_;

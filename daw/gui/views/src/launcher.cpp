@@ -1402,7 +1402,8 @@ ui::Rect LauncherHeader::captureRect() const {
 ui::Hint LauncherHeader::hintAt(ui::Point p) const {
     if (stopRect().contains(p)) return {"Stop all", {}};
     if (arrangementRect().contains(p)) return {"Arrangement", {}};
-    if (captureRect().contains(p)) return {"Capture", {}};
+    if (captureRect().contains(p))
+        return {view_.captureKept().empty() ? std::string("Capture") : view_.captureKept(), {}};
     return hint;
 }
 
@@ -1449,9 +1450,11 @@ void LauncherHeader::paint(ui::Canvas& c) {
         }
     }
     // Capture, as the transport's record button: a red dot, the cell lit
-    // while armed; ending on its boundary, outlined dashed as a queued cell.
+    // while armed; ending on its boundary, outlined dashed as a queued cell;
+    // a take kept, not committed: dark, the dot in outline, in the record red.
     stats.captureLit = view_.captureArmed();
     stats.captureEnding = stats.captureLit && view_.captureEnding();
+    stats.captureKept = !stats.captureLit && !view_.captureKept().empty();
     {
         const ui::Rect r = captureRect();
         const ui::Color red = t.color("armed");
@@ -1466,8 +1469,11 @@ void LauncherHeader::paint(ui::Canvas& c) {
             c.strokeRound(r, 3, t.color("rule"));
         }
         // As a glyph, the dot alone, centred.
-        c.fillCircle({glyphs ? r.x + r.w / 2 : r.x + 10, r.y + r.h / 2}, 3.5f,
-                     stats.captureLit ? red : t.color("ink-quiet"));
+        const ui::Point dot{glyphs ? r.x + r.w / 2 : r.x + 10, r.y + r.h / 2};
+        if (stats.captureKept)
+            c.strokeCircle(dot, 3.0f, red, 1.5f);
+        else
+            c.fillCircle(dot, 3.5f, stats.captureLit ? red : t.color("ink-quiet"));
         if (!glyphs)
             c.text({r.x + 16, r.y, r.w - 18, r.h}, "Capture", ui::Font::Ui, caption, t.color("ink"),
                    ui::kCenter | ui::kMiddle);

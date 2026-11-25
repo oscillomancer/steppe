@@ -585,10 +585,94 @@ the same.*
   logged: it follows from the loop, which a replay is given. A seek, a
   loop change or a stop ends a capture, so a replay never crosses one
   (ADR-0097, revision 2026-11-20, batch 3).
+  A plan that returns a track to the arrangement because it lacks the
+  clip the track plays (the clip removed, its track frozen, or past the
+  memory budget) is a launch too: `launchReturns_` records it as an
+  arrangement launch placed where an immediate `launch.arrangement`
+  (quantize none) would land when the engine takes the plan (the app
+  services the engine right after each load). At unity that is a bound,
+  not the frame itself: the executors report no adoption frame, and the
+  return may be recorded after the frame the plan reached them, by up to
+  an immediate launch's floor (about a device block in-callback; with
+  the anticipative renderer its render block, possibly two). Under a
+  master playrate the plan hands over at its `handAt`, which the control
+  thread prepared and the executors wait for, and the return is placed
+  there, never earlier. Where the placement answers `launch.later` (a
+  playrate change on its way), no return is recorded and the clip's
+  stretch runs on in the capture. A capture includes each recorded return
+  within its span, in frame order with the logged launches, the return
+  first at a frame they share; a launch of the track applied after the
+  plan (later in the log than the reset) at or before the return's frame
+  supersedes it, since it was heard after the return (round 172 F1);
+  "after" is by drain sequence, since the log is re-sorted when the two
+  executors' acks interleave. A removal undone before any executor block
+  (a client that sends without waiting) still records its return,
+  though at unity the executors skip the plan between and play the clip
+  on: the control thread cannot tell that a plan was never adopted
+  without a word from the audio path (`stoppedGen_` is stored after the
+  load), so the capture cuts the clip there (a known limit; such a
+  capture is edited, so not as heard). Under a playrate every queued
+  plan is adopted, so it does not arise. What
+  each track played as a capture began is judged by the resets as they
+  stood then (`CaptureState::resets`), a reset counting only once its
+  return was heard by the start (one heard after it is a launch within,
+  which cuts the clip there; one with none recorded counts), so removing
+  a clip later, in the capture
+  or after it, never drops what was heard: the capture keeps the clip's
+  stretch and the return, and `launch.commit` refuses the removed clip
+  with `launch.commit` at `/performance/launches/N/clip`, the capture
+  kept. Undoing the removal makes it committable as it was; the
+  capture's version rule is unchanged.
   Renders and the render dialog play the arrangement only, and the dialog
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at
   its logged running frames; the tests use it.
+- **A capture is kept (ADR-0097, revision 2026-11-24).** The engine holds
+  the capture it runs; `EngineApp` keeps the last one (`keptCapture_`,
+  `EngineApp::launchCapture`) across what destroys the engine: an engine
+  stop (`stopEngine`), an unrequested device restart and a device failure
+  the restart gives up on (both `beginRestart` → `haltEngine`). A capture
+  running then is ended at the heard position first, as
+  `launch.capture {on: false}` ends it (`CaptureView::endedBy`: the stop
+  or the device). The kept one is what `launch.commit` and `launch.state`
+  read until a newer capture has begun, heard a frame (one turned
+  off before that replaces nothing); `launch.capture {on: true}` warns
+  when it will replace an uncommitted one, naming its span, launches and
+  version (`LaunchCapture::version`, the session version as it began). It
+  stays committable with the engine stopped or started again, at any
+  device rate: launch.commit converts by its own `sample_rate`.
+  `engine.stop`'s answer, and the `engine.restarting` event or the
+  `engine.error` that gives up (either way), carry a warning naming an
+  uncommitted capture, said by what ended it; a client in-process reads the
+  same lines from `EngineApp::captureKeptWarning` and
+  `captureReplaceWarning`. A capture counts as committed while the head
+  reaches the version launch.commit wrote it in
+  (`LaunchCapture::committedIn`): by first parents, or through a merge of a
+  branch whose line holds it (a merge's replayed step stands for its
+  source, so a merge of a merge, or one undone only in part, counts). Where
+  a history squash has folded away a replay (into an ordinary step, under
+  a small history budget), or the source steps it names, the walk cannot
+  follow it and says uncommitted, the side that warns. An undo of the commit makes it uncommitted again, a redo commits it,
+  and an edit after the undo leaves it uncommitted (`captureUncommitted`).
+  The mark is set only when the commit's transaction commits (a rolled-back
+  script's launch.commit leaves none), and the app pins that version
+  (`VersionStore::pin`), so a history squash or collection never loses it.
+  `EngineApp::CaptureView` carries as fields all that the warnings say,
+  for a client that words its own line: the span (`capture.startSample`
+  and `frames`, and `startBeat`/`endBeat` on the current time map), the
+  launches, `version`, `endedBy`, `kept`, `replacedOnBegin` (a newer
+  capture is armed and replaces it once it hears a frame), and `commit`:
+  `None` never written, `Committed`, or `Undone`, written and taken back,
+  which the GUI reads as declined.
+  `launch.state` says both at once: `capturing` for the engine's own
+  capture, armed or running, and `capture_kept` for a kept one beside it;
+  with the engine stopped it answers for a kept capture. The GUI's Capture
+  commits whatever is uncommitted, the take just ended or a kept one (a
+  take it committed, or whose commit was undone, is skipped), and a take
+  the user drops is forgotten
+  (`dropKeptCapture`). Replacing the project or quitting the app drops
+  it: the GUI's unsaved-work dialog is to count it
+  (`captureUncommitted`, not yet), and a headless app has no dialog.
 - **Capturing a performance (L4, L-f).** While `launch.capture` is on, the
   engine keeps the song sample where the capture began, the transport
   loop it runs under, what each track that was not following the
@@ -681,7 +765,10 @@ the same.*
   performance kept (rule 7): a piece starting inside the fade-in (the
   capture's start or a loop wrap there), one a loop wrap ends inside the
   fade-out, and a stand-in that a further switch cuts (rule 5) or a loop
-  wrap crosses.
+  wrap crosses. Its path, and that of `clip.unsupported` (a loop window an
+  item cannot express) and of `item.locked` (a locked item in the way), is
+  the launch whose stretch met it, `/performance/launches/N`, so a client
+  can name the place from the code and the index.
   A scene launched whole also writes a section. `launch.scene` logs each
   clip it starts with the scene's id, all on one running frame; the commit
   writes a section for a scene whose launches at a frame all still hold (a

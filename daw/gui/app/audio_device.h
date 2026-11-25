@@ -51,6 +51,7 @@ json::Value audioDeviceJson(const AudioDeviceSettings& settings);
 json::Value engineStartArgs(const AudioDeviceSettings& settings,
                             std::span<const engine::AudioDevice> devices);
 
+class CaptureControl;
 class Shell;
 
 class AudioDeviceDialog {
@@ -85,7 +86,8 @@ class AudioDeviceDialog {
     // as a fallback when that start had them; audio stops for a moment).
     // Refused while
     // recording (audio.recording), which it would put at risk, and while a
-    // launcher capture is held (audio.capture): an engine stop discards it.
+    // launcher capture is armed or runs (audio.capture), which an engine
+    // stop would cut short; a kept take does not hold it (the stop keeps it).
     // A failed start is said in the dialog's status and through onError; the
     // engine is left stopped, the fresh list shown.
     Status rescan();
@@ -107,8 +109,9 @@ class AudioDeviceDialog {
     // The engine's full error where the dialog says it in its own words,
     // its hint for command callers included: for a log (the app: stderr).
     std::function<void(const std::string&)> onLog;
-    // A launcher capture armed, running or kept uncommitted. Default: the
-    // engine's running capture; the app adds the Capture toggle's own.
+    // A launcher capture armed or running, which an engine stop would cut
+    // short. Default: the engine's capture; the app adds the Capture
+    // toggle's own (refreshHeldBy). A kept take survives a stop.
     std::function<bool()> captureHeld;
 
   private:
@@ -143,5 +146,8 @@ class AudioDeviceDialog {
 // line (and stderr, for a start from a terminal), and a capture the
 // launcher's Capture toggle holds (armed, running or kept) keeps Refresh off.
 void connectAudioDevice(AudioDeviceDialog& dialog, Shell& shell);
+// What holds Refresh for the Capture toggle: a capture armed or running
+// (CaptureControl::lit), never a kept take, which survives the stop.
+std::function<bool()> refreshHeldBy(CaptureControl& capture);
 
 }  // namespace supple::gui

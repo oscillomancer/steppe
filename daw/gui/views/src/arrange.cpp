@@ -1847,6 +1847,11 @@ void ArrangeView::setCaptureEnding(bool ending) {
     captureEnding_ = ending;
     if (launcherHeader_) launcherHeader_->invalidate();
 }
+void ArrangeView::setCaptureKept(std::string line) {
+    if (line == captureKept_) return;
+    captureKept_ = std::move(line);
+    if (launcherHeader_) launcherHeader_->invalidate();
+}
 void ArrangeView::setLaunchRefusals(LaunchRefusals refusals) {
     if (refusals == launchRefusals_) return;
     launchRefusals_ = std::move(refusals);

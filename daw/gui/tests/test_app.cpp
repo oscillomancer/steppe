@@ -33,6 +33,7 @@
 #include "floating_panel.h"
 #include "help_actions.h"
 #include "history_panel.h"
+#include "launch_capture.h"
 #include "learn_dialog.h"
 #include "mixer.h"
 #include "mouse_dialog.h"
@@ -1219,6 +1220,260 @@ TEST_CASE("file actions: changed versions and branches renew the discard decisio
     a.root->frame(false);
     REQUIRE(a.root->click("file.confirm.discard"));
     CHECK(continued);
+}
+
+TEST_CASE(
+    "file actions: Quit commits the launcher's take; a refused one is named, Cancel keeps it") {
+    // The unsaved-work question finalizes a launcher capture as Stop does a
+    // recording: committed, one undo step, then the usual question. Only a
+    // take whose commit is refused is named (what is lost), even on a clean
+    // project; a take whose commit the user undid is declined, not counted.
+    App a;
+    REQUIRE(a.ok);
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    gui::CaptureControl capture(*a.app, *a.dispatcher);
+    files.setCapture(&capture);
+    bool quit = false;
+    files.registerQuit([&] { quit = true; });
+    auto run = [&](const std::string& command, const std::string& args) {
+        auto r = a.dispatcher->execute({command, json::parse(args).value(), {}});
+        INFO(command << ": " << (r ? std::string() : r.error().toString()));
+        REQUIRE(r);
+        return *r;
+    };
+    run("track.add", R"({"type":"channel","name":"Drums"})");
+    run("scene.add", R"({"name":"Intro"})");
+    run("clip.add",
+        R"({"track":"tr_1","scene":"sc_1","notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    run("item.add",
+        R"({"track":"tr_1","bar":1,"notation":"voice d; 1: C2:w | C2:w | C2:w | C2:w"})");
+    const std::string item = a.app->head().items.begin()->id.str();
+    const bool locked = [&] {
+        bool lock = false;
+        SUBCASE("committed") {}
+        SUBCASE("refused") { lock = true; }
+        return lock;
+    }();
+    if (locked) run("item.set", R"({"item":")" + item + R"(","locked":true})");
+    files.saveAs(a.dir / "capture");
+    REQUIRE_FALSE(files.dirty());
+    run("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    run("launch.clip", R"({"clip":"cl_1"})");
+    // A beat of it heard (the bound only stops an engine that never runs).
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        a.app->tick();
+        capture.service();
+        const auto c = a.app->launchCapture();
+        if (c && !c->capture.launches.empty() && c->capture.frames > 48000) break;
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const std::uint64_t before = a.app->head().version;
+    REQUIRE(a.actions->run("ui.quit"));
+    CHECK_FALSE(quit);
+    CHECK_FALSE(capture.lit());
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.confirm"));
+    const std::string text = a.root->find("file.confirm.text")->valueText();
+    INFO(text);
+    if (!locked) {
+        // Committed before the question, which is the usual one.
+        CHECK(a.app->head().version == before + 1);
+        CHECK_FALSE(a.app->captureUncommitted());
+        CHECK(text == "The project has unsaved changes.");
+        REQUIRE(a.root->click("file.confirm.discard"));
+        CHECK(quit);
+    } else {
+        // Refused: nothing written, the project still clean, the take named
+        // in the dialog's words (the code and the model, not the message).
+        // Nothing to save: Quit or Cancel, Cancel focused.
+        CHECK(a.app->head().version == before);
+        CHECK_FALSE(files.dirty());
+        CHECK(text.rfind("The launcher take (bar", 0) == 0);
+        CHECK(text.find("could not be committed: the item at bar 1 on Drums is locked. It will "
+                        "be lost.") != std::string::npos);
+        CHECK(text.find("Save") == std::string::npos);
+        CHECK(text.find("unsaved changes") == std::string::npos);
+        CHECK(text.find(item) == std::string::npos);        // names, never ids
+        CHECK(text.find("item.set") == std::string::npos);  // never the hint
+        CHECK(a.root->find("file.confirm.save") == nullptr);
+        REQUIRE(a.root->find("file.confirm.discard"));
+        CHECK(a.root->find("file.confirm.discard")->valueText() == "Quit");
+        CHECK(a.root->focused() == a.root->find("file.confirm.cancel"));
+        REQUIRE(a.root->click("file.confirm.cancel"));
+        CHECK_FALSE(quit);
+        CHECK(a.app->captureUncommitted());
+        // With unsaved changes too, Save / Don't save / Cancel, and the
+        // take's line says Save keeps the project without it.
+        run("track.add", R"({"type":"channel","name":"Bass"})");
+        REQUIRE(a.actions->run("ui.quit"));
+        a.root->frame(false);
+        const std::string both = a.root->find("file.confirm.text")->valueText();
+        INFO(both);
+        CHECK(both.rfind("The project has unsaved changes. The launcher take (", 0) == 0);
+        CHECK(both.find("It will be lost; Save saves the project without it.") !=
+              std::string::npos);
+        REQUIRE(a.root->find("file.confirm.save"));
+        CHECK(a.root->find("file.confirm.discard")->valueText() == "Don't save");
+        REQUIRE(a.root->click("file.confirm.cancel"));
+        CHECK_FALSE(quit);
+        // Unlocked meanwhile: the next Quit commits it, and asks as usual.
+        run("item.set", R"({"item":")" + item + R"(","locked":false})");
+        REQUIRE(a.actions->run("ui.quit"));
+        a.root->frame(false);
+        CHECK_FALSE(a.app->captureUncommitted());
+        CHECK(a.root->find("file.confirm.text")->valueText() == "The project has unsaved changes.");
+        REQUIRE(a.root->click("file.confirm.discard"));
+        CHECK(quit);
+    }
+    run("engine.stop", "{}");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+TEST_CASE("file actions: a take whose commit was undone is not counted by Quit") {
+    App a;
+    REQUIRE(a.ok);
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    gui::CaptureControl capture(*a.app, *a.dispatcher);
+    files.setCapture(&capture);
+    bool quit = false;
+    files.registerQuit([&] { quit = true; });
+    auto run = [&](const std::string& command, const std::string& args) {
+        auto r = a.dispatcher->execute({command, json::parse(args).value(), {}});
+        INFO(command << ": " << (r ? std::string() : r.error().toString()));
+        REQUIRE(r);
+        return *r;
+    };
+    run("track.add", R"({"type":"channel","name":"Drums"})");
+    run("scene.add", R"({"name":"Intro"})");
+    run("clip.add",
+        R"({"track":"tr_1","scene":"sc_1","notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    files.saveAs(a.dir / "declined");
+    run("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    run("launch.clip", R"({"clip":"cl_1"})");
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        a.app->tick();
+        capture.service();
+        const auto c = a.app->launchCapture();
+        if (c && !c->capture.launches.empty() && c->capture.frames > 48000) break;
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(capture.set(false));
+    while (capture.lit()) {  // its quantized end, then the commit
+        a.app->tick();
+        capture.service();
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    run("transport.stop", "{}");
+    REQUIRE_FALSE(a.app->captureUncommitted());  // committed by the toggle's end
+    run("history.undo", "{}");
+    REQUIRE(a.app->launchCapture()->commit == engine::EngineApp::CaptureCommit::Undone);
+    // Saved as undone: only the declined take could make Quit ask.
+    files.saveAs(a.dir / "declined");
+    REQUIRE(a.app->launchCapture()->commit == engine::EngineApp::CaptureCommit::Undone);
+    REQUIRE_FALSE(files.dirty());
+    const std::uint64_t undone = a.app->head().version;
+    REQUIRE(a.actions->run("ui.quit"));
+    CHECK(quit);  // no question: the project is clean and the take declined
+    CHECK(a.app->head().version == undone);
+    run("engine.stop", "{}");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+TEST_CASE("file dialogs: Open asks again for a capture begun or refused while the dialog is open") {
+    // Review round 170 F1: the question before the dialog finalized the
+    // capture; one that starts while the native dialog is open (an agent's)
+    // is finalized and asked about again before project.open, and a take
+    // refused meanwhile is named.
+    App a;
+    REQUIRE(a.ok);
+    std::vector<std::function<void()>> posted;
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [&](auto task) { posted.push_back(std::move(task)); });
+    gui::CaptureControl capture(*a.app, *a.dispatcher);
+    files.setCapture(&capture);
+    auto run = [&](const std::string& command, const std::string& args) {
+        auto r = a.dispatcher->execute({command, json::parse(args).value(), {}});
+        INFO(command << ": " << (r ? std::string() : r.error().toString()));
+        REQUIRE(r);
+        return *r;
+    };
+    run("track.add", R"({"type":"channel","name":"Drums"})");
+    run("scene.add", R"({"name":"Intro"})");
+    run("clip.add",
+        R"({"track":"tr_1","scene":"sc_1","notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    run("item.add",
+        R"({"track":"tr_1","bar":1,"notation":"voice d; 1: C2:w | C2:w | C2:w | C2:w"})");
+    const std::string item = a.app->head().items.begin()->id.str();
+    const bool refusedMeanwhile = [&] {
+        bool refuse = false;
+        SUBCASE("an agent's capture runs while the dialog is open") {}
+        SUBCASE("the pane's take is refused while the dialog is open") { refuse = true; }
+        return refuse;
+    }();
+    if (refusedMeanwhile) run("item.set", R"({"item":")" + item + R"(","locked":true})");
+    files.saveAs(a.dir / "open-capture");
+    REQUIRE_FALSE(files.dirty());
+    run("engine.start", R"({"backend":"dummy"})");
+    // Open's question found nothing to ask: the native dialog opens.
+    int delivered = 0;
+    auto result = files.guardDialog([&](auto) { ++delivered; }, true);
+    // Meanwhile a capture runs: an agent's, or the pane's own, which a stop
+    // ends and whose commit the lock refuses.
+    if (refusedMeanwhile)
+        REQUIRE(capture.set(true));
+    else
+        run("launch.capture", R"({"on":true})");
+    run("launch.clip", R"({"clip":"cl_1"})");
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        a.app->tick();
+        capture.service();
+        const auto c = a.app->launchCapture();
+        if (c && !c->capture.launches.empty() && c->capture.frames > 48000) break;
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const std::uint64_t before = a.app->head().version;
+    if (refusedMeanwhile) {
+        run("transport.stop", "{}");
+        a.app->tick();
+        capture.service();
+        REQUIRE(capture.kept());
+        REQUIRE(a.app->head().version == before);
+    }
+    // The file is chosen: not opened unasked.
+    result({a.dir / "other.json"});
+    REQUIRE(posted.size() == 1);
+    posted.front()();
+    posted.clear();
+    CHECK(delivered == 0);
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.confirm"));
+    const std::string text = a.root->find("file.confirm.text")->valueText();
+    INFO(text);
+    if (!refusedMeanwhile) {
+        // Finalized: the agent's take committed, then the usual question.
+        CHECK_FALSE(capture.lit());
+        CHECK(a.app->head().version == before + 1);
+        CHECK(text == "The project has unsaved changes.");
+    } else {
+        CHECK(text.rfind("The launcher take (", 0) == 0);
+        CHECK(text.find("the item at bar 1 on Drums is locked") != std::string::npos);
+        CHECK(a.root->find("file.confirm.discard")->valueText() == "Open");
+    }
+    REQUIRE(a.root->click("file.confirm.discard"));
+    CHECK(delivered == 1);
+    run("engine.stop", "{}");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
 TEST_CASE("file actions: registered Quit shares the popup and prompt policy") {
@@ -5070,11 +5325,15 @@ struct SafeLoadRig {
     bool stock = false, bridgeable = true, listed = true;
     bool second = false;  // a second suspect plug-in in the same listing
     int checks = 0;
-    json::Value lastArgs;                      // what the last check asked about
-    std::function<void()> afterCheck;          // runs once the check has read the file
-    std::string failFor;                       // a plug-in id whose override the engine refuses
-    std::map<std::string, std::string> modes;  // the mode each plug-in was last set to
-    std::string canaryId = "com.acme.canary";  // the suspect plug-in's id (a real one for F4)
+    json::Value lastArgs;                       // what the last check asked about
+    std::function<void()> afterCheck;           // runs once the check has read the file
+    std::string failFor;                        // a plug-in id whose override the engine refuses
+    std::map<std::string, std::string> modes;   // the mode each plug-in was last set to
+    std::string canaryId = "com.acme.canary";   // the suspect plug-in's id (a real one for F4)
+    std::vector<std::function<void()>> posted;  // the app's later passes (FileActions' post)
+    // project.plugins answers as the engine does: an override's mode (it
+    // holds until the app quits), and no suspect once its reports are
+    // settled. A test of the next run clears `modes` and `settled`.
 
     explicit SafeLoadRig(int width = 1000, int height = 640,
                          const std::filesystem::path& scratch = {})
@@ -5100,7 +5359,9 @@ struct SafeLoadRig {
                 p["format"] = "clap";
                 p["id"] = canaryId;
                 p["name"] = "Canary";
-                p["mode"] = "normal";
+                // As the engine answers: the mode an override set, and no
+                // suspect once its reports are settled (a "normally" answer).
+                p["mode"] = mode(canaryId);
                 p["stock"] = stock;
                 p["bridgeable"] = bridgeable;
                 auto resolved = json::Value::object();
@@ -5114,14 +5375,14 @@ struct SafeLoadRig {
                 auto incidents = json::Value::array();
                 incidents.push_back(json::Value("aa11"));
                 suspect["incidents"] = std::move(incidents);
-                p["suspect"] = std::move(suspect);
+                if (!isSettled("aa11")) p["suspect"] = std::move(suspect);
                 plugins.push_back(std::move(p));
                 if (second) {
                     auto q = json::Value::object();
                     q["format"] = "clap";
                     q["id"] = "com.acme.second";
                     q["name"] = "Second";
-                    q["mode"] = "normal";
+                    q["mode"] = mode("com.acme.second");
                     q["stock"] = false;
                     q["bridgeable"] = true;
                     auto resolved2 = json::Value::object();
@@ -5134,7 +5395,7 @@ struct SafeLoadRig {
                     auto incidents2 = json::Value::array();
                     incidents2.push_back(json::Value("bb22"));
                     suspect2["incidents"] = std::move(incidents2);
-                    q["suspect"] = std::move(suspect2);
+                    if (!isSettled("bb22")) q["suspect"] = std::move(suspect2);
                     plugins.push_back(std::move(q));
                 }
             }
@@ -5178,9 +5439,26 @@ struct SafeLoadRig {
         };
         load.onStatus = [this](const std::string& text) { statuses.push_back(text); };
         load.now = [] { return std::int64_t{1763400000000}; };
-        files = std::make_unique<gui::FileActions>(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui,
-                                                   a.window->sdl(), [](auto task) { task(); });
+        files = std::make_unique<gui::FileActions>(
+            *a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+            [this](auto task) { posted.push_back(std::move(task)); });
         files->setSafeLoad(&load);
+    }
+    std::string mode(const std::string& id) const {
+        auto at = modes.find(id);
+        return at == modes.end() ? std::string("normal") : at->second;
+    }
+    bool isSettled(const std::string& incident) const {
+        return std::find(settled.begin(), settled.end(), incident) != settled.end();
+    }
+    // The app's next passes: what FileActions posted runs, as the loop runs it.
+    void pump() {
+        while (!posted.empty()) {
+            auto task = std::move(posted.front());
+            posted.erase(posted.begin());
+            task();
+        }
+        a.root->frame(false);
     }
     // Choose a row of the question and go on with it (a click chooses; Continue acts).
     void pick(const char* row) {
@@ -5474,45 +5752,70 @@ TEST_CASE("safe-load: a refused second open leaves the override in the real engi
 }
 
 TEST_CASE("safe-load: an undo sets back only what this open changed (round 6c-a F1)") {
-    // A plug-in override holds until the app quits. A later open that finds the plug-in already
-    // set the way a remembered choice says changes nothing, so a refusal of that open must not
-    // put the plug-in back on the normal load: that restarts it in process under the project that
-    // is still open and loses its unsaved state.
+    // A plug-in override holds until the app quits. An open whose answer
+    // finds the plug-in already set that way (an agent's plugin.override
+    // while the question was open) changes nothing, so a refusal of that
+    // open must not put the plug-in back on the normal load: that restarts
+    // it in process under the project that is still open and loses its
+    // unsaved state.
     SafeLoadRig r;
-    const gui::RememberedLoad canary{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
-                                     "Acme", "1.2.0",           1};
-    r.rules = {canary};
-    r.open();  // the first open applies the remembered bridge to Canary and opens
-    REQUIRE(r.name() == "Saved");
-    REQUIRE(r.overrides.size() == 1);
-    CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
-    SUBCASE("a second open that is refused leaves Canary on its bridge") {
+    const auto noNormal = [&] {
+        for (const auto& o : r.overrides) CHECK(o.second != "normal");
+    };
+    SUBCASE("a refused open leaves the agent's matching override") {
         r.afterCheck = [&] {  // the file changes after the check: the open is refused
             std::ofstream out(r.file, std::ios::binary | std::ios::app);
             out << "\n";
         };
-        REQUIRE(r.a.dispatcher->execute(
-            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
-        r.open();
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        REQUIRE(r.load.override_(r.canaryId, "bridge"));  // the agent, meanwhile
+        r.pick("safeload.bridge");
+        r.a.root->frame(false);
         CHECK(r.name() == "Open now");  // refused
-        for (std::size_t i = 1; i < r.overrides.size(); ++i)
-            CHECK(r.overrides[i] ==
-                  std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
-        CHECK(r.overrides.size() == 2);  // the remembered choice was applied again, never undone
+        CHECK(r.posted.empty());        // by the file check, not waiting on a re-ask
+        CHECK(r.mode(r.canaryId) == "bridge");
+        noNormal();
+    }
+    SUBCASE("a refused open leaves a remembered plug-in an agent set meanwhile") {
+        // The held path: Canary's remembered bridge is applied without a
+        // question while Second is asked about; the agent sets Canary to
+        // bridge before the answer, so this open changes nothing for it.
+        r.second = true;
+        r.rules = {
+            {"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb", "Acme", "1.2.0", 1}};
+        r.afterCheck = [&] {
+            std::ofstream out(r.file, std::ios::binary | std::ios::app);
+            out << "\n";
+        };
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK(r.a.root->find("safeload.title")->valueText().find("Second Verb") !=
+              std::string::npos);
+        REQUIRE(r.load.override_(r.canaryId, "bridge"));  // the agent, meanwhile
+        r.pick("safeload.disable");                       // Second
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");  // refused
+        CHECK(r.posted.empty());
+        CHECK(r.mode(r.canaryId) == "bridge");
+        CHECK(r.mode("com.acme.second") == "normal");  // this open's own change, set back
+        for (const auto& o : r.overrides)
+            if (o.first == r.canaryId) CHECK(o.second != "normal");
     }
     SUBCASE("a later override that fails leaves it there too") {
         r.second = true;
         r.failFor = "com.acme.second";
-        REQUIRE(r.a.dispatcher->execute(
-            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
         r.ask();
         REQUIRE(r.a.root->find("safeload"));
-        r.pick("safeload.disable");
+        REQUIRE(r.load.override_(r.canaryId, "bridge"));  // the agent, meanwhile
+        r.pick("safeload.bridge");                        // Canary
         r.a.root->frame(false);
-        CHECK(r.name() == "Open now");  // the second suspect's override was refused: no open
-        for (std::size_t i = 1; i < r.overrides.size(); ++i)
-            CHECK(r.overrides[i] ==
-                  std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+        REQUIRE(r.a.root->find("safeload"));
+        r.pick("safeload.disable");  // Second: the engine refuses it, so no open
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");
+        CHECK(r.mode(r.canaryId) == "bridge");
+        noNormal();
     }
 }
 
@@ -5572,6 +5875,8 @@ TEST_CASE(
         CHECK(r.name() == "Saved");
         r.overrides.clear();
         r.statuses.clear();
+        r.modes.clear();  // the next run: no override in force, the reports as they were
+        r.settled.clear();
         r.open();  // again: the project asks nothing
         CHECK_FALSE(r.a.root->find("safeload"));
         REQUIRE(r.overrides.size() == 1);
@@ -5734,6 +6039,16 @@ TEST_CASE(
         r.a.app->setFixedClock(1'125'000);
         r.a.app->tick();
         r.pick("safeload.disable");
+        r.pump();
+        // The edit made while the question was open asks the discard decision
+        // again (review round 171 F1), then the plug-in question again.
+        CHECK(r.a.app->head().project->name == "Even later");
+        REQUIRE(r.a.root->find("file.confirm.discard"));
+        REQUIRE(r.a.root->click("file.confirm.discard"));
+        r.a.root->frame(false);
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK(r.lastArgs.find("autosave_file")->asString() == asked);
+        r.pick("safeload.disable");
         r.a.root->frame(false);
         CHECK(r.a.app->head().project->name == "After the save");
     }
@@ -5744,6 +6059,127 @@ TEST_CASE(
         CHECK(r.overrides.empty());
         CHECK_FALSE(r.a.root->find("file.recovered"));
     }
+}
+
+TEST_CASE("safe-load: an edit made while the question is open asks the discard decision again") {
+    // Review round 171 F1: the question can stay open; an agent's edit then
+    // is not opened over unasked. Round 173: the new decision is asked on a
+    // later pass, after the load that did not happen set its overrides back.
+    // A "separate process" or "not loaded" answer is then asked again; a
+    // "normally" answer has settled the reports and is not.
+    SafeLoadRig r;
+    const bool normal = [&] {
+        bool n = false;
+        SUBCASE("answered not loaded") {}
+        SUBCASE("answered normally") { n = true; }
+        return n;
+    }();
+    r.ask();
+    REQUIRE(r.a.root->find("safeload"));
+    REQUIRE(r.a.dispatcher->execute({"track.add", json::parse(R"({"name":"Late"})").value(), {}}));
+    r.pick(normal ? "safeload.normal" : "safeload.disable");
+    r.a.root->frame(false);
+    CHECK(r.name() == "Open now");  // not opened
+    // Set back before anything else happens: nothing loads with it.
+    CHECK(r.mode(r.canaryId) == "normal");
+    REQUIRE_FALSE(r.a.root->find("file.confirm"));  // asked on the next pass
+    r.pump();
+    REQUIRE(r.a.root->find("file.confirm"));
+    CHECK(r.a.root->find("file.confirm.text")->valueText() == "The project has unsaved changes.");
+    REQUIRE(r.a.root->click("file.confirm.discard"));
+    r.a.root->frame(false);
+    if (normal) {
+        // Its reports are settled: nothing to ask, the project opens.
+        CHECK_FALSE(r.a.root->find("safeload"));
+        CHECK(r.name() == "Saved");
+        CHECK(r.mode(r.canaryId) == "normal");
+        return;
+    }
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.checks == 2);
+    r.pick("safeload.disable");
+    CHECK(r.name() == "Saved");
+    CHECK(r.mode(r.canaryId) == "disable");  // the person's choice holds
+}
+
+TEST_CASE(
+    "safe-load: a re-ask with nothing to save asks the plug-in again, never loads overridden") {
+    // Review round 173 F1: a clean project and no kept take (an agent's
+    // capture that launched nothing) while the question is open. The new
+    // decision needs no question, so the load starts again at once; it must
+    // see the plug-in back on its normal load and ask, not open with the
+    // first answer's override and then have it set back under the project.
+    SafeLoadRig r;
+    gui::CaptureControl capture(*r.a.app, *r.a.dispatcher);
+    r.files->setCapture(&capture);
+    REQUIRE(r.a.dispatcher->execute(
+        {"engine.start", json::parse(R"({"backend":"dummy"})").value(), {}}));
+    REQUIRE_FALSE(r.files->dirty());
+    r.ask();
+    REQUIRE(r.a.root->find("safeload"));
+    REQUIRE(r.a.dispatcher->execute({"launch.capture", json::parse(R"({"on":true})").value(), {}}));
+    REQUIRE(capture.lit());
+    r.pick("safeload.disable");
+    r.a.root->frame(false);
+    CHECK(r.name() == "Open now");
+    r.pump();
+    // Nothing to save: the plug-in is asked about again, from its normal load.
+    CHECK_FALSE(capture.lit());
+    REQUIRE(r.a.root->find("safeload"));
+    CHECK(r.name() == "Open now");
+    CHECK(r.mode(r.canaryId) == "normal");
+    r.pick("safeload.disable");
+    CHECK(r.name() == "Saved");
+    CHECK(r.mode(r.canaryId) == "disable");
+    REQUIRE_FALSE(r.overrides.empty());
+    CHECK(r.overrides.back() == std::pair<std::string, std::string>{r.canaryId, "disable"});
+    (void)r.a.dispatcher->execute({"engine.stop", json::Value::object(), {}});
+}
+
+TEST_CASE("safe-load: a capture an agent starts while the question is open is finalized first") {
+    SafeLoadRig r;
+    gui::CaptureControl capture(*r.a.app, *r.a.dispatcher);
+    r.files->setCapture(&capture);
+    auto run = [&](const std::string& command, const std::string& args) {
+        auto res = r.a.dispatcher->execute({command, json::parse(args).value(), {}});
+        INFO(command << ": " << (res ? std::string() : res.error().toString()));
+        REQUIRE(res);
+    };
+    run("track.add", R"({"type":"channel","name":"Drums"})");
+    run("scene.add", R"({"name":"Intro"})");
+    run("clip.add",
+        R"({"track":"tr_1","scene":"sc_1","notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    run("engine.start", R"({"backend":"dummy"})");
+    r.ask();  // past the unsaved changes' question
+    REQUIRE(r.a.root->find("safeload"));
+    // While the question is open, an agent captures.
+    run("launch.capture", R"({"on":true})");
+    run("launch.clip", R"({"clip":"cl_1"})");
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        r.a.app->tick();
+        capture.service();
+        const auto c = r.a.app->launchCapture();
+        if (c && !c->capture.launches.empty() && c->capture.frames > 48000) break;
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const std::uint64_t before = r.a.app->head().version;
+    r.pick("safeload.bridge");
+    r.pump();
+    // Finalized (the take committed, one undo step), then asked again.
+    CHECK(r.name() == "Open now");
+    CHECK_FALSE(capture.lit());
+    CHECK(r.a.app->head().version == before + 1);
+    CHECK_FALSE(r.a.app->captureUncommitted());
+    REQUIRE(r.a.root->find("file.confirm"));
+    REQUIRE(r.a.root->click("file.confirm.discard"));
+    r.a.root->frame(false);
+    REQUIRE(r.a.root->find("safeload"));
+    r.pick("safeload.bridge");
+    CHECK(r.name() == "Saved");
+    CHECK(r.mode(r.canaryId) == "bridge");
+    run("engine.stop", "{}");
 }
 
 TEST_CASE("safe-load: two suspects on a recovery path are asked one after the other") {

@@ -217,7 +217,13 @@ New, Open and Quit (including File > Quit, Cmd+Q on macOS and closing the main
 window) first stop an active recording and add its takes to the
 project, then ask whether to save the changes. Cancel keeps the recorded takes;
 Undo removes that recording. If stopping fails, the error is shown and the
-requested action does not continue. If an agent starts another recording or
+requested action does not continue. A launcher capture is finished the same
+way: its take is written to the timeline (one step you can undo) before the
+question. If it can't be written (a locked item is in the way, say), the
+question names the take and says it will be lost, even when nothing else
+changed; then the buttons are just the action (Quit, say) and Cancel. Cancel
+keeps the take, so you can fix what it names first. A take whose
+writing you undid is left out: you turned it down. If an agent starts another recording or
 edits the current project while that question or its Save As dialog is open,
 the app stops the new recording and asks again before saving or leaving.
 A changed branch also requires a new decision.
@@ -227,6 +233,12 @@ open, any button cancels the old request with a notice, leaving the replacement
 project untouched. File and folder dialog results are also ignored with a notice
 if the project was replaced; open the dialog again. If edits arrive
 while Open is waiting, Steppe asks about unsaved changes again before opening.
+The same holds while it asks how to load a plug-in that crashed before: if
+the project changes or a launcher capture runs meanwhile, it checks for
+unsaved changes again (asking if there are any), then asks again about any
+plug-in you chose to run in
+a separate process or not to load (one you chose to load normally is not
+asked about again).
 
 **File > Import…** (Ctrl+I) brings in audio files (WAV, FLAC, MP3) and MIDI
 files (`.mid`) at the playhead: one file onto the selected track, several onto
@@ -1766,11 +1778,22 @@ lights when an agent is capturing; clicking it then finishes that capture
 and writes it.
 
 If the performance can't be written (a locked item is in the way, say),
-Capture goes dark and the status line says why. The performance is kept: fix
-what it names, then click Capture, and it is written before Capture lights
-again. If it is refused again, the status line says so, and one more click tries
-once more and, if it still can't, discards the performance and starts a new
-capture.
+Capture goes dark and the status line says why. The performance is kept, and
+the Capture button shows it with its dot in outline (hover over it for what is
+kept and why): fix what it names, then click Capture, and it is written before
+Capture lights again. If it is refused again, the status line says so, and one
+more click tries once more and, if it still can't, discards the performance and
+starts a new capture.
+
+If the audio engine stops while you capture with the Capture button (Stop
+audio, Restart audio, a new device, or the device restarting), the take so far
+is written to the timeline and the status line says so; Capture goes dark until
+you click it again. A capture an agent started is not written at a stop: its
+take is kept, and the Capture button shows it with its dot in outline. Click
+Capture to write it; Quit, New and Open write it first too. If you
+undo a written take and then click Capture, a new capture starts; the undone
+take stays undoable until the new one begins, and the status line says when it
+is replaced.
 
 To put a scene into the song, drag its header onto the timeline: it lies
 from the bar you drop it on, for as many whole bars as its longest clip
@@ -1954,7 +1977,14 @@ queued, `followed`: what it follows by (`none`, `key` or `chords`).
 that grid's next line, so the performance ends on the bar. The Capture
 button, turned off while playing, ends it on the project's launch quantize
 and commits it there. `launch.commit` then writes the performance onto the
-timeline as ordinary items, in one undo step. It is laid out as it ran:
+timeline as ordinary items, in one undo step. A capture not yet committed is
+kept when the engine stops or the audio device restarts or fails: a running
+one ends there, `engine.stop` (or the device's event) says so, and
+`launch.commit` still writes it, with the engine stopped or started again.
+A new capture replaces it once it begins, and `launch.capture` says so.
+Undoing the commit makes the capture uncommitted again while it is kept, and
+`engine.stop` names an uncommitted one each time it is called. It is
+laid out as it ran:
 from where the capture began, each launch as many seconds later as it was
 heard, even if the transport loop jumped back meanwhile. On each track that
 played a clip or was stopped, those stretches replace what the timeline had
@@ -1971,7 +2001,11 @@ the commit is refused with `launch.commit.fade` and the performance kept:
 set the clip's fades to 0, or capture it again. MIDI is copied, so editing the
 items leaves the clips alone; `launch.commit {pooled: true}` shares it
 instead. Stopping, seeking or changing the loop ends a capture, and
-committing again writes the same performance over itself.
+committing again writes the same performance over itself. Removing a clip
+while it plays returns its track to the arrangement, and a capture keeps
+that as you heard it: the clip up to there, then the arrangement. The
+commit then refuses, naming the removed clip and keeping the capture; undo
+the removal and commit again.
 
 Renders play the arrangement only; the render dialog says so while a
 clip is playing. Not yet:

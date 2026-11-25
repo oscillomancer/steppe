@@ -70,6 +70,7 @@ set(_engine_test_sources
   tests/test_clip_player_rate_armed.cpp tests/test_clip_player_rate_held.cpp
   tests/test_clip_player_rate_trajectory.cpp tests/test_clip_player_rate_trajectory_queued.cpp
   tests/test_clip_player_rate_retry.cpp
+  tests/test_launch_capture_kept.cpp
   tests/test_clip_player_rate_chain.cpp tests/test_clip_player_rate_wrap.cpp tests/test_clip_player_rate_live.cpp
   tests/test_clip_player_follow.cpp tests/test_launch_access.cpp tests/test_scene_section.cpp
   tests/test_scripts.cpp tests/test_strips.cpp
@@ -101,7 +102,8 @@ if(SUPPLE_BUILD_TESTS)
                        engine.tests.test_clip_player_rate_fades engine.tests.test_clip_player_rate_stretch
                        engine.tests.test_clip_player_rate_presses PROPERTIES TIMEOUT 1200)
   # S3 step D4's trajectory cases: 227 s and 206 s under ThreadSanitizer at
-  # -j 2 (before the cold-restart case moved in from rate_stretch, 573 s then).
+  # -j 2 (before the cold-restart case moved in from rate_stretch, 573 s then);
+  # 290 s and 266 s on capture-kept, where the retry entry took 161 s at -j 2.
   set_tests_properties(engine.tests.test_clip_player_rate_trajectory
                        engine.tests.test_clip_player_rate_trajectory_queued
                        engine.tests.test_clip_player_rate_retry PROPERTIES TIMEOUT 1200)

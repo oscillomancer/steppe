@@ -21,6 +21,7 @@ std::uint32_t launchesQueuedForTests(const Engine& e) {
 }
 void lateAttemptsForTests(Engine& e, int attempts) { EngineTestAccess::lateAttempts(e, attempts); }
 std::int64_t preparedSwitchForTests(const Engine& e) { return EngineTestAccess::preparedSwitch(e); }
+std::uint64_t epochForTests(const Engine& e) { return EngineTestAccess::epoch(e); }
 }  // namespace supple::engine
 
 TEST_CASE(

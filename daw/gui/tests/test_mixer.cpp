@@ -2922,7 +2922,7 @@ TEST_CASE("audio device: Refresh stops the engine, lists the devices again and s
     on["on"] = false;
     (void)f.dispatcher->execute({"launch.capture", on, test});
     REQUIRE_FALSE(f.app->launchCapturing());
-    bool kept = true;  // as the app's hook says for a kept performance
+    bool kept = true;  // as the app's hook says while the toggle is armed
     audio.captureHeld = [&] { return kept; };
     audio.refresh();
     CHECK_FALSE(f.node("audio.refresh")->enabled);
