@@ -585,6 +585,25 @@ the same.*
   logged: it follows from the loop, which a replay is given. A seek, a
   loop change or a stop ends a capture, so a replay never crosses one
   (ADR-0097, revision 2026-11-20, batch 3).
+  A plan that returns a track to the arrangement because it lacks the
+  clip the track plays (the clip removed, its track frozen, or past the
+  memory budget) is a launch too: `launchReturns_` records it as an
+  arrangement launch placed where an immediate `launch.arrangement`
+  (quantize none) would land when the engine takes the plan (the app
+  services the engine right after each load). That is a bound, not the
+  frame itself: the return may be recorded up to one block after the
+  frame the plan reached the executors, which report no adoption frame.
+  Where the placement answers `launch.later` (a playrate change on its
+  way), no return is recorded and the clip's stretch runs on in the
+  capture. A capture includes each recorded return within its span, in
+  frame order with the logged launches. What each
+  track played as a capture began is judged by the resets as they stood
+  then (`CaptureState::resets`), so removing a clip later, in the capture
+  or after it, never drops what was heard: the capture keeps the clip's
+  stretch and the return, and `launch.commit` refuses the removed clip
+  with `launch.commit` at `/performance/launches/N/clip`, the capture
+  kept. Undoing the removal makes it committable as it was; the
+  capture's version rule is unchanged.
   Renders and the render dialog play the arrangement only, and the dialog
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at

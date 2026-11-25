@@ -841,8 +841,25 @@ void Engine::serviceLaunches() {
                 (reset != launchReset_.end() && reset->second > i))
                 continue;
             const detail::Node* n = plan ? nodeOf(*plan, track) : nullptr;
-            if (!n || n->players.empty() || detail::playerOf(*n, e.clip) < 0)
+            if (!n || n->players.empty() || detail::playerOf(*n, e.clip) < 0) {
                 launchReset_[track] = launchLog_.size();
+                // Heard as a return to the arrangement: where an immediate
+                // launch.arrangement would land now (the app services the
+                // engine right after each load), for a running capture.
+                const LaunchRequest back{track, LaunchLogEntry::Action::Arrangement, {}, {}};
+                if (const auto placed =
+                        placeLaunch(std::span(&back, 1), model::LaunchQuantize::None)) {
+                    LaunchLogEntry r;
+                    r.runningFrame = placed->stream;
+                    r.track = track;
+                    r.action = LaunchLogEntry::Action::Arrangement;
+                    r.anchorSample = placed->anchorSample;
+                    r.anchorBeat = placed->anchorBeat;
+                    r.songFrame = placed->songFrame;
+                    r.epoch = placed->epoch;
+                    launchReturns_.push_back(r);
+                }
+            }
         }
     }
     for (LaunchSlot& s : *launchSlots_) {
@@ -1231,6 +1248,7 @@ void Engine::placeCapture() {
     capture_.epoch = clock.epoch;
     capture_.startSong = song;
     capture_.version = latest_ ? latest_->version : 0;
+    capture_.resets = launchReset_;
 }
 
 void Engine::captureRelocating() {
@@ -1336,7 +1354,8 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
         out.endsBeat = capture_.endBeat;
     }
     // What each track played as the capture began: its newest entry by
-    // then, unless a plan has since returned it to the arrangement.
+    // then, unless a plan had returned it to the arrangement by then (a
+    // return after it, such as a clip removed later, is a launch within).
     std::map<model::Id, std::size_t> before;
     for (std::size_t i = 0; i < launchLog_.size(); ++i) {
         const LaunchLogEntry& e = launchLog_[i];
@@ -1344,20 +1363,27 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
             before[e.track] = i;
     }
     for (const auto& [track, i] : before) {
-        const auto reset = launchReset_.find(track);
-        if (reset != launchReset_.end() && reset->second > i) continue;
+        const auto reset = capture_.resets.find(track);
+        if (reset != capture_.resets.end() && reset->second > i) continue;
         LaunchLogEntry first = launchLog_[i];
         if (first.action == LaunchLogEntry::Action::Arrangement) continue;
         first.runningFrame = 0;
         first.epoch = capture_.epoch;
         out.launches.push_back(first);
     }
-    for (const LaunchLogEntry& e : launchLog_)
-        if (e.epoch == capture_.epoch && e.songFrame > start && e.songFrame < end) {
-            LaunchLogEntry within = e;
-            within.runningFrame = e.songFrame - start;
-            out.launches.push_back(within);
-        }
+    // Then each launch within it, and each return a plan made, in order.
+    const std::size_t firsts = out.launches.size();
+    for (const auto* log : {&launchLog_, &launchReturns_})
+        for (const LaunchLogEntry& e : *log)
+            if (e.epoch == capture_.epoch && e.songFrame > start && e.songFrame < end) {
+                LaunchLogEntry within = e;
+                within.runningFrame = e.songFrame - start;
+                out.launches.push_back(within);
+            }
+    std::stable_sort(out.launches.begin() + static_cast<std::ptrdiff_t>(firsts), out.launches.end(),
+                     [](const LaunchLogEntry& a, const LaunchLogEntry& b) {
+                         return a.runningFrame < b.runningFrame;
+                     });
     return out;
 }
 

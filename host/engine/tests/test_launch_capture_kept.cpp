@@ -477,3 +477,113 @@ TEST_CASE("a commit merged twice stays committed when only the last merged step 
     p.run("history.undo", "{}");  // the commit's replay too: undone
     CHECK(commitOf(p) == EngineApp::CaptureCommit::Undone);
 }
+
+namespace {
+// Plays cl_1 from bar 2 (frame 96000), captures from frame 100096 to
+// 150016 with `midway` run at frame 120064, and ends the capture.
+template <class F>
+void heldTake(Project& p, AppLive& live, F&& midway) {
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(782 * kBlock);  // 100096
+    p.run("launch.capture", R"({"on": true})");
+    live.until(938 * kBlock);  // 120064
+    midway();
+    live.until(150016);
+    p.run("launch.capture", R"({"on": false})");
+}
+
+json::Value commitResult(Project& p) {
+    json::Value out = json::Value::object();
+    out["commit"] = p.run("launch.commit", "{}");
+    return out;
+}
+
+// launch.commit refused for the removed cl_1, the capture kept.
+void refusedForRemovedClip(Project& p) {
+    const auto before = p.app->launchCapture();
+    REQUIRE(before);
+    auto r = p.bus->execute({"launch.commit", json::Value::object(), kOrigin});
+    REQUIRE_FALSE(r);
+    CHECK(r.error().code == "launch.commit");
+    CHECK(r.error().path == "/args/performance/launches/0/clip");
+    CHECK(r.error().message.find("cl_1") != std::string::npos);
+    const auto after = p.app->launchCapture();
+    REQUIRE(after);
+    CHECK(after->capture.launches.size() == before->capture.launches.size());
+}
+}  // namespace
+
+TEST_CASE("a clip removed after its capture keeps what it played, and commits once restored") {
+    // Q3 (round 168): the clip playing as the capture began stays in it
+    // when a plan returns its track to the arrangement later; the commit
+    // refuses the removed clip, and after the removal is undone writes what
+    // a commit before the removal writes.
+    json::Value twin;
+    {
+        Project q;
+        twoTracks(q);
+        AppLive live(q, kInCallback, kBlock, 48000 * 4);
+        heldTake(q, live, [] {});
+        twin = commitResult(q);
+    }
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    heldTake(p, live, [] {});
+    const auto taken = p.app->launchCapture();
+    REQUIRE(taken);
+    REQUIRE(taken->capture.launches.size() == 1);  // cl_1, from frame 0
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    const auto kept = p.app->launchCapture();
+    REQUIRE(kept);
+    CHECK(kept->capture.launches.size() == 1);
+    refusedForRemovedClip(p);
+    p.run("history.undo", "{}");
+    CHECK(commitResult(p) == twin);
+}
+
+TEST_CASE("a clip removed mid-capture is kept up to its return to the arrangement") {
+    // Q3 (round 168): the plan's return is an arrangement launch where an
+    // immediate launch.arrangement would have landed: the same capture and
+    // commit as that launch, once the removal is undone.
+    const model::Id tr1{model::Kind::Track, 1};
+    json::Value twin;
+    std::vector<LaunchLogEntry> twinLaunches;
+    {
+        Project q;
+        twoTracks(q);
+        AppLive live(q, kInCallback, kBlock, 48000 * 4);
+        heldTake(q, live, [&] {
+            const Engine::LaunchRequest back{tr1, LaunchLogEntry::Action::Arrangement, {}, {}};
+            REQUIRE(q.app->engine()->launch(std::span(&back, 1), model::LaunchQuantize::None));
+        });
+        twinLaunches = q.app->launchCapture()->capture.launches;
+        twin = commitResult(q);
+    }
+    REQUIRE(twinLaunches.size() == 2);
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    heldTake(p, live, [&] { p.run("clip.remove", R"({"clip": "cl_1"})"); });
+    const auto view = p.app->launchCapture();
+    REQUIRE(view);
+    const auto& got = view->capture.launches;
+    REQUIRE(got.size() == 2);
+    CHECK(got[0].action == LaunchLogEntry::Action::Clip);
+    CHECK(got[0].runningFrame == 0);
+    CHECK(got[1].action == LaunchLogEntry::Action::Arrangement);
+    CHECK(got[1].track == tr1);
+    // Heard from the first block after the removal.
+    const std::int64_t back = view->capture.startSample + got[1].runningFrame;
+    CHECK(back >= 120064);
+    CHECK(back <= 120064 + 2 * kBlock);
+    CHECK(got[1].runningFrame == twinLaunches[1].runningFrame);
+    CHECK(got[1].songFrame == twinLaunches[1].songFrame);
+    CHECK(got[1].anchorSample == twinLaunches[1].anchorSample);
+    CHECK(got[1].anchorBeat == twinLaunches[1].anchorBeat);
+    refusedForRemovedClip(p);
+    p.run("history.undo", "{}");
+    CHECK(commitResult(p) == twin);
+}
