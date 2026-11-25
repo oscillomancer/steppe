@@ -2012,7 +2012,10 @@ the **Arrangement**; the **Last capture**, exactly as you heard it, on the
 version it played on (the dialog says "As heard", or why not, before you
 render); or the **Launcher** as it plays now, from Start to End. A
 performance render plays once over its own range, and its file name gets
-" performance" added, which you can change. While the arrangement is chosen
+" performance" added to the mix's or the stems' name, which you can change
+(a name you type stays when you switch between Master mix and Stems). If
+the last capture changes while the dialog is open, the dialog shows the new
+one. While the arrangement is chosen
 and a clip is playing, the dialog says the clips playing now are not in the
 render. An agent can render a performance too: `render.mix` (or
 `render.stems`, `render.dry-run`, `render.queue.add`) with

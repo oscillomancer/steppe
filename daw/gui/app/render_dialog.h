@@ -55,6 +55,9 @@ class RenderDialog {
     // Frame pass: debounced preview refresh and job polling (also while closed,
     // for File → Mix).
     void tick();
+    // Last capture follows the capture: tick() runs this once a second (it
+    // walks the history); a test calls it directly.
+    void followCapture();
     std::optional<std::chrono::steady_clock::time_point> nextDeadline() const;
     // For tests: 0 runs the preview on the next tick without a wait.
     void setDebounceMs(int ms) { debounceMs_ = std::max(0, ms); }
@@ -133,6 +136,15 @@ class RenderDialog {
     std::function<void(const std::filesystem::path&)> openFolder;
     // The status bar (File → Mix progress and result).
     std::function<void(const std::string&)> onStatus;
+    // The app's log: a refusal the dialog has no words for, in full (code,
+    // path, message and hint), while the dialog shows its plain sentence.
+    std::function<void(const std::string&)> onLog;
+    // An engine refusal in the dialog's words, from its code and path: never
+    // its message, hint or a command name. One the dialog does not know
+    // reads `fallback` and goes to onLog in full. The dialog's own errors
+    // (gui.*) are already its words.
+    std::string refusalWords(const Error& e,
+                             std::string_view fallback = "The render could not be made.") const;
     // The "Open folder when done" preference.
     std::function<bool()> openFolderWhenDone;
     std::function<void(bool)> setOpenFolderWhenDone;
@@ -186,10 +198,26 @@ class RenderDialog {
     // The launcher's default range: from the playhead's bar for the longest
     // clip playing, in whole bars (four when none plays).
     void defaultLauncherRange();
-    // A refusal of a performance in the dialog's words, from its code and
-    // path (never its hint); empty for one it does not know.
-    std::string performanceRefusal(const Error& e) const;
     void buildPerformanceRange(ui::Node& body);
+    // The file name a performance renders under: the one typed, or the
+    // current source's pattern plus " performance".
+    std::string perfPattern() const;
+    // The launcher's range again from its default when it is incomplete or
+    // out of order (after a Plays switch or a preset).
+    void settleLauncherRange();
+    // What Last capture shows of a capture: its start and version, whether it
+    // runs or is kept, and once it stopped its length, launches and facts. Two
+    // captures alike in all of it render alike (there is no capture serial).
+    struct CaptureKey {
+        std::int64_t start = 0;
+        std::uint64_t version = 0;
+        bool running = false, kept = false;
+        std::int64_t frames = -1;  // stopped only: a running one grows
+        std::size_t launches = 0;
+        engine::Engine::CaptureFacts facts;  // stopped only
+        bool operator==(const CaptureKey&) const = default;
+    };
+    std::optional<CaptureKey> captureKey() const;
 
     engine::EngineApp& app_;
     cmd::Dispatcher& dispatcher_;
@@ -205,9 +233,11 @@ class RenderDialog {
     bool clipsHeld_ = false;                 // what the Source section's clips line says
     Plays plays_ = Plays::Arrangement;
     std::optional<double> launcherStart_, launcherEnd_;  // beats
-    // The file name under a performance: the pattern plus " performance",
-    // editable, one-off (never written).
+    // The file name typed for a performance, one-off (never written); unset,
+    // the name follows the source (perfPattern()).
     std::optional<std::string> perfPattern_;
+    // The capture Last capture showed at the last build (tick() follows it).
+    std::optional<CaptureKey> captureKey_;
     std::string asHeardText_;
     std::optional<std::pair<double, double>> perfRange_;  // the dry run's range, beats
     bool captureRunning_ = false;    // what the capture's range line says ("so far")

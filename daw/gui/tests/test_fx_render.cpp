@@ -451,12 +451,265 @@ TEST_CASE("the render dialog's Plays row: a performance renders its own range, o
     f.render->setField("render.perf.end", "5");
     CHECK(f.render->renderArguments()["performance"]["start_beat"].asDouble() == 8);
     CHECK(f.render->renderArguments()["performance"]["end_beat"].asDouble() == 16);
-    // Regions: the Plays toggles are off, and nothing is sent.
+    // Regions: the Plays toggles are off, and nothing is sent; Arrangement is
+    // what is lit (round 175 F5), Launcher again once Master mix is back.
     f.render->setSource(gui::RenderDialog::Source::Regions);
     f.frame();
     CHECK_FALSE(f.uiRoot().find("render.plays.launcher")->enabled);
     CHECK(f.uiRoot().find("render.plays.launcher")->hint.name == "Regions render the arrangement");
     CHECK_FALSE(f.render->renderArguments().find("performance"));
+    CHECK(f.uiRoot().find("render.plays.arrangement")->valueText() == "on");
+    CHECK(f.uiRoot().find("render.plays.launcher")->valueText() == "off");
+    f.render->setSource(gui::RenderDialog::Source::Master);
+    f.frame();
+    CHECK(f.uiRoot().find("render.plays.launcher")->valueText() == "on");
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: a performance's file name follows Source until one is typed") {
+    // Round 175 F1: the name is the source's pattern plus " performance";
+    // stems need {track}, or every stem lands on one file (render.path).
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return r ? *r : json::Value();
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("track.add", R"({"name": "Keys"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    run("clip.add", R"({"track": "tr_2", "scene": "sc_1", "notation": "voice keys; 1: C4:q r:*"})");
+    f.render->open();
+    f.render->setPlays(gui::RenderDialog::Plays::Launcher);
+    const std::string mix = f.render->pattern();
+    CHECK(f.render->renderArguments()["pattern"].asString() == mix + " performance");
+    const auto dry = [&](const char* operation) {
+        json::Value a = f.render->renderArguments();
+        a.asObject().erase("analyze");
+        a["operation"] = operation;
+        return f.dispatcher->execute({"render.dry-run", a, kTestOrigin});
+    };
+    f.render->setSource(gui::RenderDialog::Source::Stems);
+    f.frame();
+    const std::string stems = f.render->pattern();
+    REQUIRE(stems != mix);
+    CHECK(f.render->renderArguments()["pattern"].asString() == stems + " performance");
+    auto* name = dynamic_cast<ui::TextField*>(f.uiRoot().find("render.pattern"));
+    REQUIRE(name);
+    CHECK(name->text() == stems + " performance");
+    {
+        auto r = dry("stems");  // two stems, two files
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        CHECK((*r)["files"].size() == 2);
+    }
+    f.render->setSource(gui::RenderDialog::Source::Master);
+    f.frame();
+    CHECK(f.render->renderArguments()["pattern"].asString() == mix + " performance");
+    // Typed, it is never overwritten: kept across sources.
+    f.render->setField("render.pattern", "take {project}");
+    f.render->setSource(gui::RenderDialog::Source::Stems);
+    f.frame();
+    CHECK(f.render->renderArguments()["pattern"].asString() == "take {project}");
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: the launcher's Start and End are checked as one range") {
+    // Round 175 F2: no stale error blocks a range in order, and a pair out of
+    // order never reaches the engine after Plays switches away and back.
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    f.render->open();
+    f.render->setDebounceMs(0);
+    f.render->setPlays(gui::RenderDialog::Plays::Launcher);  // bars 1 to 5
+    // Refused by the dialog's own check: the preview names the field.
+    const auto refused = [&] {
+        f.render->refreshPreview();
+        return f.render->preview().find("end after the start") != std::string::npos;
+    };
+    SUBCASE("End typed after a Start past it") {
+        f.render->setField("render.perf.start", "9");
+        CHECK(refused());
+        f.render->setField("render.perf.end", "13");
+        CHECK_FALSE(refused());
+        json::Value p = f.render->renderArguments()["performance"];
+        CHECK(p["start_beat"].asDouble() == 32);
+        CHECK(p["end_beat"].asDouble() == 48);
+        // Out of order again from End: its error, then cleared from Start.
+        f.render->setField("render.perf.end", "5");
+        CHECK(refused());
+        f.render->setField("render.perf.start", "1");
+        CHECK_FALSE(refused());
+    }
+    SUBCASE("away and back: the range starts again from its default") {
+        f.render->setField("render.perf.start", "9");
+        f.render->setPlays(gui::RenderDialog::Plays::Arrangement);
+        f.render->setPlays(gui::RenderDialog::Plays::Launcher);
+        CHECK_FALSE(refused());
+        json::Value p = f.render->renderArguments()["performance"];
+        CHECK(p["start_beat"].asDouble() < p["end_beat"].asDouble());
+        f.render->refreshPreview();
+        CHECK(f.render->preview().find("End is not after Start") == std::string::npos);
+        CHECK(f.render->preview().find("end_beat") == std::string::npos);
+    }
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
+    // Round 175 F3 (the audio device dialog's rule): from the code and the
+    // path only; never the message, the hint, a path or a command name. The
+    // codes are those the render commands and the offline render return
+    // (render_commands.cpp, render_performance.cpp, render_chain.cpp,
+    // render_settings.cpp, offline.cpp; render.mix declares none in the
+    // registry). One the dialog does not know reads one plain sentence, and
+    // the full error goes to the log.
+    Fixture f;
+    if (!f.ok) return;
+    std::vector<std::string> logged;
+    f.render->onLog = [&](const std::string& line) { logged.push_back(line); };
+    const char* text = "engine text";
+    const char* hint = "a hint for command callers";
+    const std::vector<std::pair<std::string, std::string>> codes{
+        {"launch.capture", "/performance"},
+        {"render.performance.sample_rate", "/performance/sample_rate"},
+        {"render.loop", "/performance/loop"},
+        {"render.performance.too_many", "/performance/launches"},
+        {"render.performance.launches", "/performance/launches/2/frame"},
+        {"render.performance.launches", "/performance/launches/2/clip"},
+        {"track.unknown", "/performance/launches/1/track"},
+        {"track.frozen", "/performance/launches/1/track"},
+        {"launch.playrate", "/performance/launches/1/clip"},
+        {"launch.memory", "/performance/launches/1/clip"},
+        {"clip.unknown", "/performance/launches/1/clip"},
+        {"cl.unknown", "/performance/launches/1/clip"},  // the resolver's, by id kind
+        {"tr.unknown", "/performance/launches/1/track"},
+        {"render.not_as_heard", "/performance"},
+        {"render.empty", "/performance/end_beat"},
+        {"render.empty", "/performance/frames"},
+        {"render.empty", ""},
+        {"render.args", "/seamless_loop"},
+        {"render.args", "/trim"},
+        {"render.args", "/handles_s"},
+        {"render.args", "/limit_true_peak_db"},
+        {"render.args", "/performance"},
+        {"render.args", "/sample_rate"},
+        {"render.path", "/pattern"},
+        {"render.pattern", "/pattern"},
+        {"render.exists", "/if_exists"},
+        {"render.normalize", "/normalize"},
+        {"render.normalize", "/limit_true_peak_db"},
+        {"render.format", "/outputs"},
+        {"render.secondary", "/secondary"},
+        {"render.budget", "/end_beat"},
+        {"render.source", "/version"},
+        {"render.masters", "/masters"},
+        {"render.stale_target", ""},
+        {"region.unknown", "/regions/0"},
+        {"track.strip_type", "/tracks/0"},
+        {"history.version", "/version"},
+        {"branch.unknown", "/branch"},
+        {"render.preset_unknown", "/name"},
+        {"render.preset_factory", "/name"},
+        {"render.preset_name", "/name"},
+        {"render.preset_write", ""},
+        {"render.queue_unknown", "/id"},
+        {"render.queue_empty", ""},
+        {"job.cancelled", ""},
+        {"engine.media_missing", ""},
+        {"engine.media_changed", ""},
+        {"engine.media_too_long", ""},
+        {"engine.blob_missing", ""},
+        {"engine.bridge_failed", ""},
+        {"engine.fx_failed", ""},
+        {"engine.patch_unpatchable", ""},
+        {"engine.too_long", ""},
+        {"engine.range", ""},
+        {"engine.tail", ""},
+    };
+    for (const auto& [code, path] : codes) {
+        INFO(code << " at " << path);
+        const std::string words = f.render->refusalWords(Error(code, text, "/args" + path, hint));
+        CHECK_FALSE(words.empty());
+        CHECK(words.find(text) == std::string::npos);
+        CHECK(words.find(hint) == std::string::npos);
+        CHECK(words.find(code) == std::string::npos);
+        for (const char* command :
+             {"render.mix", "render.stems", "render.regions", "render.dry-run", "render.queue"})
+            CHECK(words.find(command) == std::string::npos);  // no command name
+        CHECK(words.find("/args") == std::string::npos);
+        if (!path.empty()) CHECK(words.find(path) == std::string::npos);
+        CHECK(words != "The render could not be made.");  // each one known
+    }
+    CHECK(logged.empty());
+    // The /clip launches case is not "out of order".
+    CHECK(f.render->refusalWords(Error("render.performance.launches", text,
+                                       "/args/performance/launches/0/clip", hint)) ==
+          "A clip it plays is not on its track in this version.");
+    // Unknown: one plain sentence; the whole error in the log.
+    CHECK(f.render->refusalWords(Error("engine.something_new", text, "/args/x", hint)) ==
+          "The render could not be made.");
+    REQUIRE(logged.size() == 1);
+    CHECK(logged[0].find("engine.something_new") != std::string::npos);
+    CHECK(logged[0].find(text) != std::string::npos);
+    CHECK(logged[0].find(hint) != std::string::npos);
+}
+
+TEST_CASE("the render dialog: Render and the queue say a refusal in the dialog's words") {
+    // Round 175 F3: the Launcher on an earlier version where the clip it
+    // plays does not exist yet; the preview, Render and Add to queue say so
+    // without the command, the clip's id or the engine's text.
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    const std::uint64_t before = f.app->head().version;
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    run("launch.clip", R"({"clip": "cl_1"})");
+    backend.run(4);
+    f.app->tick();
+    std::vector<std::string> logged;
+    f.render->onLog = [&](const std::string& line) { logged.push_back(line); };
+    f.render->open();
+    f.render->setDebounceMs(0);
+    f.render->setPlays(gui::RenderDialog::Plays::Launcher);
+    f.frame();
+    auto* version = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.version"));
+    REQUIRE(version);
+    version->onChange("version:" + std::to_string(before));
+    f.render->refreshPreview();
+    const auto clean = [](const std::string& s) {
+        INFO(s);
+        CHECK(s.find("render.mix") == std::string::npos);
+        CHECK(s.find("cl_1") == std::string::npos);
+        CHECK(s.find("queue:") == std::string::npos);
+    };
+    CHECK(f.render->preview() == "A clip it plays is not in this version.");
+    f.render->run();
+    CHECK(f.render->statusText() == "A clip it plays is not in this version.");
+    clean(f.render->statusText());
+    f.render->addToQueue();
+    CHECK(f.render->statusText() == "A clip it plays is not in this version.");
+    clean(f.render->statusText());
+    CHECK(logged.empty());  // every refusal here has words
     f.render->close();
 }
 
@@ -583,14 +836,32 @@ TEST_CASE("the render dialog's Last capture: as heard, on the version it played 
     f.render->refreshPreview();
     f.frame();
     CHECK(f.render->asHeardText() == "As heard");
-    f.render->close();
-    // An edit during the take: not as heard, said in the dialog's words.
+    // An edit during a new take, made while the dialog stays open (round 175
+    // F4): the dialog follows the capture Render would play.
     take(true);
-    f.render->open();
-    f.render->setPlays(gui::RenderDialog::Plays::Capture);
-    f.render->refreshPreview();
+    f.render->followCapture();
+    f.render->tick();  // as the app's loop: a preview only once the dialog is dirty
+    f.frame();
     CHECK(f.render->asHeardText() ==
           "Not as heard: the session or a clip it played changed during it");
+    REQUIRE(f.uiRoot().find("render.version.played"));
+    CHECK(f.uiRoot().find("render.version.played")->valueText() ==
+          "As played (v" + std::to_string(f.app->launchCapture()->capture.version) + ")");
+    // The queue pins this capture, and its label says which.
+    f.render->addToQueue();
+    CHECK(f.render->statusText().find("last capture as played (v" +
+                                      std::to_string(f.app->launchCapture()->capture.version) +
+                                      ")") != std::string::npos);
+    // Gone: Last capture is off and Plays goes back to Arrangement.
+    f.app->stopEngine();
+    f.app->dropKeptCapture();
+    REQUIRE_FALSE(f.app->launchCapture());
+    f.render->followCapture();
+    f.frame();
+    CHECK(f.render->plays() == gui::RenderDialog::Plays::Arrangement);
+    CHECK_FALSE(f.uiRoot().find("render.plays.capture")->enabled);
+    CHECK(f.uiRoot().find("render.plays.arrangement")->valueText() == "on");
+    CHECK_FALSE(f.render->renderArguments().find("performance"));
     f.render->close();
 }
 

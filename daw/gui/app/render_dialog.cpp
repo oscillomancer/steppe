@@ -197,7 +197,7 @@ RenderDialog::~RenderDialog() = default;
 void RenderDialog::load(const json::Value& args) {
     auto result = dispatcher_.execute({"render.settings", args, kUiOrigin});
     if (!result) {
-        setStatus("render settings: " + result.error().message);
+        setStatus(refusalWords(result.error(), "The render settings could not be read."));
         return;
     }
     settings_ = *result->find("effective");
@@ -214,6 +214,9 @@ void RenderDialog::load(const json::Value& args) {
     raw_.clear();
     errors_.clear();
     tab_ = 0;
+    // The launcher's range lost its errors with the fields: one out of order
+    // starts again from its default rather than reach the engine.
+    if (plays_ == Plays::Launcher && (launcherStart_ || launcherEnd_)) settleLauncherRange();
 }
 
 json::Value& RenderDialog::member(const std::string& name) { return settings_[name]; }
@@ -288,14 +291,26 @@ void RenderDialog::setField(const std::string& id, const std::string& typed) {
     const bool unset = typed.empty();
     if (id == "render.pattern" && performance()) {
         // A performance's file name is one-off: the project's pattern stays.
-        perfPattern_ = typed;
+        // Typed, it is kept across sources; cleared, it follows the source.
+        if (unset)
+            perfPattern_.reset();
+        else
+            perfPattern_ = typed;
         markDirty();
-        if (patternField_ && patternField_->text() != typed) patternField_->setText(typed);
+        if (patternField_ && !unset && patternField_->text() != typed)
+            patternField_->setText(typed);
         return;
     }
     if (id == "render.perf.start" || id == "render.perf.end") {
+        // Start and End are one range: the order is checked on every edit and
+        // its error is on neither field once the pair is in order again.
+        static const std::string kOrder = "end after the start";
+        const std::string other =
+            id == "render.perf.start" ? "render.perf.end" : "render.perf.start";
         raw_[id] = typed;
         errors_.erase(id);
+        if (const auto at = errors_.find(other); at != errors_.end() && at->second == kOrder)
+            errors_.erase(at);
         markDirty();
         const auto beat = inspectorParseBars(typed, *app_.head().timeMap);
         if (!beat) {
@@ -303,8 +318,9 @@ void RenderDialog::setField(const std::string& id, const std::string& typed) {
             return;
         }
         (id == "render.perf.start" ? launcherStart_ : launcherEnd_) = *beat;
-        if (launcherStart_ && launcherEnd_ && *launcherEnd_ <= *launcherStart_)
-            errors_[id] = "end after the start";
+        if (launcherStart_ && launcherEnd_ && *launcherEnd_ <= *launcherStart_ &&
+            !errors_.count(other))
+            errors_[id] = kOrder;
         return;
     }
     if (id == "render.pattern") {
@@ -487,6 +503,10 @@ void RenderDialog::setCover(const std::string& relative) {
 }
 
 Status RenderDialog::validate() const {
+    if (errors_.empty() && performance() && plays_ == Plays::Launcher && launcherStart_ &&
+        launcherEnd_ && *launcherEnd_ <= *launcherStart_)
+        return Error("gui.render.field", "render.perf.end: end after the start", "/perf/end",
+                     "correct this field or clear it for the default");
     if (errors_.empty()) return {};
     const auto& [field, message] = *errors_.begin();
     const std::string name = field.substr(field.find('.') + 1);
@@ -536,7 +556,7 @@ json::Value RenderDialog::renderArgs(bool forJob) const {
         if (plays_ == Plays::Capture)
             for (const char* key : {"version", "branch"}) a.asObject().erase(key);
         a["performance"] = performanceArg();
-        if (perfPattern_) a["pattern"] = *perfPattern_;
+        a["pattern"] = perfPattern();
     }
     // A mix carries no per-file analysis unless it is asked for; the dialog
     // lists its loudness.
@@ -590,6 +610,7 @@ void RenderDialog::open() {
     perfRange_.reset();
     asHeardText_.clear();
     if (plays_ == Plays::Capture && !captureUnavailable().empty()) plays_ = Plays::Arrangement;
+    captureKey_ = captureKey();
     if (plays_ != Plays::Arrangement) setPlays(plays_);
     auto page = buildPage();
     root_.openPopup(std::move(page), {}, ui::Placement::Center, [this] {
@@ -676,12 +697,14 @@ void RenderDialog::buildHeader(ui::Node& page) {
     preset.layout.width = ui::SizeRule::fixed(250);
     preset.onChange = [this](const std::string& name) {
         if (name.empty()) return;
-        if (auto loaded = loadPreset(name); !loaded) setStatus(loaded.error().message);
+        if (auto loaded = loadPreset(name); !loaded)
+            setStatus(refusalWords(loaded.error(), "The preset could not be loaded."));
     };
     header.emplace<ui::Button>("render.preset.save", "Save preset…", [this] { openPresetName(); });
     header.emplace<ui::Button>("render.preset.delete", "Delete preset", [this] {
         if (presetName_.empty()) return;
-        if (auto deleted = deletePreset(presetName_); !deleted) setStatus(deleted.error().message);
+        if (auto deleted = deletePreset(presetName_); !deleted)
+            setStatus(refusalWords(deleted.error(), "The preset could not be deleted."));
     });
     header.emplace<ui::Button>("render.close", "Close", [this] { close(); });
 }
@@ -747,7 +770,9 @@ void RenderDialog::buildSource(ui::Node& body) {
         auto& t = plays.emplace<ui::Toggle>(id, label, "accent",
                                             [this, play = p](bool) { setPlays(play); });
         t.layout.width = ui::SizeRule::fixed(96);
-        t.setOn(plays_ == p);
+        // Regions render the arrangement: it is what is lit (plays_ is kept
+        // for when Master mix or Stems comes back).
+        t.setOn(current == Source::Regions ? p == Plays::Arrangement : plays_ == p);
         if (p != Plays::Arrangement && current == Source::Regions) {
             t.enabled = false;
             t.hint = {"Regions render the arrangement", {}};
@@ -963,8 +988,8 @@ void RenderDialog::buildOutput(ui::Node& body) {
     });
     auto& name = row(body, "render.name.row");
     caption(name, "render.pattern.label", "File name", 130);
-    patternField_ = &name.emplace<ui::TextField>(
-        "render.pattern", performance() && perfPattern_ ? *perfPattern_ : pattern());
+    patternField_ =
+        &name.emplace<ui::TextField>("render.pattern", performance() ? perfPattern() : pattern());
     patternField_->layout.width = ui::SizeRule::fraction();
     patternField_->onChange = [this](const std::string& t) { setField("render.pattern", t); };
     patternField_->onSubmit = [this](const std::string&) { refreshPreview(); };
@@ -1393,7 +1418,7 @@ void RenderDialog::buildFooter(ui::Node& page) {
     actions.emplace<ui::Button>("render.queue.add", "Add to queue", [this] { addToQueue(); });
     actions.emplace<ui::Button>("render.default", "Save as default", [this] {
         if (auto saved = saveAsDefault(); !saved)
-            setStatus(saved.error().message);
+            setStatus(refusalWords(saved.error(), "The preset could not be saved."));
         else
             setStatus("saved as your default");
     });
@@ -1435,7 +1460,7 @@ void RenderDialog::openPresetName() {
         const std::string chosen = name.text();
         root_.closePopup();
         if (auto saved = savePreset(chosen); !saved)
-            setStatus(saved.error().message);
+            setStatus(refusalWords(saved.error(), "The preset could not be saved."));
         else
             setStatus("saved preset " + chosen);
     };
@@ -1489,7 +1514,7 @@ void RenderDialog::openExisting(const json::Value& existing) {
         buttons.emplace<ui::Button>(id, label, [this, ifExists = std::string(mode)] {
             root_.closePopup();
             if (auto written = writeSettings(); !written) {
-                setStatus("render settings: " + written.error().message);
+                setStatus(refusalWords(written.error(), "The render settings could not be saved."));
                 return;
             }
             json::Value a = renderArgs(true);
@@ -1626,14 +1651,9 @@ void RenderDialog::refreshPreview() {
     auto result = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin});
     lastPerfMs_ = nowMs();
     if (!result) {
-        std::string where = result.error().path;
-        if (where.starts_with("/args")) where = where.substr(5);
-        // A performance's refusal in the dialog's words (never a path or the
-        // hint, which names commands).
-        const std::string words = performance() ? performanceRefusal(result.error()) : "";
-        previewText_ = !words.empty() ? words
-                                      : (where.empty() ? std::string() : where.substr(1) + ": ") +
-                                            result.error().message;
+        // In the dialog's words (never a path, the message or the hint,
+        // which names commands).
+        previewText_ = refusalWords(result.error());
         asHeardText_.clear();
         if (asHeard_) asHeard_->setText("");
         setStatus(previewText_);
@@ -1706,7 +1726,7 @@ void RenderDialog::refreshPreview() {
 void RenderDialog::startJob(std::string command, json::Value args) {
     auto result = dispatcher_.execute({command, std::move(args), kUiOrigin});
     if (!result) {
-        setStatus(command + ": " + result.error().message);
+        setStatus(refusalWords(result.error()));
         return;
     }
     if (const json::Value* id = result->find("job"); id && id->isString()) {
@@ -1736,7 +1756,7 @@ void RenderDialog::run() {
         args["if_exists"] = "overwrite";
         auto dry = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin});
         if (!dry) {
-            setStatus(dry.error().message);
+            setStatus(refusalWords(dry.error()));
             return;
         }
         json::Value existing = json::Value::array();
@@ -1748,7 +1768,7 @@ void RenderDialog::run() {
         }
     }
     if (auto written = writeSettings(); !written) {
-        setStatus("render settings: " + written.error().message);
+        setStatus(refusalWords(written.error(), "The render settings could not be saved."));
         return;
     }
     mixJob_ = false;
@@ -1761,7 +1781,7 @@ void RenderDialog::addToQueue() {
         return;
     }
     if (auto written = writeSettings(); !written) {
-        setStatus("render settings: " + written.error().message);
+        setStatus(refusalWords(written.error(), "The render settings could not be saved."));
         return;
     }
     json::Value a = renderArgs(false);
@@ -1773,26 +1793,27 @@ void RenderDialog::addToQueue() {
     if (performance()) {
         const time::TimeMap& tm = *app_.head().timeMap;
         double first = 0, last = 0;
+        std::string what = "launcher";
         if (plays_ == Plays::Launcher) {
             first = launcherStart_.value_or(0.0);
             last = launcherEnd_.value_or(first);
-        } else if (perfRange_) {
-            first = perfRange_->first;
-            last = perfRange_->second;
         } else if (const auto capture = app_.launchCapture()) {
+            // The capture the queue pins is the one this call resolves, now:
+            // its own span and version, never a range the dialog showed
+            // before it was replaced.
             first = capture->startBeat;
             last = capture->endBeat;
+            what = "last capture as played (v" + std::to_string(capture->capture.version) + ")";
         }
         const int a0 = tm.barBeat(first).bar;
         const int a1 = tm.barBeat(std::max(first, last - 1e-6)).bar;
-        q["label"] = std::string(source() == Source::Stems ? "stems" : "mix") + " \u00b7 " +
-                     (plays_ == Plays::Capture ? "last capture as played" : "launcher") +
+        q["label"] = std::string(source() == Source::Stems ? "stems" : "mix") + " \u00b7 " + what +
                      ", bars " + std::to_string(a0) + "\u2013" + std::to_string(a1);
     }
     q["args"] = std::move(a);
     auto result = dispatcher_.execute({"render.queue.add", std::move(q), kUiOrigin});
     if (!result) {
-        setStatus("queue: " + result.error().message);
+        setStatus(refusalWords(result.error(), "The render could not be queued."));
         return;
     }
     setStatus("queued " + text(result->find("label")));
@@ -1862,7 +1883,7 @@ void RenderDialog::mixJob() {
     a["job"] = true;
     auto result = dispatcher_.execute({"render.mix", std::move(a), kUiOrigin});
     if (!result) {
-        if (auto status = onStatus) status("Mix: " + result.error().message);
+        if (auto status = onStatus) status("Mix: " + refusalWords(result.error()));
         return;
     }
     if (const json::Value* id = result->find("job"); id && id->isString()) {
@@ -2012,28 +2033,32 @@ void RenderDialog::openResultMenu(std::size_t index, const ui::Rect& anchor) {
                      item["audio_file"] = text(entry.find("path"));
                      return dispatcher_.execute({"item.add", item, kUiOrigin});
                  });
-             setStatus(done ? "added to the project" : done.error().message);
+             setStatus(done ? "added to the project"
+                            : refusalWords(done.error(),
+                                           "The render could not be added to "
+                                           "the project."));
          }});
     const auto version = entry.find("version") ? entry.find("version")->asInt() : 0;
-    items.push_back({"Branch from this version", "",
-                     [this, version] {
-                         for (int n = 1; n < 100; ++n) {
-                             json::Value a = json::Value::object();
-                             a["name"] = "from-v" + std::to_string(version) +
-                                         (n > 1 ? "-" + std::to_string(n) : "");
-                             a["version"] = version;
-                             auto made = dispatcher_.execute({"branch.create", a, kUiOrigin});
-                             if (made) {
-                                 setStatus("switched to branch " + a["name"].asString());
-                                 return;
-                             }
-                             if (made.error().code != "branch.exists") {
-                                 setStatus(made.error().message);
-                                 return;
-                             }
-                         }
-                     },
-                     version > 0});
+    items.push_back(
+        {"Branch from this version", "",
+         [this, version] {
+             for (int n = 1; n < 100; ++n) {
+                 json::Value a = json::Value::object();
+                 a["name"] =
+                     "from-v" + std::to_string(version) + (n > 1 ? "-" + std::to_string(n) : "");
+                 a["version"] = version;
+                 auto made = dispatcher_.execute({"branch.create", a, kUiOrigin});
+                 if (made) {
+                     setStatus("switched to branch " + a["name"].asString());
+                     return;
+                 }
+                 if (made.error().code != "branch.exists") {
+                     setStatus(refusalWords(made.error(), "The branch could not be made."));
+                     return;
+                 }
+             }
+         },
+         version > 0});
     root_.openPopup(
         ui::makeMenu("render.result.menu", std::move(items), [this] { root_.closePopup(); }),
         anchor);
@@ -2045,7 +2070,7 @@ void RenderDialog::pollJob() {
     argsJson["job"] = job_;
     auto status = dispatcher_.execute({"job.get", std::move(argsJson), kUiOrigin});
     if (!status) {
-        setStatus(status.error().message);
+        setStatus(refusalWords(status.error()));
         job_.clear();
         return;
     }
@@ -2066,7 +2091,11 @@ void RenderDialog::pollJob() {
     job_.clear();
     if (s == "failed") {
         const json::Value* error = status->find("error");
-        const std::string message = text(error ? error->find("message") : nullptr, "render failed");
+        const std::string message =
+            refusalWords(Error(text(error ? error->find("code") : nullptr, "render.failed"),
+                               text(error ? error->find("message") : nullptr),
+                               text(error ? error->find("path") : nullptr),
+                               text(error ? error->find("hint") : nullptr)));
         if (mixJob_) {
             if (auto report = onStatus) report("Mix failed: " + message);
         } else
@@ -2109,8 +2138,7 @@ void RenderDialog::setPlays(Plays p) {
     errors_.erase("render.perf.end");
     raw_.erase("render.perf.start");
     raw_.erase("render.perf.end");
-    if (p != Plays::Arrangement && !perfPattern_) perfPattern_ = pattern() + " performance";
-    if (p == Plays::Launcher && (!launcherStart_ || !launcherEnd_)) defaultLauncherRange();
+    if (p == Plays::Launcher) settleLauncherRange();
     markDirty();
     rebuild();
 }
@@ -2160,9 +2188,14 @@ void RenderDialog::defaultLauncherRange() {
     launcherEnd_ = tm.beatOfBar(lastBar);
 }
 
-std::string RenderDialog::performanceRefusal(const Error& e) const {
+std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback) const {
     const std::string& c = e.code;
-    const bool clip = e.path.ends_with("/clip");
+    if (c.starts_with("gui.")) return e.message;
+    const std::string_view path =
+        e.path.starts_with("/args") ? std::string_view(e.path).substr(5) : std::string_view(e.path);
+    const bool clip = path.ends_with("/clip");
+    const bool perf = performance();
+    // A performance (engine.md §3.1's refusals).
     if (c == "launch.capture") return "There is no capture to render.";
     if (c == "render.performance.sample_rate")
         return "The capture was made at another sample rate than the project's. Commit it in "
@@ -2173,12 +2206,120 @@ std::string RenderDialog::performanceRefusal(const Error& e) const {
     if (c == "render.performance.too_many")
         return "The capture has more than 100,000 launches. Commit it in the launcher, then "
                "render the arrangement.";
-    if (c == "render.performance.launches") return "The capture's launches are out of order.";
-    if (c == "track.unknown") return "A track it plays on is not in this version.";
+    if (c == "render.performance.launches")
+        return clip ? "A clip it plays is not on its track in this version."
+                    : "The capture's launches are out of order.";
+    // An id the version lacks: the resolver's code names its kind (tr., cl.).
+    if (c == "track.unknown" || c == "tr.unknown")
+        return perf ? "A track it plays is not in this version."
+                    : "A track to render is not in this version.";
+    if (c == "track.frozen") return "A track it plays is frozen in this version.";
     if (c == "launch.playrate") return "A clip it plays cannot play at the master playback rate.";
     if (c == "launch.memory") return "A clip it plays is over the memory budget.";
-    if (clip && c.starts_with("clip.")) return "A clip it plays is not in this version.";
-    return {};
+    if (clip && (c.starts_with("clip.") || c.starts_with("cl.")))
+        return "A clip it plays is not in this version.";
+    if (c == "render.not_as_heard") return "It would not render as heard.";
+    if (c == "render.empty") {
+        if (path.ends_with("/end_beat")) return "End is not after Start.";
+        if (path.ends_with("/frames")) return "The capture has no running time.";
+        return "There is nothing to render in this range.";
+    }
+    // The settings.
+    if (c == "render.args") {
+        if (path == "/seamless_loop")
+            return perf ? "A performance plays once: it cannot be folded into a seamless loop."
+                        : "A seamless loop needs a tail: set Tail above 0.";
+        if (path == "/trim") return "A seamless loop cannot be trimmed: turn the trims off.";
+        if (path == "/handles_s") return "A seamless loop cannot have handles.";
+        if (path == "/limit_true_peak_db")
+            return "Stems that share the master's gain cannot be limited one by one.";
+        if (path.starts_with("/performance")) return "A performance renders its own range.";
+        return "These render settings cannot be used together.";
+    }
+    if (c == "render.path")
+        return "The file name does not give each file its own place in the renders folder. "
+               "Add {track} for stems, or choose another name.";
+    if (c == "render.pattern") return "The file name has a token that cannot be read.";
+    if (c == "render.exists")
+        return "A file with that name exists. Choose another name, or another way under "
+               "If the file exists.";
+    if (c == "render.normalize")
+        return path == "/limit_true_peak_db"
+                   ? "The true peak limit must be at or below 0 dBTP."
+                   : "Loudness normalization cannot be applied to this audio.";
+    if (c == "render.format") return "This output format is not known.";
+    if (c == "render.secondary") return "The second format is not valid.";
+    if (c == "render.budget")
+        return "The range is too long to render at once. Render a shorter range, or at a lower "
+               "sample rate.";
+    if (c == "render.source") return "Choose a branch or a version, not both.";
+    if (c == "render.masters") return "A chosen master is not a master.";
+    if (c == "render.stale_target")
+        return "The project or its branch changed before the render finished. Render again.";
+    if (c == "region.unknown") return "A region to render is not in this version.";
+    if (c == "track.strip_type") return "A chosen track cannot be rendered on its own.";
+    if (c == "history.version") return "That version is not in the history.";
+    if (c == "branch.unknown") return "That branch is not in the project.";
+    // Presets, the queue and the job.
+    if (c == "render.preset_unknown") return "That preset is not found.";
+    if (c == "render.preset_factory") return "Factory presets cannot be changed or deleted.";
+    if (c == "render.preset_name") return "That preset name cannot be used.";
+    if (c == "render.preset_write") return "The preset could not be saved.";
+    if (c == "render.queue_unknown") return "That queued render is gone.";
+    if (c == "render.queue_empty") return "Nothing is queued.";
+    if (c == "job.cancelled") return "The render was cancelled.";
+    // The offline render itself.
+    if (c == "engine.media_missing") return "A file it plays is missing.";
+    if (c == "engine.media_changed") return "A file it plays changed on disk.";
+    if (c == "engine.media_too_long") return "A file it plays is too long to load.";
+    if (c == "engine.blob_missing") return "A piece of the project's data is missing.";
+    if (c == "engine.bridge_failed" || c == "engine.fx_failed" || c == "engine.patch_unpatchable")
+        return "A plug-in failed during the render.";
+    if (c == "engine.too_long" || c == "engine.range" || c == "engine.tail")
+        return "The range is too long to render.";
+    if (onLog)
+        onLog("render: " + e.code + (e.path.empty() ? "" : " at " + e.path) + ": " + e.message +
+              (e.hint.empty() ? "" : " (" + e.hint + ")"));
+    return std::string(fallback);
+}
+
+void RenderDialog::followCapture() {
+    // Replaced, begun, stopped or gone: the version, range, as-heard line and
+    // preview follow the capture Render would play; gone, Plays goes back to
+    // Arrangement.
+    const auto key = captureKey();
+    if (captureUnavailable().empty() == captureOffered_ && key == captureKey_) return;
+    captureKey_ = key;
+    if (plays_ == Plays::Capture && !key) plays_ = Plays::Arrangement;
+    perfRange_.reset();
+    asHeardText_.clear();
+    markDirty();
+    rebuild();
+}
+
+std::string RenderDialog::perfPattern() const {
+    return perfPattern_ ? *perfPattern_ : pattern() + " performance";
+}
+
+void RenderDialog::settleLauncherRange() {
+    if (!launcherStart_ || !launcherEnd_ || *launcherEnd_ <= *launcherStart_)
+        defaultLauncherRange();
+}
+
+std::optional<RenderDialog::CaptureKey> RenderDialog::captureKey() const {
+    const auto capture = app_.launchCapture();
+    if (!capture || capture->capture.frames <= 0) return std::nullopt;
+    CaptureKey k;
+    k.start = capture->capture.startSample;
+    k.version = capture->capture.version;
+    k.kept = capture->kept;
+    k.running = capture->capture.on && !capture->kept;
+    k.launches = capture->capture.launches.size();
+    if (!k.running) {
+        k.frames = capture->capture.frames;
+        k.facts = capture->capture.facts;
+    }
+    return k;
 }
 
 void RenderDialog::buildPerformanceRange(ui::Node& body) {
@@ -2238,7 +2379,7 @@ void RenderDialog::tick() {
     // asked once a second (launchCapture walks the history).
     if (nowMs() - lastOfferMs_ >= 1000) {
         lastOfferMs_ = nowMs();
-        if (captureUnavailable().empty() != captureOffered_) rebuild();
+        followCapture();
     }
     // A running capture grows: its range and as-heard line follow it, once a
     // second (the render takes the frames at the moment it starts).

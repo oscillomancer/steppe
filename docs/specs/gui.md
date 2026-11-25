@@ -2228,7 +2228,9 @@ project is drawn in the quiet ink, with "from your default" on hover.
     Launcher (`RenderDialog::Plays`), for Master mix and Stems. It is a
     one-off selector: never written to the project's settings or a preset,
     kept while the app runs, and back on Arrangement when the capture it
-    chose is gone. File > Mix always plays the arrangement.
+    chose is gone, also while the dialog is open. Under Regions,
+    Arrangement is what is lit (the choice comes back with Master mix or
+    Stems). File > Mix always plays the arrangement.
     - **Last capture** renders `performance: "captured"`, the capture
       `EngineApp::launchCapture()` returns (also after an engine stop), on
       the version it played on: the Version dropdown gives way to "As
@@ -2238,7 +2240,11 @@ project is drawn in the quiet ink, with "from your default" on hover.
       the project runs at 48000 Hz. Commit it in the launcher, then render
       the arrangement.").
     - **Launcher** renders `{from: "launcher", start_beat, end_beat}`:
-      Start and End fields in bars, typed as the transport writes them;
+      Start and End fields in bars, typed as the transport writes them,
+      checked as one range on every edit (an End not after Start is an error
+      on the field just typed, gone from both once the pair is in order; a
+      pair out of order after a Plays switch or a preset starts again from
+      the default, so it never reaches the engine);
       Start defaults to the playhead's bar, End to Start plus the longest
       clip playing, in whole bars (four bars when none plays, which renders
       the arrangement over that range).
@@ -2252,8 +2258,14 @@ project is drawn in the quiet ink, with "from your default" on hover.
       Regions toggle and the seamless loop are off, with hints saying why,
       the loop shown unchecked, and under Regions the Plays toggles are off
       ("Regions render the arrangement").
-    - The file name gets " performance" after the pattern, editable and
-      one-off (`pattern` in the call; the project's pattern stays).
+    - The file name gets " performance" after the current source's pattern,
+      so it follows Master mix or Stems (stems keep their `{track}`);
+      editable and one-off (`pattern` in the call; the project's pattern
+      stays), and a name typed is kept across sources, never overwritten.
+    - Last capture follows the capture while the dialog is open: replaced,
+      begun, stopped or gone (`RenderDialog::followCapture`, once a second
+      from `tick()`), its version, range, as-heard line and file preview are
+      the capture Render would play.
     - **As heard** (Last capture): the dry run's `as_heard` shows under the
       range, "As heard" or "Not as heard: " and the reasons in the dialog's
       words (the capture began while playing; the session or a clip it
@@ -2265,14 +2277,25 @@ project is drawn in the quiet ink, with "from your default" on hover.
       the results start with the same line, from the render's own result,
       and the status line adds ", as heard" or ", not as heard". The dialog
       never sends `as_heard: true`.
-    - A performance's refusal reads in the dialog's words from its code
-      (no capture; another sample rate; a looped capture under a master
-      playback rate; more than 100,000 launches; launches out of order; a
-      track or clip not in this version; a clip that cannot play at the
-      master playback rate; a clip over the memory budget), never its path
-      or hint (`RenderDialog::performanceRefusal`).
-    - Add to queue labels the entry "mix · last capture as played, bars
-      1–2" or "mix · launcher, bars 3–4"; the engine stores the resolved
+    - Every refusal the dialog shows (the preview, Render, a failed job, the
+      Ask check, Add to queue, presets, settings) reads in the dialog's words
+      from its code and path, never the engine's message, its hint, a path
+      or a command name (`RenderDialog::refusalWords`, the audio device
+      dialog's rule). For a performance: no capture; another sample rate; a
+      looped capture under a master playback rate; more than 100,000
+      launches; launches out of order, or a clip not on its track (a
+      launches path ending `/clip`); a track or clip not in this version; a
+      frozen track; a clip that cannot play at the master playback rate; a
+      clip over the memory budget; End not after Start; a capture with no
+      running time. The render's own codes (the file name, a file that
+      exists, normalization, the format, the frame budget, presets, the
+      queue, a missing or changed media file, a failed plug-in) have theirs.
+      One it does not know reads "The render could not be made." (or the
+      action's own sentence: the preset, the settings, the queue), and the
+      whole error goes to the log (`onLog`, stderr).
+    - Add to queue labels the entry "mix · last capture as played (v3),
+      bars 1–2" or "mix · launcher, bars 3–4", from the capture the call
+      pins (read as it is added); the engine stores the resolved
       performance.
   - While Arrangement plays and a clip holds any track
     (`EngineApp::launchState()` says a track plays something other than the
