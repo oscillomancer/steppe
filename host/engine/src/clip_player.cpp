@@ -827,8 +827,10 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
     // The last quantum it has run; an unprimed reading (one carried across a
     // trajectory change, seeked for S and primed at its first use: S3 step
     // D4) counts from its start, so a first use long after it starts again
-    // there too instead of running every quantum since in one block.
-    const std::int64_t ran = st.primed ? st.quantum : r.startQuantum - kRateQuantum;
+    // there too instead of running every quantum since in one block. Only a
+    // keyed reading has a start (an unkeyed one seeks whatever it ran):
+    // `startQuantum` may be the INT64_MIN of none.
+    const std::int64_t ran = !keyed ? 0 : st.primed ? st.quantum : r.startQuantum - kRateQuantum;
     if (!keyed || q < ran || q - ran > kCatchUp) {
         const bool fromSwitch = switchQ != INT64_MIN && q >= switchQ && q - switchQ <= kCatchUp;
         r.previousLive = false;  // a fresh reading (S3 step D4)
