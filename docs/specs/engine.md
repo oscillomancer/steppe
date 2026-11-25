@@ -2276,7 +2276,6 @@ used, and a `bounds` in the call is refused. `tail_s`, `trim`,
 | --- | --- |
 | `began_mid_run` | the capture did not begin at a play start |
 | `edited_during` | a plan compiled during it for anything but launches (any session edit) |
-| `launch_state_uncertain` | a track's launch state was uncertain while it began or ran: a clip's removal undone before the executors were seen to take it (§1.4.2) |
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
 | `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |

@@ -889,10 +889,7 @@ class Engine {
     // heard (an applied launch not yet heard is still queued), and its
     // queued launch. The GUI's telemetry and launch.state read it.
     struct TrackLaunch {
-        // Uncertain: a removal of its clip was undone before the executors
-        // were seen to take it, so whether it plays the clip is not known
-        // until its next launch (round 172 K1).
-        enum class Plays : std::uint8_t { Arrangement, Clip, Held, Stopped, Uncertain };
+        enum class Plays : std::uint8_t { Arrangement, Clip, Held, Stopped };
         model::Id track;
         Plays plays = Plays::Arrangement;
         model::Id clip;                  // Clip and Held
@@ -936,10 +933,6 @@ class Engine {
         bool liveInput = false;      // a plan monitoring live input played during it
         bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
         bool pluginFailed = false;   // a processing error (processErrors)
-        // A track's launch state was uncertain while it began or ran: a plan
-        // without the clip it played was replaced before the executors were
-        // seen to take it (round 172 K1).
-        bool uncertain = false;
         bool operator==(const CaptureFacts&) const = default;
     };
     struct LaunchCapture {

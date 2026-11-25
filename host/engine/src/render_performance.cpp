@@ -186,7 +186,6 @@ Result<RenderPerformance> resolvePerformance(EngineApp& app, const PerformanceRe
             auto& why = out.notHeardBecause;
             if (!f.fromPlayStart) why.push_back("began_mid_run");
             if (f.edited) why.push_back("edited_during");
-            if (f.uncertain) why.push_back("launch_state_uncertain");
             if (f.rateChanged) why.push_back("playrate_changed");
             if (f.liveInput) why.push_back("live_input");
             if (f.dropout) why.push_back("dropout");
@@ -265,8 +264,6 @@ Error notAsHeard(const RenderPerformance& p) {
                                          ", the version it was captured on"
         : first == "began_mid_run" ? "capture from stop: launch.capture {on: true} before play"
         : first == "edited_during" ? "capture again without editing during it"
-        : first == "launch_state_uncertain"
-            ? "launch the track again (or launch.arrangement), then capture again"
         : first == "playrate_changed" ? "capture again without changing the playrate during it"
         : first == "live_input"       ? "capture again with no armed or monitored input"
         : first == "dropout"          ? "capture again: the output dropped out during it"
