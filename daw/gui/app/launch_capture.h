@@ -17,10 +17,19 @@
 // user has fixed what the refusal names, and then arms. When that commit is
 // refused again, the toggle stays dark and says so; one more click drops the
 // performance and arms. Opening another project drops it too.
+//
+// A take the engine ended (an engine stop, Restart audio, a device restart;
+// the app keeps it, ADR-0097) is committed by the next pass as a stop's is,
+// and nothing arms by itself after it. What is uncommitted is the app's
+// answer (EngineApp::captureUncommitted, launchCapture), never this class's
+// copy; a take whose commit the user undid is declined: a click arms over it,
+// and it is kept (redo restores it) until the new capture hears a frame.
 #pragma once
 
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <string>
 
 #include "supple/base/result.h"
 #include "supple/cmd/bus.h"
@@ -35,8 +44,13 @@ class CaptureControl {
     // What the header's cell shows: lit while the toggle is armed or the
     // engine captures, whoever armed it (an agent's launch.capture too).
     bool lit() const { return armed_ || app_.launchCapturing(); }
-    // A performance whose commit was refused waits for another try.
-    bool kept() const { return kept_ != Kept::None; }
+    // A take is kept uncommitted, and not declined (its commit undone): a
+    // refused one waiting for another try, or one another caller's capture
+    // left. What the header's cell shows dark with its dot in outline.
+    bool kept();
+    // That take in the pane's words, for the cell's hint (empty: none): its
+    // bars and launches, why it is kept, and what a click does.
+    std::string keptLine();
     // On commits a kept performance first, then arms (launch.capture {on:
     // true}: from the position heard now, or where playing starts; before a
     // pending end, it cancels it); off ends the capture and commits what it
@@ -53,8 +67,23 @@ class CaptureControl {
     // is committed and the toggle, still lit, arms the next one; a refused
     // commit keeps the performance and the toggle goes dark. An ending
     // capture that has reached its boundary (or a relocation) is committed,
-    // and nothing is armed. Without a running engine it goes dark.
+    // and nothing is armed. A take an engine stop or a device restart ended
+    // (the app's kept take) is committed, said through onNotice, and the
+    // toggle goes dark: nothing arms by itself after it.
     void service();
+    // Before the project is replaced or the app quits (FileActions'
+    // unsaved-work question): ends a running or ending capture now and
+    // commits whatever take is uncommitted, arming nothing, as Stop
+    // finalizes a recording. A refusal keeps the take (kept() stays true)
+    // and is returned. The one place where a question could take the place
+    // of the commit.
+    Status finalize();
+    // A kept take for the question: "The launcher take (bars 3–18,
+    // 2 launches) could not be committed: …"; empty when none.
+    std::string lostLine();
+    // Changes when the kept take does (another take, committed, dropped), so
+    // a decision about one take is not applied to another.
+    std::string takeKey();
     // A commit's or a re-arm's refusal, from service().
     std::function<void(const Error&)> onError;
     // What a commit did with its clips' keys (views::followNotice: the clips
@@ -68,6 +97,11 @@ class CaptureControl {
     // Committed while stopped, the tracks return to the arrangement
     // (launch.arrangement, at the play start).
     Status commit();
+    // The take the engine ended while this pane armed or was ending it:
+    // committed, a refusal kept and sent to onError.
+    void settle();
+    // "bars 3–18, 2 launches", on the current time map.
+    std::string takeWords(const engine::EngineApp::CaptureView& v);
     // A refused commit: the performance is kept and the toggle goes dark.
     Error keep(Error refusal);
     Result<json::Value> run(const std::string& command, json::Value args);
@@ -76,9 +110,21 @@ class CaptureControl {
     bool armed_ = false;
     bool capturing_ = false;  // the engine's, at the last look
     bool ending_ = false;     // turned off while playing: committed at its boundary
-    // Refused once, or refused again after a click (the next click drops it).
-    enum class Kept { None, Refused, Warned } kept_ = Kept::None;
-    std::uint64_t keptGeneration_ = 0;  // the project it belongs to
+    std::string describeKept();
+    struct KeptKey {
+        std::uint64_t project = 0, version = 0;
+        bool engine = false, capturing = false, lit = false, warned = false;
+        std::string refusal;
+        bool operator==(const KeptKey&) const = default;
+    };
+    std::optional<KeptKey> keptKey_;
+    std::string keptLine_;
+    // A click's commit of the kept take was refused: the next click drops it.
+    bool warned_ = false;
+    // The kept take's last refusal, in the pane's words (empty: none).
+    std::string refusal_;
+    // Armed over a declined take: said once when the new capture replaces it.
+    bool replacing_ = false;
 };
 
 }  // namespace supple::gui

@@ -546,7 +546,8 @@ void connectAudioDevice(AudioDeviceDialog& dialog, Shell& shell) {
     };
     // The engine's full error, its hint included, goes to stderr only.
     dialog.onLog = [](const std::string& detail) { std::fprintf(stderr, "%s\n", detail.c_str()); };
-    // An engine stop discards a launcher capture: Refresh waits for it.
+    // Refresh waits for a launcher capture that is lit or kept (fd263b3d);
+    // an engine stop keeps the take, which the pane commits (ADR-0097).
     dialog.captureHeld = [&shell, &dialog] {
         return shell.capture().lit() || shell.capture().kept() || dialog.engineCapturing();
     };

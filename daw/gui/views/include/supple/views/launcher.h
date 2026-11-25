@@ -318,6 +318,7 @@ class LauncherHeader : public ui::Node {
     struct Stats {
         bool captureLit = false;
         bool captureEnding = false;  // lit, outlined dashed (ArrangeView::captureEnding)
+        bool captureKept = false;    // dark, its dot in outline (ArrangeView::captureKept)
         bool glyphCells = false;     // Stop all, Arrangement and Capture drawn as glyphs
         int refused = 0;             // scenes whose ▶ is dimmed (ArrangeView::launchRefusals)
         std::vector<model::Id> refusedScenes;  // those scenes, in column order

@@ -369,12 +369,14 @@ instructions are in `docs/guides/installing.md`.
       device failure (ended there if running) and stays committable;
       quitting the app or replacing the project with one uncommitted
       loses it (the GUI's unsaved-work dialog does not count it yet; a
-      headless app has none); a newer capture replaces it once it begins,
-      with a warning (ADR-0097, revision 2026-11-24); an undo of its commit
-      makes it uncommitted again; the GUI's Capture commits a kept take, but
-      its pane does not show the warnings yet, and after a device restart a
-      Capture click arms over a kept take, which the next Play replaces
-      (the gui-lead's change, with the quit dialog);
+      headless app has none); a newer capture
+      replaces it once it begins, with a warning (ADR-0097, revision
+      2026-11-24); an undo of its commit makes it uncommitted again (the
+      GUI treats that take as declined: it is not committed again, and a
+      Capture click arms over it); the GUI's pane commits a take the
+      engine ended (an engine stop, Stop audio then Start, a device
+      restart) on its next pass and arms nothing after it, shows a kept
+      take in the Capture cell, and never arms over an uncommitted one;
     - a capture ends at a seek, a loop change or a stop, by design (one
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
@@ -406,7 +408,9 @@ instructions are in `docs/guides/installing.md`.
   toggle (in one row with Stop all and Arrangement, the three drawn as
   named glyph cells in a pane too narrow for their words; armed while lit; a stop, seek or loop change commits the
   performance with `launch.commit` and arms the next; a refused commit
-  keeps the performance, dark, for the next click; a commit made while
+  keeps the performance, dark with its dot in outline, for the next click;
+  a take an engine stop or device restart ended is committed, and nothing
+  arms after it; a commit made while
   stopped returns the tracks to the arrangement; the cell also lights for
   an agent's capture), a scene dragged onto
   the timeline or inserted at the playhead or the end (`scene.insert`, for

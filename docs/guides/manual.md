@@ -1766,11 +1766,19 @@ lights when an agent is capturing; clicking it then finishes that capture
 and writes it.
 
 If the performance can't be written (a locked item is in the way, say),
-Capture goes dark and the status line says why. The performance is kept: fix
-what it names, then click Capture, and it is written before Capture lights
-again. If it is refused again, the status line says so, and one more click tries
-once more and, if it still can't, discards the performance and starts a new
-capture.
+Capture goes dark and the status line says why. The performance is kept, and
+the Capture button shows it with its dot in outline (hover over it for what is
+kept and why): fix what it names, then click Capture, and it is written before
+Capture lights again. If it is refused again, the status line says so, and one
+more click tries once more and, if it still can't, discards the performance and
+starts a new capture.
+
+If the audio engine stops while you capture (Stop audio, Restart audio, a new
+device, or the device restarting), the take so far is written to the timeline
+and the status line says so; Capture goes dark until you click it again. If you
+undo a written take and then click Capture, a new capture starts; the undone
+take stays undoable until the new one begins, and the status line says when it
+is replaced.
 
 To put a scene into the song, drag its header onto the timeline: it lies
 from the bar you drop it on, for as many whole bars as its longest clip

@@ -3114,10 +3114,34 @@ same heights, scroll and colours.
   performance is kept. The next click commits it first and, if that
   succeeds, arms. If it is refused again, the cell stays dark and the
   status line says one more click drops the performance and arms; that
-  click tries the commit once more first. Opening another project, or the
-  engine stopping, drops it. The app services
+  click tries the commit once more first. Opening another project drops
+  it. The app services
   it once a pass (`CaptureControl::service`) and gives the view the state
   to draw (`ArrangeView::setCaptureArmed`).
+- **A take the engine ended is committed** (ADR-0097, a capture kept).
+  When an engine stop (Stop audio, Restart audio, a device choice) or a
+  device restart ends a capture, the app keeps the take
+  (`EngineApp::launchCapture`), and the pane's next pass commits it, one
+  undo step, also while no engine runs. The status line says so in the
+  pane's words: "The engine stopped during the capture: its take (bars
+  3–18, 2 launches) is committed." ("The audio device restarted during the
+  capture" for a device restart). Nothing arms by itself after an engine
+  stop: the cell goes dark. What is uncommitted is the app's answer
+  (`captureUncommitted`, the view's `commit`), not the pane's copy, so a
+  click after a restart commits the kept take, never the new engine's empty
+  capture, and a click never arms over an uncommitted take.
+- **A kept take shows.** While a take is kept uncommitted (its commit
+  refused, or one an agent's capture left), the cell is dark with its dot
+  drawn in outline in `armed` (`ArrangeView::setCaptureKept`,
+  `CaptureControl::keptLine`). Its hint says what is kept, why and what a
+  click does: "A take is kept, not committed: bars 3–18, 2 launches. Its
+  commit was refused: a locked item is in the way. Click Capture to commit
+  it." It never shows a command name or an engine hint.
+- **A take whose commit was undone is declined.** It is not committed
+  again and not shown kept; a click arms a new capture over it. The app
+  keeps it, so redo still restores it, until the new capture hears a frame;
+  the status line then says once "The earlier capture was replaced by this
+  one."
 
 **Columns.**
 - **Scenes.** There is one column per scene in `order`, 64 units wide. Its
@@ -3449,7 +3473,17 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   commits it. Off while playing ends on the next bar, then commits; the
   cell is dashed meanwhile, and a second click ends it at once and commits.
   An agent's quantized end dashes the cell too, and a click then ends the
-  capture at once and commits it.
+  capture at once and commits it. A take kept across Restart audio is
+  committed by the pane's next pass; after Stop audio, the pass with no
+  engine commits it and says so, and nothing is armed after Start; a device
+  restart (`DummyBackend::requestRestart`) commits it the same way, said as
+  the device's. A refused take kept across Stop audio shows kept (the
+  outline dot, the hint with the refusal and no hint text of the engine's);
+  a click while still locked is refused and arms nothing, and after
+  unlocking a click commits the kept take, then arms. A take whose commit
+  was undone is not shown kept; a click arms without committing it, and the
+  status line says once that it was replaced when the new capture hears a
+  frame (`test_launcher.cpp`).
 - The pane against the engine (step E): at every step the clips drawn dimmed
   and the scenes whose ▶ is dimmed are exactly those
   `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the

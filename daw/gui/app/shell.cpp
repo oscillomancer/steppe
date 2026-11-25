@@ -444,11 +444,13 @@ void Shell::sync(bool event) {
     // What a press on each clip and scene would be refused for (step E): the
     // engine's own answer, asked again only when it can have changed.
     refusals_.update(app_, *arrange_);
-    // Capture (L4): a capture the transport ended is committed, and the
-    // toggle shows whether it is armed.
+    // Capture (L4): a capture the transport or the engine ended is
+    // committed, and the toggle shows whether it is armed, ending, or a take
+    // is kept uncommitted.
     capture_.service();
     arrange_->setCaptureArmed(capture_.lit());
     arrange_->setCaptureEnding(capture_.ending());
+    arrange_->setCaptureKept(capture_.keptLine());
     // The bar changes with the model or while the engine runs; refreshing it on
     // every idle pass would repaint (and cost) for nothing.
     if (transport_) transport_->sync(event || moved);
