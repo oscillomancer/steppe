@@ -51,6 +51,29 @@ Result<json::Value> invokeNested(Context& ctx, const char* name, json::Value arg
 
 }  // namespace
 
+// The engine's capture as launch.commit records it.
+CapturedPerformance performanceOf(const Engine::LaunchCapture& c, double rate) {
+    CapturedPerformance p;
+    p.sampleRate = rate;
+    p.start = c.startSample;
+    p.frames = c.frames;
+    if (c.loop.active()) p.loop = CapturedLoop{c.loop.start, c.loop.end};
+    for (const LaunchLogEntry& e : c.launches) {
+        CapturedLaunch l;
+        l.frame = e.runningFrame;
+        l.track = e.track.str();
+        l.action = e.action == LaunchLogEntry::Action::Clip   ? "clip"
+                   : e.action == LaunchLogEntry::Action::Stop ? "stop"
+                                                              : "arrangement";
+        if (e.action == LaunchLogEntry::Action::Clip) l.clip = e.clip.str();
+        if (e.scene) l.scene = e.scene->str();
+        l.anchor = e.anchorSample;
+        l.anchorBeat = e.anchorBeat;
+        p.launches.push_back(std::move(l));
+    }
+    return p;
+}
+
 schema::Schema<CapturedPerformance> capturedPerformanceSchema() {
     const auto sample = schema::integer().range(0, kSampleLimit);
     auto launch =

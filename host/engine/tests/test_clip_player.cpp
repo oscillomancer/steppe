@@ -421,8 +421,13 @@ TEST_CASE("a plan swap keeps what a track plays, and a clip removed returns it t
             const std::vector<float> tail(offline->audio.channels[0].begin() + std::ptrdiff_t(from),
                                           offline->audio.channels[0].end());
             CHECK(maxDiff(live.left, live.latency + from, tail, std::size_t(1.5 * seconds)) == 0.0);
-            // ... and not the replay of both launches: tr_2 did change.
-            settings.launches = live.log;
+            // ... and not the replay of both launches: tr_2 did change, which
+            // its executor acked as a return to the arrangement at the swap.
+            REQUIRE(live.log.size() == 3);
+            CHECK(live.log[2].track == id("tr_2"));
+            CHECK(live.log[2].action == LaunchLogEntry::Action::Arrangement);
+            CHECK(live.log[2].runningFrame >= (96000 + 20000) / 128 * 128);
+            settings.launches.assign(live.log.begin(), live.log.begin() + 2);
             auto both = renderOffline(s, pool, settings);
             REQUIRE(both);
             CHECK(maxDiff(live.left, live.latency, both->audio.channels[0], 5 * seconds) > 0.0);

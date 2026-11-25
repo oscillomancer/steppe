@@ -2007,8 +2007,28 @@ that as you heard it: the clip up to there, then the arrangement. The
 commit then refuses, naming the removed clip and keeping the capture; undo
 the removal and commit again.
 
-Renders play the arrangement only; the render dialog says so while a
-clip is playing. Not yet:
+The render dialog's **Plays** row chooses what a mix or stems render plays:
+the **Arrangement**; the **Last capture**, exactly as you heard it, on the
+version it played on (the dialog says "As heard", or why not, before you
+render); or the **Launcher** as it plays now, from Start to End. A
+performance render plays once over its own range, and its file name gets
+" performance" added to the mix's or the stems' name, which you can change
+(a name you type stays when you switch between Master mix and Stems). If
+the last capture changes while the dialog is open, the dialog shows the new
+one. Last capture's range shows the bars it covers and how long the file
+runs; a capture that went round a loop says "looped", and its file is longer
+than those bars because it plays each time round. While the arrangement is chosen
+and a clip is playing, the dialog says the clips playing now are not in the
+render. An agent can render a performance too: `render.mix` (or
+`render.stems`, `render.dry-run`, `render.queue.add`) with
+`performance: "captured"` plays the capture as it ran, on the version it
+began on, and says whether that is what you heard (`as_heard`, with the
+reasons it is not: an edit or a playrate change during it, live input, a
+dropout, a failed plug-in, an engine stop, or a start after playing
+began). `as_heard: true` refuses a render that would not be. A
+`captured_performance` object renders as given, and
+`{from: "launcher", start_beat, end_beat}` renders what the launcher plays
+now over that range. Not yet:
 - launching an audio clip with take FX or take envelopes while the
   master playrate keeps the pitch (`launch.playrate`); other clips
   follow the playrate, audio ones time-stretched with the pitch kept, and

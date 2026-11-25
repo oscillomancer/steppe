@@ -133,6 +133,10 @@ Kind: `action`. Exposure: `mcp-exec`.
     "ends_at": {
       "type": "number"
     },
+    "version": {
+      "type": "integer",
+      "minimum": 0.0
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -176,7 +180,8 @@ Result:
 {
   "on": true,
   "from": 0,
-  "to": 0
+  "to": 0,
+  "version": "<any>"
 }
 
 ```
@@ -565,7 +570,7 @@ Result:
 
 What each track with clips plays, and what it has queued.
 
-plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. followed (none, key or chords) is what the clip it plays, else the one it has queued, follows by in the running plan (ADR-0098); follow_budget: true when the follow budget forced that (a chords clip by its key, or any as written). Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on; capture_ends: the beat a quantized end (launch.capture {on: false, quantize}) ends it on, until it does; capturing is true from launch.capture {on: true}, armed or running. capture_kept (when there is a capture): true while one is kept beside the engine's, from before an engine stop or a device restart, or the one a newer capture replaces once that hears a frame: both can hold at once. With the engine stopped it answers for a kept capture (no tracks).
+plays is arrangement, clip, held (a once clip past its length, silent) or stopped, as heard. position is the playing clip's place in its period, in beats for a MIDI clip and seconds for an audio clip. queued is a launch not heard yet, with the song position it applies at. followed (none, key or chords) is what the clip it plays, else the one it has queued, follows by in the running plan (ADR-0098); follow_budget: true when the follow budget forced that (a chords clip by its key, or any as written). Tracks without clips always follow the arrangement and are not listed. capturing: launch.capture is on; capture_ends: the beat a quantized end (launch.capture {on: false, quantize}) ends it on, until it does; capturing is true from launch.capture {on: true}, armed or running. capture_kept (when there is a capture): true while one is kept beside the engine's, from before an engine stop or a device restart, or the one a newer capture replaces once that hears a frame: both can hold at once. capture_version: the session version the capture launch.commit and render {performance: "captured"} take began on (its default version to render). unlogged: false until this engine has lost a launch's report from the audio path (a full queue), then true for the engine's life: the tracks' entries may then be stale, and no capture running then or begun since is as heard; restarting the audio clears it. With the engine stopped it answers for a kept capture (no tracks).
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -591,6 +596,13 @@ Kind: `query`. Exposure: `mcp-exec`.
       "type": "number"
     },
     "capture_kept": {
+      "type": "boolean"
+    },
+    "capture_version": {
+      "type": "integer",
+      "minimum": 0.0
+    },
+    "unlogged": {
       "type": "boolean"
     },
     "tracks": {
@@ -650,7 +662,7 @@ Kind: `query`. Exposure: `mcp-exec`.
       }
     }
   },
-  "required": ["playing", "capturing", "tracks"],
+  "required": ["playing", "capturing", "unlogged", "tracks"],
   "additionalProperties": false
 }
 
@@ -675,6 +687,7 @@ Result:
 {
   "playing": false,
   "capturing": false,
+  "unlogged": false,
   "tracks": [
     {
       "track": "tr_1",

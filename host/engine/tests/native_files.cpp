@@ -34,4 +34,16 @@ std::optional<std::uint64_t> fileIndex(const std::filesystem::path& path) {
 #endif
 }
 
+#if defined(_WIN32)
+ExclusiveHold::ExclusiveHold(const std::filesystem::path& path) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE) handle_ = file;
+}
+
+ExclusiveHold::~ExclusiveHold() {
+    if (handle_) CloseHandle(static_cast<HANDLE>(handle_));
+}
+#endif
+
 }  // namespace supple::test

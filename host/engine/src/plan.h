@@ -1158,6 +1158,14 @@ struct Node {
     // plan its first frame takes the clip's notes from the anchor on, which
     // may lie behind the previous frame's song position (S3).
     bool launchFresh = false;
+    // carryLaunch returned it to the arrangement at this adoption (its clip
+    // lost): the adopting executor acks it once and clears it.
+    bool launchReturned = false;
+    // Callback-only, written when the callback skips this plan (an old-epoch
+    // rate handoff): the node is live here or in a handoff skipped before
+    // it since the callback's last adoption, so its class move was acked at
+    // that skip (Engine::ackSkipped, round 180 F1).
+    bool skipLive = false;
     std::int64_t launchFadeFrames = 0;
     const float* arrangementGain = nullptr;
     std::vector<float> arrangementGains;
@@ -1469,6 +1477,11 @@ struct Plan {
     // it also adopts exactly at handAt, playing, in that epoch (adoptLive's
     // `continuous`); otherwise it starts them afresh.
     bool handContinuable = false;
+    // The renderer carried the live region from its previous plan into this
+    // one (its continuable carry), whatever the callback's handoff turns out
+    // to be (a stop, a seek, a late adoption): such a join keeps its launch
+    // (round 178 F1). Kept when a relocation clears handContinuable.
+    bool liveCarried = false;
     // Two executors at work (anticipative engine with live nodes): frontier
     // edges read their rings, not their sources' taps.
     bool split = false;

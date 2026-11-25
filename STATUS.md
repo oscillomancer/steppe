@@ -324,8 +324,16 @@ instructions are in `docs/guides/installing.md`.
     FX, are from the clip's start, pass after pass (ADR-0097, amended
     2026-11-20). Modulation routes do not reach a clip take's FX, as
     they do not reach an item's (`modulation.target`: take FX come later).
-  - Renders play the arrangement only. The render dialog says so while a
-    clip holds a track, following launches while it is open.
+  - Renders play the arrangement unless given a performance:
+    `render.mix`, `render.stems`, `render.dry-run` and `render.queue.add`
+    take `performance` ("captured", a `captured_performance`, or the
+    launcher over a beat range) and answer what they played and whether it
+    is as heard (`as_heard`, `not_heard_because`; engine.md §3.1, ADR-0097
+    revision 2026-11-24); a capture from a play start renders bit for bit
+    as heard. The render dialog's Plays row offers the last capture, as
+    played and said as heard or why not, and the launcher over Start..End
+    (gui.md §4.8); with Arrangement it says the clips playing now are not
+    in the render. Limit: native macOS and Windows CI has not run on it.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - under a master playrate clips play on the playrate path, live as
@@ -380,14 +388,22 @@ instructions are in `docs/guides/installing.md`.
       shows it; a click commits it, and Quit, New and Open finalize it);
       the pane never arms over an uncommitted take;
     - a clip removed (or frozen, or past the memory budget) while a capture
-      runs is kept up to its track's return to the arrangement, which is
-      recorded at unity up to an immediate launch's floor after the plan
-      reached the executors (about a block in-callback, a render block or
-      two with the anticipative renderer), under a master playrate where
-      the plan hands over, or not at all when a playrate change is on its
-      way (`launch.later`); a removal undone within one executor block (a
-      client that sends without waiting) still cuts the clip in the
-      capture, though the executors played it on: the
+      runs is kept up to its track's return to the arrangement, at the
+      frame its executor adopted the plan (the executors ack it); a
+      removal undone before any executor block is no return at all; a
+      return ack lost to a full ring (a plan dropping clips on more than
+      a thousand tracks at once) falls back to an immediate launch's
+      floor, with a warning, and the capture is not as heard; a launch
+      ack lost that way (returns share its ring, so a burst of several
+      hundred returns can do it) is counted, warned, and makes every
+      capture from then on not as heard (`launch_unlogged`) until the
+      engine restarts, and `launch.state` says `unlogged: true` (its
+      tracks may then be stale; which launch was lost is not restored);
+      with the anticipative executor a track that joins the live region
+      while stopped (a monitor change) or leaves it (only at a stop)
+      stops its launched clip, reported as a return to the arrangement
+      (a join while playing keeps it, unless under a master playrate a
+      seek or stop comes before the audio callback takes it): the
       commit writes the clip's stretch to there (after the removal is
       undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one

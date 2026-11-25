@@ -777,6 +777,11 @@ int frontendMain(int argc, char** argv) {
     syncDialog.onTimecode = [&] { timecodeDialog.open(); };
     appActions.addUi("ui.sync.settings", "Transport: sync settings…", [&] { syncDialog.open(); });
     renderDialog.onStatus = [&](const std::string& message) { shell.setStatus(message); };
+    // A refusal the dialog has no words for: in full to the log, as the audio
+    // device dialog's.
+    renderDialog.onLog = [](const std::string& detail) {
+        std::fprintf(stderr, "%s\n", detail.c_str());
+    };
     renderDialog.openFolderWhenDone = [&] { return preferences.preferences().renderOpenFolder; };
     renderDialog.setOpenFolderWhenDone = [&](bool on) {
         if (auto set = preferences.setRenderOpenFolder(on); !set)

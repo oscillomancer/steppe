@@ -432,6 +432,8 @@ Clips replace that with an **ordered budget**:
   *(2026-11-20, the lead with L4's engine half: seeks and wraps are not
   logged yet; capture and commit as built are in engine.md §1.4.2, and a
   capture lives in one transport epoch.)*
+  *(2026-11-24: a render can play a performance when asked; see the
+  revision "renders play a launcher performance" below.)*
 - **Memory (L-e).** The prepared-source budget counts sample values
   across channels: the decoded source plus each converted variant, with
   a source or variant shared by several takes counted once. A clip on
@@ -1334,6 +1336,39 @@ Capture pane's showing them, and not arming over a kept take, is the
 gui-lead's. After the round 168 re-check: the app pins the commit's version, so a history squash
 cannot hide that it was undone; a merge that brings the commit onto the head's line counts as it;
 and a launch.commit whose transaction rolls back marks nothing.
+
+### Revision 2026-11-24: renders play a launcher performance
+
+Before it, renders played the arrangement only; a capture reached a file only through launch.commit.
+Decided (the co-director, the contract in engine.md §3.1): `render.mix`, `render.stems`,
+`render.dry-run` and `render.queue.add` take an optional `performance`, "captured", a
+`captured_performance`, or the launcher as it plays over a beat range, and the render replays it
+offline (`OfflineSettings::launches`, in song frames, `launchesInSong`). A render without one still
+plays the arrangement only, and the render dialog's line stays true for it. The result says what was
+played (`performance`, `range`) and whether it is what was heard (`as_heard`, with reasons from facts
+the engine records while it captures: an edit, a playrate change, live input, a dropout, a plug-in
+failure, an engine stop, a start mid-run); `as_heard: true` refuses otherwise. Offline equals what
+was heard, bit for bit, when it says so. A dry run compiles no plan; the one refusal it cannot see is
+a clip past the memory budget. Not rendered: plug-in state from before the start, edits and rate
+changes during a capture (one version is rendered), a loop under a master playrate, and a capture at
+another device rate (launch.commit converts it).
+
+### Revision 2026-11-25: the executors report a return to the arrangement
+
+Before it, the control thread guessed where a plan that lacked a track's clip returned the track
+(an immediate launch's floor, or the playrate plan's handAt), kept the guesses beside the log, and
+could not tell a plan the executors skipped (a removal undone before any executor block), which it
+then marked uncertain. Decided (the co-director, after review rounds 172 and 174): `carryLaunch`
+marks the node, the executor that adopts the plan acks the return through its launch-ack ring at
+its own adoption frame, and the main thread logs it as an ordinary arrangement launch. A skipped
+plan logs nothing; `launch.state`'s "uncertain" and the `launch_state_uncertain` reason are gone. A
+lost ack (a full ring) falls back to the guess, with a warning, and the capture is not as heard. A
+capture with a return stays not as heard (`edited_during`) for the edit behind it; the replay plays
+the return as heard. *(2026-11-25, after review round 176: the return is logged on the node's
+timeline, the stream less its latency shift, so a whole-log replay equals live; a track that joins
+or leaves the anticipative executor's live region without a continuous handoff is acked as a return;
+the earlier reason given here, the executors' retiring crossfade, was wrong: replay equals live.)*
+engine.md §1.4.2 has the rules.
 
 ## Consequences
 

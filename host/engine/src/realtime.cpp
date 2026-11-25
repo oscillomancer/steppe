@@ -328,6 +328,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         rtPrimed_ = false;
         primeAhead_.store(INT64_MAX, std::memory_order_relaxed);
         livePlan_ = nullptr;
+        classBase_ = nullptr;
         liveReady_ = liveEntered_ = false;
         callbackGen_.store(0);
     }
@@ -626,8 +627,9 @@ void Engine::stop() {
     backend_ = nullptr;
     plan_ = nullptr;
     livePlan_ = nullptr;
-    syncRt_ = nullptr;  // no callback runs now
-    resetAuditions();   // a voice playing is dropped (ADR-0094)
+    classBase_ = nullptr;  // freed with plans_ below
+    syncRt_ = nullptr;     // no callback runs now
+    resetAuditions();      // a voice playing is dropped (ADR-0094)
     syncNext_.store(nullptr);
     syncAdopted_.store(nullptr);
     syncRuntimes_.clear();
@@ -673,7 +675,9 @@ void Engine::stop() {
 }
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {
+    const std::shared_ptr<const model::Session> before = latest_;
     auto loaded = loadNow(session, projectDir);
+    if (loaded && before) captureEdit(*before, session);  // a render's as_heard
     // A deferred edit compiles in the first load() past its deferral, whoever
     // calls it. If that failed, the edit never played: latest_ goes back to
     // the session that did, so the prune, the mix and scalar shortcuts and
@@ -2159,6 +2163,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             detail::carryLiveNotes(*plan_, *plan, false);
             detail::carryRateSources(*plan_, *plan, -1);
             detail::carryMix(*plan_, *plan, -1);
+            ackReturns(*plan, -1, false, rtEpoch_, rtStream_.load(std::memory_order_relaxed));
         }
         detail::adoptRackModules(plan_ ? &plan_->modules : nullptr, plan ? &plan->modules : nullptr,
                                  &processing_);
@@ -2849,7 +2854,7 @@ void Engine::adoptRendererSources(detail::Plan* next) SUPPLE_RT {
         // of `next` is untouched until the handoff is published below.
         if (continuable) detail::carryMix(*plan_, *next, 1, 0);
     }
-    if (next) next->handContinuable = continuable;
+    if (next) next->handContinuable = next->liveCarried = continuable;
     detail::adoptRackModules(plan_ ? &plan_->rendererModules : nullptr,
                              next ? &next->rendererModules : nullptr, &processing_);
     adoptShare(processing_, next ? &next->rendererInstances : nullptr, &processing_,
@@ -2868,6 +2873,9 @@ void Engine::publishRendererPlan(detail::Plan& next, std::uint64_t epoch,
         next.handEpoch = epoch;
     }
     if (queuedRate) ratePlanRequests_.consume();
+    // Its returns, before the callback can see the plan (the live nodes
+    // carried from this renderer's included).
+    ackReturns(next, -1, true, epoch, streamLocal_);
     // Queued for the callback before the adoption is reported, so a caller
     // of awaitPlan() knows the callback's next cycle takes it.
     planHandoffs_.push(&next);  // space checked before adoption
@@ -3227,6 +3235,10 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             // not discard the only graph for live monitoring. Rate plans keep
             // the strict epoch check: their converter state belongs to a seek.
             if (oldEpoch && hand->rateEnabled) {
+                // Skipped, never adopted: a node it took into the live region
+                // is lost there (round 178 F2, round 180 F1).
+                ackSkipped(*hand);
+                classBase_ = hand;
                 planHandoffs_.consume();
                 continue;
             }
@@ -3236,8 +3248,13 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             if (oldEpoch || !playing || here >= hand->handAt) {
                 // Exactly at the handoff, playing, in its epoch: the renderer's
                 // carried state is the callback's here (adoptLive).
-                adoptLive(hand,
-                          !oldEpoch && playing && hand->handContinuable && here == hand->handAt);
+                const bool continuous =
+                    !oldEpoch && playing && hand->handContinuable && here == hand->handAt;
+                if (livePlan_)
+                    ackClassMoves(*livePlan_, classBase_, *hand, hand->liveCarried, e, here);
+                classBase_ = nullptr;
+                adoptLive(hand, continuous);
+                ackReturns(*hand, 1, false, e, here);  // the live region's own
                 planHandoffs_.consume();
                 wakeRenderer();
                 continue;

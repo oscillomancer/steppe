@@ -70,6 +70,14 @@ Result<rs::Settings> readPreset(const fs::path& path) {
     }
     return presetSettings(std::move(decoded->settings));
 }
+
+// Puts an error from reading a preset file under the argument that named
+// it, /default or /name: the file's own codes (file.*, json.parse.*) at
+// that path, a member's at <path>/settings/....
+void markRead(Error& error, std::string_view argument) {
+    error.path = std::string(argument) + error.path;
+    for (auto& detail : error.details) markRead(detail, argument);
+}
 }  // namespace
 
 rs::Settings projectRenderSettings(const model::Project& project) {
@@ -212,7 +220,13 @@ Result<std::optional<rs::Settings>> loadRenderDefault(const EngineApp& app) {
     std::error_code ec;
     if (!fs::exists(path, ec)) return std::optional<rs::Settings>{};
     auto settings = readPreset(path);
-    if (!settings) return std::move(settings).error();
+    if (!settings) {
+        // file.open is the readers' and the writers' code alike: the path
+        // tells a caller this one came from reading the default (round 184).
+        auto error = std::move(settings).error();
+        markRead(error, "/default");
+        return error;
+    }
     return std::optional<rs::Settings>(std::move(*settings));
 }
 
@@ -354,11 +368,15 @@ Status deleteRenderPreset(const EngineApp& app, const std::optional<std::string>
     }
     const fs::path path = presetPath(app, name);
     std::error_code ec;
-    if (!fs::remove(path, ec))
-        return Error("render.preset_unknown",
-                     name ? "no preset \"" + *name + "\"" : std::string("no user default saved"),
-                     name ? "/name" : "/default", "render.preset.list shows the presets");
-    return okStatus();
+    if (fs::remove(path, ec)) return okStatus();
+    // A file there that cannot be removed (a read-only folder, a file in
+    // use on Windows) is a write failure, not a missing preset (round 183).
+    if (ec)
+        return Error("render.preset_write", "cannot delete " + path.string() + ": " + ec.message(),
+                     name ? "/name" : "/default", "check that the user data folder is writable");
+    return Error("render.preset_unknown",
+                 name ? "no preset \"" + *name + "\"" : std::string("no user default saved"),
+                 name ? "/name" : "/default", "render.preset.list shows the presets");
 }
 
 Result<rs::Settings> findRenderPreset(const EngineApp& app, const std::string& name) {
@@ -370,7 +388,13 @@ Result<rs::Settings> findRenderPreset(const EngineApp& app, const std::string& n
     if (!fs::exists(path, ec))
         return Error("render.preset_unknown", "no preset \"" + name + "\"", "/name",
                      "render.preset.list shows the presets");
-    return readPreset(path);
+    auto settings = readPreset(path);
+    if (!settings) {
+        auto error = std::move(settings).error();
+        markRead(error, "/name");  // as the default's (round 184 F2)
+        return error;
+    }
+    return settings;
 }
 
 }  // namespace supple::engine

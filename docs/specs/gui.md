@@ -2224,12 +2224,135 @@ project is drawn in the quiet ink, with "from your default" on hover.
   loaded into the dialog only, written to the project only on Render),
   **Save preset…** (asks for a name), **Delete preset**, Close.
 - **Source:** a segmented control: Master mix | Stems | Regions.
-  - While a clip holds any track (`EngineApp::launchState()` says a track
-    plays something other than the arrangement), a quiet caption under it
-    says "Renders play the arrangement: the clips playing now are not in
-    them." (ADR-0097; `render.clips.note`). The dialog's frame pass reads
-    the launch state, so the caption comes and goes with launches while
-    the dialog is open.
+  - **Plays** (engine.md §3.1, ADR-0097): Arrangement | Last capture |
+    Launcher (`RenderDialog::Plays`), for Master mix and Stems. It is a
+    one-off selector: never written to the project's settings or a preset,
+    kept while the app runs, and back on Arrangement when the capture it
+    chose is gone, also while the dialog is open. Under Regions,
+    Arrangement is what is lit (the choice comes back with Master mix or
+    Stems). File > Mix always plays the arrangement.
+    - **Last capture** renders `performance: "captured"`, the capture
+      `EngineApp::launchCapture()` returns (also after an engine stop), on
+      the version it played on: the Version dropdown gives way to "As
+      played (vN)", and no `version` is sent. It is off while there is no
+      capture with running time (hint "No capture") or the capture ran at
+      another device rate than the project's (hint "Captured at 44100 Hz;
+      the project runs at 48000 Hz. Commit it in the launcher, then render
+      the arrangement.").
+    - **Launcher** renders `{from: "launcher", start_beat, end_beat}`:
+      Start and End fields in bars, typed as the transport writes them,
+      checked as one range on every edit (an End not after Start is an error
+      on the field just typed, gone from both once the pair is in order; a
+      pair out of order after a Plays switch or a preset starts again from
+      the default, so it never reaches the engine);
+      Start defaults to the playhead's bar, End to Start plus the longest
+      clip playing, in whole bars (four bars when none plays, which renders
+      the arrangement over that range).
+    - Under either, the Range row gives way to the performance's own range
+      (Last capture: a read-only line, "Bars 1.1.000 – 3.1.000 · 0:04.000",
+      the dry run's `range` once it answers, "so far" while the capture
+      runs, the preview asked again once a second meanwhile; the time is the
+      running length, the file's length in the preview, and a capture that
+      wrapped a loop (begun before the loop's end and run past it, the
+      engine's rule; one begun past it covers its own bars) says so: "Bars 1.1.000 – 2.1.000, looped · 0:03.000",
+      the bars the song span it covers, the time longer by its wraps), and no
+      `bounds` or `regions` is sent; `seamless_loop: false` is, since the
+      engine refuses a seamless loop with a performance even when only the
+      project's saved settings turn it on (a saved range is ignored). The
+      Regions toggle and the seamless loop are off, with hints saying why,
+      the loop shown unchecked, and under Regions the Plays toggles are off
+      ("Regions render the arrangement").
+    - The file name gets " performance" after the current source's pattern,
+      so it follows Master mix or Stems (stems keep their `{track}`);
+      editable and one-off (`pattern` in the call; the project's pattern
+      stays), and a name typed is kept across sources, never overwritten.
+    - Last capture follows the capture while the dialog is open: replaced,
+      begun, stopped or gone (`RenderDialog::followCapture`, once a second
+      from `tick()`), its version, range, as-heard line and file preview are
+      the capture Render would play.
+    - **As heard** (Last capture): the dry run's `as_heard` shows under the
+      range, "As heard" or "Not as heard: " and the reasons in the dialog's
+      words (the capture began while playing; the session or a clip it
+      played changed during it, an edit or a clip's return to the
+      arrangement; the playback rate changed during it; live input was heard;
+      audio dropped out during it; a plug-in failed before or during it; a
+      launch was lost from the log before or during it (a new capture after
+      Restart audio in Edit > Audio device starts clean: every engine stop
+      drops the engine that holds the loss, and a capture kept across it
+      keeps the reason), `launch_unlogged`; the engine
+      stopped, or the audio device restarted, during it, from the capture's
+      `endedBy`; an unknown reason as its code in words). After a render
+      the results start with the same line, from the render's own result,
+      and the status line adds ", as heard" or ", not as heard". The dialog
+      never sends `as_heard: true`.
+    - Every refusal the dialog shows (the preview, Render, a failed job, the
+      Ask check, Add to queue, Add to the project, presets, settings,
+      Branch from this version, a field's own error) is shown once, on the
+      red line under the sections; the status line keeps to what an action
+      did and a job's progress. The files go only when the render they
+      describe is refused (the preview, Render, the Ask check, a field's
+      error), and that refusal stays until a preview succeeds, since Render
+      is still refused. An action's refusal leaves the files as they were
+      and shows over the preview's; an action that succeeds clears it, and
+      the preview's refusal, if any, comes back. A job's progress or its end
+      never clears a refusal. Render or Run queue while a job runs is
+      refused there too: "A render is already running: wait for it to
+      finish." It reads in the dialog's words from the action refused, its
+      code and its path together (one code can have several causes; a file
+      that cannot be read or written is the render's file and the renders
+      folder for a render, the preset file and your presets folder for a
+      preset, the rendered file and the project's media for Add to the
+      project, where a file that cannot be read as audio is the reader's
+      case and any other code reads the action's own sentence; any code at
+      a path under `/args/default`, under every action, is the saved render
+      default read: "Your saved render default cannot be read. Save your
+      settings as the default again.", or for a member at
+      `/args/default/settings/…` that it "has a setting that cannot be
+      used"; a named preset read under Preset, its file's read codes at
+      `/args/name` and any code at `/args/name/settings/…`, is "That preset
+      cannot be read." or "That preset has a setting that cannot be used.",
+      while a preset name refused or not found at `/args/name` keeps its
+      own words, told apart by the code), never the engine's
+      message, its hint, a path or a command name
+      (`RenderDialog::refusalWords`, the audio device dialog's rule), and
+      says what plays ("A clip the launcher plays …", "A clip the capture
+      played …"). For a performance: no capture; another sample rate; a
+      looped capture under a master playback rate; more than 100,000
+      launches; launches out of order; a launch that names no clip; a clip
+      not on its track; a track or clip not in this version; a frozen track;
+      a clip that cannot play at the master playback rate; a clip over the
+      memory budget; the launcher's End not after its Start; a capture with
+      no running time. Nothing to render says why: nothing in the range, no
+      loop set, no track to render as a stem, no checked region. The
+      render's own codes (the file name or the renders folder, a file that
+      exists, normalization, the format, the frame budget, presets, the
+      queue, a missing, changed or unreadable media file, a failed or
+      missing plug-in, a file that could not be written, an unsupported
+      format, a cancelled render, the sources a render prepares, a render
+      default that cannot be read) have theirs. A test walks the codes every
+      `render.*` command declares in the registry, each under the action it
+      serves (the preset commands as a preset, the rest as a render), a
+      family such as `json.parse.*` as one sentence for every member; the
+      dialog's other commands (item.add, branch.create, …) keep their
+      action's own sentence. A preset the settings refuse is
+      not loaded: its refusal stands, with the settings before it. The Preset
+      dropdown lists the presets as they are after a save, a load, a delete
+      or a refused choice, and shows the preset in use, the one Delete
+      preset acts on; "—" (or a preset in use that is no longer listed)
+      means none, and Delete preset then deletes nothing.
+      One it does not know reads "The render could not be made." (or the
+      action's own sentence: the preset, the settings, the queue), and the
+      whole error goes to the log (`onLog`, stderr).
+    - Add to queue labels the entry "mix · last capture as played (v3),
+      bars 1–2" or "mix · launcher, bars 3–4", from the capture the call
+      pins (read as it is added); the engine stores the resolved
+      performance.
+  - While Arrangement plays and a clip holds any track
+    (`EngineApp::launchState()` says a track plays something other than the
+    arrangement), a quiet caption under it says "The clips playing now are
+    not in this render." (ADR-0097; `render.clips.note`). The dialog's frame
+    pass reads the launch state, so the caption comes and goes with launches
+    while the dialog is open.
   - Master mix, when the project has more than one master, shows a checklist
     of the masters (All / None; the main master alone by default) that edits
     `masters`: each checked master renders its own file (ADR-0056). Unchecking
