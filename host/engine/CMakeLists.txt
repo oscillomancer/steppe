@@ -100,6 +100,10 @@ if(SUPPLE_BUILD_TESTS)
   # out at 600 s with the held-track cases, now in _held: 116 s, under the
   # default limit).
   set_tests_properties(engine.tests.test_clip_player_rate PROPERTIES TIMEOUT 1200)
+  # About 100 s in dev on Linux, but 357-364 s on a Windows runner, and 600 s was
+  # passed there once the probe's master-playrate windows came in: a guard, the
+  # cases themselves are kept short.
+  set_tests_properties(engine.tests.test_module_library PROPERTIES TIMEOUT 1200)
   target_include_directories(engine.tests PRIVATE src ${PROJECT_SOURCE_DIR}/plugins/common/include)
   target_include_directories(engine.tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/fuzz)
   add_dependencies(engine.tests clap-host-fixtures clap-host-vst3-fixtures ${PRODUCT_SLUG}-scanner ${PRODUCT_SLUG}-bridge)
