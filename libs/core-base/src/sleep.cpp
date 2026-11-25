@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <thread>
 
 #if defined(_WIN32)
@@ -31,7 +32,12 @@ struct ThreadTimer {
     HANDLE handle = nullptr;
     bool tried = false;
     ~ThreadTimer() {
-        if (handle) CloseHandle(handle);
+        // Nulled, with `tried` left true: a sleep from a later destructor on this thread takes
+        // the ordinary path and never passes a closed handle (which Windows may have reused) on.
+        if (handle) {
+            CloseHandle(handle);
+            handle = nullptr;
+        }
     }
     HANDLE get() {
         if (!tried) {
@@ -53,7 +59,7 @@ bool waitOnce(double seconds) {
     if (seconds < 1e6 && gHighResolutionEnabled.load(std::memory_order_relaxed)) {
         if (HANDLE timer = tTimer.get()) {
             LARGE_INTEGER due;  // relative, in 100 ns units
-            due.QuadPart = -std::max<LONGLONG>(1, static_cast<LONGLONG>(seconds * 1e7));
+            due.QuadPart = -std::max<LONGLONG>(1, static_cast<LONGLONG>(std::ceil(seconds * 1e7)));
             if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE) &&
                 WaitForSingleObject(timer, INFINITE) == WAIT_OBJECT_0)
                 return true;
@@ -83,8 +89,9 @@ void sleepFor(std::chrono::duration<double> duration) {
         tLastHighResolution = false;
         return;
     }
-    // Clamped to what a time_point holds (about 3 years is far more than a poll needs).
-    const auto wait = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+    // Clamped to what a time_point holds (about 3 years is far more than a poll needs), and
+    // rounded up, so the deadline is never before the call time plus the duration.
+    const auto wait = std::chrono::ceil<std::chrono::steady_clock::duration>(
         std::chrono::duration<double>(std::min(duration.count(), 1e8)));
     sleepUntil(std::chrono::steady_clock::now() + wait);
 }

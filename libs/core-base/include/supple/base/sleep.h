@@ -4,11 +4,14 @@
 
 #include <chrono>
 
+#include "supple/base/rt.h"
+
 namespace supple {
 
 // A short pause for a thread that is not on the audio path: a control or worker
 // thread polling for another thread's answer, or a fake device pacing blocks.
-// Never call it from audio-path code.
+// Never call it from audio-path code: both are marked SUPPLE_BLOCKING, so RealtimeSanitizer
+// reports a call from a SUPPLE_RT function.
 //
 // On Windows std::this_thread::sleep_for ends on the system timer tick (15.6 ms
 // by default), so a poll that asks for 200 microseconds waits up to 78 times
@@ -29,9 +32,9 @@ namespace supple {
 // The bridge's SharedSignals (host/clap-host/src/bridge_protocol.h) and
 // midi_output_windows.cpp create the same timer themselves; they could move onto
 // this later, and were left as they are.
-void sleepFor(std::chrono::duration<double> duration);
+void sleepFor(std::chrono::duration<double> duration) SUPPLE_BLOCKING;
 // Until `deadline`; returns at once if it has passed.
-void sleepUntil(std::chrono::steady_clock::time_point deadline);
+void sleepUntil(std::chrono::steady_clock::time_point deadline) SUPPLE_BLOCKING;
 
 // Whether the calling thread's most recent sleepFor/sleepUntil ended on the
 // high-resolution timer (always false off Windows).

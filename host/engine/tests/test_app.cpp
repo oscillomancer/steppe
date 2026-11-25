@@ -317,6 +317,43 @@ TEST_CASE("agent branches: parallel edits merge by replay; conflicts are reporte
     CHECK(app->head().tracks.find(*model::Id::parse("tr_5"))->notes == "copy of tr_1");
 }
 
+TEST_CASE(
+    "transport round trips through a paced device (their milliseconds are printed, not asserted)") {
+    // A transport command waits for the audio thread to act on it (Engine::awaitTransport polls
+    // with supple::sleepFor). On Windows that wait ended on the 15.6 ms system tick before the
+    // helper; the numbers go to the log for a CI run to read, and nothing here decides by them.
+    Root root;
+    cmd::Registry registry;
+    registerEngineCommands(registry);
+    auto app = makeApp(root.path);
+    cmd::Dispatcher d(registry, *app);
+    auto call = [&](std::string command, std::string_view args) {
+        auto r = d.execute({std::move(command), j(args), kTest});
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return *r;
+    };
+    call("track.add", R"({"name":"A"})");
+    DummyBackend backend({.mode = DummyBackend::Mode::Thread, .paced = true});
+    REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
+                             {.anticipative = false}));
+    std::string times;
+    for (int i = 0; i < 5; ++i) {
+        for (const char* command : {"transport.play", "transport.stop"}) {
+            const auto start = std::chrono::steady_clock::now();
+            auto reply = call(command, "{}");
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                    .count();
+            CHECK(reply["playing"].asBool() == (command[10] == 'p'));
+            char text[32];
+            std::snprintf(text, sizeof text, " %s %.1f", command + 10, ms);
+            times += text;
+        }
+    }
+    MESSAGE("transport round trips in ms (period 2.7 ms):" << times);
+    app->stopEngine();
+}
+
 TEST_CASE("a plug-in state captured on a branch reaches main through a replayed merge") {
     Root root;
     cmd::Registry registry;
