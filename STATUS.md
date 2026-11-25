@@ -1675,7 +1675,11 @@ Engine and hosting:
     scratch folder (`test_app`), being fixed. A bridged plug-in's slow start
     on a loaded runner (`test_realtime`) is no longer failed by the late rule
     (ADR-0101), and its live waits end at the cycle's deadline, not a
-    15.6 ms timer tick past it (ADR-0102).
+    15.6 ms timer tick past it (ADR-0102). The engine's control-thread polls
+    (transport, plan and renderer waits, the record-stop spin, `Engine::stop`),
+    the paced dummy backend and the bridge client's reap poll end on the same
+    thread-owned high-resolution timer instead of the tick
+    (`supple::sleepFor`, ADR-0102 note); not yet measured on a Windows run.
 - Sync (ADR-0070, ADR-0071, ADR-0073): sync input, LTC output and MIDI
   clock/MTC output are tested only with dummy devices: real
   interfaces' timing, WinMM's millisecond timestamps, LTC over analogue

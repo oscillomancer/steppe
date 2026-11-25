@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "supple/base/rt.h"
+#include "supple/base/sleep.h"
 
 namespace supple::host {
 
@@ -667,7 +668,7 @@ Result<std::vector<std::uint8_t>> BridgeProcess::call(Op op, std::uint32_t insta
             fail(-1);
             for (int i = 0; i < 100 && pid_ > 0; ++i) {
                 reap();
-                if (pid_ > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                if (pid_ > 0) supple::sleepFor(std::chrono::milliseconds(1));
             }
         }
         return Error("host.bridge_failed", failure(), {}, "fx.restart re-creates it");
