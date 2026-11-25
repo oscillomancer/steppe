@@ -924,6 +924,17 @@ class Engine {
     // played as it began (its own anchor kept), then each launch applied
     // within it, its runningFrame the song samples from the start to its
     // boundary.
+    // What a capture's performance cannot carry, for a render's as_heard
+    // (engine.md §3.1): recorded while it runs, fixed when it ends.
+    struct CaptureFacts {
+        bool fromPlayStart = false;  // it began where playing began (stream 0)
+        bool edited = false;         // the session changed apart from the playrate
+        bool rateChanged = false;    // the playrate's controls, or a sync chase's scale
+        bool liveInput = false;      // a plan monitoring live input played during it
+        bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
+        bool pluginFailed = false;   // a processing error (processErrors)
+        bool operator==(const CaptureFacts&) const = default;
+    };
     struct LaunchCapture {
         bool on = false;  // still capturing: frames grows
         // Its start was placed (while stopped, at once: it begins where
@@ -938,6 +949,7 @@ class Engine {
         std::int64_t startSample = 0, frames = 0;
         LoopRange loop;
         std::vector<LaunchLogEntry> launches;
+        CaptureFacts facts;  // so far, while it runs
         // A quantized end not reached yet: its running frame, and the beat
         // of the sample it ends on (the commit's `to`; after a loop wrap the
         // song's beat in the loop).
@@ -1456,8 +1468,17 @@ class Engine {
         // launchReset_ as it stood when it began: what each track played
         // then is judged by it, not by a reset since (a clip removed later).
         std::map<model::Id, std::size_t> resets;
+        // As heard (CaptureFacts): the counters as it began, and the facts,
+        // fixed once it ended (`closed`).
+        CaptureFacts facts;
+        std::uint64_t misses = 0, bridgeLate = 0, xruns = 0, errors = 0;
+        bool closed = false;
     };
     CaptureState capture_;
+    CaptureFacts captureFacts() const;  // the running capture's so far, or the ended one's
+    void closeCapture();                // it ended: fixes its facts
+    // A load while a capture runs: what the edit changed (Engine::load).
+    void captureEdit(const model::Session& before, const model::Session& after);
     void placeCapture();       // a pending start, once the clock reads
     void settleCaptureEnd();   // ending/endSong/endBeat from the two ends
     void dropStaleCut();       // a switch's end whose launch no longer stands

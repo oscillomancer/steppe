@@ -395,6 +395,13 @@ struct OfflineSettings {
     // order, from the render's start, which must be the log's play start.
     // The render dialog never sets it: renders play the arrangement only.
     std::vector<LaunchLogEntry> launches;
+    // The launches' runningFrame counts song frames from the render's start
+    // (a captured_performance's `frame`, engine.md §3.1), not stream frames:
+    // under a master playrate each becomes the first stream frame whose song
+    // position reaches it, as live placement finds a boundary. At unity the
+    // two are the same. Set by a render of a performance, which also refuses
+    // a clip past the memory budget (launch.memory at the launch's path).
+    bool launchesInSong = false;
     // Internal (tests): the transport loop, timeline seconds [start, end),
     // which the render wraps at exactly as the live executors do (engine.md
     // §1.4.2). [startSeconds, endSeconds) is then the running time rendered,

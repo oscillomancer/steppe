@@ -603,7 +603,10 @@ the same.*
   within its span, in frame order with the logged launches, the return
   first at a frame they share; a launch of the track applied after the
   plan (later in the log than the reset) at or before the return's frame
-  supersedes it, since it was heard after the return (round 172 F1). What
+  supersedes it, since it was heard after the return (round 172 F1). A
+  capture with either kind of return is not as heard (`edited_during`,
+  §3.1), whether or not the session itself changed (a clip past the
+  memory budget). What
   each track played as a capture began is judged by the resets as they
   stood then (`CaptureState::resets`), a reset counting only once its
   return was heard by the start (one heard after it is a launch within,
@@ -614,8 +617,8 @@ the same.*
   with `launch.commit` at `/performance/launches/N/clip`, the capture
   kept. Undoing the removal makes it committable as it was; the
   capture's version rule is unchanged.
-  Renders and the render dialog play the arrangement only (rendering a
-  performance is specified in §3.1, not built yet), and the dialog
+  Renders and the render dialog play the arrangement only unless a
+  render is given a performance (§3.1), and the dialog
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at
   its logged running frames; the tests use it.
@@ -1160,8 +1163,8 @@ the same.*
   `launchLog()` in running-frame order.
 - **Renders.** An offline render without `OfflineSettings::launches`
   compiles no players (`Plan::clipPlayers`) and prepares no clip audio:
-  renders play the arrangement only, so a clip's warnings never reach a
-  render or block a freeze. A clip past the memory budget gets no player
+  a render without a performance (§3.1) plays the arrangement only, so a
+  clip's warnings never reach it or block a freeze. A clip past the memory budget gets no player
   either (`Engine::clipsSkipped()` names them; `launch.memory`).
 - **What a track plays, for the GUI and `launch.state`.**
   `Engine::launchState()` answers, on the main thread, from the log and
@@ -2193,11 +2196,23 @@ first use, and no plug-in code runs early to warm it.
   float samples with `render.normalize` and a repair hint before applying gain.
   This is a representability check, with no additional dB target range policy.
 
-### 3.1 Rendering a launcher performance (ADR-0097; the contract, being built)
+### 3.1 Rendering a launcher performance (ADR-0097, revision 2026-11-24)
 
-Not built yet: until the code on `codirector/render-performance` lands,
-renders play the arrangement only (§1.4.2). This is the contract the code
-and the render dialog are built to.
+Built in the engine and the render commands (`render_performance.cpp`,
+`render_commands.cpp`); the render dialog's side is the GUI's (gui.md).
+`resolvePerformance` resolves the source to a `captured_performance` and
+checks it against the version without a plan; `applyPerformance` sets the
+render's range, loop and launches (`OfflineSettings::launches` with
+`launchesInSong`), and the offline pre-pass that walks the rate timeline
+converts each launch's song frame to the first stream frame whose song
+position reaches it. That is live placement's rule for a quantized
+boundary; a launch placed with quantize none under a playrate logs the
+song frame its position had fallen to, so it can play earlier than live
+did, by less than one song sample's worth of stream frames (at most four
+at the slowest playrate; a known limit, which as_heard does not show). The capture's facts are recorded
+by the engine (`Engine::CaptureFacts`: from the play start, an edit, a
+playrate change, live input, a dropout, a plug-in failure), fixed when
+the capture ends.
 
 **The selector.** `render.mix`, `render.stems`, `render.dry-run` and
 `render.queue.add` take an optional `performance`, one of:

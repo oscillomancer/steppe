@@ -1916,8 +1916,17 @@ that as you heard it: the clip up to there, then the arrangement. The
 commit then refuses, naming the removed clip and keeping the capture; undo
 the removal and commit again.
 
-Renders play the arrangement only; the render dialog says so while a
-clip is playing. Not yet:
+Renders play the arrangement; the render dialog says so while a clip is
+playing. An agent can render a performance instead: `render.mix` (or
+`render.stems`, `render.dry-run`, `render.queue.add`) with
+`performance: "captured"` plays the capture as it ran, on the version it
+began on, and says whether that is what you heard (`as_heard`, with the
+reasons it is not: an edit or a playrate change during it, live input, a
+dropout, a failed plug-in, an engine stop, or a start after playing
+began). `as_heard: true` refuses a render that would not be. A
+`captured_performance` object renders as given, and
+`{from: "launcher", start_beat, end_beat}` renders what the launcher plays
+now over that range. Not yet:
 - launching an audio clip with take FX or take envelopes while the
   master playrate keeps the pitch (`launch.playrate`); other clips
   follow the playrate, audio ones time-stretched with the pitch kept, and

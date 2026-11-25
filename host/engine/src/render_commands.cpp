@@ -22,6 +22,7 @@
 #include <tuple>
 #include "../../analysis-commands/analysis_shared.h"
 #include "analysis_commands.h"
+#include "render_performance.h"
 #include "render_settings.h"
 #include "supple/base/files.h"
 #include "supple/engine/app.h"
@@ -249,7 +250,9 @@ struct Selectors {
     std::optional<rs::StemTap> tap;
     std::optional<double> target;
     std::optional<RenderAnalyze> analyze;
+    std::optional<json::Value> performance;  // engine.md §3.1
     bool job = false;
+    bool asHeard = false;
 };
 struct Args {
     Selectors sel;
@@ -304,7 +307,15 @@ schema::Schema<Selectors> selectorSchema() {
                schema::enumeration<RenderAnalyze>(
                    {{RenderAnalyze::Summary, "summary"}, {RenderAnalyze::Full, "full"}})
                    .doc("Mix: a supple.analysis-report/1.0 inline"))
+        .field("performance", &Selectors::performance,
+               schema::any().doc("Mix, stems: play a launcher performance: \"captured\", a "
+                                 "captured_performance, or {from: \"launcher\", start_beat, "
+                                 "end_beat}; its range replaces bounds"))
         .field("job", &Selectors::job, schema::boolean())
+        .defaultValue(false)
+        .omitIfDefault()
+        .field("as_heard", &Selectors::asHeard,
+               schema::boolean().doc("With performance: refuse unless it renders as heard"))
         .defaultValue(false)
         .omitIfDefault()
         .build();
@@ -345,7 +356,8 @@ schema::Schema<Args> argsSchema() {
                     c.error("schema.unknown_member", "unknown member \"" + m.key + "\"",
                             json::pointerJoin(p, m.key),
                             "use the render settings (session-model §1.10) or the selectors "
-                            "branch, version, master, name, operation, regions, tracks, job");
+                            "branch, version, master, name, operation, regions, tracks, "
+                            "performance, as_heard, job");
                     ok = false;
                 }
             }
@@ -560,6 +572,7 @@ struct RenderPlan {
     std::optional<RenderAnalyze> analyze;
     std::vector<std::uint8_t> cover;
     std::string coverMime;
+    std::optional<RenderPerformance> performance;  // engine.md §3.1
 };
 
 // metadata.cover: a PNG or JPEG of at most 10 MiB inside the project folder.
@@ -733,14 +746,50 @@ bool controlOnlyChannel(EngineApp& app, const model::Session& s, model::Id id) {
     return racks;
 }
 
+// The performance a render plays (engine.md §3.1), with the version
+// "captured" renders by default: the capture's own.
+Result<std::optional<PerformanceRequest>> performanceRequest(EngineApp& app, const Args& a,
+                                                             std::optional<std::int64_t>& version) {
+    if (!a.sel.performance) {
+        if (a.sel.asHeard)
+            return argsError("as_heard needs a performance", "/as_heard",
+                             "give performance (\"captured\", an object or from launcher), or "
+                             "leave as_heard out");
+        return std::optional<PerformanceRequest>{};
+    }
+    auto request = decodePerformance(*a.sel.performance);
+    if (!request) return std::move(request).error();
+    if (request->kind == PerformanceRequest::Kind::Captured && !version && !a.sel.branch)
+        if (const auto own = capturedVersion(app)) version = static_cast<std::int64_t>(*own);
+    return std::optional<PerformanceRequest>{std::move(*request)};
+}
+
 Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, bool dryRun = false) {
-    auto source = sessionFor(app, a.sel.branch, a.sel.version);
+    std::optional<std::int64_t> version = a.sel.version;
+    auto request = performanceRequest(app, a, version);
+    if (!request) return std::move(request).error();
+    auto source = sessionFor(app, a.sel.branch, version);
     if (!source) return std::move(source).error();
     model::Session s = *source;
     auto resolved = resolveFor(app, s, a);
     if (!resolved) return std::move(resolved).error();
     SUPPLE_TRY(checkSettings(resolved->effective, operation, resolved->from));
     RenderPlan out;
+    if (*request) {
+        if (operation == rs::Source::Regions)
+            return argsError("a performance renders the mix or stems, not regions", "/performance",
+                             "render.mix or render.stems with performance, or regions without it");
+        if (a.settings.bounds)
+            return argsError("a performance sets the range, so bounds does not apply",
+                             "/performance", "leave bounds out: the range is the performance's");
+        if (*resolved->effective.seamlessLoop)
+            return argsError("seamless_loop cannot fold a performance", "/seamless_loop",
+                             "set seamless_loop false for this call");
+        auto played = resolvePerformance(app, **request, s, s.project->sampleRate);
+        if (!played) return std::move(played).error();
+        if (a.sel.asHeard && !played->asHeard) return notAsHeard(*played);
+        out.performance = std::move(*played);
+    }
     out.operation = operation;
     out.settings = resolved->effective;
     out.branch = a.sel.branch.value_or(app.versions().branch());
@@ -795,7 +844,7 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
                      "directory; remove traversal components or symlinks that escape it");
     // The mix's range (and the stems'): bounds.
     double rangeFirst = 0, rangeLast = 0;
-    switch (*e.bounds) {
+    switch (out.performance ? rs::Bounds::Custom : *e.bounds) {
         case rs::Bounds::Project:
             rangeLast = lastBeat(s);
             break;
@@ -812,6 +861,10 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
             rangeFirst = e.startBeat.value_or(0);
             rangeLast = e.endBeat.value_or(lastBeat(s));
             break;
+    }
+    if (out.performance) {  // its span, not the bounds
+        rangeFirst = out.performance->startBeat;
+        rangeLast = out.performance->endBeat;
     }
     std::set<fs::path> destinations;
     auto add = [&](std::optional<model::Id> track, std::optional<model::Id> region, int tn,
@@ -842,6 +895,7 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
         task.settings.projectDir = app.projectDir();
         task.settings.modules = app.modules();
         task.settings.tailSeconds = *e.tailS;
+        if (out.performance) applyPerformance(*out.performance, task.settings);
         SUPPLE_TRY(checkRenderRange(s, task.settings, *e.sampleRate));
         if (!track && a.sel.master) {
             auto id = trackId(s, *a.sel.master, "/master");
@@ -1539,6 +1593,12 @@ Result<rs::Source> operationFor(EngineApp& app, std::string_view command, const 
     return operationOf(command, a, resolved->effective);
 }
 
+// A performance render's result carries what it played (engine.md §3.1).
+json::Value withPerformance(json::Value result, const RenderPlan& p) {
+    if (p.performance) addPerformanceResult(result, *p.performance);
+    return result;
+}
+
 json::Value filesForAdd(const json::Value& result) {
     const auto* files = result.find("files");
     return files ? *files : json::Value::array();
@@ -1750,6 +1810,7 @@ void registerQueueCommands(cmd::Registry& registry) {
             "render is pinned to the session and settings as they are now (its version, a "
             "branch's head when branch is given, and the effective render settings, a loop "
             "range as beats), so later edits do not change it; a dry run lists its files now. "
+            "A performance is stored as the captured_performance it resolved to. "
             "The queue is transport-like state: not an undo step, not saved with the project.";
         c.tags = {"render"};
         c.args = schema::object<QueueAddArgs>("render_queue_add_args")
@@ -1772,6 +1833,10 @@ void registerQueueCommands(cmd::Registry& registry) {
             if (!decoded) return queueArgsError(std::move(decoded).error());
             Args args = std::move(*decoded);
             args.sel.job = false;
+            {  // "captured" defaults to the capture's version (engine.md §3.1)
+                auto request = performanceRequest(app, args, args.sel.version);
+                if (!request) return queueArgsError(std::move(request).error());
+            }
             if (!args.sel.version) {  // pin it: later edits must not change what renders
                 auto source = sessionFor(app, args.sel.branch);
                 if (!source) return queueArgsError(std::move(source).error());
@@ -1789,7 +1854,15 @@ void registerQueueCommands(cmd::Registry& registry) {
             pinned.sel.regions = args.sel.regions;
             pinned.sel.analyze = args.sel.analyze;
             pinned.settings = planned->settings;
-            if (pinned.settings.bounds == rs::Bounds::Loop) {
+            if (planned->performance) {
+                // The object it resolved to, never "captured" or "launcher",
+                // so a queued render does not grow; its range is its own.
+                pinned.sel.performance =
+                    capturedPerformanceSchema().encode(planned->performance->perf);
+                pinned.settings.bounds.reset();
+                pinned.settings.startBeat.reset();
+                pinned.settings.endBeat.reset();
+            } else if (pinned.settings.bounds == rs::Bounds::Loop) {
                 const auto& session =
                     planned->tasks.empty() ? app.view() : planned->tasks[0].session;
                 pinned.settings.bounds = rs::Bounds::Custom;
@@ -2216,6 +2289,15 @@ void registerRenderCommands(cmd::Registry& registry) {
             "tracks) a channel that can produce no audio, reason no_audio: it has a rack whose "
             "Out modules have no audio patched to them (as modulate's Modulators channel) and "
             "nothing else feeds it; naming it in tracks renders it.";
+        if (which != "render.regions")
+            c.description +=
+                " performance plays a launcher performance instead of the arrangement alone: "
+                "\"captured\" (the capture, on the version it began on unless version is "
+                "given), a captured_performance (launch.commit's), or {from: \"launcher\", "
+                "start_beat, end_beat}. Its range replaces bounds (bounds in the call is "
+                "refused). The result adds performance (the object played), range, as_heard and "
+                "not_heard_because; as_heard: true refuses one that is not as heard "
+                "(render.not_as_heard). Refusals name the launch: /performance/launches/N.";
         if (which == "render.mix")
             c.description +=
                 " The mix answers with its file's entry at the top level (path, secondary_path, "
@@ -2227,7 +2309,8 @@ void registerRenderCommands(cmd::Registry& registry) {
                 "Each file: path (where if_exists sends it), exists (its destination is already "
                 "there), skip (if_exists skip leaves it out), seconds and outputs. operation: "
                 "mix, stems or regions (default: tracks or regions given, else the settings' "
-                "source).";
+                "source). With performance it also answers performance, range, as_heard and "
+                "not_heard_because, compiling no plan.";
         c.tags = {"render"};
         c.args = argsSchema();
         c.result = schema::any();
@@ -2253,7 +2336,7 @@ void registerRenderCommands(cmd::Registry& registry) {
             if (std::string_view(name) == "render.dry-run") {
                 json::Value out = json::Value::object();
                 out["files"] = dryRunList(*planned);
-                return out;
+                return withPerformance(std::move(out), *planned);
             }
             auto& dispatcher = ctx.service<cmd::Dispatcher>();
             const cmd::Origin origin = ctx.origin();
@@ -2267,7 +2350,8 @@ void registerRenderCommands(cmd::Registry& registry) {
                 if (mix) app.rememberRenderMeters(std::move(meters));
                 if (addToProject)
                     postAddToProject(app, target, dispatcher, origin, filesForAdd(*result));
-                return mix ? mixResult(std::move(*result)) : std::move(*result);
+                return withPerformance(mix ? mixResult(std::move(*result)) : std::move(*result),
+                                       *planned);
             }
             auto available = app.plugins();
             if (!available) return std::move(available).error();
@@ -2289,7 +2373,8 @@ void registerRenderCommands(cmd::Registry& registry) {
                     json::Value files = filesForAdd(*result);
                     completeRenderJob(
                         app, dispatcher, jobs, id, target,
-                        mix ? mixResult(std::move(*result)) : std::move(*result),
+                        withPerformance(mix ? mixResult(std::move(*result)) : std::move(*result),
+                                        planned),
                         [&app, target, &dispatcher, origin, files, addToProject, mix, meters] {
                             if (mix) app.rememberRenderMeters(std::move(*meters));
                             if (addToProject)

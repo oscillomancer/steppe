@@ -599,6 +599,15 @@ TEST_CASE("a clip removed mid-capture is kept up to its return to the arrangemen
     CHECK(got[1].songFrame == twinLaunches[1].songFrame);
     CHECK(got[1].anchorSample == twinLaunches[1].anchorSample);
     CHECK(got[1].anchorBeat == twinLaunches[1].anchorBeat);
+    // Its return is placed by a bound: not as heard (engine.md §3.1). The
+    // capture's own version still has cl_1, so the dry run answers.
+    {
+        json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+        CHECK_FALSE(dry["as_heard"].asBool());
+        const std::string why = json::writeCompact(dry["not_heard_because"]);
+        INFO(why);
+        CHECK(why.find("\"edited_during\"") != std::string::npos);
+    }
     refusedForRemovedClip(p);
     p.run("history.undo", "{}");
     CHECK(commitResult(p) == twin);

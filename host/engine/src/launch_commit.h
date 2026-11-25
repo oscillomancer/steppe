@@ -35,6 +35,9 @@ struct CapturedPerformance {
     std::vector<CapturedLaunch> launches;
 };
 schema::Schema<CapturedPerformance> capturedPerformanceSchema();
+// The engine's capture as launch.commit records it, at the rate it ran at
+// (launch.commit and a render's "captured").
+CapturedPerformance performanceOf(const Engine::LaunchCapture& c, double rate);
 
 // A section written for a scene launched in the performance: every clip of the
 // scene started on one frame, held until one of its tracks was launched again.

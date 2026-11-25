@@ -672,7 +672,9 @@ void Engine::stop() {
 }
 
 Status Engine::load(const model::Session& session, const std::filesystem::path& projectDir) {
+    const std::shared_ptr<const model::Session> before = latest_;
     auto loaded = loadNow(session, projectDir);
+    if (loaded && before) captureEdit(*before, session);  // a render's as_heard
     // A deferred edit compiles in the first load() past its deferral, whoever
     // calls it. If that failed, the edit never played: latest_ goes back to
     // the session that did, so the prune, the mix and scalar shortcuts and

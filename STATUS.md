@@ -324,8 +324,17 @@ instructions are in `docs/guides/installing.md`.
     FX, are from the clip's start, pass after pass (ADR-0097, amended
     2026-11-20). Modulation routes do not reach a clip take's FX, as
     they do not reach an item's (`modulation.target`: take FX come later).
-  - Renders play the arrangement only. The render dialog says so while a
-    clip holds a track, following launches while it is open.
+  - Renders play the arrangement unless given a performance:
+    `render.mix`, `render.stems`, `render.dry-run` and `render.queue.add`
+    take `performance` ("captured", a `captured_performance`, or the
+    launcher over a beat range) and answer what they played and whether it
+    is as heard (`as_heard`, `not_heard_because`; engine.md §3.1, ADR-0097
+    revision 2026-11-24); a capture from a play start renders bit for bit
+    as heard. The render dialog does not offer it yet (the gui-lead's) and
+    says renders play the arrangement while a clip holds a track. Limits:
+    a launch placed with quantize none under a master playrate can render
+    up to a few stream frames earlier than it played, which as_heard does
+    not show; native macOS and Windows CI has not run on it.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - under a master playrate clips play on the playrate path, live as
