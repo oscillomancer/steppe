@@ -180,7 +180,9 @@ class RenderDialog {
                      std::function<Status(double)> apply);
     void markDirty();
     void setStatus(std::string text);
-    void showRefusal(std::string words);  // the red line ("" clears it)
+    // The red line ("" clears it); `ofPreview`: the render the files
+    // describe was refused, so they go too.
+    void showRefusal(std::string words, bool ofPreview = false);
     Status validate() const;
     json::Value selectors() const;
     json::Value renderArgs(bool forJob) const;

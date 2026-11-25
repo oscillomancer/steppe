@@ -2253,7 +2253,8 @@ project is drawn in the quiet ink, with "from your default" on hover.
       the dry run's `range` once it answers, "so far" while the capture
       runs, the preview asked again once a second meanwhile; the time is the
       running length, the file's length in the preview, and a capture that
-      wrapped a loop says so: "Bars 1.1.000 – 2.1.000, looped · 0:03.000",
+      wrapped a loop (begun before the loop's end and run past it, the
+      engine's rule; one begun past it covers its own bars) says so: "Bars 1.1.000 – 2.1.000, looped · 0:03.000",
       the bars the song span it covers, the time longer by its wraps), and no
       `bounds` or `regions` is sent; `seamless_loop: false` is, since the
       engine refuses a seamless loop with a performance even when only the
@@ -2281,11 +2282,15 @@ project is drawn in the quiet ink, with "from your default" on hover.
       and the status line adds ", as heard" or ", not as heard". The dialog
       never sends `as_heard: true`.
     - Every refusal the dialog shows (the preview, Render, a failed job, the
-      Ask check, Add to queue, presets, settings, a field's own error) is
-      shown once, on the red line under the sections: the preview area and
-      the status line keep to their own jobs (the files; what an action
-      did). It reads in the dialog's words from its code and path, never the
-      engine's message, its hint, a path or a command name
+      Ask check, Add to queue, Add to the project, presets, settings,
+      Branch from this version, a field's own error) is shown once, on the
+      red line under the sections; the status line keeps to what an action
+      did, and an action that succeeds clears the red line. The files go
+      only when the render they describe is refused (the preview, Render,
+      the Ask check, a field's error); an action's refusal leaves them as
+      they were. It reads in the dialog's words from its code and path
+      together (one code can have several causes), never the engine's
+      message, its hint, a path or a command name
       (`RenderDialog::refusalWords`, the audio device dialog's rule), and
       says what plays ("A clip the launcher plays …", "A clip the capture
       played …"). For a performance: no capture; another sample rate; a
@@ -2293,9 +2298,13 @@ project is drawn in the quiet ink, with "from your default" on hover.
       launches; launches out of order; a launch that names no clip; a clip
       not on its track; a track or clip not in this version; a frozen track;
       a clip that cannot play at the master playback rate; a clip over the
-      memory budget; End not after Start; a capture with no running time. The render's own codes (the file name, a file that
+      memory budget; the launcher's End not after its Start; a capture with
+      no running time. Nothing to render says why: nothing in the range, no
+      loop set, no track to render as a stem, no checked region. The
+      render's own codes (the file name or the renders folder, a file that
       exists, normalization, the format, the frame budget, presets, the
-      queue, a missing or changed media file, a failed plug-in) have theirs.
+      queue, a missing or changed media file, a failed plug-in, a file that
+      could not be written) have theirs.
       One it does not know reads "The render could not be made." (or the
       action's own sentence: the preset, the settings, the queue), and the
       whole error goes to the log (`onLog`, stderr).

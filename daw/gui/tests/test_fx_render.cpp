@@ -594,6 +594,9 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         {"render.not_as_heard", "/performance"},
         {"render.empty", "/performance/end_beat"},
         {"render.empty", "/performance/frames"},
+        {"render.empty", "/end_beat"},
+        {"render.empty", "/bounds"},
+        {"render.empty", "/tracks"},
         {"render.empty", ""},
         {"render.args", "/seamless_loop"},
         {"render.args", "/trim"},
@@ -632,6 +635,13 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         {"engine.bridge_failed", ""},
         {"engine.fx_failed", ""},
         {"engine.patch_unpatchable", ""},
+        {"engine.start_failed", ""},
+        {"engine.process_error", ""},
+        {"file.write", ""},
+        {"file.open", ""},
+        {"file.sync", ""},
+        {"audio.write", ""},
+        {"audio.encode", ""},
         {"engine.too_long", ""},
         {"engine.range", ""},
         {"engine.tail", ""},
@@ -656,6 +666,19 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
     CHECK(f.render->refusalWords(Error("render.performance.clip_track", text,
                                        "/args/performance/launches/0/clip", hint)) ==
           "A clip the launcher plays is not on its track in this version.");
+    // One code, several causes: the words go by code and path together
+    // (round 177 F3). "End is not after Start." only for the launcher's End.
+    const auto said = [&](const char* code, const char* path) {
+        return f.render->refusalWords(Error(code, text, path, hint));
+    };
+    CHECK(said("render.empty", "/args/performance/end_beat") == "End is not after Start.");
+    CHECK(said("render.empty", "/args/end_beat") == "There is nothing to render in this range.");
+    CHECK(said("render.empty", "/args/bounds") == "No loop is set.");
+    CHECK(said("render.empty", "/args/tracks") == "There is no track to render as a stem.");
+    CHECK(said("render.path", "/args/pattern").find("{track}") == std::string::npos);
+    CHECK(said("render.path", "/args/pattern").find("folder") != std::string::npos);
+    CHECK(said("engine.process_error", "") == "A plug-in failed during the render.");
+    CHECK(said("file.write", "").find("could not be written") != std::string::npos);
     // Regions: nothing to render is said of the regions.
     f.render->setSource(gui::RenderDialog::Source::Regions);
     CHECK(f.render->refusalWords(Error("render.empty", text, "/args", hint)) ==
@@ -882,6 +905,72 @@ TEST_CASE("the render dialog's Last capture: as heard, on the version it played 
     f.render->close();
 }
 
+TEST_CASE(
+    "the render dialog: an action's refusal keeps the files; a failed job is on the red line") {
+    // Round 177 F1: only a refusal of the render the files describe clears
+    // them; an action's refusal (here a preset an agent deleted) leaves them,
+    // and a later success clears the red line. F2: a failed job says so on
+    // the red line, not the status line. F3: a renders folder that cannot
+    // be made is not told to add {track}.
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute(
+        {"track.add", json::parse(R"({"name": "Bass"})").value(), kTestOrigin}));
+    f.render->open();
+    f.render->setDebounceMs(0);
+    f.frame();
+    auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    f.render->setField("render.end", "3");
+    f.render->refreshPreview();
+    f.render->tick();
+    f.frame();
+    const std::string files = f.render->preview();
+    REQUIRE_FALSE(files.empty());
+    preset->onChange("gone");
+    f.render->tick();
+    f.frame();
+    CHECK(f.render->refusal() == "That preset is not found.");
+    CHECK(f.render->preview() == files);
+    CHECK(f.render->statusText().empty());
+    REQUIRE(f.render->savePreset("r177"));
+    f.render->tick();
+    f.frame();
+    CHECK(f.render->refusal().empty());
+    CHECK(f.render->preview() == files);
+
+    // A renders folder under a folder that cannot be written: the job fails.
+    const auto locked = f.dir / "locked";
+    std::filesystem::create_directories(locked);
+    f.app->setRendersDir(locked / "renders");
+    std::filesystem::permissions(
+        locked, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+    struct Unlock {
+        std::filesystem::path p;
+        ~Unlock() {
+            std::error_code ec;
+            std::filesystem::permissions(p, std::filesystem::perms::owner_all, ec);
+        }
+    } unlock{locked};
+    if (std::error_code ec; std::filesystem::create_directory(locked / "probe", ec)) {
+        MESSAGE("this user can write a read-only folder; the failed job is not checked");
+        return;
+    }
+    f.render->refreshPreview();
+    f.render->run();
+    for (int i = 0; i < 6000 && !f.render->job().empty(); ++i) {
+        f.render->tick();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(f.render->job().empty());
+    INFO(f.render->refusal());
+    CHECK(f.render->refusal() ==
+          "The file name or the renders folder cannot be used: check the folder, or choose "
+          "another name.");
+    CHECK(f.render->statusText().empty());
+    f.render->close();
+}
+
 TEST_CASE("the render dialog: a looped capture's range ends at the loop's end") {
     // engine.md §3.1 (round 174 F4): a capture that ran past the loop's end
     // covers the song up to it, played as wraps; the range line says so
@@ -945,6 +1034,60 @@ TEST_CASE("the render dialog: a looped capture's range ends at the loop's end") 
     CHECK(std::abs(std::stod(preview.substr(open + 1)) - lineSeconds()) <= 0.005);
     f.render->addToQueue();
     CHECK(f.render->statusText().find("bars 1–1") != std::string::npos);
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: a capture begun past the loop's end is not clamped to it") {
+    // Round 177 F4, the engine's rule (render_performance.cpp): only a
+    // capture begun before the loop's end wraps it. One begun past it covers
+    // its own bars, before the dry run answers and after, and the queue's
+    // label names them all, not only the first.
+    Fixture f;
+    if (!f.ok) return;
+    const auto run = [&](const char* name, std::string_view args) {
+        auto r = f.dispatcher->execute({name, json::parse(args).value(), kTestOrigin});
+        REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+        return r ? *r : json::Value();
+    };
+    run("track.add", R"({"name": "Bass"})");
+    run("scene.add", R"({"name": "A"})");
+    run("clip.add", R"({"track": "tr_1", "scene": "sc_1", "notation": "voice bass; 1: C3:q r:*"})");
+    run("transport.loop", R"({"start_beat": 0, "end_beat": 4, "enabled": true})");
+    engine::DummyBackend backend({.mode = engine::DummyBackend::Mode::Manual});
+    struct StopEngine {
+        engine::EngineApp& app;
+        ~StopEngine() { app.stopEngine(); }
+    } stop{*f.app};
+    REQUIRE(f.app->startEngine(backend, {.sampleRate = 48000, .blockSize = 256},
+                               {.anticipative = false}));
+    run("transport.seek", R"({"seconds": 4})");  // beat 8, bar 3: past the loop
+    backend.run(1);
+    run("launch.capture", R"({"on": true})");
+    run("launch.clip", R"({"clip": "cl_1"})");
+    if (!run("launch.state", "{}")["playing"].asBool()) run("transport.play", "{}");
+    backend.run(4 * 48000 / 256);  // two bars at 120
+    f.app->tick();
+    run("transport.stop", "{}");
+    backend.run(1);
+    f.app->tick();
+    const auto capture = f.app->launchCapture();
+    REQUIRE(capture);
+    REQUIRE(capture->capture.loop.active());
+    REQUIRE(capture->capture.startSample >= capture->capture.loop.end);
+    f.render->open();
+    f.render->setPlays(gui::RenderDialog::Plays::Capture);
+    f.frame();
+    const auto line = [&] {
+        REQUIRE(f.uiRoot().find("render.perf.range"));
+        return f.uiRoot().find("render.perf.range")->valueText();
+    };
+    CHECK(line().rfind("Bars 3.1.000 – 5.1.000 · 0:0", 0) == 0);
+    f.render->setDebounceMs(0);
+    f.render->refreshPreview();
+    f.frame();
+    CHECK(line().rfind("Bars 3.1.000 – 5.1.000 · 0:0", 0) == 0);
+    f.render->addToQueue();
+    CHECK(f.render->statusText().find("bars 3–4") != std::string::npos);
     f.render->close();
 }
 

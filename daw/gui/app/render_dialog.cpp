@@ -107,17 +107,22 @@ std::string sourceKey(RenderDialog::Source s) {
                                               : "regions";
 }
 
-// A reason a performance render is not as heard (engine.md §3.1), in the
-// dialog's words; "" for given and from_launcher, which only say the source
-// is not a capture. An unknown reason reads as its code in words.
-// A capture's span in beats as a render plays it: a looped capture that ran
-// past the loop's end covers the song up to the loop's end, which it plays as
-// wraps (engine.md §3.1, the result's range).
+// Whether a capture wrapped its loop: it began before the loop's end and ran
+// past it (the engine's rule for the result's range, engine.md §3.1). One
+// begun past the loop's end never wraps.
+bool wrapsLoop(double start, double frames, bool loopOn, double loopEnd) {
+    return loopOn && start < loopEnd && start + frames > loopEnd;
+}
+
+// A capture's span in beats as a render plays it: a capture that wrapped its
+// loop covers the song up to the loop's end, which it plays as wraps.
 std::pair<double, double> capturedSpan(const engine::EngineApp::CaptureView& v,
                                        const time::TimeMap& tm) {
     double last = v.endBeat;
     const auto& c = v.capture;
-    if (c.loop.active() && v.sampleRate > 0 && c.startSample + c.frames > c.loop.end)
+    if (v.sampleRate > 0 &&
+        wrapsLoop(static_cast<double>(c.startSample), static_cast<double>(c.frames),
+                  c.loop.active(), static_cast<double>(c.loop.end)))
         last = std::min(last, tm.beatAt(static_cast<double>(c.loop.end) / v.sampleRate));
     return {v.startBeat, last};
 }
@@ -131,6 +136,9 @@ std::string captureRangeLine(double first, double last, double seconds, bool loo
            (looped ? ", looped" : "") + " \u00b7 " + timeText(std::max(0.0, seconds));
 }
 
+// A reason a performance render is not as heard (engine.md §3.1), in the
+// dialog's words; "" for given and from_launcher, which only say the source
+// is not a capture. An unknown reason reads as its code in words.
 std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEnd endedBy) {
     if (reason == "began_mid_run") return "the capture began while playing";
     // An edit, or a clip's return to the arrangement (removed, frozen or
@@ -591,20 +599,29 @@ void RenderDialog::markDirty() {
     lastEditMs_ = nowMs();
 }
 
-void RenderDialog::showRefusal(std::string words) {
-    // Once, on the red line: the preview area and the status line keep to
-    // their own jobs (the files; what an action did).
+void RenderDialog::showRefusal(std::string words, bool ofPreview) {
+    // Once, on the red line: the status line keeps to what an action did,
+    // and the files stay unless the render they describe was refused (the
+    // dry run, Render, the Ask check): an action's refusal (a preset, the
+    // settings, the queue, a branch, a job) leaves them as they were.
     refusalText_ = std::move(words);
     if (diagnostic_) diagnostic_->setText(refusalText_);
     if (refusalText_.empty()) return;
-    previewText_.clear();
-    if (previewBlock_) previewBlock_->setText("");
+    if (ofPreview) {
+        previewText_.clear();
+        if (previewBlock_) previewBlock_->setText("");
+    }
     setStatus("");
 }
 
 void RenderDialog::setStatus(std::string message) {
     statusText_ = views::objectNames(app_.head(), message);
     if (status_) status_->setText(statusText_);
+    // An action that succeeded: the red line's refusal is over.
+    if (!statusText_.empty() && !refusalText_.empty()) {
+        refusalText_.clear();
+        if (diagnostic_) diagnostic_->setText("");
+    }
 }
 
 Status RenderDialog::writeSettings() {
@@ -1672,7 +1689,7 @@ Status RenderDialog::deletePreset(const std::string& name) {
 void RenderDialog::refreshPreview() {
     dirty_ = false;
     if (auto valid = validate(); !valid) {
-        showRefusal(valid.error().message);
+        showRefusal(valid.error().message, true);
         return;
     }
     showRefusal("");
@@ -1686,7 +1703,7 @@ void RenderDialog::refreshPreview() {
         // which names commands).
         asHeardText_.clear();
         if (asHeard_) asHeard_->setText("");
-        showRefusal(refusalWords(result.error()));
+        showRefusal(refusalWords(result.error()), true);
         if (renderButton_) renderButton_->setText("Render");
         return;
     }
@@ -1721,8 +1738,8 @@ void RenderDialog::refreshPreview() {
             const double rate = num(p->find("sample_rate"));
             const double start = num(p->find("start")), frames = num(p->find("frames"));
             const json::Value* loop = p->find("loop");
-            const bool wrapped =
-                loop && loop->isObject() && start + frames > num(loop->find("end"));
+            const bool wrapped = wrapsLoop(start, frames, loop && loop->isObject(),
+                                           loop && loop->isObject() ? num(loop->find("end")) : 0);
             if (rate > 0) perfRun_ = std::pair{frames / rate, wrapped};
         }
         if (plays_ == Plays::Capture) {
@@ -1764,7 +1781,7 @@ void RenderDialog::refreshPreview() {
 void RenderDialog::startJob(std::string command, json::Value args) {
     auto result = dispatcher_.execute({command, std::move(args), kUiOrigin});
     if (!result) {
-        showRefusal(refusalWords(result.error()));
+        showRefusal(refusalWords(result.error()), true);
         return;
     }
     if (const json::Value* id = result->find("job"); id && id->isString()) {
@@ -1794,7 +1811,7 @@ void RenderDialog::run() {
         args["if_exists"] = "overwrite";
         auto dry = dispatcher_.execute({"render.dry-run", std::move(args), kUiOrigin});
         if (!dry) {
-            showRefusal(refusalWords(dry.error()));
+            showRefusal(refusalWords(dry.error()), true);
             return;
         }
         json::Value existing = json::Value::array();
@@ -2070,10 +2087,11 @@ void RenderDialog::openResultMenu(std::size_t index, const ui::Rect& anchor) {
                      item["audio_file"] = text(entry.find("path"));
                      return dispatcher_.execute({"item.add", item, kUiOrigin});
                  });
-             setStatus(done ? "added to the project"
-                            : refusalWords(done.error(),
-                                           "The render could not be added to "
-                                           "the project."));
+             if (done)
+                 setStatus("added to the project");
+             else
+                 showRefusal(
+                     refusalWords(done.error(), "The render could not be added to the project."));
          }});
     const auto version = entry.find("version") ? entry.find("version")->asInt() : 0;
     items.push_back(
@@ -2136,7 +2154,7 @@ void RenderDialog::pollJob() {
         if (mixJob_) {
             if (auto report = onStatus) report("Mix failed: " + message);
         } else
-            setStatus(message);
+            showRefusal(message);
         mixJob_ = false;
         return;
     }
@@ -2264,8 +2282,11 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
         return aClip + " is not in this version.";
     if (c == "render.not_as_heard") return "It would not render as heard.";
     if (c == "render.empty") {
-        if (path.ends_with("/end_beat")) return "End is not after Start.";
-        if (path.ends_with("/frames")) return "The capture has no running time.";
+        // By code and path together: one code, several causes.
+        if (path == "/performance/end_beat") return "End is not after Start.";
+        if (path == "/performance/frames") return "The capture has no running time.";
+        if (path == "/bounds") return "No loop is set.";
+        if (path == "/tracks") return "There is no track to render as a stem.";
         return source() == Source::Regions ? "No checked region has anything to render."
                                            : "There is nothing to render in this range.";
     }
@@ -2282,9 +2303,12 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
             return "A performance renders its own range.";
         return "These render settings cannot be used together.";
     }
+    // One code for a name two files share, a folder that cannot be made or
+    // found, and a name that leaves the folder: a sentence for them all
+    // until the folder's causes have their own code.
     if (c == "render.path")
-        return "The file name does not give each file its own place in the renders folder. "
-               "Add {track} for stems, or choose another name.";
+        return "The file name or the renders folder cannot be used: check the folder, or "
+               "choose another name.";
     if (c == "render.pattern") return "The file name has a token that cannot be read.";
     if (c == "render.exists")
         return "A file with that name exists. Choose another name, or another way under "
@@ -2319,8 +2343,14 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
     if (c == "engine.media_changed") return "A file it plays changed on disk.";
     if (c == "engine.media_too_long") return "A file it plays is too long to load.";
     if (c == "engine.blob_missing") return "A piece of the project's data is missing.";
-    if (c == "engine.bridge_failed" || c == "engine.fx_failed" || c == "engine.patch_unpatchable")
+    if (c == "engine.bridge_failed" || c == "engine.fx_failed" || c == "engine.patch_unpatchable" ||
+        c == "engine.start_failed" || c == "engine.process_error")
         return "A plug-in failed during the render.";
+    // The file writers and the encoders.
+    if (c == "file.write" || c == "file.open" || c == "file.sync" || c == "audio.write" ||
+        c == "audio.encode")
+        return "The file could not be written. Check that the renders folder is on a drive "
+               "with space and can be written to.";
     if (c == "engine.too_long" || c == "engine.range" || c == "engine.tail")
         return "The range is too long to render.";
     if (onLog)
@@ -2390,7 +2420,8 @@ void RenderDialog::buildPerformanceRange(ui::Node& body) {
         } else if (capture && capture->sampleRate > 0) {
             const auto& c = capture->capture;
             seconds = static_cast<double>(c.frames) / capture->sampleRate;
-            looped = c.loop.active() && c.startSample + c.frames > c.loop.end;
+            looped = wrapsLoop(static_cast<double>(c.startSample), static_cast<double>(c.frames),
+                               c.loop.active(), static_cast<double>(c.loop.end));
         } else {
             seconds = tm.secondsAt(last) - tm.secondsAt(first);
         }
