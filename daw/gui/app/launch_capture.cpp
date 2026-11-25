@@ -90,17 +90,21 @@ Status CaptureControl::set(bool on) {
 
 Status CaptureControl::commit() {
     engine::Engine* engine = app_.engine();
-    if (!engine) return {};
-    if (engine->launchCapturing()) {
+    if (engine && engine->launchCapturing()) {
         json::Value args = json::Value::object();
         args["on"] = false;
         auto r = run("launch.capture", std::move(args));
         if (!r) return std::move(r).error();
     }
+    // What launch.commit has not written: the take just ended, or one the
+    // app kept across an engine stop or a device restart (ADR-0097; review
+    // round 168 F1). A take already committed is skipped, so none is written
+    // twice, and so is one whose commit was undone: the user declined it.
     // Nothing ran, or every track followed the arrangement throughout: there
     // is nothing to write, and no empty undo step.
-    const auto capture = engine->launchCapture();
-    if (!capture || capture->frames <= 0 || capture->launches.empty()) return {};
+    if (!app_.captureUncommitted() ||
+        app_.launchCapture()->commit == engine::EngineApp::CaptureCommit::Undone)
+        return {};
     auto r = run("launch.commit", json::Value::object());
     if (!r) return std::move(r).error();
     if (onNotice)

@@ -737,6 +737,66 @@ TEST_CASE("launcher: Capture arms while lit; a stop commits the performance, one
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: a take kept across Restart audio is committed by the pane") {
+    // Review round 168 F1: a restart of the audio engine while Capture is
+    // lit keeps the take (EngineApp); the pane's next pass commits it, as a
+    // stop would have, though the new engine has no capture of its own.
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    const double at = f.exec("launch.clip", R"({"clip":"cl_1"})")["beat"].asDouble();
+    const model::Id drums = *model::Id::parse("tr_1");
+    auto playing = [&] {
+        for (const auto& t : f.app->launchState())
+            if (t.track == drums && t.plays == engine::Engine::TrackLaunch::Plays::Clip)
+                return true;
+        return false;
+    };
+    const auto service = [&] { capture.service(); };
+    REQUIRE(f.runUntil(playing, at, "Kit A heard", service));
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= at + 1; }, at, "a beat of Kit A", service));
+    CHECK(f.app->head().items.empty());
+    const std::uint64_t before = f.app->head().version;
+    // Restart audio: the engine stops (the take is kept, and said) and starts.
+    f.exec("engine.stop", "{}");
+    CHECK(f.app->captureUncommitted());
+    REQUIRE(f.app->captureKeptWarning());
+    CHECK(f.app->captureKeptWarning()->find("was running when the engine stopped") !=
+          std::string::npos);
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    capture.service();
+    CHECK(refused.empty());
+    CHECK(f.app->head().version == before + 1);  // the kept take, one undo step
+    bool laid = false;
+    for (const auto& e : f.app->head().items) laid = laid || e.value->track == drums;
+    CHECK(laid);
+    CHECK_FALSE(f.app->captureUncommitted());
+    // Not written twice: a later pass finds it committed.
+    capture.service();
+    CHECK(f.app->head().version == before + 1);
+    // Undone, the commit is declined: another restart keeps the take, and
+    // the pane's pass (which commits a capture it finds gone) does not
+    // write it again; it arms a new capture, as a click would.
+    f.exec("history.undo", "{}");
+    CHECK(f.app->launchCapture()->commit == engine::EngineApp::CaptureCommit::Undone);
+    f.exec("engine.stop", "{}");
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(f.app->launchCapture());
+    CHECK(f.app->launchCapture()->kept);
+    capture.service();
+    REQUIRE(capture.set(true));
+    CHECK(capture.armed());
+    CHECK(f.app->launchCapturing());
+    CHECK(refused.empty());
+    CHECK(f.app->head().version == before);
+    f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: Capture turned off while playing ends on the next bar, then commits") {
     // gui.md §4.15: off while playing ends the capture on the project's launch
     // quantize boundary, as a launch made then would land; the commit follows
