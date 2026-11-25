@@ -1150,6 +1150,14 @@ TEST_CASE("the render dialog: a file's refusal names the action's file and folde
                                  gui::RenderDialog::Action::Preset) ==
           "The preset file could not be written. Check that your presets folder can be written "
           "to.");
+    // A delete in the same folder answers render.preset_write (c04ce61f);
+    // its words are true for a delete as for a save.
+    auto deleted = f.render->deletePreset("p181");
+    REQUIRE_FALSE(deleted);
+    CHECK(deleted.error().code == "render.preset_write");
+    CHECK(f.render->refusalWords(deleted.error(), "The preset could not be deleted.",
+                                 gui::RenderDialog::Action::Preset) ==
+          "Your presets folder cannot be written to.");
     f.render->close();
 }
 

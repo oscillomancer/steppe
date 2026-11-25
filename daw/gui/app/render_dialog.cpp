@@ -2401,7 +2401,8 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
     if (c == "render.preset_unknown") return "That preset is not found.";
     if (c == "render.preset_factory") return "Factory presets cannot be changed or deleted.";
     if (c == "render.preset_name") return "That preset name cannot be used.";
-    if (c == "render.preset_write") return "The preset could not be saved.";
+    // Answered by a save and by a delete (c04ce61f): true for both.
+    if (c == "render.preset_write") return "Your presets folder cannot be written to.";
     if (c == "render.queue_unknown") return "That queued render is gone.";
     if (c == "render.queue_empty") return "Nothing is queued.";
     if (c == "job.cancelled") return "The render was cancelled.";
