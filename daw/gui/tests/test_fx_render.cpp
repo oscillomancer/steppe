@@ -702,6 +702,29 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
                       "Your saved render default has a setting that cannot be used. Save your "
                       "settings as the default again.");
             }
+    // A named preset read (render.preset.load {name}, 7024d3b3): its file's
+    // read codes at /args/name and any code at /args/name/settings/… are a
+    // read under Preset; preset_name and preset_unknown answer at /args/name
+    // too and keep their words (told apart by the code).
+    for (const std::string& family : under[Action::Preset])
+        for (const std::string& code : members(family)) {
+            INFO(code << " at the preset's name");
+            CHECK(f.render->refusalWords(Error(code, text, "/args/name/settings/tail_s", hint),
+                                         "fallback", Action::Preset) ==
+                  "That preset has a setting that cannot be used. Save it again, or delete it.");
+            const std::string at = f.render->refusalWords(Error(code, text, "/args/name", hint),
+                                                          "fallback", Action::Preset);
+            const bool read = code == "file.open" || code == "file.read" ||
+                              code == "file.too_large" || code.starts_with("json.parse.");
+            if (read)
+                CHECK(at == "That preset cannot be read. Save it again, or delete it.");
+            else
+                CHECK(at != "That preset cannot be read. Save it again, or delete it.");
+        }
+    CHECK(f.render->refusalWords(Error("render.preset_unknown", text, "/args/name", hint),
+                                 "fallback", Action::Preset) == "That preset is not found.");
+    CHECK(f.render->refusalWords(Error("render.preset_name", text, "/args/name", hint), "fallback",
+                                 Action::Preset) == "That preset name cannot be used.");
     // The path table names declared codes only, so it cannot go stale.
     for (const auto& [code, unused] : paths) {
         INFO(code);
@@ -1327,6 +1350,53 @@ TEST_CASE("the render dialog: a render default that cannot be read says so, as a
     f.frame();
     CHECK(f.render->refusal() == words);
     f.render->close();
+}
+
+TEST_CASE("the render dialog: a preset that cannot be read says so, as a read") {
+    // 7024d3b3: render.preset.load {name} answers a file it cannot open or
+    // parse at /args/name; under Preset that is a preset that cannot be
+    // read, never a write.
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute({"render.preset.save",
+                                   json::parse(R"({"name":"p","settings":{"tail_s":1}})").value(),
+                                   kTestOrigin}));
+    std::filesystem::path file;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(f.dir))
+        if (e.path().filename() == "p.json") file = e.path();
+    REQUIRE_FALSE(file.empty());
+    const auto load = [&] {
+        return f.dispatcher->execute(
+            {"render.preset.load", json::parse(R"({"name":"p"})").value(), kTestOrigin});
+    };
+    const std::string words = "That preset cannot be read. Save it again, or delete it.";
+    {
+        std::ofstream out(file, std::ios::trunc);
+        out << "{\"settings\": ";  // not JSON
+    }
+    auto damaged = load();
+    REQUIRE_FALSE(damaged);
+    INFO(damaged.error().code << " at " << damaged.error().path);
+    CHECK(damaged.error().path == "/args/name");
+    CHECK(f.render->refusalWords(damaged.error(), "The preset could not be loaded.",
+                                 gui::RenderDialog::Action::Preset) == words);
+    std::filesystem::permissions(file, std::filesystem::perms::none);
+    struct Unlock {
+        std::filesystem::path p;
+        ~Unlock() {
+            std::error_code ec;
+            std::filesystem::permissions(p, std::filesystem::perms::owner_all, ec);
+        }
+    } unlock{file};
+    if (std::ifstream probe(file); probe) {
+        MESSAGE("this user can read a mode-000 file; the unreadable case is not checked");
+        return;
+    }
+    auto unreadable = load();
+    REQUIRE_FALSE(unreadable);
+    INFO(unreadable.error().code << " at " << unreadable.error().path);
+    CHECK(f.render->refusalWords(unreadable.error(), "The preset could not be loaded.",
+                                 gui::RenderDialog::Action::Preset) == words);
 }
 
 TEST_CASE("the render dialog: Add to the project of a damaged render reads as unreadable") {

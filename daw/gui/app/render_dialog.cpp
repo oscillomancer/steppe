@@ -2335,6 +2335,14 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
                "again.";
     }
     if (action == Action::Preset) {
+        // A named preset read (render.preset.load {name}, 7024d3b3): its
+        // file's codes at /args/name, a bad member at /args/name/settings/…,
+        // where file.open is a read. preset_name and preset_unknown answer at
+        // /args/name too: they keep their words, told apart by the code.
+        if (e.path.starts_with("/args/name/settings"))
+            return "That preset has a setting that cannot be used. Save it again, or delete it.";
+        if (e.path == "/args/name" && (reads || c == "file.open"))
+            return "That preset cannot be read. Save it again, or delete it.";
         if (writes)
             return "The preset file could not be written. Check that your presets folder can be "
                    "written to.";

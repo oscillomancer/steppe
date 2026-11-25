@@ -2308,7 +2308,11 @@ project is drawn in the quiet ink, with "from your default" on hover.
       default read: "Your saved render default cannot be read. Save your
       settings as the default again.", or for a member at
       `/args/default/settings/…` that it "has a setting that cannot be
-      used"), never the engine's
+      used"; a named preset read under Preset, its file's read codes at
+      `/args/name` and any code at `/args/name/settings/…`, is "That preset
+      cannot be read." or "That preset has a setting that cannot be used.",
+      while a preset name refused or not found at `/args/name` keeps its
+      own words, told apart by the code), never the engine's
       message, its hint, a path or a command name
       (`RenderDialog::refusalWords`, the audio device dialog's rule), and
       says what plays ("A clip the launcher plays …", "A clip the capture
