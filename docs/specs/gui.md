@@ -2327,9 +2327,11 @@ project is drawn in the quiet ink, with "from your default" on hover.
       family such as `json.parse.*` as one sentence for every member; the
       dialog's other commands (item.add, branch.create, …) keep their
       action's own sentence. A preset the settings refuse is
-      not loaded: its refusal stands, with the settings before it. A preset
-      choice that is refused puts the Preset dropdown back on the preset in
-      use, the one Delete preset acts on.
+      not loaded: its refusal stands, with the settings before it. The Preset
+      dropdown lists the presets as they are after a save, a load, a delete
+      or a refused choice, and shows the preset in use, the one Delete
+      preset acts on; "—" (or a preset in use that is no longer listed)
+      means none, and Delete preset then deletes nothing.
       One it does not know reads "The render could not be made." (or the
       action's own sentence: the preset, the settings, the queue), and the
       whole error goes to the log (`onLog`, stderr).

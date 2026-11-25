@@ -760,33 +760,58 @@ void RenderDialog::buildHeader(ui::Node& page) {
     auto& gap = header.emplace<ui::Node>("render.header.gap");
     gap.layout.width = ui::SizeRule::fraction();
     caption(header, "render.preset.label", "Preset", 44);
+    auto& preset = header.emplace<ui::Dropdown>("render.preset", presetChoices(), presetName_);
+    preset.layout.width = ui::SizeRule::fixed(250);
+    preset.onChange = [this](const std::string& name) {
+        if (name.empty()) {
+            // "—": no preset in use, so Delete preset has nothing to delete.
+            presetName_.clear();
+            refreshPresets();
+            return;
+        }
+        if (auto loaded = loadPreset(name); !loaded) {
+            showRefusal(
+                refusalWords(loaded.error(), "The preset could not be loaded.", Action::Preset));
+            // The choice did not take: the dropdown lists the presets as they
+            // are now and shows the one in use, the one Delete preset acts on.
+            refreshPresets();
+        }
+    };
+    header.emplace<ui::Button>("render.preset.save", "Save preset…", [this] { openPresetName(); });
+    header.emplace<ui::Button>("render.preset.delete", "Delete preset", [this] {
+        if (presetName_.empty()) return;
+        if (auto deleted = deletePreset(presetName_); !deleted) {
+            showRefusal(
+                refusalWords(deleted.error(), "The preset could not be deleted.", Action::Preset));
+            refreshPresets();
+        }
+    });
+    header.emplace<ui::Button>("render.close", "Close", [this] { close(); });
+}
+
+std::vector<ui::Choice> RenderDialog::presetChoices() const {
     std::vector<Choice> presets{{"", "—"}};
     if (auto list = dispatcher_.execute({"render.preset.list", json::Value::object(), kUiOrigin}))
         for (const auto& p : (*list)["presets"].asArray()) {
             const std::string name = text(p.find("name"));
             presets.push_back({name, name + (flag(p.find("factory")) ? "" : " (yours)")});
         }
-    auto& preset = header.emplace<ui::Dropdown>("render.preset", presets, presetName_);
-    preset.layout.width = ui::SizeRule::fixed(250);
-    preset.onChange = [this](const std::string& name) {
-        if (name.empty()) return;
-        if (auto loaded = loadPreset(name); !loaded) {
-            showRefusal(
-                refusalWords(loaded.error(), "The preset could not be loaded.", Action::Preset));
-            // The choice did not take: the dropdown shows the preset in use
-            // again, the one Delete preset acts on (round 182 F1).
-            if (auto* shown = dynamic_cast<ui::Dropdown*>(root_.find("render.preset")))
-                shown->setValue(presetName_);
-        }
-    };
-    header.emplace<ui::Button>("render.preset.save", "Save preset…", [this] { openPresetName(); });
-    header.emplace<ui::Button>("render.preset.delete", "Delete preset", [this] {
-        if (presetName_.empty()) return;
-        if (auto deleted = deletePreset(presetName_); !deleted)
-            showRefusal(
-                refusalWords(deleted.error(), "The preset could not be deleted.", Action::Preset));
-    });
-    header.emplace<ui::Button>("render.close", "Close", [this] { close(); });
+    return presets;
+}
+
+void RenderDialog::refreshPresets() {
+    // The header is built once per open (rebuild() is the body): after a
+    // preset is saved, loaded, deleted or refused, the dropdown lists the
+    // presets as they are and shows the one in use. One no longer listed is
+    // not in use, so what the dropdown shows is always what Delete deletes.
+    auto choices = presetChoices();
+    const bool listed = std::any_of(choices.begin(), choices.end(),
+                                    [&](const Choice& c) { return c.value == presetName_; });
+    if (!listed) presetName_.clear();
+    if (auto* shown = dynamic_cast<ui::Dropdown*>(root_.find("render.preset"))) {
+        shown->setChoices(std::move(choices));
+        shown->setValue(presetName_);
+    }
 }
 
 void RenderDialog::buildSource(ui::Node& body) {
@@ -1680,6 +1705,7 @@ Status RenderDialog::loadPreset(const std::string& name) {
             presetName_ = name;
             markDirty();
             rebuild();
+            refreshPresets();
             actionDone("loaded preset " + name + "; Render writes it to the project");
             return {};
         }
@@ -1695,6 +1721,7 @@ Status RenderDialog::savePreset(const std::string& name) {
     if (!saved) return std::move(saved).error();
     presetName_ = name;
     if (page_) rebuild();
+    refreshPresets();
     return {};
 }
 
@@ -1715,6 +1742,7 @@ Status RenderDialog::deletePreset(std::string name) {
     if (!deleted) return std::move(deleted).error();
     presetName_.clear();
     if (page_) rebuild();
+    refreshPresets();
     actionDone("deleted preset " + name);
     return {};
 }
@@ -2338,8 +2366,9 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
         return aClip + " is not on its track in this version.";
     if (c == "render.performance.no_clip") return "The capture names no clip for a launch.";
     if (c == "render.performance.launches") return "The capture's launches are out of order.";
-    // An id the version lacks: the resolver's code names its kind (tr., cl.).
-    if (c == "track.unknown" || c == "tr.unknown")
+    // A track the version lacks (tr.unknown left the render commands with
+    // 4caf3a4d; a clip's resolver code, cl.unknown, is below).
+    if (c == "track.unknown")
         return perf ? aTrack + " is not in this version."
                     : "A track to render is not in this version.";
     if (c == "track.frozen") return aTrack + " is frozen in this version.";

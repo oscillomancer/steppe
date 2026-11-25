@@ -1197,6 +1197,72 @@ TEST_CASE("the render dialog: a refused preset choice leaves Delete on the prese
     f.render->close();
 }
 
+TEST_CASE("the render dialog: the Preset dropdown shows what Delete preset deletes") {
+    // Round 184 F1 (probes M, M2): the header is built once per open, so the
+    // dropdown is refreshed after a save, a load, a delete and a refusal;
+    // "—" means no preset in use, and Delete then deletes nothing.
+    Fixture f;
+    if (!f.ok) return;
+    const auto listed = [&](const std::string& name) {
+        auto list =
+            f.dispatcher->execute({"render.preset.list", json::Value::object(), kTestOrigin});
+        REQUIRE(list);
+        for (const auto& p : (*list)["presets"].asArray())
+            if (p.find("name") && p.find("name")->asString() == name) return true;
+        return false;
+    };
+    const auto offered = [](const ui::Dropdown& d, const std::string& name) {
+        for (const auto& c : d.choices())
+            if (c.value == name) return true;
+        return false;
+    };
+    REQUIRE(f.dispatcher->execute({"render.preset.save",
+                                   json::parse(R"({"name":"A","settings":{"tail_s":1}})").value(),
+                                   kTestOrigin}));
+    REQUIRE(f.dispatcher->execute(
+        {"render.preset.save", json::parse(R"({"name":"gone","settings":{"tail_s":2}})").value(),
+         kTestOrigin}));
+    f.render->open();
+    f.frame();
+    auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    // M2: choose A, save B: B is listed and shown.
+    preset->choose("A");
+    f.frame();
+    REQUIRE(f.render->savePreset("B"));
+    f.frame();
+    CHECK(offered(*preset, "B"));
+    CHECK(preset->value() == "B");
+    CHECK(preset->label() == "B (yours)");
+    // A refused choice: the list drops it and the label is the preset in use.
+    REQUIRE(f.dispatcher->execute(
+        {"render.preset.delete", json::parse(R"({"name":"gone"})").value(), kTestOrigin}));
+    preset->choose("gone");
+    f.frame();
+    CHECK(f.render->refusal() == "That preset is not found.");
+    CHECK(preset->value() == "B");
+    CHECK(preset->label() == "B (yours)");
+    CHECK_FALSE(offered(*preset, "gone"));
+    // Delete deletes what is shown, and the dropdown shows "—" after it.
+    REQUIRE(f.click("render.preset.delete"));
+    f.frame();
+    CHECK(f.render->statusText() == "deleted preset B");
+    CHECK_FALSE(listed("B"));
+    CHECK(listed("A"));
+    CHECK(preset->value().empty());
+    CHECK_FALSE(offered(*preset, "B"));
+    // M: load A, then "—": Delete deletes nothing.
+    preset->choose("A");
+    f.frame();
+    REQUIRE(preset->value() == "A");
+    preset->choose("");
+    f.frame();
+    REQUIRE(f.click("render.preset.delete"));
+    f.frame();
+    CHECK(listed("A"));
+    f.render->close();
+}
+
 TEST_CASE("the render dialog: Add to the project of a damaged render reads as unreadable") {
     // Round 182 F2 (probe K): a file that is not the WAV it names answers
     // audio.format, which is the reader's case, not the render's outputs.

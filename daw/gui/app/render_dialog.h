@@ -27,6 +27,7 @@
 #include "supple/ui/node.h"
 
 namespace supple::ui {
+struct Choice;
 class Root;
 class Button;
 class Label;
@@ -123,6 +124,10 @@ class RenderDialog {
     Status savePreset(const std::string& name);
     Status saveAsDefault();
     Status deletePreset(std::string name);
+    // The Preset dropdown as the presets are now, showing the one in use
+    // (cleared when it is no longer listed): what it shows is what Delete
+    // preset deletes.
+    void refreshPresets();
 
     // File → Mix: render.mix with no other arguments, as a job, reported by
     // onStatus.
@@ -199,6 +204,7 @@ class RenderDialog {
     // The red line ("" clears it); `ofPreview`: the render the files
     // describe was refused, so they go too.
     void showRefusal(std::string words, bool ofPreview = false);
+    std::vector<ui::Choice> presetChoices() const;  // "—" and render.preset.list
     Status validate() const;
     json::Value selectors() const;
     json::Value renderArgs(bool forJob) const;
