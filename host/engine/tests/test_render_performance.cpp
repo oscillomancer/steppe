@@ -10,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <regex>
 #include <set>
@@ -729,7 +730,8 @@ TEST_CASE("an engine stop and start forget the handoff the callback skipped (rou
         REQUIRE(EngineTestAccess::classBase(engine) != nullptr);
         engine.stop();
         CHECK(EngineTestAccess::classBase(engine) == nullptr);
-        EngineTestAccess::skipped(engine, reinterpret_cast<detail::Plan*>(&media));  // stale
+        if (run == 0)  // stale, before the restart
+            EngineTestAccess::skipped(engine, reinterpret_cast<detail::Plan*>(&media));
     }
 }
 
@@ -755,52 +757,18 @@ TEST_CASE("a launch ack lost just before the capture ends still marks it (round 
     CHECK(why.find("\"launch_unlogged\"") != std::string::npos);
 }
 
-TEST_CASE("the render commands declare every code their sources answer (round 180 F3, F4)") {
-    // A lint over what a render.* command (the renders, the queue, the
-    // settings and the presets) or a render job can answer: each code an
-    // Error(...) names in the files they reach (the render sources, source
-    // preparation, the offline pass, the preset files, the JSON parser and
-    // the writers) is declared by one of them, exactly or by a family
-    // ("json.parse.*"), unless it is a schema code (every command's) or one
-    // these files answer only for other commands (below). A new code fails
-    // here until it is declared, so a client can word every refusal from
-    // the registry alone.
-    Project p;
-    std::set<std::string> declared;
-    for (const cmd::CommandInfo* info : p.registry.all()) {
-        if (info->name.rfind("render.", 0) != 0) continue;
-        for (const cmd::ErrorSpec& e : info->errors) declared.insert(e.code);
-    }
-    CHECK(declared.count("render.queue_empty"));  // the queue and presets are walked too
-    const auto isDeclared = [&](const std::string& c) {
-        if (declared.count(c)) return true;
-        for (const std::string& d : declared)
-            if (d.size() > 2 && d.ends_with(".*") && c.rfind(d.substr(0, d.size() - 1), 0) == 0)
-                return true;
-        return false;
-    };
-    const std::set<std::string> elsewhere = {
-        // render_chain.cpp's freeze commands (track.freeze), not a render.*
-        "freeze.tail_limit", "freeze.tail_changed", "freeze.tail_pending",
-        "file.exists",     // files.cpp's create-exclusive, which no render.* uses
-        "base64.invalid",  // files.cpp's base64 decoder, likewise
-    };
+namespace {
+// Each code an Error(...) names in `files` (its first argument's string
+// literals, to its first comma at depth 0), with the file it is in.
+std::map<std::string, std::string> codesIn(std::initializer_list<const char*> files) {
     const std::filesystem::path root =
         std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
     REQUIRE(std::filesystem::exists(root / "host/engine/src/offline.cpp"));
-    std::vector<std::string> undeclared;
-    for (const char* file :
-         {"host/engine/src/render_commands.cpp", "host/engine/src/render_performance.cpp",
-          "host/engine/src/render_chain.cpp", "host/engine/src/offline.cpp",
-          "libs/core-base/src/files.cpp", "libs/audio-file/src/audio_file.cpp",
-          "libs/audio-file/src/flac_encode.cpp", "libs/audio-file/src/metadata.cpp",
-          "libs/audio-codecs/src/mp3.cpp", "libs/audio-codecs/src/vorbis.cpp",
-          "host/engine/src/prepared_sources.cpp", "host/engine/src/stretch.cpp",
-          "host/engine/src/render_settings.cpp", "libs/core-json/src/parse.cpp"}) {
+    std::map<std::string, std::string> out;
+    for (const char* file : files) {
         std::ifstream in(root / file);
         REQUIRE_MESSAGE(in, file);
         const std::string text{std::istreambuf_iterator<char>(in), {}};
-        // Each Error( call's first argument, to its first comma at depth 0.
         for (std::size_t at = text.find("Error("); at != std::string::npos;
              at = text.find("Error(", at + 6)) {
             if (at > 0 &&
@@ -815,13 +783,94 @@ TEST_CASE("the render commands declare every code their sources answer (round 18
             }
             static const std::regex code(R"re("([a-z0-9_]+\.[a-z0-9_.]+)")re");
             const std::string first = text.substr(at + 6, end - at - 6);
-            for (std::sregex_iterator i(first.begin(), first.end(), code), e; i != e; ++i) {
-                const std::string c = (*i)[1];
-                if (c.rfind("schema.", 0) == 0 || isDeclared(c) || elsewhere.count(c)) continue;
-                undeclared.push_back(c + " (" + file + ")");
-            }
+            for (std::sregex_iterator i(first.begin(), first.end(), code), e; i != e; ++i)
+                if (std::string((*i)[1]).rfind("schema.", 0) != 0) out.emplace((*i)[1], file);
         }
     }
+    return out;
+}
+
+// Declared, exactly or by a family ("json.parse.*" declares json.parse.<what>).
+bool declares(const cmd::CommandInfo& info, const std::string& c) {
+    return std::any_of(info.errors.begin(), info.errors.end(), [&](const cmd::ErrorSpec& e) {
+        return e.code == c ||
+               (e.code.ends_with(".*") && c.rfind(e.code.substr(0, e.code.size() - 1), 0) == 0);
+    });
+}
+}  // namespace
+
+TEST_CASE("each render.* command declares every code its sources answer (round 183 F1)") {
+    // A lint per command, so that no command leans on another's entry: a
+    // client words a refusal from the registry entry of the command it ran
+    // (engine.md §3.1). Schema codes are every command's and not listed. A
+    // new code fails here until each command that answers it declares it.
+    Project p;
+    const auto info = [&](const char* name) {
+        const cmd::CommandInfo* found = p.registry.find(name);
+        REQUIRE_MESSAGE(found, name);
+        return found;
+    };
+    std::vector<std::string> undeclared;
+    // The renders: the render sources, source preparation, the offline pass,
+    // the file and audio writers, and the JSON parser (the render default).
+    const auto renderCodes =
+        codesIn({"host/engine/src/render_commands.cpp", "host/engine/src/render_performance.cpp",
+                 "host/engine/src/render_chain.cpp", "host/engine/src/offline.cpp",
+                 "host/engine/src/prepared_sources.cpp", "host/engine/src/stretch.cpp",
+                 "libs/core-base/src/files.cpp", "libs/audio-file/src/audio_file.cpp",
+                 "libs/audio-file/src/flac_encode.cpp", "libs/audio-file/src/metadata.cpp",
+                 "libs/audio-codecs/src/mp3.cpp", "libs/audio-codecs/src/vorbis.cpp",
+                 "libs/core-json/src/parse.cpp"});
+    // Answered in those files by other commands only.
+    const std::set<std::string> others = {
+        "render.queue_empty",    "render.queue_unknown", "render.preset_name",
+        "render.preset_unknown",  // render.preset.* (presetTarget, the default's load)
+        "freeze.tail_limit",     "freeze.tail_changed",  "freeze.tail_pending",  // track.freeze
+        "file.exists",     // files.cpp's create-exclusive, which no render.* uses
+        "base64.invalid",  // files.cpp's base64 decoder, likewise
+    };
+    // What one render answers and another does not (engine.md §3.1).
+    const auto performance = [](const std::string& c) {  // not render.regions
+        return c.rfind("render.performance.", 0) == 0 ||
+               std::set<std::string>{"launch.capture",  "cl.unknown",          "track.frozen",
+                                     "launch.playrate", "render.not_as_heard", "launch.memory"}
+                   .count(c);
+    };
+    const std::set<std::string> runOnly = {"render.stale_target", "engine.start_failed",
+                                           "job.cancelled", "launch.memory"};  // not the dry run
+    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
+        const std::string_view which(name);
+        for (const auto& [c, file] : renderCodes) {
+            if (others.count(c)) continue;
+            if (which == "render.regions" && performance(c)) continue;
+            if (which == "render.dry-run" && runOnly.count(c)) continue;
+            if ((which == "render.mix" || which == "render.stems") && c == "region.unknown")
+                continue;
+            if (!declares(*info(name), c))
+                undeclared.push_back(std::string(name) + ": " + c + " (" + file + ")");
+        }
+    }
+    // The presets and render.settings: the preset files, the JSON parser
+    // and the file reads and writes, against what those commands declare
+    // together (each command's own refusals are tested in test_render.cpp).
+    for (const auto& [c, file] :
+         codesIn({"host/engine/src/render_settings.cpp", "libs/core-base/src/files.cpp",
+                  "libs/core-json/src/parse.cpp"})) {
+        if (c == "file.exists" || c == "base64.invalid") continue;
+        bool any = false;
+        for (const char* name : {"render.preset.list", "render.preset.save", "render.preset.load",
+                                 "render.preset.delete", "render.settings"})
+            any = any || declares(*info(name), c);
+        if (!any) undeclared.push_back("render.preset.*: " + c + " (" + file + ")");
+    }
+    // The queue plans a render at add and plans and runs it at run.
+    for (const auto& [queue, render] : {std::pair{"render.queue.add", "render.dry-run"},
+                                        std::pair{"render.queue.run", "render.mix"}})
+        for (const cmd::ErrorSpec& e : info(render)->errors)
+            if (!declares(*info(queue), e.code))
+                undeclared.push_back(std::string(queue) + ": " + e.code + " (as " + render + ")");
+    CHECK(declares(*info("render.queue.run"), "render.queue_empty"));
+    CHECK(declares(*info("render.preset.delete"), "render.preset_write"));  // round 183 S2
     std::string list;
     for (const std::string& u : undeclared) list += u + "\n";
     INFO("undeclared:\n" << list);
