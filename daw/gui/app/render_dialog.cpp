@@ -2424,6 +2424,19 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
         return "The file could not be written. Check that the renders folder is on a drive "
                "with space and can be written to.";
     if (c == "audio.format") return "This output format or bit depth is not supported.";
+    // The sources a render prepares.
+    if (c == "media.budget")
+        return "The audio the render plays is over the memory budget. Use shorter files or fewer "
+               "channels.";
+    if (c == "warp.peers") return "A warped take the render plays is missing a linked take.";
+    if (c == "warp.budget") return "A warped take the render plays is over the memory budget.";
+    if (c == "warp.rate") return "A warped take the render plays has a stretch rate out of range.";
+    if (c == "engine.stretch") return "A file the render plays cannot be stretched.";
+    // A render default whose file is not JSON (every json.parse.* member; a
+    // preset's file is the Preset action's, above).
+    if (c.starts_with("json.parse."))
+        return "Your saved render default cannot be read. Save your settings as the default "
+               "again.";
     if (c == "audio.cancelled") return "The render was cancelled.";
     if (c == "engine.block_size") return "The render's block size is out of range.";
     if (c == "engine.too_long" || c == "engine.range" || c == "engine.tail")

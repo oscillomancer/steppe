@@ -2320,12 +2320,13 @@ project is drawn in the quiet ink, with "from your default" on hover.
       exists, normalization, the format, the frame budget, presets, the
       queue, a missing, changed or unreadable media file, a failed or
       missing plug-in, a file that could not be written, an unsupported
-      format, a cancelled render) have theirs. A test walks the codes the
-      render, queue and preset commands declare in the registry, each under
-      the action it serves (the four renders, a job's own codes included,
-      and the queue as a render; the preset commands as a preset); the
-      dialog's other commands (the settings, item.add, branch.create, …)
-      keep their action's own sentence. A preset the settings refuse is
+      format, a cancelled render, the sources a render prepares, a render
+      default that cannot be read) have theirs. A test walks the codes every
+      `render.*` command declares in the registry, each under the action it
+      serves (the preset commands as a preset, the rest as a render), a
+      family such as `json.parse.*` as one sentence for every member; the
+      dialog's other commands (item.add, branch.create, …) keep their
+      action's own sentence. A preset the settings refuse is
       not loaded: its refusal stands, with the settings before it. A preset
       choice that is refused puts the Preset dropdown back on the preset in
       use, the one Delete preset acts on.

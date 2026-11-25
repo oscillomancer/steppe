@@ -592,10 +592,10 @@ TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words")
 TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
     // Round 175 F3 (the audio device dialog's rule): from the code and the
     // path only; never the message, the hint, a path or a command name. The
-    // codes are those the render commands declare in the registry (engine.md
-    // §3), and what reaches the dialog from elsewhere (below). One the
-    // dialog does not know reads one plain sentence, and the full error goes
-    // to the log.
+    // codes are those every render.* command declares in the registry
+    // (engine.md §3); Add to the project, whose item.add is not a render's,
+    // keeps its own sentence (below). One the dialog does not know reads one
+    // plain sentence, and the full error goes to the log.
     Fixture f;
     if (!f.ok) return;
     std::vector<std::string> logged;
@@ -616,11 +616,10 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         {"render.performance.no_clip", {"/performance/launches/2/clip"}},
         {"render.performance.clip_track", {"/performance/launches/2/clip"}},
         {"cl.unknown", {"/performance/launches/1/clip"}},
-        {"tr.unknown", {"/performance/launches/1/track"}},
         {"track.frozen", {"/performance/launches/1/clip"}},
         {"launch.playrate", {"/performance/launches/1/clip"}},
         {"launch.memory", {"/performance/launches/1/clip"}},
-        {"track.unknown", {"", "/performance/launches/1/track"}},
+        {"track.unknown", {""}},
         {"launch.capture", {"/performance"}},
         {"render.loop", {"/performance/loop"}},
     };
@@ -645,51 +644,49 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         if (action == Action::Preset) CHECK(words.find("renders folder") == std::string::npos);
         if (action == Action::Render) CHECK(words.find("preset file") == std::string::npos);
     };
-    // The commands that answer in render codes, each under the action it
-    // serves (the registry gives command, code; the table gives path): the
-    // four renders (a job's own codes included, 3293e01c) and the queue
-    // under Render, the preset commands under Preset.
-    const std::vector<std::pair<Action, std::vector<const char*>>> commands{
-        {Action::Render,
-         {"render.mix", "render.stems", "render.regions", "render.dry-run", "render.queue.add",
-          "render.queue.remove", "render.queue.run"}},
-        {Action::Preset, {"render.preset.save", "render.preset.load", "render.preset.delete"}},
-    };
+    // Every render.* command, each under the action it serves (the
+    // registry gives command and code; the table gives path): the preset
+    // commands under Preset, the rest (the renders, a job's own codes
+    // included, the settings, the queue) under Render (4caf3a4d).
     std::set<std::string> declared;                 // by any of them
     std::map<Action, std::set<std::string>> under;  // by the action's commands
-    for (const auto& [action, names] : commands)
-        for (const char* name : names) {
-            const cmd::CommandInfo* command = f.registry.find(name);
-            REQUIRE_MESSAGE(command, name);
-            for (const cmd::ErrorSpec& e : command->errors) {
-                declared.insert(e.code);
-                under[action].insert(e.code);
-            }
+    std::size_t walked = 0;
+    for (const cmd::CommandInfo* command : f.registry.all()) {
+        if (!command->name.starts_with("render.")) continue;
+        ++walked;
+        const Action action =
+            command->name.starts_with("render.preset.") ? Action::Preset : Action::Render;
+        for (const cmd::ErrorSpec& e : command->errors) {
+            declared.insert(e.code);
+            under[action].insert(e.code);
         }
-    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
+    }
+    CHECK(walked >= 13);
+    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run",
+                             "render.preset.save", "render.preset.delete"}) {
         INFO(name);
+        REQUIRE(f.registry.find(name));
         CHECK_FALSE(f.registry.find(name)->errors.empty());
     }
+    // A family ("json.parse.*") is one sentence for every member: two
+    // members stand for it.
+    const auto members = [](const std::string& code) {
+        if (!code.ends_with(".*")) return std::vector<std::string>{code};
+        const std::string stem = code.substr(0, code.size() - 1);
+        return std::vector<std::string>{stem + "trailing_comma", stem + "unexpected_end"};
+    };
     for (const auto& [action, codes] : under)
-        for (const std::string& code : codes) {
-            const auto at = paths.find(code);
-            for (const std::string& path :
-                 at == paths.end() ? std::vector<std::string>{""} : at->second)
-                check(action, code, path);
-        }
+        for (const std::string& family : codes)
+            for (const std::string& code : members(family)) {
+                const auto at = paths.find(code);
+                for (const std::string& path :
+                     at == paths.end() ? std::vector<std::string>{""} : at->second)
+                    check(action, code, path);
+            }
     // The path table names declared codes only, so it cannot go stale.
     for (const auto& [code, unused] : paths) {
         INFO(code);
         CHECK(declared.count(code) == 1);
-    }
-    // What the preset commands answer and do not declare yet (round 181
-    // F4, with the lead): a name the settings refuse, a preset that could
-    // not be written, and the writer's codes. Each is checked under Preset;
-    // once declared there, the walk above has it and this list must drop it.
-    for (const char* code : {"render.preset_name", "render.preset_write", "file.write", "file.open",
-                             "file.sync", "file.sync_published", "file.sync_directory"}) {
-        CHECK(under[Action::Preset].count(code) == 0);
-        check(Action::Preset, code, "");
     }
     // Add to the project: a rendered file that is gone, or that cannot be
     // copied into the project's media, says so (item.add's own codes are not
