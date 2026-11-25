@@ -2323,6 +2323,17 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
                        c == "audio.read" || c == "audio.decode" || c.starts_with("json.parse");
     const bool writes = c == "file.write" || c == "file.open" || c == "file.sync" ||
                         c == "file.sync_published" || c == "file.sync_directory";
+    // The user's render default, read by every render.* command (engine.md
+    // §3.1): its errors have their path under /args/default, whatever the
+    // action, and the code alone cannot tell its read from a write (file.open
+    // is both). Reading it is all a command does with it.
+    if (e.path == "/args/default" || e.path.starts_with("/args/default/")) {
+        if (e.path.starts_with("/args/default/settings"))
+            return "Your saved render default has a setting that cannot be used. Save your "
+                   "settings as the default again.";
+        return "Your saved render default cannot be read. Save your settings as the default "
+               "again.";
+    }
     if (action == Action::Preset) {
         if (writes)
             return "The preset file could not be written. Check that your presets folder can be "

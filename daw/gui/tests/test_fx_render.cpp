@@ -683,6 +683,25 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
                      at == paths.end() ? std::vector<std::string>{""} : at->second)
                     check(action, code, path);
             }
+    // The user's render default: every code at a path under /args/default
+    // (ec8e9cb9) speaks of the default as read, under every action, never a
+    // write or another folder (round 184 F2).
+    for (const auto& [action, codes] : under)
+        for (const std::string& family : codes)
+            for (const std::string& code : members(family)) {
+                INFO(code << " at the default (action " << int(action) << ")");
+                const std::string file = f.render->refusalWords(
+                    Error(code, text, "/args/default", hint), "fallback", action);
+                CHECK(file ==
+                      "Your saved render default cannot be read. Save your settings as the "
+                      "default again.");
+                const std::string member = f.render->refusalWords(
+                    Error(code, text, "/args/default/settings/outputs/0/format", hint), "fallback",
+                    action);
+                CHECK(member ==
+                      "Your saved render default has a setting that cannot be used. Save your "
+                      "settings as the default again.");
+            }
     // The path table names declared codes only, so it cannot go stale.
     for (const auto& [code, unused] : paths) {
         INFO(code);
@@ -1155,6 +1174,12 @@ TEST_CASE("the render dialog: a file's refusal names the action's file and folde
     auto deleted = f.render->deletePreset("p181");
     REQUIRE_FALSE(deleted);
     CHECK(deleted.error().code == "render.preset_write");
+    // A preset that is not there is not a write failure: still not found.
+    auto missing = f.render->deletePreset("never-saved");
+    REQUIRE_FALSE(missing);
+    CHECK(missing.error().code == "render.preset_unknown");
+    CHECK(f.render->refusalWords(missing.error(), "The preset could not be deleted.",
+                                 gui::RenderDialog::Action::Preset) == "That preset is not found.");
     CHECK(f.render->refusalWords(deleted.error(), "The preset could not be deleted.",
                                  gui::RenderDialog::Action::Preset) ==
           "Your presets folder cannot be written to.");
@@ -1260,6 +1285,47 @@ TEST_CASE("the render dialog: the Preset dropdown shows what Delete preset delet
     REQUIRE(f.click("render.preset.delete"));
     f.frame();
     CHECK(listed("A"));
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: a render default that cannot be read says so, as a read") {
+    // Round 184 F2 (probe N): file.open is a reader's code too; reading the
+    // default answers it at /args/default (ec8e9cb9), which the dialog words
+    // as the default that cannot be read, under Preset and under Render.
+    Fixture f;
+    if (!f.ok) return;
+    f.render->open();
+    f.frame();
+    REQUIRE(f.render->savePreset("mine"));
+    REQUIRE(f.render->saveAsDefault());
+    f.frame();
+    std::filesystem::path file;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(f.dir))
+        if (e.path().filename() == "default.json") file = e.path();
+    REQUIRE_FALSE(file.empty());
+    std::filesystem::permissions(file, std::filesystem::perms::none);
+    struct Unlock {
+        std::filesystem::path p;
+        ~Unlock() {
+            std::error_code ec;
+            std::filesystem::permissions(p, std::filesystem::perms::owner_all, ec);
+        }
+    } unlock{file};
+    if (std::ifstream probe(file); probe) {
+        MESSAGE("this user can read a mode-000 file; not checked");
+        return;
+    }
+    const std::string words =
+        "Your saved render default cannot be read. Save your settings as the default again.";
+    auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    preset->choose("mine");  // render.preset.list reads the default
+    f.frame();
+    CHECK(f.render->refusal() == words);
+    f.render->close();
+    f.render->open();  // render.settings reads the default
+    f.frame();
+    CHECK(f.render->refusal() == words);
     f.render->close();
 }
 

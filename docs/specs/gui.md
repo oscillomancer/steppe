@@ -2303,8 +2303,12 @@ project is drawn in the quiet ink, with "from your default" on hover.
       folder for a render, the preset file and your presets folder for a
       preset, the rendered file and the project's media for Add to the
       project, where a file that cannot be read as audio is the reader's
-      case and any other code reads the action's own sentence), never the
-      engine's
+      case and any other code reads the action's own sentence; any code at
+      a path under `/args/default`, under every action, is the saved render
+      default read: "Your saved render default cannot be read. Save your
+      settings as the default again.", or for a member at
+      `/args/default/settings/…` that it "has a setting that cannot be
+      used"), never the engine's
       message, its hint, a path or a command name
       (`RenderDialog::refusalWords`, the audio device dialog's rule), and
       says what plays ("A clip the launcher plays …", "A clip the capture
