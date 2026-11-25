@@ -392,6 +392,7 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 - `render.preset_name`: neither or both of name and default, or a bad name Hint: name a preset or pass default: true
 - `render.preset_factory`: factory presets cannot be deleted Hint: delete one of your own
+- `render.preset_write`: the preset file cannot be removed Hint: check the user data folder
 - `render.preset_unknown`: no preset with that name, or no default Hint: render.preset.list shows them
 
 ### Examples

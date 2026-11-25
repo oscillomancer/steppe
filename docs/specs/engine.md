@@ -2234,7 +2234,9 @@ first use, and no plug-in code runs early to warm it.
     `matrix` and custom bounds.
   - `render.preset.load {name}` (edit): replaces `project.render`.
   - `render.preset.delete {name | default: true}` (action). Factory presets
-    cannot be overwritten or deleted.
+    cannot be overwritten or deleted. No file answers `render.preset_unknown`;
+    a file that cannot be removed (a read-only folder, a file in use on
+    Windows) answers `render.preset_write` (round 183).
 
   Files are `<data>/<slug>/render-presets/<name>.json` (the user default is
   `default.json`), canonical `supple.render-preset/1.0`. Under `--workdir`

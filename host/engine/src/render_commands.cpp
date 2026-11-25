@@ -2301,6 +2301,8 @@ void registerSettingsCommands(cmd::Registry& registry) {
         c.errors = presetErrors(false, false);
         c.errors.push_back({"render.preset_factory", "factory presets cannot be deleted",
                             "delete one of your own"});
+        c.errors.push_back({"render.preset_write", "the preset file cannot be removed",
+                            "check the user data folder"});
         c.errors.push_back({"render.preset_unknown", "no preset with that name, or no default",
                             "render.preset.list shows them"});
         c.examples = {{"Delete a preset", obj(R"({"name":"Archive"})"), obj(R"({"deleted":true})"),

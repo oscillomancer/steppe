@@ -14,6 +14,10 @@
 #include <supple/model/schemas.h>
 
 #include "../../../tests/file_platform.h"
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include "render_commands.h"
 
 using namespace supple;
@@ -489,4 +493,44 @@ TEST_CASE(
         CHECK(std::any_of(info->errors.begin(), info->errors.end(),
                           [](const cmd::ErrorSpec& s) { return s.code == "json.parse.*"; }));
     }
+}
+
+TEST_CASE(
+    "a preset that cannot be removed answers render.preset_write, not preset_unknown (round "
+    "183 S2)") {
+    Rig r;
+    r.run("render.preset.save", R"({"name":"Archive","settings":{"tail_s":1}})");
+    const fs::path dir = r.dir.path / "render-presets";
+    const fs::path file = dir / "Archive.json";
+    REQUIRE(fs::exists(file));
+    {
+#ifdef _WIN32
+        // Windows removes a file from a read-only folder, but not one that
+        // is open without delete sharing.
+        std::ifstream held(file);
+        REQUIRE(held);
+#else
+        if (::geteuid() == 0) {
+            MESSAGE("running as root: a read-only folder does not stop a delete; skipped");
+            return;
+        }
+        const auto writable =
+            fs::perms::owner_write | fs::perms::group_write | fs::perms::others_write;
+        fs::permissions(dir, writable, fs::perm_options::remove);
+#endif
+        const Error e = r.fails("render.preset.delete", R"({"name":"Archive"})");
+#ifndef _WIN32
+        fs::permissions(dir, fs::perms::owner_write, fs::perm_options::add);
+#endif
+        CHECK(e.code == "render.preset_write");
+        CHECK(e.path == "/args/name");
+        const cmd::CommandInfo* info = r.registry.find("render.preset.delete");
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& s) { return s.code == "render.preset_write"; }));
+    }
+    REQUIRE(fs::exists(file));
+    r.run("render.preset.delete", R"({"name":"Archive"})");
+    CHECK_FALSE(fs::exists(file));
+    CHECK(r.fails("render.preset.delete", R"({"name":"Archive"})").code == "render.preset_unknown");
 }
