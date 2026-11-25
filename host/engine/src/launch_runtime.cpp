@@ -781,7 +781,16 @@ void Engine::serviceLaunches() {
                 e.scene = model::Id{model::Kind::Scene, static_cast<std::uint32_t>(ack.scene)};
             launchLog_.push_back(e);
             launchSeq_.push_back(launchSeqNext_++);
+            // A launch on the track: what it plays is known again.
+            std::erase(launchUncertain_, e.track);
+            std::erase_if(unseenReturns_,
+                          [&](const UnseenReturn& u) { return u.track == e.track; });
         }
+    }
+    // A return whose plan the executors have taken was heard (round 172 K1).
+    if (!unseenReturns_.empty()) {
+        const std::uint64_t seen = oldestInUse();
+        std::erase_if(unseenReturns_, [&](const UnseenReturn& u) { return seen >= u.generation; });
     }
     if (added) {  // the two executors' acks interleave: sorted, each with its sequence
         std::vector<std::size_t> order(launchLog_.size());
@@ -856,6 +865,15 @@ void Engine::serviceLaunches() {
             const detail::Node* n = plan ? nodeOf(*plan, track) : nullptr;
             if (!n || n->players.empty() || detail::playerOf(*n, e.clip) < 0) {
                 launchReset_[track] = launchSeqNext_;
+                // At unity the executors take only the latest plan, so one
+                // replaced before they reach it may never be heard (K1).
+                if (plan && !plan->rateEnabled)
+                    unseenReturns_.push_back({track, e.clip, plan->generation});
+                // A return placed by bound, or none placed (launch.later):
+                // not as heard (edited_during), also where only the
+                // prepared sources changed (a clip past the memory budget).
+                if (capture_.on && !capture_.pending && !capture_.closed)
+                    capture_.facts.edited = true;
                 // Heard as a return to the arrangement: where an immediate
                 // launch.arrangement would land now (the app services the
                 // engine right after each load), for a running capture.
@@ -1002,6 +1020,11 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
                           : pl.followed == detail::FollowOutcome::Key ? TrackLaunch::Followed::Key
                                                                       : TrackLaunch::Followed::None;
             tl.followBudget = pl.followBudget;
+        }
+        if (launchUncertain(n.id)) {  // round 172 K1: not known until its next launch
+            tl.plays = TrackLaunch::Plays::Uncertain;
+            tl.clip = {};
+            tl.position.reset();
         }
         out.push_back(std::move(tl));
     }
@@ -1247,8 +1270,10 @@ void Engine::placeCapture() {
     capture_.startSample = clock.pos;  // where it will begin, so far
     capture_.loop = clock.loop;
     std::int64_t song = clock.pos;  // at a play start, the epoch's first position
+    bool fromPlayStart = true;
     if (clock.playing) {
         if (const auto heard = heardSong(clock.epoch)) {
+            fromPlayStart = heard->stream == 0;
             // The position heard now, on the song's running count, and where
             // that is in the song (folded by the loop it runs under).
             song = static_cast<std::int64_t>(std::floor(heard->song));
@@ -1268,6 +1293,97 @@ void Engine::placeCapture() {
     capture_.startSong = song;
     capture_.version = latest_ ? latest_->version : 0;
     capture_.resets = launchReset_;
+    // As heard: where it began, and the counters now.
+    capture_.facts = {};
+    capture_.facts.fromPlayStart = fromPlayStart;
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    capture_.facts.liveInput = plan && plan->anyLive;
+    capture_.facts.uncertain = !launchUncertain_.empty();
+    capture_.misses = misses_.load(std::memory_order_relaxed);
+    capture_.bridgeLate = bridgeLate_.load(std::memory_order_relaxed);
+    capture_.xruns = backend_ ? backend_->status().xruns : 0;
+    capture_.errors = processErrors_.load(std::memory_order_relaxed);
+    capture_.closed = false;
+}
+
+Engine::CaptureFacts Engine::captureFacts() const {
+    CaptureFacts f = capture_.facts;
+    if (capture_.closed || capture_.pending) return f;
+    f.dropout = f.dropout || misses_.load(std::memory_order_relaxed) != capture_.misses ||
+                bridgeLate_.load(std::memory_order_relaxed) != capture_.bridgeLate ||
+                (backend_ && backend_->status().xruns != capture_.xruns);
+    f.pluginFailed =
+        f.pluginFailed || processErrors_.load(std::memory_order_relaxed) != capture_.errors;
+    return f;
+}
+
+void Engine::closeCapture() {
+    if (capture_.pending || capture_.closed || !capture_.placed) return;
+    capture_.facts = captureFacts();
+    capture_.closed = true;
+}
+
+namespace {
+bool playrateEnvelope(const model::Envelope& e) {
+    return e.target.object == model::kMaster && e.target.param == "playrate";
+}
+
+// Whether the envelopes of two sessions that `pick` selects are the same.
+template <class Pick>
+bool sameEnvelopes(const model::Session& a, const model::Session& b, Pick pick) {
+    if (a.envelopes.sameStorage(b.envelopes)) return true;
+    std::size_t n = 0;
+    for (const auto& e : a.envelopes) {
+        if (!pick(*e.value)) continue;
+        ++n;
+        const model::Envelope* other = b.envelopes.find(e.id);
+        if (!other || !(*other == *e.value)) return false;
+    }
+    for (const auto& e : b.envelopes)
+        if (pick(*e.value)) {
+            if (n == 0) return false;
+            --n;
+        }
+    return n == 0;
+}
+
+// Whether two sessions are the same apart from the master playrate (its
+// scalar, preserve pitch and envelopes). As rate_runtime.cpp's scalarOnly
+// does, this names every Session member, so one added is a build error here
+// until it says how it is compared; `context` and `contextView` are not
+// compared: no plan reads them (ADR-0095).
+bool sameApartFromPlayrate(const model::Session& a, const model::Session& b) {
+    {
+        [[maybe_unused]] const auto& [project, next, tempo, meters, timeMap, tracks, groups, items,
+                                      takes, media, midi, fx, routes, envelopes, autoItems, markers,
+                                      regions, racks, modules, cables, modulations, context,
+                                      contextView, scenes, clips, blobs, extraSections, version] =
+            a;
+    }
+    model::Project x = *a.project;
+    x.playrate = b.project->playrate;
+    return x == *b.project && a.tempo.sameStorage(b.tempo) && a.meters.sameStorage(b.meters) &&
+           a.tracks.sameStorage(b.tracks) && a.groups.sameStorage(b.groups) &&
+           a.items.sameStorage(b.items) && a.takes.sameStorage(b.takes) &&
+           a.media.sameStorage(b.media) && a.midi.sameStorage(b.midi) && a.fx.sameStorage(b.fx) &&
+           a.routes.sameStorage(b.routes) && a.autoItems.sameStorage(b.autoItems) &&
+           a.markers.sameStorage(b.markers) && a.regions.sameStorage(b.regions) &&
+           a.racks.sameStorage(b.racks) && a.modules.sameStorage(b.modules) &&
+           a.cables.sameStorage(b.cables) && a.modulations.sameStorage(b.modulations) &&
+           a.scenes.sameStorage(b.scenes) && a.clips.sameStorage(b.clips) && a.blobs == b.blobs &&
+           a.extraSections == b.extraSections &&
+           sameEnvelopes(a, b, [](const model::Envelope& e) { return !playrateEnvelope(e); });
+}
+}  // namespace
+
+void Engine::captureEdit(const model::Session& before, const model::Session& after) {
+    if (!capture_.on || capture_.pending || capture_.closed || &before == &after) return;
+    if (!(before.project->playrate == after.project->playrate) ||
+        !sameEnvelopes(before, after, playrateEnvelope))
+        capture_.facts.rateChanged = true;
+    if (!sameApartFromPlayrate(before, after)) capture_.facts.edited = true;
+    const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
+    if (plan && plan->anyLive) capture_.facts.liveInput = true;
 }
 
 void Engine::captureRelocating() {
@@ -1279,6 +1395,7 @@ void Engine::captureRelocating() {
     if (heard > capture_.startSong) {  // it ran: running time ends here
         capture_.endSong = heard;
         capture_.on = false;
+        closeCapture();
     } else {
         capture_.pending = true;  // nothing ran yet: it begins where the transport goes
     }
@@ -1334,6 +1451,7 @@ Status Engine::captureLaunches(bool on, std::optional<model::LaunchQuantize> qua
         return {};
     }
     capture_.endSong = capture_.pending ? capture_.startSong : captureHeard();
+    closeCapture();
     capture_.pending = false;
     capture_.ending = capture_.userEnding = false;
     capture_.cutSlot = SIZE_MAX;
@@ -1347,6 +1465,7 @@ void Engine::captureEnding() {
     capture_.ending = capture_.userEnding = false;  // heard its boundary: it ends there
     capture_.cutSlot = SIZE_MAX;
     capture_.on = false;
+    closeCapture();
 }
 
 std::optional<Engine::LaunchCapture> Engine::launchCapture() {
@@ -1361,6 +1480,7 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
     out.startSample = capture_.startSample;
     out.loop = capture_.loop;
     if (capture_.pending) return out;
+    out.facts = captureFacts();
     // Running time on the song's count (S3 B): the same as stream frames at
     // unity, song samples under a master playrate.
     const std::int64_t start = capture_.startSong;
@@ -1417,6 +1537,29 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
                          return a.runningFrame < b.runningFrame;
                      });
     return out;
+}
+
+bool Engine::launchUncertain(model::Id track) const {
+    return std::find(launchUncertain_.begin(), launchUncertain_.end(), track) !=
+           launchUncertain_.end();
+}
+
+void Engine::judgeUnseenReturns(const detail::Plan& next) {
+    if (unseenReturns_.empty()) return;
+    // What the executors have taken: conservative, since an executor that has
+    // loaded a plan stores its generation later in that block.
+    const std::uint64_t seen = oldestInUse();
+    std::erase_if(unseenReturns_, [&](UnseenReturn& u) {
+        if (seen >= u.generation) return true;  // taken: the return was heard
+        const detail::Node* n = nodeOf(next, u.track);
+        if (!n || n->players.empty() || detail::playerOf(*n, u.clip) < 0) {
+            u.generation = next.generation;  // the newer plan returns it too
+            return false;
+        }
+        if (!launchUncertain(u.track)) launchUncertain_.push_back(u.track);
+        if (capture_.on && !capture_.pending && !capture_.closed) capture_.facts.uncertain = true;
+        return true;
+    });
 }
 
 const LaunchLogEntry* Engine::returnFor(model::Id track, std::uint64_t after) const {

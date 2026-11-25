@@ -12,7 +12,7 @@ In an argument table, a member of an object argument is listed under it as `argu
 
 List the files a render would write, with lengths, without rendering.
 
-Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source).
+Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source). With performance it also answers performance, range, as_heard and not_heard_because, compiling no plan.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -87,7 +87,9 @@ Kind: `query`. Exposure: `mcp-exec`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -121,7 +123,7 @@ Result:
 
 Render the mix offline with the project's settings (default: whole song).
 
-Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. performance plays a launcher performance instead of the arrangement alone: "captured" (the capture, on the version it began on unless version is given), a captured_performance (launch.commit's), or {from: "launcher", start_beat, end_beat}. Its range replaces bounds (bounds in the call is refused). The result adds performance (the object played), range, as_heard and not_heard_because; as_heard: true refuses one that is not as heard (render.not_as_heard). Refusals name the launch: /performance/launches/N. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name.
 
 Kind: `action`. Exposure: `mcp-tool`.
 
@@ -196,7 +198,9 @@ Kind: `action`. Exposure: `mcp-tool`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -443,7 +447,7 @@ Result:
 
 Queue a render (mix, stems, regions) for render.queue.run.
 
-args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session and settings as they are now (its version, a branch's head when branch is given, and the effective render settings, a loop range as beats), so later edits do not change it; a dry run lists its files now. The queue is transport-like state: not an undo step, not saved with the project.
+args: the render command's arguments (as for render.mix/stems/regions). The queued render is pinned to the session and settings as they are now (its version, a branch's head when branch is given, and the effective render settings, a loop range as beats), so later edits do not change it; a dry run lists its files now. A performance is stored as the captured_performance it resolved to. The queue is transport-like state: not an undo step, not saved with the project.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -701,7 +705,9 @@ Kind: `action`. Exposure: `mcp-exec`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -810,7 +816,9 @@ Kind: `query`. Exposure: `mcp-exec`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 
@@ -844,7 +852,7 @@ Result:
 
 Render each selected track to its own file (stems).
 
-Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it.
+Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. performance plays a launcher performance instead of the arrangement alone: "captured" (the capture, on the version it began on unless version is given), a captured_performance (launch.commit's), or {from: "launcher", start_beat, end_beat}. Its range replaces bounds (bounds in the call is refused). The result adds performance (the object played), range, as_heard and not_heard_because; as_heard: true refuses one that is not as heard (render.not_as_heard). Refusals name the launch: /performance/launches/N.
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -919,7 +927,9 @@ Kind: `action`. Exposure: `mcp-exec`.
 | `tap` | string |  |  |  | Sets stems.tap for this call One of: post_fader, pre_fader, pre_fx. |
 | `target` | number |  |  |  | Sets normalize.target for this call |
 | `analyze` | string |  |  |  | Mix: a supple.analysis-report/1.0 inline One of: summary, full. |
+| `performance` | value |  |  |  | Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds |
 | `job` | boolean |  |  | false |  |
+| `as_heard` | boolean |  |  | false | With performance: refuse unless it renders as heard |
 
 ### Result
 

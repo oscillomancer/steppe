@@ -1,0 +1,292 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 Supple Audio
+// Rendering a launcher performance (engine.md §3.1): the render commands'
+// `performance` selector, its result fields and refusals, the queue's
+// resolved object, and song frames converted under a master playrate. Its
+// own ctest entry.
+#include <supple/audio/audio_file.h>
+#include <optional>
+#include "clip_player_support.h"
+
+using namespace supple;
+using namespace supple::engine;
+using namespace clip_player_test;
+
+namespace {
+constexpr std::uint32_t kBlock = 128;
+
+std::vector<float> leftOf(json::Value rendered) {
+    auto audio = audio::readAudio(rendered["path"].asString());
+    REQUIRE_MESSAGE(audio, (audio ? std::string() : audio.error().toString()));
+    return audio->channels[0];
+}
+
+Error refused(Project& p, const char* command, const json::Value& args) {
+    auto r = p.bus->execute({command, args, kOrigin});
+    REQUIRE_FALSE(r);
+    return r.error();
+}
+
+// cl_1 on tr_1 from bar 2 for a bar, given outright.
+json::Value given() {
+    return j(R"({"sample_rate": 48000, "start": 0, "frames": 192000,
+        "launches": [{"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 96000, "anchor_beat": 4}]})");
+}
+
+json::Value withPerformance(json::Value args, json::Value performance) {
+    args["performance"] = std::move(performance);
+    return args;
+}
+}  // namespace
+
+TEST_CASE("a capture from a play start renders as heard, bit for bit, and queues as an object") {
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 5);
+    // Armed while stopped: it begins where playing begins.
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    p.run("launch.clip", R"({"clip": "cl_2"})");
+    live.until(150016);
+    json::Value ended = p.run("launch.capture", R"({"on": false})");
+    live.until(160000);
+    const std::int64_t version = std::int64_t(p.app->head().version);
+    CHECK(ended["version"].asInt() == version);
+    CHECK(p.run("launch.state", "{}")["capture_version"].asInt() == version);
+
+    // The dry run: what it would play, compiling nothing.
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    CHECK(dry["as_heard"].asBool());
+    CHECK_FALSE(dry.find("not_heard_because"));
+    json::Value perf = dry["performance"];
+    CHECK(perf["start"].asInt() == 0);
+    CHECK(perf["launches"].size() == 2);
+    CHECK(dry["range"]["start_beat"].asDouble() == 0);
+    CHECK(dry["range"]["end_beat"].asDouble() > 4);
+
+    // The render, as heard: what played, bit for bit.
+    json::Value rendered =
+        p.run("render.mix",
+              R"({"performance": "captured", "as_heard": true, "bit_depth": 32, "name": "heard",
+            "tail_s": 0})");
+    CHECK(rendered["as_heard"].asBool());
+    CHECK(rendered["performance"] == perf);
+    const std::vector<float> offline = leftOf(rendered);
+    // The queue stores the object it resolved to, pinned to its version.
+    json::Value queued = p.run("render.queue.add", R"({"command": "render.mix",
+                                      "args": {"performance": "captured", "name": "queued"}})");
+    CHECK(queued["version"].asInt() == version);
+    CHECK(queued["args"]["performance"] == perf);
+    CHECK_FALSE(queued["args"].find("bounds"));
+    CHECK_FALSE(queued["args"].find("as_heard"));
+    const std::vector<float> heard = live.stop();
+    const std::int64_t frames = perf["frames"].asInt();
+    REQUIRE(std::int64_t(offline.size()) >= frames);
+    const auto [worst, first] = compare(heard, live.latency, offline, 0, frames);
+    INFO("first differing frame " << first);
+    CHECK(worst == 0.0);
+}
+
+TEST_CASE("a performance render refuses what it cannot play, one code per cause") {
+    Project p;
+    twoTracks(p);
+    // Nothing captured.
+    Error e = refused(p, "render.dry-run", j(R"({"performance": "captured"})"));
+    CHECK(e.code == "launch.capture");
+    CHECK(e.path == "/args/performance");
+    // as_heard alone.
+    e = refused(p, "render.dry-run", j(R"({"as_heard": true})"));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/as_heard");
+    // Regions, bounds in the call, seamless_loop.
+    e = refused(p, "render.regions", withPerformance(j("{}"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/performance");
+    e = refused(p, "render.dry-run", withPerformance(j(R"({"bounds": "project"})"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/performance");
+    e = refused(p, "render.dry-run", withPerformance(j(R"({"seamless_loop": true})"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/seamless_loop");
+    // Another sample rate.
+    json::Value other = given();
+    other["sample_rate"] = 44100;
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), other));
+    CHECK(e.code == "render.performance.sample_rate");
+    CHECK(e.path == "/args/performance/sample_rate");
+    // Out of frame order, and past frames.
+    const auto launches = [](const char* list) {
+        json::Value perf = given();
+        perf["launches"] = j(list);
+        return perf;
+    };
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), launches(R"([
+        {"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_1", "anchor": 96000,
+         "anchor_beat": 4},
+        {"frame": 1000, "track": "tr_1", "action": "stop", "anchor": 1000, "anchor_beat": 0}])")));
+    CHECK(e.code == "render.performance.launches");
+    CHECK(e.path == "/args/performance/launches/1/frame");
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), launches(R"([
+        {"frame": 192000, "track": "tr_1", "action": "clip", "clip": "cl_1", "anchor": 96000,
+         "anchor_beat": 4}])")));
+    CHECK(e.code == "render.performance.launches");
+    CHECK(e.path == "/args/performance/launches/0/frame");
+    // A track the version lacks.
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), launches(R"([
+        {"frame": 96000, "track": "tr_9", "action": "clip", "clip": "cl_1", "anchor": 96000,
+         "anchor_beat": 4}])")));
+    CHECK(e.code == "track.unknown");
+    CHECK(e.path == "/args/performance/launches/0/track");
+    // A given object cannot be as heard.
+    e = refused(p, "render.dry-run", withPerformance(j(R"({"as_heard": true})"), given()));
+    CHECK(e.code == "render.not_as_heard");
+    CHECK(e.path == "/args/performance");
+    // Given and accepted: canonical, and not as heard because given.
+    json::Value dry = p.runArgs("render.dry-run", withPerformance(j("{}"), given()));
+    CHECK_FALSE(dry["as_heard"].asBool());
+    CHECK(dry["not_heard_because"] == j(R"(["given"])"));
+    CHECK(dry["performance"]["launches"].size() == 1);
+    CHECK(dry["range"]["end_beat"].asDouble() == doctest::Approx(8));
+}
+
+TEST_CASE("from the launcher with nothing playing renders the arrangement over the range") {
+    Project p;
+    twoTracks(p);
+    json::Value launcher =
+        p.runArgs("render.mix",
+                  withPerformance(j(R"({"bit_depth": 32, "name": "launcher", "tail_s": 0})"),
+                                  j(R"({"from": "launcher", "start_beat": 0, "end_beat": 4})")));
+    CHECK(launcher["performance"]["launches"].size() == 0);
+    CHECK(launcher["not_heard_because"] == j(R"(["from_launcher"])"));
+    json::Value arrangement =
+        p.run("render.mix", R"({"bounds": "custom", "start_beat": 0, "end_beat": 4,
+                                "bit_depth": 32, "name": "arrangement", "tail_s": 0})");
+    CHECK(leftOf(launcher) == leftOf(arrangement));
+}
+
+TEST_CASE("under a master playrate a performance's song frames play where live placed them") {
+    // 0.6: bar 2 (song 96000) is device frame 160000, which live placement
+    // logs; the render of the same launch given in song frames plays there.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.6, "preserve_pitch": false})");
+    const model::Session s = p.app->head();
+    const Live heard = playLive(s, p.app->projectDir(), kInCallback, kBlock, 48000 * 6,
+                                {{20, {request("tr_1", "cl_1")}}});
+    REQUIRE(heard.log.size() == 1);
+    REQUIRE(heard.log[0].runningFrame == 160000);
+    const auto render = [&](std::vector<LaunchLogEntry> launches, bool inSong) {
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 4.0;
+        settings.blockSize = kBlock;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = std::move(launches);
+        settings.launchesInSong = inSong;
+        auto r = renderOffline(s, pool, settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        return r->audio.channels[0];
+    };
+    std::vector<LaunchLogEntry> song = heard.log;
+    song[0].runningFrame = heard.log[0].songFrame;
+    CHECK(song[0].runningFrame == 96000);
+    const std::vector<float> fromSong = render(song, true);
+    CHECK(fromSong == render(heard.log, false));
+    const std::int64_t to = std::min(std::int64_t(fromSong.size()),
+                                     std::int64_t(heard.left.size()) - heard.latency - kBlock);
+    REQUIRE(to > 200000);  // past the launch at 160000
+    const auto [worst, first] = compare(heard.left, heard.latency, fromSong, 0, to);
+    INFO("first differing frame " << first);
+    CHECK(worst == 0.0);
+}
+
+TEST_CASE("a clip removed and restored within one block leaves the capture edited (G2)") {
+    // A client that sends without waiting: the executors may skip the plan
+    // without cl_1 and play on, though a return was recorded. The capture
+    // says it is not as heard.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(800 * kBlock);
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    p.run("history.undo", "{}");
+    live.until(1000 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    CHECK_FALSE(dry["as_heard"].asBool());
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why.find("\"edited_during\"") != std::string::npos);
+    // A capture with no edit is as heard, so the reason is the edit's.
+    CHECK(why.find("\"began_mid_run\"") == std::string::npos);
+}
+
+namespace {
+std::string playsOf(Project& p, const char* track) {
+    json::Value state = p.run("launch.state", "{}");
+    for (const auto& t : state["tracks"].asArray())
+        if (t.find("track")->asString() == track) return t.find("plays")->asString();
+    return "";
+}
+
+// cl_1 playing from bar 2, then `edit` at frame 102400, then a capture
+// from 115200 to 128000, begun with no edit since.
+template <class F>
+json::Value laterCapture(Project& p, AppLive& live, F&& edit) {
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(800 * kBlock);
+    edit();
+    live.until(900 * kBlock);
+    p.run("launch.capture", R"({"on": true})");
+    live.until(1000 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    return p.run("render.dry-run", R"({"performance": "captured"})");
+}
+}  // namespace
+
+TEST_CASE("a removal undone before the executors took it leaves the track uncertain (K1)") {
+    // The executors may have skipped the plan without cl_1: launch.state
+    // says so, and a later capture with no edit of its own is not as heard,
+    // until tr_1 is launched again.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 5);
+    json::Value dry = laterCapture(p, live, [&] {
+        p.run("clip.remove", R"({"clip": "cl_1"})");
+        p.run("history.undo", "{}");  // no block between
+    });
+    CHECK(playsOf(p, "tr_1") == "uncertain");
+    CHECK_FALSE(dry["as_heard"].asBool());
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why.find("\"launch_state_uncertain\"") != std::string::npos);
+    CHECK(why.find("\"edited_during\"") == std::string::npos);
+    // Launched again: known.
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 3, frame 192000
+    live.until(1600 * kBlock);
+    CHECK(playsOf(p, "tr_1") == "clip");
+}
+
+TEST_CASE("a removal the executors took, then an edit, leaves no uncertainty (K1)") {
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    json::Value dry = laterCapture(p, live, [&] {
+        p.run("clip.remove", R"({"clip": "cl_1"})");
+        live.until(801 * kBlock);  // a block: the executor takes the plan
+        p.run("track.add", R"({"name": "After"})");
+    });
+    CHECK(playsOf(p, "tr_1") != "uncertain");  // (no clips: not listed)
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why.find("\"launch_state_uncertain\"") == std::string::npos);
+}

@@ -324,8 +324,17 @@ instructions are in `docs/guides/installing.md`.
     FX, are from the clip's start, pass after pass (ADR-0097, amended
     2026-11-20). Modulation routes do not reach a clip take's FX, as
     they do not reach an item's (`modulation.target`: take FX come later).
-  - Renders play the arrangement only. The render dialog says so while a
-    clip holds a track, following launches while it is open.
+  - Renders play the arrangement unless given a performance:
+    `render.mix`, `render.stems`, `render.dry-run` and `render.queue.add`
+    take `performance` ("captured", a `captured_performance`, or the
+    launcher over a beat range) and answer what they played and whether it
+    is as heard (`as_heard`, `not_heard_because`; engine.md §3.1, ADR-0097
+    revision 2026-11-24); a capture from a play start renders bit for bit
+    as heard. The render dialog does not offer it yet (the gui-lead's) and
+    says renders play the arrangement while a clip holds a track. Limits:
+    a launch placed with quantize none under a master playrate can render
+    up to a few stream frames earlier than it played, which as_heard does
+    not show; native macOS and Windows CI has not run on it.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - under a master playrate clips play on the playrate path, live as
@@ -386,8 +395,12 @@ instructions are in `docs/guides/installing.md`.
       two with the anticipative renderer), under a master playrate where
       the plan hands over, or not at all when a playrate change is on its
       way (`launch.later`); a removal undone within one executor block (a
-      client that sends without waiting) still cuts the clip in the
-      capture, though the executors played it on: the
+      client that sends without waiting) still records the return, though
+      the executors may have played on: the track is then reported
+      `uncertain` by `launch.state` until its next launch, and a capture
+      begun or running meanwhile is not as heard
+      (`launch_state_uncertain`; the mark can be a false alarm; the real
+      fix, a return ack from the audio path, is a follow-up): the
       commit writes the clip's stretch to there (after the removal is
       undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one

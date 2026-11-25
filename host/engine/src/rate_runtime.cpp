@@ -225,6 +225,7 @@ void Engine::setSyncRate(double scale) {
     scale = std::isfinite(scale) ? std::clamp(scale, .25, 4.) : 1.;
     if (scale == syncScale_) return;
     syncScale_ = scale;
+    if (capture_.on && !capture_.pending) capture_.facts.rateChanged = true;  // as_heard
     auto* p = latestPlan_.load(std::memory_order_acquire);
     // A plan compiled later takes the scale; this one gets a scalar control.
     if (!backend_ || !latest_ || !p || !p->syncRate) return;

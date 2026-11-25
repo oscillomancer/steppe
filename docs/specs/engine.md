@@ -610,10 +610,26 @@ the same.*
   though at unity the executors skip the plan between and play the clip
   on: the control thread cannot tell that a plan was never adopted
   without a word from the audio path (`stoppedGen_` is stored after the
-  load), so the capture cuts the clip there (a known limit; such a
-  capture is edited, so not as heard). Under a playrate every queued
-  plan is adopted, so it does not arise. What
-  each track played as a capture began is judged by the resets as they
+  load). The stale reset outlives the capture: until the track's next
+  launch `launch.state` would report the track on the arrangement while
+  the clip plays, a later capture would omit the clip at frame 0, and
+  `audioUnderStretch` and `cutsArrangementAudio` judge the track by it.
+  So the engine marks such a track uncertain (round 172 K1): in
+  `Engine::loadNow`, before a newer plan is published, a unity return
+  whose plan generation is above `oldestInUse()` (the executors were not
+  seen to take it) and whose clip the newer plan has leaves its track
+  uncertain until the next ack drained for it (a newer plan that also
+  lacks the clip carries the return instead). The mark is conservative
+  and can be a false alarm: an executor that had loaded the plan but not
+  yet stored its generation did return the track. `launch.state` then
+  reports `plays: "uncertain"` with no clip or position, and a capture
+  begun or running while any track is uncertain is not as heard
+  (`launch_state_uncertain`, §3.1). Under a playrate every queued plan
+  is adopted, so it does not arise. The real fix is a follow-up: a
+  return ack from `carryLaunch` through the existing ack rings, which
+  touches the audio path (rtsan and tsan legs). A capture with either kind of
+  return is not as heard (`edited_during`, §3.1), whether or not the
+  session itself changed (a clip past the memory budget). What each track played as a capture began is judged by the resets as they
   stood then (`CaptureState::resets`), a reset counting only once its
   return was heard by the start (one heard after it is a launch within,
   which cuts the clip there; one with none recorded counts), so removing
@@ -623,7 +639,8 @@ the same.*
   with `launch.commit` at `/performance/launches/N/clip`, the capture
   kept. Undoing the removal makes it committable as it was; the
   capture's version rule is unchanged.
-  Renders and the render dialog play the arrangement only, and the dialog
+  Renders and the render dialog play the arrangement only unless a
+  render is given a performance (§3.1), and the dialog
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at
   its logged running frames; the tests use it.
@@ -1168,8 +1185,8 @@ the same.*
   `launchLog()` in running-frame order.
 - **Renders.** An offline render without `OfflineSettings::launches`
   compiles no players (`Plan::clipPlayers`) and prepares no clip audio:
-  renders play the arrangement only, so a clip's warnings never reach a
-  render or block a freeze. A clip past the memory budget gets no player
+  a render without a performance (§3.1) plays the arrangement only, so a
+  clip's warnings never reach it or block a freeze. A clip past the memory budget gets no player
   either (`Engine::clipsSkipped()` names them; `launch.memory`).
 - **What a track plays, for the GUI and `launch.state`.**
   `Engine::launchState()` answers, on the main thread, from the log and
@@ -2200,6 +2217,141 @@ first use, and no plug-in code runs early to warm it.
 - Normalization rejects non-finite source samples, derived gains, or resulting
   float samples with `render.normalize` and a repair hint before applying gain.
   This is a representability check, with no additional dB target range policy.
+
+### 3.1 Rendering a launcher performance (ADR-0097, revision 2026-11-24)
+
+Built in the engine and the render commands (`render_performance.cpp`,
+`render_commands.cpp`); the render dialog's side is the GUI's (gui.md).
+`resolvePerformance` resolves the source to a `captured_performance` and
+checks it against the version without a plan; `applyPerformance` sets the
+render's range, loop and launches (`OfflineSettings::launches` with
+`launchesInSong`), and the offline pre-pass that walks the rate timeline
+converts each launch's song frame to the first stream frame whose song
+position reaches it. That is live placement's rule for a quantized
+boundary; a launch placed with quantize none under a playrate logs the
+song frame its position had fallen to, so it can play earlier than live
+did, by less than one song sample's worth of stream frames (at most four
+at the slowest playrate; a known limit, which as_heard does not show). The capture's facts are recorded
+by the engine (`Engine::CaptureFacts`: from the play start, an edit, a
+playrate change, live input, a dropout, a plug-in failure), fixed when
+the capture ends.
+
+**The selector.** `render.mix`, `render.stems`, `render.dry-run` and
+`render.queue.add` take an optional `performance`, one of:
+- `"captured"`: the capture `EngineApp::launchCapture()` returns (the
+  engine's own once it has heard a frame, else the one kept across an
+  engine stop, a device restart or failure, or beside a newer capture not
+  yet begun). A running capture renders its frames so far.
+- a `captured_performance` object: the schema `launch.commit` takes and
+  history records.
+- `{"from": "launcher", "start_beat": b, "end_beat": e}`: every track
+  playing a clip (Clip or Held) gets a clip launch at frame 0, anchored at
+  the start; a Stopped track gets a stop; a track following the
+  arrangement gets nothing. Queued launches are left out, and there is no
+  loop. With nothing playing or stopped (the launcher empty, or the engine
+  stopped, so every track follows the arrangement) it is not refused: the
+  render plays the arrangement over b..e, as an arrangement render of
+  that range would, and the result's performance has no launches.
+
+`as_heard` (boolean, default false) requires the property below.
+`version` keeps its meaning, the session version rendered; for
+`"captured"` it defaults to the capture's own (`capture_version`).
+Neither selector belongs to `project.render`, so presets and saved
+settings never hold one. `render.queue.add` stores the resolved object,
+never "captured" or "launcher", so a queued render does not grow. With a
+performance the range is the performance's: the saved `bounds` is not
+used, and a `bounds` in the call is refused. `tail_s`, `trim`,
+`handles_s`, outputs, normalize and analysis apply as usual.
+
+**The result.** The usual render result, plus:
+- `performance`: the object rendered, as canonical JSON, so it can be
+  rendered again as a given object: a `captured_performance`
+  (`sample_rate`, `start`, the song sample it starts at, `frames`, its
+  running length, `loop` when it ran under one, and `launches`). Captured
+  and launcher sources resolve into one; a given object comes back
+  canonicalized.
+- `range`: `{start_beat, end_beat}`, the performance's span on the
+  rendered version's time map, without the tail.
+- `as_heard` (boolean), and `not_heard_because`, present when as_heard is
+  false: an array of these reasons, in this order:
+
+| Reason | When |
+| --- | --- |
+| `began_mid_run` | the capture did not begin at a play start |
+| `edited_during` | a plan compiled during it for anything but launches (any session edit) |
+| `launch_state_uncertain` | a track's launch state was uncertain while it began or ran: a clip's removal undone before the executors were seen to take it (§1.4.2) |
+| `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
+| `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
+| `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |
+| `plugin_failed` | a plug-in failed during it |
+| `ended_by_engine` | an engine stop, a device restart or a device failure ended it (`CaptureView::endedBy`) |
+| `other_version` | the version rendered is not the capture's own |
+| `given` | the source is a given object |
+| `from_launcher` | the source is "from launcher" |
+
+`given` and `from_launcher` are always present for those sources: they
+say only that the source is not a capture. With `as_heard: true` in the
+call, a false result is refused with `render.not_as_heard` (path
+`/performance`) and a hint for the first reason (`other_version`: render
+the version it was captured on; `began_mid_run`: capture from stop;
+`ended_by_engine`: capture again).
+
+**The dry run.** `render.dry-run` with a performance returns the same
+`performance`, `range`, `as_heard` and `not_heard_because` without
+rendering, and compiles no plan, decodes nothing and reads no media beyond
+what a dry run reads today. It resolves the source to an object, checks
+each launch against the version's model (tracks, clips, frame order, the
+cap, the sample rate, a loop under a playrate, and step E's refusal, a take
+chain under a pitch-keeping master playrate) and computes as_heard from
+the capture's recorded facts: linear in the launches. The one refusal it
+cannot see is `launch.memory` (a clip over the memory budget, or one the
+compiled plan skips), which needs the compile: only the render reports it.
+"Captured" resolves at each call, so a dry run during a running capture
+and the render after it can give different ranges; a client shows the
+render's own `range` and `performance`.
+
+**Refusals.** One code per cause; a client words a refusal from the code
+and the path's index, never from the hint, which names commands for
+command callers.
+
+| Case | Code | Path |
+| --- | --- | --- |
+| "captured" with none, or none with running time | `launch.capture` | `/performance` |
+| `sample_rate` other than the project's (a capture made at another device rate) | `render.performance.sample_rate` | `/performance/sample_rate` |
+| a looped performance under a master playrate | `render.loop` | `/performance/loop` |
+| a track or clip the version lacks | `track.unknown`, or launch.clip's clip code | `/performance/launches/N/...` |
+| an audio clip the engine refuses on the version (step E) | `launch.playrate` | `/performance/launches/N/clip` |
+| a clip over the memory budget (render only) | `launch.memory` | `/performance/launches/N/clip` |
+| launches out of frame order, or past `frames` | `render.performance.launches` | `/performance/launches/N/frame` |
+| more than 100,000 launches (launch.commit's limit unchanged) | `render.performance.too_many` | `/performance/launches` |
+| `operation: "regions"`, or `bounds` in the call | `render.args` | `/performance` |
+| `seamless_loop` | `render.args` | `/seamless_loop` |
+
+Two launches of one track on one frame are not an error: the last given
+holds, as in launch.commit. A given object's other defects keep the
+schema's own codes and paths.
+
+**Capture facts for clients.** `launch.state` gains `capture_version`
+(the session version the capture began on) beside `capturing`,
+`capture_ends` and `capture_kept`, whenever there is a capture, and with
+the engine stopped for a kept one; `launch.capture`'s result gains
+`version` when it ends or reports a capture. In-process,
+`EngineApp::launchCapture()`'s `CaptureView` (§1.4.2) gives the span,
+version, rate, `kept`, `endedBy` and `commit` that a dialog shows before
+asking a dry run for as_heard.
+
+**Laws.** Offline equals what was heard, bit for bit, when as_heard is
+true, in both executors (third-party plug-ins that are not block-size
+invariant are the documented exception). Frames are in song time: under a
+playrate each launch converts to a stream frame by live placement's
+function, and equals the log's `runningFrame` when no rate edit fell in its
+span. Renders are deterministic for any worker count and across runs.
+What the offline replay cannot play exactly is refused, never
+approximated. Not rendered: plug-in state and tails from before the
+start (a cold start), edits and rate changes during a capture (one version;
+`as_heard` says so), a loop under a master playrate, a capture at a device
+rate other than the project's (launch.commit converts it), and a plug-in's
+hidden state.
 
 ## 4. Media, recording, device handling
 

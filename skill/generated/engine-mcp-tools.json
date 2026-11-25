@@ -1023,7 +1023,7 @@
   {
     "name": "render_mix",
     "title": "Render the mix offline with the project's settings (default: whole song).",
-    "description": "Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name. See describe for errors and examples.",
+    "description": "Arguments override project.render (then the user's default, then built-ins) for this call only; render.settings shows what applies. Files go to the renders folder, named by pattern (subfolders allowed). job: true runs the render as a job (job.get for progress, job.cancel to stop). Each file lists its outputs (with delivery checks when a loudness target or a ceiling is set), branch, version, start_beat, seconds, a render id (analyze.render, analyze.compare) and an analysis summary. skipped lists files left out: skip_silent, if_exists skip, and (stems without tracks) a channel that can produce no audio, reason no_audio: it has a rack whose Out modules have no audio patched to them (as modulate's Modulators channel) and nothing else feeds it; naming it in tracks renders it. performance plays a launcher performance instead of the arrangement alone: \"captured\" (the capture, on the version it began on unless version is given), a captured_performance (launch.commit's), or {from: \"launcher\", start_beat, end_beat}. Its range replaces bounds (bounds in the call is refused). The result adds performance (the object played), range, as_heard and not_heard_because; as_heard: true refuses one that is not as heard (render.not_as_heard). Refusals name the launch: /performance/launches/N. The mix answers with its file's entry at the top level (path, secondary_path, outputs, peak_dbfs, …); analyze: summary or full adds the report inline. masters renders several masters, a file each (the first on top, all in files); a pattern without {track} then gets -{track}, the master's name. See describe for errors and examples.",
     "inputSchema": {
       "type": "object",
       "title": "render_args",
@@ -1417,8 +1417,16 @@
           "enum": ["summary", "full"],
           "description": "Mix: a supple.analysis-report/1.0 inline"
         },
+        "performance": {
+          "description": "Mix, stems: play a launcher performance: \"captured\", a captured_performance, or {from: \"launcher\", start_beat, end_beat}; its range replaces bounds"
+        },
         "job": {
           "type": "boolean",
+          "default": false
+        },
+        "as_heard": {
+          "type": "boolean",
+          "description": "With performance: refuse unless it renders as heard",
           "default": false
         }
       },

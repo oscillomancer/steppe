@@ -941,6 +941,20 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         return Error("track.strip_type", "mix output must be a master", "/master",
                      "choose a master id from track.list");
     const Node* selected = &*master;
+    // A performance's clip whose audio the plan could not prepare (engine.md
+    // §3.1): the one refusal a dry run cannot see, by the launch's index.
+    if (opt.launchesInSong && p.preparedSources)
+        for (std::size_t i = 0; i < opt.launches.size(); ++i) {
+            const LaunchLogEntry& e = opt.launches[i];
+            const auto& skipped = p.preparedSources->clipsSkipped;
+            if (e.action == LaunchLogEntry::Action::Clip &&
+                std::find(skipped.begin(), skipped.end(), e.clip) != skipped.end())
+                return Error("launch.memory",
+                             e.clip.str() + "'s audio did not fit the prepared-audio budget",
+                             "/performance/launches/" + std::to_string(i) + "/clip",
+                             "launch.commit the performance and render the timeline, or use "
+                             "shorter audio or fewer distinct files in clips");
+        }
     const auto selectedTrack = opt.freezeTrack ? opt.freezeTrack : opt.track;
     if (selectedTrack) {
         auto it = std::find_if(p.nodes.begin(), p.nodes.end(),
@@ -1009,17 +1023,40 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                        : opt.tailSeconds,
                         p.rate);
     std::int64_t contentFrames = timelineLength;
+    // The launches in stream frames: song frames converted on the way below.
+    std::vector<LaunchLogEntry> launches = opt.launches;
     if (p.rateEnabled) {
         // Count inverse-clock boundaries using bounded scratch/history. This
         // prepass never renders audio and never allocates an expanded timeline.
         auto& timeline = *p.timelines[0];
         std::int64_t device = 0;
+        // Launches in song frames (in frame order): each takes the first
+        // stream frame whose song position reaches it, found in the chunk
+        // ensured while it is there.
+        std::size_t unplaced = opt.launchesInSong ? 0 : launches.size();
+        const auto placeLaunches = [&](std::int64_t from, std::int64_t to) {
+            while (unplaced < launches.size() &&
+                   timeline.phase(to) >= double(launches[unplaced].runningFrame)) {
+                const double reach = double(launches[unplaced].runningFrame);
+                std::int64_t lo = from, hi = to;
+                while (lo < hi) {
+                    const auto mid = lo + (hi - lo) / 2;
+                    if (timeline.phase(mid) < reach)
+                        lo = mid + 1;
+                    else
+                        hi = mid;
+                }
+                launches[unplaced++].runningFrame = lo;
+            }
+        };
+        placeLaunches(0, 0);  // those at the start
         while (timeline.phase(device) < double(timelineLength)) {
             if (device + tailFrames + outputLatency > (std::int64_t(1) << 28))
                 return Error("engine.too_long", "playrate-expanded render exceeds the frame budget",
                              {}, "shorten the timeline range or increase the master playrate");
             const auto end = device + 4096;
             timeline.ensure(end);
+            placeLaunches(device, end);
             if (timeline.phase(end) >= double(timelineLength)) {
                 auto lo = device, hi = end;
                 while (lo < hi) {
@@ -1097,7 +1134,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
         // 0); this plan counts from the render's start (round 74 F1). Beats
         // are absolute in both.
         const std::int64_t launchOrigin = time::samplesAt(opt.startSeconds, p.rate);
-        for (const LaunchLogEntry& e : opt.launches)
+        for (const LaunchLogEntry& e : launches)
             for (std::size_t k = 0; k < p.nodes.size(); ++k) {
                 detail::Node& node = p.nodes[k];
                 if (node.rack)

@@ -1139,6 +1139,7 @@ q = nil
 ---@field from? number
 ---@field to? number
 ---@field ends_at? number
+---@field version? integer
 ---@field warnings? (string|table)[]
 
 ---@class Steppe.launch_clip_args
@@ -1181,6 +1182,7 @@ q = nil
 ---@field capturing boolean
 ---@field capture_ends? number
 ---@field capture_kept? boolean
+---@field capture_version? integer
 ---@field tracks table[]
 ---@field warnings? table[]
 
@@ -1783,7 +1785,9 @@ q = nil
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
 ---@field target? number Sets normalize.target for this call
 ---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
+---@field performance? any Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds
 ---@field job? boolean (default: false)
+---@field as_heard? boolean With performance: refuse unless it renders as heard (default: false)
 
 ---@class Steppe.render_mix_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
@@ -1821,7 +1825,9 @@ q = nil
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
 ---@field target? number Sets normalize.target for this call
 ---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
+---@field performance? any Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds
 ---@field job? boolean (default: false)
+---@field as_heard? boolean With performance: refuse unless it renders as heard (default: false)
 
 ---@class Steppe.render_preset_delete_args
 ---@field name? string A preset name (render.preset.list)
@@ -1884,7 +1890,9 @@ q = nil
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
 ---@field target? number Sets normalize.target for this call
 ---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
+---@field performance? any Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds
 ---@field job? boolean (default: false)
+---@field as_heard? boolean With performance: refuse unless it renders as heard (default: false)
 
 ---@class Steppe.render_settings_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
@@ -1922,7 +1930,9 @@ q = nil
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
 ---@field target? number Sets normalize.target for this call
 ---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
+---@field performance? any Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds
 ---@field job? boolean (default: false)
+---@field as_heard? boolean With performance: refuse unless it renders as heard (default: false)
 
 ---@class Steppe.render_stems_args
 ---@field source? "mix"|"stems"|"regions" The dialog's source; render.mix always renders the mix
@@ -1960,7 +1970,9 @@ q = nil
 ---@field tap? "post_fader"|"pre_fader"|"pre_fx" Sets stems.tap for this call
 ---@field target? number Sets normalize.target for this call
 ---@field analyze? "summary"|"full" Mix: a supple.analysis-report/1.0 inline
+---@field performance? any Mix, stems: play a launcher performance: "captured", a captured_performance, or {from: "launcher", start_beat, end_beat}; its range replaces bounds
 ---@field job? boolean (default: false)
+---@field as_heard? boolean With performance: refuse unless it renders as heard (default: false)
 
 ---@class Steppe.route_add_args
 ---@field from string|table

@@ -2014,7 +2014,16 @@ render); or the **Launcher** as it plays now, from Start to End. A
 performance render plays once over its own range, and its file name gets
 " performance" added, which you can change. While the arrangement is chosen
 and a clip is playing, the dialog says the clips playing now are not in the
-render. Not yet:
+render. An agent can render a performance too: `render.mix` (or
+`render.stems`, `render.dry-run`, `render.queue.add`) with
+`performance: "captured"` plays the capture as it ran, on the version it
+began on, and says whether that is what you heard (`as_heard`, with the
+reasons it is not: an edit or a playrate change during it, live input, a
+dropout, a failed plug-in, an engine stop, or a start after playing
+began). `as_heard: true` refuses a render that would not be. A
+`captured_performance` object renders as given, and
+`{from: "launcher", start_beat, end_beat}` renders what the launcher plays
+now over that range. Not yet:
 - launching an audio clip with take FX or take envelopes while the
   master playrate keeps the pitch (`launch.playrate`); other clips
   follow the playrate, audio ones time-stretched with the pitch kept, and
