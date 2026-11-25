@@ -19,6 +19,7 @@
 #include "supple/ui/scroll_view.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/object_name.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
@@ -754,7 +755,7 @@ std::optional<std::chrono::steady_clock::time_point> FxWindow::nextDeadline() co
 }
 
 void FxWindow::setStatus(std::string message) {
-    if (status_) status_->setText(std::move(message));
+    if (status_) status_->setText(views::objectNames(app_.head(), message));
 }
 
 std::vector<model::Id> FxWindow::chain() const {
@@ -772,12 +773,7 @@ std::vector<model::Id> FxWindow::inputChain() const {
     return t ? t->inputChain : std::vector<model::Id>{};
 }
 
-std::string FxWindow::nameOf(model::Id fx) const {
-    const model::FxInstance* inst = app_.head().fx.find(fx);
-    if (!inst) return fx.str();
-    return inst->label.empty() ? (inst->plugin.name.empty() ? inst->plugin.id : inst->plugin.name)
-                               : inst->label;
-}
+std::string FxWindow::nameOf(model::Id fx) const { return views::objectName(app_.head(), fx); }
 
 std::string FxWindow::latencyOf(model::Id fx) {
     const auto* model = app_.head().fx.find(fx);
@@ -1143,11 +1139,20 @@ void FxWindow::refresh() {
         setStatus("the track is gone");
         return;
     }
-    const std::string trackName = track->name.empty() ? track_.str() : track->name;
+    const std::string trackName = views::objectName(app_.head(), track_);
     if (take_ && !app_.head().takes.find(*take_)) take_.reset();  // the take is gone
     if (title_) {
-        title_->setText(take_ ? "Take FX: " + trackName + " / " + take_->str()
-                              : "FX: " + trackName);
+        // The take after its track, in the inspector's words (takeLabel:
+        // "Bass / Take 2" in an item of several takes, "Bass / kick" for a
+        // lone unnamed take called by its file or clip), unless its words
+        // already say the track ("Bass's item at bar 2").
+        std::string title = "FX: " + trackName;
+        if (take_) {
+            const std::string words = views::takeLabel(app_.head(), *take_);
+            title = "Take FX: " +
+                    (words.starts_with(trackName + "'s ") ? words : trackName + " / " + words);
+        }
+        title_->setText(title);
         panel_.setTitle(title_->valueText());
     }
     body_->clear();

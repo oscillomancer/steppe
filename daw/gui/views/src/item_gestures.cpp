@@ -21,6 +21,7 @@
 #include "supple/views/arrange.h"
 #include "supple/views/comp_view.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/object_name.h"
 
 namespace supple::views {
 namespace {
@@ -1700,8 +1701,7 @@ std::vector<ui::MenuItem> ItemGestures::buildItemMenu(const MenuPlace& place, bo
     }
     if (!pointed) return items;
     const model::Id take = *pointed;
-    const model::Take* tk = s.takes.find(take);
-    const std::string name = tk && !tk->name.empty() ? tk->name : take.str();
+    const std::string name = objectName(s, take);
     // Every selected item with several takes keeps only its heard one.
     std::vector<EditStep> crop;
     for (model::Id id : selection_)
@@ -2109,7 +2109,7 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
                     const LauncherDrop drop =
                         launcherDropItems(s, view_.trackLayout(), state_.anchor, selection_);
                     auto refuse = [&](std::string message, std::string hint) {
-                        const Error refused = launcherNames(
+                        const Error refused = objectNames(
                             s, Error("gui.launcher.drop", std::move(message), {}, std::move(hint)));
                         if (const auto& onRefused = view_.launcherCallbacks().onError)
                             onRefused(refused);
@@ -2182,7 +2182,7 @@ void ItemGestures::commit(const ui::PointerEvent& e) {
                     }
                     auto r = run("Clips from items", steps);
                     if (!r) {
-                        const Error refused = launcherNames(s, r.error());
+                        const Error refused = objectNames(s, r.error());
                         if (const auto& onRefused = view_.launcherCallbacks().onError)
                             onRefused(refused);
                         else if (onError)

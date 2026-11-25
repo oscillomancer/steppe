@@ -76,7 +76,9 @@ void Button::paintText(Canvas& canvas, const Rect& b, Color ink) const {
     const Theme& t = canvas.theme();
     const float size = t.type("small");
     if (mark_.empty()) {
-        canvas.text(b, text_, Font::UiBold, size, ink, kCenter | kMiddle);
+        const bool narrow =
+            !narrowText_.empty() && canvas.textWidth(text_, Font::UiBold, size) > b.w;
+        canvas.text(b, narrow ? narrowText_ : text_, Font::UiBold, size, ink, kCenter | kMiddle);
         return;
     }
     const float tw = canvas.textWidth(text_, Font::UiBold, size);
@@ -86,6 +88,12 @@ void Button::paintText(Canvas& canvas, const Rect& b, Color ink) const {
     canvas.text({x + tw + 1, b.y, mw + 1, b.h}, mark_, Font::UiBold, size,
                 !enabled || markColor_.empty() ? ink : t.color(markColor_.c_str()),
                 kLeft | kMiddle);
+}
+
+void Button::setNarrowText(std::string text) {
+    if (text == narrowText_) return;
+    narrowText_ = std::move(text);
+    invalidate();
 }
 
 void Button::setEmphasis(bool on) {

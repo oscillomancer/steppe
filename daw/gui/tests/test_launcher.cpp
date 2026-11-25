@@ -780,6 +780,7 @@ TEST_CASE("launcher: items on one track dropped into cells take the scenes after
         const auto clip = views::clipIn(f.app->head(), track, scene);
         return clip ? f.app->head().clips.find(*clip)->length : -1.0;
     };
+    std::size_t hidden = 0;  // the last drop's cells out of view, while held
     // `press`: the item pressed (at its start); `at`: the point in the cell.
     auto drop = [&](std::vector<model::Id> selection, model::Id press, double beat, std::size_t row,
                     std::size_t column, bool centre, const char* shot = nullptr) {
@@ -798,6 +799,7 @@ TEST_CASE("launcher: items on one track dropped into cells take the scenes after
         f.pointer(Pointer::Move, into);
         f.sync();
         const auto held = std::pair{pane.stats.dropShown, pane.stats.dropTakes};
+        hidden = pane.stats.dropHidden;
         if (shot) f.snapshot(shot);
         f.pointer(Pointer::Up, into);
         f.sync();
@@ -849,6 +851,25 @@ TEST_CASE("launcher: items on one track dropped into cells take the scenes after
     CHECK(f.errors[0].code == "clip.occupied");
     CHECK(f.errors[0].message.find("Root") != std::string::npos);
     CHECK_FALSE(views::clipIn(f.app->head(), bass, intro));  // rolled back
+    // A pane two scenes wide: of Keys's three, Chorus's cell is out of view,
+    // said as "+1" at the pane's edge while held; the drop still makes all
+    // three, and the pane does not scroll.
+    f.view->setLauncherWidth(views::LauncherColumns::kMinWidth);
+    f.sync();
+    held =
+        drop({early, middle, late}, early, 8, f.row("tr_3"), 0, false, "launcher-items-hidden.png");
+    CHECK(held == std::pair<std::size_t, bool>{3, true});
+    CHECK(hidden == 1);
+    CHECK(f.errors.empty());
+    CHECK(lengthIn(keys, chorus) == doctest::Approx(6));
+    f.exec("history.undo", "{}");
+    f.view->setLauncherWidth(0);
+    f.sync();
+    // In a pane wide enough, nothing is out of view.
+    held = drop({early, middle}, early, 8, f.row("tr_3"), 0, false);
+    CHECK(hidden == 0);
+    f.exec("history.undo", "{}");
+    f.sync();
     // The centre of an empty cell (its stop square) takes a drop as the rest
     // of the cell does: outlined as taking, and a clip made.
     held = drop({}, early, 8, f.row("tr_3"), 2, true);
@@ -1040,20 +1061,36 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     f.exec("scene.add", "{}");
     f.exec("clip.add", R"({"track":"tr_3","scene":"sc_4","notation":"1: C4:w"})");
     const model::Session& s = f.app->head();
-    CHECK(views::launcherNames(s, "cl_3 is already in tr_2's sc_2") ==
+    CHECK(views::objectNames(s, "cl_3 is already in tr_2's sc_2") ==
           "Root is already in Bass's Verse");
-    CHECK(views::launcherNames(s, "sc_4 is empty") == "Scene 4 is empty");
-    CHECK(views::launcherNames(s, "cl_4 can't play") == "Keys's clip in Scene 4 can't play");
-    CHECK(views::launcherNames(s, "sc_9 and cl_9 and tr_9") ==
+    CHECK(views::objectNames(s, "sc_4 is empty") == "Scene 4 is empty");
+    CHECK(views::objectNames(s, "cl_4 can't play") == "Keys's clip in Scene 4 can't play");
+    CHECK(views::objectNames(s, "sc_9 and cl_9 and tr_9") ==
           "a removed scene and a removed clip and a removed track");
     // Only whole ids: part of a word, or a prefix with no number, stays.
-    CHECK(views::launcherNames(s, "disc_3, tr_2x, sc_ and (tr_1)") ==
+    CHECK(views::objectNames(s, "disc_3, tr_2x, sc_ and (tr_1)") ==
           "disc_3, tr_2x, sc_ and (Drums)");
+    // A message that gives the name and the id says the name once (round
+    // 165 F4: freeze.cpp's "Bass (tr_2) is frozen"); another name stays.
+    CHECK(views::objectNames(s, "Bass (tr_2) is frozen") == "Bass is frozen");
+    CHECK(views::objectNames(s, "Old (tr_2) is frozen") == "Old (Bass) is frozen");
+    // Only a whole name collapses (round 165 re-check 4): a longer name that
+    // ends in the id's is another name, and keeps both.
+    CHECK(views::objectNames(s, "Sub Bass (tr_2) is frozen") == "Sub Bass (Bass) is frozen");
+    CHECK(views::objectNames(s, "SubBass (tr_2)") == "SubBass (Bass)");
+    // Joined by a hyphen, dot or slash: another, longer name (second re-check F3).
+    CHECK(views::objectNames(s, "Sub-Bass (tr_2) is frozen") == "Sub-Bass (Bass) is frozen");
+    CHECK(views::objectNames(s, "Sub.Bass (tr_2)") == "Sub.Bass (Bass)");
+    CHECK(views::objectNames(s, "Sub/Bass (tr_2)") == "Sub/Bass (Bass)");
+    CHECK(views::objectNames(s, "frozen: Bass (tr_2)") == "frozen: Bass");
+    CHECK(views::objectNames(s, "\"Bass (tr_2)\"") == "\"Bass\"");
+    CHECK(views::objectNames(s, "track Bass (tr_2): kept") == "track Bass: kept");
+    CHECK(views::objectNames(s, "Drums (tr_1), Bass (tr_2)") == "Drums, Bass");
     // The Error form: the message, the hint and each listed error; the code
     // and path stay as the command gave them.
     Error e("clip.occupied", "cl_3 is in sc_2", "/clip", "move cl_3 out of tr_2 first");
     e.details.push_back(Error("x", "sc_1 has none", "/scene", "add one to sc_1"));
-    const Error named = views::launcherNames(s, e);
+    const Error named = views::objectNames(s, e);
     CHECK(named.code == "clip.occupied");
     CHECK(named.path == "/clip");
     CHECK(named.message == "Root is in Verse");
@@ -1077,6 +1114,124 @@ TEST_CASE("launcher: refusals name clips, tracks and scenes, never their ids") {
     CHECK(f.errors[0].code == "scene.empty");
     CHECK(f.errors[0].message.find("sc_") == std::string::npos);
     CHECK(f.errors[0].message.find("Chorus") != std::string::npos);
+    // Items, takes, envelopes and sections too. An unnamed MIDI item on Keys
+    // at bar 5: its track and bar; its take, as its item.
+    const json::Value made =
+        f.exec("item.add", R"({"track":"tr_3","position":16,"length":4,"notation":"1: C4:w"})");
+    const model::Id item = *model::Id::parse(made.find("item")->asString());
+    const model::Item* it = f.app->head().items.find(item);
+    REQUIRE(it);
+    REQUIRE(it->activeTake);
+    const model::Session& now = f.app->head();
+    CHECK(views::objectNames(now, item.str() + " is in the way") ==
+          "Keys's item at bar 5 is in the way");
+    CHECK(views::objectNames(now, it->activeTake->str() + " is warped") ==
+          "Keys's item at bar 5 is warped");
+    {  // Another unnamed item in bar 5: each says its beat (round 165 S1).
+        const json::Value other = f.exec(
+            "item.add", R"({"track":"tr_3","position":18,"length":1,"notation":"1: E4:q r:*"})");
+        const model::Session& two = f.app->head();
+        CHECK(views::objectNames(two, item.str()) == "Keys's item at bar 5, beat 1");
+        CHECK(views::objectNames(two, other.find("item")->asString()) ==
+              "Keys's item at bar 5, beat 3");
+        f.exec("history.undo", "{}");
+        CHECK(views::objectNames(f.app->head(), item.str()) == "Keys's item at bar 5");
+    }
+    const json::Value env = f.exec("env.add", R"({"track":"tr_2","param":"volume"})");
+    CHECK(
+        views::objectNames(f.app->head(), env.find("env")->asString() + " has automation items") ==
+        "Bass's volume automation has automation items");
+    f.exec("region.add", R"({"start":8,"end":16})");
+    f.exec("region.add", R"({"start":16,"end":20,"name":"Bridge"})");
+    std::vector<std::string> regions;
+    for (const auto& entry : f.app->head().regions) regions.push_back(entry.id.str());
+    REQUIRE(regions.size() == 2);
+    CHECK(views::objectNames(f.app->head(), regions[0] + " and " + regions[1]) ==
+          "the section at bar 3 and Bridge");
+    CHECK(views::objectNames(f.app->head(), "it_99, tk_99, en_99, rg_99") ==
+          "a removed item, a removed take, a removed envelope, a removed section");
+    // The other kinds the GUI refers to: a marker, a meter change and a send
+    // without names of their own, a group; any whole id of a known kind.
+    f.exec("marker.add", R"({"pos":8})");
+    f.exec("timesig.set", R"({"bar":9,"meter":"3/4"})");
+    f.exec("route.add", R"({"from":"tr_1","to":"tr_4"})");
+    f.exec("group.add", R"({"name":"Rhythm","members":["tr_1","tr_2"]})");
+    auto last = [](const auto& map) {
+        std::string id;
+        for (const auto& entry : map) id = entry.id.str();
+        return id;
+    };
+    const model::Session& more = f.app->head();
+    CHECK(views::objectNames(more, last(more.markers)) == "the marker at bar 3");
+    CHECK(views::objectNames(more, last(more.meters)) == "the meter change at bar 9");
+    CHECK(views::objectNames(more, last(more.routes)) == "the send from Drums to Verb");
+    CHECK(views::objectNames(more, last(more.groups)) == "Rhythm");
+    CHECK(views::objectNames(more, "fx_99 and mo_99") == "a removed plug-in and a removed module");
+    // Not an id: an unknown prefix, upper case, or no digits.
+    CHECK(views::objectNames(more, "zz_3, TR_1 and tr_x") == "zz_3, TR_1 and tr_x");
+    {  // Unnamed groups by their place, as tracks (round 165 re-check 3).
+        const std::string first = last(f.app->head().groups);
+        f.exec("group.add", R"({"name":"Pads"})");
+        const std::string second = last(f.app->head().groups);
+        f.exec("group.set", R"({"group":")" + first + R"(","name":""})");
+        f.exec("group.set", R"({"group":")" + second + R"(","name":""})");
+        const model::Session& unnamed = f.app->head();
+        CHECK(views::objectNames(unnamed, first + " and " + second) == "Group 1 and Group 2");
+        for (int i = 0; i < 3; ++i) f.exec("history.undo", "{}");
+        CHECK(views::objectNames(f.app->head(), first) == "Rhythm");
+    }
+    // An unnamed item draws no name on its lane, never its id.
+    f.root->damageAll();
+    f.root->frame(false);
+    const auto& labels = f.view->lanes().stats().labels;
+    CHECK(std::find(labels.begin(), labels.end(), std::string()) != labels.end());
+    for (const std::string& label : labels) CHECK(label.find("it_") == std::string::npos);
+    // The header draws what refusals say: an unnamed scene as "Scene 4".
+    f.root->damageAll();
+    f.root->frame(false);
+    CHECK(header.stats.names == std::vector<std::string>{"Intro", "Verse", "Chorus", "Scene 4"});
+    // An unnamed clip's cell draws no name (its row and column say it),
+    // never an id: the song's three named clips, then Scene 4's empty name.
+    CHECK(f.view->launcherPane().stats.names ==
+          std::vector<std::string>{"Kit A", "Kit B", "Root", ""});
+    // Insert at playhead over that item: scene.insert.occupied names it.
+    f.errors.clear();
+    f.view->setPlayhead(f.app->head().timeMap->secondsAt(16));  // bar 5
+    f.click({header.sceneRect(2).x + 40, header.sceneRect(2).y + 8}, 0, 1, 3);
+    menu = f.root->find("launcher.scene.menu");
+    REQUIRE(menu);
+    std::function<void()> atPlayhead;
+    for (const auto& row : ui::menuItems(*menu))
+        if (row.label == "Insert at playhead") atPlayhead = row.run;
+    f.root->closePopups();
+    REQUIRE(atPlayhead);
+    f.exec("clip.add", R"({"track":"tr_3","scene":"sc_3","notation":"1: C4:w"})");
+    atPlayhead();
+    f.sync();
+    REQUIRE(f.errors.size() == 1);
+    CHECK(f.errors[0].code == "scene.insert.occupied");
+    CHECK(f.errors[0].message.find("Keys's item at bar 5") != std::string::npos);
+    for (const char* prefix : {"it_", "tr_", "sc_", "cl_", "tk_"})
+        CHECK(f.errors[0].message.find(prefix) == std::string::npos);
+}
+
+// Round 165 F5: the lanes' drawn labels are this paint's, also when the GL
+// layers failed (paintGl, which resets the stats, then draws nothing).
+TEST_CASE("lanes: the drawn labels are each paint's own when the GL layers failed") {
+    LauncherFixture f;
+    f.song();
+    f.exec("item.add", R"({"track":"tr_3","position":0,"length":4,"notation":"1: C4:w"})");
+    f.exec("item.add", R"({"track":"tr_2","position":4,"length":4,"notation":"1: C2:w"})");
+    f.root->damageAll();
+    f.root->frame(false);
+    const std::size_t drawn = f.view->lanes().stats().labels.size();
+    REQUIRE(drawn > 0);
+    f.view->lanes().failGlForTests();
+    for (int i = 0; i < 3; ++i) {
+        f.root->damageAll();
+        f.root->frame(false);
+        CHECK(f.view->lanes().stats().labels.size() == drawn);
+    }
 }
 
 TEST_CASE("launcher: the pane's look, playing, queued, held, empty and selected, in both themes") {
@@ -2179,7 +2334,7 @@ TEST_CASE("launcher: the scene menu's checks say how scenes are laid; Lay out sc
     REQUIRE(f.root->find("launcher.layout"));
     ui::Node* status = f.root->find("launcher.layout.status");
     REQUIRE(status);
-    // Names, not ids, in what reaches the user (launcherNames).
+    // Names, not ids, in what reaches the user (objectNames).
     CHECK(f.errors[0].message.find("sc_") == std::string::npos);
     CHECK(f.errors[0].message.find("Chorus") != std::string::npos);
     CHECK(status->valueText().find("sc_") == std::string::npos);

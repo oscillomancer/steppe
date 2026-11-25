@@ -17,6 +17,7 @@
 #include "strip_learn.h"
 #include "supple/ui/popup.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/object_name.h"
 #include "supple/views/track_layout.h"
 
 namespace supple::gui {
@@ -233,7 +234,7 @@ void openModulateMenu(ui::Root& root, cmd::Dispatcher& dispatcher, const model::
         if (!t || t->type == model::StripType::Master || id == ownTrack) continue;
         if (first) items.push_back({"", "", {}, true, true});
         first = false;
-        const std::string name = t->name.empty() ? id.str() : t->name;
+        const std::string name = views::objectName(s, id);
         items.push_back({"Follower: " + name, "", make(json::Value("follower"), id)});
     }
     ui::Root* r = &root;

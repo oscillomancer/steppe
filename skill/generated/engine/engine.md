@@ -821,10 +821,18 @@ Kind: `action`. Exposure: `mcp-tool`.
 ### Errors
 
 - `engine.running`: the engine is already running Hint: engine.stop first
-- `backend.device`: device or host API was not found Hint: choose names from engine.devices
+- `backend.device.not_found`: the input or output device was not found Hint: choose an exact name from engine.devices
+- `backend.device.ambiguous`: two devices share the name Hint: rename one in its driver, or choose another host API
+- `backend.device.no_inputs`: the input device is listed without inputs Hint: set inputs to zero for playback only
+- `backend.device.channels`: the device has too few channels Hint: reduce inputs or outputs to the counts engine.devices shows
+- `backend.device.invalid`: the device is gone or held in exclusive mode Hint: list engine.devices again, or free the device
+- `backend.host_api.not_found`: the host API was not found Hint: choose an exact host_api from engine.devices
+- `backend.busy`: another stream or process holds the device Hint: stop it, then start again
+- `backend.driver`: the ASIO driver or the JACK server did not start Hint: close other apps using the driver, or start PipeWire with pipewire-jack
+- `backend.rate`: the device does not support the rate (ASIO: or is absent) Hint: name a rate engine.devices lists as the device's default_rate
 - `backend.config`: device format is invalid Hint: check rate and channel capacities
 - `backend.unavailable`: JACK is not installed Hint: install pipewire-jack
-- `backend.open`: no JACK server answered Hint: is PipeWire running?
+- `backend.open`: the device did not open for another reason Hint: check engine.devices, rate and channels
 - `backend.unsupported`: backend is unavailable on this platform Hint: select dummy
 
 ### Examples

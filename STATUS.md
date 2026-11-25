@@ -1629,9 +1629,10 @@ capacity reports retain their original revision/settings.
 
 Library boundaries:
 - Chord-tone spelling (ADR-0100) reaches `midi.get` and the MIDI editor (the
-  roll's note labels and messages, the notation panel, the event list) only. The
-  roll's keyboard labels, MIDI-control names, `midi.edit` readbacks and the rack
-  probe stay on the key's rule or the default table.
+  roll's note labels and messages, the notation panel, the event list) only.
+  MIDI-control names, `midi.edit` readbacks and the rack probe stay on the
+  key's rule or the default table; all three are engine-side. (The roll's
+  keyboard labels only its C rows, which read "C" in any key.)
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.
@@ -1833,8 +1834,13 @@ Engine and hosting:
   PipeWire, or the rate and quantum are forced on the graph while the engine
   runs. Whether a given PipeWire server grants a suggested rate, and how
   CoreAudio, WASAPI and ASIO devices take each rate and buffer, are untested
-  on hardware. The dialog lists the devices present when it opens; there is no
-  hotplug refresh while it stays open.
+  on hardware. The dialog lists the devices present when it opens, and its
+  Refresh lists them again by stopping the engine, listing and starting it
+  (PortAudio rescans only when nothing holds it; audio stops for a moment,
+  and Refresh is off while recording or while a launcher capture is held). That a device plugged in since does
+  appear after Refresh is unverified on real macOS and Windows hardware: it
+  cannot be run here or in CI, where the sequence is tested with the dummy
+  backend.
   Refusing native MIDI inputs are skipped with structured startup warnings;
   audio and other inputs keep running. CoreMIDI/WinMM use bounded per-port queues,
   timestamp mapping, bounded per-port merging, routing/learn/recording and
@@ -1882,8 +1888,6 @@ Engine and hosting:
   opening every output of a device).
 - Overlapping gestures on a plugin without semantic parameters share one
   state blob.
-- The render dialog's Start and End show beats and bar.beat rather than
-  the ruler's full format.
 - MP3 encodes run one at a time (LAME's shared tables, `libs/audio-codecs`):
   several MP3 renders in parallel jobs wait for each other's encoding step.
 - Renders: MP3 and Ogg Vorbis files are byte-identical from run to run on
@@ -2010,7 +2014,8 @@ Session and editing:
 - Squashed history steps keep large invocation arguments; actual squashing
   and graph edits may still traverse retained history.
 - Saved branches (ADR-0076): main's undo history and redo steps are kept only
-  with `project.save {history: true}`, which the GUI does not offer yet. A
+  with `project.save {history: true}` (File > Save with undo history in
+  the app). A
   command whose arguments change incompatibly makes a merge of an older
   file's branch stop with an `invalid` conflict. Saving serializes every kept
   version's state on the main thread. Linux is tested locally; native

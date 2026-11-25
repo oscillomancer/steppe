@@ -14,6 +14,7 @@
 #include "supple/harmony/harmony.h"
 #include "supple/model/context.h"
 #include "supple/model/follow.h"
+#include "supple/model/take_owner.h"
 #include "supple/time/timeline.h"
 #include "supple/ui/canvas.h"
 #include "supple/ui/forms.h"
@@ -233,64 +234,6 @@ void addLaying(json::Value& args, const SceneLaying& laying) {
 }
 
 }  // namespace
-
-namespace {
-// A scene as the user knows it: its name, else its place in the pane.
-std::string sceneWords(const model::Session& s, model::Id id) {
-    const model::Scene* sc = s.scenes.find(id);
-    if (sc && !sc->name.empty()) return sc->name;
-    const std::vector<model::Id> order = launcherColumns(s).scenes;
-    const auto at = std::find(order.begin(), order.end(), id);
-    return at == order.end() ? std::string("a removed scene")
-                             : "Scene " + std::to_string(at - order.begin() + 1);
-}
-std::string trackWords(const model::Session& s, model::Id id) {
-    const model::Track* t = s.tracks.find(id);
-    if (!t) return "a removed track";
-    return t->name.empty() ? std::string("an unnamed track") : t->name;
-}
-std::string clipWords(const model::Session& s, model::Id id) {
-    const model::Clip* c = s.clips.find(id);
-    if (!c) return "a removed clip";
-    if (!c->name.empty()) return c->name;
-    return trackWords(s, c->track) + "'s clip in " + sceneWords(s, c->scene);
-}
-}  // namespace
-
-std::string launcherNames(const model::Session& s, std::string_view text) {
-    auto word = [&](std::size_t i) {
-        return i < text.size() &&
-               (std::isalnum(static_cast<unsigned char>(text[i])) || text[i] == '_');
-    };
-    std::string out;
-    for (std::size_t i = 0; i < text.size();) {
-        const std::string_view rest = text.substr(i);
-        const bool prefix =
-            rest.starts_with("sc_") || rest.starts_with("cl_") || rest.starts_with("tr_");
-        if (prefix && (i == 0 || !word(i - 1))) {
-            std::size_t end = i + 3;
-            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
-            if (end > i + 3 && !word(end)) {
-                if (const auto id = model::Id::parse(std::string(text.substr(i, end - i)))) {
-                    out += rest.starts_with("sc_")   ? sceneWords(s, *id)
-                           : rest.starts_with("cl_") ? clipWords(s, *id)
-                                                     : trackWords(s, *id);
-                    i = end;
-                    continue;
-                }
-            }
-        }
-        out += text[i++];
-    }
-    return out;
-}
-
-Error launcherNames(const model::Session& s, Error error) {
-    error.message = launcherNames(s, error.message);
-    error.hint = launcherNames(s, error.hint);
-    for (Error& detail : error.details) detail = launcherNames(s, std::move(detail));
-    return error;
-}
 
 std::optional<std::string> followNotice(const model::Session& s, const std::string& command,
                                         const json::Value& args, const json::Value& answer) {
@@ -861,7 +804,9 @@ void LauncherPane::paint(ui::Canvas& c) {
                            .withAlpha(dim),
                        ui::kRight | ui::kMiddle);
             stats.keys.push_back(strip > 0 ? keyMark : std::string());
-            std::string label = clip->name.empty() ? id->str() : clip->name;
+            // An unnamed clip draws no name: its row and column say its
+            // track and scene (refusals still call it objectName's words).
+            const std::string label = clip->name;
             const std::string fit =
                 c.elide(label, ui::Font::Ui, caption, std::max(0.0f, name.w - 18));
             if (!fit.empty())
@@ -917,6 +862,12 @@ void LauncherPane::paint(ui::Canvas& c) {
             // cell counts as empty). One past the rows or the scenes, or on a
             // lane, refuses the drop, and the cell under the pointer says so.
             const auto column = static_cast<std::ptrdiff_t>(col - cols.scenes.begin());
+            // The scene columns in view: a cell wholly outside them is out of
+            // view, counted for the "+N" at the edge it lies beyond.
+            const ui::Rect shown{b.x, b.y, cols.scenesRight() - b.x, b.h};
+            std::size_t right = 0, left = 0, below = 0, above = 0;
+            c.save();
+            c.clip(shown);
             bool allIn = !dropRefused_;
             bool pointerTakes = !clipIn(s, tracks.rows()[over->row].track, *over->scene) &&
                                 tracks.rows()[over->row].type == model::StripType::Channel &&
@@ -938,16 +889,47 @@ void LauncherPane::paint(ui::Canvas& c) {
                     pointerTakes = takes;  // drawn last, with the drop's verdict
                     continue;
                 }
-                c.strokeRect(
-                    cellRect(static_cast<std::size_t>(row), static_cast<std::size_t>(scene))
-                        .inset(2),
-                    takes ? t.color("focus") : t.color("meter-clip"), 1.5f);
+                const ui::Rect cell =
+                    cellRect(static_cast<std::size_t>(row), static_cast<std::size_t>(scene));
+                if (cell.intersect(shown).empty()) {
+                    right += cell.x >= shown.right();
+                    left += cell.right() <= shown.x;
+                    below += cell.x < shown.right() && cell.right() > shown.x &&
+                             cell.y >= shown.bottom();
+                    above += cell.x < shown.right() && cell.right() > shown.x &&
+                             cell.bottom() <= shown.y;
+                    ++stats.dropHidden;
+                }
+                c.strokeRect(cell.inset(2), takes ? t.color("focus") : t.color("meter-clip"), 1.5f);
                 ++stats.dropShown;
             }
             stats.dropTakes = allIn && pointerTakes;
-            c.strokeRect(cellRect(over->row, static_cast<std::size_t>(column)).inset(2),
-                         stats.dropTakes ? t.color("focus") : t.color("meter-clip"), 1.5f);
+            const ui::Rect under = cellRect(over->row, static_cast<std::size_t>(column));
+            c.strokeRect(under.inset(2), stats.dropTakes ? t.color("focus") : t.color("meter-clip"),
+                         1.5f);
             ++stats.dropShown;
+            // The cells out of view, as "+N" at the edge most of them lie
+            // beyond: on the pointer's row at the right or left, in its
+            // column at the bottom or top. The pane does not scroll.
+            if (stats.dropHidden > 0) {
+                const std::string more = "+" + std::to_string(stats.dropHidden);
+                const float w = 26, h = 16;
+                const float midY =
+                    std::clamp(under.y + under.h / 2, shown.y + h / 2, shown.bottom() - h / 2);
+                const float midX =
+                    std::clamp(under.x + under.w / 2, shown.x + w / 2, shown.right() - w / 2);
+                const std::size_t most = std::max({right, left, below, above});
+                const ui::Rect tag =
+                    most == right   ? ui::Rect{shown.right() - w - 2, midY - h / 2, w, h}
+                    : most == left  ? ui::Rect{shown.x + 2, midY - h / 2, w, h}
+                    : most == below ? ui::Rect{midX - w / 2, shown.bottom() - h - 2, w, h}
+                                    : ui::Rect{midX - w / 2, shown.y + 2, w, h};
+                c.fillRect(tag, t.color("panel"));
+                c.strokeRect(tag, t.color("focus"), 1.0f);
+                c.text(tag, more, ui::Font::UiBold, t.type("caption"), t.color("focus"),
+                       ui::kCenter | ui::kMiddle);
+            }
+            c.restore();
         } else if (col != cols.scenes.end()) {
             // A clip in hand: the cell under it takes it or refuses it.
             const auto column = static_cast<std::size_t>(col - cols.scenes.begin());
@@ -1439,6 +1421,7 @@ void LauncherHeader::paint(ui::Canvas& c) {
     const model::Session& s = view_.session();
     stats.refused = 0;
     stats.refusedScenes.clear();
+    stats.names.clear();
     c.fillRect(b, t.color("panel"));
     c.fillRect({b.x, b.bottom() - 1, b.w, 1}, t.color("rule"));
     c.fillRect({b.right() - 1, b.y, 1, b.h}, t.color("rule"));
@@ -1513,8 +1496,10 @@ void LauncherHeader::paint(ui::Canvas& c) {
             drawPlay(c, {cell.x + 1, cell.y, 14, cell.h},
                      t.color("ink-quiet").withAlpha(refused ? 0.45f : 1.0f));
         if (playing) c.strokeRect(cell.inset(1), t.color("playing"), 1.5f);
-        const std::string name = scene->name.empty() ? cols.scenes[col].str() : scene->name;
+        // An unnamed scene by its place, as a refusal says it (objectName).
+        const std::string name = objectName(s, cols.scenes[col]);
         const std::string fit = c.elide(name, ui::Font::Ui, caption, cell.w - 19);
+        stats.names.push_back(fit);
         if (!fit.empty())
             c.text({cell.x + 15, cell.y, cell.w - 16, cell.h}, fit, ui::Font::Ui, caption,
                    t.color("ink"), ui::kLeft | ui::kMiddle);
@@ -1752,7 +1737,6 @@ void LauncherHeader::openLayOut() {
         }
     };
     for (std::size_t i = 0; i < scenes.size(); ++i) {
-        const model::Scene* sc = s.scenes.find(scenes[i]);
         const std::int64_t bars = sceneBars(s, scenes[i], at);
         at += static_cast<int>(bars);
         const std::string n = std::to_string(i);
@@ -1760,9 +1744,8 @@ void LauncherHeader::openLayOut() {
         line.layout.gap = 4;
         line.emplace<ui::Label>("launcher.layout.mark." + n, "", ui::Font::UiBold, "small", "armed")
             .layout.width = ui::SizeRule::fixed(8);
-        auto& use = line.emplace<ui::Checkbox>(
-            "launcher.layout.use." + n,
-            sc && !sc->name.empty() ? sc->name : launcherNames(s, scenes[i].str()), true);
+        auto& use =
+            line.emplace<ui::Checkbox>("launcher.layout.use." + n, objectName(s, scenes[i]), true);
         use.layout.width = ui::SizeRule::fraction();
         use.onToggle = [runnable, recompute](bool) {
             runnable();
@@ -1870,8 +1853,8 @@ void LauncherHeader::openLayOut() {
         const Error& first = e.details.empty() ? e : e.details[0];
         std::string path = first.path;
         if (path.rfind("/args", 0) == 0) path = path.substr(5);
-        std::string mark, prefix, text = launcherNames(view_.session(), e.message);
-        if (!e.details.empty()) text += ": " + launcherNames(view_.session(), first.message);
+        std::string mark, prefix, text = objectNames(view_.session(), e.message);
+        if (!e.details.empty()) text += ": " + objectNames(view_.session(), first.message);
         if (path.rfind("/sequence/", 0) == 0) {
             const std::size_t entry = wholeNumberAt(path, 10);
             if (entry < rows.size()) {

@@ -50,6 +50,9 @@ class LaneLabels : public ui::Node {
         // The visible take envelopes by take, in the session's order within
         // one, gathered once: each item then finds its own without a scan.
         takeEnvelopes_.clear();
+        // What this paint draws (also when the GL layers failed and
+        // paintGl's reset never runs; round 165 F5).
+        lanes_.stats_.labels.clear();
         for (const auto& e : s.envelopes)
             if (e.value->visible && e.value->target.object.kind == model::Kind::Take)
                 takeEnvelopes_.push_back({e.value->target.object, &*e.value});
@@ -70,14 +73,16 @@ class LaneLabels : public ui::Node {
                 const bool barShown = full.y >= bounds().y - 0.5f;
                 const model::Take* take =
                     item->activeTake ? s.takes.find(*item->activeTake) : nullptr;
+                // An unnamed item draws no name on its lane (its place says
+                // where it is); elsewhere views::objectName says it.
                 std::string name = Lanes::itemLabel(s, *item);
-                if (name.empty()) name = id.str();
                 if (take && std::abs(take->playrate - 1.0) > 1e-6) {  // a stretched take says so
                     char rate[48];
-                    std::snprintf(rate, sizeof rate, "  \u00b7 %.3gx%s", take->playrate,
-                                  take->preservePitch ? "" : " varispeed");
+                    std::snprintf(rate, sizeof rate, "%s%.3gx%s", name.empty() ? "" : "  \u00b7 ",
+                                  take->playrate, take->preservePitch ? "" : " varispeed");
                     name += rate;
                 }
+                lanes_.stats_.labels.push_back(name);
                 const auto* owner = s.tracks.find(item->track);
                 const bool frozen = owner && owner->freeze;
                 if (frozen) {

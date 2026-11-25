@@ -25,6 +25,7 @@
 #include "actions_list.h"
 #include "app_actions.h"
 #include "appearance.h"
+#include "audio_device.h"
 #include "chrome.h"
 #include "crash_banner.h"
 #include "crash_report_text.h"
@@ -267,6 +268,70 @@ TEST_CASE("recording writer errors stay visible while healthy targets continue")
     CHECK(status->valueText().find("Vocal-1.wav") != std::string::npos);
     CHECK(status->valueText().find("kept") != std::string::npos);
     a.snapshot("recording-write-error.png");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+// Round 165 F3: the app's wiring of the audio device dialog says Refresh's
+// refusals in the status line, and the Capture toggle's capture keeps it off.
+TEST_CASE("audio device: the app's wiring says Refresh's refusals in the status line") {
+    App a;
+    if (!a.ok) {
+        MESSAGE("skipped: no offscreen GL");
+        return;
+    }
+    peaks::PeakService peaks(a.dir / "cache", [](std::function<void()> f) { f(); });
+    gui::MeterFeed meters;
+    gui::Shell shell(*a.app, *a.dispatcher, a.ui, "", peaks, meters);
+    a.root->setContent(shell.build(*a.root, *a.actions));
+    gui::AudioDeviceSettings settings;
+    settings.backend = "portaudio";
+    gui::AudioDeviceDialog audio(*a.root, *a.dispatcher, *a.app, settings, {});
+    const cmd::Origin test{cmd::Origin::Type::Test, "t", {}};
+    bool refuse = false;
+    audio.enumerate = [] {
+        return Result<std::vector<engine::AudioDevice>>(std::vector<engine::AudioDevice>{});
+    };
+    audio.startEngine = [&](const json::Value& args) -> Result<json::Value> {
+        if (refuse)
+            return Error("backend.device.not_found", "device was not found", "/output_device",
+                         "choose an exact name from engine.devices");
+        json::Value dummy = json::Value::object();  // a device-free engine stands in
+        dummy["backend"] = "dummy";
+        dummy["block"] = args.find("block")->asInt();
+        return a.dispatcher->execute({"engine.start", dummy, test});
+    };
+    audio.stopEngine = [&] {
+        (void)a.dispatcher->execute({"engine.stop", json::Value::object(), test});
+    };
+    gui::connectAudioDevice(audio, shell);
+    REQUIRE(audio.start());
+    auto status = [&] {
+        shell.sync();
+        a.root->frame(false);
+        const ui::Node* line = a.root->find("status");
+        return line ? line->valueText() : std::string();
+    };
+    // The Capture toggle armed: Refresh is off, refused, and says why there.
+    REQUIRE(shell.capture().set(true));
+    CHECK_FALSE(audio.refreshBlocked().empty());
+    const Status held = audio.rescan();
+    REQUIRE_FALSE(held);
+    CHECK(held.error().code == "audio.capture");
+    CHECK(status().find("off while the launcher captures") != std::string::npos);
+    REQUIRE(a.app->backend() != nullptr);  // nothing was stopped
+    REQUIRE(shell.capture().set(false));
+    CHECK(audio.refreshBlocked().empty());
+    // A refused start: the command's message in the status line.
+    refuse = true;
+    CHECK_FALSE(audio.rescan());
+    // In the dialog's words with a next step; the command hint is not shown.
+    CHECK(status().find("The default output device was not found. Choose another device") !=
+          std::string::npos);
+    CHECK(status().find("engine.devices") == std::string::npos);
+    CHECK(a.app->backend() == nullptr);
+    // The status line names ids at once, not from the next sync (round 165 N1).
+    shell.setStatus("no track tr_99");
+    CHECK(a.root->find("status")->valueText() == "no track a removed track");
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
@@ -1118,7 +1183,9 @@ TEST_CASE("the status line shows a recording's warnings, whoever stopped it") {
         shell.engineEvents(a.app->takeEvents());  // what the app does each pass
         // The note, which the status line shows once the new item's audio is prepared.
         const std::string text = shell.statusNote();
-        CHECK(text.find("not a take of " + item) != std::string::npos);
+        // The item by name, never its id (views::objectNames).
+        CHECK(text.find("not a take of held") != std::string::npos);
+        CHECK(text.find(item) == std::string::npos);
         CHECK(text.find("locked") != std::string::npos);
         if (halt) break;
     }
@@ -1364,6 +1431,44 @@ TEST_CASE("save as gives each project a folder of its own") {
     files.saveAs(a.dir / "Song");
     CHECK(error.find("already exists") != std::string::npos);
     CHECK(a.app->projectPath() == a.dir / "Mix" / "Mix.json");
+}
+
+TEST_CASE("file actions: Save with undo history keeps main's undo steps in the file") {
+    App a;
+    if (!a.ok) return;
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](std::function<void()> f) { f(); });
+    std::string error;
+    a.actions->onError = [&](const std::string& message) { error = message; };
+    // A project with a file: an edit, then File > Save with undo history.
+    files.saveAs(a.dir / "Kept" / "Kept.json");
+    const auto path = a.app->projectPath();
+    REQUIRE_FALSE(path.empty());
+    const std::size_t tracks = a.tracks();
+    a.key("Ctrl+T");
+    REQUIRE(a.tracks() == tracks + 1);
+    REQUIRE(a.actions->run("ui.file.save_history"));
+    CHECK(error.empty());
+    CHECK(a.app->projectPath() == path);  // in place
+    // Reopened, undo on main takes the edit back: its step was kept.
+    json::Value open = json::Value::object();
+    open["path"] = path.string();
+    REQUIRE(a.dispatcher->execute({"project.open", open, {}}));
+    REQUIRE(a.tracks() == tracks + 1);
+    REQUIRE(a.dispatcher->execute({"history.undo", json::Value::object(), {}}));
+    CHECK(a.tracks() == tracks);
+    // A plain save keeps no undo history: after reopening there is nothing
+    // to undo on main (the menu's entries differ).
+    a.key("Ctrl+T");
+    REQUIRE(a.actions->run("ui.file.save"));
+    REQUIRE(a.dispatcher->execute({"project.open", open, {}}));
+    CHECK_FALSE(a.dispatcher->execute({"history.undo", json::Value::object(), {}}));
+    // The File menu lists it after Save as….
+    const gui::ChromeLayout defaults = gui::ChromeLayout::defaults();
+    const auto& file = defaults.menus.front();
+    const auto at = std::find(file.items.begin(), file.items.end(), "ui.file.save_as");
+    REQUIRE(at != file.items.end());
+    CHECK(*(at + 1) == "ui.file.save_history");
 }
 
 TEST_CASE("file actions: project templates save, start a new project and delete") {
@@ -3567,7 +3672,8 @@ TEST_CASE("shell: a refused edit from the track panel or the timeline reaches th
     a.root->frame(false);
     REQUIRE(shell.arrange()->gestures().onError);
     shell.arrange()->gestures().onError(Error("item.locked", "it_1 is locked"));
-    CHECK(status->text() == "it_1 is locked");
+    // Named at once (the new project has no it_1), never the id.
+    CHECK(status->text() == "a removed item is locked");
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 

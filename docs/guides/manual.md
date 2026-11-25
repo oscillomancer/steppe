@@ -68,7 +68,10 @@ by default, or ASIO).
 **Edit > Audio device…** (also a row in **Edit > Preferences…**) chooses the
 audio system, the output and input devices, the sample rate and the buffer
 size. Steppe remembers the choice and starts with it next time. Each change
-restarts the running engine at once.
+restarts the running engine at once. Plugged in a device while the dialog is
+open? On macOS and Windows, **Refresh** lists the devices again; audio stops
+for a moment while it does, so it is off while you record or while the
+launcher's Capture is on or still holds a performance.
 
 **Edit > Preferences…** holds the settings that apply to every project, in
 sections: **Audio**, **Recording and import**, **Plug-ins** and **Editing**.
@@ -107,11 +110,26 @@ applies to Steppe and its plug-in bridges only: it changes no system setting,
 and ends when Steppe stops the engine. macOS and Windows do not merge memory
 this way, and nothing changes there.
 
-If the device is missing or busy when Steppe starts, the app still opens. The
-Audio device dialog then opens and says why. Choose another device, or
-**Restart audio** once the device is ready. The dialog's status lines show
-what is running: the backend, rate, buffer size, device period and output
-latency.
+If the device is missing or busy when Steppe starts, the app still opens. It
+tries the default device instead, and the Audio device dialog opens and says
+why. When the default device runs, audio keeps going on it. The dialog and the
+status line say so, for example: The output device "Interface" was not found.
+Audio is running on the default device at 48000 Hz. The choice is kept for
+when it returns. The rate is named only when it differs from the one you
+chose; the default device keeps its own rate. The missing device's row reads
+**Interface (not found)**. Changing the rate or buffer size meanwhile keeps
+audio on the default device, and your choices stay saved. Once the device is
+back, **Refresh** or **Restart audio** runs on it again. If the default device
+fails too, audio stays stopped: choose another device, or **Restart audio**
+once the device is ready. The dialog's status lines show what is running: the
+backend, rate, buffer size, device period and output latency.
+
+When audio cannot start, the dialog says why and what to do. On Linux, "The
+JACK server did not answer" means PipeWire's JACK support (pipewire-jack) or a
+JACK server is not running: start it, then **Restart audio**. On Windows, an
+ASIO driver that does not start is often held by another app, and an app using
+a device in exclusive mode keeps it from others: close that app, then
+**Restart audio**.
 
 The right end of the transport bar shows what the device is running at, for
 example **48 kHz · 256 samples**. It stays quiet while all is well. If
@@ -138,9 +156,10 @@ branch you have not merged yet is still there after quitting and reopening,
 with each of its steps (**View > History and command log**, a tab of the
 side panel), and it can be undone step by step or
 merged into main as before. The file opens on the branch that was current when
-it was saved. Main's own undo history is not kept: after reopening, undo on
-main starts from the saved state. (Agents can keep it with
-`project.save {"history": true}`.) Autosaves keep branches too.
+it was saved. Main's own undo and redo steps are kept only when you save
+with **File > Save with undo history** (agents use
+`project.save {"history": true}`); after a plain save, undo on main starts
+from the saved state when you reopen. Autosaves keep branches too.
 
 If a program that does not know about branches (an older Steppe, a script)
 changed the file's main project, the saved branches no longer fit it: Steppe
@@ -1728,7 +1747,8 @@ launches the scene; double-click its name to rename it, drag it sideways
 to reorder the scenes, and right-click it for Rename, Colour, Insert at
 playhead, Insert at end, the two checks for how scenes are laid, Lay out
 scenes… and Delete (all described below). The **+** after the last scene
-adds one.
+adds one; until you name it, it shows as "Scene" and its place, such as
+"Scene 4".
 
 Stop all, Arrangement and Capture sit in one row. In a narrow pane they
 show as small symbols (a square, two bars and a dot); rest the pointer on
@@ -1778,8 +1798,10 @@ the ruler and choose **Capture as scene** to make a scene from the items
 inside it.
 When one of these cannot be done (items already lie in the way, a scene has
 no clips, a section has two items on one track) the status line says why. It
-names the clips, tracks and scenes involved; one without a name is called
-by where it is, such as "Scene 4" or "Bass's clip in Verse".
+names the clips, items, tracks, scenes and sections involved; one without
+a name is called by where it is, such as "Scene 4", "Bass's clip in Verse"
+or "Keys's item at bar 5". A clip without a name shows no name in its cell,
+since its row and column already say its track and scene.
 
 In a cell, no click does two things:
 - a clip's ▶ launches it; a click on the clip's body selects it (Ctrl adds
@@ -1805,7 +1827,8 @@ at the same distance from the item you hold, as when you move them.
 Several items on one track go into that scene and the ones after it, in
 the order they play: the first into the scene you drop on, the next into
 the one after it. One undo takes them all back. Every cell they will
-fill is outlined while you hold them. If any of them can't go (its cell is
+fill is outlined while you hold them; cells scrolled out of view are
+counted in a small "+2"-style tag at the pane's edge. If any of them can't go (its cell is
 taken, its row is not a channel, it would fall off the track list, there
 are not enough scenes after the one you drop on, or it is on a hidden
 track or in a closed folder), none is made and the status line says why.
@@ -2051,7 +2074,9 @@ writes it to the project. Presets and your default are kept in the data folder
   version* to start a branch at that mix.
 - **Range**: the entire project (to the last item's end), the time
   selection (the range drawn on the ruler, also the loop, whether or not
-  looping is on), or a custom start and end in beats. A **tail** renders seconds past the end for
+  looping is on), or a custom start and end, written as bar, beat and
+  thousandths as the transport shows them (`3.1.000`; `3` or `3.2` will do),
+  with the time beside each. A **tail** renders seconds past the end for
   reverb and delays; *Cut silence at the end* trims what is left quiet.
 
 ### Files and formats

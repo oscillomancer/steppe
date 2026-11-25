@@ -19,6 +19,7 @@
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/item_gestures.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -198,6 +199,16 @@ FileActions::FileActions(ui::Root& root, AppActions& actions, cmd::Dispatcher& d
     });
     actions_.addUi("ui.file.save_as", "File: save as…",
                    [this] { chooseSave([this](auto paths) { saveAs(paths.front()); }); });
+    // Main's undo and redo steps kept in the file too (project.save
+    // {history: true}, ADR-0076): in place, or where the user chooses for a
+    // project that has no file yet. A refusal says why in the status line.
+    actions_.addUi("ui.file.save_history", "File: save with undo history", [this] {
+        if (app_.projectPath().empty())
+            return chooseSave([this](auto paths) { saveAs(paths.front(), true); });
+        json::Value args = json::Value::object();
+        args["history"] = true;
+        if (exec("project.save", std::move(args))) markSaved();
+    });
     actions_.addUi("ui.file.template.save", "File: save template…", [this] { openSaveTemplate(); });
     actions_.addUi("ui.file.template.load", "File: load template…", [this] { openTemplateList(); });
     actions_.addUi("ui.track.template.save", "Track: save as template…",
@@ -662,7 +673,7 @@ std::filesystem::path projectFolderPath(std::filesystem::path chosen,
     return base / stem / chosen.filename();
 }
 
-void FileActions::saveAs(const std::filesystem::path& path) {
+void FileActions::saveAs(const std::filesystem::path& path, bool history) {
     const std::filesystem::path p = projectFolderPath(path, app_.projectPath());
     std::error_code ec;
     if (std::filesystem::exists(p, ec) && p != app_.projectPath()) {
@@ -671,6 +682,7 @@ void FileActions::saveAs(const std::filesystem::path& path) {
     }
     json::Value args = json::Value::object();
     args["path"] = p.string();
+    if (history) args["history"] = true;
     if (exec("project.save", std::move(args))) markSaved();
 }
 
@@ -720,7 +732,8 @@ void FileActions::exportItem(model::Id item, std::function<void(const std::strin
     const model::Take* take = it && it->activeTake ? s.takes.find(*it->activeTake) : nullptr;
     if (!take || !take->source) return status("Export: the item has no material");
     const bool midi = take->source->kind == model::Kind::Midi;
-    std::string name = take->name.empty() ? item.str() : take->name;
+    // The file is named as the item is referred to (views::objectName).
+    std::string name = take->name.empty() ? views::objectName(s, item) : take->name;
     for (char& c : name)
         if (std::string_view("/\\:*?\"<>|").find(c) != std::string_view::npos) c = '-';
     std::filesystem::path folder = app_.projectPath().empty() ? mediaHome() : app_.projectDir();

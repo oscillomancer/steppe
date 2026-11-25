@@ -12,6 +12,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "supple/model/follow.h"
@@ -102,8 +103,11 @@ class Lanes : public ui::Node {
     // What the last paint drew (benchmarks, tests).
     struct Stats {
         std::size_t rows = 0, items = 0, columns = 0, notes = 0, pending = 0, fades = 0;
+        std::vector<std::string> labels;  // each item's name bar text, as drawn ("": none)
     };
     const Stats& stats() const { return stats_; }
+    // Tests: as if the GL layers had failed (paintGl then draws nothing).
+    void failGlForTests() { glFailed_ = true; }
     // The parts of automation lanes the last paint dimmed: where an item's
     // take effect does not play (outside the item, or all of it while
     // another take is active), as a held track's items are dimmed.

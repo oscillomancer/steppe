@@ -21,6 +21,7 @@
 #include "supple/ui/text_area.h"
 #include "supple/ui/text_field.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -821,7 +822,8 @@ Result<json::Value> RackWindow::exec(const std::string& command, json::Value arg
 }
 
 void RackWindow::report(const Error& e) {
-    error_ = e.message + (e.hint.empty() ? "" : " (" + e.hint + ")");
+    const Error named = views::objectNames(app_.head(), e);
+    error_ = named.message + (named.hint.empty() ? "" : " (" + named.hint + ")");
     if (status_) status_->setText(status());
     if (!isOpen() && actions_.onError) actions_.onError("rack: " + error_);
 }
@@ -2561,7 +2563,7 @@ void RackWindow::showSource(const std::string& type) {
             a["source"] = code->text();
             auto r = dispatcher_.execute({"module.write", std::move(a), kOrigin});
             if (!r) {
-                note->setText(r.error().message);
+                note->setText(views::objectNames(app_.head(), r.error().message));
                 return;
             }
             std::vector<ui::TextArea::Mark> marks;

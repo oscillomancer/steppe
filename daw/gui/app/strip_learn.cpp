@@ -9,6 +9,7 @@
 #include "supple/engine/midi_control.h"
 #include "supple/model/schemas.h"
 #include "supple/ui/popup.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -59,12 +60,12 @@ std::string ownerName(const model::Session& s, const std::vector<model::Id>& obj
         return std::to_string(objects.size()) + (isRoute(objects.front()) ? " sends" : " tracks");
     const model::Id& id = objects.front();
     if (isVca(id)) {
-        const model::TrackGroup* g = s.groups.find(id);
-        return (g && !g->name.empty() ? g->name + " " : std::string()) + "VCA";
+        // An unnamed group by its place ("Group 2 VCA"), as everywhere.
+        return (s.groups.find(id) ? views::objectName(s, id) + " " : std::string()) + "VCA";
     }
     if (!isRoute(id)) return trackName(s, id);
     const model::Route* r = s.routes.find(id);
-    if (!r) return id.str();
+    if (!r) return views::objectName(s, id);
     std::string to = r->to.track ? trackName(s, r->to.track) : r->to.fx ? "key" : "out";
     return trackName(s, r->from.track) + " → " + to;
 }

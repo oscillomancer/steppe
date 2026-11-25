@@ -11,6 +11,7 @@
 
 #include "supple/model/env_shape.h"
 #include "supple/ui/controls.h"
+#include "supple/views/object_name.h"
 
 namespace supple::views {
 
@@ -510,8 +511,8 @@ LaneTitle laneTitle(const model::Envelope& env, const model::Session& session,
             }
             return {envTitle(env), model::rackLabel(session, m->rack) + " \u00bb " + name, {}};
         }
-    if (const model::TrackGroup* g = session.groups.find(env.target.object))
-        return {envTitle(env), g->name, {}};
+    if (session.groups.find(env.target.object))
+        return {envTitle(env), objectName(session, env.target.object), {}};
     const model::Route* r = env.target.object.kind == model::Kind::Route
                                 ? session.routes.find(env.target.object)
                                 : nullptr;

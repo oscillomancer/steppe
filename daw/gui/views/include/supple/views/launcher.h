@@ -29,6 +29,7 @@
 #include "supple/ui/node.h"
 #include "supple/ui/theme.h"
 #include "supple/views/item_gestures.h"
+#include "supple/views/object_name.h"
 
 namespace supple::views {
 
@@ -137,16 +138,6 @@ int barAtOrAfter(const time::TimeMap& map, double beat);
 // The bar after the arrangement: the first bar line at or after the end of
 // its last item or section (bar 1 when it is empty).
 int barAfterArrangement(const model::Session& session);
-
-// A launcher refusal as the user reads it (gui.md §4.15): each clip, track
-// and scene id in the text (sc_3, cl_2, tr_1) said by name, so no id reaches
-// the user: a scene's name, else "Scene N" by its place in the pane; a
-// track's, else "an unnamed track"; a clip's, else "<track>'s clip in
-// <scene>" ("a removed …" for one that is gone). The rest of the command's
-// words are kept. The Error form does the message, the hint and each listed
-// error.
-std::string launcherNames(const model::Session& session, std::string_view text);
-Error launcherNames(const model::Session& session, Error error);
 
 // What a command that laid clips on the timeline did with their keys, in a
 // few words for the status line (gui.md §4.15), read from the answer's
@@ -261,7 +252,8 @@ class LauncherPane : public ui::Node {
         std::vector<std::string> keys;   // their key marks as drawn ("Dm"; "" for none)
         std::size_t playing = 0, held = 0, queued = 0, arrLit = 0, selected = 0, squares = 0,
                     dropShown = 0;
-        bool dropTakes = false;  // the cell under a drop outlined as taking it (focus)
+        bool dropTakes = false;      // the cell under a drop outlined as taking it (focus)
+        std::size_t dropHidden = 0;  // a drop's cells out of view, said as "+N" at the edge
         int refused = 0;  // clips drawn dimmed: a press is refused (ArrangeView::launchRefusals)
         std::vector<model::Id> refusedClips;  // those clips, in drawing order
         std::size_t notes = 0, columns = 0, pending = 0, fades = 0;  // the last paintGl's
@@ -329,6 +321,7 @@ class LauncherHeader : public ui::Node {
         bool glyphCells = false;     // Stop all, Arrangement and Capture drawn as glyphs
         int refused = 0;             // scenes whose ▶ is dimmed (ArrangeView::launchRefusals)
         std::vector<model::Id> refusedScenes;  // those scenes, in column order
+        std::vector<std::string> names;        // the scenes' names as drawn
     } stats;
     // The scene column under x in the headers' row, and its ▶.
     std::optional<std::size_t> sceneAt(ui::Point p) const;

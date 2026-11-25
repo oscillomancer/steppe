@@ -77,7 +77,8 @@ class FileActions {
     // points at (safe-load, topic 7d). Without one nothing is asked.
     void setSafeLoad(SafeLoad* safeLoad) { safeLoad_ = safeLoad; }
     void openPath(const std::filesystem::path& path);
-    void saveAs(const std::filesystem::path& path);  // in projectFolderPath()
+    // In projectFolderPath(); `history` keeps main's undo history too.
+    void saveAs(const std::filesystem::path& path, bool history = false);
     // One file: onto the selected track (or a new one) at the playhead.
     // Several: a new track each. One undo step; an error is shown and returned.
     Status import(const std::vector<std::filesystem::path>& files);

@@ -3658,10 +3658,27 @@ integer input/output capacities, a numeric default rate, and boolean default
 input/output indicators. `{backend: dummy}`
 returns an empty list without library initialization. Linux portaudio requests
 return backend.unsupported, path /backend and a JACK/dummy hint; JACK device
-queries direct the caller to engine.inputs. Selection errors use backend.device
-and the relevant host_api/input_device/output_device path. Format/channel errors
-use backend.config or backend.open, with a corrective hint. Duplicate matching
-names are rejected. No numeric device index is persisted across restarts.
+queries direct the caller to engine.inputs. A failed start carries its cause
+in the code, set where the backend holds the PortAudio error number and host API
+(or the JACK client status), so callers switch on the code, never the message
+(the message stays the driver's text), each with a corrective hint:
+
+| Code | Cause |
+|---|---|
+| `backend.host_api.not_found` | no host API by that name (`/host_api`) |
+| `backend.device.not_found` | no device by that name, or no default (`/input_device`, `/output_device`) |
+| `backend.device.ambiguous` | two devices of the host API share the name |
+| `backend.device.no_inputs` | the input device is listed but has no inputs (an output-only device asked to record) |
+| `backend.device.channels` | fewer channels than asked (`/inputs`, `/outputs`) |
+| `backend.device.invalid` | `paInvalidDevice`: the device is gone, or (WASAPI) held in exclusive mode by another app |
+| `backend.busy` | `paDeviceUnavailable`: held by another stream of this process (ASIO), or taken over by another app (Core Audio hog mode) |
+| `backend.driver` | the driver or server did not start: on ASIO `paUnanticipatedHostError` (the driver failed to load or `ASIOInit`, as when another app holds a single-client driver); on JACK, no server answered |
+| `backend.rate` | `paInvalidSampleRate` only: the device does not run at the rate (`/rate`); on ASIO also an interface that is not present (`ASE_NotPresent` maps to it), which the engine cannot tell apart. An omitted rate is the project's, so the hint names engine.devices' `default_rate` |
+| `backend.unavailable` | the JACK library is missing or lacks the JACK API |
+| `backend.config` | an invalid rate, block or channel request, or an invalid stream rate returned |
+| `backend.open` | any other failure (another PortAudio error, port registration or activation on JACK, the device monitor) |
+
+Duplicate matching names are rejected. No numeric device index is persisted across restarts.
 
 Callbacks use non-interleaved float32 and paClipOff/paDitherOff. They call the
 engine in chunks no larger than blockSize; period reports the complete device

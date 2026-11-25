@@ -27,6 +27,9 @@ class Root;
 
 namespace supple::gui {
 
+// Seconds as the transport shows them, "1:04.250" (m:ss.mmm).
+std::string timeText(double seconds);
+
 class TransportButton;
 
 // The transport bar's engine readout (gui.md §4.1), in words. `format` is what

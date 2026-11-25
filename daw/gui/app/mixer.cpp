@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Supple Audio
 #include "mixer.h"
 
+#include "supple/views/object_name.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -74,7 +76,7 @@ std::string sendText(const model::Session& session, const model::Route& route) {
     std::string to = "?";
     if (route.to.track && session.tracks.find(*route.to.track))
         to = model::trackLabel(session, *route.to.track);
-    if (route.to.fx) to = route.to.fx->str() + " key";
+    if (route.to.fx) to = views::objectName(session, *route.to.fx) + " key";
     return "→ " + to + " " + dbText(route.volumeDb);
 }
 
@@ -1350,12 +1352,20 @@ void Mixer::rebuild(bool keepLists) {
                     "mixer.group.color." + tid + "." + gid.str(), group.color);
                 color.layout.width = ui::SizeRule::fixed(3);
                 color.layout.height = ui::SizeRule::fixed(14);
-                auto& tab = tabs.emplace<ui::Button>("mixer.group." + tid + "." + gid.str(),
-                                                     (group.active ? "" : "· ") + group.name);
+                auto& tab = tabs.emplace<ui::Button>(
+                    "mixer.group." + tid + "." + gid.str(),
+                    (group.active ? "" : "· ") + views::objectName(s, gid));
                 // The group's menu opens at its tab.
                 tab.onClick = [this, gid, tid, b = &tab] {
                     trackMenu_.openGroup(gid, {tid}, b->bounds());
                 };
+                // An unnamed group's tab too narrow for "Group N" says the
+                // number alone; a named one elides.
+                if (group.name.empty()) {
+                    const std::string words = views::objectName(s, gid);
+                    if (words.starts_with("Group "))
+                        tab.setNarrowText((group.active ? "" : "· ") + words.substr(6));
+                }
                 tab.layout.width = ui::SizeRule::fraction();
                 tab.layout.height = ui::SizeRule::fixed(14);
             }
@@ -1573,15 +1583,17 @@ void Mixer::rebuild(bool keepLists) {
         });
         st.node = frame.get();
         frame->emplace<ColorStripe>("mixer.vca.color." + tid, e.value->color);
-        frame->emplace<ui::Label>("mixer.vca.name." + tid, e.value->name, ui::Font::UiBold, "small",
-                                  "ink");
+        frame->emplace<ui::Label>("mixer.vca.name." + tid, views::objectName(s, gid),
+                                  ui::Font::UiBold, "small", "ink");
         frame->emplace<ui::Label>("mixer.vca.badge." + tid, "VCA", ui::Font::Ui, "caption",
                                   "ink-quiet");
         auto& filler = frame->emplace<ui::Node>("mixer.vca.space." + tid);
         filler.layout.height = ui::SizeRule::fraction();
         // Their menus open at the button.
-        auto& members = frame->emplace<ui::Button>(
-            "mixer.vca.members." + tid, std::to_string(e.value->members.size()) + " members");
+        auto& members =
+            frame->emplace<ui::Button>("mixer.vca.members." + tid,
+                                       std::to_string(e.value->members.size()) +
+                                           (e.value->members.size() == 1 ? " member" : " members"));
         members.onClick = [this, gid, b = &members] {
             trackMenu_.openGroup(gid, actions_.ui().selectedTracks, b->bounds());
         };

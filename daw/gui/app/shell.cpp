@@ -31,6 +31,7 @@
 #include "supple/ui/root.h"
 #include "supple/ui/widgets.h"
 #include "supple/views/envelope_lane.h"
+#include "supple/views/object_name.h"
 #include "transport_bar.h"
 
 namespace supple::gui {
@@ -64,9 +65,10 @@ void Shell::engineEvents(const std::vector<std::pair<std::string, json::Value>>&
 }
 
 void Shell::setStatus(const std::string& text) {
-    editStatus_ = text;
+    // No id reaches the user: each is said by name (views::objectNames).
+    editStatus_ = views::objectNames(app_.head(), text);
     ++noteSerial_;
-    if (counts_) counts_->setText(text);
+    if (counts_) counts_->setText(editStatus_);
 }
 namespace {
 

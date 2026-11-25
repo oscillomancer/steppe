@@ -9,6 +9,7 @@
 
 #include "midi_editor.h"
 #include "supple/ui/widgets.h"
+#include "supple/views/object_name.h"
 
 namespace supple::gui {
 namespace {
@@ -184,7 +185,7 @@ std::unique_ptr<ui::Node> MidiEventList::build() {
 }
 
 void MidiEventList::status(std::string text) {
-    if (status_) status_->setText(std::move(text));
+    if (status_) status_->setText(views::objectNames(app_.head(), text));
 }
 
 void MidiEventList::cancel() {

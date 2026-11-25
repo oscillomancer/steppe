@@ -427,6 +427,47 @@ never works around the bus.
 
 ### 4.1 Main window
 
+**Names, not ids.** No model id (`tr_3`, `it_4`, …) reaches the user. Where
+an object is drawn in its own place (an item on its lane, a clip in its
+cell) an unnamed one draws no name: its place says what it is. Where it is
+referred to from elsewhere (window and inspector titles, lists, menus,
+messages, the status line, a file name offered for an export) it is called
+by `views::objectName`: its name, else words that say where it is, the same
+everywhere:
+
+| Object | Unnamed |
+|---|---|
+| Track | its label (`model::trackLabel`: "Track 3", "Bus 2") |
+| Scene | "Scene *N*", by its place in the launcher pane |
+| Clip | "*track*'s clip in *scene*" |
+| Item | "*track*'s item at bar *N*", with ", beat *B*" when another item of the track starts in that bar (named by its take or file, §4.3) |
+| Take | as its item or clip |
+| Envelope | "*track or take*'s *param* automation" ("the *param* automation" on a route or module) |
+| Automation item | "*envelope* item at bar *N*" |
+| Section or range | "the section (range) at bar *N*" |
+| Marker | "the marker at bar *N*" |
+| Tempo, meter, key or chord point | "the tempo change (meter change, key, chord) at bar *N*" |
+| Plug-in | its plug-in's name |
+| Send | "the send from *track* to *track*" |
+| Group | "Group *N*", by its place among the groups: also on the mixer's group tab (the number alone, "2", when the tab is too narrow for "Group 2"; a named group's tab elides), the VCA strip, a group envelope's lane title and MIDI learn ("Group 2 VCA"); the rename field starts empty |
+| Rack, module | its rack's label; its plug-in's or type's name |
+| Cable, modulation route | "the cable from *module* to *module*"; "the modulation of *parameter*" |
+| Media file | its file name |
+
+One that is gone is "a removed …". Each status line (the main window's,
+the FX window's, the event list's, the render dialog's, the rack window's)
+says each whole id in what it shows by `views::objectNames`, so a
+command's refusal names what it is about; the rest of its words are kept.
+A message that already gives the name with the id in parentheses ("Bass
+(tr_2) is frozen") says the name once ("Bass is frozen"): the name must stand
+whole, at the start, after '(', ',', ':', ';' or '"' (a space between
+allowed), or after a lower-case word ("track Bass"). A different name before
+it stays ("Old (Bass)", and "Sub Bass (Bass)", "Sub-Bass (Bass)" for a track
+now named Bass). Accepted residue: an all-lower-case name ending in the id's
+current name ("sub bass (tr_2)" with tr_2 renamed "bass") reads "sub bass".
+Commands, their errors and what agents see keep their ids; the command log
+(§4.10) shows commands as they ran.
+
 Transport bar (go to start, play/stop, record, loop, punch, metronome,
 count-in and follow as symbol buttons: |◀, ▶ or ■ while playing, a red ● (a
 ring while counting in), circling arrows, [●], a metronome, →| with the bar
@@ -484,7 +525,11 @@ Each has its own GL context, bundled fonts, retained root, focus, damage cache
 and popup stack. Resources are created on first open and retained while
 hidden. Both panels fill their client area with the theme's `raised` surface,
 matching the former popup frame. Their OS titles match their visible headers:
-"Routing", "FX: <track>", or the take FX header; switching tracks/takes or
+"Routing", "FX: <track>", or the take FX header ("Take FX: <track> / <take>",
+the take as the inspector's take list says it (`views::takeLabel`): its name,
+else "Take *N*" by its place in an item of several takes, else its file or
+clip; "Take FX: Bass's item at bar 2" when its words already say the track;
+never an id); switching tracks/takes or
 renaming the track updates the FX title in place. Close or an unhandled Escape
 hides only that panel; Escape first closes a nested popup or cancels a widget
 gesture. Events are routed by SDL window identity before the main window's
@@ -824,7 +869,8 @@ its content starts, short ("→D", "→Dm": `views::takeFollowMark`), in the
 name's ink, left of the badges; a take that does not follow, a baked one
 included, carries none. The label is the heard take's name; an unnamed audio take is
 called by its media file, without the folder and the extension; an item with
-neither shows its id (`Lanes::itemLabel`). A stretched take adds its rate. An
+neither draws no name on its lane (`Lanes::itemLabel`; elsewhere it is
+"*track*'s item at bar *N*", §4.1). A stretched take adds its rate. An
 item that begins before the view keeps its label at the view's left edge. An
 item whose top is scrolled above the view has its bar out of sight, and its
 label and marks with it: they are not redrawn on the body. An
@@ -1023,7 +1069,7 @@ selected one) and is greyed
 when its heard take is empty. It opens the system's save dialog (SDL3,
 asynchronous, guarded like Save As against a project change) filtered to WAV or
 MIDI, starting in the project's folder (unsaved: the media home) with the take's
-name (else the item ID) plus `.wav` or `.mid`, then runs `item.export`; the status
+name (else the item's words from `views::objectName`) plus `.wav` or `.mid`, then runs `item.export`; the status
 line reports "Exported <file>" or the error. `ui.item.export` is the key-bindable
 action (the first selected item). See engine.md for what the file holds.
 
@@ -2200,8 +2246,13 @@ project is drawn in the quiet ink, with "from your default" on hover.
 - **Range:** a dropdown with Entire project | Time selection | Custom.
   - Time selection is the loop range drawn on the ruler (`bounds: loop`),
     whether or not looping is on; it is disabled while there is none.
-  - Start, End and Length are shown in the ruler's format, and are editable
-    under Custom.
+  - Start, End and Length are shown in the ruler's format: Start and End
+    as bar, beat and thousandths (`inspectorBarsText`, the transport's
+    "3.1.000") with the time beside each (m:ss.mmm, the transport's), and
+    Length in beats and time. Under Custom the two fields are editable and
+    read what they show (`inspectorParseBars`: "3", "3.2" and "3.2.500"
+    too); one that is not a position says how to write one, and End must
+    be after bar 1.
   - Tail: a checkbox and an editable dropdown in seconds (0.5, 1, 2, 5, 10),
     with "Cut silence at the end" (`trim.end`).
 - **Output:**
@@ -2307,7 +2358,10 @@ save / Cancel before unsaved changes are lost. Before New, Open or Quit checks
 for unsaved changes, active recording is stopped through `transport.stop`:
 recorded takes become an undoable version, then the normal prompt runs. If
 Stop fails, the error is shown and the requested action does not continue.
-Import… (`ui.file.import`, Ctrl+I) takes audio files (WAV, FLAC, MP3) and
+**Save with undo history** (`ui.file.save_history`, after Save as…) saves
+with `project.save {history: true}` (ADR-0076): in place, or, for a project
+without a file, where the save dialog says. A refusal shows the command's
+message in the status line. Import… (`ui.file.import`, Ctrl+I) takes audio files (WAV, FLAC, MP3) and
 Standard MIDI Files (`.mid`, `.midi`) through `item.add` (`audio_file` or
 `midi_file`), at the playhead in one undo step: one file onto the selected
 track, else each onto a new track named after it. Files dropped on the
@@ -2446,7 +2500,7 @@ a new channel). It follows rack.md §8.
   Out module carries a tag under it naming the channel it feeds. A plugin module shows the plug-in's name and
   vendor on its plate and a window mark; a click (not a drag) opens the
   plug-in's editor, as the mixer's slot does. A module of an unknown type is
-  kept, outlined in the clip colour, saying "Missing module" and its id.
+  kept, outlined in the clip colour, saying "Missing module" and its type's name.
   Bypassed modules are veiled and say so. Modules have a soft shadow and
   are dragged by any part that is not a control: a click selects, Ctrl+click
   or Shift+click toggles, a drag on the space draws a marquee (Ctrl or
@@ -2899,7 +2953,7 @@ a track's own; none without one), its name in the title size
 
 | Selection | Title | Line |
 |---|---|---|
-| One item | Its name as the arrange view shows it (§4.3), else its id | "Audio item on *track*", "MIDI item on *track*" or "Empty item on *track*" |
+| One item | Its name as the arrange view shows it (§4.3), else "*track*'s item at bar *N*" (§4.1) | "Audio item on *track*", "MIDI item on *track*" or "Empty item on *track*" |
 | Several items | "*N* items" | "On *track*", or "On *M* tracks" |
 | One track | Its label | "Channel", "Buss" or "Master" |
 | Several tracks | "*N* tracks" | "Selected together" |
@@ -3131,15 +3185,13 @@ same heights, scroll and colours.
   - A refusal of `scene.insert` (items already in the span, an empty
     scene, a looping clip whose period is not its content) shows its
     message in the status line and changes nothing.
-  - **Names, not ids.** Every launcher refusal reaches the user (the status
-    line, the Lay out dialog) with each clip, track and scene id in its
-    message, hint and listed errors said by name (`views::launcherNames`): a
-    scene's name, else "Scene N" by its place in the pane; a track's, else
-    "an unnamed track"; a clip's, else "<track>'s clip in <scene>"; "a
-    removed …" for one that is gone. The rest of the command's words, its
-    code and path, are kept. This covers the pane's commands
-    (`ArrangeView::runLauncher`), items dropped into cells, the menu's
-    Delete and Capture's refusals.
+  - **Names, not ids** (§4.1). The header draws an unnamed scene as
+    "Scene N", the words its refusals use; an unnamed clip's cell draws no
+    name (its row and column say it). Every launcher refusal reaches the
+    user (the status line, the Lay out dialog) with each id in its message,
+    hint and listed errors said by `views::objectNames`: the pane's
+    commands (`ArrangeView::runLauncher`), items dropped into cells, the
+    menu's Delete, Capture's refusals and the ruler's Capture as scene.
   - What laying did goes to the status line (`views::followNotice`): each
     clip that follows or was laid as written in another key, and, with
     write_context, a section whose harmony was not written ("Verse's harmony
@@ -3259,7 +3311,10 @@ same heights, scroll and colours.
   position, and every target cell is outlined while held, `focus` if it
   would take its clip (empty, on a channel; the centre's stop square of an
   empty cell counts as empty) and `meter-clip` if not
-  (`LauncherPane::showDrop`'s cells). The new clips are selected
+  (`LauncherPane::showDrop`'s cells). Cells out of view (scrolled past
+  the pane's scene columns or rows) are counted as "+N" in a small tag at
+  the edge most of them lie beyond, on the pointer's row or column; the
+  pane does not scroll. The new clips are selected
   (`ArrangeView::selectClipsIn`, at the next sync). A refusal of any
   (a taken cell, `clip.occupied`; a row whose track holds no clips) refuses
   them all with `clip.add`'s message. These refuse the drop before
@@ -3796,16 +3851,91 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   **PipeWire graph** (Request, shared with other apps, or Force). A short note says what the choices mean on that system, and
   status lines show the running backend, rate, block, device period and
   output latency, a needed restart, or why the engine is not running.
-  Restart audio and Stop audio buttons follow. Each choice is saved, then a
+  Restart audio and Stop audio buttons follow. For the native device the
+  heading has **Refresh** (`AudioDeviceDialog::rescan`), which lists the
+  devices again: PortAudio sees a device plugged in since only when nothing
+  holds it, so a running engine is stopped (`engine.stop`), the devices
+  listed (`engine.devices`) and the engine started again (`engine.start`)
+  the way it last started: one that came up on the defaults because the
+  saved device was refused at app start falls back again, and runs on the
+  saved device once that is back;
+  audio stops for a moment, which its hover hint says. A stopped engine is
+  only listed for. While recording it is disabled, its hint "Refresh is off
+  while recording", and refused (`audio.recording`); likewise while a
+  launcher capture is armed, running or kept uncommitted (an engine stop
+  discards it), refused with `audio.capture`. The hint is said in the status
+  line on hover. A refused start shows
+  why in the dialog's status and the status line, the
+  engine left stopped and the dialog open with the fresh list. Every error
+  the dialog shows (a refused start, a choice, Restart audio, Refresh, the
+  native device list) is in the dialog's own words, by the table of audio
+  device errors below: what went wrong, and what to do next where that alone
+  gives no step, chosen by the audio system and the error's code and path.
+  An error with no row shows the engine's message alone, as a sentence. A
+  command name or the engine's hint, written for command callers, never
+  shows; the full error with its hint goes to the log (`onLog`: stderr), once
+  until a start succeeds. The status lines wrap at plain spaces only; a number and
+  its unit are joined by a no-break space ("48000 Hz", "0.0 ms"). Each choice is saved, then a
   running engine (or one whose start failed) restarts with it at once; a
-  stopped one stays stopped. The native input opens all its channels up to
+  stopped one stays stopped. A restart keeps the fallback the last start had:
+  after the app came up on the defaults, a choice the device refuses (the
+  saved device still missing, a rate it refuses) runs on the defaults again,
+  so audio is not stopped by a change of rate or buffer. The dialog's status
+  and the status line say it in the dialog's own words, as sentences, never
+  with a command name or an agent's hint: "The output device "Interface" was
+  not found. Audio is running on the default device. The choice is kept for
+  when it returns." (a case of the table says its cause there; any other
+  refusal: "The saved choice was refused: <message>."). The defaults leave the rate to the device: when
+  the engine runs at another rate than the one chosen, the note names the
+  engine's rate, "… on the default device at 48000 Hz.", and the chosen rate
+  stays saved for when the device returns. The rows show the saved choice;
+  the row a missing device's error points at reads "Interface (not found)"
+  ("System default (not found)" for a missing default; an ASIO driver's
+  input error marks the output row, its one device) until a start finds it.
+  With both named devices missing, the input is reported: it opens first. The native input opens all its channels up to
   32. At app start a refused saved choice retries the backend's defaults; the
   saved choice is kept. A failed start, or that fallback, opens the dialog,
   whose status says why (stderr is not seen from Finder or a desktop entry). engine.start receives the mapping
   (`engineStartArgs`): an explicit rate, or for the native device the output
   device's own rate; for JACK, `force_graph` only when forcing.
 
+**Audio device errors** (`errorWords`, audio_device.cpp). The words key on
+the engine's error code, which carries the cause (engine.md, the codes of a
+failed start), and the audio system; the error's path only says which device.
+No message text is compared. The audio systems are JACK (Linux, through
+PipeWire), Core Audio (macOS), WASAPI in shared mode and ASIO (Windows), and
+Dummy, which opens no device and has no rows; no ALSA and no WASAPI exclusive
+mode are built. "Choose another audio system" is said only when the Audio
+system menu lists another one with devices, never for Dummy alone. *X* is the
+device asked for: an ASIO driver is one device for input and output; an
+unnamed device is "the default input (output) device", "No ASIO device" on
+ASIO, never `""`. The row the error points at is marked: "(not found)" on
+the device's row (an ASIO driver's: the output row), "(no inputs)" on the
+input row.
 
+| Cause (code) | Audio system | The dialog says |
+|---|---|---|
+| `backend.unavailable` | JACK | The JACK library is missing or incomplete. Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart audio. |
+| `backend.driver` | JACK | The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), or a JACK server, then Restart audio. |
+| `backend.open` | JACK | The engine's message (a port or the activation refused), then: Restart audio; if it fails again, restart PipeWire or the JACK server. |
+| `backend.driver` | ASIO | The ASIO driver did not start. If another app is using it, close that app; check that the interface is connected; then Restart audio. |
+| `backend.device.not_found` | Core Audio, WASAPI | The output (input) device "*X*" was not found, or: The default output (input) device was not found. Choose another device, or Refresh once it is connected. |
+| `backend.device.not_found` | ASIO | The device "*X*" was not found, or: No ASIO device was found. Choose another device, or Refresh once it is connected. |
+| `backend.device.no_inputs` | Core Audio, WASAPI, ASIO | The input device "*X*" has no inputs (ASIO: The device "*X*" has no inputs). Choose another input device, or None (playback only). |
+| `backend.device.ambiguous` | Core Audio, WASAPI, ASIO | More than one device is named "*X*". Rename one in the system's sound settings, or choose another device. |
+| `backend.device.channels` | Core Audio, WASAPI, ASIO | The input (output) device has too few channels. Choose another input device, or None (playback only) / Choose another output device. |
+| `backend.device.invalid` | WASAPI | The device could not be opened. Another app may be using it in exclusive mode, or it was disconnected: close that app or reconnect it, then Restart audio. |
+| `backend.device.invalid` | Core Audio, ASIO | The device could not be opened. It may have been disconnected: reconnect it or choose another device, then Restart audio. |
+| `backend.host_api.not_found` | Core Audio, WASAPI, ASIO | The audio system "*X*" was not found. (Choose another audio system., when another is listed) |
+| `backend.rate` | Core Audio, WASAPI | The device does not run at *N* Hz. Choose another sample rate, or the device's own rate. (No rate chosen: The device refused the sample rate.) |
+| `backend.rate` | ASIO | The device does not run at *N* Hz. Choose another sample rate, or check that the interface is connected. (No rate chosen: The device refused the sample rate. Check that the interface is connected.) An absent interface reads as a refused rate on ASIO. |
+| `backend.busy` | Core Audio | The device is in use. Another app has taken it over: close that app, then Restart audio. |
+| `backend.busy` | ASIO | The ASIO driver is already open in this app. Restart audio. |
+| anything else (`backend.open` off JACK, `backend.config`, `backend.unsupported`, `engine.*`, `backend.driver` off JACK and ASIO, `backend.busy` on WASAPI, which never reports it) | any | The message alone, as a sentence. |
+
+A test walks engine.start's registered `backend.*` codes: each has words for at
+least one audio system, or is listed as the message alone (`backend.config`,
+`backend.unsupported`), so a new or renamed code without words fails.
 
 ## 7. Visual identity
 
@@ -4015,7 +4145,8 @@ or pan gesture changes only that member. Group suspension disables links,
 including selection and matched-span item edits, but leaves VCA sound active.
 
 A group's optional VCA appears after audio strips and before pinned masters in
-the existing mixer. It has a name/color, member count/menu, envelope button,
+the existing mixer. It has a name/color, member count/menu ("1 member", "2
+members"), envelope button,
 fader, mute and solo; it has no audio meter, pan, inserts, inputs or routing.
 A right-click on its fader, mute or solo opens that control's parameter menu
 (§4.2): MIDI learn (§4.5, `vca.learn.set`, ADR-0058), the volume or mute lane,

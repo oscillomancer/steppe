@@ -18,8 +18,27 @@ Error unsupported() {
     return Error("backend.unsupported", "native device audio is unavailable on this platform",
                  "/backend", "select jack on Linux, or dummy without a device");
 }
-Error failure(const detail::PortAudioApi& api, PaError error, const char* path) {
-    return Error("backend.open", api.errorText(error), path,
+// A PortAudio failure classified by its error number and, where the meaning
+// differs, the host API (`host`: its PaHostApiTypeId, or -1 before one is
+// chosen). The message stays PortAudio's text; the code says the cause.
+Error failure(const detail::PortAudioApi& api, PaError error, const char* path, int host = -1) {
+    std::string text = api.errorText(error);
+    if (error == paInvalidSampleRate)
+        return Error("backend.rate", std::move(text), "/rate",
+                     "name a rate the device supports: engine.devices lists its default_rate; on "
+                     "ASIO also check that the interface is connected");
+    if (error == paDeviceUnavailable)
+        return Error("backend.busy", std::move(text), path,
+                     "another stream or process holds the device: stop it, then start again");
+    if (error == paInvalidDevice)
+        return Error("backend.device.invalid", std::move(text), path,
+                     "the device is gone or held in exclusive mode; list engine.devices again or "
+                     "free the device");
+    if (error == paUnanticipatedHostError && host == paASIO)
+        return Error("backend.driver", std::move(text), path,
+                     "the ASIO driver did not start: close any other app using it, check the "
+                     "interface is connected, then start again");
+    return Error("backend.open", std::move(text), path,
                  "use engine.devices to select a device and host API; check rate and channels");
 }
 struct Initialization {
@@ -220,28 +239,35 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
     }
     const auto* hostInfo = api.hostApiInfo(host);
     if (!hostInfo)
-        return fail(Error("backend.device", "host API was not found", "/host_api",
+        return fail(Error("backend.host_api.not_found", "host API was not found", "/host_api",
                           "choose an exact host_api from engine.devices"));
     auto select = [&](const std::string& name, bool input) -> Result<int> {
         int found = input ? hostInfo->defaultInputDevice : hostInfo->defaultOutputDevice;
+        bool listedWithout = false;  // the name is listed, without channels this way
         if (!name.empty()) {
             found = paNoDevice;
             for (int i = 0; i < api.deviceCount(); ++i) {
                 const auto* device = api.deviceInfo(i);
-                if (!device || device->hostApi != host || name != device->name ||
-                    (input ? device->maxInputChannels : device->maxOutputChannels) == 0)
+                if (!device || device->hostApi != host || name != device->name) continue;
+                if ((input ? device->maxInputChannels : device->maxOutputChannels) == 0) {
+                    listedWithout = true;
                     continue;
+                }
                 if (found != paNoDevice)
                     return Error(
-                        "backend.device", "device name is ambiguous",
+                        "backend.device.ambiguous", "device name is ambiguous",
                         input ? "/input_device" : "/output_device",
                         "rename duplicate devices in their driver, or choose another host API");
                 found = i;
             }
         }
+        if (found == paNoDevice && input && listedWithout)
+            return Error("backend.device.no_inputs", "device has no inputs", "/input_device",
+                         "set inputs to zero for playback only, or choose an input_device with "
+                         "inputs from engine.devices");
         if (found == paNoDevice)
             return Error(
-                "backend.device", "device was not found",
+                "backend.device.not_found", "device was not found",
                 input ? "/input_device" : "/output_device",
                 "choose an exact name from engine.devices; set inputs to zero for playback only");
         return found;
@@ -255,7 +281,7 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
         const auto channels = isInput ? config.inputs : config.outputs;
         if (!info || channels > static_cast<unsigned>(isInput ? info->maxInputChannels
                                                               : info->maxOutputChannels))
-            return Error("backend.config", "device has too few channels",
+            return Error("backend.device.channels", "device has too few channels",
                          isInput ? "/inputs" : "/outputs",
                          "reduce the channel count to the capacity shown by engine.devices");
         parameters.device = *device;
@@ -276,7 +302,7 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
     auto s = setup(output, false);
     if (!s) return fail(std::move(s).error());
     error = api.formatSupported(config.inputs ? &input : nullptr, &output, config.sampleRate);
-    if (error != paFormatIsSupported) return fail(failure(api, error, "/rate"));
+    if (error != paFormatIsSupported) return fail(failure(api, error, "/backend", hostInfo->type));
     self.outputDevice = output.device;
     self.config = config;
     self.callback = std::move(callback);
@@ -290,7 +316,7 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
     self.monitorStop.store(0);
     error = api.open(&self.stream, config.inputs ? &input : nullptr, &output, config.sampleRate,
                      config.blockSize, paClipOff | paDitherOff, Impl::process, &self);
-    if (error != paNoError) return fail(failure(api, error, "/backend"));
+    if (error != paNoError) return fail(failure(api, error, "/backend", hostInfo->type));
     const auto* info = api.info(self.stream);
     if (!info || !std::isfinite(info->sampleRate) || info->sampleRate < 1 ||
         info->sampleRate > 768000)
@@ -342,9 +368,9 @@ Status PortAudioBackend::start(const BackendConfig& config, Callback callback) {
             self.sinkStarted = true;
     }
     error = api.finished(self.stream, Impl::finished);
-    if (error != paNoError) return fail(failure(api, error, "/backend"));
+    if (error != paNoError) return fail(failure(api, error, "/backend", hostInfo->type));
     error = api.start(self.stream);
-    if (error != paNoError) return fail(failure(api, error, "/backend"));
+    if (error != paNoError) return fail(failure(api, error, "/backend", hostInfo->type));
     if (api.native) {
         try {
             self.monitor = std::thread([this] {
