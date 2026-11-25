@@ -1387,8 +1387,9 @@ and naming. All `edit` unless marked (q) query or (a) action.
   `track.duplicate {tracks}` (each copy right after its original: settings,
   both chains with live settings, items and takes — unpooled MIDI copied —,
   sends, record input, and the envelopes on the track, its plug-ins, sends and
-  takes; the modulation routes into its take FX (Modulation, M5; the routes
-  into its chain and input-chain FX are not copied); not a folder's children,
+  takes; the modulation routes into its plug-ins, take FX included
+  (Modulation, M5: a copy sounds like the original; before M5 it copied no
+  route); not a folder's children,
   sends into it or item groups; masters are refused), `track.list` (q); templates `track.template.save {track, name}`
   (a), `track.template.load {name}` (a new strip under the master),
   `track.template.list` (q), `track.template.delete` (a).
@@ -2177,6 +2178,11 @@ built).** The target of a route to a take FX is stored as any FX target is,
   - `scene.insert`, `arrangement.build`, `track.duplicate` and
     `launch.commit`;
   - the new take of a MIDI overdub, and a follow merge.
+- **`track.duplicate`.** It follows the same rule for the copy's chain and
+  input-chain FX, as well as its take FX. That changes what it did before
+  M5, when it copied no route. Its copy can close no cycle: the copy has the
+  original's sends and only the original's modulation routes coming in, so
+  any cycle through the copy would already pass through the original.
 - **A split.** `item.split` leaves both halves with the routes: the right
   half's FX are copies, each with its own routes.
 - **Heal.** `item.heal` joins pieces only when their FX match route by route
@@ -2191,8 +2197,10 @@ built).** The target of a route to a take FX is stored as any FX target is,
   - `cycle`: the copy lands on a track the source rack hears.
   - The rest of the copy goes ahead.
 - **Too many routes.** A copy that would take the project past 4096 routes
-  is refused whole with `modulation.limit` at the command's copied object,
-  with a hint to remove routes first.
+  is refused whole, never trimmed, with `modulation.limit` at the command's
+  copied object. The message gives the count the copy would reach. The hint
+  says how many routes to remove first, and where: `modulation.list`, or
+  the copied chain's routes, which the copy would duplicate.
 - **Not copied.** A route whose source is inside the copied chain and whose
   target is outside it is not copied. Today a source is always a rack's
   Mod Out, so the case cannot arise.
@@ -2200,7 +2208,8 @@ built).** The target of a route to a take FX is stored as any FX target is,
   `item.move`, `clip.move`, `take.extract`, and `item.explode-takes {mode:
   tracks}`. A move that would close a cycle is refused with
   `modulation.cycle` at the command's track argument, naming the route,
-  with a hint to remove the route or choose another track.
+  with a hint to remove the route or choose another track. No route is
+  dropped instead, so a move never changes what sounds.
 
 **Commands.**
 - `modulation.add` and `modulation.set` also check what the model cannot

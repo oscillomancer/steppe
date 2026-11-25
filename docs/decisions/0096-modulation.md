@@ -100,6 +100,10 @@ differences below.
     a scene insert or an arrangement build); capturing items into clips;
     duplicating a clip or a track; committing a performance; an overdub's
     new take; a MIDI merge.
+  - **`track.duplicate`.** It copies the routes into the copy's chain and
+    input-chain FX as well, which changes what it did before M5: then it
+    copied no route. Its copy cannot close a cycle, because it has only the
+    original's sends and modulation routes.
   - **A split.** Both halves keep the routes: the right half's FX are
     copies, each with its own routes.
   - **Dropped routes.** A route is not copied when its source does not
@@ -115,11 +119,14 @@ differences below.
     chain and whose target is outside it is not copied. Today that case
     cannot arise: a source is a rack's Mod Out, never a take FX.
   - **The route limit.** A copy that would take the project past 4096
-    routes is refused whole, with `modulation.limit`.
+    routes is refused whole, never trimmed, with `modulation.limit`. The
+    message gives the count it would reach, and the hint says how many
+    routes to remove.
 - **Moves.** A command that changes the track holding the take keeps its
   routes: moving an item or clip to another track, extracting a take, or
   exploding takes onto tracks. One that would close a cycle is refused
-  with `modulation.cycle`, naming the route.
+  with `modulation.cycle`, naming the route. Its route is never dropped,
+  because a move must not change what sounds.
 - **Heal.** `item.heal` joins pieces only when their routes match FX by FX,
   as their stored FX must; it refuses otherwise with `item.heal_fx`.
 - **Removal.** Removing a take FX, its take, or its item or clip (directly,

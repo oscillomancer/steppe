@@ -317,7 +317,10 @@ until it is released.
   - its `before` is the chain latency ahead of the target stage: 0 for an
     input-chain stage, which is outside compensation; for a mixer target
     the whole chain less one grid interval (32 frames), since it reads one
-    interval ahead;
+    interval ahead. In a chain of under 32 samples that `before` is
+    negative, and the track waits for the difference where it has no other
+    read-ahead: a modulated fader in a project without latency adds up to
+    32 samples plus the tap to its track's arrival (shipped since M2);
   - it carries a delay line of held values sized by that compensation, so
     the value the rack computed for timeline sample t reaches the target as
     the target plays t;
