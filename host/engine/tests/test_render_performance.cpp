@@ -5,6 +5,7 @@
 // resolved object, and song frames converted under a master playrate. Its
 // own ctest entry.
 #include <supple/audio/audio_file.h>
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <thread>
@@ -24,9 +25,17 @@ std::vector<float> leftOf(json::Value rendered) {
     return audio->channels[0];
 }
 
+// Refused, with a code the command declares (its registry entry's errors,
+// which a client walks to word refusals).
 Error refused(Project& p, const char* command, const json::Value& args) {
     auto r = p.bus->execute({command, args, kOrigin});
     REQUIRE_FALSE(r);
+    const cmd::CommandInfo* info = p.registry.find(command);
+    REQUIRE(info);
+    const std::string code = r.error().code;
+    INFO(command << " answered " << code);
+    CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                      [&](const cmd::ErrorSpec& e) { return e.code == code; }));
     return r.error();
 }
 

@@ -12,7 +12,7 @@ In an argument table, a member of an object argument is listed under it as `argu
 
 List the files a render would write, with lengths, without rendering.
 
-Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source). With performance it also answers performance, range, as_heard and not_heard_because, compiling no plan.
+Each file: path (where if_exists sends it), exists (its destination is already there), skip (if_exists skip leaves it out), seconds and outputs. operation: mix, stems or regions (default: tracks or regions given, else the settings' source, mix with a performance where that is regions). With performance it also answers performance, range, as_heard and not_heard_because, compiling no plan.
 
 Kind: `query`. Exposure: `mcp-exec`.
 
@@ -97,6 +97,37 @@ Kind: `query`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `render.args`: an argument does not apply to this call Hint: drop the argument the path names
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list shows the versions
+- `render.pattern`: the file name pattern does not parse Hint: fix the token or filter named
+- `render.path`: a destination escapes the renders folder, collides or cannot be made Hint: change pattern
+- `render.exists`: a destination exists, or no free numbered name is left Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: use a format render.settings lists
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a track that is not a master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop that cannot be followed Hint: render without the loop
+- `track.unknown`: a track the call or a performance names is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: the render is too long, or too long once the playrate expands it Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `region.unknown`: a region the call names is not in the version Hint: region.list
+- `launch.capture`: performance "captured" with no capture, or none with running time Hint: launch.capture {on: true}, play, then render
+- `render.performance.sample_rate`: the performance runs at another rate than the project Hint: launch.commit it and render the timeline
+- `render.performance.launches`: launches out of frame order, or past frames Hint: give the launches in frame order, each within frames
+- `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
+- `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
+- `render.performance.clip_track`: a launch's clip belongs to another track Hint: give the clip's own track
+- `clip.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
+- `launch.playrate`: an audio clip the engine refuses under the master playrate Hint: launch.commit it and render the timeline
+- `render.not_as_heard`: as_heard: true, and the performance is not as heard Hint: act on the first reason, or leave as_heard out
 
 ### Examples
 
@@ -208,6 +239,40 @@ Kind: `action`. Exposure: `mcp-tool`.
 {}
 
 ```
+
+### Errors
+
+- `render.args`: an argument does not apply to this call Hint: drop the argument the path names
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list shows the versions
+- `render.pattern`: the file name pattern does not parse Hint: fix the token or filter named
+- `render.path`: a destination escapes the renders folder, collides or cannot be made Hint: change pattern
+- `render.exists`: a destination exists, or no free numbered name is left Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: use a format render.settings lists
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a track that is not a master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop that cannot be followed Hint: render without the loop
+- `track.unknown`: a track the call or a performance names is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: the render is too long, or too long once the playrate expands it Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `render.stale_target`: the project or branch changed while it rendered Hint: render again
+- `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
+- `job.cancelled`: the render job was cancelled Hint: render again
+- `launch.capture`: performance "captured" with no capture, or none with running time Hint: launch.capture {on: true}, play, then render
+- `render.performance.sample_rate`: the performance runs at another rate than the project Hint: launch.commit it and render the timeline
+- `render.performance.launches`: launches out of frame order, or past frames Hint: give the launches in frame order, each within frames
+- `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
+- `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
+- `render.performance.clip_track`: a launch's clip belongs to another track Hint: give the clip's own track
+- `clip.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
+- `launch.playrate`: an audio clip the engine refuses under the master playrate Hint: launch.commit it and render the timeline
+- `render.not_as_heard`: as_heard: true, and the performance is not as heard Hint: act on the first reason, or leave as_heard out
+- `launch.memory`: a launch's clip is past the memory budget Hint: launch.commit it and render the timeline
 
 ### Examples
 
@@ -716,6 +781,30 @@ Kind: `action`. Exposure: `mcp-exec`.
 
 ```
 
+### Errors
+
+- `render.args`: an argument does not apply to this call Hint: drop the argument the path names
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list shows the versions
+- `render.pattern`: the file name pattern does not parse Hint: fix the token or filter named
+- `render.path`: a destination escapes the renders folder, collides or cannot be made Hint: change pattern
+- `render.exists`: a destination exists, or no free numbered name is left Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: use a format render.settings lists
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a track that is not a master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop that cannot be followed Hint: render without the loop
+- `track.unknown`: a track the call or a performance names is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: the render is too long, or too long once the playrate expands it Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `region.unknown`: a region the call names is not in the version Hint: region.list
+- `render.stale_target`: the project or branch changed while it rendered Hint: render again
+- `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
+- `job.cancelled`: the render job was cancelled Hint: render again
+
 ### Examples
 
 **Render project** (`song_with_region`)
@@ -937,6 +1026,40 @@ Kind: `action`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `render.args`: an argument does not apply to this call Hint: drop the argument the path names
+- `render.empty`: the render would write nothing Hint: add items or a range
+- `render.source`: branch and version are both given Hint: give one of them
+- `history.version`: no such version Hint: history.list shows the versions
+- `render.pattern`: the file name pattern does not parse Hint: fix the token or filter named
+- `render.path`: a destination escapes the renders folder, collides or cannot be made Hint: change pattern
+- `render.exists`: a destination exists, or no free numbered name is left Hint: if_exists overwrite, number or skip
+- `render.secondary`: secondary is neither {format, bit_depth} nor "none" Hint: e.g. {"format": "flac", "bit_depth": 16}
+- `render.format`: an output format is unknown Hint: use a format render.settings lists
+- `render.normalize`: normalization cannot apply as set Hint: fix normalize as the path names
+- `render.masters`: masters names a track that is not a master Hint: track.list
+- `render.budget`: the render exceeds the in-memory frame budget Hint: render a shorter range
+- `render.loop`: a loop that cannot be followed Hint: render without the loop
+- `track.unknown`: a track the call or a performance names is not in the version Hint: track.list
+- `track.strip_type`: the mix output is not a master Hint: name a master
+- `engine.too_long`: the render is too long, or too long once the playrate expands it Hint: render a shorter range
+- `engine.tail`: tail_s is out of range Hint: 0 .. 600 s
+- `render.stale_target`: the project or branch changed while it rendered Hint: render again
+- `engine.start_failed`: a plug-in refused to start processing Hint: fx.restart it
+- `job.cancelled`: the render job was cancelled Hint: render again
+- `launch.capture`: performance "captured" with no capture, or none with running time Hint: launch.capture {on: true}, play, then render
+- `render.performance.sample_rate`: the performance runs at another rate than the project Hint: launch.commit it and render the timeline
+- `render.performance.launches`: launches out of frame order, or past frames Hint: give the launches in frame order, each within frames
+- `render.performance.too_many`: more than 100,000 launches Hint: launch.commit it and render the timeline
+- `render.performance.no_clip`: a clip launch names no clip Hint: give the launch's clip, or action arrangement or stop
+- `render.performance.clip_track`: a launch's clip belongs to another track Hint: give the clip's own track
+- `clip.unknown`: a launch's clip is not in the version Hint: render a version that has it
+- `track.frozen`: a launch's track is frozen Hint: track.unfreeze it
+- `launch.playrate`: an audio clip the engine refuses under the master playrate Hint: launch.commit it and render the timeline
+- `render.not_as_heard`: as_heard: true, and the performance is not as heard Hint: act on the first reason, or leave as_heard out
+- `launch.memory`: a launch's clip is past the memory budget Hint: launch.commit it and render the timeline
 
 ### Examples
 

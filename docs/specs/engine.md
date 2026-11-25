@@ -2341,7 +2341,12 @@ render's own `range` and `performance`.
 
 **Refusals.** One code per cause; a client words a refusal from the code
 and the path's index, never from the hint, which names commands for
-command callers.
+command callers. `render.mix`, `render.stems`, `render.regions` and
+`render.dry-run` declare every code they answer, the resolvers' they pass
+through included, in their registry entries (`cmd::CommandInfo::errors`:
+code, when, hint; `skill/generated/engine/render.md` lists them), so a
+client's table of wordings can be checked against the registry; schema
+codes of a malformed argument are every command's and are not listed.
 
 | Case | Code | Path |
 | --- | --- | --- |
