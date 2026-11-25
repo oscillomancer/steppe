@@ -3917,6 +3917,7 @@ input row.
 |---|---|---|
 | `backend.unavailable` | JACK | The JACK library is missing or incomplete. Install PipeWire's JACK support (pipewire-jack) or JACK, then Restart audio. |
 | `backend.driver` | JACK | The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), or a JACK server, then Restart audio. |
+| `backend.open` | JACK | The engine's message (a port or the activation refused), then: Restart audio; if it fails again, restart PipeWire or the JACK server. |
 | `backend.driver` | ASIO | The ASIO driver did not start. If another app is using it, close that app; check that the interface is connected; then Restart audio. |
 | `backend.device.not_found` | Core Audio, WASAPI | The output (input) device "*X*" was not found, or: The default output (input) device was not found. Choose another device, or Refresh once it is connected. |
 | `backend.device.not_found` | ASIO | The device "*X*" was not found, or: No ASIO device was found. Choose another device, or Refresh once it is connected. |
@@ -3926,11 +3927,15 @@ input row.
 | `backend.device.invalid` | WASAPI | The device could not be opened. Another app may be using it in exclusive mode, or it was disconnected: close that app or reconnect it, then Restart audio. |
 | `backend.device.invalid` | Core Audio, ASIO | The device could not be opened. It may have been disconnected: reconnect it or choose another device, then Restart audio. |
 | `backend.host_api.not_found` | Core Audio, WASAPI, ASIO | The audio system "*X*" was not found. (Choose another audio system., when another is listed) |
-| `backend.rate` | Core Audio, WASAPI, ASIO | The device does not run at *N* Hz. Choose another sample rate, or the device's own rate. (No rate chosen: The device refused the sample rate.) |
+| `backend.rate` | Core Audio, WASAPI | The device does not run at *N* Hz. Choose another sample rate, or the device's own rate. (No rate chosen: The device refused the sample rate.) |
+| `backend.rate` | ASIO | The device does not run at *N* Hz. Choose another sample rate, or check that the interface is connected. (No rate chosen: The device refused the sample rate. Check that the interface is connected.) An absent interface reads as a refused rate on ASIO. |
 | `backend.busy` | Core Audio | The device is in use. Another app has taken it over: close that app, then Restart audio. |
 | `backend.busy` | ASIO | The ASIO driver is already open in this app. Restart audio. |
-| `backend.busy` | WASAPI | The device is in use. Close the app using it, then Restart audio. |
-| anything else (`backend.open`, `backend.config`, `engine.*`, `backend.driver` off JACK and ASIO) | any | The message alone, as a sentence. |
+| anything else (`backend.open` off JACK, `backend.config`, `backend.unsupported`, `engine.*`, `backend.driver` off JACK and ASIO, `backend.busy` on WASAPI, which never reports it) | any | The message alone, as a sentence. |
+
+A test walks engine.start's registered `backend.*` codes: each has words for at
+least one audio system, or is listed as the message alone (`backend.config`,
+`backend.unsupported`), so a new or renamed code without words fails.
 
 ## 7. Visual identity
 

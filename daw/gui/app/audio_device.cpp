@@ -148,6 +148,11 @@ ErrorWords errorWords(const Error& e, const AudioDeviceSettings& s, const ErrorP
             return row("The JACK server did not answer.",
                        "Start PipeWire with its JACK support (pipewire-jack), or a JACK server, "
                        "then Restart audio.");
+        // The client connected, then a port or its activation was refused:
+        // the engine's message says which.
+        if (c == "backend.open")
+            return row(sentence(e.message),
+                       "Restart audio; if it fails again, restart PipeWire or the JACK server.");
         return unknown;
     }
     if (at.backend != "portaudio") return unknown;
@@ -183,10 +188,17 @@ ErrorWords errorWords(const Error& e, const AudioDeviceSettings& s, const ErrorP
     if (c == "backend.host_api.not_found")
         return row("The audio system \"" + s.hostApi + "\" was not found.",
                    at.otherHost ? "Choose another audio system." : "");
-    if (c == "backend.rate")
-        return s.rate > 0 ? row("The device does not run at " + hzKept(s.rate) + ".",
-                                "Choose another sample rate, or the device's own rate.")
-                          : row("The device refused the sample rate.");
+    if (c == "backend.rate") {
+        // On ASIO an interface that is not there reads as a refused rate.
+        const std::string cause = s.rate > 0 ? "The device does not run at " + hzKept(s.rate) + "."
+                                             : std::string("The device refused the sample rate.");
+        if (at.asio())
+            return row(cause, s.rate > 0 ? "Choose another sample rate, or check that the "
+                                           "interface is connected."
+                                         : "Check that the interface is connected.");
+        return row(cause,
+                   s.rate > 0 ? "Choose another sample rate, or the device's own rate." : "");
+    }
     if (c == "backend.driver" && at.asio())
         return row("The ASIO driver did not start.",
                    "If another app is using it, close that app; check that the interface is "
@@ -199,13 +211,13 @@ ErrorWords errorWords(const Error& e, const AudioDeviceSettings& s, const ErrorP
                    : row("The device could not be opened.",
                          "It may have been disconnected: reconnect it or choose another device, "
                          "then Restart audio.");
-    if (c == "backend.busy")
-        return at.coreAudio() ? row("The device is in use.",
-                                    "Another app has taken it over: close that app, then Restart "
-                                    "audio.")
-               : at.asio()
-                   ? row("The ASIO driver is already open in this app.", "Restart audio.")
-                   : row("The device is in use.", "Close the app using it, then Restart audio.");
+    // WASAPI never reports a busy device (an exclusive holder is
+    // backend.device.invalid), so it has no row.
+    if (c == "backend.busy" && at.coreAudio())
+        return row("The device is in use.",
+                   "Another app has taken it over: close that app, then Restart audio.");
+    if (c == "backend.busy" && at.asio())
+        return row("The ASIO driver is already open in this app.", "Restart audio.");
     return unknown;
 }
 
@@ -444,11 +456,8 @@ Status AudioDeviceDialog::start(bool fallback) {
             std::string note =
                 explain(st.error(), true) + " Audio is running on the default device";
             const double rate = app_.engineStatus().sampleRate;
-            if (settings_.rate > 0 && rate > 0 && rate != settings_.rate) {
-                char at[48];
-                std::snprintf(at, sizeof at, " at %.0f%sHz", rate, kNoBreak);
-                note += at;
-            }
+            if (settings_.rate > 0 && rate > 0 && rate != settings_.rate)
+                note += " at " + hzKept(rate);
             lastError_ = note + ". The choice is kept for when it returns.";
             if (onError) onError("audio device: " + lastError_);
             marks_ = rowMarks(st.error(), asio());

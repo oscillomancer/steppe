@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -2504,7 +2505,12 @@ TEST_CASE("audio device: each start error reads as gui.md's table says, per audi
          error("backend.driver"),
          "The JACK server did not answer. Start PipeWire with its JACK support (pipewire-jack), "
          "or a JACK server, then Restart audio."},
-        {"jack other", settings("jack"), {}, error("backend.open"), unknown},
+        {"jack ports",
+         settings("jack"),
+         {},
+         error("backend.open"),
+         "Driver text. Restart audio; if it fails again, restart PipeWire or the JACK server."},
+        {"jack other", settings("jack"), {}, error("backend.config"), unknown},
         // Windows WASAPI (shared mode).
         {"wasapi invalid", settings("portaudio"), fakeDevices(),
          error("backend.device.invalid", "/backend"),
@@ -2522,8 +2528,9 @@ TEST_CASE("audio device: each start error reads as gui.md's table says, per audi
         {"wasapi host", settings("portaudio", "Windows DirectSound"), fakeDevices(),
          error("backend.host_api.not_found", "/host_api"),
          "The audio system \"Windows DirectSound\" was not found. Choose another audio system."},
+        // WASAPI never reports a busy device: no row.
         {"wasapi busy", settings("portaudio"), fakeDevices(), error("backend.busy", "/backend"),
-         "The device is in use. Close the app using it, then Restart audio."},
+         unknown},
         {"wasapi other", settings("portaudio"), fakeDevices(), error("backend.open", "/backend"),
          unknown},
         // Windows ASIO: one device for input and output.
@@ -2541,6 +2548,11 @@ TEST_CASE("audio device: each start error reads as gui.md's table says, per audi
          "The device \"Interface ASIO\" has no inputs. Choose another input device, or None "
          "(playback only).",
          "Interface ASIO", "Same device as output (no inputs)"},
+        // An absent ASIO interface also reads as a refused rate.
+        {"asio rate", settings("portaudio", "ASIO", "Interface ASIO", "", 96000), fakeDevices(),
+         error("backend.rate", "/rate"),
+         "The device does not run at 96000\xC2\xA0Hz. Choose another sample rate, or check that "
+         "the interface is connected."},
         {"asio driver", settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices(),
          error("backend.driver", "/backend"),
          "The ASIO driver did not start. If another app is using it, close that app; check that "
@@ -2582,6 +2594,41 @@ TEST_CASE("audio device: each start error reads as gui.md's table says, per audi
         if (!c.input.empty()) CHECK(f.node("audio.input.set")->valueText() == c.input);
         f.root->closePopups();
     }
+    // Every backend.* code engine.start registers has words for at least one
+    // audio system, or is deliberately the message alone: a new or renamed
+    // code without words fails here.
+    const std::set<std::string> messageAlone{"backend.config", "backend.unsupported"};
+    const cmd::CommandInfo* start = f.registry.find("engine.start");
+    REQUIRE(start);
+    std::size_t walked = 0;
+    for (const cmd::ErrorSpec& spec : start->errors) {
+        if (!spec.code.starts_with("backend.")) continue;
+        CAPTURE(spec.code);
+        ++walked;
+        const std::string path = spec.code == "backend.host_api.not_found"  ? "/host_api"
+                                 : spec.code == "backend.rate"              ? "/rate"
+                                 : spec.code == "backend.device.channels"   ? "/outputs"
+                                 : spec.code.starts_with("backend.device.") ? "/output_device"
+                                                                            : "/backend";
+        bool worded = false;
+        for (const auto& [s, devices] :
+             std::vector<std::pair<gui::AudioDeviceSettings, std::vector<engine::AudioDevice>>>{
+                 {settings("jack"), {}},
+                 {settings("portaudio", "", "Interface"), fakeDevices()},
+                 {settings("portaudio", "ASIO", "Interface ASIO"), fakeDevices()},
+                 {settings("portaudio", "Core Audio", "MacBook Pro Speakers"), mac}}) {
+            gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, s, {});
+            audio.enumerate = [&] { return Result<std::vector<engine::AudioDevice>>(devices); };
+            audio.startEngine = [&](const json::Value&) -> Result<json::Value> {
+                return Error(spec.code, text, path, hint);
+            };
+            audio.stopEngine = [] {};
+            CHECK_FALSE(audio.start());
+            worded = worded || audio.lastError() != unknown;
+        }
+        CHECK(worded != messageAlone.contains(spec.code));
+    }
+    CHECK(walked >= 12);
 }
 
 TEST_CASE("audio device: settings become engine.start arguments") {
