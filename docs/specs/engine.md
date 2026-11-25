@@ -2384,14 +2384,17 @@ that loads it (the renders, the dry run, `render.queue.add` and `.run`,
 `default`, and `render.preset.save` without `settings`): the file's own
 codes at `/args/default`, a member's at `/args/default/settings/…`. That
 tells a reader's `file.open` from a writer's, which share the code. A
-test lints the files these commands reach (the render sources, source preparation, the
-offline pass, the preset files, the JSON parser and the writers) per
-command: each render against the render sources, less the codes one
-render answers and another does not (`region.unknown`; a performance's
-codes, not `render.regions`'; the job's, not the dry run's), the preset
-commands and `render.settings` against the preset files, and
-`render.queue.add` and `render.queue.run` against the dry run's and
-`render.mix`'s lists (round 178 F5, round 180 F3 and F4, round 183 F1).
+test lints the files these commands reach (the render sources, source
+preparation, the offline pass, the preset files, the JSON parser and the
+writers) per command: each render against the render sources, less the
+codes one render answers and another does not (`region.unknown`; a
+performance's codes, not `render.regions`'; the job's, not the dry
+run's); the preset commands and `render.settings` together against the
+preset files, and each command that reads a preset or the default
+against the reads, `render.preset.save` against the writes too and
+`render.settings` against its resolver's codes; and `render.queue.add`
+and `render.queue.run` against the dry run's and `render.mix`'s lists
+(round 178 F5, round 180 F3 and F4, round 183 F1, round 185 S1).
 
 | Case | Code | Path |
 | --- | --- | --- |
