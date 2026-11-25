@@ -7,6 +7,7 @@
 // uncommitted; a recovery seek's end keeps it as well. Its own ctest entry.
 #include <optional>
 #include "clip_player_support.h"
+#include "engine_test_access.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -494,9 +495,24 @@ void heldTake(Project& p, AppLive& live, F&& midway) {
     p.run("launch.capture", R"({"on": false})");
 }
 
+// The commit's reply and the timeline it leaves: each item's track, span
+// and fades, in order (ids aside, which a twin need not share).
 json::Value commitResult(Project& p) {
     json::Value out = json::Value::object();
     out["commit"] = p.run("launch.commit", "{}");
+    const model::Session s = p.app->head();
+    std::vector<std::string> items;
+    for (const auto& e : s.items) {
+        const model::ItemSpan span = model::itemSpan(s, *e.value);
+        items.push_back(e.value->track.str() + " " + json::formatDouble(span.startBeat) + "-" +
+                        json::formatDouble(model::itemEndBeat(s, *e.value)) + " fades " +
+                        json::formatDouble(e.value->fadeIn.length) + "/" +
+                        json::formatDouble(e.value->fadeOut.length));
+    }
+    std::sort(items.begin(), items.end());
+    json::Value layout = json::Value::array();
+    for (const std::string& item : items) layout.push_back(item);
+    out["layout"] = std::move(layout);
     return out;
 }
 
@@ -586,4 +602,155 @@ TEST_CASE("a clip removed mid-capture is kept up to its return to the arrangemen
     refusedForRemovedClip(p);
     p.run("history.undo", "{}");
     CHECK(commitResult(p) == twin);
+}
+
+namespace {
+// cl_1 playing from bar 2 (frame 96000), a capture from frame 100096, the
+// performance's middle in `midway`, and its end at `until`. cl_3 is a
+// second clip on tr_1.
+template <class F>
+void longTake(Project& p, AppLive& live, std::int64_t until, F&& midway) {
+    p.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_2", "notation": "voice bass; 1: D3:q F3:q A3:h"})");
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(782 * kBlock);  // 100096
+    p.run("launch.capture", R"({"on": true})");
+    midway();
+    live.until(until);
+    p.run("launch.capture", R"({"on": false})");
+}
+
+void launchNow(Project& p, const char* track, const char* clip, model::LaunchQuantize q) {
+    const Engine::LaunchRequest r =
+        clip ? request(track, clip)
+             : Engine::LaunchRequest{
+                   *model::Id::parse(track), LaunchLogEntry::Action::Arrangement, {}, {}};
+    REQUIRE(p.app->engine()->launch(std::span(&r, 1), q));
+}
+
+// The capture's launches as (action, clip, frame), for a failure's message
+// and comparison.
+std::string launchesOf(Project& p) {
+    const auto view = p.app->launchCapture();
+    REQUIRE(view);
+    std::string out;
+    for (const LaunchLogEntry& e : view->capture.launches)
+        out += std::to_string(int(e.action)) + " " + e.track.str() + " " + e.clip.str() + " @" +
+               std::to_string(e.runningFrame) + "\n";
+    return out;
+}
+
+// Removed and twin: the same capture, and after the undo the same commit.
+void sameAsTwin(Project& p, const std::string& twinLaunches, const json::Value& twinCommit) {
+    const std::string got = launchesOf(p);
+    INFO("removed:\n" << got << "twin:\n" << twinLaunches);
+    CHECK(got == twinLaunches);
+    p.run("history.undo", "{}");
+    CHECK(commitResult(p) == twinCommit);
+}
+}  // namespace
+
+TEST_CASE("a launch on the track after its clip is removed holds over the return (round 172 F1)") {
+    for (const bool queued : {false, true}) {
+        INFO((queued ? "a quantized launch due before the return's frame"
+                     : "an immediate launch at the return's frame"));
+        // (a) cl_3 now, at the floor the return also takes; (b) cl_3 on beat
+        // 9 (frame 216000), queued at 215040, then cl_1 removed at 215936:
+        // the plan reaches the executor at 215936, cl_3 switches at 216000,
+        // and the return is placed at 216064.
+        const auto midway = [&](Project& q, AppLive& live, bool remove) {
+            if (!queued) {
+                live.until(938 * kBlock);
+                if (remove) q.run("clip.remove", R"({"clip": "cl_1"})");
+                launchNow(q, "tr_1", "cl_3", model::LaunchQuantize::None);
+                return;
+            }
+            live.until(1680 * kBlock);
+            launchNow(q, "tr_1", "cl_3", model::LaunchQuantize::Beat);
+            live.until(1687 * kBlock);
+            if (remove) q.run("clip.remove", R"({"clip": "cl_1"})");
+        };
+        std::string twinLaunches;
+        json::Value twin;
+        {
+            Project q;
+            twoTracks(q);
+            AppLive live(q, kInCallback, kBlock, 48000 * 6);
+            longTake(q, live, 250112, [&] { midway(q, live, false); });
+            twinLaunches = launchesOf(q);
+            twin = commitResult(q);
+        }
+        Project p;
+        twoTracks(p);
+        AppLive live(p, kInCallback, kBlock, 48000 * 6);
+        longTake(p, live, 250112, [&] { midway(p, live, true); });
+        sameAsTwin(p, twinLaunches, twin);
+    }
+}
+
+TEST_CASE("a clip removed just before its capture began is kept until its return (round 172 F3)") {
+    // The capture begins in the same pass as the removal's reset, while its
+    // return is still ahead: frame 0 keeps cl_1, and the return cuts it, as
+    // an immediate launch.arrangement would.
+    std::string twinLaunches;
+    json::Value twin;
+    {
+        Project q;
+        twoTracks(q);
+        AppLive live(q, kInCallback, kBlock, 48000 * 4);
+        REQUIRE(q.app->transport("play"));
+        live.until(20 * kBlock);
+        q.run("launch.clip", R"({"clip": "cl_1"})");
+        live.until(782 * kBlock);
+        launchNow(q, "tr_1", nullptr, model::LaunchQuantize::None);
+        q.run("launch.capture", R"({"on": true})");
+        live.until(150016);
+        q.run("launch.capture", R"({"on": false})");
+        twinLaunches = launchesOf(q);
+        twin = commitResult(q);
+    }
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(782 * kBlock);
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    p.run("launch.capture", R"({"on": true})");
+    live.until(150016);
+    p.run("launch.capture", R"({"on": false})");
+    REQUIRE(p.app->launchCapture()->capture.launches.size() == 2);
+    sameAsTwin(p, twinLaunches, twin);
+}
+
+TEST_CASE("under a master playrate a removed clip's return is where its plan hands over (F2)") {
+    // A MIDI clip, so the capture runs under the playrate: the return is at
+    // the plan's handAt, which the executors wait for, not an immediate
+    // launch's earlier floor.
+    Project p;
+    twoTracks(p);
+    p.run("transport.playrate.set", R"({"rate": 0.8, "preserve_pitch": false})");
+    AppLive live(p, kInCallback, kBlock, 48000 * 6);
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // bar 2: device 120000
+    live.until(1000 * kBlock);
+    p.run("launch.capture", R"({"on": true})");
+    live.until(1200 * kBlock);
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
+    REQUIRE(returns.size() == 1);
+    const std::int64_t handAt = EngineTestAccess::latestHandAt(*p.app->engine());
+    CHECK(handAt > 1201 * std::int64_t(kBlock));  // later than an immediate launch's floor
+    CHECK(returns[0].runningFrame == handAt);
+    live.until(1400 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    const auto view = p.app->launchCapture();
+    REQUIRE(view);
+    REQUIRE(view->capture.launches.size() == 2);
+    CHECK(view->capture.launches[1].action == LaunchLogEntry::Action::Arrangement);
+    CHECK(view->capture.launches[1].songFrame == returns[0].songFrame);
 }

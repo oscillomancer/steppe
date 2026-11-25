@@ -1365,8 +1365,19 @@ class Engine {
     std::map<model::Id, std::size_t> launchReset_;
     // Main thread: each such return as an arrangement launch, placed where
     // an immediate one would have been (quantize none) when the engine took
-    // the plan, so a capture running then records it (launchCapture).
-    std::vector<LaunchLogEntry> launchReturns_;
+    // the plan, or where a playrate plan hands over if later, so a capture
+    // running then records it (launchCapture); `after`: the log's length at
+    // the reset, so an entry from then on (applied after the plan) and at or
+    // before its frame supersedes it.
+    struct LaunchReturn {
+        LaunchLogEntry entry;
+        std::size_t after = 0;
+    };
+    std::vector<LaunchReturn> launchReturns_;
+    // The return recorded for `track`'s reset at log length `after`, if any.
+    const LaunchLogEntry* returnFor(model::Id track, std::size_t after) const;
+    // Whether a log entry applied after `r`'s plan precedes or meets it.
+    bool returnSuperseded(const LaunchReturn& r) const;
     std::uint64_t launchCheckedGen_ = UINT64_MAX;  // the plan generation last checked
     // The rate controls of the plan last checked (serviceLaunches): a
     // change voids the launches placed on the old trajectory.
