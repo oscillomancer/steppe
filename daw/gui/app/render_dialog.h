@@ -146,8 +146,16 @@ class RenderDialog {
     // its message, hint or a command name. One the dialog does not know
     // reads `fallback` and goes to onLog in full. The dialog's own errors
     // (gui.*) are already its words.
+    // What the refused call was for: the same code (a file that cannot be
+    // read or written) means a different file and folder for each.
+    enum class Action : std::uint8_t {
+        Render,        // the preview, Render, the queue, a job: the renders folder
+        Preset,        // a preset saved, loaded or deleted: your presets
+        AddToProject,  // a rendered file added as an item: the project's media
+    };
     std::string refusalWords(const Error& e,
-                             std::string_view fallback = "The render could not be made.") const;
+                             std::string_view fallback = "The render could not be made.",
+                             Action action = Action::Render) const;
     // A not-as-heard reason (engine.md §3.1) in the as-heard line's words;
     // "" for given and from_launcher; an unknown one as its code in words.
     static std::string reasonWords(const std::string& reason,
@@ -162,7 +170,7 @@ class RenderDialog {
     struct Diagnostic {
         std::string field, message;
     };
-    void load(const json::Value& args);  // render.settings with `args` into the dialog
+    Status load(const json::Value& args);  // render.settings with `args` into the dialog
     void rebuild();
     std::unique_ptr<ui::Node> buildPage();
     void buildHeader(ui::Node& page);
@@ -263,6 +271,7 @@ class RenderDialog {
     std::string presetName_;
     std::string previewText_, statusText_, refusalText_, job_, folderText_;
     bool refusalOfPreview_ = false;  // the red line refuses the render the files describe
+    std::string previewRefusal_;     // the preview's refusal, kept under an action's
     bool mixJob_ = false;            // the job is File → Mix
     std::vector<std::string> resultFiles_;
     json::Value results_ = json::Value::array();

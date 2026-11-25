@@ -232,11 +232,11 @@ RenderDialog::~RenderDialog() = default;
 
 // ------------------------------------------------------------------ state
 
-void RenderDialog::load(const json::Value& args) {
+Status RenderDialog::load(const json::Value& args) {
     auto result = dispatcher_.execute({"render.settings", args, kUiOrigin});
     if (!result) {
         showRefusal(refusalWords(result.error(), "The render settings could not be read."));
-        return;
+        return std::move(result).error();
     }
     settings_ = *result->find("effective");
     from_ = *result->find("from");
@@ -255,6 +255,7 @@ void RenderDialog::load(const json::Value& args) {
     // The launcher's range lost its errors with the fields: one out of order
     // starts again from its default rather than reach the engine.
     if (plays_ == Plays::Launcher && (launcherStart_ || launcherEnd_)) settleLauncherRange();
+    return {};
 }
 
 json::Value& RenderDialog::member(const std::string& name) { return settings_[name]; }
@@ -613,6 +614,9 @@ void RenderDialog::showRefusal(std::string words, bool ofPreview) {
     // and the files stay unless the render they describe was refused (the
     // dry run, Render, the Ask check): an action's refusal (a preset, the
     // settings, the queue, a branch, a job) leaves them as they were.
+    // The preview's refusal changes only when a preview answers ("" is its
+    // success); an action's refusal shows over it and leaves it as it was.
+    if (ofPreview || words.empty()) previewRefusal_ = words;
     refusalText_ = std::move(words);
     refusalOfPreview_ = ofPreview && !refusalText_.empty();
     if (diagnostic_) diagnostic_->setText(refusalText_);
@@ -631,12 +635,14 @@ void RenderDialog::setStatus(std::string message) {
 
 void RenderDialog::actionDone(std::string message) {
     setStatus(std::move(message));
-    // An action that succeeded: an action's refusal is over. A refusal of
-    // the render the files describe stays until a preview succeeds (Render
-    // is still refused), and a job's progress never clears one.
+    // An action that succeeded: an action's refusal is over, and the red
+    // line goes back to the preview's refusal, if any: a refusal of the
+    // render the files describe stays until a preview succeeds (Render is
+    // still refused). A job's progress never clears one.
     if (!refusalText_.empty() && !refusalOfPreview_) {
-        refusalText_.clear();
-        if (diagnostic_) diagnostic_->setText("");
+        refusalText_ = previewRefusal_;
+        refusalOfPreview_ = !previewRefusal_.empty();
+        if (diagnostic_) diagnostic_->setText(refusalText_);
     }
 }
 
@@ -664,7 +670,7 @@ Status RenderDialog::writeSettings() {
 
 void RenderDialog::open() {
     if (page_) return;
-    load(json::Value::object());
+    (void)load(json::Value::object());  // a refusal is on the red line
     presetName_.clear();
     versionChoice_ = "current";
     regions_.reset();
@@ -764,13 +770,15 @@ void RenderDialog::buildHeader(ui::Node& page) {
     preset.onChange = [this](const std::string& name) {
         if (name.empty()) return;
         if (auto loaded = loadPreset(name); !loaded)
-            showRefusal(refusalWords(loaded.error(), "The preset could not be loaded."));
+            showRefusal(
+                refusalWords(loaded.error(), "The preset could not be loaded.", Action::Preset));
     };
     header.emplace<ui::Button>("render.preset.save", "Save preset…", [this] { openPresetName(); });
     header.emplace<ui::Button>("render.preset.delete", "Delete preset", [this] {
         if (presetName_.empty()) return;
         if (auto deleted = deletePreset(presetName_); !deleted)
-            showRefusal(refusalWords(deleted.error(), "The preset could not be deleted."));
+            showRefusal(
+                refusalWords(deleted.error(), "The preset could not be deleted.", Action::Preset));
     });
     header.emplace<ui::Button>("render.close", "Close", [this] { close(); });
 }
@@ -1484,7 +1492,8 @@ void RenderDialog::buildFooter(ui::Node& page) {
     actions.emplace<ui::Button>("render.queue.add", "Add to queue", [this] { addToQueue(); });
     actions.emplace<ui::Button>("render.default", "Save as default", [this] {
         if (auto saved = saveAsDefault(); !saved)
-            showRefusal(refusalWords(saved.error(), "The preset could not be saved."));
+            showRefusal(
+                refusalWords(saved.error(), "The preset could not be saved.", Action::Preset));
         else
             actionDone("saved as your default");
     });
@@ -1526,7 +1535,8 @@ void RenderDialog::openPresetName() {
         const std::string chosen = name.text();
         root_.closePopup();
         if (auto saved = savePreset(chosen); !saved)
-            showRefusal(refusalWords(saved.error(), "The preset could not be saved."));
+            showRefusal(
+                refusalWords(saved.error(), "The preset could not be saved.", Action::Preset));
         else
             actionDone("saved preset " + chosen);
     };
@@ -1658,7 +1668,9 @@ Status RenderDialog::loadPreset(const std::string& name) {
         if (text(p.find("name")) == name) {
             json::Value args = *p.find("settings");
             if (!args.size()) args["source"] = text(settings_.find("source"), "mix");
-            load(args);
+            // A preset the settings refuse (a file edited by hand) is not
+            // loaded: the refusal stands, and so do the settings before it.
+            if (Status loaded = load(args); !loaded) return loaded;
             presetName_ = name;
             markDirty();
             rebuild();
@@ -2106,8 +2118,9 @@ void RenderDialog::openResultMenu(std::size_t index, const ui::Rect& anchor) {
              if (done)
                  actionDone("added to the project");
              else
-                 showRefusal(
-                     refusalWords(done.error(), "The render could not be added to the project."));
+                 showRefusal(refusalWords(done.error(),
+                                          "The render could not be added to the project.",
+                                          Action::AddToProject));
          }});
     const auto version = entry.find("version") ? entry.find("version")->asInt() : 0;
     items.push_back(
@@ -2265,9 +2278,26 @@ std::string RenderDialog::reasonWords(const std::string& reason,
     return notHeardWord(reason, endedBy);
 }
 
-std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback) const {
+std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback,
+                                       Action action) const {
     const std::string& c = e.code;
     if (c.starts_with("gui.")) return e.message;
+    // The files of each action: a reader's or writer's code names the file
+    // and folder of the action the user just took.
+    const bool reads = c == "file.read" || c == "file.too_large" || c == "audio.open" ||
+                       c == "audio.read" || c == "audio.decode" || c.starts_with("json.parse");
+    const bool writes = c == "file.write" || c == "file.open" || c == "file.sync" ||
+                        c == "file.sync_published" || c == "file.sync_directory";
+    if (action == Action::Preset) {
+        if (writes)
+            return "The preset file could not be written. Check that your presets folder can be "
+                   "written to.";
+        if (reads) return "The preset file cannot be read. Save it again, or delete it.";
+    }
+    if (action == Action::AddToProject) {
+        if (reads) return "The rendered file cannot be read: it may have been moved or deleted.";
+        if (writes) return "The rendered file could not be copied into the project's media folder.";
+    }
     const std::string_view path =
         e.path.starts_with("/args") ? std::string_view(e.path).substr(5) : std::string_view(e.path);
     const bool clip = path.ends_with("/clip");

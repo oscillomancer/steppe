@@ -624,51 +624,85 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         {"launch.capture", {"/performance"}},
         {"render.loop", {"/performance/loop"}},
     };
-    const auto check = [&](const std::string& code, const std::string& path) {
-        INFO(code << " at " << path);
-        const std::string words = f.render->refusalWords(Error(code, text, "/args" + path, hint));
+    using Action = gui::RenderDialog::Action;
+    // A sentence must be true for the action that was refused: the same
+    // reader or writer code names the renders folder for a render and your
+    // presets for a preset (round 181 F2/F3).
+    const auto check = [&](Action action, const std::string& code, const std::string& path) {
+        INFO(code << " at " << path << " (action " << int(action) << ")");
+        const std::string words = f.render->refusalWords(Error(code, text, "/args" + path, hint),
+                                                         "The render could not be made.", action);
         CHECK_FALSE(words.empty());
         CHECK(words.find(text) == std::string::npos);
         CHECK(words.find(hint) == std::string::npos);
         CHECK(words.find(code) == std::string::npos);
-        for (const char* command :
-             {"render.mix", "render.stems", "render.regions", "render.dry-run", "render.queue"})
+        for (const char* command : {"render.mix", "render.stems", "render.regions",
+                                    "render.dry-run", "render.queue", "render.preset"})
             CHECK(words.find(command) == std::string::npos);  // no command name
         CHECK(words.find("/args") == std::string::npos);
         if (!path.empty()) CHECK(words.find(path) == std::string::npos);
         CHECK(words != "The render could not be made.");  // each one known
+        if (action == Action::Preset) CHECK(words.find("renders folder") == std::string::npos);
+        if (action == Action::Render) CHECK(words.find("preset file") == std::string::npos);
     };
-    // The commands the dialog calls that answer in render codes: the four
-    // renders (a job's own codes included, 3293e01c), presets and the queue.
-    std::set<std::string> declared;
-    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run",
-                             "render.preset.save", "render.preset.load", "render.preset.delete",
-                             "render.queue.add", "render.queue.remove", "render.queue.run"}) {
-        const cmd::CommandInfo* command = f.registry.find(name);
-        REQUIRE_MESSAGE(command, name);
-        for (const cmd::ErrorSpec& e : command->errors) declared.insert(e.code);
-    }
+    // The commands that answer in render codes, each under the action it
+    // serves (the registry gives command, code; the table gives path): the
+    // four renders (a job's own codes included, 3293e01c) and the queue
+    // under Render, the preset commands under Preset.
+    const std::vector<std::pair<Action, std::vector<const char*>>> commands{
+        {Action::Render,
+         {"render.mix", "render.stems", "render.regions", "render.dry-run", "render.queue.add",
+          "render.queue.remove", "render.queue.run"}},
+        {Action::Preset, {"render.preset.save", "render.preset.load", "render.preset.delete"}},
+    };
+    std::set<std::string> declared;                 // by any of them
+    std::map<Action, std::set<std::string>> under;  // by the action's commands
+    for (const auto& [action, names] : commands)
+        for (const char* name : names) {
+            const cmd::CommandInfo* command = f.registry.find(name);
+            REQUIRE_MESSAGE(command, name);
+            for (const cmd::ErrorSpec& e : command->errors) {
+                declared.insert(e.code);
+                under[action].insert(e.code);
+            }
+        }
     for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
         INFO(name);
         CHECK_FALSE(f.registry.find(name)->errors.empty());
     }
-    for (const std::string& code : declared) {
-        const auto at = paths.find(code);
-        for (const std::string& path :
-             at == paths.end() ? std::vector<std::string>{""} : at->second)
-            check(code, path);
-    }
+    for (const auto& [action, codes] : under)
+        for (const std::string& code : codes) {
+            const auto at = paths.find(code);
+            for (const std::string& path :
+                 at == paths.end() ? std::vector<std::string>{""} : at->second)
+                check(action, code, path);
+        }
     // The path table names declared codes only, so it cannot go stale.
     for (const auto& [code, unused] : paths) {
         INFO(code);
         CHECK(declared.count(code) == 1);
     }
-    // Not declared by any command the dialog calls, and still the dialog's
-    // to word: a preset name the settings refuse, and a preset that could
-    // not be written. Once declared, the walk above has them.
-    for (const char* code : {"render.preset_name", "render.preset_write"}) {
-        CHECK(declared.count(code) == 0);
-        check(code, "");
+    // What the preset commands answer and do not declare yet (round 181
+    // F4, with the lead): a name the settings refuse, a preset that could
+    // not be written, and the writer's codes. Each is checked under Preset;
+    // once declared there, the walk above has it and this list must drop it.
+    for (const char* code : {"render.preset_name", "render.preset_write", "file.write", "file.open",
+                             "file.sync", "file.sync_published", "file.sync_directory"}) {
+        CHECK(under[Action::Preset].count(code) == 0);
+        check(Action::Preset, code, "");
+    }
+    // Add to the project: a rendered file that is gone, or that cannot be
+    // copied into the project's media, says so (item.add's own codes are not
+    // the render's, so only these are worded).
+    for (const char* code :
+         {"audio.open", "audio.read", "audio.decode", "file.read", "file.write", "file.open"}) {
+        INFO(code);
+        const std::string words = f.render->refusalWords(
+            Error(code, text, "/args/audio_file", hint),
+            "The render could not be added to the project.", Action::AddToProject);
+        CHECK(words.find("rendered file") != std::string::npos);
+        CHECK(words.find("the render plays") == std::string::npos);
+        CHECK(words.find("renders folder") == std::string::npos);
     }
     CHECK(logged.empty());
     // A clip of another track is not "out of order", and the words say what
@@ -1018,6 +1052,96 @@ TEST_CASE("the render dialog: a refusal of the preview outlives an action's succ
     }
     CHECK(f.render->statusText() == "saved as your default");
     CHECK(f.render->refusal() == refused);
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: an action's refusal over a refused preview gives it back") {
+    // Round 181 F1 (probe E): the preview's refusal changes only when a
+    // preview answers. An action's refusal shows over it; the action's later
+    // success clears that and the preview's reason comes back.
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute(
+        {"track.add", json::parse(R"({"name": "Bass"})").value(), kTestOrigin}));
+    f.render->open();
+    f.render->setDebounceMs(0);
+    f.frame();
+    f.render->setField("render.end", "3");
+    f.render->refreshPreview();
+    REQUIRE_FALSE(f.render->preview().empty());
+    f.render->setSource(gui::RenderDialog::Source::Regions);
+    f.render->refreshPreview();
+    f.frame();
+    const std::string refused = "No checked region has anything to render.";
+    REQUIRE(f.render->refusal() == refused);
+    for (int i = 0; i < 12; ++i) {
+        f.render->tick();
+        f.frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    REQUIRE(f.render->refusal() == refused);
+    auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    preset->onChange("gone");
+    REQUIRE(f.render->refusal() == "That preset is not found.");
+    REQUIRE(f.click("render.default"));  // succeeds, rebuilds nothing
+    for (int i = 0; i < 3; ++i) {
+        f.render->tick();
+        f.frame();
+    }
+    CHECK(f.render->statusText() == "saved as your default");
+    CHECK(f.render->refusal() == refused);
+    CHECK(f.uiRoot().find("render.diagnostic")->valueText() == refused);
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: a file's refusal names the action's file and folder") {
+    // Round 181 F2 (probe F): Add to the project of a rendered file that is
+    // gone is not "a file the render plays". F3 (probe G): a preset that
+    // cannot be written names the presets folder, not the renders folder.
+    Fixture f;
+    if (!f.ok) return;
+    auto t = f.dispatcher->execute(
+        {"track.add", json::parse(R"({"name": "Bass"})").value(), kTestOrigin});
+    REQUIRE(t);
+    json::Value item = json::Value::object();
+    item["track"] = (*t)["track"];
+    item["position"] = 0.0;
+    item["audio_file"] = (f.dir / "renders" / "gone.wav").string();
+    auto added = f.dispatcher->execute({"item.add", item, kTestOrigin});
+    REQUIRE_FALSE(added);
+    INFO(added.error().code << " at " << added.error().path);
+    CHECK(f.render->refusalWords(added.error(), "The render could not be added to the project.",
+                                 gui::RenderDialog::Action::AddToProject) ==
+          "The rendered file cannot be read: it may have been moved or deleted.");
+
+    f.render->open();
+    f.frame();
+    REQUIRE(f.render->savePreset("p181"));
+    std::filesystem::path folder;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(f.dir))
+        if (e.path().filename() == "p181.json") folder = e.path().parent_path();
+    REQUIRE_FALSE(folder.empty());
+    std::filesystem::permissions(
+        folder, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+    struct Unlock {
+        std::filesystem::path p;
+        ~Unlock() {
+            std::error_code ec;
+            std::filesystem::permissions(p, std::filesystem::perms::owner_all, ec);
+        }
+    } unlock{folder};
+    auto saved = f.render->savePreset("p181b");
+    if (saved) {
+        MESSAGE("this user can write a read-only folder; the preset write is not checked");
+        return;
+    }
+    // The Save preset panel words it as a preset (its handler's Action).
+    INFO(saved.error().code);
+    CHECK(f.render->refusalWords(saved.error(), "The preset could not be saved.",
+                                 gui::RenderDialog::Action::Preset) ==
+          "The preset file could not be written. Check that your presets folder can be written "
+          "to.");
     f.render->close();
 }
 

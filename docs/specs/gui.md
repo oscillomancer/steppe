@@ -2292,12 +2292,17 @@ project is drawn in the quiet ink, with "from your default" on hover.
       did and a job's progress. The files go only when the render they
       describe is refused (the preview, Render, the Ask check, a field's
       error), and that refusal stays until a preview succeeds, since Render
-      is still refused. An action's refusal leaves the files as they were,
-      and an action that succeeds clears it; a job's progress or its end
+      is still refused. An action's refusal leaves the files as they were
+      and shows over the preview's; an action that succeeds clears it, and
+      the preview's refusal, if any, comes back. A job's progress or its end
       never clears a refusal. Render or Run queue while a job runs is
       refused there too: "A render is already running: wait for it to
-      finish." It reads in the dialog's words from its code and path
-      together (one code can have several causes), never the engine's
+      finish." It reads in the dialog's words from the action refused, its
+      code and its path together (one code can have several causes; a file
+      that cannot be read or written is the render's file and the renders
+      folder for a render, the preset file and your presets folder for a
+      preset, the rendered file and the project's media for Add to the
+      project), never the engine's
       message, its hint, a path or a command name
       (`RenderDialog::refusalWords`, the audio device dialog's rule), and
       says what plays ("A clip the launcher plays …", "A clip the capture
@@ -2313,9 +2318,13 @@ project is drawn in the quiet ink, with "from your default" on hover.
       exists, normalization, the format, the frame budget, presets, the
       queue, a missing, changed or unreadable media file, a failed or
       missing plug-in, a file that could not be written, an unsupported
-      format, a cancelled render) have theirs. A test walks every code the
-      commands the dialog calls declare in the registry (the four renders,
-      a job's own codes included, presets and the queue).
+      format, a cancelled render) have theirs. A test walks the codes the
+      render, queue and preset commands declare in the registry, each under
+      the action it serves (the four renders, a job's own codes included,
+      and the queue as a render; the preset commands as a preset); the
+      dialog's other commands (the settings, item.add, branch.create, …)
+      keep their action's own sentence. A preset the settings refuse is
+      not loaded: its refusal stands, with the settings before it.
       One it does not know reads "The render could not be made." (or the
       action's own sentence: the preset, the settings, the queue), and the
       whole error goes to the log (`onLog`, stderr).
