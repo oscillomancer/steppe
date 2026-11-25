@@ -1903,29 +1903,99 @@ namespace {
 bool captureBegun(const Engine::LaunchCapture& c) { return c.placed && c.frames > 0; }
 }  // namespace
 
+// Every reader of the capture comes here, and haltEngine checks the same
+// rule, so the kept capture is dropped the first time anyone looks after a
+// newer one has begun: when that is asked does not change what is kept
+// (review round 168 S4).
 std::optional<EngineApp::CaptureView> EngineApp::launchCapture() {
     if (engine_)
         if (auto c = engine_->launchCapture(); c && (captureBegun(*c) || !keptCapture_)) {
             if (captureBegun(*c)) keptCapture_.reset();  // the newer one ran: it replaces it
             const double rate = engine_->config().sampleRate;
-            return CaptureView{std::move(*c), rate, false, CaptureEnd::None};
+            return described(CaptureView{std::move(*c), rate, false, CaptureEnd::None});
         }
-    return keptCapture_;
+    if (!keptCapture_) return std::nullopt;
+    return described(*keptCapture_);
+}
+
+EngineApp::CaptureView EngineApp::described(CaptureView view) const {
+    view.commit = captureCommit(view.capture);
+    const model::Session session = this->view();  // holds the time map
+    const time::TimeMap& tm = *session.timeMap;
+    const double rate = view.sampleRate > 0 ? view.sampleRate : 48000.0;
+    view.startBeat = tm.beatAt(double(view.capture.startSample) / rate);
+    view.endBeat = tm.beatAt(double(view.capture.startSample + view.capture.frames) / rate);
+    view.replacedOnBegin = view.kept && engine_ && engine_->launchCapturing();
+    return view;
+}
+
+EngineApp::CaptureCommit EngineApp::captureCommit(const Engine::LaunchCapture& c) const {
+    const std::uint64_t in = c.committedIn;
+    if (in == 0) return CaptureCommit::None;
+    // Committed while the head descends from the commit's version by first
+    // parents (an undo takes it back, a redo restores it), and that version
+    // holds the launch.commit (a rolled-back transaction's number is reused
+    // by the next commit; until then it is past the store's numbers). A step
+    // that squashed earlier ones, or history pruned before it, cannot be
+    // undone past: committed.
+    const model::VersionStore& store = *versions_;
+    if (store.nextVersion() <= in) return CaptureCommit::None;  // rolled back, not reused yet
+    std::uint64_t at = store.headVersion(store.branch());
+    while (at > in) {
+        const model::Version* v = store.version(at);
+        if (!v) return CaptureCommit::Committed;
+        if (v->parents.empty()) return CaptureCommit::Undone;
+        const std::uint64_t parent = v->parents[0];
+        if (parent < in && v->squashedSteps > 0) return CaptureCommit::Committed;
+        at = parent;
+    }
+    if (at != in) return CaptureCommit::Undone;
+    const model::Version* v = store.version(in);
+    if (!v) return CaptureCommit::Committed;
+    for (const model::Invocation& call : v->txn.invocations)
+        if (call.command == "launch.commit") return CaptureCommit::Committed;
+    return CaptureCommit::None;  // the number was reused by another commit
 }
 
 bool EngineApp::captureUncommitted() {
     const auto c = launchCapture();
-    return c && c->capture.placed && c->capture.frames > 0 && !c->capture.launches.empty() &&
-           !c->capture.committed;
+    if (!c || !c->capture.placed || c->capture.frames <= 0 || c->capture.launches.empty())
+        return false;
+    return c->commit != CaptureCommit::Committed;  // never written, or taken back
 }
 
-void EngineApp::markCaptureCommitted() {
+void EngineApp::markCaptureCommitted(std::uint64_t version) {
     const auto c = launchCapture();
     if (!c) return;
     if (c->kept && keptCapture_)
-        keptCapture_->capture.committed = true;
+        keptCapture_->capture.committedIn = version;
     else if (engine_)
-        engine_->markCaptureCommitted();
+        engine_->markCaptureCommitted(version);
+}
+
+bool EngineApp::captureKept() {
+    (void)launchCapture();  // a newer capture that has begun replaces it
+    return keptCapture_.has_value();
+}
+
+std::optional<std::string> EngineApp::captureKeptWarning() {
+    if (!captureKept() || !captureUncommitted() || !keptCapture_) return std::nullopt;
+    const char* then = keptCapture_->endedBy == CaptureEnd::EngineStop
+                           ? " was running when the engine stopped: it ended there and is kept "
+                             "uncommitted; launch.commit writes it"
+                       : keptCapture_->endedBy == CaptureEnd::Device
+                           ? " was running when the audio device restarted: it ended there and "
+                             "is kept uncommitted; launch.commit writes it"
+                           : " is kept uncommitted: launch.commit writes it";
+    return "launch: " + captureLine(*keptCapture_, then);
+}
+
+std::optional<std::string> EngineApp::captureReplaceWarning() {
+    if ((engine_ && engine_->launchCapturing()) || !captureUncommitted()) return std::nullopt;
+    return "launch: this capture replaces " +
+           captureLine(*launchCapture(),
+                       ", uncommitted, once it begins; launch.capture {on: false} before then, "
+                       "and launch.commit, keep it");
 }
 
 void EngineApp::keepEngineCapture() {
@@ -1936,16 +2006,13 @@ void EngineApp::keepEngineCapture() {
 }
 
 std::string EngineApp::captureLine(const CaptureView& c, std::string_view then) const {
-    const time::TimeMap& tm = *view().timeMap;
-    const double rate = c.sampleRate > 0 ? c.sampleRate : 48000.0;
-    const auto beat = [&](std::int64_t sample) {
-        return json::formatDouble(std::round(tm.beatAt(double(sample) / rate) * 1000) / 1000);
-    };
-    const std::size_t n = c.capture.launches.size();
-    return "the capture from beat " + beat(c.capture.startSample) + " to " +
-           beat(c.capture.startSample + c.capture.frames) + " (" + std::to_string(n) +
-           (n == 1 ? " launch" : " launches") + ", version " + std::to_string(c.capture.version) +
-           ")" + std::string(then);
+    // Worded from the view's fields, the ones a client in-process reads.
+    const CaptureView d = described(c);
+    const auto beat = [](double b) { return json::formatDouble(std::round(b * 1000) / 1000); };
+    const std::size_t n = d.capture.launches.size();
+    return "the capture from beat " + beat(d.startBeat) + " to " + beat(d.endBeat) + " (" +
+           std::to_string(n) + (n == 1 ? " launch" : " launches") + ", version " +
+           std::to_string(c.capture.version) + ")" + std::string(then);
 }
 
 void EngineApp::haltEngine(CaptureEnd why) {
@@ -2219,11 +2286,9 @@ void EngineApp::beginRestart(std::string reason, double seconds) {
     restarting_ = true;
     json::Value ev = json::Value::object();
     ev["reason"] = restartReason_;
-    if (captureUncommitted()) {
+    if (const auto warning = captureKeptWarning()) {
         ev["warnings"] = json::Value::array();
-        ev["warnings"].push_back("launch: " + captureLine(*launchCapture(),
-                                                          " is kept uncommitted: launch.commit "
-                                                          "writes it"));
+        ev["warnings"].push_back(*warning);
     }
     emit("engine.restarting", std::move(ev));
 }
@@ -2235,11 +2300,9 @@ void EngineApp::retryRestart() {
         auto ev = json::Value::object();
         ev["reason"] = restartReason_;
         ev["error"] = restartError_.empty() ? "device restart deadline expired" : restartError_;
-        if (captureUncommitted()) {
+        if (const auto warning = captureKeptWarning()) {
             ev["warnings"] = json::Value::array();
-            ev["warnings"].push_back("launch: " + captureLine(*launchCapture(),
-                                                              " is kept uncommitted: launch.commit "
-                                                              "writes it"));
+            ev["warnings"].push_back(*warning);
         }
         emit("engine.error", std::move(ev));
         return;
@@ -2278,6 +2341,11 @@ void EngineApp::retryRestart() {
         json::Value ev = json::Value::object();
         ev["reason"] = restartReason_;
         ev["error"] = restartError_;
+        // The same warning as the give-up above (review round 168 F3).
+        if (const auto warning = captureKeptWarning()) {
+            ev["warnings"] = json::Value::array();
+            ev["warnings"].push_back(*warning);
+        }
         emit("engine.error", std::move(ev));
         return;
     }

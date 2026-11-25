@@ -1324,6 +1324,14 @@ the project or quitting drops it; the GUI's unsaved-work dialog is to count it
 (`EngineApp::captureUncommitted`, the gui-lead's change); a headless quit loses it, a limit stated in
 STATUS. A capture a relocation ends (a seek, a loop change, a stop, and the
 playrate's recovery seek, a prepared locate) stays in the engine, committable, as it did before.
+After review round 168: an undo of the commit makes the capture uncommitted again for as long as it
+is kept (the commit counts while the head descends from the version it was written in), so replacing
+it warns; `launch.state` reports a capture armed and a kept one at once; the GUI's Capture commits a
+kept take, and the warnings are readable in-process (`EngineApp::captureKeptWarning`,
+`captureReplaceWarning`), and `CaptureView` carries what they say as fields, with the commit's
+state (never written, committed, or undone: declined, which the GUI does not write again); the
+Capture pane's showing them, and not arming over a kept take, is the
+gui-lead's.
 
 ## Consequences
 

@@ -1890,7 +1890,9 @@ timeline as ordinary items, in one undo step. A capture not yet committed is
 kept when the engine stops or the audio device restarts or fails: a running
 one ends there, `engine.stop` (or the device's event) says so, and
 `launch.commit` still writes it, with the engine stopped or started again.
-A new capture replaces it once it begins, and `launch.capture` says so. It is
+A new capture replaces it once it begins, and `launch.capture` says so.
+Undoing the commit makes the capture uncommitted again while it is kept, and
+`engine.stop` names an uncommitted one each time it is called. It is
 laid out as it ran:
 from where the capture began, each launch as many seconds later as it was
 heard, even if the transport loop jumped back meanwhile. On each track that

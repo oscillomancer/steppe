@@ -413,10 +413,12 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "follow_budget: true when the follow budget forced that (a chords clip by its key, "
             "or any as written). Tracks without clips always follow the arrangement and are not "
             "listed. capturing: launch.capture is on; capture_ends: the beat a quantized "
-            "end (launch.capture {on: false, quantize}) ends it on, until it does; capture_kept "
-            "(when there is a capture): true for one kept across an engine stop, a device "
-            "restart or a newer capture not yet begun. With the engine stopped it answers "
-            "for a kept capture (no tracks).";
+            "end (launch.capture {on: false, quantize}) ends it on, until it does; capturing is "
+            "true from launch.capture {on: true}, armed or running. capture_kept (when there is "
+            "a capture): true while one is kept beside the engine's, from before an engine "
+            "stop or a device restart, or the one a newer capture replaces once that hears a "
+            "frame: both can hold at once. With the engine stopped it answers for a kept "
+            "capture (no tracks).";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto queued = schema::object<LaunchQueued>("launch_queued")
@@ -451,16 +453,18 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        "song_with_clip_running"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<LaunchStateResult> {
             EngineApp& app = engine::app(ctx);
-            const auto capture = app.launchCapture();
+            // Both at once (review round 168 F2): the engine's own capture,
+            // armed or running, and a kept one beside it.
+            const bool kept = app.captureKept();
+            const bool any = app.launchCapture().has_value();
             auto engine = runningEngine(app);
-            if (!engine && !(capture && capture->kept)) return std::move(engine).error();
+            if (!engine && !kept) return std::move(engine).error();
             LaunchStateResult out;
-            if (capture) {
-                out.capturing = !capture->kept && capture->capture.on;
-                out.captureEnds = capture->capture.endsBeat;
-                out.captureKept = capture->kept;
-            }
+            if (any) out.captureKept = kept;
             if (!engine) return out;  // stopped: the kept capture alone
+            out.capturing = (*engine)->launchCapturing();
+            if (const auto own = (*engine)->launchCapture(); own && own->on)
+                out.captureEnds = own->endsBeat;
             const double rate = (*engine)->config().sampleRate;
             out.playing = (*engine)->transport().playing;
             for (const TL& t : (*engine)->launchState()) {
@@ -548,13 +552,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
             std::optional<std::string> replaced;
             if (a.on && !(*engine)->launchCapturing()) {
                 // A capture is a buffer until committed: a newer one replaces
-                // it once it begins, said here; the app keeps it until then.
-                if (app.captureUncommitted())
-                    replaced = "launch: this capture replaces " +
-                               app.captureLine(*app.launchCapture(),
-                                               ", uncommitted, once it begins; launch.capture "
-                                               "{on: false} before then, and launch.commit, keep "
-                                               "it");
+                // it once it begins, said here (captureReplaceWarning, as a
+                // client in-process reads it); the app keeps it until then.
+                replaced = app.captureReplaceWarning();
                 app.keepEngineCapture();
             }
             SUPPLE_TRY((*engine)->captureLaunches(a.on, a.on ? std::nullopt : a.quantize));
@@ -695,7 +695,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
                              "launch.capture {on: true}, play and launch clips, then "
                              "launch.commit");
             auto done = commitPerformance(ctx, *a.performance, a.pooled);
-            if (done && a.fromCapture) engine::app(ctx).markCaptureCommitted();
+            // Committed in this transaction's version: an undo of it makes
+            // the capture uncommitted again (review round 168 F4).
+            if (done && a.fromCapture)
+                engine::app(ctx).markCaptureCommitted(engine::app(ctx).txn().version());
             // The item commands it ran recorded their own resolved arguments
             // (item.split); history records this command's.
             ctx.setResolvedArgs(commitArgsSchema().encode(a));

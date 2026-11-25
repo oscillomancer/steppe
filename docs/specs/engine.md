@@ -604,10 +604,28 @@ the same.*
   stays committable with the engine stopped or started again, at any
   device rate: launch.commit converts by its own `sample_rate`.
   `engine.stop`'s answer, and the `engine.restarting` event or the
-  `engine.error` that gives up, carry a warning naming an uncommitted
-  capture (`EngineApp::captureUncommitted`; launch.commit marks one
-  committed). `launch.state` answers with the engine stopped for a kept
-  capture (`capture_kept`). Replacing the project or quitting the app drops
+  `engine.error` that gives up (either way), carry a warning naming an
+  uncommitted capture, said by what ended it; a client in-process reads the
+  same lines from `EngineApp::captureKeptWarning` and
+  `captureReplaceWarning`. A capture counts as committed while the head
+  descends, by first parents, from the version launch.commit wrote it in
+  (`LaunchCapture::committedIn`, checked to hold the launch.commit): an
+  undo of the commit makes it uncommitted again, a redo commits it, and an
+  edit after the undo leaves it uncommitted (`captureUncommitted`).
+  `EngineApp::CaptureView` carries as fields all that the warnings say,
+  for a client that words its own line: the span (`capture.startSample`
+  and `frames`, and `startBeat`/`endBeat` on the current time map), the
+  launches, `version`, `endedBy`, `kept`, `replacedOnBegin` (a newer
+  capture is armed and replaces it once it hears a frame), and `commit`:
+  `None` never written, `Committed`, or `Undone`, written and taken back,
+  which the GUI reads as declined.
+  `launch.state` says both at once: `capturing` for the engine's own
+  capture, armed or running, and `capture_kept` for a kept one beside it;
+  with the engine stopped it answers for a kept capture. The GUI's Capture
+  commits whatever is uncommitted, the take just ended or a kept one (a
+  take it committed, or whose commit was undone, is skipped), and a take
+  the user drops is forgotten
+  (`dropKeptCapture`). Replacing the project or quitting the app drops
   it: the GUI's unsaved-work dialog is to count it
   (`captureUncommitted`, not yet), and a headless app has no dialog.
 - **Capturing a performance (L4, L-f).** While `launch.capture` is on, the

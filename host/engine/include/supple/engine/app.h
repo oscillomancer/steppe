@@ -806,19 +806,43 @@ class EngineApp : public cmd::Host {
     // of it is lost until a newer capture runs, the project is replaced, or
     // the app quits.
     enum class CaptureEnd : std::uint8_t { None, EngineStop, Device };
+    // Its commit as the history stands: never written; written, the head
+    // descending from that version; or written and taken back (an undo, or
+    // an undo and an edit), which the user declined.
+    enum class CaptureCommit : std::uint8_t { None, Committed, Undone };
+    // Everything the warnings say, as fields, so a client words its own line
+    // (the GUI's pane) instead of reading captureKeptWarning's text.
     struct CaptureView {
-        Engine::LaunchCapture capture;
+        Engine::LaunchCapture capture;          // its span: startSample and frames; launches
         double sampleRate = 0;                  // the engine's as it ran
         bool kept = false;                      // the app's, not the running engine's
         CaptureEnd endedBy = CaptureEnd::None;  // running when that ended it
+        CaptureCommit commit = CaptureCommit::None;
+        // Its span in beats on the current time map (as the warnings say it).
+        double startBeat = 0, endBeat = 0;
+        // Kept while the engine has a newer capture armed: that one replaces
+        // it once it hears a frame (launch.capture's warning).
+        bool replacedOnBegin = false;
     };
     // The engine's once it has begun (or when none is kept), else the kept
     // one; what launch.commit and launch.state read (the GUI's Capture
-    // commits the take just ended, the engine's own).
+    // commits whichever is uncommitted, and words its line from the view).
     std::optional<CaptureView> launchCapture();
-    // A capture with launches that launch.commit has not written.
+    // A capture with launches that launch.commit has not written, or whose
+    // commit an undo took back (the head no longer descends from it).
     bool captureUncommitted();
-    void markCaptureCommitted();  // launch.commit wrote launchCapture()'s
+    // launch.commit wrote launchCapture()'s, in `version` (its transaction's).
+    void markCaptureCommitted(std::uint64_t version);
+    // What the history says of launchCapture()'s commit (CaptureView::commit).
+    CaptureCommit captureCommit(const Engine::LaunchCapture& c) const;
+    // A capture is kept beside the engine's (from before an engine stop or a
+    // device restart, or one a newer capture replaces once it hears a frame).
+    bool captureKept();
+    // The warnings engine.stop, the device events and launch.capture give,
+    // for a client in-process (the GUI): an uncommitted kept capture, said
+    // by what ended it; and what launch.capture {on: true} would replace.
+    std::optional<std::string> captureKeptWarning();
+    std::optional<std::string> captureReplaceWarning();
     // Keeps the engine's capture (one that has begun) before a newer one
     // replaces it in the engine (launch.capture {on: true}).
     void keepEngineCapture();
@@ -1103,6 +1127,7 @@ class EngineApp : public cmd::Host {
     // capture: one running is ended at the heard position, `why` its cause.
     void haltEngine(CaptureEnd why = CaptureEnd::EngineStop);
     std::optional<CaptureView> keptCapture_;
+    CaptureView described(CaptureView view) const;  // fills commit, the beats, replacedOnBegin
     // The device changed under the running engine: stop it and remember to
     // start it again (same backend kind, block and options).
     void beginRestart(std::string reason, double seconds);

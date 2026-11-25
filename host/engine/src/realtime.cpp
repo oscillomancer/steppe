@@ -120,6 +120,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
     if (running_)
         return Error("backend.running", "the backend is already running", {},
                      "stop this backend before starting it again or changing its configuration");
+    if (onStart_) onStart_();
     if (failStarts_ > 0) {
         --failStarts_;
         return Error("backend.open", "the dummy device did not open (a test's failStarts)", {},

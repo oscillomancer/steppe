@@ -464,6 +464,9 @@ class DummyBackend : public Backend {
     // device that will not open; the rate later starts grant.
     void requestRestart(std::string reason);
     void failStarts(int n) { failStarts_ = n; }
+    // Tests: runs at each start(), before it opens (a device slow to answer:
+    // the test moves its clock there).
+    void onStart(std::function<void()> hook) { onStart_ = std::move(hook); }
     void grantRate(double rate) { options_.grantedRate = rate; }
     BackendStatus status() const override;
     // Every output channel; read after stop() / run().
@@ -484,6 +487,7 @@ class DummyBackend : public Backend {
     std::atomic<bool> restartNeeded_{false};
     std::string restartReason_;
     int failStarts_ = 0;
+    std::function<void()> onStart_;
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::atomic<std::int64_t> cycles_{0};
@@ -926,7 +930,10 @@ class Engine {
         // playing starts). Once it has also heard a frame it replaces the capture before it
         // (EngineApp keeps that one until then).
         bool placed = false;
-        bool committed = false;     // launch.commit wrote it (markCaptureCommitted)
+        // The version launch.commit wrote it in (markCaptureCommitted), 0
+        // for none; EngineApp counts it committed while the head descends
+        // from that version (an undo of the commit makes it uncommitted).
+        std::uint64_t committedIn = 0;
         std::uint64_t version = 0;  // the session version playing as it began
         std::int64_t startSample = 0, frames = 0;
         LoopRange loop;
@@ -958,9 +965,9 @@ class Engine {
     // first. Collects the executors' acknowledgements first.
     std::optional<LaunchCapture> launchCapture();
     bool launchCapturing() const { return capture_.on; }  // main thread
-    // Main thread: launch.commit wrote the capture (EngineApp's
-    // captureUncommitted, the stop's warning).
-    void markCaptureCommitted() { capture_.committed = true; }
+    // Main thread: launch.commit wrote the capture in `version`
+    // (EngineApp's captureUncommitted, the stop's warning).
+    void markCaptureCommitted(std::uint64_t version) { capture_.committedIn = version; }
     // Main thread: a running capture waits for a quantized end's boundary
     // (launch.state's capture_ends), whoever asked for it.
     bool launchCaptureEnding() const { return capture_.on && capture_.ending; }
@@ -1429,8 +1436,8 @@ class Engine {
         // song sample it began at.
         std::int64_t startSong = 0, endSong = 0, startSample = 0;
         LoopRange loop;
-        bool placed = false, committed = false;  // LaunchCapture's
-        std::uint64_t version = 0;
+        bool placed = false;  // LaunchCapture's
+        std::uint64_t version = 0, committedIn = 0;
     };
     CaptureState capture_;
     void placeCapture();       // a pending start, once the clock reads

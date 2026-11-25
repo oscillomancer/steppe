@@ -400,16 +400,11 @@ void registerDeviceCommands(cmd::Registry& registry) {
         c.examples = {{"Stop", j("{}"), j("{}"), "engine_running"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStopDone> {
             EngineApp& a = app(ctx);
-            const bool running = a.engine() && a.engine()->launchCapturing();
             a.stopEngine();
             EngineStopDone out;
-            if (a.captureUncommitted())
-                out.warnings = std::vector<std::string>{
-                    "launch: " + a.captureLine(*a.launchCapture(),
-                                               running ? " was running: it ends here and is kept "
-                                                         "uncommitted; launch.commit writes it"
-                                                       : " is kept uncommitted: launch.commit "
-                                                         "writes it")};
+            // The same line a client in-process reads (captureKeptWarning).
+            if (auto warning = a.captureKeptWarning())
+                out.warnings = std::vector<std::string>{std::move(*warning)};
             return out;
         };
         addChecked(registry, std::move(c));

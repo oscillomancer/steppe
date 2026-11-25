@@ -1319,7 +1319,7 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
     LaunchCapture out;
     out.on = capture_.on;
     out.placed = capture_.placed;
-    out.committed = capture_.committed;
+    out.committedIn = capture_.committedIn;
     out.version = capture_.version;
     out.startSample = capture_.startSample;
     out.loop = capture_.loop;

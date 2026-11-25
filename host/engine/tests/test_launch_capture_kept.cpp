@@ -215,3 +215,130 @@ TEST_CASE("a recovery seek ends a running capture, which stays committable") {
     CHECK_FALSE(p.app->captureUncommitted());
     CHECK(warningsOf(p.run("engine.stop", "{}")).empty());
 }
+
+TEST_CASE("launch.state says both a capture armed and a kept one") {
+    // Review round 168 F2: after a stop with one uncommitted, a new capture
+    // armed while stopped has not begun, so the kept one is still the one
+    // launch.commit takes; launch.state says capturing (the new one, armed)
+    // and capture_kept (the old) at once.
+    Project p;
+    twoTracks(p);
+    std::optional<AppLive> live;
+    live.emplace(p, kInCallback, kBlock, 48000 * 4);
+    take(p, *live, 150016, true);
+    (void)p.run("engine.stop", "{}");
+    live.emplace(p, kInCallback, kBlock, 48000 * 4);
+    json::Value armed = p.run("launch.capture", R"({"on": true})");
+    CHECK(warningsOf(armed).find("this capture replaces") != std::string::npos);
+    json::Value state = p.run("launch.state", "{}");
+    CHECK(state["capturing"].asBool());
+    CHECK(state["capture_kept"].asBool());
+    // The view carries what the replace warning says, as fields.
+    {
+        const auto view = p.app->launchCapture();
+        REQUIRE(view);
+        CHECK(view->kept);
+        CHECK(view->replacedOnBegin);
+        CHECK(view->endedBy == EngineApp::CaptureEnd::None);  // ended before the stop
+        CHECK(view->commit == EngineApp::CaptureCommit::None);
+        CHECK(view->capture.launches.size() == 2);
+        CHECK(view->endBeat > view->startBeat);
+        // What arming would replace is said once, by launch.capture.
+        CHECK(warningsOf(armed).find("2 launches") != std::string::npos);
+        CHECK_FALSE(p.app->captureReplaceWarning());  // armed: nothing more to replace
+    }
+    // A halt now keeps the old one, not the empty new one (round 168 S2).
+    (void)p.run("engine.stop", "{}");
+    const auto kept = p.app->launchCapture();
+    REQUIRE(kept);
+    CHECK(kept->capture.launches.size() == 2);
+    CHECK(kept->capture.frames > 0);
+    live.reset();
+}
+
+TEST_CASE("an undo of the commit makes a kept capture uncommitted again; a redo commits it") {
+    // Review round 168 F4: the commit counts while the head descends from
+    // the version it was written in.
+    Project p;
+    twoTracks(p);
+    std::optional<AppLive> live;
+    live.emplace(p, kInCallback, kBlock, 48000 * 4);
+    take(p, *live, 150016, true);
+    (void)p.run("engine.stop", "{}");
+    // The pane tells a take never committed (a click commits it) from one
+    // whose commit was undone (declined: a click arms a new capture).
+    const auto commitState = [&] {
+        const auto view = p.app->launchCapture();
+        REQUIRE(view);
+        CHECK(view->kept);
+        CHECK(view->endedBy == EngineApp::CaptureEnd::None);  // ended before the stop
+        return view->commit;
+    };
+    CHECK(commitState() == EngineApp::CaptureCommit::None);
+    CHECK(p.app->captureUncommitted());
+    (void)p.run("launch.commit", "{}");
+    CHECK(commitState() == EngineApp::CaptureCommit::Committed);
+    CHECK_FALSE(p.app->captureUncommitted());
+    CHECK_FALSE(p.app->captureKeptWarning());
+    p.run("history.undo", "{}");
+    CHECK(commitState() == EngineApp::CaptureCommit::Undone);
+    CHECK(p.app->captureUncommitted());
+    REQUIRE(p.app->captureKeptWarning());
+    CHECK(p.app->captureKeptWarning()->find("kept uncommitted") != std::string::npos);
+    p.run("history.redo", "{}");
+    CHECK(commitState() == EngineApp::CaptureCommit::Committed);
+    CHECK_FALSE(p.app->captureUncommitted());
+    // Undone, then an edit: the redo is gone, and so is the commit.
+    p.run("history.undo", "{}");
+    p.run("track.add", R"({"name": "After"})");
+    CHECK(commitState() == EngineApp::CaptureCommit::Undone);
+    CHECK(p.app->captureUncommitted());
+    // So a new capture warns that it replaces it.
+    live.emplace(p, kInCallback, kBlock, 48000 * 4);
+    CHECK(warningsOf(p.run("launch.capture", R"({"on": true})")).find("this capture replaces") !=
+          std::string::npos);
+    live.reset();
+}
+
+TEST_CASE("a halt with a quantized end pending ends the capture where it was heard") {
+    // Review round 168 S1: launch.capture {on: false, quantize: "bar"} waits
+    // for bar 3's boundary (running frame 192000); a stop before it ends the
+    // capture at the heard frame, short of the boundary, and keeps it.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    take(p, live, 150016, false);
+    json::Value ending = p.run("launch.capture", R"({"on": false, "quantize": "bar"})");
+    REQUIRE(ending["ends_at"].isNumber());
+    CHECK(p.run("launch.state", "{}")["capturing"].asBool());
+    (void)p.run("engine.stop", "{}");
+    const auto kept = p.app->launchCapture();
+    REQUIRE(kept);
+    CHECK_FALSE(kept->capture.on);
+    CHECK(kept->capture.startSample + kept->capture.frames < 192000);
+    CHECK(kept->capture.frames > 0);
+    CHECK(kept->endedBy == EngineApp::CaptureEnd::EngineStop);
+}
+
+TEST_CASE("a restart that gives up after a slow last attempt names the kept capture") {
+    // Review round 168 F3: the device's open fails after the deadline
+    // although it began before it (the test moves the clock there).
+    Project p;
+    twoTracks(p);
+    p.app->setFixedClock(1'000'000);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    take(p, live, 150016, true);
+    live.backend.failStarts(1000);
+    live.backend.requestRestart("the device went away");
+    p.app->tick();  // stops the engine, keeping the capture (a first retry may fail at once)
+    // The last retry begins before the 30 s deadline and fails after it.
+    p.app->setFixedClock(1'029'999);
+    live.backend.onStart([&] { p.app->setFixedClock(1'031'000); });
+    p.app->tick();
+    std::string reported;
+    for (auto& [topic, payload] : p.app->takeEvents())
+        if (topic == "engine.error" && payload.isObject()) reported += warningsOf(payload);
+    INFO(reported);
+    CHECK(reported.find("kept uncommitted") != std::string::npos);
+    CHECK(p.app->engine() == nullptr);
+}

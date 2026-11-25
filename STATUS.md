@@ -370,7 +370,11 @@ instructions are in `docs/guides/installing.md`.
       quitting the app or replacing the project with one uncommitted
       loses it (the GUI's unsaved-work dialog does not count it yet; a
       headless app has none); a newer capture replaces it once it begins,
-      with a warning (ADR-0097, revision 2026-11-24);
+      with a warning (ADR-0097, revision 2026-11-24); an undo of its commit
+      makes it uncommitted again; the GUI's Capture commits a kept take, but
+      its pane does not show the warnings yet, and after a device restart a
+      Capture click arms over a kept take, which the next Play replaces
+      (the gui-lead's change, with the quit dialog);
     - a capture ends at a seek, a loop change or a stop, by design (one
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
