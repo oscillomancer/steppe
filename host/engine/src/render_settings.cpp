@@ -71,12 +71,12 @@ Result<rs::Settings> readPreset(const fs::path& path) {
     return presetSettings(std::move(decoded->settings));
 }
 
-// Puts an error from reading the user's default under /default: the file's
-// own codes (file.*, json.parse.*) at /default, a member's at
-// /default/settings/....
-void markDefault(Error& error) {
-    error.path = "/default" + error.path;
-    for (auto& detail : error.details) markDefault(detail);
+// Puts an error from reading a preset file under the argument that named
+// it, /default or /name: the file's own codes (file.*, json.parse.*) at
+// that path, a member's at <path>/settings/....
+void markRead(Error& error, std::string_view argument) {
+    error.path = std::string(argument) + error.path;
+    for (auto& detail : error.details) markRead(detail, argument);
 }
 }  // namespace
 
@@ -224,7 +224,7 @@ Result<std::optional<rs::Settings>> loadRenderDefault(const EngineApp& app) {
         // file.open is the readers' and the writers' code alike: the path
         // tells a caller this one came from reading the default (round 184).
         auto error = std::move(settings).error();
-        markDefault(error);
+        markRead(error, "/default");
         return error;
     }
     return std::optional<rs::Settings>(std::move(*settings));
@@ -388,7 +388,13 @@ Result<rs::Settings> findRenderPreset(const EngineApp& app, const std::string& n
     if (!fs::exists(path, ec))
         return Error("render.preset_unknown", "no preset \"" + name + "\"", "/name",
                      "render.preset.list shows the presets");
-    return readPreset(path);
+    auto settings = readPreset(path);
+    if (!settings) {
+        auto error = std::move(settings).error();
+        markRead(error, "/name");  // as the default's (round 184 F2)
+        return error;
+    }
+    return settings;
 }
 
 }  // namespace supple::engine

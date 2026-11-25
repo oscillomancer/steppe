@@ -2382,8 +2382,10 @@ user's render default has its path under `/default`, in every command
 that loads it (the renders, the dry run, `render.queue.add` and `.run`,
 `render.settings`, `render.preset.list`, `render.preset.load` with
 `default`, and `render.preset.save` without `settings`): the file's own
-codes at `/args/default`, a member's at `/args/default/settings/…`. That
-tells a reader's `file.open` from a writer's, which share the code. A
+codes at `/args/default`, a member's at `/args/default/settings/…`. A
+named preset's, read by `render.preset.load` with `name`, are under
+`/name` the same way (`/args/name`, `/args/name/settings/…`). That tells
+a reader's `file.open` from a writer's, which share the code. A
 test lints the files these commands reach (the render sources, source
 preparation, the offline pass, the preset files, the JSON parser and the
 writers) per command: each render against the render sources, less the

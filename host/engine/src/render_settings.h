@@ -65,6 +65,8 @@ Status validPresetName(const std::string& name);
 Status saveRenderPreset(const EngineApp& app, const std::optional<std::string>& name,
                         const rs::Settings& settings);  // nullopt: the default
 Status deleteRenderPreset(const EngineApp& app, const std::optional<std::string>& name);
+// A factory or user preset by name. An error reading the user's file has
+// its path under /name, as the default's is under /default.
 Result<rs::Settings> findRenderPreset(const EngineApp& app, const std::string& name);
 
 }  // namespace supple::engine
