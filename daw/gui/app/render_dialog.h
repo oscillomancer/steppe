@@ -119,7 +119,9 @@ class RenderDialog {
     json::Value projectSettings() const;
 
     // Presets (render.preset.*): load one into the dialog (not the project),
-    // save the dialog's settings under a name or as the user default.
+    // save the dialog's settings under a name or as the user default. Each
+    // says what it did on the status line and returns its own refusal
+    // unshown.
     Status loadPreset(const std::string& name);
     Status savePreset(const std::string& name);
     Status saveAsDefault();
@@ -204,7 +206,9 @@ class RenderDialog {
     // The red line ("" clears it); `ofPreview`: the render the files
     // describe was refused, so they go too.
     void showRefusal(std::string words, bool ofPreview = false);
-    std::vector<ui::Choice> presetChoices() const;  // "—" and render.preset.list
+    // "—" and render.preset.list's presets; a refused list gives "—" only and
+    // its error in `refused`.
+    std::vector<ui::Choice> presetChoices(std::optional<Error>& refused) const;
     Status validate() const;
     json::Value selectors() const;
     json::Value renderArgs(bool forJob) const;
@@ -280,6 +284,7 @@ class RenderDialog {
     std::string previewText_, statusText_, refusalText_, job_, folderText_;
     bool refusalOfPreview_ = false;  // the red line refuses the render the files describe
     std::string previewRefusal_;     // the preview's refusal, kept under an action's
+    bool previewOfDefault_ = false;  // the preview refused: the default cannot be read
     bool mixJob_ = false;            // the job is File → Mix
     std::vector<std::string> resultFiles_;
     json::Value results_ = json::Value::array();

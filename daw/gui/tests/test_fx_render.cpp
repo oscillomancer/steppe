@@ -675,26 +675,45 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         const std::string stem = code.substr(0, code.size() - 1);
         return std::vector<std::string>{stem + "trailing_comma", stem + "unexpected_end"};
     };
+    // Codes only reading a preset file answers: always at the argument that
+    // named it (/args/default or /args/name, engine.md §3.1), checked there
+    // below, never at no path. A render's own reads (its media) are at no
+    // path; a preset command's at no path are its writes.
+    const auto fileReadOnly = [](Action action, const std::string& family) {
+        return family.starts_with("json.parse.") ||
+               (action == Action::Preset && (family == "file.read" || family == "file.too_large"));
+    };
     for (const auto& [action, codes] : under)
         for (const std::string& family : codes)
             for (const std::string& code : members(family)) {
+                if (fileReadOnly(action, family)) continue;
                 const auto at = paths.find(code);
                 for (const std::string& path :
                      at == paths.end() ? std::vector<std::string>{""} : at->second)
                     check(action, code, path);
             }
-    // The user's render default: every code at a path under /args/default
-    // (ec8e9cb9) speaks of the default as read, under every action, never a
-    // write or another folder (round 184 F2).
+    // The user's render default (ec8e9cb9): its file's own codes at
+    // /args/default and any code at /args/default/settings/… speak of the
+    // default as read, under every action, never a write or another folder
+    // (round 184 F2). Other codes answered at /default are not its read and
+    // keep their words (round 186 S1).
+    const std::string defaultRead =
+        "Your saved render default cannot be read. Save your settings as the default again.";
+    const auto readOfFile = [](const std::string& code) {
+        return code == "file.open" || code == "file.read" || code == "file.too_large" ||
+               code.starts_with("json.parse.") || code.starts_with("schema.");
+    };
+    CHECK(logged.empty());  // every code above has words
     for (const auto& [action, codes] : under)
         for (const std::string& family : codes)
             for (const std::string& code : members(family)) {
                 INFO(code << " at the default (action " << int(action) << ")");
                 const std::string file = f.render->refusalWords(
                     Error(code, text, "/args/default", hint), "fallback", action);
-                CHECK(file ==
-                      "Your saved render default cannot be read. Save your settings as the "
-                      "default again.");
+                if (readOfFile(code))
+                    CHECK(file == defaultRead);
+                else
+                    CHECK(file.find("render default") == std::string::npos);
                 const std::string member = f.render->refusalWords(
                     Error(code, text, "/args/default/settings/outputs/0/format", hint), "fallback",
                     action);
@@ -702,6 +721,25 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
                       "Your saved render default has a setting that cannot be used. Save your "
                       "settings as the default again.");
             }
+    // A code worded by its path only (cl.unknown at a clip) has no words at
+    // /default, which never answers it: logged, as any unknown.
+    logged.clear();
+    // The schema's codes for a default file that is not a preset (not an
+    // object, no settings, another schema) are its read; delete {default}'s
+    // preset_write and load or delete {default}'s preset_unknown are not.
+    for (const auto& [code, path] :
+         {std::pair{"schema.type", "/args/default"}, std::pair{"schema.required", "/args/default"},
+          std::pair{"schema.invalid", "/args/default/schema"}}) {
+        INFO(code << " at " << path);
+        for (Action action : {Action::Preset, Action::Render})
+            CHECK(f.render->refusalWords(Error(code, text, path, hint), "fallback", action) ==
+                  defaultRead);
+    }
+    CHECK(f.render->refusalWords(Error("render.preset_write", text, "/args/default", hint),
+                                 "fallback",
+                                 Action::Preset) == "Your presets folder cannot be written to.");
+    CHECK(f.render->refusalWords(Error("render.preset_unknown", text, "/args/default", hint),
+                                 "fallback", Action::Preset) == "That preset is not found.");
     // A named preset read (render.preset.load {name}, 7024d3b3): its file's
     // read codes at /args/name and any code at /args/name/settings/… are a
     // read under Preset; preset_name and preset_unknown answer at /args/name
@@ -1349,6 +1387,86 @@ TEST_CASE("the render dialog: a render default that cannot be read says so, as a
     f.render->open();  // render.settings reads the default
     f.frame();
     CHECK(f.render->refusal() == words);
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: Save as default lists the presets a broken default hid") {
+    // Round 186 F2 (probe G4): every render.* command but a save of given
+    // settings reads the default, so with one that cannot be read
+    // render.preset.list is refused: the dropdown offers "—" only and the
+    // red line says why. Save as default, what that sentence advises, lists
+    // the presets again.
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute(
+        {"render.preset.save", json::parse(R"({"name":"mine","settings":{"tail_s":1}})").value(),
+         kTestOrigin}));
+    f.render->open();
+    f.frame();
+    REQUIRE(f.render->saveAsDefault());
+    f.render->close();
+    std::filesystem::path file;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(f.dir))
+        if (e.path().filename() == "default.json") file = e.path();
+    REQUIRE_FALSE(file.empty());
+    std::filesystem::permissions(file, std::filesystem::perms::none);
+    struct Unlock {
+        std::filesystem::path p;
+        ~Unlock() {
+            std::error_code ec;
+            std::filesystem::permissions(p, std::filesystem::perms::owner_all, ec);
+        }
+    } unlock{file};
+    if (std::ifstream probe(file); probe) {
+        MESSAGE("this user can read a mode-000 file; not checked");
+        return;
+    }
+    const std::string words =
+        "Your saved render default cannot be read. Save your settings as the default again.";
+    const auto offered = [](const ui::Dropdown& d) {
+        std::vector<std::string> values;
+        for (const auto& c : d.choices()) values.push_back(c.value);
+        return values;
+    };
+    f.render->open();
+    f.frame();
+    auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    CHECK(offered(*preset) == std::vector<std::string>{""});
+    CHECK(f.render->refusal() == words);
+    // A preset saved meanwhile is not listed: "—" stays, the red line says
+    // why after the save's status, and Delete deletes nothing.
+    REQUIRE(f.render->savePreset("X"));
+    f.frame();
+    CHECK(f.render->statusText() == "saved preset X");
+    CHECK(f.render->refusal() == words);
+    CHECK(offered(*preset) == std::vector<std::string>{""});
+    CHECK(preset->value().empty());
+    REQUIRE(f.click("render.preset.delete"));
+    f.frame();
+    CHECK(std::filesystem::exists(file.parent_path() / "X.json"));
+    // The save rebuilt the sections (the folder line marks the preview
+    // dirty): the preview answers now, refused by the default still, so
+    // that below only Save as default can make it ask again.
+    f.render->setDebounceMs(0);
+    f.render->tick();
+    REQUIRE(f.render->refusal() == words);
+    // The user does what the red line says: the presets are back, X among
+    // them, and the preview the default refused asks again.
+    std::filesystem::permissions(
+        file, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    REQUIRE(f.click("render.default"));
+    f.frame();
+    CHECK(f.render->statusText() == "saved as your default");
+    const auto now = offered(*preset);
+    CHECK(std::find(now.begin(), now.end(), "mine") != now.end());
+    CHECK(std::find(now.begin(), now.end(), "X") != now.end());
+    CHECK(preset->value().empty());
+    CHECK(f.render->refusal() == words);  // the preview's, until it asks again
+    // Nothing else edited: only Save as default makes it ask again.
+    f.render->tick();
+    f.frame();
+    CHECK(f.render->refusal() != words);
     f.render->close();
 }
 

@@ -2303,12 +2303,15 @@ project is drawn in the quiet ink, with "from your default" on hover.
       folder for a render, the preset file and your presets folder for a
       preset, the rendered file and the project's media for Add to the
       project, where a file that cannot be read as audio is the reader's
-      case and any other code reads the action's own sentence; any code at
-      a path under `/args/default`, under every action, is the saved render
-      default read: "Your saved render default cannot be read. Save your
-      settings as the default again.", or for a member at
+      case and any other code reads the action's own sentence; under every
+      action, the render default's file read (a file that cannot be opened
+      or read, is too large, or is not JSON or not a preset) at
+      `/args/default` is "Your saved render default cannot be read. Save
+      your settings as the default again.", and any code at
       `/args/default/settings/…` that it "has a setting that cannot be
-      used"; a named preset read under Preset, its file's read codes at
+      used", while a code answered at `/args/default` that is not its read
+      (a presets folder that cannot be written to, no default saved) keeps
+      its own words; a named preset read under Preset, its file's read codes at
       `/args/name` and any code at `/args/name/settings/…`, is "That preset
       cannot be read." or "That preset has a setting that cannot be used.",
       while a preset name refused or not found at `/args/name` keeps its
@@ -2328,18 +2331,22 @@ project is drawn in the quiet ink, with "from your default" on hover.
       exists, normalization, the format, the frame budget, presets, the
       queue, a missing, changed or unreadable media file, a failed or
       missing plug-in, a file that could not be written, an unsupported
-      format, a cancelled render, the sources a render prepares, a render
-      default that cannot be read) have theirs. A test walks the codes every
+      format, a cancelled render, the sources a render prepares) have
+      theirs. A test walks the codes every
       `render.*` command declares in the registry, each under the action it
       serves (the preset commands as a preset, the rest as a render), a
       family such as `json.parse.*` as one sentence for every member; the
       dialog's other commands (item.add, branch.create, …) keep their
       action's own sentence. A preset the settings refuse is
       not loaded: its refusal stands, with the settings before it. The Preset
-      dropdown lists the presets as they are after a save, a load, a delete
-      or a refused choice, and shows the preset in use, the one Delete
-      preset acts on; "—" (or a preset in use that is no longer listed)
-      means none, and Delete preset then deletes nothing.
+      dropdown lists the presets as they are after a save, a load, a delete,
+      Save as default or a refused choice, and shows the preset in use, the
+      one Delete preset acts on; "—" (or a preset in use that is no longer
+      listed) means none, and Delete preset then deletes nothing. When the
+      presets cannot be listed (a render default that cannot be read), it
+      offers "—" only and the red line says why; Save as default, which
+      that sentence advises, lists them again, and a preview the default
+      refused asks again.
       One it does not know reads "The render could not be made." (or the
       action's own sentence: the preset, the settings, the queue), and the
       whole error goes to the log (`onLog`, stderr).

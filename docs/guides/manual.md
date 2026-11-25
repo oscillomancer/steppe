@@ -2104,7 +2104,9 @@ they render.
 
 What a project leaves unset comes from **your default**: **Save as default**
 stores the dialog's settings for every project, and values that come from it
-are drawn in the quieter ink. **Presets** are named settings of your own, plus
+are drawn in the quieter ink. If your default cannot be read (its file was
+damaged or its permissions changed), the dialog says so and the Preset list
+offers nothing until you click Save as default again. **Presets** are named settings of your own, plus
 read-only factory presets: WAV 24-bit, a streaming master (−14 LUFS, −1 dBTP),
 a CD master (16-bit 44.1 kHz with noise-shaped dither, −1 dBTP), a podcast MP3
 (−16 LUFS), stems for mixing (24-bit, mono tracks as mono) and a game loop

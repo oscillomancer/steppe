@@ -760,7 +760,11 @@ void RenderDialog::buildHeader(ui::Node& page) {
     auto& gap = header.emplace<ui::Node>("render.header.gap");
     gap.layout.width = ui::SizeRule::fraction();
     caption(header, "render.preset.label", "Preset", 44);
-    auto& preset = header.emplace<ui::Dropdown>("render.preset", presetChoices(), presetName_);
+    // A list that is refused (the render default cannot be read) offers "—"
+    // only; at open, render.settings and the preview say why.
+    std::optional<Error> refused;
+    auto& preset =
+        header.emplace<ui::Dropdown>("render.preset", presetChoices(refused), presetName_);
     preset.layout.width = ui::SizeRule::fixed(250);
     preset.onChange = [this](const std::string& name) {
         if (name.empty()) {
@@ -789,14 +793,18 @@ void RenderDialog::buildHeader(ui::Node& page) {
     header.emplace<ui::Button>("render.close", "Close", [this] { close(); });
 }
 
-std::vector<ui::Choice> RenderDialog::presetChoices() const {
+std::vector<ui::Choice> RenderDialog::presetChoices(std::optional<Error>& refused) const {
     std::vector<Choice> presets{{"", "—"}};
-    if (auto list = dispatcher_.execute({"render.preset.list", json::Value::object(), kUiOrigin}))
-        for (const auto& p : (*list)["presets"].asArray()) {
-            if (p.find("damaged")) continue;  // not offered yet (round 186 F1, the dialog's step)
-            const std::string name = text(p.find("name"));
-            presets.push_back({name, name + (flag(p.find("factory")) ? "" : " (yours)")});
-        }
+    auto list = dispatcher_.execute({"render.preset.list", json::Value::object(), kUiOrigin});
+    if (!list) {
+        refused = std::move(list).error();
+        return presets;
+    }
+    for (const auto& p : (*list)["presets"].asArray()) {
+        if (p.find("damaged")) continue;  // not offered yet (round 186 F1, the dialog's step)
+        const std::string name = text(p.find("name"));
+        presets.push_back({name, name + (flag(p.find("factory")) ? "" : " (yours)")});
+    }
     return presets;
 }
 
@@ -805,7 +813,10 @@ void RenderDialog::refreshPresets() {
     // preset is saved, loaded, deleted or refused, the dropdown lists the
     // presets as they are and shows the one in use. One no longer listed is
     // not in use, so what the dropdown shows is always what Delete deletes.
-    auto choices = presetChoices();
+    // A refused list offers "—" only and says why on the red line, so an
+    // empty dropdown is never unexplained (round 186 F2).
+    std::optional<Error> refused;
+    auto choices = presetChoices(refused);
     const bool listed = std::any_of(choices.begin(), choices.end(),
                                     [&](const Choice& c) { return c.value == presetName_; });
     if (!listed) presetName_.clear();
@@ -813,6 +824,12 @@ void RenderDialog::refreshPresets() {
         shown->setChoices(std::move(choices));
         shown->setValue(presetName_);
     }
+    if (!refused) return;
+    // Shown unless the red line says it already (the preview reads the
+    // default too): a refusal clears the status, which keeps what the action
+    // that listed them did.
+    std::string words = refusalWords(*refused, "The presets could not be listed.", Action::Preset);
+    if (words != refusalText_) showRefusal(std::move(words));
 }
 
 void RenderDialog::buildSource(ui::Node& body) {
@@ -1526,8 +1543,6 @@ void RenderDialog::buildFooter(ui::Node& page) {
         if (auto saved = saveAsDefault(); !saved)
             showRefusal(
                 refusalWords(saved.error(), "The preset could not be saved.", Action::Preset));
-        else
-            actionDone("saved as your default");
     });
     status_ = &actions.emplace<ui::Label>("render.status", statusText_, ui::Font::Ui, "caption",
                                           "ink-quiet");
@@ -1569,8 +1584,6 @@ void RenderDialog::openPresetName() {
         if (auto saved = savePreset(chosen); !saved)
             showRefusal(
                 refusalWords(saved.error(), "The preset could not be saved.", Action::Preset));
-        else
-            actionDone("saved preset " + chosen);
     };
     name.onSubmit = [save](const std::string&) { save(); };
     buttons.emplace<ui::Button>("render.preset.ok", "Save", save);
@@ -1706,8 +1719,9 @@ Status RenderDialog::loadPreset(const std::string& name) {
             presetName_ = name;
             markDirty();
             rebuild();
-            refreshPresets();
+            // Done first: a refusal of the list, below, outlasts it.
             actionDone("loaded preset " + name + "; Render writes it to the project");
+            refreshPresets();
             return {};
         }
     return Error("render.preset_unknown", "no preset " + name, "/name",
@@ -1722,6 +1736,7 @@ Status RenderDialog::savePreset(const std::string& name) {
     if (!saved) return std::move(saved).error();
     presetName_ = name;
     if (page_) rebuild();
+    actionDone("saved preset " + name);
     refreshPresets();
     return {};
 }
@@ -1732,6 +1747,12 @@ Status RenderDialog::saveAsDefault() {
     a["settings"] = settings_;
     auto saved = dispatcher_.execute({"render.preset.save", std::move(a), kUiOrigin});
     if (!saved) return std::move(saved).error();
+    actionDone("saved as your default");
+    // What the sentence for a default that cannot be read advises: every
+    // render.* command but this reads the default, so the presets are listed
+    // again, and a preview the default refused asks again (round 186 F2).
+    refreshPresets();
+    if (previewOfDefault_) markDirty();
     return {};
 }
 
@@ -1743,8 +1764,8 @@ Status RenderDialog::deletePreset(std::string name) {
     if (!deleted) return std::move(deleted).error();
     presetName_.clear();
     if (page_) rebuild();
-    refreshPresets();
     actionDone("deleted preset " + name);
+    refreshPresets();
     return {};
 }
 
@@ -1752,6 +1773,7 @@ Status RenderDialog::deletePreset(std::string name) {
 
 void RenderDialog::refreshPreview() {
     dirty_ = false;
+    previewOfDefault_ = false;
     if (auto valid = validate(); !valid) {
         showRefusal(valid.error().message, true);
         return;
@@ -1767,6 +1789,8 @@ void RenderDialog::refreshPreview() {
         // which names commands).
         asHeardText_.clear();
         if (asHeard_) asHeard_->setText("");
+        const std::string& path = result.error().path;
+        previewOfDefault_ = path == "/args/default" || path.starts_with("/args/default/");
         showRefusal(refusalWords(result.error()), true);
         if (renderButton_) renderButton_->setText("Render");
         return;
@@ -2324,16 +2348,25 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
                        c == "audio.read" || c == "audio.decode" || c.starts_with("json.parse");
     const bool writes = c == "file.write" || c == "file.open" || c == "file.sync" ||
                         c == "file.sync_published" || c == "file.sync_directory";
+    // A preset file's own codes as it is read (readTextFile, json::parse and
+    // its schema), file.open among them.
+    const bool fileRead = c == "file.open" || c == "file.read" || c == "file.too_large" ||
+                          c.starts_with("json.parse.") || c.starts_with("schema.");
     // The user's render default, read by every render.* command (engine.md
-    // §3.1): its errors have their path under /args/default, whatever the
-    // action, and the code alone cannot tell its read from a write (file.open
-    // is both). Reading it is all a command does with it.
+    // §3.1): an error reading it has its path under /args/default, whatever
+    // the action, and the code alone cannot tell its read from a write
+    // (file.open is both). The file's own codes (fileRead, the schema's
+    // among them for a file that is not a preset) are its read, and so is
+    // any code at /args/default/settings/…. Other codes answer at /default
+    // without reading it (delete {default}'s preset_write, load and delete
+    // {default}'s preset_unknown): they keep their own words.
     if (e.path == "/args/default" || e.path.starts_with("/args/default/")) {
         if (e.path.starts_with("/args/default/settings"))
             return "Your saved render default has a setting that cannot be used. Save your "
                    "settings as the default again.";
-        return "Your saved render default cannot be read. Save your settings as the default "
-               "again.";
+        if (fileRead)
+            return "Your saved render default cannot be read. Save your settings as the default "
+                   "again.";
     }
     if (action == Action::Preset) {
         // A named preset read (render.preset.load {name}, 7024d3b3): its
@@ -2344,10 +2377,11 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
             return "That preset has a setting that cannot be used. Save it again, or delete it.";
         if (e.path == "/args/name" && (reads || c == "file.open"))
             return "That preset cannot be read. Save it again, or delete it.";
+        // A preset command reads a preset file only as the default or a named
+        // preset, above: what it answers at no path is its write.
         if (writes)
             return "The preset file could not be written. Check that your presets folder can be "
                    "written to.";
-        if (reads) return "The preset file cannot be read. Save it again, or delete it.";
     }
     if (action == Action::AddToProject) {
         // A file the reader cannot take as audio (truncated, or replaced:
@@ -2482,11 +2516,6 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
     if (c == "warp.budget") return "A warped take the render plays is over the memory budget.";
     if (c == "warp.rate") return "A warped take the render plays has a stretch rate out of range.";
     if (c == "engine.stretch") return "A file the render plays cannot be stretched.";
-    // A render default whose file is not JSON (every json.parse.* member; a
-    // preset's file is the Preset action's, above).
-    if (c.starts_with("json.parse."))
-        return "Your saved render default cannot be read. Save your settings as the default "
-               "again.";
     if (c == "audio.cancelled") return "The render was cancelled.";
     if (c == "engine.block_size") return "The render's block size is out of range.";
     if (c == "engine.too_long" || c == "engine.range" || c == "engine.tail")
