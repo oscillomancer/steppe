@@ -1311,6 +1311,20 @@ that two compared runs switched at the same S, and a test hook that makes prepar
 (late attempts move S later; three end in the recovery seek). The in-callback executor's burst is a
 known limit in STATUS.
 
+### Revision 2026-11-24: a capture is kept across an engine stop
+
+Before it, an engine stop, a device restart or a device failure destroyed the Engine and with it a
+running or ended, uncommitted capture, silently. Decided (the co-director, with Nate's rule "a
+recording is never lost"): `EngineApp` keeps the last capture across `dropEngine`; a running one is
+ended at the heard position first; it stays committable and readable (`launch.state`'s `capture_kept`)
+with the engine stopped or started again, at any device rate; the stop's answer and the device events
+warn while it is uncommitted; a newer capture replaces it only once it begins, and `launch.capture`
+warns then (a capture is a buffer until committed, and the GUI commits at each take's end). Replacing
+the project or quitting drops it; the GUI's unsaved-work dialog is to count it
+(`EngineApp::captureUncommitted`, the gui-lead's change); a headless quit loses it, a limit stated in
+STATUS. A capture a relocation ends (a seek, a loop change, a stop, and the
+playrate's recovery seek, a prepared locate) stays in the engine, committable, as it did before.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

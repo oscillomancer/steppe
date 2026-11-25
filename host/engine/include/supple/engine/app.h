@@ -799,6 +799,35 @@ class EngineApp : public cmd::Host {
     std::uint64_t midiPreferencesRevision() const { return midiPreferencesRevision_; }
     void stopEngine();
     Engine* engine() { return engine_.get(); }
+    // --- the clip launcher's capture, kept (ADR-0097, revision 2026-11-24) ---
+    // The engine holds the capture it runs; the app keeps the last one across
+    // an engine stop, a device restart or failure (dropEngine), and while a
+    // newer capture has captured nothing (no frame heard). Nothing
+    // of it is lost until a newer capture runs, the project is replaced, or
+    // the app quits.
+    enum class CaptureEnd : std::uint8_t { None, EngineStop, Device };
+    struct CaptureView {
+        Engine::LaunchCapture capture;
+        double sampleRate = 0;                  // the engine's as it ran
+        bool kept = false;                      // the app's, not the running engine's
+        CaptureEnd endedBy = CaptureEnd::None;  // running when that ended it
+    };
+    // The engine's once it has begun (or when none is kept), else the kept
+    // one; what launch.commit and launch.state read (the GUI's Capture
+    // commits the take just ended, the engine's own).
+    std::optional<CaptureView> launchCapture();
+    // A capture with launches that launch.commit has not written.
+    bool captureUncommitted();
+    void markCaptureCommitted();  // launch.commit wrote launchCapture()'s
+    // Keeps the engine's capture (one that has begun) before a newer one
+    // replaces it in the engine (launch.capture {on: true}).
+    void keepEngineCapture();
+    // Forgets the kept capture: the GUI dropped it (a refused take, Capture
+    // clicked again to drop it and arm).
+    void dropKeptCapture() { keptCapture_.reset(); }
+    // A line naming launchCapture() for a warning: its span, launches and
+    // version, then `then`.
+    std::string captureLine(const CaptureView& c, std::string_view then) const;
     const Backend* backend() const { return backend_; }  // null while stopped
     EngineStatus engineStatus();
     bool preparingAudio() const { return !pendingSourceKey_.empty(); }
@@ -1070,7 +1099,10 @@ class EngineApp : public cmd::Host {
     void headChanged();         // reload the real-time engine
     void noteUnplayedEdit();    // a deferred edit failed to compile: engine.error
     void endMasterRecording();  // masters' items play everywhere again (ADR-0057)
-    void haltEngine();          // tears the engine down (stopEngine also cancels a restart)
+    // Tears the engine down (stopEngine also cancels a restart), keeping its
+    // capture: one running is ended at the heard position, `why` its cause.
+    void haltEngine(CaptureEnd why = CaptureEnd::EngineStop);
+    std::optional<CaptureView> keptCapture_;
     // The device changed under the running engine: stop it and remember to
     // start it again (same backend kind, block and options).
     void beginRestart(std::string reason, double seconds);

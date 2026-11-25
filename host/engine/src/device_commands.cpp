@@ -12,6 +12,9 @@ namespace {
 
 enum class BackendArg { Jack, Dummy, PortAudio };
 
+struct EngineStopDone {
+    std::optional<std::vector<std::string>> warnings;
+};
 struct EngineDevicesArgs {
     std::optional<BackendArg> backend;
 };
@@ -379,18 +382,35 @@ void registerDeviceCommands(cmd::Registry& registry) {
         addChecked(registry, std::move(c));
     }();
     [&] {
-        Command<NoArgs, Empty> c;
+        Command<NoArgs, EngineStopDone> c;
         c.name = "engine.stop";
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Stop real-time playback and release the audio device.";
+        c.description =
+            "A clip launcher capture is kept, not lost: one running ends here, at what was heard. "
+            "warnings names a capture launch.commit has not written; it stays committable "
+            "after the engine starts again (launch.state's capture_kept).";
         c.tags = {"engine"};
         c.args = schema::object<NoArgs>("no_args").build();
-        c.result = emptySchema();
+        c.result =
+            schema::object<EngineStopDone>("engine_stop_done")
+                .field("warnings", &EngineStopDone::warnings, schema::arrayOf(schema::string()))
+                .build();
         c.examples = {{"Stop", j("{}"), j("{}"), "engine_running"}};
-        c.run = [](const NoArgs&, Context& ctx) -> Result<Empty> {
-            app(ctx).stopEngine();
-            return Empty{};
+        c.run = [](const NoArgs&, Context& ctx) -> Result<EngineStopDone> {
+            EngineApp& a = app(ctx);
+            const bool running = a.engine() && a.engine()->launchCapturing();
+            a.stopEngine();
+            EngineStopDone out;
+            if (a.captureUncommitted())
+                out.warnings = std::vector<std::string>{
+                    "launch: " + a.captureLine(*a.launchCapture(),
+                                               running ? " was running: it ends here and is kept "
+                                                         "uncommitted; launch.commit writes it"
+                                                       : " is kept uncommitted: launch.commit "
+                                                         "writes it")};
+            return out;
         };
         addChecked(registry, std::move(c));
     }();

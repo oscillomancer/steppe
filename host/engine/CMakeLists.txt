@@ -70,6 +70,7 @@ set(_engine_test_sources
   tests/test_clip_player_rate_armed.cpp tests/test_clip_player_rate_held.cpp
   tests/test_clip_player_rate_trajectory.cpp tests/test_clip_player_rate_trajectory_queued.cpp
   tests/test_clip_player_rate_retry.cpp
+  tests/test_launch_capture_kept.cpp
   tests/test_clip_player_rate_chain.cpp tests/test_clip_player_rate_wrap.cpp tests/test_clip_player_rate_live.cpp
   tests/test_clip_player_follow.cpp tests/test_launch_access.cpp tests/test_scene_section.cpp
   tests/test_scripts.cpp tests/test_strips.cpp

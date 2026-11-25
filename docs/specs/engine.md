@@ -589,6 +589,27 @@ the same.*
   says so in one line while any track is held by a clip, following
   launches while it is open. An internal offline replay applies a log at
   its logged running frames; the tests use it.
+- **A capture is kept (ADR-0097, revision 2026-11-24).** The engine holds
+  the capture it runs; `EngineApp` keeps the last one (`keptCapture_`,
+  `EngineApp::launchCapture`) across what destroys the engine: an engine
+  stop (`stopEngine`), an unrequested device restart and a device failure
+  the restart gives up on (both `beginRestart` → `haltEngine`). A capture
+  running then is ended at the heard position first, as
+  `launch.capture {on: false}` ends it (`CaptureView::endedBy`: the stop
+  or the device). The kept one is what `launch.commit` and `launch.state`
+  read until a newer capture has begun, heard a frame (one turned
+  off before that replaces nothing); `launch.capture {on: true}` warns
+  when it will replace an uncommitted one, naming its span, launches and
+  version (`LaunchCapture::version`, the session version as it began). It
+  stays committable with the engine stopped or started again, at any
+  device rate: launch.commit converts by its own `sample_rate`.
+  `engine.stop`'s answer, and the `engine.restarting` event or the
+  `engine.error` that gives up, carry a warning naming an uncommitted
+  capture (`EngineApp::captureUncommitted`; launch.commit marks one
+  committed). `launch.state` answers with the engine stopped for a kept
+  capture (`capture_kept`). Replacing the project or quitting the app drops
+  it: the GUI's unsaved-work dialog is to count it
+  (`captureUncommitted`, not yet), and a headless app has no dialog.
 - **Capturing a performance (L4, L-f).** While `launch.capture` is on, the
   engine keeps the song sample where the capture began, the transport
   loop it runs under, what each track that was not following the

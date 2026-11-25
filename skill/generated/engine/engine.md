@@ -1734,7 +1734,7 @@ Result:
 
 Stop real-time playback and release the audio device.
 
-
+A clip launcher capture is kept, not lost: one running ends here, at what was heard. warnings names a capture launch.commit has not written; it stays committable after the engine starts again (launch.state's capture_kept).
 
 Kind: `action`. Exposure: `mcp-exec`.
 
@@ -1748,12 +1748,19 @@ Kind: `action`. Exposure: `mcp-exec`.
 ```json
 {
   "type": "object",
-  "title": "empty",
+  "title": "engine_stop_done",
   "properties": {
     "warnings": {
       "type": "array",
       "items": {
-        "type": "object"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object"
+          }
+        ]
       }
     }
   },

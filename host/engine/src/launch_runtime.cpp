@@ -1227,8 +1227,10 @@ void Engine::placeCapture() {
         return;  // stopped: it begins where playing starts
     }
     capture_.pending = false;
+    capture_.placed = true;
     capture_.epoch = clock.epoch;
     capture_.startSong = song;
+    capture_.version = latest_ ? latest_->version : 0;
 }
 
 void Engine::captureRelocating() {
@@ -1316,6 +1318,9 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
     placeCapture();
     LaunchCapture out;
     out.on = capture_.on;
+    out.placed = capture_.placed;
+    out.committed = capture_.committed;
+    out.version = capture_.version;
     out.startSample = capture_.startSample;
     out.loop = capture_.loop;
     if (capture_.pending) return out;

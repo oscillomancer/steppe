@@ -365,6 +365,12 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
+    - a capture is kept across an engine stop, a device restart and a
+      device failure (ended there if running) and stays committable;
+      quitting the app or replacing the project with one uncommitted
+      loses it (the GUI's unsaved-work dialog does not count it yet; a
+      headless app has none); a newer capture replaces it once it begins,
+      with a warning (ADR-0097, revision 2026-11-24);
     - a capture ends at a seek, a loop change or a stop, by design (one
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay

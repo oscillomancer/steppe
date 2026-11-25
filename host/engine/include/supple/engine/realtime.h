@@ -459,6 +459,13 @@ class DummyBackend : public Backend {
 
     void run(std::int64_t cycles);  // Manual mode: run cycles now, on this thread
     std::int64_t cycles() const { return cycles_.load(); }
+    // Tests: the device changed, as a backend reports it (status() asks for
+    // a restart until the next start()); the next `n` starts fail, as a
+    // device that will not open; the rate later starts grant.
+    void requestRestart(std::string reason);
+    void failStarts(int n) { failStarts_ = n; }
+    void grantRate(double rate) { options_.grantedRate = rate; }
+    BackendStatus status() const override;
     // Every output channel; read after stop() / run().
     const audio::AudioData& capture() const { return capture_; }
 
@@ -474,6 +481,9 @@ class DummyBackend : public Backend {
     Options options_;
     BackendConfig config_;
     Callback callback_;
+    std::atomic<bool> restartNeeded_{false};
+    std::string restartReason_;
+    int failStarts_ = 0;
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::atomic<std::int64_t> cycles_{0};
@@ -912,6 +922,12 @@ class Engine {
     // boundary.
     struct LaunchCapture {
         bool on = false;  // still capturing: frames grows
+        // Its start was placed (while stopped, at once: it begins where
+        // playing starts). Once it has also heard a frame it replaces the capture before it
+        // (EngineApp keeps that one until then).
+        bool placed = false;
+        bool committed = false;     // launch.commit wrote it (markCaptureCommitted)
+        std::uint64_t version = 0;  // the session version playing as it began
         std::int64_t startSample = 0, frames = 0;
         LoopRange loop;
         std::vector<LaunchLogEntry> launches;
@@ -942,6 +958,9 @@ class Engine {
     // first. Collects the executors' acknowledgements first.
     std::optional<LaunchCapture> launchCapture();
     bool launchCapturing() const { return capture_.on; }  // main thread
+    // Main thread: launch.commit wrote the capture (EngineApp's
+    // captureUncommitted, the stop's warning).
+    void markCaptureCommitted() { capture_.committed = true; }
     // Main thread: a running capture waits for a quantized end's boundary
     // (launch.state's capture_ends), whoever asked for it.
     bool launchCaptureEnding() const { return capture_.on && capture_.ending; }
@@ -1410,6 +1429,8 @@ class Engine {
         // song sample it began at.
         std::int64_t startSong = 0, endSong = 0, startSample = 0;
         LoopRange loop;
+        bool placed = false, committed = false;  // LaunchCapture's
+        std::uint64_t version = 0;
     };
     CaptureState capture_;
     void placeCapture();       // a pending start, once the clock reads

@@ -104,10 +104,28 @@ DummyBackend::DummyBackend(Options options) : options_(options) {}
 
 DummyBackend::~DummyBackend() { stop(); }
 
+void DummyBackend::requestRestart(std::string reason) {
+    restartReason_ = std::move(reason);
+    restartNeeded_.store(true);
+}
+
+BackendStatus DummyBackend::status() const {
+    BackendStatus s{config_.blockSize, 0, 0, 0, false, {}};
+    s.restartNeeded = restartNeeded_.load();
+    if (s.restartNeeded) s.restartReason = restartReason_;
+    return s;
+}
+
 Status DummyBackend::start(const BackendConfig& config, Callback callback) {
     if (running_)
         return Error("backend.running", "the backend is already running", {},
                      "stop this backend before starting it again or changing its configuration");
+    if (failStarts_ > 0) {
+        --failStarts_;
+        return Error("backend.open", "the dummy device did not open (a test's failStarts)", {},
+                     "a test asked for it; start again");
+    }
+    restartNeeded_.store(false);
     config_ = config;
     if (options_.grantedRate > 0) config_.sampleRate = options_.grantedRate;
     callback_ = std::move(callback);

@@ -565,7 +565,7 @@ q = nil
 ---@field sync table
 
 ---@class Steppe.engine_stop_result
----@field warnings? table[]
+---@field warnings? (string|table)[]
 
 ---@class Steppe.env_add_args
 ---@field track? string Track id, e.g. "tr_1".
@@ -1139,7 +1139,7 @@ q = nil
 ---@field from? number
 ---@field to? number
 ---@field ends_at? number
----@field warnings? table[]
+---@field warnings? (string|table)[]
 
 ---@class Steppe.launch_clip_args
 ---@field clip string Clip id, e.g. "cl_1".
@@ -1180,6 +1180,7 @@ q = nil
 ---@field playing boolean
 ---@field capturing boolean
 ---@field capture_ends? number
+---@field capture_kept? boolean
 ---@field tracks table[]
 ---@field warnings? table[]
 

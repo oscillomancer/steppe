@@ -1886,7 +1886,12 @@ queued, `followed`: what it follows by (`none`, `key` or `chords`).
 that grid's next line, so the performance ends on the bar. The Capture
 button, turned off while playing, ends it on the project's launch quantize
 and commits it there. `launch.commit` then writes the performance onto the
-timeline as ordinary items, in one undo step. It is laid out as it ran:
+timeline as ordinary items, in one undo step. A capture not yet committed is
+kept when the engine stops or the audio device restarts or fails: a running
+one ends there, `engine.stop` (or the device's event) says so, and
+`launch.commit` still writes it, with the engine stopped or started again.
+A new capture replaces it once it begins, and `launch.capture` says so. It is
+laid out as it ran:
 from where the capture began, each launch as many seconds later as it was
 heard, even if the transport loop jumped back meanwhile. On each track that
 played a clip or was stopped, those stretches replace what the timeline had
