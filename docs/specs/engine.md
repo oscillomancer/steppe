@@ -2352,10 +2352,15 @@ render's own `range` and `performance`.
 and the path's index, never from the hint, which names commands for
 command callers. `render.mix`, `render.stems`, `render.regions` and
 `render.dry-run` declare every code they answer, the resolvers' they pass
-through included, in their registry entries (`cmd::CommandInfo::errors`:
-code, when, hint; `skill/generated/engine/render.md` lists them), so a
-client's table of wordings can be checked against the registry; schema
-codes of a malformed argument are every command's and are not listed.
+through included (the offline pass's, the file and audio writers', and
+the id resolver's `cl.unknown` and `tr.unknown`), in their registry
+entries (`cmd::CommandInfo::errors`: code, when, hint;
+`skill/generated/engine/render.md` lists them), so a client's table of
+wordings can be checked against the registry. Schema codes of a
+malformed argument are every command's and are not listed; a broken
+user render default answers through them and the `file.*` codes. A test
+lints the render sources, the offline pass and the writers for codes no
+render command declares (round 178 F5).
 
 | Case | Code | Path |
 | --- | --- | --- |

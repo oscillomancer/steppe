@@ -6,8 +6,13 @@
 // own ctest entry.
 #include <supple/audio/audio_file.h>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <optional>
+#include <regex>
+#include <set>
 #include <thread>
 #include "clip_player_support.h"
 #include "engine_test_access.h"
@@ -610,4 +615,66 @@ TEST_CASE("a launch ack lost just before the capture ends still marks it (round 
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
     CHECK(why.find("\"launch_unlogged\"") != std::string::npos);
+}
+
+TEST_CASE("the render commands declare every code their sources answer (round 178 F5)") {
+    // A lint over what a render or render job can answer: each code an
+    // Error(...) in the render sources, the offline pass and the writers
+    // names is declared by render.mix, render.stems, render.regions or
+    // render.dry-run, unless it is a schema code (every command's) or one
+    // these files answer for other commands (below). A new code fails here
+    // until it is declared.
+    Project p;
+    std::set<std::string> declared;
+    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
+        const cmd::CommandInfo* info = p.registry.find(name);
+        REQUIRE(info);
+        for (const cmd::ErrorSpec& e : info->errors) declared.insert(e.code);
+    }
+    const std::set<std::string> elsewhere = {
+        "render.queue_empty", "render.queue_unknown",  "render.preset_factory",
+        "render.preset_name", "render.preset_unknown", "render.preset_write",
+        "freeze.tail_limit",  "freeze.tail_changed",   "freeze.tail_pending",
+        "file.exists",     // files.cpp's create-exclusive, which renders do not use
+        "base64.invalid",  // files.cpp's base64 decoder, likewise
+    };
+    const std::filesystem::path root =
+        std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+    REQUIRE(std::filesystem::exists(root / "host/engine/src/offline.cpp"));
+    std::vector<std::string> undeclared;
+    for (const char* file :
+         {"host/engine/src/render_commands.cpp", "host/engine/src/render_performance.cpp",
+          "host/engine/src/render_chain.cpp", "host/engine/src/offline.cpp",
+          "libs/core-base/src/files.cpp", "libs/audio-file/src/audio_file.cpp",
+          "libs/audio-file/src/flac_encode.cpp", "libs/audio-file/src/metadata.cpp",
+          "libs/audio-codecs/src/mp3.cpp", "libs/audio-codecs/src/vorbis.cpp"}) {
+        std::ifstream in(root / file);
+        REQUIRE_MESSAGE(in, file);
+        const std::string text{std::istreambuf_iterator<char>(in), {}};
+        // Each Error( call's first argument, to its first comma at depth 0.
+        for (std::size_t at = text.find("Error("); at != std::string::npos;
+             at = text.find("Error(", at + 6)) {
+            if (at > 0 &&
+                (std::isalnum(static_cast<unsigned char>(text[at - 1])) || text[at - 1] == '_'))
+                continue;  // argsError(, launchesError(: helpers, scanned where they call Error(
+            std::size_t end = at + 6;
+            for (int depth = 0; end < text.size(); ++end) {
+                const char c = text[end];
+                if (c == '(') ++depth;
+                if (c == ')' && depth-- == 0) break;
+                if (c == ',' && depth == 0) break;
+            }
+            static const std::regex code(R"re("([a-z0-9_]+\.[a-z0-9_.]+)")re");
+            const std::string first = text.substr(at + 6, end - at - 6);
+            for (std::sregex_iterator i(first.begin(), first.end(), code), e; i != e; ++i) {
+                const std::string c = (*i)[1];
+                if (c.rfind("schema.", 0) == 0 || declared.count(c) || elsewhere.count(c)) continue;
+                undeclared.push_back(c + " (" + file + ")");
+            }
+        }
+    }
+    std::string list;
+    for (const std::string& u : undeclared) list += u + "\n";
+    INFO("undeclared:\n" << list);
+    CHECK(undeclared.empty());
 }
