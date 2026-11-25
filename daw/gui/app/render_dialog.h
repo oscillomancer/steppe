@@ -122,7 +122,7 @@ class RenderDialog {
     Status loadPreset(const std::string& name);
     Status savePreset(const std::string& name);
     Status saveAsDefault();
-    Status deletePreset(const std::string& name);
+    Status deletePreset(std::string name);
 
     // File → Mix: render.mix with no other arguments, as a job, reported by
     // onStatus.
@@ -170,7 +170,9 @@ class RenderDialog {
     struct Diagnostic {
         std::string field, message;
     };
-    Status load(const json::Value& args);  // render.settings with `args` into the dialog
+    // render.settings with `args` into the dialog; a refusal shows on the
+    // red line unless `show` is false (the caller words it).
+    Status load(const json::Value& args, bool show = true);
     void rebuild();
     std::unique_ptr<ui::Node> buildPage();
     void buildHeader(ui::Node& page);

@@ -232,10 +232,11 @@ RenderDialog::~RenderDialog() = default;
 
 // ------------------------------------------------------------------ state
 
-Status RenderDialog::load(const json::Value& args) {
+Status RenderDialog::load(const json::Value& args, bool show) {
     auto result = dispatcher_.execute({"render.settings", args, kUiOrigin});
     if (!result) {
-        showRefusal(refusalWords(result.error(), "The render settings could not be read."));
+        if (show)
+            showRefusal(refusalWords(result.error(), "The render settings could not be read."));
         return std::move(result).error();
     }
     settings_ = *result->find("effective");
@@ -769,9 +770,14 @@ void RenderDialog::buildHeader(ui::Node& page) {
     preset.layout.width = ui::SizeRule::fixed(250);
     preset.onChange = [this](const std::string& name) {
         if (name.empty()) return;
-        if (auto loaded = loadPreset(name); !loaded)
+        if (auto loaded = loadPreset(name); !loaded) {
             showRefusal(
                 refusalWords(loaded.error(), "The preset could not be loaded.", Action::Preset));
+            // The choice did not take: the dropdown shows the preset in use
+            // again, the one Delete preset acts on (round 182 F1).
+            if (auto* shown = dynamic_cast<ui::Dropdown*>(root_.find("render.preset")))
+                shown->setValue(presetName_);
+        }
     };
     header.emplace<ui::Button>("render.preset.save", "Save preset…", [this] { openPresetName(); });
     header.emplace<ui::Button>("render.preset.delete", "Delete preset", [this] {
@@ -1670,7 +1676,7 @@ Status RenderDialog::loadPreset(const std::string& name) {
             if (!args.size()) args["source"] = text(settings_.find("source"), "mix");
             // A preset the settings refuse (a file edited by hand) is not
             // loaded: the refusal stands, and so do the settings before it.
-            if (Status loaded = load(args); !loaded) return loaded;
+            if (Status loaded = load(args, false); !loaded) return loaded;  // its caller says it
             presetName_ = name;
             markDirty();
             rebuild();
@@ -1701,7 +1707,8 @@ Status RenderDialog::saveAsDefault() {
     return {};
 }
 
-Status RenderDialog::deletePreset(const std::string& name) {
+Status RenderDialog::deletePreset(std::string name) {
+    // By value: the caller passes presetName_, which this clears.
     json::Value a = json::Value::object();
     a["name"] = name;
     auto deleted = dispatcher_.execute({"render.preset.delete", std::move(a), kUiOrigin});
@@ -2295,8 +2302,17 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
         if (reads) return "The preset file cannot be read. Save it again, or delete it.";
     }
     if (action == Action::AddToProject) {
-        if (reads) return "The rendered file cannot be read: it may have been moved or deleted.";
+        // A file the reader cannot take as audio (truncated, or replaced:
+        // audio.format) is the reader's case too; a code that is not about
+        // the file is not the render's either (item.add, track.add): the
+        // action's own sentence, the error in the log.
+        if (reads || c == "audio.format")
+            return "The rendered file cannot be read: it may have been moved, deleted or damaged.";
         if (writes) return "The rendered file could not be copied into the project's media folder.";
+        if (onLog)
+            onLog("render: " + e.code + (e.path.empty() ? "" : " at " + e.path) + ": " + e.message +
+                  (e.hint.empty() ? "" : " (" + e.hint + ")"));
+        return std::string(fallback);
     }
     const std::string_view path =
         e.path.starts_with("/args") ? std::string_view(e.path).substr(5) : std::string_view(e.path);

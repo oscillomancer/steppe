@@ -2302,7 +2302,9 @@ project is drawn in the quiet ink, with "from your default" on hover.
       that cannot be read or written is the render's file and the renders
       folder for a render, the preset file and your presets folder for a
       preset, the rendered file and the project's media for Add to the
-      project), never the engine's
+      project, where a file that cannot be read as audio is the reader's
+      case and any other code reads the action's own sentence), never the
+      engine's
       message, its hint, a path or a command name
       (`RenderDialog::refusalWords`, the audio device dialog's rule), and
       says what plays ("A clip the launcher plays …", "A clip the capture
@@ -2324,7 +2326,9 @@ project is drawn in the quiet ink, with "from your default" on hover.
       and the queue as a render; the preset commands as a preset); the
       dialog's other commands (the settings, item.add, branch.create, …)
       keep their action's own sentence. A preset the settings refuse is
-      not loaded: its refusal stands, with the settings before it.
+      not loaded: its refusal stands, with the settings before it. A preset
+      choice that is refused puts the Preset dropdown back on the preset in
+      use, the one Delete preset acts on.
       One it does not know reads "The render could not be made." (or the
       action's own sentence: the preset, the settings, the queue), and the
       whole error goes to the log (`onLog`, stderr).

@@ -694,8 +694,8 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
     // Add to the project: a rendered file that is gone, or that cannot be
     // copied into the project's media, says so (item.add's own codes are not
     // the render's, so only these are worded).
-    for (const char* code :
-         {"audio.open", "audio.read", "audio.decode", "file.read", "file.write", "file.open"}) {
+    for (const char* code : {"audio.open", "audio.read", "audio.decode", "audio.format",
+                             "file.read", "file.write", "file.open"}) {
         INFO(code);
         const std::string words = f.render->refusalWords(
             Error(code, text, "/args/audio_file", hint),
@@ -705,6 +705,17 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         CHECK(words.find("renders folder") == std::string::npos);
     }
     CHECK(logged.empty());
+    // A code that is not about the file reads the action's own sentence,
+    // never the render table's (round 182 F2), and goes to the log.
+    for (const char* code : {"tr.unknown", "render.format", "notation.parse"}) {
+        INFO(code);
+        CHECK(f.render->refusalWords(Error(code, text, "/args/track", hint),
+                                     "The render could not be added to the project.",
+                                     Action::AddToProject) ==
+              "The render could not be added to the project.");
+    }
+    CHECK(logged.size() == 3);
+    logged.clear();
     // A clip of another track is not "out of order", and the words say what
     // plays.
     CHECK(f.render->refusalWords(Error("render.performance.clip_track", text,
@@ -1113,7 +1124,7 @@ TEST_CASE("the render dialog: a file's refusal names the action's file and folde
     INFO(added.error().code << " at " << added.error().path);
     CHECK(f.render->refusalWords(added.error(), "The render could not be added to the project.",
                                  gui::RenderDialog::Action::AddToProject) ==
-          "The rendered file cannot be read: it may have been moved or deleted.");
+          "The rendered file cannot be read: it may have been moved, deleted or damaged.");
 
     f.render->open();
     f.frame();
@@ -1143,6 +1154,69 @@ TEST_CASE("the render dialog: a file's refusal names the action's file and folde
           "The preset file could not be written. Check that your presets folder can be written "
           "to.");
     f.render->close();
+}
+
+TEST_CASE("the render dialog: a refused preset choice leaves Delete on the preset in use") {
+    // Round 182 F1 (probe J): an agent deletes "other" while the dialog
+    // lists it; picking it is refused, the dropdown shows the preset in use
+    // again, and Delete preset deletes that one, named on the status line.
+    Fixture f;
+    if (!f.ok) return;
+    const auto listed = [&](const std::string& name) {
+        auto list =
+            f.dispatcher->execute({"render.preset.list", json::Value::object(), kTestOrigin});
+        REQUIRE(list);
+        for (const auto& p : (*list)["presets"].asArray())
+            if (p.find("name") && p.find("name")->asString() == name) return true;
+        return false;
+    };
+    REQUIRE(f.dispatcher->execute(
+        {"render.preset.save", json::parse(R"({"name":"other","settings":{"tail_s":1}})").value(),
+         kTestOrigin}));
+    f.render->open();
+    f.frame();
+    REQUIRE(f.render->savePreset("mine"));
+    f.frame();
+    REQUIRE(f.dispatcher->execute(
+        {"render.preset.delete", json::parse(R"({"name":"other"})").value(), kTestOrigin}));
+    auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    preset->choose("other");
+    f.frame();
+    CHECK(f.render->refusal() == "That preset is not found.");
+    CHECK(preset->value() == "mine");
+    REQUIRE(f.click("render.preset.delete"));
+    f.frame();
+    CHECK_FALSE(listed("mine"));
+    CHECK(f.render->statusText() == "deleted preset mine");
+    f.render->close();
+}
+
+TEST_CASE("the render dialog: Add to the project of a damaged render reads as unreadable") {
+    // Round 182 F2 (probe K): a file that is not the WAV it names answers
+    // audio.format, which is the reader's case, not the render's outputs.
+    Fixture f;
+    if (!f.ok) return;
+    auto t = f.dispatcher->execute(
+        {"track.add", json::parse(R"({"name": "Bass"})").value(), kTestOrigin});
+    REQUIRE(t);
+    std::filesystem::create_directories(f.dir / "renders");
+    const auto file = f.dir / "renders" / "damaged.wav";
+    {
+        std::ofstream out(file, std::ios::binary);
+        static const char bytes[] = "RIFF\x10\x00\x00\x00WAVEjunk";
+        out.write(bytes, sizeof bytes - 1);
+    }
+    json::Value item = json::Value::object();
+    item["track"] = (*t)["track"];
+    item["position"] = 0.0;
+    item["audio_file"] = file.string();
+    auto added = f.dispatcher->execute({"item.add", item, kTestOrigin});
+    REQUIRE_FALSE(added);
+    INFO(added.error().code << " at " << added.error().path);
+    CHECK(f.render->refusalWords(added.error(), "The render could not be added to the project.",
+                                 gui::RenderDialog::Action::AddToProject) ==
+          "The rendered file cannot be read: it may have been moved, deleted or damaged.");
 }
 
 TEST_CASE("the render dialog: a running job's refusals stay on the red line") {
