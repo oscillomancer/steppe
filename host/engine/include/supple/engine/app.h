@@ -831,7 +831,9 @@ class EngineApp : public cmd::Host {
     // A capture with launches that launch.commit has not written, or whose
     // commit an undo took back (the head no longer descends from it).
     bool captureUncommitted();
-    // launch.commit wrote launchCapture()'s, in `version` (its transaction's).
+    // launch.commit wrote launchCapture()'s, in `version` (its transaction's):
+    // marked once that transaction commits, with the version pinned so that
+    // no history squash or collection loses it; a rollback drops the mark.
     void markCaptureCommitted(std::uint64_t version);
     // What the history says of launchCapture()'s commit (CaptureView::commit).
     CaptureCommit captureCommit(const Engine::LaunchCapture& c) const;
@@ -848,7 +850,10 @@ class EngineApp : public cmd::Host {
     void keepEngineCapture();
     // Forgets the kept capture: the GUI dropped it (a refused take, Capture
     // clicked again to drop it and arm).
-    void dropKeptCapture() { keptCapture_.reset(); }
+    void dropKeptCapture() {
+        keptCapture_.reset();
+        pruneCommitPins();
+    }
     // A line naming launchCapture() for a warning: its span, launches and
     // version, then `then`.
     std::string captureLine(const CaptureView& c, std::string_view then) const;
@@ -1128,6 +1133,18 @@ class EngineApp : public cmd::Host {
     void haltEngine(CaptureEnd why = CaptureEnd::EngineStop);
     std::optional<CaptureView> keptCapture_;
     CaptureView described(CaptureView view) const;  // fills commit, the beats, replacedOnBegin
+    // launch.commit's mark, applied when its transaction commits (review
+    // round 168 re-check R3), and the versions marks name, leased (R1).
+    struct CommitMark {
+        std::uint64_t version = 0;
+        bool kept = false;  // on keptCapture_, else on the engine's
+    };
+    std::optional<CommitMark> pendingCommit_;
+    std::map<std::uint64_t, std::shared_ptr<const model::Session>> commitPins_;
+    void applyCommitMark(const CommitMark& mark, std::uint64_t version);
+    void pruneCommitPins();  // keeps the pins a capture's committedIn names
+    // Whether `at`'s first-parent line, or a line merged into it, holds `in`.
+    bool reachesCommit(std::uint64_t at, std::uint64_t in) const;
     // The device changed under the running engine: stop it and remember to
     // start it again (same backend kind, block and options).
     void beginRestart(std::string reason, double seconds);

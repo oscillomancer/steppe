@@ -102,7 +102,8 @@ if(SUPPLE_BUILD_TESTS)
                        engine.tests.test_clip_player_rate_fades engine.tests.test_clip_player_rate_stretch
                        engine.tests.test_clip_player_rate_presses PROPERTIES TIMEOUT 1200)
   # S3 step D4's trajectory cases: 227 s and 206 s under ThreadSanitizer at
-  # -j 2 (before the cold-restart case moved in from rate_stretch, 573 s then).
+  # -j 2 (before the cold-restart case moved in from rate_stretch, 573 s then);
+  # 290 s and 266 s on capture-kept, where the retry entry took 161 s at -j 2.
   set_tests_properties(engine.tests.test_clip_player_rate_trajectory
                        engine.tests.test_clip_player_rate_trajectory_queued
                        engine.tests.test_clip_player_rate_retry PROPERTIES TIMEOUT 1200)

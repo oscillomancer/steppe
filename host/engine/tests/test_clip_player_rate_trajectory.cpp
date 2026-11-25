@@ -532,11 +532,18 @@ TEST_CASE("a launched clip unread across a trajectory change catches up within i
         addEnvelope(p);  // S at about 209600
         live.until(230000);
         p.run("clip.set", R"({"clip": "cl_2", "mute": false})");
+        // The renderer's work is counted against the callback it answers:
+        // settled before the span and after each callback (by the wake
+        // condition, no clock), it renders exactly what that callback made
+        // room for. Without that, a renderer the OS runs late (Windows CI)
+        // does several callbacks' work inside one count.
+        live.settle();
         std::uint64_t most = 0;
         const std::uint64_t start = detail::stretchQuanta();
         for (std::int64_t c = 230000 / 128 + 1; c <= 280000 / 128; ++c) {
             const std::uint64_t before = detail::stretchQuanta();
             live.until(c * 128);
+            live.settle();
             most = std::max(most, detail::stretchQuanta() - before);
         }
         const std::uint64_t total = detail::stretchQuanta() - start;
@@ -546,9 +553,13 @@ TEST_CASE("a launched clip unread across a trajectory change catches up within i
         run.latency = live.latency;
         INFO("most quanta in one callback " << most << ", " << total << " in all");
         CHECK(total > 0);  // it was read again
-        // A callback runs its own quanta, and at most a catch-up's more; the
-        // renderer runs ahead in longer slices.
-        CHECK(most <= (options.anticipative ? 64 : 34));
+        // One interval holds one callback's work, the same in both
+        // executors: in the callback, its own 128 frames; anticipative, the
+        // renderer's answer to it, those 128 frames rendered in 64-frame
+        // chunks (a rate quantum while a playrate is on). Two quanta, and
+        // at most a catch-up's 32 more (2 in every run: the unread reading
+        // starts again where it is read).
+        CHECK(most <= 34);
         CHECK(loudest(run, 250000, 280000) > 0.01);  // cl_2 plays again
     }
 }

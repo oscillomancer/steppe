@@ -1331,7 +1331,9 @@ kept take, and the warnings are readable in-process (`EngineApp::captureKeptWarn
 `captureReplaceWarning`), and `CaptureView` carries what they say as fields, with the commit's
 state (never written, committed, or undone: declined, which the GUI does not write again); the
 Capture pane's showing them, and not arming over a kept take, is the
-gui-lead's.
+gui-lead's. After the round 168 re-check: the app pins the commit's version, so a history squash
+cannot hide that it was undone; a merge that brings the commit onto the head's line counts as it;
+and a launch.commit whose transaction rolls back marks nothing.
 
 ## Consequences
 

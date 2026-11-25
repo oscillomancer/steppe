@@ -766,7 +766,9 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
     }
     projectGeneration_.fetch_add(1, std::memory_order_acq_rel);
     keptCapture_.reset();  // the old project's (the GUI asks first: captureUncommitted)
-    stopAudition();        // a file audition belongs to the old project's media folder (ADR-0094)
+    pendingCommit_.reset();
+    commitPins_.clear();  // leases in the old project's history
+    stopAudition();       // a file audition belongs to the old project's media folder (ADR-0094)
     // A control still moving belongs to the old project's effects.
     learnCommits_.clear();
     learnState_.clear();
@@ -1910,7 +1912,10 @@ bool captureBegun(const Engine::LaunchCapture& c) { return c.placed && c.frames 
 std::optional<EngineApp::CaptureView> EngineApp::launchCapture() {
     if (engine_)
         if (auto c = engine_->launchCapture(); c && (captureBegun(*c) || !keptCapture_)) {
-            if (captureBegun(*c)) keptCapture_.reset();  // the newer one ran: it replaces it
+            if (captureBegun(*c) && keptCapture_) {  // the newer one ran: it replaces it
+                keptCapture_.reset();
+                pruneCommitPins();
+            }
             const double rate = engine_->config().sampleRate;
             return described(CaptureView{std::move(*c), rate, false, CaptureEnd::None});
         }
@@ -1932,29 +1937,48 @@ EngineApp::CaptureView EngineApp::described(CaptureView view) const {
 EngineApp::CaptureCommit EngineApp::captureCommit(const Engine::LaunchCapture& c) const {
     const std::uint64_t in = c.committedIn;
     if (in == 0) return CaptureCommit::None;
-    // Committed while the head descends from the commit's version by first
-    // parents (an undo takes it back, a redo restores it), and that version
-    // holds the launch.commit (a rolled-back transaction's number is reused
-    // by the next commit; until then it is past the store's numbers). A step
-    // that squashed earlier ones, or history pruned before it, cannot be
-    // undone past: committed.
+    // Set only once the commit's transaction committed (a rollback drops the
+    // mark), and the version is pinned (commitPins_), so it is never
+    // squashed or collected. Committed while the head reaches it: by first
+    // parents (an undo takes it back, a redo restores it), or through a
+    // merge of a line that holds it.
+    return reachesCommit(versions_->headVersion(versions_->branch()), in) ? CaptureCommit::Committed
+                                                                          : CaptureCommit::Undone;
+}
+
+bool EngineApp::reachesCommit(std::uint64_t at, std::uint64_t in) const {
     const model::VersionStore& store = *versions_;
-    if (store.nextVersion() <= in) return CaptureCommit::None;  // rolled back, not reused yet
-    std::uint64_t at = store.headVersion(store.branch());
-    while (at > in) {
+    while (at > in) {  // ids grow from parent to child
         const model::Version* v = store.version(at);
-        if (!v) return CaptureCommit::Committed;
-        if (v->parents.empty()) return CaptureCommit::Undone;
-        const std::uint64_t parent = v->parents[0];
-        if (parent < in && v->squashedSteps > 0) return CaptureCommit::Committed;
-        at = parent;
+        if (!v) return false;                // not on a retained line: say it is uncommitted
+        if (v->replayOf == in) return true;  // the commit, replayed by a merge
+        // A merge's last step: its second parent is the merged branch's head.
+        if (v->parents.size() > 1 && reachesCommit(v->parents[1], in)) return true;
+        if (v->parents.empty()) return false;
+        at = v->parents[0];
     }
-    if (at != in) return CaptureCommit::Undone;
-    const model::Version* v = store.version(in);
-    if (!v) return CaptureCommit::Committed;
-    for (const model::Invocation& call : v->txn.invocations)
-        if (call.command == "launch.commit") return CaptureCommit::Committed;
-    return CaptureCommit::None;  // the number was reused by another commit
+    return at == in;
+}
+
+void EngineApp::applyCommitMark(const CommitMark& mark, std::uint64_t version) {
+    if (mark.version != version) return;
+    if (mark.kept) {
+        if (!keptCapture_) return;
+        keptCapture_->capture.committedIn = version;
+    } else {
+        if (!engine_) return;
+        engine_->markCaptureCommitted(version);
+    }
+    if (auto lease = versions_->pin(version)) commitPins_[version] = std::move(lease);
+    pruneCommitPins();
+}
+
+void EngineApp::pruneCommitPins() {
+    std::set<std::uint64_t> named;
+    if (keptCapture_) named.insert(keptCapture_->capture.committedIn);
+    if (engine_)
+        if (const auto c = engine_->launchCapture()) named.insert(c->committedIn);
+    std::erase_if(commitPins_, [&](const auto& pin) { return !named.contains(pin.first); });
 }
 
 bool EngineApp::captureUncommitted() {
@@ -1965,12 +1989,10 @@ bool EngineApp::captureUncommitted() {
 }
 
 void EngineApp::markCaptureCommitted(std::uint64_t version) {
+    if (replaying_) return;  // a replayed launch.commit writes a recorded performance
     const auto c = launchCapture();
     if (!c) return;
-    if (c->kept && keptCapture_)
-        keptCapture_->capture.committedIn = version;
-    else if (engine_)
-        engine_->markCaptureCommitted(version);
+    pendingCommit_ = CommitMark{version, c->kept};  // applied by commitTransaction
 }
 
 bool EngineApp::captureKept() {
@@ -5875,6 +5897,9 @@ Status EngineApp::commitTransaction(std::uint64_t id) {
         }
     } writing{autoWrite_, std::exchange(autoWriteRollback_, std::nullopt)};
     std::unique_ptr<model::EditTxn> t = std::move(txn_);
+    // launch.commit's mark counts only if this commits (review round 168
+    // re-check R3): any return before that drops it.
+    const auto commitMark = std::exchange(pendingCommit_, std::nullopt);
     mainWake_.notify();  // resume work deferred by this transaction
     auto changes = t->changes();
     if (changes.empty() && !t->projectChanged() && t->created().empty()) {
@@ -5890,6 +5915,7 @@ Status EngineApp::commitTransaction(std::uint64_t id) {
                                std::move(created), clockMs());
     if (!v) return std::move(v).error();
     writing.committed = true;
+    if (commitMark) applyCommitMark(*commitMark, *v);
     json::Value ev = json::Value::object();
     ev["version"] = *v;
     ev["branch"] = versions_->branch();
@@ -5901,6 +5927,7 @@ Status EngineApp::commitTransaction(std::uint64_t id) {
 Status EngineApp::rollbackTransaction(std::uint64_t id) {
     if (id == txnId_) {
         txn_.reset();
+        pendingCommit_.reset();  // its launch.commit did not happen
         if (autoWriteRollback_) autoWrite_ = std::move(*autoWriteRollback_);
         autoWriteRollback_.reset();
         mainWake_.notify();
@@ -5912,10 +5939,11 @@ Result<std::function<Status()>> EngineApp::invocationSavepoint() {
     if (!txn_) return std::function<Status()>{};
     auto scriptEvents = scripts_ ? scripts_->eventSavepoint() : std::function<void()>{};
     return std::function<Status()>([this, saved = *txn_, record = record_, writing = autoWrite_,
-                                    events = events_,
+                                    events = events_, mark = pendingCommit_,
                                     scriptEvents = std::move(scriptEvents)]() mutable {
         *txn_ = std::move(saved);
         record_ = std::move(record);
+        pendingCommit_ = mark;  // a launch.commit undone with its step
         autoWrite_ = std::move(writing);
         events_ = std::move(events);
         if (scriptEvents) scriptEvents();

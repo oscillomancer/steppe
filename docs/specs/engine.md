@@ -608,10 +608,14 @@ the same.*
   uncommitted capture, said by what ended it; a client in-process reads the
   same lines from `EngineApp::captureKeptWarning` and
   `captureReplaceWarning`. A capture counts as committed while the head
-  descends, by first parents, from the version launch.commit wrote it in
-  (`LaunchCapture::committedIn`, checked to hold the launch.commit): an
-  undo of the commit makes it uncommitted again, a redo commits it, and an
-  edit after the undo leaves it uncommitted (`captureUncommitted`).
+  reaches the version launch.commit wrote it in
+  (`LaunchCapture::committedIn`): by first parents, or through a merge of a
+  branch whose line holds it (a merge that replays the commit counts as
+  it). An undo of the commit makes it uncommitted again, a redo commits it,
+  and an edit after the undo leaves it uncommitted (`captureUncommitted`).
+  The mark is set only when the commit's transaction commits (a rolled-back
+  script's launch.commit leaves none), and the app pins that version
+  (`VersionStore::pin`), so a history squash or collection never loses it.
   `EngineApp::CaptureView` carries as fields all that the warnings say,
   for a client that words its own line: the span (`capture.startSample`
   and `frames`, and `startBeat`/`endBeat` on the current time map), the

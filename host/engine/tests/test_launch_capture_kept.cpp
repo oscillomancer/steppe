@@ -342,3 +342,90 @@ TEST_CASE("a restart that gives up after a slow last attempt names the kept capt
     CHECK(reported.find("kept uncommitted") != std::string::npos);
     CHECK(p.app->engine() == nullptr);
 }
+
+namespace {
+// A take kept across a stop, nothing committed yet (the engine stopped).
+void keptTake(Project& p) {
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    take(p, live, 150016, true);
+    (void)p.run("engine.stop", "{}");
+}
+
+EngineApp::CaptureCommit commitOf(Project& p) {
+    const auto view = p.app->launchCapture();
+    REQUIRE(view);
+    return view->commit;
+}
+}  // namespace
+
+TEST_CASE("a history squash after an undone commit leaves it undone") {
+    // Review round 168 re-check R1: commit, undo, then edits under a budget
+    // that squashes all it can. The step before the commit is squashed into
+    // the first edit after the undo; the commit's version is pinned, so the
+    // check still sees the commit off the head's line.
+    Project p;
+    p.run("project.set", R"({"history_budget_bytes": 1})");
+    keptTake(p);
+    (void)p.run("launch.commit", "{}");
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    p.run("history.undo", "{}");
+    p.run("track.add", R"({"name": "E1"})");
+    p.run("track.add", R"({"name": "E2"})");
+    p.run("track.add", R"({"name": "E3"})");
+    CHECK(p.run("history.list", "{}")["truncated"].asBool());
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Undone);
+    CHECK(p.app->captureUncommitted());
+    CHECK(p.app->captureKeptWarning());
+}
+
+TEST_CASE("a commit merged into main from a branch counts as committed") {
+    // Review round 168 re-check R2: committed on a branch, then merged into a
+    // main that moved meanwhile (a replay, not a fast-forward).
+    Project p;
+    keptTake(p);
+    p.run("branch.create", R"({"name": "idea"})");
+    (void)p.run("launch.commit", "{}");
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    p.run("branch.switch", R"({"name": "main"})");
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Undone);  // main has not got it
+    p.run("track.add", R"({"name": "Main moved"})");
+    json::Value merged = p.run("branch.merge", R"({"from": "idea"})");
+    CHECK_FALSE(merged["fast_forward"].asBool());
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    CHECK_FALSE(p.app->captureUncommitted());
+    CHECK_FALSE(p.app->captureKeptWarning());
+}
+
+TEST_CASE("a rolled-back launch.commit leaves the capture unmarked") {
+    // Review round 168 re-check R3: a batch commits the capture, then fails
+    // and rolls back; a launch.commit of an explicit performance then takes
+    // the same version number. The capture was never written.
+    json::Value performance;
+    {
+        Project twin;
+        keptTake(twin);
+        (void)twin.run("launch.commit", "{}");
+        json::Value log = twin.run("log.list", R"({"limit": 1})");
+        const json::Value& last = log["entries"].at(log["entries"].size() - 1);
+        REQUIRE(last.find("command")->asString() == "launch.commit");
+        performance = *last.find("args")->find("performance");
+    }
+    Project p;
+    keptTake(p);
+    const std::uint64_t before = p.app->head().version;
+    auto failed = p.bus->execute(
+        {"batch",
+         j(R"({"steps": [{"command": "launch.commit", "args": {}},)"
+           R"( {"command": "track.set", "args": {"track": "tr_99", "name": "x"}}]})"),
+         kOrigin});
+    REQUIRE_FALSE(failed);
+    CHECK(p.app->head().version == before);
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::None);
+    json::Value args = json::Value::object();
+    args["performance"] = performance;
+    (void)p.runArgs("launch.commit", args);
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::None);
+    CHECK(p.app->captureUncommitted());
+    CHECK(p.app->captureKeptWarning());
+}
