@@ -2201,9 +2201,10 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   duplicated track: its volume, pan and width; the level of each send it
   copies (onto the copy's new send); and its chain, input-chain and take
   FX. That changes what it did before M5, when it copied no route.
-  - Its copy can close no cycle. The copy has the original's sends and
-    parent, no sends into it, and only the original's routes coming in. So
-    any cycle through the copy would already pass through the original.
+  - Its copy can close no cycle. The copy has the original's sends, parent
+    and parent send, no sends into it, and only the original's routes
+    coming in. So any cycle through the copy would already pass through
+    the original.
   - Racks homed on the track are not copied, so no route's source is.
 - **A split.** `item.split` leaves both halves with the routes: the right
   half's FX are copies, each with its own routes.
@@ -2233,7 +2234,8 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   - The rest of the copy goes ahead.
   - A cycle can arise only where the destination track can differ from the
     original's: `item.paste`, `clip.duplicate {track}`, `item.add {clip}`,
-    `scene.insert` and `arrangement.build`.
+    `clip.add {item}` (the clip goes on its `track`), `scene.insert` and
+    `arrangement.build`.
 - **Too many routes.** A copy that would take the project past 4096 routes
   is refused whole, never trimmed, with `modulation.limit`.
   - The message gives the count the copy would reach. The hint says how
@@ -2259,18 +2261,22 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   chain and whose target is outside it is not copied. Today a source is
   always a rack's Mod Out, so the case cannot arise.
 - **Moves.** A command that moves a take to another track keeps its
-  routes: `item.move`, `clip.move` and `take.extract`.
+  routes: `item.move`, `clip.move`, `take.extract` and
+  `item.explode-takes {mode: tracks}`.
   - A move that would close a cycle is refused with `modulation.cycle`,
     naming the route, with a hint to remove the route or choose another
     track. The path is `/track`, the argument that moves the take there.
-    `take.extract` without `track` stays on its track and cannot close
-    one.
+    For `item.explode-takes` it is `/item`. `take.extract` without `track`
+    stays on its track and cannot close one.
   - No route is dropped by a move. A move in time hears its sources at its
     new time.
-  - `item.explode-takes {mode: tracks}` cannot close a cycle. Its new
-    channels sit under the original's parent with no sends and the routes
-    of their takes, so their edges are a subset of the original's. A test
-    pins this.
+  - `item.explode-takes {mode: tracks}` can close one (round 188 G2).
+    Its new channels get the default parent send, so under a parent the
+    original does not feed (its parent send off) they feed what it did
+    not.
+    - The cycle refusal is the guard, and a test pins it.
+    - The new channels keep the default parent send: they get no sends,
+      so copying an off parent send would leave them unheard.
 - **Bakes.** A bake whose result replaces modulated take FX is exact, with
   the modulation printed as it plays, or it is refused while those FX are
   modulated: `modulation.bake` at the bake's item or track argument, with a
@@ -2279,6 +2285,16 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   - The bakes are `item.consolidate`, `item.apply-fx`, `item.mix-to-track`
     and `track.freeze`.
   - Step 5's test decides which of the two each bake is.
+  - **An exact bake's stale check covers the routes.** A bake that renders
+    first and commits later (`item.consolidate` through
+    `item.consolidate.commit`, and the other background bakes) is refused
+    as stale when a route into a baked FX, or its source, was added,
+    removed or changed in between.
+    - `itemEditFingerprint` gathers those routes as `freezeDependencyHash`
+      already does for a freeze.
+  - **Refusals come before the render.** `modulation.bake`, and
+    `modulation.limit` for the MIDI merge's copy, are checked when the bake
+    starts, not only in its commit.
 
 **Commands.**
 - `modulation.add` and `modulation.set` also check what the model cannot

@@ -85,9 +85,13 @@ changes is in engine.md §1.4.1, "Take FX targets".
     interval before its input reaches the item or clip. The grid point at
     or before the onset is then inside a block the chain runs, at every
     block size, in both executors (round 187 F1).
-  - For a clip chain the launch reaches the node one grid interval earlier
-    than its lead. So on such a node an unquantized launch applies up to 32
-    frames later.
+  - On a node with a modulated clip chain, the incoming clip's chain alone
+    is entered one grid interval before the launch's input switch, which
+    stays at the node's lead (round 188 G1).
+    - An outgoing clip still ends at the switch.
+    - Placement keeps the extra 32 frames of room. An unquantized launch
+      applies up to 32 frames later, and a quantized one pressed within
+      32 frames more before its boundary takes the next boundary.
   - The reset moves `modulationEpoch`, so the first grid point sends every
     modulated parameter.
 - **Copies keep their routes.** This is the co-director's ruling of

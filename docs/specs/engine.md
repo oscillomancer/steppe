@@ -391,12 +391,47 @@ until it is released.
     - **Item chains.** Every branch where `processTake` decides that the
       chain meets its item (unity, the early wrap, the playrate path)
       widens the input end by `kAutomationStep`.
-    - **Clip chains.** On a node with a modulated clip chain, a launch
-      reaches the node `launchLead + kAutomationStep` frames before it
-      applies, and that chain enters on reaching it. `launchEarly` is the
-      larger of that and the warm-up. Placement keeps that much room, so
-      on such a node an unquantized launch applies up to 32 frames later
-      than it would otherwise. The replay places it the same way.
+      - This holds for every item chain, modulated or not. So it moves
+        every item chain's reset up to one block earlier.
+      - Plug-ins whose state runs free from their reset (an LFO's phase)
+        may render differently in existing projects, and goldens may move.
+        That state depended on the block size before as well, so this is
+        not a regression.
+    - **Modulated clip chain.** A node has one when any route edge reaches
+      a stage of one of its clip chains: enabled, disabled or inert (every
+      route is an edge, M-l). The compile decides it.
+      - An edit that changes this changes the node's `launchEarly`.
+      - A committed launch whose new early frame has already passed is
+        voided and placed again, by the existing path. So such an edit can
+        move a launch already placed.
+    - **Clip chains: two switches (round 188 G1).** On a node with a
+      modulated clip chain, a launch is known to the node
+      `launchLead + kAutomationStep` frames before it applies.
+      - At that point only the incoming clip's chain is entered (activated
+        and reset), and it runs on silence. It is in a third state,
+        entered, beside playing and inactive (`processClipChain`
+        otherwise deactivates a chain that has no input and is not heard).
+      - The input switch, `launchNext`, stays at `launchLead` before the
+        switch, as now. So an outgoing MIDI clip still ends its notes at
+        the switch, and a relaunched audio clip plays on to it.
+      - A chain already active, such as the relaunch of the playing clip,
+        is not entered again.
+      - The replay has the same two switches, the entry and the input
+        switch, at the same frames.
+      - Like `launchNext`, the entry is one slot per node. Launches closer
+        together than the early window overwrite it as they overwrite
+        `launchNext` (an existing rule). The window is 32 frames wider.
+    - **What it costs.** `launchEarly` is the larger of
+      `launchLead + kAutomationStep` and the warm-up, and placement keeps
+      that much room before the switch.
+      - On such a node an unquantized launch applies up to 32 frames later
+        than it would otherwise.
+      - A quantized launch pressed within 32 frames more before its
+        boundary takes the next boundary: the last
+        `launchLead + 32 + block` frames instead of the last
+        `launchLead + block`.
+      - The replay places launches the same way, so real time equals the
+        replay and `as_heard` is unchanged.
     - **Locates.** A locate (play, a seek) enters at the locate, as a play
       start does, and both runs start there.
     - **Take FX lanes.** The same early entry makes their first value
@@ -452,6 +487,9 @@ until it is released.
       point, played from a position off the 32 grid: real time at 128 and
       512 equals the offline render, in both executors (F1, S1);
     - the same for a clip chain coming in;
+    - on a node with a modulated clip chain, a MIDI clip switch and an
+      audio relaunch equal the same launches without the route, apart from
+      the modulated parameter (G1);
     - a loop with a latent take chain whose lead exceeds the track's
       read-ahead, with the route on a stage k > 0, across the early wrap
       (S2);
