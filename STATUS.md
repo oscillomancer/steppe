@@ -336,9 +336,14 @@ instructions are in `docs/guides/installing.md`.
       inside a track's warm-up lands after that switch; a compiled
       trajectory change (an envelope edit, preserve pitch toggled) switches
       launched audio where the items switch, crossfaded from the old
-      reading (S3 step D4, phase 1: the new reading is primed on the audio
-      thread, a warm-up's primes for each track with launched audio, in the
-      callback holding the switch, until the main-thread mirror lands), and
+      reading (S3 step D4: the new reading is primed by the executor at
+      its first use, a warm-up's primes, 45 at 48 kHz, for each track with
+      launched audio in the block holding the switch: on the anticipative
+      renderer within its render-ahead, but inside the device callback with
+      the in-callback executor (`engine.start {"anticipative": false}`) or
+      for an armed or monitored track, a burst that can overrun a small
+      device block; a main-thread mirror was built and taken out, ADR-0097,
+      revision 2026-11-24), and
       an audio launch pressed while it is pending, or queued before it and
       not yet begun, can land a boundary later, after its crossfade plus a
       warm-up; a
@@ -360,6 +365,16 @@ instructions are in `docs/guides/installing.md`.
     - a quantize of `none` waits for the floor, about a device block for
       a live track and about 0.2 s for a rendered one, plus the latency
       of the track's clip chains;
+    - a capture is kept across an engine stop, a device restart and a
+      device failure (ended there if running) and stays committable;
+      quitting the app or replacing the project with one uncommitted
+      loses it (the GUI's unsaved-work dialog does not count it yet; a
+      headless app has none); a newer capture replaces it once it begins,
+      with a warning (ADR-0097, revision 2026-11-24); an undo of its commit
+      makes it uncommitted again; the GUI's Capture commits a kept take, but
+      its pane does not show the warnings yet, and after a device restart a
+      Capture click arms over a kept take, which the next Play replaces
+      (the gui-lead's change, with the quit dialog);
     - a capture ends at a seek, a loop change or a stop, by design (one
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
@@ -1969,7 +1984,8 @@ Session and editing:
   off the audio executors while playback/monitoring continues. Clock windows
   reserve four additional seconds for latency changes; history exhaustion or late
   preparation recovers automatically through a prepared locate at the consumed
-  position, with the same state reset/preroll as a seek. Moving a compensated
+  position, with the same state reset/preroll as a seek; like a seek, it
+  ends a running launch capture there (ADR-0097 L4). Moving a compensated
   stretch source uses this recovery too, preserving phase alignment. Under
   read-ahead PDC, inserting track latency can move sibling sources and trigger
   this same recovery, even when the clock window itself has enough history.

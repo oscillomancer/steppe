@@ -2276,7 +2276,9 @@ TEST_CASE("launch.commit: history, undo, pooling and refusals") {
         REQUIRE_FALSE(r);
         return r.error();
     };
-    CHECK(fails("launch.commit", j("{}")).code == "engine.stopped");
+    // Stopped with nothing kept: nothing to commit (a kept capture commits
+    // with the engine stopped, ADR-0097 revision 2026-11-24).
+    CHECK(fails("launch.commit", j("{}")).code == "launch.capture");
     CHECK(fails("launch.capture", j(R"({"on": true})")).code == "engine.stopped");
     // tr_1 plays cl_1 from bar 2 for a bar: a performance given outright,
     // as history records it.

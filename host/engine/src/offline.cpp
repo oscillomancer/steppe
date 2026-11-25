@@ -1167,8 +1167,9 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                                 sw.action.anchorBeat);
                     else if (sw.early)
                         detail::prelaunch(node, sw.action);
-                    else if (sw.warm)  // where it applies, a launchWarm later
-                        detail::prewarm(node, sw.action, sw.at + node.launchWarm);
+                    else if (sw.warm)  // its running frame, a launchWarm later, unshifted
+                        detail::prewarm(node, sw.action,
+                                        sw.at + node.launchWarm - node.timelineShift);
                     else
                         detail::applyLaunch(node, sw.action);
                 }

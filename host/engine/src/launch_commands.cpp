@@ -49,6 +49,7 @@ struct LaunchTrackState {
 struct LaunchStateResult {
     bool playing = false, capturing = false;
     std::optional<double> captureEnds;
+    std::optional<bool> captureKept;
     std::vector<LaunchTrackState> tracks;
 };
 struct CaptureArg {
@@ -58,10 +59,12 @@ struct CaptureArg {
 struct CaptureDone {
     bool on = false;
     std::optional<double> from, to, endsAt;
+    std::optional<std::vector<std::string>> warnings;
 };
 struct CommitArgs {
     bool pooled = false;
     std::optional<CapturedPerformance> performance;
+    bool fromCapture = false;  // resolve filled it from the capture (not in the schema)
 };
 
 using Action = LaunchLogEntry::Action;
@@ -410,7 +413,12 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "follow_budget: true when the follow budget forced that (a chords clip by its key, "
             "or any as written). Tracks without clips always follow the arrangement and are not "
             "listed. capturing: launch.capture is on; capture_ends: the beat a quantized "
-            "end (launch.capture {on: false, quantize}) ends it on, until it does.";
+            "end (launch.capture {on: false, quantize}) ends it on, until it does; capturing is "
+            "true from launch.capture {on: true}, armed or running. capture_kept (when there is "
+            "a capture): true while one is kept beside the engine's, from before an engine "
+            "stop or a device restart, or the one a newer capture replaces once that hears a "
+            "frame: both can hold at once. With the engine stopped it answers for a kept "
+            "capture (no tracks).";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto queued = schema::object<LaunchQueued>("launch_queued")
@@ -436,6 +444,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("playing", &LaunchStateResult::playing, schema::boolean())
                        .field("capturing", &LaunchStateResult::capturing, schema::boolean())
                        .field("capture_ends", &LaunchStateResult::captureEnds, schema::number())
+                       .field("capture_kept", &LaunchStateResult::captureKept, schema::boolean())
                        .field("tracks", &LaunchStateResult::tracks, schema::arrayOf(track))
                        .build();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"}};
@@ -444,14 +453,20 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        "song_with_clip_running"}};
         c.run = [](const NoArgs&, Context& ctx) -> Result<LaunchStateResult> {
             EngineApp& app = engine::app(ctx);
+            // Both at once (review round 168 F2): the engine's own capture,
+            // armed or running, and a kept one beside it.
+            const bool kept = app.captureKept();
+            const bool any = app.launchCapture().has_value();
             auto engine = runningEngine(app);
-            if (!engine) return std::move(engine).error();
-            const double rate = (*engine)->config().sampleRate;
+            if (!engine && !kept) return std::move(engine).error();
             LaunchStateResult out;
+            if (any) out.captureKept = kept;
+            if (!engine) return out;  // stopped: the kept capture alone
+            out.capturing = (*engine)->launchCapturing();
+            if (const auto own = (*engine)->launchCapture(); own && own->on)
+                out.captureEnds = own->endsBeat;
+            const double rate = (*engine)->config().sampleRate;
             out.playing = (*engine)->transport().playing;
-            const auto capture = (*engine)->launchCapture();
-            out.capturing = capture && capture->on;
-            if (capture) out.captureEnds = capture->endsBeat;
             for (const TL& t : (*engine)->launchState()) {
                 LaunchTrackState e;
                 e.track = t.track.str();
@@ -519,6 +534,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
                        .field("from", &CaptureDone::from, schema::number())
                        .field("to", &CaptureDone::to, schema::number())
                        .field("ends_at", &CaptureDone::endsAt, schema::number())
+                       .field("warnings", &CaptureDone::warnings, schema::arrayOf(schema::string()))
                        .build();
         c.errors = {{"engine.stopped", "the engine is not running", "engine.start first"},
                     {"launch.playrate",
@@ -533,8 +549,18 @@ void registerLaunchCommands(cmd::Registry& registry) {
             EngineApp& app = engine::app(ctx);
             auto engine = runningEngine(app);
             if (!engine) return std::move(engine).error();
+            std::optional<std::string> replaced;
+            if (a.on && !(*engine)->launchCapturing()) {
+                // A capture is a buffer until committed: a newer one replaces
+                // it once it begins, said here (captureReplaceWarning, as a
+                // client in-process reads it); the app keeps it until then.
+                replaced = app.captureReplaceWarning();
+                app.keepEngineCapture();
+            }
             SUPPLE_TRY((*engine)->captureLaunches(a.on, a.on ? std::nullopt : a.quantize));
-            return captureDone(app, **engine);
+            CaptureDone out = captureDone(app, **engine);
+            if (replaced) out.warnings = std::vector<std::string>{*replaced};
+            return out;
         };
         addChecked(registry, std::move(c));
     }();
@@ -545,8 +571,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Write the captured performance onto the timeline as items.";
         c.description =
-            "One undo step. The capture (launch.capture) is laid out linearly from where it "
-            "began, by running time, whatever the transport loop did: a launch heard s seconds "
+            "One undo step. The capture (launch.capture), or one kept across an engine stop or a "
+            "device restart (with the engine stopped or started again), is laid out linearly "
+            "from where it began, by running time, whatever the transport loop did: a launch heard "
+            "s seconds "
             "into the capture lands s seconds after its start (under a master playrate, s "
             "seconds of song: the same song positions, not the same durations). On each track that "
             "left the "
@@ -614,7 +642,6 @@ void registerLaunchCommands(cmd::Registry& registry) {
                                   "it plays out to its pass's end."))
                        .build();
         c.errors = {
-            {"engine.stopped", "the engine is not running", "engine.start first"},
             {"launch.capture", "nothing has been captured",
              "launch.capture {on: true}, play and launch clips, then launch.commit"},
             {"launch.capture.ending", "the capture ends on a boundary not heard yet",
@@ -639,26 +666,27 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.resolve = [](CommitArgs& a, Context& ctx) -> Status {
             if (a.performance) return {};
             EngineApp& app = engine::app(ctx);
-            auto engine = runningEngine(app);
-            if (!engine) return std::move(engine).error();
-            auto capture = (*engine)->launchCapture();
-            if (capture && capture->on && capture->endsBeat)
-                return Error("launch.capture.ending",
-                             "the capture ends at beat " + json::formatDouble(*capture->endsBeat) +
-                                 ", which has not been heard yet",
-                             "",
-                             "commit once launch.state says capturing is false, or launch.capture "
-                             "{on: false} to "
-                             "end it now");
-            if (capture && capture->on) {
-                (void)(*engine)->captureLaunches(false);
-                capture = (*engine)->launchCapture();
+            // The engine's capture, or the one kept across an engine stop or
+            // a newer capture not yet begun (EngineApp::launchCapture).
+            auto capture = app.launchCapture();
+            if (capture && !capture->kept && capture->capture.on) {
+                if (capture->capture.endsBeat)
+                    return Error("launch.capture.ending",
+                                 "the capture ends at beat " +
+                                     json::formatDouble(*capture->capture.endsBeat) +
+                                     ", which has not been heard yet",
+                                 "",
+                                 "commit once launch.state says capturing is false, or "
+                                 "launch.capture {on: false} to end it now");
+                (void)app.engine()->captureLaunches(false);
+                capture = app.launchCapture();
             }
-            if (!capture || capture->frames <= 0)
+            if (!capture || capture->capture.frames <= 0)
                 return Error("launch.capture", "no performance has been captured", "",
                              "launch.capture {on: true}, play and launch clips, then "
                              "launch.commit");
-            a.performance = performanceOf(*capture, (*engine)->config().sampleRate);
+            a.performance = performanceOf(capture->capture, capture->sampleRate);
+            a.fromCapture = true;
             return {};
         };
         c.run = [](const CommitArgs& a, Context& ctx) -> Result<CommitDone> {
@@ -667,6 +695,10 @@ void registerLaunchCommands(cmd::Registry& registry) {
                              "launch.capture {on: true}, play and launch clips, then "
                              "launch.commit");
             auto done = commitPerformance(ctx, *a.performance, a.pooled);
+            // Committed in this transaction's version: an undo of it makes
+            // the capture uncommitted again (review round 168 F4).
+            if (done && a.fromCapture)
+                engine::app(ctx).markCaptureCommitted(engine::app(ctx).txn().version());
             // The item commands it ran recorded their own resolved arguments
             // (item.split); history records this command's.
             ctx.setResolvedArgs(commitArgsSchema().encode(a));

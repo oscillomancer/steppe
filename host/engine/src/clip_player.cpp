@@ -777,6 +777,8 @@ void stretchSeek(PlayerReader& r, const ClipPlayer& pl, std::int64_t anchor, boo
 }
 
 std::atomic<std::uint64_t> gStretchPrimes{0};
+std::array<std::atomic<std::int64_t>, 256> gStretchPrimeFrames{};
+std::atomic<std::uint64_t> gStretchQuanta{0};
 
 // Up to `budget` more of its primes; true once it is ready, its output
 // running from its start quantum.
@@ -788,7 +790,9 @@ bool stretchPrime(PlayerReader& r, const PlayrateTimeline& timeline,
     const PlayerSource source = stretchSource(r, *r.player, timeline);
     while (r.primes < quanta && budget-- > 0) {
         ++r.primes;
-        gStretchPrimes.fetch_add(1, std::memory_order_relaxed);
+        const std::uint64_t counted = gStretchPrimes.fetch_add(1, std::memory_order_relaxed) + 1;
+        gStretchPrimeFrames[counted % gStretchPrimeFrames.size()].store(r.startQuantum,
+                                                                        std::memory_order_relaxed);
         const std::int64_t at = r.startQuantum - std::int64_t(quanta) * kRateQuantum +
                                 std::int64_t(r.primes) * kRateQuantum + latency;
         if (!st.stretch->primeTo({&source, PlayerSource::read, 2},
@@ -819,7 +823,12 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
     constexpr std::int64_t kCatchUp = 32 * kRateQuantum;
     const bool keyed =
         r.player == &pl && r.anchor == anchor && r.startQuantum != INT64_MIN && q >= r.startQuantum;
-    if (!keyed || (st.primed && (q < st.quantum || q - st.quantum > kCatchUp))) {
+    // The last quantum it has run; an unprimed reading (one carried across a
+    // trajectory change, seeked for S and primed at its first use: S3 step
+    // D4) counts from its start, so a first use long after it starts again
+    // there too instead of running every quantum since in one block.
+    const std::int64_t ran = st.primed ? st.quantum : r.startQuantum - kRateQuantum;
+    if (!keyed || q < ran || q - ran > kCatchUp) {
         const bool fromSwitch = switchQ != INT64_MIN && q >= switchQ && q - switchQ <= kCatchUp;
         r.previousLive = false;  // a fresh reading (S3 step D4)
         stretchSeekCycle(r, pl, anchor, unanchored,
@@ -832,6 +841,7 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
         const std::int64_t next = st.quantum + kRateQuantum;
         const double end = timeline.phase(next + kRateQuantum + st.stretch->lookahead()) +
                            st.stretch->analysisLookahead();
+        gStretchQuanta.fetch_add(1, std::memory_order_relaxed);
         if (!st.stretch->process({&source, PlayerSource::read, 2}, end, st.pointers)) {
             st.failed = true;
             for (auto& channel : st.output) channel.fill(0);
@@ -839,6 +849,15 @@ const RateClipState& stretchQuantum(PlayerReader& r, const ClipPlayer& pl, std::
         st.quantum = next;
     }
     return st;
+}
+
+// The device frame of the switch `n` warms up for: launchWarmAt is the
+// slot's target, a stream frame, and a seek moves the device away from the
+// stream by the plan's rateOrigin. (The node's shift does not enter: its
+// switch lands at the target plus the shift in node frames, the device frame
+// being the node frame less the shift.)
+std::int64_t warmSwitchDevice(const Plan& p, const Node& n) SUPPLE_RT {
+    return n.launchWarmAt + p.rateOrigin;
 }
 
 // A launch warming up on reader 2 (prewarm): its converter seeks at the
@@ -858,11 +877,11 @@ void warmLaunch(const Plan& p, Node& n, std::uint32_t frames) SUPPLE_RT {
     // one switching later warms on the plan's own (round 152 F1).
     const bool before = reader.previousLive && reader.previous && reader.previous->state &&
                         reader.previous->state->preserve && p.previousTimelines[n.live ? 1 : 0] &&
-                        n.launchWarmAt - n.timelineShift <= p.rateSwitchDevice;
+                        warmSwitchDevice(p, n) <= p.rateSwitchDevice;
     PlayerReader& r = before ? *reader.previous : reader;
     const PlayrateTimeline& timeline =
         before ? *p.previousTimelines[n.live ? 1 : 0] : *p.timelines[n.live ? 1 : 0];
-    const std::int64_t device = n.launchWarmAt - n.timelineShift;
+    const std::int64_t device = warmSwitchDevice(p, n);
     const std::int64_t q = quantumAt(p, device);
     if (r.player != &pl || r.anchor != a.anchorSample || r.startQuantum != q)
         stretchSeek(r, pl, a.anchorSample, false, timeline, q, device);
@@ -1383,6 +1402,10 @@ std::int64_t switchCycle(const Node& n, const PlayrateTimeline& timeline) SUPPLE
 }
 
 std::uint64_t stretchPrimes() noexcept { return gStretchPrimes.load(std::memory_order_relaxed); }
+std::uint64_t stretchQuanta() noexcept { return gStretchQuanta.load(std::memory_order_relaxed); }
+std::int64_t stretchPrimeFrame(std::uint64_t n) noexcept {
+    return gStretchPrimeFrames[n % gStretchPrimeFrames.size()].load(std::memory_order_relaxed);
+}
 
 void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
     const PlayrateTimeline& timeline = *p.timelines[n.live ? 1 : 0];
@@ -1394,7 +1417,7 @@ void carryLaunchAcross(const Plan& p, Node& old, Node& n) SUPPLE_RT {
                          old.launchWarmNext.kind == LaunchState::Kind::Clip &&
                          old.launchWarmNext.player >= 0;
     const std::int64_t warmSwitch =
-        warming ? old.launchWarmAt - old.timelineShift : std::numeric_limits<std::int64_t>::max();
+        warming ? warmSwitchDevice(p, old) : std::numeric_limits<std::int64_t>::max();
     const bool warmFirst = warming && warmSwitch <= S;  // what reads at S is that launch
     // The reading each reader holds in the previous plan: 0 what plays, 1
     // what goes out, 2 the warm-up.

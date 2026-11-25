@@ -1296,6 +1296,43 @@ tests, in test_clip_player_rate_trajectory.cpp and its `_queued` sibling:
 
 Phase 2 (the mirror, its keys, the race case, the loop wrap A6) is still to come.
 
+*Revision 2026-11-24, the mirror taken out (the co-director, on review round 166):* phase 2 was
+built (469496c2 through 77c51914 on codirector/launch-s3-d4-mirror; review rounds 163 and 166) and
+removed by a revert on top of ab732087, so it can be brought back by reverting that revert. Measured:
+its output is by design the miss path's, and what it saves is the miss path's burst, 45 primes per
+launched stretched track in the block holding S. With the anticipative renderer, the default and the
+only executor the GUI starts, a renderer caught up leaves the hand about 128 frames past its frontier,
+under the render block the frontier can move at once, so a budget that keeps the mirror from making an
+attempt late (round 166 F) primed nothing; the renderer's misses run within its render-ahead, not
+against a device deadline. It served only the in-callback executor, which only a scripted
+`engine.start {"anticipative": false}` reaches. Its code (a second key path in audio-thread code)
+and test time did not earn that. Kept from it: the tests' renderer settle before an edit and a check
+that two compared runs switched at the same S, and a test hook that makes preparation attempts late
+(late attempts move S later; three end in the recovery seek). The in-callback executor's burst is a
+known limit in STATUS.
+
+### Revision 2026-11-24: a capture is kept across an engine stop
+
+Before it, an engine stop, a device restart or a device failure destroyed the Engine and with it a
+running or ended, uncommitted capture, silently. Decided (the co-director, with Nate's rule "a
+recording is never lost"): `EngineApp` keeps the last capture across `dropEngine`; a running one is
+ended at the heard position first; it stays committable and readable (`launch.state`'s `capture_kept`)
+with the engine stopped or started again, at any device rate; the stop's answer and the device events
+warn while it is uncommitted; a newer capture replaces it only once it begins, and `launch.capture`
+warns then (a capture is a buffer until committed, and the GUI commits at each take's end). Replacing
+the project or quitting drops it; the GUI's unsaved-work dialog is to count it
+(`EngineApp::captureUncommitted`, the gui-lead's change); a headless quit loses it, a limit stated in
+STATUS. A capture a relocation ends (a seek, a loop change, a stop, and the
+playrate's recovery seek, a prepared locate) stays in the engine, committable, as it did before.
+After review round 168: an undo of the commit makes the capture uncommitted again for as long as it
+is kept (the commit counts while the head descends from the version it was written in), so replacing
+it warns; `launch.state` reports a capture armed and a kept one at once; the GUI's Capture commits a
+kept take, and the warnings are readable in-process (`EngineApp::captureKeptWarning`,
+`captureReplaceWarning`), and `CaptureView` carries what they say as fields, with the commit's
+state (never written, committed, or undone: declined, which the GUI does not write again); the
+Capture pane's showing them, and not arming over a kept take, is the
+gui-lead's.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take

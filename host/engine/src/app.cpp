@@ -765,7 +765,8 @@ Status EngineApp::replaceProject(model::VersionStore store, fs::path path,
         if (!stopped) return stopped.error();
     }
     projectGeneration_.fetch_add(1, std::memory_order_acq_rel);
-    stopAudition();  // a file audition belongs to the old project's media folder (ADR-0094)
+    keptCapture_.reset();  // the old project's (the GUI asks first: captureUncommitted)
+    stopAudition();        // a file audition belongs to the old project's media folder (ADR-0094)
     // A control still moving belongs to the old project's effects.
     learnCommits_.clear();
     learnState_.clear();
@@ -1894,7 +1895,127 @@ Status EngineApp::startEngine(std::string_view backend, std::uint32_t block, boo
     return st;
 }
 
-void EngineApp::haltEngine() {
+namespace {
+// A capture that has begun: placed, and heard a frame. One turned on while
+// stopped is placed at once (it begins where playing starts), its launches
+// already holding what each track plays then; turned off before playing,
+// it has captured nothing.
+bool captureBegun(const Engine::LaunchCapture& c) { return c.placed && c.frames > 0; }
+}  // namespace
+
+// Every reader of the capture comes here, and haltEngine checks the same
+// rule, so the kept capture is dropped the first time anyone looks after a
+// newer one has begun: when that is asked does not change what is kept
+// (review round 168 S4).
+std::optional<EngineApp::CaptureView> EngineApp::launchCapture() {
+    if (engine_)
+        if (auto c = engine_->launchCapture(); c && (captureBegun(*c) || !keptCapture_)) {
+            if (captureBegun(*c)) keptCapture_.reset();  // the newer one ran: it replaces it
+            const double rate = engine_->config().sampleRate;
+            return described(CaptureView{std::move(*c), rate, false, CaptureEnd::None});
+        }
+    if (!keptCapture_) return std::nullopt;
+    return described(*keptCapture_);
+}
+
+EngineApp::CaptureView EngineApp::described(CaptureView view) const {
+    view.commit = captureCommit(view.capture);
+    const model::Session session = this->view();  // holds the time map
+    const time::TimeMap& tm = *session.timeMap;
+    const double rate = view.sampleRate > 0 ? view.sampleRate : 48000.0;
+    view.startBeat = tm.beatAt(double(view.capture.startSample) / rate);
+    view.endBeat = tm.beatAt(double(view.capture.startSample + view.capture.frames) / rate);
+    view.replacedOnBegin = view.kept && engine_ && engine_->launchCapturing();
+    return view;
+}
+
+EngineApp::CaptureCommit EngineApp::captureCommit(const Engine::LaunchCapture& c) const {
+    const std::uint64_t in = c.committedIn;
+    if (in == 0) return CaptureCommit::None;
+    // Committed while the head descends from the commit's version by first
+    // parents (an undo takes it back, a redo restores it), and that version
+    // holds the launch.commit (a rolled-back transaction's number is reused
+    // by the next commit; until then it is past the store's numbers). A step
+    // that squashed earlier ones, or history pruned before it, cannot be
+    // undone past: committed.
+    const model::VersionStore& store = *versions_;
+    if (store.nextVersion() <= in) return CaptureCommit::None;  // rolled back, not reused yet
+    std::uint64_t at = store.headVersion(store.branch());
+    while (at > in) {
+        const model::Version* v = store.version(at);
+        if (!v) return CaptureCommit::Committed;
+        if (v->parents.empty()) return CaptureCommit::Undone;
+        const std::uint64_t parent = v->parents[0];
+        if (parent < in && v->squashedSteps > 0) return CaptureCommit::Committed;
+        at = parent;
+    }
+    if (at != in) return CaptureCommit::Undone;
+    const model::Version* v = store.version(in);
+    if (!v) return CaptureCommit::Committed;
+    for (const model::Invocation& call : v->txn.invocations)
+        if (call.command == "launch.commit") return CaptureCommit::Committed;
+    return CaptureCommit::None;  // the number was reused by another commit
+}
+
+bool EngineApp::captureUncommitted() {
+    const auto c = launchCapture();
+    if (!c || !c->capture.placed || c->capture.frames <= 0 || c->capture.launches.empty())
+        return false;
+    return c->commit != CaptureCommit::Committed;  // never written, or taken back
+}
+
+void EngineApp::markCaptureCommitted(std::uint64_t version) {
+    const auto c = launchCapture();
+    if (!c) return;
+    if (c->kept && keptCapture_)
+        keptCapture_->capture.committedIn = version;
+    else if (engine_)
+        engine_->markCaptureCommitted(version);
+}
+
+bool EngineApp::captureKept() {
+    (void)launchCapture();  // a newer capture that has begun replaces it
+    return keptCapture_.has_value();
+}
+
+std::optional<std::string> EngineApp::captureKeptWarning() {
+    if (!captureKept() || !captureUncommitted() || !keptCapture_) return std::nullopt;
+    const char* then = keptCapture_->endedBy == CaptureEnd::EngineStop
+                           ? " was running when the engine stopped: it ended there and is kept "
+                             "uncommitted; launch.commit writes it"
+                       : keptCapture_->endedBy == CaptureEnd::Device
+                           ? " was running when the audio device restarted: it ended there and "
+                             "is kept uncommitted; launch.commit writes it"
+                           : " is kept uncommitted: launch.commit writes it";
+    return "launch: " + captureLine(*keptCapture_, then);
+}
+
+std::optional<std::string> EngineApp::captureReplaceWarning() {
+    if ((engine_ && engine_->launchCapturing()) || !captureUncommitted()) return std::nullopt;
+    return "launch: this capture replaces " +
+           captureLine(*launchCapture(),
+                       ", uncommitted, once it begins; launch.capture {on: false} before then, "
+                       "and launch.commit, keep it");
+}
+
+void EngineApp::keepEngineCapture() {
+    if (!engine_) return;
+    if (auto c = engine_->launchCapture(); c && captureBegun(*c))
+        keptCapture_ =
+            CaptureView{std::move(*c), engine_->config().sampleRate, true, CaptureEnd::None};
+}
+
+std::string EngineApp::captureLine(const CaptureView& c, std::string_view then) const {
+    // Worded from the view's fields, the ones a client in-process reads.
+    const CaptureView d = described(c);
+    const auto beat = [](double b) { return json::formatDouble(std::round(b * 1000) / 1000); };
+    const std::size_t n = d.capture.launches.size();
+    return "the capture from beat " + beat(d.startBeat) + " to " + beat(d.endBeat) + " (" +
+           std::to_string(n) + (n == 1 ? " launch" : " launches") + ", version " +
+           std::to_string(c.capture.version) + ")" + std::string(then);
+}
+
+void EngineApp::haltEngine(CaptureEnd why) {
     // A pass the halt interrupts is never finished (ADR-0061): its writes
     // must not come back as holds or a latch tail when a successor plays or
     // records (recording, unlike play, starts no new pass).
@@ -1904,6 +2025,13 @@ void EngineApp::haltEngine() {
     pendingSourceKey_.clear();
     preparationError_.clear();
     if (engine_) {
+        // The capture is kept (ADR-0097, revision 2026-11-24): a running one
+        // ended here, at the heard position, while the clock still reads.
+        const bool running = engine_->launchCapturing();
+        if (running) (void)engine_->captureLaunches(false);
+        if (auto c = engine_->launchCapture(); c && captureBegun(*c))
+            keptCapture_ = CaptureView{std::move(*c), engine_->config().sampleRate, true,
+                                       running ? why : CaptureEnd::None};
         engine_->stop();
         auto takes = engine_->stopRecording();
         engine_->service();
@@ -2152,12 +2280,17 @@ void EngineApp::beginRestart(std::string reason, double seconds) {
     restartBackoff_ = 0;
     restartUntil_ = serviceClockMs() + kRestartGiveUpMs;
     restartRetryAt_ = serviceClockMs();
+    // Playback stays stopped; the position and the loop are restored. The
+    // capture is kept; the event names it when it is uncommitted.
+    haltEngine(CaptureEnd::Device);
+    restarting_ = true;
     json::Value ev = json::Value::object();
     ev["reason"] = restartReason_;
+    if (const auto warning = captureKeptWarning()) {
+        ev["warnings"] = json::Value::array();
+        ev["warnings"].push_back(*warning);
+    }
     emit("engine.restarting", std::move(ev));
-    // Playback stays stopped; the position and the loop are restored.
-    haltEngine();
-    restarting_ = true;
 }
 
 void EngineApp::retryRestart() {
@@ -2167,6 +2300,10 @@ void EngineApp::retryRestart() {
         auto ev = json::Value::object();
         ev["reason"] = restartReason_;
         ev["error"] = restartError_.empty() ? "device restart deadline expired" : restartError_;
+        if (const auto warning = captureKeptWarning()) {
+            ev["warnings"] = json::Value::array();
+            ev["warnings"].push_back(*warning);
+        }
         emit("engine.error", std::move(ev));
         return;
     }
@@ -2204,6 +2341,11 @@ void EngineApp::retryRestart() {
         json::Value ev = json::Value::object();
         ev["reason"] = restartReason_;
         ev["error"] = restartError_;
+        // The same warning as the give-up above (review round 168 F3).
+        if (const auto warning = captureKeptWarning()) {
+            ev["warnings"] = json::Value::array();
+            ev["warnings"].push_back(*warning);
+        }
         emit("engine.error", std::move(ev));
         return;
     }
