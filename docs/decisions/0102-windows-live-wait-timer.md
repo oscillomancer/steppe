@@ -48,3 +48,19 @@ unchanged.
 - Tests: on Windows, with and without the timer, a wait not woken times out
   and a woken one returns (outcomes only); the hung-bridge case prints the
   longest live wait, read from native CI rather than asserted.
+
+## Note, 2026-11-25: control-thread polls use the same timer
+
+The engine's control-thread polls (`Engine::awaitTransport`, `awaitPlan`,
+`awaitRendered`, `awaitRendererHeld`, the record-stop spin and `Engine::stop`'s
+farewell poll), the paced dummy backend's block pacing and the bridge client's
+reap poll slept 200 us to 1 ms through `std::this_thread::sleep_for`, which on
+Windows ends on the same 15.6 ms tick: every transport command that waits for
+the audio thread paid up to one tick. They now call `supple::sleepFor` and
+`sleepUntil` (`libs/core-base/include/supple/base/sleep.h`, MIT): a high-resolution
+waitable timer owned by the calling thread, created on its first use and closed
+at thread exit, with `std::this_thread::sleep_for` where it cannot be created
+and on other platforms. The helper returns only once `steady_clock` has reached
+the deadline, on both paths ("not before", nothing about how late). Nothing on
+the audio path changed, and `SharedSignals` and `midi_output_windows.cpp` still
+create their own timers; they could move onto the helper later.

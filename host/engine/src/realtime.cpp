@@ -17,6 +17,7 @@
 #include <type_traits>
 
 #include "supple/base/environment.h"
+#include "supple/base/sleep.h"
 #include "supple/base/thread.h"
 #include "supple/diagctx/table.h"
 #include "supple/host/clap_host.h"
@@ -143,7 +144,7 @@ Status DummyBackend::start(const BackendConfig& config, Callback callback) {
                 cycle();
                 if (options_.paced) {
                     next += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
-                    std::this_thread::sleep_until(next);
+                    supple::sleepUntil(next);
                 }
             }
             finishMidi();  // the final callback (Backend::stop contract)
@@ -555,7 +556,7 @@ void Engine::stop() {
                                   std::chrono::duration<double>(std::max(0.05, 4 * period)));
         while (syncFarewells_.load(std::memory_order_acquire) == acked &&
                std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            supple::sleepFor(std::chrono::milliseconds(1));
         if (syncFarewells_.load(std::memory_order_acquire) != acked && config_.sampleRate > 0) {
             const double leave =
                 static_cast<double>(syncOutputLatency_.load(std::memory_order_relaxed)) /
@@ -1219,7 +1220,7 @@ Status Engine::awaitTransport(double timeoutSeconds) {
     auto waitUntil = [&](auto done) {
         while (!done()) {
             if (std::chrono::steady_clock::now() >= deadline) return done();
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            supple::sleepFor(std::chrono::microseconds(200));
         }
         return true;
     };
@@ -1251,7 +1252,7 @@ bool Engine::awaitPlan(double timeoutSeconds) {
         if (std::chrono::steady_clock::now() > deadline)
             return false;
         else
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            supple::sleepFor(std::chrono::microseconds(200));
     return true;
 }
 
@@ -1280,7 +1281,7 @@ bool Engine::awaitRendered(std::int64_t frames, double timeoutSeconds) {
         // A renderer without work (every node live) waits for no consumption:
         // wake it, so it reports the stream position it keeps ahead.
         wakeRenderer();
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        supple::sleepFor(std::chrono::microseconds(200));
     }
 }
 
@@ -1289,7 +1290,7 @@ bool Engine::awaitRendererHeld(double timeoutSeconds) {
         std::chrono::steady_clock::now() + std::chrono::duration<double>(timeoutSeconds);
     while (!holdSeen_.load(std::memory_order_acquire)) {
         if (std::chrono::steady_clock::now() > deadline) return false;
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        supple::sleepFor(std::chrono::microseconds(200));
     }
     return true;
 }
@@ -2657,7 +2658,7 @@ Result<std::vector<RecordedTake>> Engine::stopRecording() {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (cycleSeq_.load(std::memory_order_acquire) == seq &&
                std::chrono::steady_clock::now() < deadline)
-            std::this_thread::sleep_for(std::chrono::microseconds(200));
+            supple::sleepFor(std::chrono::microseconds(200));
         if (cycleSeq_.load(std::memory_order_acquire) == seq)  // never free what it may use
             return Error("record.busy",
                          "the audio callback has not returned for 2 s; the recording is kept", {},
