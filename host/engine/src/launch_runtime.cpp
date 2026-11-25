@@ -780,14 +780,27 @@ void Engine::serviceLaunches() {
             if (ack.scene != 0)
                 e.scene = model::Id{model::Kind::Scene, static_cast<std::uint32_t>(ack.scene)};
             launchLog_.push_back(e);
+            launchSeq_.push_back(launchSeqNext_++);
         }
     }
-    if (added)  // the two executors' acks interleave
-        std::stable_sort(launchLog_.begin(), launchLog_.end(),
-                         [](const LaunchLogEntry& a, const LaunchLogEntry& b) {
-                             return a.epoch != b.epoch ? a.epoch < b.epoch
-                                                       : a.runningFrame < b.runningFrame;
-                         });
+    if (added) {  // the two executors' acks interleave: sorted, each with its sequence
+        std::vector<std::size_t> order(launchLog_.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            const LaunchLogEntry &x = launchLog_[a], &y = launchLog_[b];
+            return x.epoch != y.epoch ? x.epoch < y.epoch : x.runningFrame < y.runningFrame;
+        });
+        std::vector<LaunchLogEntry> log;
+        std::vector<std::uint64_t> seq;
+        log.reserve(order.size());
+        seq.reserve(order.size());
+        for (const std::size_t i : order) {
+            log.push_back(launchLog_[i]);
+            seq.push_back(launchSeq_[i]);
+        }
+        launchLog_ = std::move(log);
+        launchSeq_ = std::move(seq);
+    }
     // Waiting for a track or clip the latest plan cannot play (frozen,
     // removed, an audio clip under a pitch-keeping playrate): dropped, with
     // a warning.
@@ -838,11 +851,11 @@ void Engine::serviceLaunches() {
             const LaunchLogEntry& e = launchLog_[i];
             const auto reset = launchReset_.find(track);
             if (e.action != LaunchLogEntry::Action::Clip ||
-                (reset != launchReset_.end() && reset->second > i))
+                (reset != launchReset_.end() && reset->second > launchSeq_[i]))
                 continue;
             const detail::Node* n = plan ? nodeOf(*plan, track) : nullptr;
             if (!n || n->players.empty() || detail::playerOf(*n, e.clip) < 0) {
-                launchReset_[track] = launchLog_.size();
+                launchReset_[track] = launchSeqNext_;
                 // Heard as a return to the arrangement: where an immediate
                 // launch.arrangement would land now (the app services the
                 // engine right after each load), for a running capture.
@@ -863,7 +876,7 @@ void Engine::serviceLaunches() {
                     r.anchorBeat = placed->anchorBeat;
                     r.songFrame = placed->songFrame;
                     r.epoch = placed->epoch;
-                    launchReturns_.push_back({r, launchLog_.size()});
+                    launchReturns_.push_back({r, launchSeqNext_});
                 }
             }
         }
@@ -938,11 +951,11 @@ std::vector<Engine::TrackLaunch> Engine::launchState() const {
         // The newest heard entry since the track's reset; a newer one not
         // heard yet is what it has queued.
         const auto reset = launchReset_.find(n.id);
-        const std::size_t from = reset == launchReset_.end() ? 0 : reset->second;
+        const std::uint64_t from = reset == launchReset_.end() ? 0 : reset->second;
         const LaunchLogEntry* heard = nullptr;
-        for (std::size_t i = launchLog_.size(); i-- > from;) {
+        for (std::size_t i = launchLog_.size(); i-- > 0;) {
             const LaunchLogEntry& e = launchLog_[i];
-            if (e.track != n.id) continue;
+            if (e.track != n.id || launchSeq_[i] < from) continue;
             if (e.epoch == epoch && e.runningFrame + n.timelineShift > played) {
                 if (!tl.queued) {
                     LaunchPending q;
@@ -1046,7 +1059,7 @@ std::optional<model::Id> Engine::audioUnderStretch() const {
         const LaunchLogEntry& e = launchLog_[i];
         const auto reset = launchReset_.find(track);
         if (e.action != LaunchLogEntry::Action::Clip ||
-            (reset != launchReset_.end() && reset->second > i))
+            (reset != launchReset_.end() && reset->second > launchSeq_[i]))
             continue;
         const model::Clip* clip = latest_->clips.find(e.clip);
         if (!clip || clip->kind == model::ClipKind::Midi) continue;
@@ -1130,7 +1143,7 @@ bool Engine::cutsArrangementAudio(const LaunchRequest& r, std::int64_t anchor) c
         if (launchLog_[i].track == r.track) {
             const auto reset = launchReset_.find(r.track);
             arrangement = launchLog_[i].action == LaunchLogEntry::Action::Arrangement ||
-                          (reset != launchReset_.end() && reset->second > i);
+                          (reset != launchReset_.end() && reset->second > launchSeq_[i]);
             break;
         }
     return arrangement != (r.action == LaunchLogEntry::Action::Arrangement);
@@ -1373,7 +1386,7 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
         // heard after it is a launch within, which cuts the clip there (round
         // 172 F3). One with no return recorded (launch.later) counts.
         const auto reset = capture_.resets.find(track);
-        if (reset != capture_.resets.end() && reset->second > i) {
+        if (reset != capture_.resets.end() && reset->second > launchSeq_[i]) {
             const LaunchLogEntry* back = returnFor(track, reset->second);
             if (!back || back->epoch < capture_.epoch ||
                 (back->epoch == capture_.epoch && back->songFrame <= start))
@@ -1406,16 +1419,16 @@ std::optional<Engine::LaunchCapture> Engine::launchCapture() {
     return out;
 }
 
-const LaunchLogEntry* Engine::returnFor(model::Id track, std::size_t after) const {
+const LaunchLogEntry* Engine::returnFor(model::Id track, std::uint64_t after) const {
     for (const LaunchReturn& r : launchReturns_)
         if (r.entry.track == track && r.after == after) return &r.entry;
     return nullptr;
 }
 
 bool Engine::returnSuperseded(const LaunchReturn& r) const {
-    for (std::size_t i = r.after; i < launchLog_.size(); ++i) {
+    for (std::size_t i = 0; i < launchLog_.size(); ++i) {
         const LaunchLogEntry& e = launchLog_[i];
-        if (e.track == r.entry.track && e.epoch == r.entry.epoch &&
+        if (launchSeq_[i] >= r.after && e.track == r.entry.track && e.epoch == r.entry.epoch &&
             e.songFrame <= r.entry.songFrame)
             return true;
     }

@@ -603,7 +603,16 @@ the same.*
   within its span, in frame order with the logged launches, the return
   first at a frame they share; a launch of the track applied after the
   plan (later in the log than the reset) at or before the return's frame
-  supersedes it, since it was heard after the return (round 172 F1). What
+  supersedes it, since it was heard after the return (round 172 F1);
+  "after" is by drain sequence, since the log is re-sorted when the two
+  executors' acks interleave. A removal undone before any executor block
+  (a client that sends without waiting) still records its return,
+  though at unity the executors skip the plan between and play the clip
+  on: the control thread cannot tell that a plan was never adopted
+  without a word from the audio path (`stoppedGen_` is stored after the
+  load), so the capture cuts the clip there (a known limit; such a
+  capture is edited, so not as heard). Under a playrate every queued
+  plan is adopted, so it does not arise. What
   each track played as a capture began is judged by the resets as they
   stood then (`CaptureState::resets`), a reset counting only once its
   return was heard by the start (one heard after it is a launch within,

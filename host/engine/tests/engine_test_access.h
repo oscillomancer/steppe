@@ -170,6 +170,20 @@ struct EngineTestAccess {
     // The latest plan's handover (a playrate plan's, prepared on the main
     // thread) and the returns to the arrangement the engine recorded.
     static std::int64_t latestHandAt(const Engine& e) { return e.latestPlan_.load()->handAt; }
+    // An ack drained late, as the callback's can be behind the renderer's
+    // (only between manual blocks: the callback is the ring's producer).
+    static void drainedLate(Engine& e, const LaunchLogEntry& x) {
+        Engine::LaunchAck a;
+        a.track = x.track.n;
+        a.clip = x.clip.n;
+        a.epoch = x.epoch;
+        a.action = static_cast<std::uint8_t>(x.action);
+        a.stream = x.runningFrame;
+        a.anchorSample = x.anchorSample;
+        a.songFrame = x.songFrame;
+        a.anchorBeat = x.anchorBeat;
+        (void)e.callbackLaunchAcks_->push(a);
+    }
     static std::vector<LaunchLogEntry> launchReturns(const Engine& e) {
         std::vector<LaunchLogEntry> out;
         for (const auto& r : e.launchReturns_) out.push_back(r.entry);
