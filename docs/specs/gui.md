@@ -2373,12 +2373,15 @@ too, the line ends "It will be lost; Save saves the project without it." and
 the buttons are Save / Don't save / Cancel. Cancel keeps the take, so the
 user can fix what the refusal names. The refusal is worded from its code
 and path and the model, never its message or hint
-(`CaptureControl::refusalWords`): `item.locked` names the one locked item
-under the take on a track it launched on ("a locked item is in the way"
-when that is not one); `launch.commit` at a launch's `/track` or `/clip`
-says the track is gone or no longer a channel, or the clip is gone or
-changed; `launch.commit.fade` and `clip.unsupported` say their cause
-without a place; any other refusal reads "could not be written to the
+(`CaptureControl::refusalWords`). Each refusal's path names the launch it
+met (`/performance/launches/N`): `item.locked` names the one locked item
+under the take on that launch's track ("a locked item on Drums is in the
+way" when there are several); `launch.commit` at a launch's `/track` or
+`/clip` says the track is gone or no longer a channel, or the clip is gone
+or changed; `launch.commit.fade` and `clip.unsupported` name the launch's
+clip and track ("a piece of Kit A on Drums would start or end inside its
+own fade"; "Kit A on Drums loops only part of its content, which an item
+cannot"); any other refusal reads "could not be written to the
 arrangement". A take whose commit the user
 undid is declined: neither committed nor counted. The decision also
 records the kept take (`CaptureControl::takeKey`), and a different one
@@ -2422,7 +2425,8 @@ of the same kind: when it is answered, a changed version or branch, a
 recording, a lit capture or another kept take asks the discard decision
 again (which finalizes) instead of loading; the plug-in answers are set back
 with the load that did not happen, so the load asks them again after the new
-decision (`FileActions::checked`).
+decision (`FileActions::checked`): asking the plug-in question again after
+the new decision is by design.
 A save (or project template)
 that comes back with warnings (a plug-in whose state could not be read keeps
 its earlier state) opens a popup listing them. Open and Save as start in the

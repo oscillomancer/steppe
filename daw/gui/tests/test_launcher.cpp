@@ -1575,6 +1575,7 @@ TEST_CASE(
     capture.service();
     REQUIRE(refused.size() == 1);
     CHECK(refused[0].code == "item.locked");
+    CHECK(refused[0].path.ends_with("/performance/launches/0"));  // the launch it met
     CHECK_FALSE(capture.armed());
     CHECK(capture.kept());
     const std::string line = capture.keptLine();

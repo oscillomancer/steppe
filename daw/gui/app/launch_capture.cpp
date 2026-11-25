@@ -70,10 +70,14 @@ std::string CaptureControl::refusalWords(const Error& e) {
                e.path.compare(e.path.size() - tail.size(), tail.size(), tail) == 0;
     };
     if (e.code == "item.locked") {
-        // The refusal does not say which item (path /items): the one locked
-        // item under the take on a track it launched on, when there is one.
+        // The launch whose stretch met it (/performance/launches/N) names the
+        // track; the one locked item there under the take names the place.
+        // Without an index, any track the take launched on.
+        const engine::LaunchLogEntry* at = launchAt();
         std::set<model::Id> tracks;
-        if (v)
+        if (at)
+            tracks.insert(at->track);
+        else if (v)
             for (const auto& l : v->capture.launches) tracks.insert(l.track);
         const model::Item* found = nullptr;
         int count = 0;
@@ -90,7 +94,27 @@ std::string CaptureControl::refusalWords(const Error& e) {
             return "the item at bar " +
                    std::to_string(s.timeMap->barBeat(model::itemSpan(s, *found).startBeat).bar) +
                    " on " + views::objectName(s, found->track) + " is locked";
+        if (at && s.tracks.find(at->track))
+            return "a locked item on " + views::objectName(s, at->track) + " is in the way";
         return count > 1 ? "locked items are in the way" : "a locked item is in the way";
+    }
+    // A clip's fade or loop window: the launch that laid it names the clip
+    // and its track.
+    const auto clipOn = [&]() -> std::string {
+        const engine::LaunchLogEntry* at = launchAt();
+        if (!at || !s.clips.find(at->clip) || !s.tracks.find(at->track)) return {};
+        return views::objectName(s, at->clip) + " on " + views::objectName(s, at->track);
+    };
+    if (e.code == "launch.commit.fade") {
+        const std::string where = clipOn();
+        return where.empty() ? "a piece of it would start or end inside a clip's own fade"
+                             : "a piece of " + where + " would start or end inside its own fade";
+    }
+    if (e.code == "clip.unsupported") {
+        const std::string where = clipOn();
+        return where.empty()
+                   ? "a clip it played loops only part of its content, which an item cannot"
+                   : where + " loops only part of its content, which an item cannot";
     }
     if (e.code == "launch.commit") {
         // The performance's launches are the capture's, in order.
@@ -107,10 +131,6 @@ std::string CaptureControl::refusalWords(const Error& e) {
         }
         return {};
     }
-    if (e.code == "launch.commit.fade")
-        return "a piece of it would start or end inside a clip's own fade";
-    if (e.code == "clip.unsupported")
-        return "a clip it played loops only part of its content, which an item cannot";
     return {};
 }
 
