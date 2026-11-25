@@ -1144,7 +1144,9 @@ class EngineApp : public cmd::Host {
     void applyCommitMark(const CommitMark& mark, std::uint64_t version);
     void pruneCommitPins();  // keeps the pins a capture's committedIn names
     // Whether `at`'s first-parent line, or a line merged into it, holds `in`.
-    bool reachesCommit(std::uint64_t at, std::uint64_t in) const;
+    // `seen`: versions walked already, so shared history after merges is
+    // walked once.
+    bool reachesCommit(std::uint64_t at, std::uint64_t in, std::set<std::uint64_t>& seen) const;
     // The device changed under the running engine: stop it and remember to
     // start it again (same backend kind, block and options).
     void beginRestart(std::string reason, double seconds);
