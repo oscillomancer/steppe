@@ -863,6 +863,26 @@ TEST_CASE("each render.* command declares every code its sources answer (round 1
             any = any || declares(*info(name), c);
         if (!any) undeclared.push_back("render.preset.*: " + c + " (" + file + ")");
     }
+    // The union above cannot see one command drop a code another declares
+    // (round 185 S1, the reviewer's MP1 and MP2), so per command: each that
+    // reads a preset or the default declares the reads, render.preset.save
+    // the writes too, and render.settings resolveFor's own refusals.
+    const std::vector<std::string> reads = {"file.open", "file.read", "file.too_large",
+                                            "json.parse.trailing_comma"};
+    const std::vector<std::string> writes = {"render.preset_write", "file.write", "file.sync",
+                                             "file.sync_directory", "file.sync_published"};
+    const std::vector<std::string> resolver = {"render.source", "history.version", "branch.unknown",
+                                               "render.args", "render.secondary"};
+    const std::vector<std::pair<const char*, std::vector<const std::vector<std::string>*>>> sets = {
+        {"render.preset.list", {&reads}},
+        {"render.preset.load", {&reads}},
+        {"render.preset.save", {&reads, &writes}},
+        {"render.settings", {&reads, &resolver}}};
+    for (const auto& [name, groups] : sets)
+        for (const auto* group : groups)
+            for (const std::string& c : *group)
+                if (!declares(*info(name), c))
+                    undeclared.push_back(std::string(name) + ": " + c + " (per command)");
     // The queue plans a render at add and plans and runs it at run.
     for (const auto& [queue, render] : {std::pair{"render.queue.add", "render.dry-run"},
                                         std::pair{"render.queue.run", "render.mix"}})
