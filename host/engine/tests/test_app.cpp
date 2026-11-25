@@ -22,6 +22,7 @@
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
 #include <supple/base/sha256.h>
+#include <supple/base/sleep.h>
 #include <supple/diagctx/inventory.h>
 #include <supple/engine/app.h>
 #if defined(SUPPLE_TEST_JACK)
@@ -336,21 +337,32 @@ TEST_CASE(
     DummyBackend backend({.mode = DummyBackend::Mode::Thread, .paced = true});
     REQUIRE(app->startEngine(backend, {.sampleRate = 48000, .blockSize = 128},
                              {.anticipative = false}));
-    std::string times;
-    for (int i = 0; i < 5; ++i) {
-        for (const char* command : {"transport.play", "transport.stop"}) {
-            const auto start = std::chrono::steady_clock::now();
-            auto reply = call(command, "{}");
-            const double ms =
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
-                    .count();
-            CHECK(reply["playing"].asBool() == (command[10] == 'p'));
-            char text[32];
-            std::snprintf(text, sizeof text, " %s %.1f", command + 10, ms);
-            times += text;
+    // Twice, so one Windows run shows before and after: with the high-resolution timer, then with
+    // it switched off (the ordinary sleep, as before the helper). The switch is process-wide, so
+    // it covers the dummy device's pacing thread as well.
+    struct RestoreSleep {
+        ~RestoreSleep() { setHighResolutionSleepEnabledForTests(true); }
+    } restoreSleep;
+    for (const bool highResolution : {true, false}) {
+        setHighResolutionSleepEnabledForTests(highResolution);
+        std::string times;
+        for (int i = 0; i < 5; ++i) {
+            for (const char* command : {"transport.play", "transport.stop"}) {
+                const auto start = std::chrono::steady_clock::now();
+                auto reply = call(command, "{}");
+                const double ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - start)
+                                      .count();
+                CHECK(reply["playing"].asBool() == (command[10] == 'p'));
+                char text[32];
+                std::snprintf(text, sizeof text, " %s %.1f", command + 10, ms);
+                times += text;
+            }
         }
+        const std::string label =
+            highResolution ? "high-resolution timer on" : "high-resolution timer off";
+        MESSAGE("transport round trips in ms, " << label << " (period 2.7 ms):" << times);
     }
-    MESSAGE("transport round trips in ms (period 2.7 ms):" << times);
     app->stopEngine();
 }
 
