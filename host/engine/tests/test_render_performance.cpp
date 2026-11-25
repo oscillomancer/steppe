@@ -145,12 +145,71 @@ TEST_CASE("a performance render refuses what it cannot play, one code per cause"
     e = refused(p, "render.dry-run", withPerformance(j(R"({"as_heard": true})"), given()));
     CHECK(e.code == "render.not_as_heard");
     CHECK(e.path == "/args/performance");
+    // start_beat or end_beat in the call (round 174 F3).
+    e = refused(p, "render.mix", withPerformance(j(R"({"start_beat": 8})"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/start_beat");
+    e = refused(p, "render.dry-run", withPerformance(j(R"({"end_beat": 16})"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/end_beat");
+    // A clip launch with no clip, a clip of another track (F5).
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), launches(R"([
+        {"frame": 96000, "track": "tr_1", "action": "clip", "anchor": 96000,
+         "anchor_beat": 4}])")));
+    CHECK(e.code == "render.performance.no_clip");
+    CHECK(e.path == "/args/performance/launches/0/clip");
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), launches(R"([
+        {"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_2", "anchor": 96000,
+         "anchor_beat": 4}])")));
+    CHECK(e.code == "render.performance.clip_track");
+    CHECK(e.path == "/args/performance/launches/0/clip");
+    CHECK(e.hint.find("tr_2") != std::string::npos);
+    // No running time; a launcher range that ends before it starts.
+    json::Value none = given();
+    none["frames"] = 0;
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), none));
+    CHECK(e.code == "render.empty");
+    CHECK(e.path == "/args/performance/frames");
+    e = refused(p, "render.dry-run",
+                withPerformance(j("{}"), j(R"({"from": "launcher", "start_beat": 8,
+                                               "end_beat": 8})")));
+    CHECK(e.code == "render.empty");
+    CHECK(e.path == "/args/performance/end_beat");
     // Given and accepted: canonical, and not as heard because given.
     json::Value dry = p.runArgs("render.dry-run", withPerformance(j("{}"), given()));
     CHECK_FALSE(dry["as_heard"].asBool());
     CHECK(dry["not_heard_because"] == j(R"(["given"])"));
     CHECK(dry["performance"]["launches"].size() == 1);
     CHECK(dry["range"]["end_beat"].asDouble() == doctest::Approx(8));
+}
+
+TEST_CASE("a dry run with a performance renders the mix whatever the saved source (round 174 F2)") {
+    Project p;
+    twoTracks(p);
+    p.run("project.set", R"({"render": {"source": "regions"}})");
+    json::Value dry = p.runArgs("render.dry-run", withPerformance(j("{}"), given()));
+    CHECK(dry["not_heard_because"] == j(R"(["given"])"));
+    // operation regions in the call is still refused, naming operation.
+    Error e =
+        refused(p, "render.dry-run", withPerformance(j(R"({"operation": "regions"})"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/performance");
+    CHECK(e.hint.find("operation mix") != std::string::npos);
+}
+
+TEST_CASE("a looped performance's range is the song span it covers (round 174 F4)") {
+    // A bar looped three times: the range ends at the loop's end (bar 2,
+    // beat 4), not at three bars of running time.
+    Project p;
+    twoTracks(p);
+    json::Value looped = j(R"({"sample_rate": 48000, "start": 0, "frames": 288000,
+        "loop": {"start": 0, "end": 96000},
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]})");
+    json::Value dry = p.runArgs("render.dry-run", withPerformance(j("{}"), looped));
+    CHECK(dry["range"]["start_beat"].asDouble() == doctest::Approx(0));
+    CHECK(dry["range"]["end_beat"].asDouble() == doctest::Approx(4));
+    CHECK(dry["performance"]["frames"].asInt() == 288000);
 }
 
 TEST_CASE("from the launcher with nothing playing renders the arrangement over the range") {

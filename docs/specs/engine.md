@@ -2259,7 +2259,8 @@ Neither selector belongs to `project.render`, so presets and saved
 settings never hold one. `render.queue.add` stores the resolved object,
 never "captured" or "launcher", so a queued render does not grow. With a
 performance the range is the performance's: the saved `bounds` is not
-used, and a `bounds` in the call is refused. `tail_s`, `trim`,
+used, and a `bounds`, `start_beat` or `end_beat` in the call is
+refused. `tail_s`, `trim`,
 `handles_s`, outputs, normalize and analysis apply as usual.
 
 **The result.** The usual render result, plus:
@@ -2270,7 +2271,10 @@ used, and a `bounds` in the call is refused. `tail_s`, `trim`,
   and launcher sources resolve into one; a given object comes back
   canonicalized.
 - `range`: `{start_beat, end_beat}`, the performance's span on the
-  rendered version's time map, without the tail.
+  rendered version's time map, without the tail. For a looped
+  performance that ran past the loop's end it ends at the loop's end:
+  the song span it covers, which it plays as wraps (its running length
+  is `frames`).
 - `as_heard` (boolean), and `not_heard_because`, present when as_heard is
   false: an array of these reasons, in this order:
 
@@ -2318,12 +2322,18 @@ command callers.
 | `sample_rate` other than the project's (a capture made at another device rate) | `render.performance.sample_rate` | `/performance/sample_rate` |
 | a looped performance under a master playrate | `render.loop` | `/performance/loop` |
 | a track or clip the version lacks | `track.unknown`, or launch.clip's clip code | `/performance/launches/N/...` |
+| a clip launch that names no clip | `render.performance.no_clip` | `/performance/launches/N/clip` |
+| a clip of another track | `render.performance.clip_track` | `/performance/launches/N/clip` |
+| a clip on a frozen track | `track.frozen` | `/performance/launches/N/clip` |
 | an audio clip the engine refuses on the version (step E) | `launch.playrate` | `/performance/launches/N/clip` |
 | a clip over the memory budget (render only) | `launch.memory` | `/performance/launches/N/clip` |
 | launches out of frame order, or past `frames` | `render.performance.launches` | `/performance/launches/N/frame` |
 | more than 100,000 launches (launch.commit's limit unchanged) | `render.performance.too_many` | `/performance/launches` |
 | `operation: "regions"`, or `bounds` in the call | `render.args` | `/performance` |
-| `seamless_loop` | `render.args` | `/seamless_loop` |
+| `start_beat` or `end_beat` in the call | `render.args` | `/start_beat` or `/end_beat` |
+| `seamless_loop`, given or saved (the effective setting) | `render.args` | `/seamless_loop` |
+| `frames` not above 0 | `render.empty` | `/performance/frames` |
+| the launcher's `end_beat` not after its `start_beat` | `render.empty` | `/performance/end_beat` |
 
 Two launches of one track on one frame are not an error: the last given
 holds, as in launch.commit. A given object's other defects keep the

@@ -778,10 +778,17 @@ Result<RenderPlan> plan(EngineApp& app, rs::Source operation, const Args& a, boo
     if (*request) {
         if (operation == rs::Source::Regions)
             return argsError("a performance renders the mix or stems, not regions", "/performance",
-                             "render.mix or render.stems with performance, or regions without it");
+                             "render.mix or render.stems with performance (render.dry-run: "
+                             "operation mix or stems), or regions without it");
         if (a.settings.bounds)
             return argsError("a performance sets the range, so bounds does not apply",
                              "/performance", "leave bounds out: the range is the performance's");
+        if (a.settings.startBeat || a.settings.endBeat)  // round 174 F3
+            return argsError(
+                "a performance sets the range, so start_beat and end_beat do not apply",
+                a.settings.startBeat ? "/start_beat" : "/end_beat",
+                "leave them out: the range is the performance's (the launcher's range goes in "
+                "performance: {from: \"launcher\", start_beat, end_beat})");
         if (*resolved->effective.seamlessLoop)
             return argsError("seamless_loop cannot fold a performance", "/seamless_loop",
                              "set seamless_loop false for this call");
@@ -1580,6 +1587,9 @@ rs::Source operationOf(std::string_view command, const Args& a, const rs::Settin
     if (a.sel.operation) return *a.sel.operation;
     if (a.sel.regions) return rs::Source::Regions;
     if (a.sel.tracks) return rs::Source::Stems;
+    // A performance renders the mix or stems: a saved regions source does
+    // not make a dry run refuse it (round 174 F2).
+    if (a.sel.performance && effective.source == rs::Source::Regions) return rs::Source::Mix;
     return effective.source.value_or(rs::Source::Mix);
 }
 
