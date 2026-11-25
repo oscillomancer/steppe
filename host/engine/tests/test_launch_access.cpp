@@ -19,6 +19,8 @@ void launchCommitHookForTests(Engine& e, void (*hook)(void*), void* context) {
 std::uint32_t launchesQueuedForTests(const Engine& e) {
     return EngineTestAccess::launchesQueued(e);
 }
+void lateAttemptsForTests(Engine& e, int attempts) { EngineTestAccess::lateAttempts(e, attempts); }
+std::int64_t preparedSwitchForTests(const Engine& e) { return EngineTestAccess::preparedSwitch(e); }
 }  // namespace supple::engine
 
 TEST_CASE(

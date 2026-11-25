@@ -48,6 +48,17 @@ struct EngineTestAccess {
         e.launchCommitForTests_ = hook;
         e.launchCommitContext_ = context;
     }
+    // The next `attempts` prepareRatePlan attempts count as late: each
+    // prepares again with the hand later, so S later; three fail, and the
+    // recovery seek prepares the plan once more.
+    static void lateAttempts(Engine& e, int attempts) { e.lateAttemptsForTests_ = attempts; }
+    // The newest prepared trajectory change's switch S as a stream frame
+    // (INT64_MIN: none, or a seek). Control thread.
+    static std::int64_t preparedSwitch(const Engine& e) {
+        const detail::Plan* p = e.ratePreparedTail_;
+        if (!p || p->rateSwitchDevice == INT64_MIN) return INT64_MIN;
+        return p->rateSwitchDevice - p->rateOrigin;
+    }
     static void afterCollect(Engine& e, void (*hook)(void*), void* context) {
         e.afterCollectForTests_ = hook;
         e.afterCollectContext_ = context;

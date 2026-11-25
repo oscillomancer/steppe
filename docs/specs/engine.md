@@ -825,41 +825,32 @@ the same.*
     audio where the timeline's items switch, at `rateSwitchDevice` (S, a
     device frame; in an executor's stream `handAt + S - rateHandDevice`,
     as `rateSafeStream_`), and the same way:
-    - At prepare the main thread reads, from the acknowledged launch log
-      and the applied launch slots, what each node with audio clips
-      reads at S: the clip, its anchor, its switch quantum, its loop
-      cycle (`launchCycle`) and whether it is unanchored (the key). It
-      primes a reader for that on the new trajectory from S, as an item's
-      converter is primed, and, for an applied warm-up whose switch is
-      after S, a reader on the new trajectory primed as far as that
-      warm-up's credit stands at the handover. Each carries its key.
-    - At adoption, the executor that runs the node (the renderer for a
-      rendered node, the callback for a live one, each at `handAt` in its
-      stream) compares each key with what it holds for S: its reader 0,
-      or the warming launch that switches at or before S. On a match it
-      takes the primed reader. On a miss it primes the same reading
-      itself, there and then: at most 45 primes per reader (a warm-up's
-      length), so N readers that miss in one block cost N times that, and
-      a miss changes CPU only, not what plays. Either way the old reader
-      0 plays on the old trajectory (`previousTimelines`) until S and
-      crossfades into the new one over `smoothFrames`, as an item does,
-      converting while it is read.
-    - *Built in two phases.* Phase 1 has no mirror yet: every adoption
-      takes the miss path. `carryLaunchAcross` (from `carryRateSources`)
-      hands each reading to the new reader's `previous`
+    - At adoption `carryLaunchAcross` (from `carryRateSources`) hands
+      each reading to the new reader's `previous`
       (`PlayerReader::previous`, allocated at compile) and seeks the new
-      reader for output from S, and it is primed at its first use, on the
-      audio thread: at most a warm-up's primes per reader in one callback
-      (45 at 48 kHz), so a callback holding S primes 45 for each track
-      with launched audio under stretch. A warm-up switching after S
+      reader for output from S. The old reading plays on the old
+      trajectory (`previousTimelines`) until S and crossfades into the new
+      one over `smoothFrames`, as an item does, converting while it is
+      read. The new reader is primed at its first use by the executor that
+      runs the node (the renderer for a rendered node, the callback for a
+      live one): at most a warm-up's primes per reader in one block (45 at
+      48 kHz), so the block holding S primes 45 for each track with
+      launched audio under stretch, on the renderer within its
+      render-ahead, and inside the device callback for a live node or with
+      the in-callback executor (a known limit, STATUS). One first read more
+      than the catch-up (32 quanta) after S starts again where it is read,
+      as a primed reading does, rather than running every quantum since S
+      in one block. A warm-up switching after S
       starts again on the new trajectory, primed as far as it had come, in
       the adoption's block; only a warm-up switching at or before S goes on
       in `previous`, and the reader rotated onto reader 2 at a switch drops
       its `previous` (round 152 F1). A tape reader keeps no loop cycle, so
       a reading handed on from one takes its switch's (`switchCycle`,
       from `Node::launchSwitchPhase`, recorded in the switch's block while
-      the timeline still holds that frame; round 152 F2). Phase 2, the mirror,
-      only moves that priming to the main thread.
+      the timeline still holds that frame; round 152 F2). A mirror that
+      primed those readers on the main thread at prepare (phase 2) was
+      built and taken out: it was dormant with the anticipative renderer,
+      the default (ADR-0097, revision 2026-11-24, "the mirror taken out").
     - *A change of preserve pitch with a launch switching in (adoption,
       S].* Stretch to tape: reader 2 holds a tape reader with no warm-up,
       so the launch is not rotated in: the clip plays on tape from its own

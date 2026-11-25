@@ -7,6 +7,7 @@
 // ran past 600 s under ThreadSanitizer with them; the presses during a
 // warm-up are in test_clip_player_rate_presses.cpp.
 #include "clip_player_support.h"
+#include "engine_test_access.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -194,13 +195,19 @@ TEST_CASE(
 TEST_CASE("a plan swap or a rate change during a launch's warm-up" * doctest::description("rt")) {
     // Round 139: a swap that keeps the rate (a track added) inside cl_2's
     // warm-up hands reader 2 over mid-warm-up, and the launch still plays
-    // as the replay; a rate change there (0.75 to 0.8, the pitch kept) loses
-    // it, and the launch still switches and plays, cold.
+    // as the replay. A rate change made there (0.75 to 0.8, the pitch kept)
+    // reaches the executors only after the switch (the edit applies about
+    // 200 ms ahead, review round 161 F1): the launch switches at its
+    // acknowledged frame and plays cl_2, not tr_2's items (tr_1 muted: the
+    // clip's ramp stays under 0.05 there, the items' is about 0.09). A rate
+    // change that does arrive before a launch's switch, with and without a
+    // seek, is the case "a launch not yet begun when the rate changes".
     for (const bool rate : {false, true})
         for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
             INFO("rate change " << rate << ", anticipative " << options.anticipative);
             Project p;
             twoTracks(p);
+            if (rate) p.run("track.set", R"({"track": "tr_1", "mute": true})");
             p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
             AppLive live(p, options, 128, 48000 * 6 + 16384);
             REQUIRE(p.app->transport("play"));
@@ -216,19 +223,19 @@ TEST_CASE("a plan swap or a rate change during a launch's warm-up" * doctest::de
             REQUIRE(log.size() == 1);
             CHECK(log[0].anchorSample == 96000);
             const std::int64_t switched = log[0].runningFrame;
-            const std::vector<float> heard = live.stop();
-            double loudest = 0;
-            for (std::int64_t k = switched + 2000; k < switched + 40000; ++k)
-                loudest =
-                    std::max(loudest, std::fabs(double(heard[std::size_t(k + live.latency)])));
-            CHECK(loudest > 0.01);  // cl_2's ramp plays
-            if (!rate) {
-                CHECK(switched == 128000);
-                const std::vector<float> offline = replay(p, 6.0, log, 128);
-                const auto [worst, first] = compare(heard, live.latency, offline, 0, 240000);
-                CHECK(worst == 0.0);
-                CHECK(first == -1);
+            CHECK(switched == 128000);
+            ChangeRun run;
+            run.heard = live.stop();
+            run.latency = live.latency;
+            CHECK(loudest(run, switched + 2000, switched + 40000) > 0.01);  // it plays
+            if (rate) {
+                CHECK(loudest(run, switched + 2000, switched + 40000) < 0.05);  // cl_2's ramp
+                continue;
             }
+            const std::vector<float> offline = replay(p, 6.0, log, 128);
+            const auto [worst, first] = compare(run.heard, run.latency, offline, 0, 240000);
+            CHECK(worst == 0.0);
+            CHECK(first == -1);
         }
 }
 
@@ -433,8 +440,23 @@ TEST_CASE("a plan that moves a track's shift during its launch's warm-up keeps t
             }
         };
         run(128000 - lag - 1500);
+        const auto shiftOf = [&] {
+            const detail::Plan& plan = EngineTestAccess::latestPlan(*p.app->engine());
+            return std::find_if(plan.nodes.begin(), plan.nodes.end(),
+                                [](const auto& n) { return n.id == id("tr_3"); })
+                ->timelineShift;
+        };
+        const std::int64_t before = shiftOf();
         p.run("fx.add", R"({"track": "tr_3", "plugin": "com.suppleaudio.test.gain"})");
         p.run("fx.patch.merge", R"({"fx": "fx_3", "patch": {"params": {"latency": "short"}}})");
+        // The swap moves the shift and is handed over inside the warm-up
+        // (review round 160 S1), else the case says nothing.
+        const std::int64_t handAt = EngineTestAccess::latestPlan(*p.app->engine()).handAt;
+        INFO("tr_3's shift " << before << " then " << shiftOf() << ", handed over at " << handAt);
+        CHECK(before > 0);
+        CHECK(shiftOf() == 0);
+        CHECK(handAt > 128000 - 2944);
+        CHECK(handAt < 128000);
         run(200000);
         const std::uint64_t total = detail::stretchPrimes() - start;
         const auto log = p.app->engine()->launchLog();

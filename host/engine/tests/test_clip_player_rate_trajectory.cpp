@@ -508,3 +508,47 @@ TEST_CASE("after a seek a warm-up switching after a trajectory change warms on t
     CHECK(r.startQuantum == detail::quantumAt(to, warmSwitch));
     CHECK(r.primes == 10);  // as far as it had come
 }
+
+TEST_CASE("a launched clip unread across a trajectory change catches up within its bound" *
+          doctest::description("rt")) {
+    // S3 step D4: the reading carried across a change is seeked for S and
+    // primed at its first use. cl_2 is muted (unread) before the change and
+    // unmuted about 30000 frames after S: its first use is far past S, and
+    // a reading that is behind by more than the catch-up (32 quanta) starts
+    // again where it is read, as a primed one does, instead of running every
+    // quantum from S in one block.
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        Project p;
+        twoTracks(p);
+        p.run("transport.playrate.set", R"({"rate": 0.75, "preserve_pitch": true})");
+        AppLive live(p, options, 128, 48000 * 7);
+        REQUIRE(p.app->transport("play"));
+        live.until(20 * 128);
+        p.run("launch.clip", R"({"clip": "cl_2"})");  // bar 2: running frame 128000
+        live.until(180000);
+        p.run("clip.set", R"({"clip": "cl_2", "mute": true})");
+        live.until(200000);
+        addEnvelope(p);  // S at about 209600
+        live.until(230000);
+        p.run("clip.set", R"({"clip": "cl_2", "mute": false})");
+        std::uint64_t most = 0;
+        const std::uint64_t start = detail::stretchQuanta();
+        for (std::int64_t c = 230000 / 128 + 1; c <= 280000 / 128; ++c) {
+            const std::uint64_t before = detail::stretchQuanta();
+            live.until(c * 128);
+            most = std::max(most, detail::stretchQuanta() - before);
+        }
+        const std::uint64_t total = detail::stretchQuanta() - start;
+        CHECK(p.app->engine()->processErrors() == 0);
+        ChangeRun run;
+        run.heard = live.stop();
+        run.latency = live.latency;
+        INFO("most quanta in one callback " << most << ", " << total << " in all");
+        CHECK(total > 0);  // it was read again
+        // A callback runs its own quanta, and at most a catch-up's more; the
+        // renderer runs ahead in longer slices.
+        CHECK(most <= (options.anticipative ? 64 : 34));
+        CHECK(loudest(run, 250000, 280000) > 0.01);  // cl_2 plays again
+    }
+}

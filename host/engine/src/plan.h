@@ -1736,6 +1736,9 @@ std::uint64_t stretchPrimes() noexcept;
 // stretchPrimes was for, among the last 256: where a cold start's burst
 // begins, whatever the executor's lead (a test seam, written relaxed).
 std::int64_t stretchPrimeFrame(std::uint64_t n) noexcept;
+// Quanta a launched clip's stretch converter has run since the process
+// began (a relaxed count, for the tests' per-block bound).
+std::uint64_t stretchQuanta() noexcept;
 // What a clip chain's input reads in this block: the player's anchor on the
 // input side, or nothing (`on` false).
 struct ClipChainInput {

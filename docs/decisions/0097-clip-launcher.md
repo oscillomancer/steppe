@@ -1296,6 +1296,21 @@ tests, in test_clip_player_rate_trajectory.cpp and its `_queued` sibling:
 
 Phase 2 (the mirror, its keys, the race case, the loop wrap A6) is still to come.
 
+*Revision 2026-11-24, the mirror taken out (the co-director, on review round 166):* phase 2 was
+built (469496c2 through 77c51914 on codirector/launch-s3-d4-mirror; review rounds 163 and 166) and
+removed by a revert on top of ab732087, so it can be brought back by reverting that revert. Measured:
+its output is by design the miss path's, and what it saves is the miss path's burst, 45 primes per
+launched stretched track in the block holding S. With the anticipative renderer, the default and the
+only executor the GUI starts, a renderer caught up leaves the hand about 128 frames past its frontier,
+under the render block the frontier can move at once, so a budget that keeps the mirror from making an
+attempt late (round 166 F) primed nothing; the renderer's misses run within its render-ahead, not
+against a device deadline. It served only the in-callback executor, which only a scripted
+`engine.start {"anticipative": false}` reaches. Its code (a second key path in audio-thread code)
+and test time did not earn that. Kept from it: the tests' renderer settle before an edit and a check
+that two compared runs switched at the same S, and a test hook that makes preparation attempts late
+(late attempts move S later; three end in the recovery seek). The in-callback executor's burst is a
+known limit in STATUS.
+
 ## Consequences
 
 - **Timeline code is untouched by construction.** The cost is the take
