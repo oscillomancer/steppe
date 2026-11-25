@@ -611,8 +611,10 @@ the same.*
   `captureReplaceWarning`. A capture counts as committed while the head
   reaches the version launch.commit wrote it in
   (`LaunchCapture::committedIn`): by first parents, or through a merge of a
-  branch whose line holds it (a merge that replays the commit counts as
-  it). An undo of the commit makes it uncommitted again, a redo commits it,
+  branch whose line holds it (a merge's replayed step stands for its
+  source, so a merge of a merge, or one undone only in part, counts). Where
+  a history squash has folded away the source steps a replay names, the
+  walk cannot follow it and says uncommitted, the side that warns. An undo of the commit makes it uncommitted again, a redo commits it,
   and an edit after the undo leaves it uncommitted (`captureUncommitted`).
   The mark is set only when the commit's transaction commits (a rolled-back
   script's launch.commit leaves none), and the app pins that version
@@ -725,7 +727,10 @@ the same.*
   performance kept (rule 7): a piece starting inside the fade-in (the
   capture's start or a loop wrap there), one a loop wrap ends inside the
   fade-out, and a stand-in that a further switch cuts (rule 5) or a loop
-  wrap crosses.
+  wrap crosses. Its path, and that of `clip.unsupported` (a loop window an
+  item cannot express) and of `item.locked` (a locked item in the way), is
+  the launch whose stretch met it, `/performance/launches/N`, so a client
+  can name the place from the code and the index.
   A scene launched whole also writes a section. `launch.scene` logs each
   clip it starts with the scene's id, all on one running frame; the commit
   writes a section for a scene whose launches at a frame all still hold (a

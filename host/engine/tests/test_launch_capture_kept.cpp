@@ -297,6 +297,7 @@ TEST_CASE("an undo of the commit makes a kept capture uncommitted again; a redo 
     live.emplace(p, kInCallback, kBlock, 48000 * 4);
     CHECK(warningsOf(p.run("launch.capture", R"({"on": true})")).find("this capture replaces") !=
           std::string::npos);
+    (void)p.run("engine.stop", "{}");  // before its backend goes with `live`
     live.reset();
 }
 
@@ -387,6 +388,10 @@ TEST_CASE("a commit merged into main from a branch counts as committed") {
     p.run("branch.create", R"({"name": "idea"})");
     (void)p.run("launch.commit", "{}");
     CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    // An edit after it on the branch: the merge's last step replays that,
+    // so the merge finds the commit through its replays or second parent
+    // (review round 168 recheck 2 S2).
+    p.run("track.add", R"({"name": "On idea"})");
     p.run("branch.switch", R"({"name": "main"})");
     CHECK(commitOf(p) == EngineApp::CaptureCommit::Undone);  // main has not got it
     p.run("track.add", R"({"name": "Main moved"})");
@@ -428,4 +433,47 @@ TEST_CASE("a rolled-back launch.commit leaves the capture unmarked") {
     CHECK(commitOf(p) == EngineApp::CaptureCommit::None);
     CHECK(p.app->captureUncommitted());
     CHECK(p.app->captureKeptWarning());
+}
+
+TEST_CASE("a commit stays committed while edits after it squash history") {
+    // Review round 168 recheck 2 F2: without the pin, a budget squash folds
+    // the commit's version into the next one, and the walk passes below it.
+    Project p;
+    p.run("project.set", R"({"history_budget_bytes": 1})");
+    keptTake(p);
+    (void)p.run("launch.commit", "{}");
+    p.run("track.add", R"({"name": "E1"})");
+    p.run("track.add", R"({"name": "E2"})");
+    p.run("track.add", R"({"name": "E3"})");
+    CHECK(p.run("history.list", "{}")["truncated"].asBool());
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    CHECK_FALSE(p.app->captureUncommitted());
+}
+
+TEST_CASE("a commit merged twice stays committed when only the last merged step is undone") {
+    // Review round 168 recheck 2 F1: committed on a, merged into c, then c
+    // merged into main (two replayed steps, neither a fast-forward). Undoing
+    // only main's last merged step leaves the head on a replay of c's
+    // replay of the commit: a replayed step stands for its source.
+    Project p;
+    keptTake(p);
+    p.run("branch.create", R"({"name": "a"})");
+    (void)p.run("launch.commit", "{}");
+    p.run("branch.switch", R"({"name": "main"})");
+    p.run("track.add", R"({"name": "Main 1"})");
+    p.run("branch.create", R"({"name": "c"})");
+    json::Value first = p.run("branch.merge", R"({"from": "a", "into": "c"})");
+    CHECK_FALSE(first["fast_forward"].asBool());
+    p.run("track.add", R"({"name": "On c"})");
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    p.run("branch.switch", R"({"name": "main"})");
+    p.run("track.add", R"({"name": "Main 2"})");
+    json::Value second = p.run("branch.merge", R"({"from": "c"})");
+    CHECK_FALSE(second["fast_forward"].asBool());
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    p.run("history.undo", "{}");  // c's own edit, replayed last
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Committed);
+    CHECK_FALSE(p.app->captureUncommitted());
+    p.run("history.undo", "{}");  // the commit's replay too: undone
+    CHECK(commitOf(p) == EngineApp::CaptureCommit::Undone);
 }
