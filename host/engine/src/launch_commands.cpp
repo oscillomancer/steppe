@@ -597,7 +597,8 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "as a launched clip does (take.bake writes the sounding pitches). A clip played as "
             "written warns context.mismatch once, when its key (or, in the same "
             "key, chord) is not the project's under it, however many periods it is laid as. "
-            "A running "
+            "item.locked, clip.unsupported and launch.commit.fade name the launch whose stretch "
+            "met them (path /performance/launches/N). A running "
             "capture ends first, unless a quantized end is pending (launch.capture.ending); the "
             "capture stays, so committing again writes it again over itself. performance is "
             "what history records: leave it out and launch.commit fills it from the capture.";

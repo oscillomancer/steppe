@@ -726,7 +726,10 @@ the same.*
   performance kept (rule 7): a piece starting inside the fade-in (the
   capture's start or a loop wrap there), one a loop wrap ends inside the
   fade-out, and a stand-in that a further switch cuts (rule 5) or a loop
-  wrap crosses.
+  wrap crosses. Its path, and that of `clip.unsupported` (a loop window an
+  item cannot express) and of `item.locked` (a locked item in the way), is
+  the launch whose stretch met it, `/performance/launches/N`, so a client
+  can name the place from the code and the index.
   A scene launched whole also writes a section. `launch.scene` logs each
   clip it starts with the scene's id, all on one running frame; the commit
   writes a section for a scene whose launches at a frame all still hold (a

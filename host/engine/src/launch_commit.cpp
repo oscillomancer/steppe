@@ -149,6 +149,11 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
         }
     }
     std::sort(order.begin(), order.end());
+    // A launch's own path, so a refusal names which launch's stretch it
+    // met (a client words it from the code and this index).
+    const auto launchPath = [&](const CapturedLaunch* e) {
+        return at + "/launches/" + std::to_string(e - perf.launches.data());
+    };
 
     CommitDone done;
     done.from = beatAt(double(perf.start));
@@ -364,7 +369,13 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
             const bool fadeIn =
                 (last.to < perf.frames && last.e->action == "clip" && !heldBy(last, last.to)) ||
                 to > last.to;
-            SUPPLE_TRY(clear(stretches[i].from, to, fadeOut, fadeIn));
+            // A locked item in the way (item.locked, from the split or the
+            // removal) names the launch that left the arrangement there.
+            if (Status cleared = clear(stretches[i].from, to, fadeOut, fadeIn); !cleared) {
+                Error e = std::move(cleared).error();
+                e.path = launchPath(stretches[i].e);
+                return e;
+            }
             // The span it answers covers that tail (review round 135, L1).
             done.to = std::max(done.to, beatAt(double(perf.start + to)));
             i = j + 1;
@@ -398,7 +409,7 @@ Result<CommitDone> commitPerformance(Context& ctx, const CapturedPerformance& pe
                 prev && !(prev->e && prev->e->action == "stop") && !(prev && heldBy(*prev, x.from));
             const bool fadeOut = x.to < perf.frames && !heldBy(x, x.to);
             const double speed = take.playrate > 0 ? take.playrate : 1.0;
-            const std::string path = at + "/launches";
+            const std::string path = launchPath(x.e);  // its fade and clip refusals
             // The clip's own fades, in song samples as its player has them
             // (S3 step C, Q4): each piece takes them on the pass edges it has.
             const std::int64_t Pf = midi ? 0 : time::samplesAt(P, rate);
