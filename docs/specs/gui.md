@@ -2375,8 +2375,9 @@ user can fix what the refusal names. The refusal is worded from its code
 and path and the model, never its message or hint
 (`CaptureControl::refusalWords`). Each refusal's path names the launch it
 met (`/performance/launches/N`): `item.locked` names the one locked item
-under the take on that launch's track ("a locked item on Drums is in the
-way" when there are several); `launch.commit` at a launch's `/track` or
+under the take on that launch's track, the take reaching past its end under
+an audio clip's fade-out still sounding there ("a locked item on Drums is in
+the way" when there are several); `launch.commit` at a launch's `/track` or
 `/clip` says the track is gone or no longer a channel, or the clip is gone
 or changed; `launch.commit.fade` and `clip.unsupported` name the launch's
 clip and track ("a piece of Kit A on Drums would start or end inside its
@@ -3544,7 +3545,10 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   then the plug-in question again unless it was answered "normally"; with
   nothing to save the plug-in question comes back from the normal load and
   the project never opens overridden (`test_app.cpp`, a rig that answers
-  modes and settled reports as the engine does).
+  modes and settled reports as the engine does). A refused take's words are
+  driven per launch: two locked items, a locked item on another launched
+  track, a loop window, and a locked item under a fade-out's tail
+  (`test_launcher.cpp`).
 - The pane against the engine (step E): at every step the clips drawn dimmed
   and the scenes whose ▶ is dimmed are exactly those
   `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the

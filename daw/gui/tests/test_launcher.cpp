@@ -1667,6 +1667,79 @@ TEST_CASE("launcher: a kept take's refusal is worded from its code and path") {
     CHECK(f.errors.empty());
 }
 
+TEST_CASE("launcher: a refused take's words name the launch its refusal met") {
+    // Review round 173 F3: the refusal's /performance/launches/N names the
+    // launch's track (only its locked items count) and, for a clip's loop
+    // window, the launch's clip on its track.
+    LauncherFixture f;
+    f.song();
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    const auto lockOn = [&](const char* track, const char* notation) {
+        const std::size_t had = f.app->head().items.size();
+        f.exec("item.add", std::string(R"({"track":")") + track + R"(","bar":1,"notation":")" +
+                               notation + R"("})");
+        REQUIRE(f.app->head().items.size() == had + 1);
+        std::string id;
+        for (const auto& e : f.app->head().items)
+            if (e.value->track == *model::Id::parse(track) && !e.value->locked) id = e.id.str();
+        f.exec("item.set", R"({"item":")" + id + R"(","locked":true})");
+    };
+    std::string line;
+    const auto refuse = [&](const char* code) {
+        f.exec("engine.stop", "{}");
+        capture.service();
+        REQUIRE(refused.size() == 1);
+        CHECK(refused[0].code == code);
+        CHECK(refused[0].path.ends_with("/performance/launches/0"));
+        REQUIRE(capture.kept());
+        line = capture.keptLine();
+    };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    SUBCASE("two locked items on the launch's track") {
+        lockOn("tr_1", "voice d; 1: C2:w");
+        f.exec("item.add", R"({"track":"tr_1","bar":2,"notation":"voice d; 1: C2:w | C2:w"})");
+        for (const auto& e : f.app->head().items)
+            if (!e.value->locked)
+                f.exec("item.set", R"({"item":")" + e.id.str() + R"(","locked":true})");
+        captureKitA(f, capture);
+        // Into bar 2: both items under the take, in Kit A's way.
+        REQUIRE(f.runUntil([&] { return f.playingBeat() >= 6; }, 6, "bar 2",
+                           [&] { capture.service(); }));
+        refuse("item.locked");
+        INFO(line);
+        CHECK(line.find("Its commit was refused: a locked item on Drums is in the way.") !=
+              std::string::npos);
+    }
+    SUBCASE("a locked item on another launched track is not counted") {
+        // Bass follows the arrangement until Root lands, past its item: the
+        // item is under the take but not in the way, and Drums' one is named.
+        lockOn("tr_1", "voice d; 1: C2:w | C2:w | C2:w | C2:w");
+        lockOn("tr_2", "voice b; 1: C2:w | C2:w");
+        captureKitA(f, capture);
+        const auto service = [&] { capture.service(); };
+        REQUIRE(f.runUntil([&] { return f.playingBeat() >= 8; }, 8, "past Bass's item", service));
+        const double rootAt = f.exec("launch.clip", R"({"clip":"cl_3"})")["beat"].asDouble();
+        CHECK(rootAt >= 8);
+        REQUIRE(f.runUntil([&] { return f.playingBeat() >= rootAt + 1; }, rootAt, "Root heard",
+                           service));
+        refuse("item.locked");
+        INFO(line);
+        CHECK(line.find("Its commit was refused: the item at bar 1 on Drums is locked.") !=
+              std::string::npos);
+    }
+    SUBCASE("a clip's loop window names the clip on its track") {
+        captureKitA(f, capture);
+        f.exec("clip.set", R"({"clip":"cl_1","length":8,"loop":{"on":true,"start":1,"length":2}})");
+        refuse("clip.unsupported");
+        INFO(line);
+        CHECK(line.find("Its commit was refused: Kit A on Drums loops only part of its content, "
+                        "which an item cannot.") != std::string::npos);
+    }
+    CHECK(f.errors.empty());
+}
+
 TEST_CASE("launcher: a take whose commit was undone is declined: a click arms over it") {
     // Q1 (co-director): the undone take is not committed again, not shown
     // kept; a click arms, and the take stays the app's (redo restores it)
@@ -2161,6 +2234,64 @@ std::string addAudioClip(LauncherFixture& f, const char* track, const char* scen
     return f.exec("clip.add", *json::write(add))["clip"].asString();
 }
 }  // namespace
+
+TEST_CASE("launcher: a locked item under a fade-out's tail counts in a refused take's words") {
+    // Review round 173 F4: the commit clears under an audio clip's fade-out
+    // still sounding at the take's end, past endBeat. A locked item there is
+    // the one in the way; a locked item earlier on the track, where it still
+    // followed the arrangement, must not be named instead.
+    LauncherFixture f;
+    f.song();
+    REQUIRE(f.app->head().timeMap->secondsAt(4) == doctest::Approx(2));  // 120 bpm, 4/4
+    // Twelve beats a pass, the last eight fading out.
+    const std::string pad = addAudioClip(f, "tr_1", "sc_3", [&] {
+        audio::AudioData tone;
+        tone.sampleRate = 48000;
+        tone.channels.assign(1, std::vector<float>(6 * 48000, 0.3f));
+        const auto path = f.dir / "pad.wav";
+        REQUIRE(audio::writeWav(path, tone));
+        return path.string();
+    }());
+    f.exec("clip.set", R"({"clip":")" + pad + R"(","fade_out":4})");
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    const auto service = [&] { capture.service(); };
+    // The take starts with Root on Bass; Drums follows the arrangement.
+    REQUIRE(capture.set(true));
+    const double b0 = f.exec("launch.clip", R"({"clip":"cl_3"})")["beat"].asDouble();
+    REQUIRE(f.runUntil([&] { return f.playingBeat() >= b0 + 1; }, b0, "Root heard", service));
+    const double b1 = f.exec("launch.clip", R"({"clip":")" + pad + R"("})")["beat"].asDouble();
+    REQUIRE(b1 >= b0 + 4);
+    const auto lockAt = [&](double beat) {
+        json::Value add = json::Value::object();
+        add["track"] = "tr_1";
+        add["bar"] = static_cast<int>(beat / 4) + 1;
+        add["notation"] = "voice d; 1: C2:w";
+        f.exec("item.add", *json::write(add));
+        for (const auto& e : f.app->head().items)
+            if (!e.value->locked)
+                f.exec("item.set", R"({"item":")" + e.id.str() + R"(","locked":true})");
+    };
+    lockAt(b0);      // under the take, before the pad: not in the way
+    lockAt(b1 + 8);  // past the take's end, under the pad's fade-out
+    // Stopped six beats into the pad's pass: inside its fade-out.
+    REQUIRE(
+        f.runUntil([&] { return f.playingBeat() >= b1 + 6; }, b1 + 6, "into the fade", service));
+    f.exec("engine.stop", "{}");
+    capture.service();
+    REQUIRE(refused.size() == 1);
+    CHECK(refused[0].code == "item.locked");
+    CHECK(refused[0].path.ends_with("/performance/launches/1"));
+    REQUIRE(f.app->launchCapture());
+    REQUIRE(f.app->launchCapture()->endBeat < b1 + 8);  // the tail's item is past the take
+    const std::string line = capture.keptLine();
+    INFO(line);
+    CHECK(line.find("Its commit was refused: a locked item on Drums is in the way.") !=
+          std::string::npos);
+    CHECK(f.errors.empty());
+}
 
 TEST_CASE("launcher: the pane dims what a press would be refused for, as the engine answers") {
     // Step E: the pane no longer copies the engine's rule; it asks

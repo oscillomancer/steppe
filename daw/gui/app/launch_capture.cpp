@@ -79,6 +79,15 @@ std::string CaptureControl::refusalWords(const Error& e) {
             tracks.insert(at->track);
         else if (v)
             for (const auto& l : v->capture.launches) tracks.insert(l.track);
+        // The commit clears under an audio clip's fade-out still sounding at
+        // the take's end, at most one period past it (launch_commit's
+        // playsOutTo): the window reaches that far, so an item locked there
+        // is counted (review round 173 F4). A MIDI clip ends at the take.
+        double last = v ? v->endBeat : 0;
+        if (const model::Clip* clip = at ? s.clips.find(at->clip) : nullptr;
+            v && clip && clip->kind != model::ClipKind::Midi && clip->length > 0 &&
+            clip->fadeOut.length > 0)
+            last = s.timeMap->beatAt(s.timeMap->secondsAt(v->endBeat) + clip->length);
         const model::Item* found = nullptr;
         int count = 0;
         for (const auto& entry : s.items) {
@@ -86,7 +95,7 @@ std::string CaptureControl::refusalWords(const Error& e) {
             if (!item.locked || !tracks.contains(item.track) || !v) continue;
             const double start = model::itemSpan(s, item).startBeat;
             const double end = start + model::itemLengthBeats(s, item);
-            if (end <= v->startBeat || start >= v->endBeat) continue;
+            if (end <= v->startBeat || start >= last) continue;
             found = &item;
             ++count;
         }
