@@ -763,3 +763,40 @@ TEST_CASE("under a master playrate a removed clip's return is where its plan han
     CHECK(view->capture.launches[1].action == LaunchLogEntry::Action::Arrangement);
     CHECK(view->capture.launches[1].songFrame == returns[0].songFrame);
 }
+
+TEST_CASE("an ack drained late does not move a removed clip's return (round 172 re-check G1)") {
+    // The anticipative renderer's acks can be drained before the callback's
+    // for an earlier frame, and the log is re-sorted: a late tr_2 entry
+    // before cl_1's must not make cl_1's own launch count as after the
+    // reset, which would drop the return and record a second, later one.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(782 * kBlock);
+    p.run("launch.capture", R"({"on": true})");
+    live.until(938 * kBlock);
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
+    REQUIRE(log.size() == 1);
+    LaunchLogEntry late = log[0];  // cl_1 at 96000
+    late.track = model::Id{model::Kind::Track, 2};
+    late.action = LaunchLogEntry::Action::Arrangement;
+    late.clip = {};
+    late.runningFrame -= kBlock;
+    late.songFrame -= kBlock;
+    late.anchorSample -= kBlock;
+    EngineTestAccess::drainedLate(*p.app->engine(), late);
+    REQUIRE(p.app->launchCapture());  // drains it, re-sorting the log
+    live.until(1100 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
+    REQUIRE(returns.size() == 1);
+    const auto view = p.app->launchCapture();
+    REQUIRE(view);
+    REQUIRE(view->capture.launches.size() == 2);
+    CHECK(view->capture.launches[1].action == LaunchLogEntry::Action::Arrangement);
+    CHECK(view->capture.launches[1].songFrame == returns[0].songFrame);
+}

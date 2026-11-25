@@ -1371,23 +1371,29 @@ class Engine {
     std::unique_ptr<SpscRing<LaunchAck, 1024>> callbackLaunchAcks_ =
         std::make_unique<SpscRing<LaunchAck, 1024>>();
     std::vector<LaunchLogEntry> launchLog_;
-    // Main thread: by track, the log's length when a plan without its clip
-    // returned it to the arrangement (carryLaunch); older entries no longer
-    // say what it plays.
-    std::map<model::Id, std::size_t> launchReset_;
+    // Each entry's drain sequence (main thread, in the log's order): the
+    // log is re-sorted when the two executors' acks interleave, so a
+    // position in it does not say which entries came after a reset; this
+    // does (round 172 re-check G1).
+    std::vector<std::uint64_t> launchSeq_;
+    std::uint64_t launchSeqNext_ = 0;
+    // Main thread: by track, the drain sequence next due when a plan without
+    // its clip returned it to the arrangement (carryLaunch); entries drained
+    // before it no longer say what it plays.
+    std::map<model::Id, std::uint64_t> launchReset_;
     // Main thread: each such return as an arrangement launch, placed where
     // an immediate one would have been (quantize none) when the engine took
     // the plan, or where a playrate plan hands over if later, so a capture
-    // running then records it (launchCapture); `after`: the log's length at
-    // the reset, so an entry from then on (applied after the plan) and at or
-    // before its frame supersedes it.
+    // running then records it (launchCapture); `after`: the drain sequence
+    // at the reset, so an entry drained from then on (applied after the
+    // plan) and at or before its frame supersedes it.
     struct LaunchReturn {
         LaunchLogEntry entry;
-        std::size_t after = 0;
+        std::uint64_t after = 0;
     };
     std::vector<LaunchReturn> launchReturns_;
-    // The return recorded for `track`'s reset at log length `after`, if any.
-    const LaunchLogEntry* returnFor(model::Id track, std::size_t after) const;
+    // The return recorded for `track`'s reset at drain sequence `after`.
+    const LaunchLogEntry* returnFor(model::Id track, std::uint64_t after) const;
     // Whether a log entry applied after `r`'s plan precedes or meets it.
     bool returnSuperseded(const LaunchReturn& r) const;
     std::uint64_t launchCheckedGen_ = UINT64_MAX;  // the plan generation last checked
@@ -1467,7 +1473,7 @@ class Engine {
         std::uint64_t version = 0, committedIn = 0;
         // launchReset_ as it stood when it began: what each track played
         // then is judged by it, not by a reset since (a clip removed later).
-        std::map<model::Id, std::size_t> resets;
+        std::map<model::Id, std::uint64_t> resets;
         // As heard (CaptureFacts): the counters as it began, and the facts,
         // fixed once it ended (`closed`).
         CaptureFacts facts;
