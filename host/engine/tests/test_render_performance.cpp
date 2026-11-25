@@ -495,6 +495,10 @@ TEST_CASE(
             p.run("track.set", R"({"track": "tr_1", "monitor": "off"})");
         else
             p.run("track.set", monitorOn);
+        // Stopped, until() does not wait for the renderer: on the adoption,
+        // not the clock, then cycles for the callback's handoff.
+        while (!p.app->engine()->awaitPlan()) {
+        }
         live.until(live.cycles * kBlock + 100 * kBlock);
         CHECK(playsOf(p, "tr_1") == "arrangement");
         const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
