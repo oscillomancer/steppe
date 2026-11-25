@@ -97,6 +97,15 @@ struct EngineTestAccess {
         return e.renderedStream_.load() - e.playedStream(e.epochDone_.load());
     }
     static std::int64_t aheadFrames(const Engine& e) { return e.aheadFrames_; }
+    // What the callback has played of the current epoch (manual backends:
+    // between cycles, on the test's thread).
+    static std::int64_t played(const Engine& e) { return e.playedStream(e.epoch_.load()); }
+    // The handoff the callback last skipped (round 180 F2), and one set as
+    // a skip leaves it: the latest plan by default (between manual cycles).
+    static const detail::Plan* classBase(const Engine& e) { return e.classBase_; }
+    static void skipped(Engine& e, detail::Plan* plan = nullptr) {
+        e.classBase_ = plan ? plan : e.latestPlan_.load();
+    }
     // The renderer waits for the callback to free room (a ring or its lead).
     static bool rendererWaitsForRoom(const Engine& e) {
         return e.rendererWakeAt_.load() != INT64_MAX;

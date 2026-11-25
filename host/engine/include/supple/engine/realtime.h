@@ -1363,17 +1363,29 @@ class Engine {
     };
     // The executor adopting `next`: one ack per node of `liveClass` (-1: all)
     // that carryLaunch returned to the arrangement, at `stream` of `epoch`.
-    // The callback adopting `next` from `old` (the anticipative executor's
-    // handoff): a node that changed class without a carry (while stopped,
-    // or a late handoff) restarts on the arrangement; one whose old state
-    // was not the arrangement is acked as a return (round 176 F1).
-    // `carried`: the renderer carried the live region into `next`
-    // (Plan::liveCarried), so a join kept its launch.
-    void ackClassMoves(detail::Plan& old, const detail::Plan& next, bool carried,
-                       std::uint64_t epoch, std::int64_t stream) SUPPLE_RT;
-    // The callback: the last handoff it skipped (an old-epoch rate plan),
-    // which the next one's class moves are judged against; kept while the
-    // callback's own plan holds it alive (oldestInUse), reset at adoption.
+    // The callback adopting `next` from `old`, its own previous plan (the
+    // anticipative executor's handoff): a node that changed class without a
+    // carry (while stopped, or a late handoff) restarts on the arrangement;
+    // one whose state before was not the arrangement is acked as a return
+    // (round 176 F1). Keyed on the node's class in `old` (round 180 F1): a
+    // node live there is the callback's own, which adoptLive carries on, so
+    // only `next` rendering it is a move. A node rendered there is the
+    // renderer's, judged in its chain: `skipped` is the last handoff skipped
+    // since (null: none; then the chain's last plan is `old`); a node live
+    // in a skipped one was acked at that skip, else a join is a move unless
+    // the renderer carried it (`carried`, Plan::liveCarried: round 178 F1).
+    void ackClassMoves(const detail::Plan& old, const detail::Plan* skipped,
+                       const detail::Plan& next, bool carried, std::uint64_t epoch,
+                       std::int64_t stream) SUPPLE_RT;
+    // The callback skipping `skipped` (an old-epoch rate plan, never
+    // adopted): a node rendered in livePlan_ that it runs live, for the
+    // first time since the adoption, is acked there whatever the renderer
+    // carried (nobody plays a skipped plan's live region), and marked
+    // (Node::skipLive) so that nothing more is acked for it.
+    void ackSkipped(detail::Plan& skipped) SUPPLE_RT;
+    // The callback: the last handoff it skipped since its adoption; kept
+    // alive while the callback's own plan is (oldestInUse), reset at the
+    // adoption and by start() and stop() (round 180 F2).
     detail::Plan* classBase_ = nullptr;
     void ackReturns(detail::Plan& next, int liveClass, bool renderer, std::uint64_t epoch,
                     std::int64_t stream) SUPPLE_RT;

@@ -1555,19 +1555,29 @@ void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::u
     if (any) notifyMain();
 }
 
-void Engine::ackClassMoves(detail::Plan& old, const detail::Plan& next, bool carried,
-                           std::uint64_t epoch, std::int64_t stream) SUPPLE_RT {
+void Engine::ackClassMoves(const detail::Plan& old, const detail::Plan* skipped,
+                           const detail::Plan& next, bool carried, std::uint64_t epoch,
+                           std::int64_t stream) SUPPLE_RT {
     // `old` is the callback's previous plan: its live nodes are the
-    // callback's own, and the renderer left its rendered ones when it
-    // adopted a newer plan, before this handoff was published.
+    // callback's own, and the renderer left its rendered ones (and those of
+    // a skipped plan) when it adopted a newer plan, before this handoff was
+    // published.
     bool any = false;
     for (const detail::Node& n : next.nodes) {
         const detail::Node* o = detail::findNode(old, n.id);
-        if (!o || o->live == n.live) continue;
-        // The renderer carried it: it kept its launch, or lost it and acked
-        // that itself (round 178 F1: by the carry, not the handoff).
-        if (n.live && carried) continue;
-        if (o->launch.kind == detail::LaunchState::Kind::Arrangement) continue;
+        if (!o) continue;
+        const detail::Node* before = o;  // the state that restarts
+        if (o->live) {
+            if (n.live) continue;  // adoptLive carries the callback's own on
+        } else {
+            if (skipped) {
+                before = detail::findNode(*skipped, n.id);
+                if (!before || before->skipLive) continue;  // ackSkipped judged it
+            }
+            if (!n.live) continue;  // the renderer's, rendered throughout
+            if (carried) continue;  // the renderer carried it (round 178 F1)
+        }
+        if (before->launch.kind == detail::LaunchState::Kind::Arrangement) continue;
         LaunchAck ack;
         ack.track = n.id.n;
         ack.epoch = epoch;
@@ -1575,6 +1585,31 @@ void Engine::ackClassMoves(detail::Plan& old, const detail::Plan& next, bool car
         ack.stream = stream - n.timelineShift;
         ack.returned = true;
         ack.generation = next.generation;
+        if (!callbackLaunchAcks_->push(ack))
+            returnAcksDropped_.fetch_add(1, std::memory_order_relaxed);
+        any = true;
+    }
+    if (any) notifyMain();
+}
+
+void Engine::ackSkipped(detail::Plan& skipped) SUPPLE_RT {
+    // Only skipLive is written here: the renderer may still read the rest
+    // of the plan.
+    bool any = false;
+    for (detail::Node& n : skipped.nodes) {
+        const detail::Node* o = livePlan_ ? detail::findNode(*livePlan_, n.id) : nullptr;
+        const detail::Node* before = classBase_ ? detail::findNode(*classBase_, n.id) : o;
+        const bool judged = classBase_ && before && before->skipLive;
+        n.skipLive = n.live || judged;
+        if (!o || o->live || !n.live || judged || !before) continue;
+        if (before->launch.kind == detail::LaunchState::Kind::Arrangement) continue;
+        LaunchAck ack;
+        ack.track = n.id.n;
+        ack.epoch = skipped.handEpoch;
+        ack.action = static_cast<std::uint8_t>(LaunchLogEntry::Action::Arrangement);
+        ack.stream = skipped.handAt - n.timelineShift;
+        ack.returned = true;
+        ack.generation = skipped.generation;
         if (!callbackLaunchAcks_->push(ack))
             returnAcksDropped_.fetch_add(1, std::memory_order_relaxed);
         any = true;
