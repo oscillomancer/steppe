@@ -90,13 +90,20 @@ Status checkPerformance(const CapturedPerformance& p, const model::Session& s, d
                          "render a version that has the track (version), or give the "
                          "performance without its launches");
         if (e.action != "clip") continue;
-        if (!e.clip)
-            return launchesError("launch " + std::to_string(i) + " names no clip", path + "/clip");
+        if (!e.clip)  // round 174 F5: its own code
+            return Error("render.performance.no_clip",
+                         "launch " + std::to_string(i) + " is a clip launch that names no clip",
+                         path + "/clip",
+                         "give the launch's clip, or make it action arrangement or stop");
         auto clip = existing<model::Clip>(s, *e.clip, path + "/clip");
         if (!clip) return std::move(clip).error();
         const model::Clip& c = *s.clips.find(*clip);
         if (c.track != *track)
-            return launchesError(*e.clip + " is not " + e.track + "'s clip", path + "/clip");
+            return Error("render.performance.clip_track",
+                         *e.clip + " is " + c.track.str() + "'s clip, not " + e.track + "'s",
+                         path + "/clip",
+                         "give the launch the clip's own track (" + c.track.str() +
+                             "), or a clip of " + e.track);
         if (tr->freeze) return trackFrozen(*track, path + "/clip");
         if (stretch && c.kind != model::ClipKind::Midi && detail::clipHasTakeChain(s, c))
             return Error("launch.playrate",
@@ -186,7 +193,6 @@ Result<RenderPerformance> resolvePerformance(EngineApp& app, const PerformanceRe
             auto& why = out.notHeardBecause;
             if (!f.fromPlayStart) why.push_back("began_mid_run");
             if (f.edited) why.push_back("edited_during");
-            if (f.uncertain) why.push_back("launch_state_uncertain");
             if (f.rateChanged) why.push_back("playrate_changed");
             if (f.liveInput) why.push_back("live_input");
             if (f.dropout) why.push_back("dropout");
@@ -213,7 +219,12 @@ Result<RenderPerformance> resolvePerformance(EngineApp& app, const PerformanceRe
     if (canonical) out.perf = std::move(*canonical);
     const time::TimeMap& tm = *s.timeMap;
     out.startBeat = tm.beatAt(double(out.perf.start) / rate);
-    out.endBeat = tm.beatAt(double(out.perf.start + out.perf.frames) / rate);
+    // The song span it covers: under a loop it runs past the loop's end only
+    // as wraps, so its span ends there (round 174 F4).
+    std::int64_t last = out.perf.start + out.perf.frames;
+    if (out.perf.loop && out.perf.start < out.perf.loop->end && last > out.perf.loop->end)
+        last = out.perf.loop->end;
+    out.endBeat = tm.beatAt(double(last) / rate);
     return out;
 }
 
@@ -265,8 +276,6 @@ Error notAsHeard(const RenderPerformance& p) {
                                          ", the version it was captured on"
         : first == "began_mid_run" ? "capture from stop: launch.capture {on: true} before play"
         : first == "edited_during" ? "capture again without editing during it"
-        : first == "launch_state_uncertain"
-            ? "launch the track again (or launch.arrangement), then capture again"
         : first == "playrate_changed" ? "capture again without changing the playrate during it"
         : first == "live_input"       ? "capture again with no armed or monitored input"
         : first == "dropout"          ? "capture again: the output dropped out during it"

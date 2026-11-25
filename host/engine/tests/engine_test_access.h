@@ -184,10 +184,32 @@ struct EngineTestAccess {
         a.anchorBeat = x.anchorBeat;
         (void)e.callbackLaunchAcks_->push(a);
     }
+    static std::uint64_t returnAcksDropped(const Engine& e) { return e.returnAcksDropped_.load(); }
+    static std::uint64_t returnAcksDuplicated(const Engine& e) { return e.returnAcksDuplicated_; }
+    // The returns the log holds (an executor's ack, or the fallback for a
+    // lost one), in its order.
     static std::vector<LaunchLogEntry> launchReturns(const Engine& e) {
         std::vector<LaunchLogEntry> out;
-        for (const auto& r : e.launchReturns_) out.push_back(r.entry);
+        for (std::size_t i = 0; i < e.launchLog_.size(); ++i)
+            if (e.launchIsReturn_[i]) out.push_back(e.launchLog_[i]);
         return out;
+    }
+    // A full ring, as the in-callback executor would have met it: its
+    // return acks waiting are lost and counted (the test thread runs the
+    // Manual backend's cycles, so nothing pushes meanwhile).
+    static std::size_t loseReturnAcks(Engine& e) {
+        std::vector<Engine::LaunchAck> keep;
+        std::size_t lost = 0;
+        Engine::LaunchAck a;
+        while (e.callbackLaunchAcks_->pop(a)) {
+            if (a.returned)
+                ++lost;
+            else
+                keep.push_back(a);
+        }
+        for (const auto& k : keep) (void)e.callbackLaunchAcks_->push(k);
+        e.returnAcksDropped_.fetch_add(lost);
+        return lost;
     }
 };
 }  // namespace supple::engine

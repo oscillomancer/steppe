@@ -333,10 +333,7 @@ instructions are in `docs/guides/installing.md`.
     as heard. The render dialog's Plays row offers the last capture, as
     played and said as heard or why not, and the launcher over Start..End
     (gui.md §4.8); with Arrangement it says the clips playing now are not
-    in the render. Limits:
-    a launch placed with quantize none under a master playrate can render
-    up to a few stream frames earlier than it played, which as_heard does
-    not show; native macOS and Windows CI has not run on it.
+    in the render. Limit: native macOS and Windows CI has not run on it.
     `EngineApp::launchState()` gives the GUI what `launch.state` reports.
   - Limits, until done:
     - under a master playrate clips play on the playrate path, live as
@@ -391,18 +388,13 @@ instructions are in `docs/guides/installing.md`.
       shows it; a click commits it, and Quit, New and Open finalize it);
       the pane never arms over an uncommitted take;
     - a clip removed (or frozen, or past the memory budget) while a capture
-      runs is kept up to its track's return to the arrangement, which is
-      recorded at unity up to an immediate launch's floor after the plan
-      reached the executors (about a block in-callback, a render block or
-      two with the anticipative renderer), under a master playrate where
-      the plan hands over, or not at all when a playrate change is on its
-      way (`launch.later`); a removal undone within one executor block (a
-      client that sends without waiting) still records the return, though
-      the executors may have played on: the track is then reported
-      `uncertain` by `launch.state` until its next launch, and a capture
-      begun or running meanwhile is not as heard
-      (`launch_state_uncertain`; the mark can be a false alarm; the real
-      fix, a return ack from the audio path, is a follow-up): the
+      runs is kept up to its track's return to the arrangement, at the
+      frame its executor adopted the plan (the executors ack it); a
+      removal undone before any executor block is no return at all; a
+      return ack lost to a full ring (a plan dropping clips on more than
+      a thousand tracks at once) falls back to an immediate launch's
+      floor, with a warning, and the capture is not as heard; a launch
+      ack lost that way is not counted (it cannot overflow today): the
       commit writes the clip's stretch to there (after the removal is
       undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one

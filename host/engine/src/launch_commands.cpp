@@ -199,11 +199,10 @@ schema::Schema<CommitArgs> commitArgsSchema() {
 
 std::string playsName(Engine::TrackLaunch::Plays p) {
     using P = Engine::TrackLaunch::Plays;
-    return p == P::Clip        ? "clip"
-           : p == P::Held      ? "held"
-           : p == P::Stopped   ? "stopped"
-           : p == P::Uncertain ? "uncertain"
-                               : "arrangement";
+    return p == P::Clip      ? "clip"
+           : p == P::Held    ? "held"
+           : p == P::Stopped ? "stopped"
+                             : "arrangement";
 }
 
 schema::Schema<LaunchDone> launchDoneSchema() {
@@ -374,7 +373,6 @@ void registerLaunchCommands(cmd::Registry& registry) {
             return toAll(engine::app(ctx), ctx, action, a, [stop](const TL& t) {
                 if (stop)
                     return t.plays == TL::Plays::Clip || t.plays == TL::Plays::Held ||
-                           t.plays == TL::Plays::Uncertain ||
                            (t.queued && t.queued->request.action == Action::Clip);
                 return t.plays != TL::Plays::Arrangement ||
                        (t.queued && t.queued->request.action != Action::Arrangement);
@@ -389,9 +387,7 @@ void registerLaunchCommands(cmd::Registry& registry) {
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "What each track with clips plays, and what it has queued.";
         c.description =
-            "plays is arrangement, clip, held (a once clip past its length, silent), stopped, or "
-            "uncertain (a removal of its clip undone before the executors took it: not known until "
-            "its next launch), "
+            "plays is arrangement, clip, held (a once clip past its length, silent) or stopped, "
             "as heard. position is the playing clip's place in its period, in beats for a MIDI "
             "clip and seconds for an audio clip. queued is a launch not heard yet, with the "
             "song position it applies at. followed (none, key or chords) is what the clip it "

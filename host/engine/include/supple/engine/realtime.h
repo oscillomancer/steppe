@@ -889,10 +889,7 @@ class Engine {
     // heard (an applied launch not yet heard is still queued), and its
     // queued launch. The GUI's telemetry and launch.state read it.
     struct TrackLaunch {
-        // Uncertain: a removal of its clip was undone before the executors
-        // were seen to take it, so whether it plays the clip is not known
-        // until its next launch (round 172 K1).
-        enum class Plays : std::uint8_t { Arrangement, Clip, Held, Stopped, Uncertain };
+        enum class Plays : std::uint8_t { Arrangement, Clip, Held, Stopped };
         model::Id track;
         Plays plays = Plays::Arrangement;
         model::Id clip;                  // Clip and Held
@@ -936,10 +933,6 @@ class Engine {
         bool liveInput = false;      // a plan monitoring live input played during it
         bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
         bool pluginFailed = false;   // a processing error (processErrors)
-        // A track's launch state was uncertain while it began or ran: a plan
-        // without the clip it played was replaced before the executors were
-        // seen to take it (round 172 K1).
-        bool uncertain = false;
         bool operator==(const CaptureFacts&) const = default;
     };
     struct LaunchCapture {
@@ -1352,7 +1345,17 @@ class Engine {
         std::uint8_t action = 0;
         std::int64_t stream = 0, anchorSample = 0, songFrame = 0;
         double anchorBeat = 0;
+        // A return to the arrangement carryLaunch made at the adoption of
+        // plan `generation`, at `stream` (no slot, clip or song frame: the
+        // main thread works it out, logReturn).
+        bool returned = false;
+        std::uint64_t generation = 0;
     };
+    // The executor adopting `next`: one ack per node of `liveClass` (-1: all)
+    // that carryLaunch returned to the arrangement, at `stream` of `epoch`.
+    void ackReturns(detail::Plan& next, int liveClass, bool renderer, std::uint64_t epoch,
+                    std::int64_t stream) SUPPLE_RT;
+    std::atomic<std::uint64_t> returnAcksDropped_{0};  // a full ring: the main thread falls back
     std::unique_ptr<std::array<LaunchSlot, kLaunchSlots>> launchSlots_ =
         std::make_unique<std::array<LaunchSlot, kLaunchSlots>>();
     // Slots the executors still act on (pending, committed, or applied and
@@ -1378,43 +1381,40 @@ class Engine {
     std::unique_ptr<SpscRing<LaunchAck, 1024>> callbackLaunchAcks_ =
         std::make_unique<SpscRing<LaunchAck, 1024>>();
     std::vector<LaunchLogEntry> launchLog_;
-    // Each entry's drain sequence (main thread, in the log's order): the
-    // log is re-sorted when the two executors' acks interleave, so a
-    // position in it does not say which entries came after a reset; this
-    // does (round 172 re-check G1).
-    std::vector<std::uint64_t> launchSeq_;
-    std::uint64_t launchSeqNext_ = 0;
-    // Main thread: by track, the drain sequence next due when a plan without
-    // its clip returned it to the arrangement (carryLaunch); entries drained
-    // before it no longer say what it plays.
-    std::map<model::Id, std::uint64_t> launchReset_;
-    // Main thread: each such return as an arrangement launch, placed where
-    // an immediate one would have been (quantize none) when the engine took
-    // the plan, or where a playrate plan hands over if later, so a capture
-    // running then records it (launchCapture); `after`: the drain sequence
-    // at the reset, so an entry drained from then on (applied after the
-    // plan) and at or before its frame supersedes it.
-    struct LaunchReturn {
-        LaunchLogEntry entry;
-        std::uint64_t after = 0;
+    // Whether each entry (in the log's order) is a return to the
+    // arrangement an executor acked as it adopted a plan without the
+    // track's clip (carryLaunch): at a frame it shares with a launch it
+    // sorts first, since a launch there was applied after the adoption.
+    std::vector<std::uint8_t> launchIsReturn_;
+    // Main thread: the returns logged, by track, epoch and plan generation:
+    // one acked twice is logged once.
+    struct ReturnKey {
+        model::Id track;
+        std::uint64_t epoch = 0, generation = 0;
+        bool operator==(const ReturnKey&) const = default;
     };
-    std::vector<LaunchReturn> launchReturns_;
-    // Main thread: a unity return whose plan the executors were not yet
-    // seen to take (oldestInUse() below its generation). A newer plan that
-    // has the clip replacing it then leaves the track uncertain until its
-    // next launch (round 172 K1); one that lacks it too carries it.
-    struct UnseenReturn {
-        model::Id track, clip;
-        std::uint64_t generation = 0;
+    std::vector<ReturnKey> returnKeys_;
+    // Main thread: under a playrate, a published plan without a track's
+    // clip, which its executor adopts at `stream` (its handAt) of `epoch`:
+    // the song frame of its return, placed when it is published, before
+    // the song passes it, on the launches' convention (the next whole song
+    // sample, placeRateLaunch with quantize none). The ack takes it only on
+    // the same epoch and stream (round 174, return-ack risk 2).
+    struct ReturnPlace {
+        model::Id track;
+        std::uint64_t generation = 0, epoch = 0;
+        std::int64_t stream = 0;
+        LaunchPlaced placed;
     };
-    std::vector<UnseenReturn> unseenReturns_;
-    std::vector<model::Id> launchUncertain_;
-    bool launchUncertain(model::Id track) const;
-    void judgeUnseenReturns(const detail::Plan& next);  // loadNow, before publishing it
-    // The return recorded for `track`'s reset at drain sequence `after`.
-    const LaunchLogEntry* returnFor(model::Id track, std::uint64_t after) const;
-    // Whether a log entry applied after `r`'s plan precedes or meets it.
-    bool returnSuperseded(const LaunchReturn& r) const;
+    std::uint64_t returnAcksDuplicated_ = 0;  // the guard fired: carries overlapped (risk 6)
+    std::vector<ReturnPlace> returnPlaces_;
+    std::uint64_t returnAcksDropSeen_ = 0;  // returnAcksDropped_ as last handled
+    void logReturn(const LaunchAck& ack);
+    bool pluginFailedNow() const;  // a failed or refused instance of the version's fx
+    void sortLaunchLog();
+    // Each track whose newest entry the latest plan cannot play any more
+    // (its clip, or all its players, gone), in track order.
+    std::vector<model::Id> tracksLosingLaunch(const detail::Plan* plan) const;
     std::uint64_t launchCheckedGen_ = UINT64_MAX;  // the plan generation last checked
     // The rate controls of the plan last checked (serviceLaunches): a
     // change voids the launches placed on the old trajectory.
@@ -1490,9 +1490,6 @@ class Engine {
         LoopRange loop;
         bool placed = false;  // LaunchCapture's
         std::uint64_t version = 0, committedIn = 0;
-        // launchReset_ as it stood when it began: what each track played
-        // then is judged by it, not by a reset since (a clip removed later).
-        std::map<model::Id, std::uint64_t> resets;
         // As heard (CaptureFacts): the counters as it began, and the facts,
         // fixed once it ended (`closed`).
         CaptureFacts facts;

@@ -5,8 +5,11 @@
 // resolved object, and song frames converted under a master playrate. Its
 // own ctest entry.
 #include <supple/audio/audio_file.h>
+#include <chrono>
 #include <optional>
+#include <thread>
 #include "clip_player_support.h"
+#include "engine_test_access.h"
 
 using namespace supple;
 using namespace supple::engine;
@@ -144,12 +147,71 @@ TEST_CASE("a performance render refuses what it cannot play, one code per cause"
     e = refused(p, "render.dry-run", withPerformance(j(R"({"as_heard": true})"), given()));
     CHECK(e.code == "render.not_as_heard");
     CHECK(e.path == "/args/performance");
+    // start_beat or end_beat in the call (round 174 F3).
+    e = refused(p, "render.mix", withPerformance(j(R"({"start_beat": 8})"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/start_beat");
+    e = refused(p, "render.dry-run", withPerformance(j(R"({"end_beat": 16})"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/end_beat");
+    // A clip launch with no clip, a clip of another track (F5).
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), launches(R"([
+        {"frame": 96000, "track": "tr_1", "action": "clip", "anchor": 96000,
+         "anchor_beat": 4}])")));
+    CHECK(e.code == "render.performance.no_clip");
+    CHECK(e.path == "/args/performance/launches/0/clip");
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), launches(R"([
+        {"frame": 96000, "track": "tr_1", "action": "clip", "clip": "cl_2", "anchor": 96000,
+         "anchor_beat": 4}])")));
+    CHECK(e.code == "render.performance.clip_track");
+    CHECK(e.path == "/args/performance/launches/0/clip");
+    CHECK(e.hint.find("tr_2") != std::string::npos);
+    // No running time; a launcher range that ends before it starts.
+    json::Value none = given();
+    none["frames"] = 0;
+    e = refused(p, "render.dry-run", withPerformance(j("{}"), none));
+    CHECK(e.code == "render.empty");
+    CHECK(e.path == "/args/performance/frames");
+    e = refused(p, "render.dry-run",
+                withPerformance(j("{}"), j(R"({"from": "launcher", "start_beat": 8,
+                                               "end_beat": 8})")));
+    CHECK(e.code == "render.empty");
+    CHECK(e.path == "/args/performance/end_beat");
     // Given and accepted: canonical, and not as heard because given.
     json::Value dry = p.runArgs("render.dry-run", withPerformance(j("{}"), given()));
     CHECK_FALSE(dry["as_heard"].asBool());
     CHECK(dry["not_heard_because"] == j(R"(["given"])"));
     CHECK(dry["performance"]["launches"].size() == 1);
     CHECK(dry["range"]["end_beat"].asDouble() == doctest::Approx(8));
+}
+
+TEST_CASE("a dry run with a performance renders the mix whatever the saved source (round 174 F2)") {
+    Project p;
+    twoTracks(p);
+    p.run("project.set", R"({"render": {"source": "regions"}})");
+    json::Value dry = p.runArgs("render.dry-run", withPerformance(j("{}"), given()));
+    CHECK(dry["not_heard_because"] == j(R"(["given"])"));
+    // operation regions in the call is still refused, naming operation.
+    Error e =
+        refused(p, "render.dry-run", withPerformance(j(R"({"operation": "regions"})"), given()));
+    CHECK(e.code == "render.args");
+    CHECK(e.path == "/args/performance");
+    CHECK(e.hint.find("operation mix") != std::string::npos);
+}
+
+TEST_CASE("a looped performance's range is the song span it covers (round 174 F4)") {
+    // A bar looped three times: the range ends at the loop's end (bar 2,
+    // beat 4), not at three bars of running time.
+    Project p;
+    twoTracks(p);
+    json::Value looped = j(R"({"sample_rate": 48000, "start": 0, "frames": 288000,
+        "loop": {"start": 0, "end": 96000},
+        "launches": [{"frame": 0, "track": "tr_1", "action": "clip", "clip": "cl_1",
+                      "anchor": 0, "anchor_beat": 0}]})");
+    json::Value dry = p.runArgs("render.dry-run", withPerformance(j("{}"), looped));
+    CHECK(dry["range"]["start_beat"].asDouble() == doctest::Approx(0));
+    CHECK(dry["range"]["end_beat"].asDouble() == doctest::Approx(4));
+    CHECK(dry["performance"]["frames"].asInt() == 288000);
 }
 
 TEST_CASE("from the launcher with nothing playing renders the arrangement over the range") {
@@ -203,6 +265,48 @@ TEST_CASE("under a master playrate a performance's song frames play where live p
     CHECK(worst == 0.0);
 }
 
+TEST_CASE(
+    "under a slow master playrate an immediate launch renders where it played (round 174 F1)") {
+    // Quantize none: live places it on the next whole song sample, at or
+    // after the floor, so the render's first frame reaching that sample is
+    // the stream frame live switched on. At 0.25 with 126-frame blocks the
+    // floor's song position is fractional (21 * 126 * 0.25 = 661.5), as at
+    // 0.6 with 128-frame blocks.
+    for (const auto& [rate, block] : {std::pair{0.25, 126u}, std::pair{0.6, 128u}}) {
+        INFO("rate " << rate << " block " << block);
+        Project p;
+        twoTracks(p);
+        json::Value set = j(R"({"preserve_pitch": false})");
+        set["rate"] = rate;
+        p.runArgs("transport.playrate.set", set);
+        const model::Session s = p.app->head();
+        const Live heard = playLive(s, p.app->projectDir(), kInCallback, block, 48000 * 4,
+                                    {{20, {request("tr_1", "cl_1")}, model::LaunchQuantize::None}});
+        REQUIRE(heard.log.size() == 1);
+        // On a whole song sample: the song frame is where it switched.
+        CHECK(double(heard.log[0].songFrame) <= rate * double(heard.log[0].runningFrame) + 1e-6);
+        CHECK(double(heard.log[0].songFrame) > rate * double(heard.log[0].runningFrame - 1));
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 1.5;
+        settings.blockSize = kBlock;
+        settings.projectDir = p.app->projectDir();
+        std::vector<LaunchLogEntry> song = heard.log;
+        song[0].runningFrame = heard.log[0].songFrame;
+        settings.launches = song;
+        settings.launchesInSong = true;
+        auto r = renderOffline(s, pool, settings);
+        REQUIRE_MESSAGE(r, (r ? std::string() : r.error().toString()));
+        const std::vector<float>& fromSong = r->audio.channels[0];
+        const std::int64_t to = std::min(std::int64_t(fromSong.size()),
+                                         std::int64_t(heard.left.size()) - heard.latency - block);
+        REQUIRE(to > heard.log[0].runningFrame + 4096);
+        const auto [worst, first] = compare(heard.left, heard.latency, fromSong, 0, to);
+        INFO("first differing frame " << first << ", launch at " << heard.log[0].runningFrame);
+        CHECK(worst == 0.0);
+    }
+}
+
 TEST_CASE("a clip removed and restored within one block leaves the capture edited (G2)") {
     // A client that sends without waiting: the executors may skip the plan
     // without cl_1 and play on, though a return was recorded. The capture
@@ -253,10 +357,10 @@ json::Value laterCapture(Project& p, AppLive& live, F&& edit) {
 }
 }  // namespace
 
-TEST_CASE("a removal undone before the executors took it leaves the track uncertain (K1)") {
-    // The executors may have skipped the plan without cl_1: launch.state
-    // says so, and a later capture with no edit of its own is not as heard,
-    // until tr_1 is launched again.
+TEST_CASE("a removal undone before the executors took it is not a return (round 172 K1)") {
+    // The executor went from the plan with cl_1 to the one with it again:
+    // it never returned tr_1, and acked nothing. launch.state says cl_1,
+    // and a later capture with no edit of its own lacks only a play start.
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 5);
@@ -264,29 +368,61 @@ TEST_CASE("a removal undone before the executors took it leaves the track uncert
         p.run("clip.remove", R"({"clip": "cl_1"})");
         p.run("history.undo", "{}");  // no block between
     });
-    CHECK(playsOf(p, "tr_1") == "uncertain");
-    CHECK_FALSE(dry["as_heard"].asBool());
+    CHECK(playsOf(p, "tr_1") == "clip");
+    CHECK(EngineTestAccess::launchReturns(*p.app->engine()).empty());
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
-    CHECK(why.find("\"launch_state_uncertain\"") != std::string::npos);
-    CHECK(why.find("\"edited_during\"") == std::string::npos);
-    // Launched again: known.
-    p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 3, frame 192000
-    live.until(1600 * kBlock);
-    CHECK(playsOf(p, "tr_1") == "clip");
+    CHECK(why == R"(["began_mid_run"])");
 }
 
-TEST_CASE("a removal the executors took, then an edit, leaves no uncertainty (K1)") {
+TEST_CASE("a removal the executors took, then its undo, is a return (round 174)") {
+    // The executor returned tr_1 at the removal's next block; the undo brings
+    // cl_1 back to the plan, not to the track: launch.state says the
+    // arrangement, and a capture after both lacks only a play start.
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 4);
     json::Value dry = laterCapture(p, live, [&] {
         p.run("clip.remove", R"({"clip": "cl_1"})");
         live.until(801 * kBlock);  // a block: the executor takes the plan
-        p.run("track.add", R"({"name": "After"})");
+        p.run("history.undo", "{}");
     });
-    CHECK(playsOf(p, "tr_1") != "uncertain");  // (no clips: not listed)
+    CHECK(playsOf(p, "tr_1") == "arrangement");
+    const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
+    REQUIRE(returns.size() == 1);
+    CHECK(returns[0].runningFrame == 800 * std::int64_t(kBlock));
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
-    CHECK(why.find("\"launch_state_uncertain\"") == std::string::npos);
+    CHECK(why == R"(["began_mid_run"])");
+}
+
+TEST_CASE("a plug-in that failed before the capture leaves it not as heard (round 174 U1)") {
+    // A failed bridged instance plays silence and answers ok, so no
+    // processing error is counted; a render's pool plays a working one.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    Project p;
+    twoTracks(p);
+    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.crash"})");  // fx_3
+    p.run("fx.set", R"({"fx": "fx_3", "isolation": "dedicated"})");
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    host::Instance* crash = p.app->instanceOf(*model::Id::parse("fx_3"));
+    REQUIRE(crash);
+    REQUIRE(crash->isolated());
+    REQUIRE(crash->setParam(1, 1.0));  // crash in its next process()
+    for (int i = 0; i < 2000 && !crash->failed(); ++i) {
+        live.until((live.cycles + 1) * kBlock);  // stopped: plug-ins still run
+        if (!crash->failed()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(crash->failed());
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(live.cycles * kBlock + 20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(live.cycles * kBlock + 1000 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    CHECK_FALSE(dry["as_heard"].asBool());
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why == R"(["plugin_failed"])");
 }

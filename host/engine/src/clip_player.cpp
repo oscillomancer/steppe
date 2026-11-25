@@ -441,6 +441,7 @@ void carryLaunch(const Node& old, Node& n) SUPPLE_RT {
     }
     const bool lost = (L.kind == LaunchState::Kind::Clip && L.player < 0) ||
                       (n.players.empty() && L.kind != LaunchState::Kind::Arrangement);
+    n.launchReturned = lost;
     if (lost) {
         L = LaunchState{};
         n.releaseHeld = true;  // the clip's notes end
