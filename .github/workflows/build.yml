@@ -49,6 +49,13 @@ on:
         description: Junk-fill heap memory (macOS MallocPreScribble and MallocScribble, Linux MALLOC_PERTURB_)
         type: boolean
         default: false
+      # Reading what passing tests print (a number a test reports with MESSAGE, a timing the
+      # log should show): ctest -V for the run. Narrowed runs only, the full suite's output
+      # is far too long to read; it changes what is logged, not what runs.
+      verbose:
+        description: Print passing tests' output too (ctest -V; for a narrowed run, not the full suite)
+        type: boolean
+        default: false
       # The 10 GB cache store cannot hold every branch run's compiler caches
       # (CONTRIBUTING.md): main always saves, tags never do, a branch only when asked.
       save_caches:
@@ -186,25 +193,17 @@ jobs:
       # is disposable, so its workspace and temp folders are excluded; the state is printed before
       # and after, to read what the runner had (round: test-time study, section 12). A refusal
       # (tamper protection, no rights) leaves the run unchanged.
-      - name: Windows Defender state and exclusion
+      # Printed, not changed: on the Windows image real-time protection was already off and C:\
+      # and D:\ already excluded in every run measured (45516882921, 45542564419), so no
+      # exclusion is added; a change of image shows up on this line.
+      - name: Windows Defender state
         if: matrix.platform == 'windows'
         continue-on-error: true
         timeout-minutes: 5
         shell: pwsh
         run: |
-          function Show-Defender($label) {
-            "--- Defender $label"
-            Get-MpComputerStatus | Select-Object AMRunningMode, RealTimeProtectionEnabled, BehaviorMonitorEnabled, IoavProtectionEnabled | Format-List | Out-String | Write-Host
-            $p = Get-MpPreference
-            $p.ExclusionPath | ForEach-Object { "path exclusion: $_" } | Write-Host
-            $p.ExclusionProcess | ForEach-Object { "process exclusion: $_" } | Write-Host
-          }
-          Show-Defender 'before'
-          # The workspace holds the build tree, ccache and .deps; the build tools' own reads
-          # (headers, libraries, compilers) are covered by excluding the processes.
-          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:TEMP
-          Add-MpPreference -ExclusionProcess 'clang-cl.exe', 'lld-link.exe', 'link.exe', 'cl.exe', 'ninja.exe', 'cmake.exe', 'ctest.exe', 'ccache.exe'
-          Show-Defender 'after'
+          $s = Get-MpComputerStatus
+          "Defender: RealTimeProtection=$($s.RealTimeProtectionEnabled) BehaviorMonitor=$($s.BehaviorMonitorEnabled) IoavProtection=$($s.IoavProtectionEnabled)"
       - name: Windows dependencies (vcpkg binary cache)
         if: matrix.platform == 'windows'
         run: |
@@ -453,9 +452,12 @@ jobs:
           SUPPLE_CI_TESTS: ${{ inputs.tests }}
           SUPPLE_CI_REPEAT: ${{ inputs.repeat }}
           SUPPLE_CI_SCRIBBLE: ${{ inputs.scribble }}
+          SUPPLE_CI_VERBOSE: ${{ inputs.verbose }}
         run: |
           if [[ "$SUPPLE_CI_SCRIBBLE" == true ]]; then export MALLOC_PERTURB_=165; fi
-          xvfb-run -a -s '-screen 0 1920x1080x24' ctest --preset dev ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
+          verbose=()
+          if [[ "$SUPPLE_CI_VERBOSE" == true ]]; then verbose=(-V); fi
+          xvfb-run -a -s '-screen 0 1920x1080x24' ctest --preset dev ${verbose[@]+"${verbose[@]}"} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
       # The runner's desktop is 1024x768, smaller than the stock editors and
       # the 1320x840 the probes resize them to; win32-embedding can only see
       # what is on screen.
@@ -474,6 +476,7 @@ jobs:
           SUPPLE_CI_TESTS: ${{ inputs.tests }}
           SUPPLE_CI_REPEAT: ${{ inputs.repeat }}
           SUPPLE_CI_SCRIBBLE: ${{ inputs.scribble }}
+          SUPPLE_CI_VERBOSE: ${{ inputs.verbose }}
         # The macOS runner has three cores: six tests at once there pushed the
         # instruments' reset, state and validator checks past their timeouts.
         # libmalloc reads MallocScribble when it is set at all, even empty, so
@@ -482,7 +485,9 @@ jobs:
           if [[ "$SUPPLE_CI_SCRIBBLE" == true && '${{ matrix.platform }}' == macos ]]; then
             export MallocPreScribble=1 MallocScribble=1
           fi
-          ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
+          verbose=()
+          if [[ "$SUPPLE_CI_VERBOSE" == true ]]; then verbose=(-V); fi
+          ctest --preset ${{ matrix.preset }} ${{ matrix.platform == 'macos' && '--parallel 3' || '' }} ${verbose[@]+"${verbose[@]}"} ${SUPPLE_CI_TESTS:+-R "$SUPPLE_CI_TESTS"} ${SUPPLE_CI_REPEAT:+--repeat "until-fail:$SUPPLE_CI_REPEAT"}
       - name: Windows CPU use after tests
         if: always() && matrix.platform == 'windows'
         continue-on-error: true
