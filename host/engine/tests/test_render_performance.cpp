@@ -5,7 +5,9 @@
 // resolved object, and song frames converted under a master playrate. Its
 // own ctest entry.
 #include <supple/audio/audio_file.h>
+#include <chrono>
 #include <optional>
+#include <thread>
 #include "clip_player_support.h"
 #include "engine_test_access.h"
 
@@ -392,4 +394,35 @@ TEST_CASE("a removal the executors took, then its undo, is a return (round 174)"
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
     CHECK(why == R"(["began_mid_run"])");
+}
+
+TEST_CASE("a plug-in that failed before the capture leaves it not as heard (round 174 U1)") {
+    // A failed bridged instance plays silence and answers ok, so no
+    // processing error is counted; a render's pool plays a working one.
+    host::setBridgeExecutable(BRIDGE_PATH);
+    Project p;
+    twoTracks(p);
+    p.run("fx.add", R"({"track": "tr_1", "plugin": "com.suppleaudio.test.crash"})");  // fx_3
+    p.run("fx.set", R"({"fx": "fx_3", "isolation": "dedicated"})");
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    host::Instance* crash = p.app->instanceOf(*model::Id::parse("fx_3"));
+    REQUIRE(crash);
+    REQUIRE(crash->isolated());
+    REQUIRE(crash->setParam(1, 1.0));  // crash in its next process()
+    for (int i = 0; i < 2000 && !crash->failed(); ++i) {
+        live.until((live.cycles + 1) * kBlock);  // stopped: plug-ins still run
+        if (!crash->failed()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(crash->failed());
+    p.run("launch.capture", R"({"on": true})");
+    REQUIRE(p.app->transport("play"));
+    live.until(live.cycles * kBlock + 20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(live.cycles * kBlock + 1000 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    CHECK_FALSE(dry["as_heard"].asBool());
+    const std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why == R"(["plugin_failed"])");
 }

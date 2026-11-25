@@ -2285,7 +2285,7 @@ refused. `tail_s`, `trim`,
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
 | `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |
-| `plugin_failed` | a plug-in failed during it |
+| `plugin_failed` | a plug-in failed during it, or a failed or refused instance of the version's plug-ins was there as it began or while it ran (a failed bridged instance plays silence) |
 | `ended_by_engine` | an engine stop, a device restart or a device failure ended it (`CaptureView::endedBy`) |
 | `other_version` | the version rendered is not the capture's own |
 | `given` | the source is a given object |

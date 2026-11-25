@@ -1269,6 +1269,7 @@ void Engine::placeCapture() {
     capture_.facts.fromPlayStart = fromPlayStart;
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     capture_.facts.liveInput = plan && plan->anyLive;
+    capture_.facts.pluginFailed = pluginFailedNow();  // failed before it began (U1)
     capture_.misses = misses_.load(std::memory_order_relaxed);
     capture_.bridgeLate = bridgeLate_.load(std::memory_order_relaxed);
     capture_.xruns = backend_ ? backend_->status().xruns : 0;
@@ -1282,9 +1283,21 @@ Engine::CaptureFacts Engine::captureFacts() const {
     f.dropout = f.dropout || misses_.load(std::memory_order_relaxed) != capture_.misses ||
                 bridgeLate_.load(std::memory_order_relaxed) != capture_.bridgeLate ||
                 (backend_ && backend_->status().xruns != capture_.xruns);
-    f.pluginFailed =
-        f.pluginFailed || processErrors_.load(std::memory_order_relaxed) != capture_.errors;
+    f.pluginFailed = f.pluginFailed ||
+                     processErrors_.load(std::memory_order_relaxed) != capture_.errors ||
+                     pluginFailedNow();
     return f;
+}
+
+bool Engine::pluginFailedNow() const {
+    // A failed bridged instance outputs silence and its process() answers
+    // ok, so processErrors_ does not count it; nor a plug-in the pool
+    // refused (round 174 U1). Either is not what an offline render's
+    // healthy instance plays.
+    if (!latest_) return false;
+    for (const auto& [id, error] : plugins_.failedErrors())
+        if (latest_->fx.find(id)) return true;
+    return false;
 }
 
 void Engine::closeCapture() {

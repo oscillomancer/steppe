@@ -1410,6 +1410,7 @@ class Engine {
     std::vector<ReturnPlace> returnPlaces_;
     std::uint64_t returnAcksDropSeen_ = 0;  // returnAcksDropped_ as last handled
     void logReturn(const LaunchAck& ack);
+    bool pluginFailedNow() const;  // a failed or refused instance of the version's fx
     void sortLaunchLog();
     // Each track whose newest entry the latest plan cannot play any more
     // (its clip, or all its players, gone), in track order.
