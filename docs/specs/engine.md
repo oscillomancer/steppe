@@ -623,16 +623,27 @@ the same.*
   (a monitor change while stopped), or leaves (only while stopped:
   ADR-0014's keepLive defers a release to the stop), restarts on the
   arrangement and its launched clip stops. The callback acks that as a
-  return when it adopts the plan (`Engine::ackClassMoves`, before
-  `adoptLive`), for each node whose class changed without the carry and
-  whose state in the plan it compares with was not the arrangement: its
-  previous plan, or the last handoff it skipped (an old-epoch rate plan,
-  judged too, so a class move inside a skipped plan is not lost); its own
-  live nodes, and rendered ones the renderer left when it adopted a
-  newer plan. The log, `launch.state` and the next capture agree (round
-  176 F1, round 178 F1 and F2). Carrying the clip across instead would have the renderer read a
-  live node the callback is still running, so the clip's stop is a
-  stated limit (STATUS).
+  return, once, for a node whose state before was not the arrangement,
+  keyed on the node's class in the callback's own previous plan A
+  (`Engine::ackClassMoves` at the adoption, before `adoptLive`; round 176
+  F1, round 178 F1 and F2, round 180 F1). A node live in A is the
+  callback's own, which `adoptLive` carries on: it is a return only when
+  the adopted plan renders it (A's state). A node rendered in A is the
+  renderer's, judged along the renderer's plans: under a playrate the
+  callback skips a handoff of an old epoch (never adopted), and a node it
+  runs live for the first time since A is a return there, at the skipped
+  plan's epoch and hand, whatever the renderer carried, since nobody
+  plays a skipped plan's live region (`Engine::ackSkipped`, which marks
+  it in `Node::skipLive`, callback-only); else it is a return when the
+  adopted plan runs it live without the renderer's carry (the state in
+  the last skipped plan, or A's). The last skipped plan (`classBase_`)
+  is reset at the adoption and by `Engine::start()` and `stop()`, which
+  frees it (round 180 F2). Its own live nodes, and rendered ones the
+  renderer left when it adopted a newer plan, are the only states the
+  callback reads. The log, `launch.state` and the next capture agree.
+  Carrying the clip across instead would have the renderer read a live
+  node the callback is still running, so the clip's stop is a stated
+  limit (STATUS).
   A full ring drops a return ack and counts it (`returnAcksDropped_`).
   When the count moves the main thread logs a return for each track whose
   newest launch the latest plan cannot play, where an immediate
@@ -2350,17 +2361,24 @@ render's own `range` and `performance`.
 
 **Refusals.** One code per cause; a client words a refusal from the code
 and the path's index, never from the hint, which names commands for
-command callers. `render.mix`, `render.stems`, `render.regions` and
-`render.dry-run` declare every code they answer, the resolvers' they pass
-through included (the offline pass's, the file and audio writers', and
-the id resolver's `cl.unknown` and `tr.unknown`), in their registry
-entries (`cmd::CommandInfo::errors`: code, when, hint;
+command callers. Every `render.*` command (`render.mix`, `render.stems`,
+`render.regions`, `render.dry-run`, `render.settings`, the
+`render.queue.*` and `render.preset.*` commands) declares every code it
+answers, the resolvers' it passes through included (source preparation's
+`media.budget`, `warp.*` and `engine.stretch`, the offline pass's, the
+file and audio writers', and `cl.unknown` for a performance's clip), in
+its registry entry (`cmd::CommandInfo::errors`: code, when, hint;
 `skill/generated/engine/render.md` lists them), so a client's table of
-wordings can be checked against the registry. Schema codes of a
-malformed argument are every command's and are not listed; a broken
-user render default answers through them and the `file.*` codes. A test
-lints the render sources, the offline pass and the writers for codes no
-render command declares (round 178 F5).
+wordings can be checked against the registry alone. `render.queue.add`
+declares what planning a render answers, `render.queue.run` what a render
+does. Schema codes of a malformed argument are every command's and are
+not listed. A broken render default or preset file answers the `file.*`
+read codes, a schema code, or `json.parse.<what>` (the JSON parser's),
+declared as the family `json.parse.*` by every command that reads one: a
+client matches a family's code by its prefix. A test lints the files
+these commands reach (the render sources, source preparation, the
+offline pass, the preset files, the JSON parser and the writers) for
+codes none of them declares (round 178 F5, round 180 F3 and F4).
 
 | Case | Code | Path |
 | --- | --- | --- |

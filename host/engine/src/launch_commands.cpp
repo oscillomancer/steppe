@@ -404,8 +404,9 @@ void registerLaunchCommands(cmd::Registry& registry) {
             "launch.commit and render {performance: \"captured\"} take began on (its default "
             "version to render). unlogged: false until this engine has lost a launch's report "
             "from the audio path (a full queue), then true for the engine's life: the tracks' "
-            "entries may then be stale, and no capture is as heard; restarting the audio clears "
-            "it. With the engine stopped it answers for a kept capture (no tracks).";
+            "entries may then be stale, and no capture running then or begun since is as heard; "
+            "restarting the audio clears it. With the engine stopped it answers for a kept capture "
+            "(no tracks).";
         c.tags = {"clip launcher", "transport"};
         c.args = schema::object<NoArgs>("no_args").build();
         auto queued = schema::object<LaunchQueued>("launch_queued")

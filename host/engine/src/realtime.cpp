@@ -327,6 +327,7 @@ Status Engine::start(Backend& backend, const BackendConfig& config) {
         rtPrimed_ = false;
         primeAhead_.store(INT64_MAX, std::memory_order_relaxed);
         livePlan_ = nullptr;
+        classBase_ = nullptr;
         liveReady_ = liveEntered_ = false;
         callbackGen_.store(0);
     }
@@ -625,8 +626,9 @@ void Engine::stop() {
     backend_ = nullptr;
     plan_ = nullptr;
     livePlan_ = nullptr;
-    syncRt_ = nullptr;  // no callback runs now
-    resetAuditions();   // a voice playing is dropped (ADR-0094)
+    classBase_ = nullptr;  // freed with plans_ below
+    syncRt_ = nullptr;     // no callback runs now
+    resetAuditions();      // a voice playing is dropped (ADR-0094)
     syncNext_.store(nullptr);
     syncAdopted_.store(nullptr);
     syncRuntimes_.clear();
@@ -3232,10 +3234,9 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             // not discard the only graph for live monitoring. Rate plans keep
             // the strict epoch check: their converter state belongs to a seek.
             if (oldEpoch && hand->rateEnabled) {
-                // Skipped, never adopted: its class moves still happened in
-                // the renderer, so they are judged against it (round 178 F2).
-                if (detail::Plan* base = classBase_ ? classBase_ : livePlan_)
-                    ackClassMoves(*base, *hand, hand->liveCarried, hand->handEpoch, hand->handAt);
+                // Skipped, never adopted: a node it took into the live region
+                // is lost there (round 178 F2, round 180 F1).
+                ackSkipped(*hand);
                 classBase_ = hand;
                 planHandoffs_.consume();
                 continue;
@@ -3248,8 +3249,8 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
                 // carried state is the callback's here (adoptLive).
                 const bool continuous =
                     !oldEpoch && playing && hand->handContinuable && here == hand->handAt;
-                if (detail::Plan* base = classBase_ ? classBase_ : livePlan_)
-                    ackClassMoves(*base, *hand, hand->liveCarried, e, here);
+                if (livePlan_)
+                    ackClassMoves(*livePlan_, classBase_, *hand, hand->liveCarried, e, here);
                 classBase_ = nullptr;
                 adoptLive(hand, continuous);
                 ackReturns(*hand, 1, false, e, here);  // the live region's own

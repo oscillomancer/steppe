@@ -1161,6 +1161,11 @@ struct Node {
     // carryLaunch returned it to the arrangement at this adoption (its clip
     // lost): the adopting executor acks it once and clears it.
     bool launchReturned = false;
+    // Callback-only, written when the callback skips this plan (an old-epoch
+    // rate handoff): the node is live here or in a handoff skipped before
+    // it since the callback's last adoption, so its class move was acked at
+    // that skip (Engine::ackSkipped, round 180 F1).
+    bool skipLive = false;
     std::int64_t launchFadeFrames = 0;
     const float* arrangementGain = nullptr;
     std::vector<float> arrangementGains;

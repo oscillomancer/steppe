@@ -402,7 +402,8 @@ instructions are in `docs/guides/installing.md`.
       with the anticipative executor a track that joins the live region
       while stopped (a monitor change) or leaves it (only at a stop)
       stops its launched clip, reported as a return to the arrangement
-      (a join while playing keeps it): the
+      (a join while playing keeps it, unless under a master playrate a
+      seek or stop comes before the audio callback takes it): the
       commit writes the clip's stretch to there (after the removal is
       undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one

@@ -39,8 +39,10 @@ Error refused(Project& p, const char* command, const json::Value& args) {
     REQUIRE(info);
     const std::string code = r.error().code;
     INFO(command << " answered " << code);
-    CHECK(std::any_of(info->errors.begin(), info->errors.end(),
-                      [&](const cmd::ErrorSpec& e) { return e.code == code; }));
+    CHECK(std::any_of(info->errors.begin(), info->errors.end(), [&](const cmd::ErrorSpec& e) {
+        return e.code == code ||
+               (e.code.ends_with(".*") && code.rfind(e.code.substr(0, e.code.size() - 1), 0) == 0);
+    }));
     return r.error();
 }
 
@@ -595,6 +597,142 @@ TEST_CASE(
     }
 }
 
+TEST_CASE("a rate handoff the callback skips leaves each class move acked once (round 180 F1)") {
+    // Under a playrate the callback skips every handoff of an old epoch. A
+    // is the callback's plan, B the skipped one(s), C the plan it adopts
+    // after a seek; L live, R rendered. A node live in A is the callback's
+    // own (adoptLive carries it on); one rendered in A is the renderer's,
+    // and a skipped plan's live region is never played, carried or not.
+    struct Case {
+        const char* name;
+        bool liveFirst;  // tr_1 monitored from the start: live in A
+        bool playing;    // B adopted by the renderer while playing (carried)
+        bool returned;   // one return logged, else none and cl_1 plays on
+        bool liveInC;
+    };
+    for (const Case& k : {Case{"R-L-L: joined in B (carried) and C", false, true, true, true},
+                          Case{"R-L-R: joined in B only", false, false, true, false},
+                          Case{"L-R-L: left in B only", true, false, false, true},
+                          Case{"L-L-R: left in C only", true, false, true, false}}) {
+        const std::string name = k.name;
+        INFO("case " << name);
+        Project p;
+        twoTracks(p);
+        p.run("transport.playrate.set", R"({"rate": 0.6, "preserve_pitch": false})");
+        const char* monitorOn =
+            R"({"track": "tr_1", "armed": true, "record_midi": "*", "monitor": "on"})";
+        const char* monitorOff = R"({"track": "tr_1", "monitor": "off"})";
+        if (k.liveFirst) p.run("track.set", monitorOn);
+        AppLive live(p, EngineOptions{.workers = 0}, kBlock, 48000 * 8);
+        Engine& e = *p.app->engine();
+        REQUIRE(p.app->transport("play"));
+        live.until(live.cycles * kBlock + 20 * kBlock);
+        p.run("launch.clip", R"({"clip": "cl_1"})");
+        live.until(live.cycles * kBlock + 1500 * kBlock);  // bar 2: device 160000 at 0.6
+        REQUIRE(playsOf(p, "tr_1") == "clip");
+        // Each edit's plan queued for the callback (no callback cycle runs
+        // here: Manual); the seek then makes them old.
+        const auto liveIn = [](const detail::Plan* plan) {
+            const detail::Node* n = detail::findNode(*plan, id("tr_1"));
+            REQUIRE(n);
+            return n->live;
+        };
+        const auto queued = [&](const char* edit, const char* args) {
+            INFO("edit " << edit << " " << args);
+            const detail::Plan* before = &EngineTestAccess::latestPlan(e);
+            p.run(edit, args);
+            while (!e.awaitPlan()) {
+            }
+            const detail::Plan& now = EngineTestAccess::latestPlan(e);
+            REQUIRE(&now != before);
+            return &now;
+        };
+        if (k.playing) {
+            p.run("track.set", monitorOn);
+            const detail::Plan& b = EngineTestAccess::latestPlan(e);
+            REQUIRE(b.rateEnabled);
+            const std::int64_t ahead = EngineTestAccess::aheadFrames(e);
+            REQUIRE(ahead > kBlock);
+            // The renderer reaches B's hand once the callback has played to
+            // hand - ahead; the callback would take B itself at the hand.
+            while (EngineTestAccess::played(e) < b.handAt - ahead) {
+                while (!e.awaitRendered(kBlock)) {
+                }
+                live.backend.run(1);
+                ++live.cycles;
+            }
+            REQUIRE(EngineTestAccess::played(e) < b.handAt);
+            while (!e.awaitPlan()) {
+            }
+            REQUIRE(&EngineTestAccess::latestPlan(e) == &b);
+            REQUIRE(b.liveCarried);
+        } else {
+            // Stopped, the callback takes the stop's plans: A. Then B.
+            REQUIRE(p.app->transport("stop"));
+            live.until(live.cycles * kBlock + 50 * kBlock);
+            REQUIRE(playsOf(p, "tr_1") == "clip");
+            REQUIRE(liveIn(&EngineTestAccess::latestPlan(e)) == k.liveFirst);
+            if (!k.liveFirst) {
+                CHECK(liveIn(queued("track.set", monitorOn)));
+                CHECK_FALSE(liveIn(queued("track.set", monitorOff)));
+            } else if (!k.returned) {
+                CHECK_FALSE(liveIn(queued("track.set", monitorOff)));
+                CHECK(liveIn(queued("track.set", monitorOn)));
+            } else {
+                CHECK(liveIn(queued("track.set", R"({"track": "tr_2", "armed": true})")));
+                CHECK_FALSE(liveIn(queued("track.set", monitorOff)));
+            }
+        }
+        const std::uint64_t old = EngineTestAccess::latestPlan(e).handEpoch;
+        const detail::Plan* c = queued("transport.seek", R"({"seconds": 1})");
+        REQUIRE(c->handEpoch > old);
+        live.until(live.cycles * kBlock + 100 * kBlock);
+        REQUIRE(EngineTestAccess::callbackGeneration(e) == c->generation);
+        const detail::Node* n = detail::findNode(*c, id("tr_1"));
+        REQUIRE(n);
+        REQUIRE(n->live == k.liveInC);
+        // A live node is the callback's (this thread).
+        if (n->live)
+            CHECK(n->launch.kind == (k.returned ? detail::LaunchState::Kind::Arrangement
+                                                : detail::LaunchState::Kind::Clip));
+        const auto returns = EngineTestAccess::launchReturns(e);
+        if (k.returned) {
+            CHECK(returns.size() == 1);
+            if (!returns.empty()) CHECK(returns[0].track == id("tr_1"));
+            CHECK(playsOf(p, "tr_1") == "arrangement");
+        } else {
+            CHECK(returns.empty());
+            CHECK(playsOf(p, "tr_1") == "clip");
+        }
+    }
+}
+
+TEST_CASE("an engine stop and start forget the handoff the callback skipped (round 180 F2)") {
+    // classBase_ points into plans_, which stop() frees; a restarted engine
+    // must not judge its first handoff against it.
+    Project p;
+    twoTracks(p);
+    InstancePool pool = makePool();
+    MediaCache media;
+    DummyBackend backend({.mode = DummyBackend::Mode::Manual, .captureFrames = 48000});
+    Engine engine(pool, media, EngineOptions{.workers = 0});
+    for (int run = 0; run < 2; ++run) {
+        INFO("run " << run);
+        REQUIRE(engine.start(backend, {.sampleRate = 48000, .blockSize = kBlock}));
+        CHECK(EngineTestAccess::classBase(engine) == nullptr);
+        REQUIRE(engine.load(p.app->head(), p.app->projectDir()));
+        while (!engine.awaitPlan()) {
+        }
+        backend.run(4);
+        // As a skip leaves it: the latest plan, never adopted.
+        EngineTestAccess::skipped(engine);
+        REQUIRE(EngineTestAccess::classBase(engine) != nullptr);
+        engine.stop();
+        CHECK(EngineTestAccess::classBase(engine) == nullptr);
+        EngineTestAccess::skipped(engine, reinterpret_cast<detail::Plan*>(&media));  // stale
+    }
+}
+
 TEST_CASE("a launch ack lost just before the capture ends still marks it (round 178 F3)") {
     // The drop is not serviced before launch.capture off closes the capture.
     Project p;
@@ -617,25 +755,34 @@ TEST_CASE("a launch ack lost just before the capture ends still marks it (round 
     CHECK(why.find("\"launch_unlogged\"") != std::string::npos);
 }
 
-TEST_CASE("the render commands declare every code their sources answer (round 178 F5)") {
-    // A lint over what a render or render job can answer: each code an
-    // Error(...) in the render sources, the offline pass and the writers
-    // names is declared by render.mix, render.stems, render.regions or
-    // render.dry-run, unless it is a schema code (every command's) or one
-    // these files answer for other commands (below). A new code fails here
-    // until it is declared.
+TEST_CASE("the render commands declare every code their sources answer (round 180 F3, F4)") {
+    // A lint over what a render.* command (the renders, the queue, the
+    // settings and the presets) or a render job can answer: each code an
+    // Error(...) names in the files they reach (the render sources, source
+    // preparation, the offline pass, the preset files, the JSON parser and
+    // the writers) is declared by one of them, exactly or by a family
+    // ("json.parse.*"), unless it is a schema code (every command's) or one
+    // these files answer only for other commands (below). A new code fails
+    // here until it is declared, so a client can word every refusal from
+    // the registry alone.
     Project p;
     std::set<std::string> declared;
-    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
-        const cmd::CommandInfo* info = p.registry.find(name);
-        REQUIRE(info);
+    for (const cmd::CommandInfo* info : p.registry.all()) {
+        if (info->name.rfind("render.", 0) != 0) continue;
         for (const cmd::ErrorSpec& e : info->errors) declared.insert(e.code);
     }
+    CHECK(declared.count("render.queue_empty"));  // the queue and presets are walked too
+    const auto isDeclared = [&](const std::string& c) {
+        if (declared.count(c)) return true;
+        for (const std::string& d : declared)
+            if (d.size() > 2 && d.ends_with(".*") && c.rfind(d.substr(0, d.size() - 1), 0) == 0)
+                return true;
+        return false;
+    };
     const std::set<std::string> elsewhere = {
-        "render.queue_empty", "render.queue_unknown",  "render.preset_factory",
-        "render.preset_name", "render.preset_unknown", "render.preset_write",
-        "freeze.tail_limit",  "freeze.tail_changed",   "freeze.tail_pending",
-        "file.exists",     // files.cpp's create-exclusive, which renders do not use
+        // render_chain.cpp's freeze commands (track.freeze), not a render.*
+        "freeze.tail_limit", "freeze.tail_changed", "freeze.tail_pending",
+        "file.exists",     // files.cpp's create-exclusive, which no render.* uses
         "base64.invalid",  // files.cpp's base64 decoder, likewise
     };
     const std::filesystem::path root =
@@ -647,7 +794,9 @@ TEST_CASE("the render commands declare every code their sources answer (round 17
           "host/engine/src/render_chain.cpp", "host/engine/src/offline.cpp",
           "libs/core-base/src/files.cpp", "libs/audio-file/src/audio_file.cpp",
           "libs/audio-file/src/flac_encode.cpp", "libs/audio-file/src/metadata.cpp",
-          "libs/audio-codecs/src/mp3.cpp", "libs/audio-codecs/src/vorbis.cpp"}) {
+          "libs/audio-codecs/src/mp3.cpp", "libs/audio-codecs/src/vorbis.cpp",
+          "host/engine/src/prepared_sources.cpp", "host/engine/src/stretch.cpp",
+          "host/engine/src/render_settings.cpp", "libs/core-json/src/parse.cpp"}) {
         std::ifstream in(root / file);
         REQUIRE_MESSAGE(in, file);
         const std::string text{std::istreambuf_iterator<char>(in), {}};
@@ -668,7 +817,7 @@ TEST_CASE("the render commands declare every code their sources answer (round 17
             const std::string first = text.substr(at + 6, end - at - 6);
             for (std::sregex_iterator i(first.begin(), first.end(), code), e; i != e; ++i) {
                 const std::string c = (*i)[1];
-                if (c.rfind("schema.", 0) == 0 || declared.count(c) || elsewhere.count(c)) continue;
+                if (c.rfind("schema.", 0) == 0 || isDeclared(c) || elsewhere.count(c)) continue;
                 undeclared.push_back(c + " (" + file + ")");
             }
         }

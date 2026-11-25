@@ -1791,6 +1791,32 @@ Result<QueuedWork> planQueued(EngineApp& app, const EngineApp::QueuedRender& q) 
     return QueuedWork{q.id, q.label, std::move(*planned)};
 }
 
+// Every code a render answers (below), and those of the render default and
+// preset files the preset commands read and write (round 180 F4).
+std::vector<cmd::ErrorSpec> renderErrors(std::string_view which);
+std::vector<cmd::ErrorSpec> presetErrors(bool read, bool write) {
+    std::vector<cmd::ErrorSpec> out = {{"render.preset_name",
+                                        "neither or both of name and default, or a bad name",
+                                        "name a preset or pass default: true"}};
+    if (read) {
+        out.push_back({"file.open", "a preset file cannot be opened", "check the folder"});
+        out.push_back({"file.read", "a preset file cannot be read", "check the file"});
+        out.push_back({"file.too_large", "a preset file is too large", "delete it"});
+        out.push_back({"json.parse.*", "a preset file is not JSON", "fix or delete it"});
+    }
+    if (write) {
+        out.push_back({"render.preset_write", "the presets folder cannot be made",
+                       "check the user data folder"});
+        out.push_back({"file.write", "a preset file cannot be written", "check the disk"});
+        out.push_back({"file.sync", "a preset file cannot be synced", "check the disk"});
+        out.push_back(
+            {"file.sync_directory", "the presets folder cannot be synced", "check the disk"});
+        out.push_back(
+            {"file.sync_published", "a preset was written but not synced", "check the disk"});
+    }
+    return out;
+}
+
 Error queueArgsError(Error error) {
     auto prefix = [](auto&& self, Error& e) -> void {
         e.path = "/args/args" + e.path;
@@ -1831,7 +1857,7 @@ void registerQueueCommands(cmd::Registry& registry) {
                      .field("label", &QueueAddArgs::label, schema::string())
                      .build();
         c.result = schema::any();
-        c.errors = {{"render.empty", "the render would write nothing", "add items or a range"}};
+        c.errors = renderErrors("render.dry-run");  // it plans the render now
         c.examples = {{"Queue the mix as it is now",
                        obj(R"({"command":"render.mix","args":{"end_beat":1,"name":"queued"}})"),
                        obj(R"({"id":"q1","command":"render.mix","label":"<any>","version":"<any>",
@@ -1970,7 +1996,9 @@ void registerQueueCommands(cmd::Registry& registry) {
                      .defaultValue(false)
                      .build();
         c.result = schema::any();
-        c.errors = {{"render.queue_empty", "nothing is queued", "render.queue.add first"}};
+        c.errors = renderErrors("render.mix");  // each queued render, planned and run
+        c.errors.insert(c.errors.begin(),
+                        {"render.queue_empty", "nothing is queued", "render.queue.add first"});
         c.examples = {
             {"Render the queue", obj("{}"), obj(R"({"renders":"<any>"})"), "render_queued"}};
         c.run = [](const QueueRunArgs& a, Context& ctx) -> Result<json::Value> {
@@ -2107,6 +2135,16 @@ void registerSettingsCommands(cmd::Registry& registry) {
         c.tags = {"render"};
         c.args = argsSchema();
         c.result = schema::any();
+        c.errors = presetErrors(true, false);  // the render default
+        c.errors.insert(
+            c.errors.begin(),
+            {{"render.source", "branch and version are both given", "give one of them"},
+             {"history.version", "no such version", "history.list shows the versions"},
+             {"branch.unknown", "no such branch", "branch.list shows the branches"},
+             {"render.args", "an argument does not apply to this call",
+              "drop the argument the path names"},
+             {"render.secondary", "secondary is neither {format, bit_depth} nor \"none\"",
+              "e.g. {\"format\": \"flac\", \"bit_depth\": 16}"}});
         c.examples = {{"What File → Mix would do", obj("{}"),
                        obj(R"({"effective":"<any>","project":"<any>","default":null,
                                "from":"<any>"})"),
@@ -2139,6 +2177,8 @@ void registerSettingsCommands(cmd::Registry& registry) {
         c.tags = {"render"};
         c.args = schema::object<cmd::NoArgs>("no_args").build();
         c.result = schema::any();
+        c.errors = presetErrors(true, false);  // the render default; a damaged preset is left out
+        c.errors.erase(c.errors.begin());      // no name to give
         c.examples = {{"List", obj("{}"), obj(R"({"presets":"<any>","default":null})"), "empty"}};
         c.run = [](const cmd::NoArgs&, Context& ctx) -> Result<json::Value> {
             auto& app = ctx.service<EngineApp>();
@@ -2174,8 +2214,9 @@ void registerSettingsCommands(cmd::Registry& registry) {
                      .field("settings", &PresetSaveArgs::settings, rs::settingsSchema())
                      .build();
         c.result = schema::any();
-        c.errors = {
-            {"render.preset_factory", "a factory preset has that name", "save under another name"}};
+        c.errors = presetErrors(true, true);  // the default read for the effective settings
+        c.errors.push_back(
+            {"render.preset_factory", "a factory preset has that name", "save under another name"});
         c.examples = {{"A preset of FLAC files",
                        obj(R"({"name":"Archive","settings":{"outputs":[{"format":"flac"}]}})"),
                        obj(R"({"name":"Archive"})"), "empty"}};
@@ -2213,8 +2254,9 @@ void registerSettingsCommands(cmd::Registry& registry) {
                      .defaultValue(false)
                      .build();
         c.result = schema::any();
-        c.errors = {
-            {"render.preset_unknown", "no preset with that name", "render.preset.list shows them"}};
+        c.errors = presetErrors(true, false);
+        c.errors.push_back(
+            {"render.preset_unknown", "no preset with that name", "render.preset.list shows them"});
         c.examples = {{"A factory preset", obj(R"({"name":"WAV 24-bit"})"),
                        obj(R"({"render":"<any>"})"), "empty"}};
         c.run = [](const PresetNameArgs& a, Context& ctx) -> Result<json::Value> {
@@ -2256,8 +2298,11 @@ void registerSettingsCommands(cmd::Registry& registry) {
                      .defaultValue(false)
                      .build();
         c.result = schema::any();
-        c.errors = {{"render.preset_factory", "factory presets cannot be deleted",
-                     "delete one of your own"}};
+        c.errors = presetErrors(false, false);
+        c.errors.push_back({"render.preset_factory", "factory presets cannot be deleted",
+                            "delete one of your own"});
+        c.errors.push_back({"render.preset_unknown", "no preset with that name, or no default",
+                            "render.preset.list shows them"});
         c.examples = {{"Delete a preset", obj(R"({"name":"Archive"})"), obj(R"({"deleted":true})"),
                        "render_preset"}};
         c.run = [](const PresetNameArgs& a, Context& ctx) -> Result<json::Value> {
@@ -2282,61 +2327,64 @@ namespace {
 std::vector<cmd::ErrorSpec> renderErrors(std::string_view which) {
     const bool dry = which == "render.dry-run";
     std::vector<cmd::ErrorSpec> out = {
-        {"render.args", "an argument does not apply to this call",
-         "drop the argument the path names"},
+        {"render.args", "an argument does not apply", "drop it"},
         {"render.empty", "the render would write nothing", "add items or a range"},
         {"render.source", "branch and version are both given", "give one of them"},
-        {"history.version", "no such version", "history.list shows the versions"},
-        {"branch.unknown", "no such branch", "branch.list shows the branches"},
-        {"engine.range", "the range is empty or out of bounds", "give an end after the start"},
+        {"history.version", "no such version", "history.list"},
+        {"branch.unknown", "no such branch", "branch.list"},
+        {"engine.range", "the range is empty or out of bounds", "fix the range"},
         {"engine.block_size", "the block size is out of range", "1 .. 8192"},
         {"engine.fx_failed", "a plug-in could not be loaded", "fx.restart it"},
         {"engine.bridge_failed", "a bridged plug-in failed", "fx.restart it"},
-        {"engine.process_error", "a plug-in failed while it rendered", "fx.restart it"},
-        {"engine.media_missing", "an item's audio file is missing", "relink or remove it"},
-        {"engine.media_changed", "an item's audio file changed on disk", "relink it"},
-        {"engine.media_too_long", "an item's audio file is too long to hold", "trim it"},
-        {"engine.blob_missing", "a plug-in state blob is missing", "fx.restart it, or re-save"},
+        {"engine.process_error", "a plug-in failed", "fx.restart it"},
+        {"engine.media_missing", "an audio file is missing", "restore the file"},
+        {"engine.media_changed", "an item's audio file changed", "restore the file"},
+        {"engine.media_too_long", "an audio file is too long", "trim it"},
+        {"engine.blob_missing", "a plug-in state blob is missing", "re-save"},
         {"engine.patch_unpatchable", "a rack patch cannot be compiled", "fix the patch"},
-        {"plugin.unknown", "a plug-in is not available to the render", "plugin.list"},
-        {"file.open", "a file cannot be opened", "check the path's folder and permissions"},
+        {"engine.stretch", "a source cannot be stretched", "see the message"},
+        {"media.budget", "sources exceed the sample budget", "use shorter sources"},
+        {"warp.peers", "a warp peer is missing", "detach the bundle"},
+        {"warp.budget", "a warp bundle exceeds its budget", "shorten its items"},
+        {"warp.rate", "a warp segment's rate is out of range", "rates 0.01 .. 100"},
+        {"json.parse.*", "the render default is not JSON", "fix or delete it"},
+        {"plugin.unknown", "a plug-in is not available", "plugin.list"},
+        {"file.open", "a file cannot be opened", "check the path"},
         {"file.read", "a file cannot be read", "check it exists and is readable"},
         {"file.too_large", "a file is too large to read", "use a smaller file"},
-        {"file.write", "a file cannot be written", "check the disk and permissions"},
+        {"file.write", "a file cannot be written", "check the disk"},
         {"file.sync", "a written file cannot be synced", "check the disk"},
-        {"file.sync_directory", "a written file's folder cannot be synced", "check the disk"},
-        {"file.sync_published", "a file was written but not synced", "check the disk"},
+        {"file.sync_directory", "a folder cannot be synced", "check the disk"},
+        {"file.sync_published", "written but not synced", "check the disk"},
         {"audio.open", "an audio file cannot be opened", "check the path"},
         {"audio.read", "an audio file cannot be read", "check the file"},
         {"audio.decode", "an audio file cannot be decoded", "check the file"},
-        {"audio.format", "an audio format or depth is not supported", "change outputs"},
+        {"audio.format", "a format or depth is unsupported", "change outputs"},
         {"audio.write", "an audio file cannot be written", "check the disk"},
         {"audio.encode", "an encoder or tag writer failed", "change outputs"},
         {"audio.cancelled", "an encoder was cancelled", "render again"},
-        {"render.pattern", "the file name pattern does not parse", "fix the token or filter named"},
-        {"render.path", "a destination is outside renders, taken or unwritable", "change pattern"},
-        {"render.exists", "a destination exists, or no free numbered name is left",
-         "if_exists overwrite, number or skip"},
+        {"render.pattern", "the name pattern does not parse", "fix the token named"},
+        {"render.path", "a destination is outside renders or unwritable", "change pattern"},
+        {"render.exists", "a destination exists", "if_exists overwrite, number or skip"},
         {"render.secondary", "secondary is neither {format, bit_depth} nor \"none\"",
          "e.g. {\"format\": \"flac\", \"bit_depth\": 16}"},
-        {"render.format", "an output format is unknown", "use a format render.settings lists"},
+        {"render.format", "an output format is unknown", "render.settings"},
         {"render.normalize", "normalization cannot apply as set",
          "fix normalize as the path names"},
-        {"render.masters", "masters names a track that is not a master", "track.list"},
+        {"render.masters", "masters names a non-master", "track.list"},
         {"render.budget", "the render exceeds the in-memory frame budget",
          "render a shorter range"},
-        {"render.loop", "a loop that cannot be followed", "render without the loop"},
+        {"render.loop", "a loop it cannot follow", "drop the loop"},
         {"track.unknown", "a named track is not in the version", "track.list"},
         {"track.strip_type", "the mix output is not a master", "name a master"},
-        {"engine.too_long", "the render is too long", "render a shorter range"},
+        {"engine.too_long", "too long, or so at the playrate", "render a shorter range"},
         {"engine.tail", "tail_s is out of range", "0 .. 600 s"},
     };
     if (which == "render.regions" || dry)
-        out.push_back(
-            {"region.unknown", "a region the call names is not in the version", "region.list"});
+        out.push_back({"region.unknown", "no such region", "region.list"});
     if (!dry) {
-        out.push_back({"render.stale_target", "the project or branch changed while it rendered",
-                       "render again"});
+        out.push_back(
+            {"render.stale_target", "the project changed while it rendered", "render again"});
         out.push_back(
             {"engine.start_failed", "a plug-in refused to start processing", "fx.restart it"});
         out.push_back({"job.cancelled", "the render job was cancelled", "render again"});
@@ -2345,20 +2393,18 @@ std::vector<cmd::ErrorSpec> renderErrors(std::string_view which) {
     const std::vector<cmd::ErrorSpec> performance = {
         {"launch.capture", "\"captured\" with no capture to play",
          "launch.capture {on: true}, play, then render"},
-        {"render.performance.sample_rate", "the performance runs at another rate than the project",
+        {"render.performance.sample_rate", "the performance is at another rate",
          "launch.commit it and render the timeline"},
-        {"render.performance.launches", "launches out of frame order, or past frames",
+        {"render.performance.launches", "launches out of order or past frames",
          "give the launches in frame order, each within frames"},
         {"render.performance.too_many", "more than 100,000 launches",
          "launch.commit it and render the timeline"},
         {"render.performance.no_clip", "a clip launch names no clip",
          "give the launch's clip, or action arrangement or stop"},
-        {"render.performance.clip_track", "a launch's clip belongs to another track",
-         "give the clip's own track"},
+        {"render.performance.clip_track", "a clip on another track", "give the clip's own track"},
         {"cl.unknown", "a launch's clip is not in the version", "render a version that has it"},
-        {"tr.unknown", "a track id is not in the version", "track.list"},
         {"track.frozen", "a launch's track is frozen", "track.unfreeze it"},
-        {"launch.playrate", "an audio clip the engine refuses under the master playrate",
+        {"launch.playrate", "a clip refused under the playrate",
          "launch.commit it and render the timeline"},
         {"render.not_as_heard", "as_heard: true for one not as heard",
          "act on the first reason, or leave as_heard out"},
