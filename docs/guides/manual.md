@@ -1779,9 +1779,12 @@ Capture lights again. If it is refused again, the status line says so, and one
 more click tries once more and, if it still can't, discards the performance and
 starts a new capture.
 
-If the audio engine stops while you capture (Stop audio, Restart audio, a new
-device, or the device restarting), the take so far is written to the timeline
-and the status line says so; Capture goes dark until you click it again. If you
+If the audio engine stops while you capture with the Capture button (Stop
+audio, Restart audio, a new device, or the device restarting), the take so far
+is written to the timeline and the status line says so; Capture goes dark until
+you click it again. A capture an agent started is not written at a stop: its
+take is kept, and the Capture button shows it with its dot in outline. Click
+Capture to write it; Quit, New and Open write it first too. If you
 undo a written take and then click Capture, a new capture starts; the undone
 take stays undoable until the new one begins, and the status line says when it
 is replaced.

@@ -1388,6 +1388,94 @@ TEST_CASE("file actions: a take whose commit was undone is not counted by Quit")
     a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
+TEST_CASE("file dialogs: Open asks again for a capture begun or refused while the dialog is open") {
+    // Review round 170 F1: the question before the dialog finalized the
+    // capture; one that starts while the native dialog is open (an agent's)
+    // is finalized and asked about again before project.open, and a take
+    // refused meanwhile is named.
+    App a;
+    REQUIRE(a.ok);
+    std::vector<std::function<void()>> posted;
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [&](auto task) { posted.push_back(std::move(task)); });
+    gui::CaptureControl capture(*a.app, *a.dispatcher);
+    files.setCapture(&capture);
+    auto run = [&](const std::string& command, const std::string& args) {
+        auto r = a.dispatcher->execute({command, json::parse(args).value(), {}});
+        INFO(command << ": " << (r ? std::string() : r.error().toString()));
+        REQUIRE(r);
+        return *r;
+    };
+    run("track.add", R"({"type":"channel","name":"Drums"})");
+    run("scene.add", R"({"name":"Intro"})");
+    run("clip.add",
+        R"({"track":"tr_1","scene":"sc_1","notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    run("item.add",
+        R"({"track":"tr_1","bar":1,"notation":"voice d; 1: C2:w | C2:w | C2:w | C2:w"})");
+    const std::string item = a.app->head().items.begin()->id.str();
+    const bool refusedMeanwhile = [&] {
+        bool refuse = false;
+        SUBCASE("an agent's capture runs while the dialog is open") {}
+        SUBCASE("the pane's take is refused while the dialog is open") { refuse = true; }
+        return refuse;
+    }();
+    if (refusedMeanwhile) run("item.set", R"({"item":")" + item + R"(","locked":true})");
+    files.saveAs(a.dir / "open-capture");
+    REQUIRE_FALSE(files.dirty());
+    run("engine.start", R"({"backend":"dummy"})");
+    // Open's question found nothing to ask: the native dialog opens.
+    int delivered = 0;
+    auto result = files.guardDialog([&](auto) { ++delivered; }, true);
+    // Meanwhile a capture runs: an agent's, or the pane's own, which a stop
+    // ends and whose commit the lock refuses.
+    if (refusedMeanwhile)
+        REQUIRE(capture.set(true));
+    else
+        run("launch.capture", R"({"on":true})");
+    run("launch.clip", R"({"clip":"cl_1"})");
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        a.app->tick();
+        capture.service();
+        const auto c = a.app->launchCapture();
+        if (c && !c->capture.launches.empty() && c->capture.frames > 48000) break;
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const std::uint64_t before = a.app->head().version;
+    if (refusedMeanwhile) {
+        run("transport.stop", "{}");
+        a.app->tick();
+        capture.service();
+        REQUIRE(capture.kept());
+        REQUIRE(a.app->head().version == before);
+    }
+    // The file is chosen: not opened unasked.
+    result({a.dir / "other.json"});
+    REQUIRE(posted.size() == 1);
+    posted.front()();
+    posted.clear();
+    CHECK(delivered == 0);
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.confirm"));
+    const std::string text = a.root->find("file.confirm.text")->valueText();
+    INFO(text);
+    if (!refusedMeanwhile) {
+        // Finalized: the agent's take committed, then the usual question.
+        CHECK_FALSE(capture.lit());
+        CHECK(a.app->head().version == before + 1);
+        CHECK(text == "The project has unsaved changes.");
+    } else {
+        CHECK(text.rfind("The launcher take (", 0) == 0);
+        CHECK(text.find("the item at bar 1 on Drums is locked") != std::string::npos);
+        CHECK(a.root->find("file.confirm.discard")->valueText() == "Open");
+    }
+    REQUIRE(a.root->click("file.confirm.discard"));
+    CHECK(delivered == 1);
+    run("engine.stop", "{}");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
 TEST_CASE("file actions: registered Quit shares the popup and prompt policy") {
     App a;
     REQUIRE(a.ok);

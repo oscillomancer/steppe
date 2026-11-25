@@ -373,10 +373,12 @@ instructions are in `docs/guides/installing.md`.
       replaces it once it begins, with a warning (ADR-0097, revision
       2026-11-24); an undo of its commit makes it uncommitted again (the
       GUI treats that take as declined: it is not committed again, and a
-      Capture click arms over it); the GUI's pane commits a take the
-      engine ended (an engine stop, Stop audio then Start, a device
-      restart) on its next pass and arms nothing after it, shows a kept
-      take in the Capture cell, and never arms over an uncommitted one;
+      Capture click arms over it); the GUI's pane commits a take of a
+      capture it started that the engine ended (an engine stop, Stop audio
+      then Start, a device restart) on its next pass and arms nothing
+      after it; a take of an agent's capture stays kept (the Capture cell
+      shows it; a click commits it, and Quit, New and Open finalize it);
+      the pane never arms over an uncommitted take;
     - a capture ends at a seek, a loop change or a stop, by design (one
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
