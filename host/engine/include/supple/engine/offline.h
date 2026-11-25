@@ -395,6 +395,12 @@ struct OfflineSettings {
     // order, from the render's start, which must be the log's play start.
     // The render dialog never sets it: renders play the arrangement only.
     std::vector<LaunchLogEntry> launches;
+    // Internal (rack.probe, rack.capture): when set, the render appends one row,
+    // (running frame, song seconds), at the start of every block it processes, in running-frame
+    // order: the song position that frame plays, through the master playrate's clock (the start
+    // plus the frame over the rate at unity). A listener records running frames, and under a
+    // playrate they are not song time.
+    std::vector<std::pair<std::int64_t, double>>* songClock = nullptr;
     // Internal (tests): the transport loop, timeline seconds [start, end),
     // which the render wraps at exactly as the live executors do (engine.md
     // §1.4.2). [startSeconds, endSeconds) is then the running time rendered,

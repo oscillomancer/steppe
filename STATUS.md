@@ -137,8 +137,8 @@ instructions are in `docs/guides/installing.md`.
   messages, the notation panel, the event list) spell each note by the key and
   chord at its start, at the same place (ADR-0100: a chord tone by its degree,
   doubles where a degree needs them; a place before beat 0 reads beat 0's
-  context); `midi.edit` readbacks and `rack.probe` spell by the key at the
-  item's start (`libs/harmony`).
+  context), and so does `rack.probe`, at the beat each note is heard at (ADR-0100;
+  `libs/harmony`). `midi.notes` and `midi.edit` return MIDI numbers and name nothing.
   A file with a missing or low counter, a duplicate beat, an unknown scale or an
   unparsable chord symbol opens with a warning and keeps the point as data. The
   lead sheet (`context.get`'s `text`, `context.write` as a diff recorded as the
@@ -1628,11 +1628,10 @@ capacity reports retain their original revision/settings.
 ## Known limits
 
 Library boundaries:
-- Chord-tone spelling (ADR-0100) reaches `midi.get` and the MIDI editor (the
-  roll's note labels and messages, the notation panel, the event list) only.
-  MIDI-control names, `midi.edit` readbacks and the rack probe stay on the
-  key's rule or the default table; all three are engine-side. (The roll's
-  keyboard labels only its C rows, which read "C" in any key.)
+- Chord-tone spelling (ADR-0100) reaches `midi.get`, the MIDI editor (the roll's
+  note labels and messages, the notation panel, the event list) and `rack.probe`.
+  MIDI-control labels and the roll's keyboard labels stay on the default table on
+  purpose: they name a device key or an octave, not a pitch in the song.
 - The control client bounds connecting and sending, as well as the
   response, by its timeout through nonblocking sockets; that path is tested
   on Linux, and native macOS/Windows CI has not run on it.

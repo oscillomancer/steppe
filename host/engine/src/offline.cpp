@@ -794,6 +794,54 @@ Error renderCancelled() {
 
 void setRenderWatchTestHooks(const RenderWatchTestHooks& hooks) { gWatchHooks = hooks; }
 
+namespace {
+
+// The rows OfflineSettings::songClock gets for a block that has just been processed: its first
+// frame and its last, and, between them, the frames where the clock bends. A step in a playrate
+// envelope falls at any frame, not at a block start, and the song position is straight between
+// two rows. So every frame of a stretch is read and compared with the straight line between its
+// ends (at most 62 reads), and the stretch is split at the frame that is furthest off while that
+// is more than kClockTolerance song seconds: far above float noise and a fiftieth of the slack a
+// note's place has at 120 bpm. Splitting at the worst frame, not at the middle, finds two
+// opposite bends in one stretch too. The block's frames are still in the timeline's history.
+// Unity is straight by construction (no reads), and a constant rate adds nothing.
+constexpr double kClockTolerance = 1e-8;
+template <class At>
+void refineClock(std::vector<std::pair<std::int64_t, double>>& rows, const At& at, std::int64_t lo,
+                 double from, std::int64_t hi, double to) {
+    std::int64_t worst = lo;
+    double worstSeconds = 0, worstOff = 0;
+    for (std::int64_t frame = lo + 1; frame < hi; ++frame) {
+        const double heard = at(frame);
+        const double straight =
+            from + (to - from) * static_cast<double>(frame - lo) / static_cast<double>(hi - lo);
+        if (std::abs(heard - straight) > worstOff) {
+            worst = frame;
+            worstSeconds = heard;
+            worstOff = std::abs(heard - straight);
+        }
+    }
+    if (worstOff > kClockTolerance) {
+        refineClock(rows, at, lo, from, worst, worstSeconds);
+        refineClock(rows, at, worst, worstSeconds, hi, to);
+        return;
+    }
+    rows.emplace_back(hi, to);
+}
+void appendSongClock(std::vector<std::pair<std::int64_t, double>>& rows, const detail::Plan& p,
+                     std::int64_t pos, std::int64_t song, std::uint32_t n) {
+    const auto at = [&](std::int64_t frame) { return p.rateSeconds(song + (frame - pos)); };
+    const double first = at(pos);
+    rows.emplace_back(pos, first);
+    if (n < 2) return;
+    if (p.rateEnabled)
+        refineClock(rows, at, pos, first, pos + n - 1, at(pos + n - 1));
+    else
+        rows.emplace_back(pos + n - 1, at(pos + n - 1));
+}
+
+}  // namespace
+
 Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                                     const OfflineSettings& opt) {
     static_assert(std::atomic<double>::is_always_lock_free);
@@ -1062,6 +1110,15 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
     const std::vector<host::Instance*> instances = p.instances;
     detail::Workers workers(opt.threads == 0 ? detail::Workers::defaultHelpers()
                                              : std::min(opt.threads, 64u) - 1);
+    if (opt.songClock) {
+        // Offline only: the rows are appended by this render's own block loop below (never by
+        // processBlock, which the live executors share). Room for a first and a last row per
+        // block up front; a bend inside a block adds rows, which is a reallocation on this
+        // thread, harmless.
+        opt.songClock->clear();
+        opt.songClock->reserve(
+            2 * static_cast<std::size_t>(total / std::min<std::int64_t>(p.block, 64)) + 16);
+    }
     std::thread audio([&] {
         auto progressAt = std::chrono::steady_clock::time_point::min();
         nameThread("audio-offline");
@@ -1188,6 +1245,7 @@ Result<OfflineResult> renderOffline(const Session& s, InstancePool& pool,
                 // A failed plug-in's output went silent (ADR-0013 §6): the
                 // render fails below.
                 if (failing()) break;
+                if (opt.songClock) appendSongClock(*opt.songClock, p, pos, song, n);
                 const Stereo& tap = opt.tap == model::Tap::PreFx      ? selected->preFx
                                     : opt.tap == model::Tap::PreFader ? selected->preFader
                                                                       : selected->post;

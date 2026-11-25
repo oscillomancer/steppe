@@ -191,6 +191,16 @@ the key's rule, the default table when no key holds (`byDegree` false); a chord 
 its spelling. Input is unchanged: the notation reads `##` and `bb` in a pitch, a chord root or
 bass takes one accidental (`chord.bad_root`, `chord.bad_bass`).
 
+### 3.2 Who spells by place
+
+The place of a note is the key and chord that hold where it is heard. `midi.get`, the MIDI
+editor (roll labels and messages, the notation panel, the event list) and `rack.probe` (its note
+names, at the beat each is heard at, `specs/rack.md` §7.2) spell by it. These do not, on purpose:
+a MIDI-control label (`Note C2 · ch 10`, in `*.learn.set` results and the learn dialog) names a
+key on a device, which has no song position, so it uses the default table whatever the context;
+`midi.notes`, `midi.edit` and `midi.get {format: events}` give MIDI numbers and name nothing; the
+roll's keyboard C labels are octave marks.
+
 ## 4. Tests required
 
 Every scale's spelling for all 21 tonic spellings (seven letters, each plain,
