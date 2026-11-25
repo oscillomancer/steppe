@@ -666,7 +666,8 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 ack.anchorSample = anchorSample;
                 ack.anchorBeat = anchorBeat;
                 ack.songFrame = songFrame;
-                (void)(renderer ? rendererLaunchAcks_ : callbackLaunchAcks_)->push(ack);
+                if (!(renderer ? rendererLaunchAcks_ : callbackLaunchAcks_)->push(ack))
+                    launchAcksDropped_.fetch_add(1, std::memory_order_relaxed);
                 notifyMain();
             });
         };
@@ -851,6 +852,19 @@ void Engine::serviceLaunches() {
                     returnPlaces_.push_back(
                         {track, plan->generation, plan->handEpoch, plan->handAt, *placed});
             }
+    }
+    // A launch ack lost to a full ring: the log misses a launch that was
+    // heard, which no render can replay; a capture running, and every one
+    // placed from now on, is not as heard (launch_unlogged).
+    if (const auto dropped = launchAcksDropped_.load(std::memory_order_relaxed);
+        dropped != launchAcksDropSeen_) {
+        launchAcksDropSeen_ = dropped;
+        launchAcksLost_ = true;
+        if (capture_.on && !capture_.pending && !capture_.closed)
+            capture_.facts.launchUnlogged = true;
+        warnings_.push_back(
+            "launch: the audio path's report of a launch was lost (its queue was full): the "
+            "launch log misses a launch that was heard, so no capture from now on is as heard");
     }
     // A return ack lost to a full ring: each track the latest plan cannot
     // play is logged as returned where an immediate launch.arrangement
@@ -1270,6 +1284,7 @@ void Engine::placeCapture() {
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     capture_.facts.liveInput = plan && plan->anyLive;
     capture_.facts.pluginFailed = pluginFailedNow();  // failed before it began (U1)
+    capture_.facts.launchUnlogged = launchAcksLost_;
     capture_.misses = misses_.load(std::memory_order_relaxed);
     capture_.bridgeLate = bridgeLate_.load(std::memory_order_relaxed);
     capture_.xruns = backend_ ? backend_->status().xruns : 0;

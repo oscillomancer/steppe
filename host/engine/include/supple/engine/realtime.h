@@ -933,6 +933,9 @@ class Engine {
         bool liveInput = false;      // a plan monitoring live input played during it
         bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
         bool pluginFailed = false;   // a processing error (processErrors)
+        // A launch ack lost to a full ring while it ran, or at any time
+        // before it began: the log misses a launch that was heard.
+        bool launchUnlogged = false;
         bool operator==(const CaptureFacts&) const = default;
     };
     struct LaunchCapture {
@@ -1356,6 +1359,13 @@ class Engine {
     void ackReturns(detail::Plan& next, int liveClass, bool renderer, std::uint64_t epoch,
                     std::int64_t stream) SUPPLE_RT;
     std::atomic<std::uint64_t> returnAcksDropped_{0};  // a full ring: the main thread falls back
+    // A launch ack a full ring dropped (the executor counts it, nothing
+    // else); the main thread warns and marks captures (serviceLaunches).
+    std::atomic<std::uint64_t> launchAcksDropped_{0};
+    std::uint64_t launchAcksDropSeen_ = 0;
+    // Sticky: a launch ack was lost, so the log may miss a launch any later
+    // capture's frame 0 depends on, for the engine's life.
+    bool launchAcksLost_ = false;
     std::unique_ptr<std::array<LaunchSlot, kLaunchSlots>> launchSlots_ =
         std::make_unique<std::array<LaunchSlot, kLaunchSlots>>();
     // Slots the executors still act on (pending, committed, or applied and

@@ -620,9 +620,14 @@ the same.*
   return whose clip a later plan restored before the drop was seen is not
   recovered: the track then reads as playing the clip. A ring holds 1,024
   acks, so that takes a plan dropping clips on more than a thousand
-  tracks at once. A launch ack that finds its ring full is dropped
-  uncounted (`launch_runtime.cpp`, `(void)push`): with 256 launch slots
-  it cannot happen today (round 174 risk 8, a found gap).
+  tracks at once. A launch ack that finds its ring full is dropped and
+  counted (`launchAcksDropped_`, the executor's only extra work; with 256
+  launch slots it cannot happen today). The log then misses a launch
+  that was heard, which no render can replay, and frame 0 of any later
+  capture may depend on it: when the count moves the main thread warns,
+  and a capture running then and every capture placed after it, for the
+  engine's life, is not as heard (`launch_unlogged`, §3.1). A new engine
+  (Restart audio) starts clean.
   A capture includes each return within its span in the log's order, and
   one with a return is not as heard (`edited_during`, §3.1): the
   executors crossfade the clip's audio into the arrangement (the retiring
@@ -2285,6 +2290,7 @@ refused. `tail_s`, `trim`,
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
 | `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |
+| `launch_unlogged` | a launch ack was lost to a full ring while it ran, or at any time before it in the engine's life: the log misses a launch that was heard (§1.4.2) |
 | `plugin_failed` | a plug-in failed during it, or a failed or refused instance of the version's plug-ins was there as it began or while it ran (a failed bridged instance plays silence) |
 | `ended_by_engine` | an engine stop, a device restart or a device failure ended it (`CaptureView::endedBy`) |
 | `other_version` | the version rendered is not the capture's own |

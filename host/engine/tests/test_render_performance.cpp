@@ -426,3 +426,35 @@ TEST_CASE("a plug-in that failed before the capture leaves it not as heard (roun
     INFO(why);
     CHECK(why == R"(["plugin_failed"])");
 }
+
+TEST_CASE("a launch ack lost to a full ring leaves every later capture not as heard") {
+    // cl_1's ack finds the ring full: the log misses a launch that was
+    // heard. The capture running then, and one begun after, say so.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 6);
+    p.run("launch.capture", R"({"on": true})");  // from the play start
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 2, frame 96000
+    live.backend.run(760 - 20);                   // past it, with no service
+    live.cycles = 760;
+    CHECK(EngineTestAccess::launchAcksDropped(*p.app->engine()) == 1);
+    EngineTestAccess::emptyLaunchRing(*p.app->engine());  // only the filler
+    live.until(1000 * kBlock);
+    CHECK(p.app->engine()->launchLog().empty());  // the launch was not logged
+    p.run("launch.capture", R"({"on": false})");
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    CHECK_FALSE(dry["as_heard"].asBool());
+    std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why == R"(["launch_unlogged"])");
+    // Begun later: still not as heard for it.
+    p.run("launch.capture", R"({"on": true})");
+    live.until(1200 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    why = json::writeCompact(dry["not_heard_because"]);
+    CHECK(why.find("\"launch_unlogged\"") != std::string::npos);
+}
