@@ -1363,8 +1363,12 @@ marks the node, the executor that adopts the plan acks the return through its la
 its own adoption frame, and the main thread logs it as an ordinary arrangement launch. A skipped
 plan logs nothing; `launch.state`'s "uncertain" and the `launch_state_uncertain` reason are gone. A
 lost ack (a full ring) falls back to the guess, with a warning, and the capture is not as heard. A
-capture with a return stays not as heard (`edited_during`): the executors' retiring crossfade is
-not the replay's switch. engine.md §1.4.2 has the rules.
+capture with a return stays not as heard (`edited_during`) for the edit behind it; the replay plays
+the return as heard. *(2026-11-25, after review round 176: the return is logged on the node's
+timeline, the stream less its latency shift, so a whole-log replay equals live; a track that joins
+or leaves the anticipative executor's live region without a continuous handoff is acked as a return;
+the earlier reason given here, the executors' retiring crossfade, was wrong: replay equals live.)*
+engine.md §1.4.2 has the rules.
 
 ## Consequences
 

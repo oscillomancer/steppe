@@ -390,9 +390,13 @@ instructions are in `docs/guides/installing.md`.
       return ack lost to a full ring (a plan dropping clips on more than
       a thousand tracks at once) falls back to an immediate launch's
       floor, with a warning, and the capture is not as heard; a launch
-      ack lost that way (it cannot overflow today) is counted, warned, and
-      makes every capture from then on not as heard (`launch_unlogged`)
-      until the engine restarts: the
+      ack lost that way (returns share its ring, so a burst of several
+      hundred returns can do it) is counted, warned, and makes every
+      capture from then on not as heard (`launch_unlogged`) until the
+      engine restarts; with the anticipative executor a track that joins
+      or leaves the live region while stopped (a monitor change, or a
+      monitor release deferred to the stop) stops its launched clip,
+      reported as a return to the arrangement: the
       commit writes the clip's stretch to there (after the removal is
       undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one
