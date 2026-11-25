@@ -933,6 +933,9 @@ class Engine {
         bool liveInput = false;      // a plan monitoring live input played during it
         bool dropout = false;        // an anticipation miss, a late bridge cycle, an xrun
         bool pluginFailed = false;   // a processing error (processErrors)
+        // A launch ack lost to a full ring while it ran, or at any time
+        // before it began: the log misses a launch that was heard.
+        bool launchUnlogged = false;
         bool operator==(const CaptureFacts&) const = default;
     };
     struct LaunchCapture {
@@ -1353,9 +1356,22 @@ class Engine {
     };
     // The executor adopting `next`: one ack per node of `liveClass` (-1: all)
     // that carryLaunch returned to the arrangement, at `stream` of `epoch`.
+    // The callback adopting `next` from `old` (the anticipative executor's
+    // handoff): a node that changed class without a carry (while stopped,
+    // or a late handoff) restarts on the arrangement; one whose old state
+    // was not the arrangement is acked as a return (round 176 F1).
+    void ackClassMoves(detail::Plan& old, const detail::Plan& next, bool continuous,
+                       std::uint64_t epoch, std::int64_t stream) SUPPLE_RT;
     void ackReturns(detail::Plan& next, int liveClass, bool renderer, std::uint64_t epoch,
                     std::int64_t stream) SUPPLE_RT;
     std::atomic<std::uint64_t> returnAcksDropped_{0};  // a full ring: the main thread falls back
+    // A launch ack a full ring dropped (the executor counts it, nothing
+    // else); the main thread warns and marks captures (serviceLaunches).
+    std::atomic<std::uint64_t> launchAcksDropped_{0};
+    std::uint64_t launchAcksDropSeen_ = 0;
+    // Sticky: a launch ack was lost, so the log may miss a launch any later
+    // capture's frame 0 depends on, for the engine's life.
+    bool launchAcksLost_ = false;
     std::unique_ptr<std::array<LaunchSlot, kLaunchSlots>> launchSlots_ =
         std::make_unique<std::array<LaunchSlot, kLaunchSlots>>();
     // Slots the executors still act on (pending, committed, or applied and
@@ -1409,6 +1425,12 @@ class Engine {
     std::uint64_t returnAcksDuplicated_ = 0;  // the guard fired: carries overlapped (risk 6)
     std::vector<ReturnPlace> returnPlaces_;
     std::uint64_t returnAcksDropSeen_ = 0;  // returnAcksDropped_ as last handled
+    // The latest song frame a return was guessed at (a lost ack's fallback,
+    // or an ack whose frame could not be placed), in its epoch: a capture
+    // placed before it is not as heard either (round 176 F4).
+    std::uint64_t returnGuessEpoch_ = UINT64_MAX;
+    std::int64_t returnGuessSong_ = INT64_MIN;
+    void noteReturnGuess(std::uint64_t epoch, std::int64_t song);
     void logReturn(const LaunchAck& ack);
     bool pluginFailedNow() const;  // a failed or refused instance of the version's fx
     void sortLaunchLog();

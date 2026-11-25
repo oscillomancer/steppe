@@ -563,27 +563,11 @@ TEST_CASE("a clip removed after its capture keeps what it played, and commits on
 
 TEST_CASE("a clip removed mid-capture is kept up to its return to the arrangement") {
     // Q3 (round 168): the plan's return is an arrangement launch where the
-    // executor adopted the plan (its ack): the next cycle's start, 120064.
-    // An immediate launch.arrangement a block before the removal lands
-    // there too: the same capture and commit, once the removal is undone.
+    // executor adopted the plan (its ack): the next cycle's start, 120064,
+    // which is 120000 on tr_1's timeline (64 frames behind the stream, tr_2's
+    // latent gain), where its launches are placed too (round 176 F2). Once
+    // the removal is undone, the commit cuts cl_1 there: beat 5.
     const model::Id tr1{model::Kind::Track, 1};
-    json::Value twin;
-    std::vector<LaunchLogEntry> twinLaunches;
-    {
-        Project q;
-        twoTracks(q);
-        AppLive live(q, kInCallback, kBlock, 48000 * 4);
-        heldTake(
-            q, live,
-            [&] {
-                const Engine::LaunchRequest back{tr1, LaunchLogEntry::Action::Arrangement, {}, {}};
-                REQUIRE(q.app->engine()->launch(std::span(&back, 1), model::LaunchQuantize::None));
-            },
-            937);
-        twinLaunches = q.app->launchCapture()->capture.launches;
-        twin = commitResult(q);
-    }
-    REQUIRE(twinLaunches.size() == 2);
     Project p;
     twoTracks(p);
     AppLive live(p, kInCallback, kBlock, 48000 * 4);
@@ -596,15 +580,12 @@ TEST_CASE("a clip removed mid-capture is kept up to its return to the arrangemen
     CHECK(got[0].runningFrame == 0);
     CHECK(got[1].action == LaunchLogEntry::Action::Arrangement);
     CHECK(got[1].track == tr1);
-    // Heard from the cycle after the removal, which began at 120064.
-    CHECK(view->capture.startSample + got[1].runningFrame == 120064);
-    CHECK(got[1].runningFrame == twinLaunches[1].runningFrame);
-    CHECK(got[1].songFrame == twinLaunches[1].songFrame);
-    CHECK(got[1].anchorSample == twinLaunches[1].anchorSample);
-    CHECK(got[1].anchorBeat == twinLaunches[1].anchorBeat);
-    // The executors crossfade into the arrangement, which the replay's
-    // switch does not: not as heard (engine.md §3.1). The capture's own
-    // version still has cl_1, so the dry run answers.
+    CHECK(view->capture.startSample + got[1].runningFrame == 120000);
+    CHECK(got[1].songFrame == 120000);
+    CHECK(got[1].anchorSample == 120000);
+    CHECK(got[1].anchorBeat == doctest::Approx(5.0));
+    // The edit behind the return: not as heard (engine.md §3.1). The
+    // capture's own version still has cl_1, so the dry run answers.
     {
         json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
         CHECK_FALSE(dry["as_heard"].asBool());
@@ -614,7 +595,10 @@ TEST_CASE("a clip removed mid-capture is kept up to its return to the arrangemen
     }
     refusedForRemovedClip(p);
     p.run("history.undo", "{}");
-    CHECK(commitResult(p) == twin);
+    json::Value done = commitResult(p);
+    const std::string layout = json::writeCompact(done["layout"]);
+    INFO(layout);
+    CHECK(layout.find("\"tr_1 4.1706666666666665-5.0 fades") != std::string::npos);
 }
 
 namespace {
@@ -666,6 +650,8 @@ TEST_CASE("a launch on the track after its clip is removed holds over the return
         // removed at 215936: the return at 215936, cl_3 at 216000. Heard and
         // captured: the arrangement between, then cl_3 (a twin cannot launch
         // that: a second launch on tr_1 replaces a pending one).
+        // tr_1 is 64 frames behind the stream (tr_2's latent gain): its
+        // return is logged on its timeline.
         const std::int64_t removedAt = (queued ? 1687 : 938) * std::int64_t(kBlock);
         const auto midway = [&](Project& q, AppLive& live, bool remove) {
             if (!queued) {
@@ -697,7 +683,7 @@ TEST_CASE("a launch on the track after its clip is removed holds over the return
         const std::size_t cl3 = twinLaunches.find("0 tr_1 cl_3");
         REQUIRE(cl3 != std::string::npos);
         const std::string expected = twinLaunches.substr(0, cl3) + "1 tr_1 tr_0 @" +
-                                     std::to_string(removedAt - 100096) + "\n" +
+                                     std::to_string(removedAt - 64 - 100096) + "\n" +
                                      twinLaunches.substr(cl3);
         const std::string got = launchesOf(p);
         INFO("removed:\n" << got << "expected:\n" << expected);
@@ -737,7 +723,7 @@ TEST_CASE("a clip removed as its capture began returns where the executor took t
     CHECK(view->capture.launches.empty());
     const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
     REQUIRE(returns.size() == 1);
-    CHECK(returns[0].runningFrame == 782 * std::int64_t(kBlock));
+    CHECK(returns[0].runningFrame == 782 * std::int64_t(kBlock) - 64);  // tr_1's timeline
 }
 
 TEST_CASE("under a master playrate a removed clip's return is where its plan hands over (F2)") {
@@ -762,7 +748,7 @@ TEST_CASE("under a master playrate a removed clip's return is where its plan han
     REQUIRE(p.app->launchCapture());  // drains the ack
     const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
     REQUIRE(returns.size() == 1);
-    CHECK(returns[0].runningFrame == handAt);
+    CHECK(returns[0].runningFrame == handAt - 64);  // on tr_1's timeline
     p.run("launch.capture", R"({"on": false})");
     const auto view = p.app->launchCapture();
     REQUIRE(view);
@@ -829,7 +815,7 @@ TEST_CASE("a removed clip's return is logged where its executor adopted the plan
     REQUIRE(returns.size() == 1);
     CHECK(returns[0].track == model::Id{model::Kind::Track, 1});
     CHECK(returns[0].action == LaunchLogEntry::Action::Arrangement);
-    CHECK(returns[0].runningFrame == 938 * std::int64_t(kBlock));
+    CHECK(returns[0].runningFrame == 938 * std::int64_t(kBlock) - 64);  // tr_1's timeline
     const std::vector<LaunchLogEntry> log = p.app->engine()->launchLog();
     REQUIRE(log.size() == 2);
     CHECK(returns[0].songFrame - log[0].songFrame == returns[0].runningFrame - log[0].runningFrame);

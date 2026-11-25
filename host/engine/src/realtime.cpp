@@ -3241,8 +3241,10 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
             if (oldEpoch || !playing || here >= hand->handAt) {
                 // Exactly at the handoff, playing, in its epoch: the renderer's
                 // carried state is the callback's here (adoptLive).
-                adoptLive(hand,
-                          !oldEpoch && playing && hand->handContinuable && here == hand->handAt);
+                const bool continuous =
+                    !oldEpoch && playing && hand->handContinuable && here == hand->handAt;
+                if (livePlan_) ackClassMoves(*livePlan_, *hand, continuous, e, here);
+                adoptLive(hand, continuous);
                 ackReturns(*hand, 1, false, e, here);  // the live region's own
                 planHandoffs_.consume();
                 wakeRenderer();

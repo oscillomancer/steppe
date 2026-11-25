@@ -2274,6 +2274,79 @@ void registerSettingsCommands(cmd::Registry& registry) {
 
 }  // namespace
 
+namespace {
+// The codes render.mix, render.stems, render.regions and render.dry-run
+// answer, the resolvers' they pass through included (engine.md §3, §3.1),
+// so a client words its refusals by walking the registry. Schema codes of
+// a malformed argument are every command's and are not listed.
+std::vector<cmd::ErrorSpec> renderErrors(std::string_view which) {
+    const bool dry = which == "render.dry-run";
+    std::vector<cmd::ErrorSpec> out = {
+        {"render.args", "an argument does not apply to this call",
+         "drop the argument the path names"},
+        {"render.empty", "the render would write nothing", "add items or a range"},
+        {"render.source", "branch and version are both given", "give one of them"},
+        {"history.version", "no such version", "history.list shows the versions"},
+        {"render.pattern", "the file name pattern does not parse", "fix the token or filter named"},
+        {"render.path", "a destination escapes the renders folder, collides or cannot be made",
+         "change pattern"},
+        {"render.exists", "a destination exists, or no free numbered name is left",
+         "if_exists overwrite, number or skip"},
+        {"render.secondary", "secondary is neither {format, bit_depth} nor \"none\"",
+         "e.g. {\"format\": \"flac\", \"bit_depth\": 16}"},
+        {"render.format", "an output format is unknown", "use a format render.settings lists"},
+        {"render.normalize", "normalization cannot apply as set",
+         "fix normalize as the path names"},
+        {"render.masters", "masters names a track that is not a master", "track.list"},
+        {"render.budget", "the render exceeds the in-memory frame budget",
+         "render a shorter range"},
+        {"render.loop", "a loop that cannot be followed", "render without the loop"},
+        {"track.unknown", "a track the call or a performance names is not in the version",
+         "track.list"},
+        {"track.strip_type", "the mix output is not a master", "name a master"},
+        {"engine.too_long", "the render is too long, or too long once the playrate expands it",
+         "render a shorter range"},
+        {"engine.tail", "tail_s is out of range", "0 .. 600 s"},
+    };
+    if (which == "render.regions" || dry)
+        out.push_back(
+            {"region.unknown", "a region the call names is not in the version", "region.list"});
+    if (!dry) {
+        out.push_back({"render.stale_target", "the project or branch changed while it rendered",
+                       "render again"});
+        out.push_back(
+            {"engine.start_failed", "a plug-in refused to start processing", "fx.restart it"});
+        out.push_back({"job.cancelled", "the render job was cancelled", "render again"});
+    }
+    if (which == "render.regions") return out;
+    const std::vector<cmd::ErrorSpec> performance = {
+        {"launch.capture", "performance \"captured\" with no capture, or none with running time",
+         "launch.capture {on: true}, play, then render"},
+        {"render.performance.sample_rate", "the performance runs at another rate than the project",
+         "launch.commit it and render the timeline"},
+        {"render.performance.launches", "launches out of frame order, or past frames",
+         "give the launches in frame order, each within frames"},
+        {"render.performance.too_many", "more than 100,000 launches",
+         "launch.commit it and render the timeline"},
+        {"render.performance.no_clip", "a clip launch names no clip",
+         "give the launch's clip, or action arrangement or stop"},
+        {"render.performance.clip_track", "a launch's clip belongs to another track",
+         "give the clip's own track"},
+        {"clip.unknown", "a launch's clip is not in the version", "render a version that has it"},
+        {"track.frozen", "a launch's track is frozen", "track.unfreeze it"},
+        {"launch.playrate", "an audio clip the engine refuses under the master playrate",
+         "launch.commit it and render the timeline"},
+        {"render.not_as_heard", "as_heard: true, and the performance is not as heard",
+         "act on the first reason, or leave as_heard out"},
+    };
+    out.insert(out.end(), performance.begin(), performance.end());
+    if (!dry)
+        out.push_back({"launch.memory", "a launch's clip is past the memory budget",
+                       "launch.commit it and render the timeline"});
+    return out;
+}
+}  // namespace
+
 void registerRenderCommands(cmd::Registry& registry) {
     for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
         Command<Args, json::Value> c;
@@ -2319,11 +2392,13 @@ void registerRenderCommands(cmd::Registry& registry) {
                 "Each file: path (where if_exists sends it), exists (its destination is already "
                 "there), skip (if_exists skip leaves it out), seconds and outputs. operation: "
                 "mix, stems or regions (default: tracks or regions given, else the settings' "
-                "source). With performance it also answers performance, range, as_heard and "
+                "source, mix with a performance where that is regions). With performance it also "
+                "answers performance, range, as_heard and "
                 "not_heard_because, compiling no plan.";
         c.tags = {"render"};
         c.args = argsSchema();
         c.result = schema::any();
+        c.errors = renderErrors(which);
         if (which == "render.mix")
             c.examples = {
                 {"Render", obj(R"({"name": "mix-v1"})"),

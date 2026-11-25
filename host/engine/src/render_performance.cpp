@@ -196,6 +196,7 @@ Result<RenderPerformance> resolvePerformance(EngineApp& app, const PerformanceRe
             if (f.rateChanged) why.push_back("playrate_changed");
             if (f.liveInput) why.push_back("live_input");
             if (f.dropout) why.push_back("dropout");
+            if (f.launchUnlogged) why.push_back("launch_unlogged");
             if (f.pluginFailed) why.push_back("plugin_failed");
             if (c->endedBy != EngineApp::CaptureEnd::None) why.push_back("ended_by_engine");
             if (s.version != c->capture.version) why.push_back("other_version");
@@ -279,8 +280,10 @@ Error notAsHeard(const RenderPerformance& p) {
         : first == "playrate_changed" ? "capture again without changing the playrate during it"
         : first == "live_input"       ? "capture again with no armed or monitored input"
         : first == "dropout"          ? "capture again: the output dropped out during it"
-        : first == "plugin_failed"    ? "capture again: a plug-in failed during it"
-        : first == "ended_by_engine"  ? "the engine stopped during it: capture again"
+        : first == "launch_unlogged"
+            ? "restart the engine (Restart audio), then capture again: a launch was not logged"
+        : first == "plugin_failed"   ? "capture again: a plug-in failed during it"
+        : first == "ended_by_engine" ? "the engine stopped during it: capture again"
         : first == "from_launcher"
             ? "render a capture (performance: \"captured\") to require as_heard"
             : "render a capture (performance: \"captured\") to require as_heard";

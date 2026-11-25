@@ -594,12 +594,16 @@ the same.*
   `publishRendererPlan` before the callback can see the plan, the
   callback after `adoptLive` for its live region) pushes one `LaunchAck`
   per marked node to its own ack ring, with `returned`, the plan's
-  generation and its own adoption stream frame, and clears the mark. The
-  main thread logs it as an arrangement launch (`Engine::logReturn`): at
-  the executor's frame, the frame it was heard from. Its song frame at
-  unity is the epoch's start plus that frame; under a master playrate
-  the executor adopts at the plan's `handAt`, and the song frame is the
-  next whole song sample there (the launches' convention, below),
+  generation and its adoption stream frame on the node's timeline (the
+  stream less the node's `timelineShift`, where a launch's target is
+  placed: a latency-delayed node switches its input that much behind
+  the stream; round 176 F2), and clears the mark. The main thread logs
+  it as an arrangement launch (`Engine::logReturn`) at that frame, the
+  frame it was heard from, so a replay of the whole log equals live bit
+  for bit. Its song frame at unity is the epoch's start plus that frame;
+  under a master playrate the executor adopts at the plan's `handAt`,
+  and the song frame is the next whole song sample at `handAt` less the
+  node's shift (the launches' convention, below),
   placed when the plan is published, before the song passes it, and
   taken only by an ack in the same epoch at that frame; otherwise, and
   where no clock serves, where an immediate `launch.arrangement` would
@@ -611,24 +615,46 @@ the same.*
   return logged twice (by track, epoch and generation) is dropped and
   counted (`returnAcksDuplicated_`, never expected: the carries are
   disjoint by class).
+  The anticipative executor carries a node across the live region only
+  at a continuous handoff (playing, at the handoff frame), so a track
+  that joins or leaves it otherwise (a monitor change while stopped, or
+  a monitor release ADR-0014's keepLive defers to the stop) restarts on
+  the arrangement and its launched clip stops. The callback acks that as
+  a return when it adopts the plan (`Engine::ackClassMoves`, before
+  `adoptLive`), for each node whose class changed without that carry and
+  whose state in its previous plan was not the arrangement (its own live
+  nodes, and rendered ones the renderer left when it adopted a newer
+  plan): the log, `launch.state` and the next capture agree (round 176
+  F1). Carrying the clip across instead would have the renderer read a
+  live node the callback is still running, so the clip's stop is a
+  stated limit (STATUS).
   A full ring drops a return ack and counts it (`returnAcksDropped_`).
   When the count moves the main thread logs a return for each track whose
   newest launch the latest plan cannot play, where an immediate
   `launch.arrangement` would land, warns, and marks a running capture
-  not as heard (`edited_during`). `launch.state` never shows a clip the
+  not as heard (`edited_during`), and a capture placed while such a
+  guessed return still lies ahead too (round 176 F4). `launch.state` never shows a clip the
   plan lacks (it reports such a track on the arrangement). A dropped
   return whose clip a later plan restored before the drop was seen is not
   recovered: the track then reads as playing the clip. A ring holds 1,024
   acks, so that takes a plan dropping clips on more than a thousand
-  tracks at once. A launch ack that finds its ring full is dropped
-  uncounted (`launch_runtime.cpp`, `(void)push`): with 256 launch slots
-  it cannot happen today (round 174 risk 8, a found gap).
+  tracks at once. Returns and launches share the two rings, so a burst
+  of returns can fill one before a launch ack arrives (about 770 tracks
+  returned in one adoption, fewer with launch acks waiting). A launch ack
+  that finds its ring full is dropped and counted (`launchAcksDropped_`,
+  the executor's only extra work). The log then misses a launch
+  that was heard, which no render can replay, and frame 0 of any later
+  capture may depend on it: when the count moves the main thread warns,
+  and a capture running then and every capture placed after it, for the
+  engine's life, is not as heard (`launch_unlogged`, §3.1). A new engine
+  (Restart audio) starts clean.
   A capture includes each return within its span in the log's order, and
-  one with a return is not as heard (`edited_during`, §3.1): the
-  executors crossfade the clip's audio into the arrangement (the retiring
-  fade), which the replay's switch does not, and a return comes from a
-  plan compiled for an edit or a change of the prepared sources (a clip
-  past the memory budget) anyway. What each track played as a capture
+  one with a return is not as heard (`edited_during`, §3.1), for the
+  edit behind it alone: a return comes from a plan compiled for an edit
+  or for a change of the prepared sources (a clip past the memory
+  budget). The replay plays a logged return as heard: the whole log
+  replayed equals live, the executors' fade into the arrangement
+  included (round 176 F3). What each track played as a capture
   began is its newest entry by the start, a return included, so removing
   a clip later, in the capture
   or after it, never drops what was heard: the capture keeps the clip's
@@ -2285,6 +2311,7 @@ refused. `tail_s`, `trim`,
 | `playrate_changed` | a playrate edit or a sync chase took effect inside its span |
 | `live_input` | MIDI input reached a track, or an armed or monitored audio input was heard |
 | `dropout` | an anticipation miss, a device xrun or a cycle overrun during it |
+| `launch_unlogged` | a launch ack was lost to a full ring while it ran, or at any time before it in the engine's life: the log misses a launch that was heard (§1.4.2) |
 | `plugin_failed` | a plug-in failed during it, or a failed or refused instance of the version's plug-ins was there as it began or while it ran (a failed bridged instance plays silence) |
 | `ended_by_engine` | an engine stop, a device restart or a device failure ended it (`CaptureView::endedBy`) |
 | `other_version` | the version rendered is not the capture's own |
@@ -2314,7 +2341,12 @@ render's own `range` and `performance`.
 
 **Refusals.** One code per cause; a client words a refusal from the code
 and the path's index, never from the hint, which names commands for
-command callers.
+command callers. `render.mix`, `render.stems`, `render.regions` and
+`render.dry-run` declare every code they answer, the resolvers' they pass
+through included, in their registry entries (`cmd::CommandInfo::errors`:
+code, when, hint; `skill/generated/engine/render.md` lists them), so a
+client's table of wordings can be checked against the registry; schema
+codes of a malformed argument are every command's and are not listed.
 
 | Case | Code | Path |
 | --- | --- | --- |

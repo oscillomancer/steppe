@@ -666,7 +666,8 @@ std::uint32_t Engine::launchesAt(detail::Plan& p, int liveClass, std::uint64_t e
                 ack.anchorSample = anchorSample;
                 ack.anchorBeat = anchorBeat;
                 ack.songFrame = songFrame;
-                (void)(renderer ? rendererLaunchAcks_ : callbackLaunchAcks_)->push(ack);
+                if (!(renderer ? rendererLaunchAcks_ : callbackLaunchAcks_)->push(ack))
+                    launchAcksDropped_.fetch_add(1, std::memory_order_relaxed);
                 notifyMain();
             });
         };
@@ -846,11 +847,27 @@ void Engine::serviceLaunches() {
                         return r.track == track && r.generation == plan->generation;
                     });
                 if (placedAlready) continue;
-                if (auto placed = placeRateLaunch(*plan, plan->handEpoch, plan->handAt,
-                                                  model::LaunchQuantize::None))
+                // On the node's timeline, where its ack will be (round 176 F2).
+                const detail::Node* n = nodeOf(*plan, track);
+                const std::int64_t at = plan->handAt - (n ? n->timelineShift : 0);
+                if (auto placed =
+                        placeRateLaunch(*plan, plan->handEpoch, at, model::LaunchQuantize::None))
                     returnPlaces_.push_back(
-                        {track, plan->generation, plan->handEpoch, plan->handAt, *placed});
+                        {track, plan->generation, plan->handEpoch, at, *placed});
             }
+    }
+    // A launch ack lost to a full ring: the log misses a launch that was
+    // heard, which no render can replay; a capture running, and every one
+    // placed from now on, is not as heard (launch_unlogged).
+    if (const auto dropped = launchAcksDropped_.load(std::memory_order_relaxed);
+        dropped != launchAcksDropSeen_) {
+        launchAcksDropSeen_ = dropped;
+        launchAcksLost_ = true;
+        if (capture_.on && !capture_.pending && !capture_.closed)
+            capture_.facts.launchUnlogged = true;
+        warnings_.push_back(
+            "launch: the audio path's report of a launch was lost (its queue was full): the "
+            "launch log misses a launch that was heard, so no capture from now on is as heard");
     }
     // A return ack lost to a full ring: each track the latest plan cannot
     // play is logged as returned where an immediate launch.arrangement
@@ -875,6 +892,7 @@ void Engine::serviceLaunches() {
             r.epoch = placed->epoch;
             launchLog_.push_back(r);
             launchIsReturn_.push_back(1);
+            noteReturnGuess(r.epoch, r.songFrame);
             any = true;
         }
         if (any) sortLaunchLog();
@@ -1270,6 +1288,9 @@ void Engine::placeCapture() {
     const detail::Plan* plan = latestPlan_.load(std::memory_order_acquire);
     capture_.facts.liveInput = plan && plan->anyLive;
     capture_.facts.pluginFailed = pluginFailedNow();  // failed before it began (U1)
+    capture_.facts.launchUnlogged = launchAcksLost_;
+    // A guessed return still ahead: where it really was is not known.
+    if (returnGuessEpoch_ == clock.epoch && returnGuessSong_ > song) capture_.facts.edited = true;
     capture_.misses = misses_.load(std::memory_order_relaxed);
     capture_.bridgeLate = bridgeLate_.load(std::memory_order_relaxed);
     capture_.xruns = backend_ ? backend_->status().xruns : 0;
@@ -1518,7 +1539,10 @@ void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::u
         ack.track = n.id.n;
         ack.epoch = epoch;
         ack.action = static_cast<std::uint8_t>(LaunchLogEntry::Action::Arrangement);
-        ack.stream = stream;
+        // On the node's timeline, as a launch's target is (a latency-delayed
+        // node switches its input timelineShift frames behind the stream:
+        // round 176 F2).
+        ack.stream = stream - n.timelineShift;
         ack.returned = true;
         ack.generation = next.generation;
         if (!(renderer ? rendererLaunchAcks_ : callbackLaunchAcks_)->push(ack))
@@ -1526,6 +1550,40 @@ void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::u
         any = true;
     }
     if (any) notifyMain();
+}
+
+void Engine::ackClassMoves(detail::Plan& old, const detail::Plan& next, bool continuous,
+                           std::uint64_t epoch, std::int64_t stream) SUPPLE_RT {
+    // `old` is the callback's previous plan: its live nodes are the
+    // callback's own, and the renderer left its rendered ones when it
+    // adopted a newer plan, before this handoff was published.
+    bool any = false;
+    for (const detail::Node& n : next.nodes) {
+        const detail::Node* o = detail::findNode(old, n.id);
+        if (!o || o->live == n.live) continue;
+        if (n.live && continuous) continue;  // the renderer carried it (continuable)
+        if (o->launch.kind == detail::LaunchState::Kind::Arrangement) continue;
+        LaunchAck ack;
+        ack.track = n.id.n;
+        ack.epoch = epoch;
+        ack.action = static_cast<std::uint8_t>(LaunchLogEntry::Action::Arrangement);
+        ack.stream = stream - n.timelineShift;
+        ack.returned = true;
+        ack.generation = next.generation;
+        if (!callbackLaunchAcks_->push(ack))
+            returnAcksDropped_.fetch_add(1, std::memory_order_relaxed);
+        any = true;
+    }
+    if (any) notifyMain();
+}
+
+void Engine::noteReturnGuess(std::uint64_t epoch, std::int64_t song) {
+    if (epoch != returnGuessEpoch_) {
+        returnGuessEpoch_ = epoch;
+        returnGuessSong_ = song;
+    } else {
+        returnGuessSong_ = std::max(returnGuessSong_, song);
+    }
 }
 
 void Engine::sortLaunchLog() {
@@ -1614,13 +1672,14 @@ void Engine::logReturn(const LaunchAck& ack) {
         } else {
             r.songFrame = ack.stream;
         }
+        noteReturnGuess(r.epoch, r.songFrame);
     }
     std::erase_if(returnPlaces_, [&](const ReturnPlace& p) {
         return p.track == track && p.generation <= ack.generation;
     });
-    // The executors' crossfade into the arrangement is not the replay's
-    // switch, and a return comes from a plan compiled for an edit anyway:
-    // a capture running is not as heard (edited_during).
+    // A return comes from a plan compiled for an edit (or a change of the
+    // prepared sources): a capture running is not as heard (edited_during).
+    // The replay itself plays a logged return as heard (round 176 F3).
     if (capture_.on && !capture_.pending && !capture_.closed) capture_.facts.edited = true;
     launchLog_.push_back(r);
     launchIsReturn_.push_back(1);

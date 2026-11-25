@@ -186,6 +186,22 @@ struct EngineTestAccess {
     }
     static std::uint64_t returnAcksDropped(const Engine& e) { return e.returnAcksDropped_.load(); }
     static std::uint64_t returnAcksDuplicated(const Engine& e) { return e.returnAcksDuplicated_; }
+    static std::uint64_t launchAcksDropped(const Engine& e) { return e.launchAcksDropped_.load(); }
+    // The in-callback executor's ack ring made full with filler, as if it
+    // were tiny (the test thread runs the Manual backend's cycles, so
+    // nothing pushes meanwhile); emptyLaunchRing discards what it holds,
+    // before the main thread drains it.
+    static std::size_t fillLaunchRing(Engine& e) {
+        std::size_t n = 0;
+        while (e.callbackLaunchAcks_->push(Engine::LaunchAck{})) ++n;
+        return n;
+    }
+    static std::size_t emptyLaunchRing(Engine& e) {
+        std::size_t n = 0;
+        Engine::LaunchAck a;
+        while (e.callbackLaunchAcks_->pop(a)) ++n;
+        return n;
+    }
     // The returns the log holds (an executor's ack, or the fallback for a
     // lost one), in its order.
     static std::vector<LaunchLogEntry> launchReturns(const Engine& e) {

@@ -5,6 +5,7 @@
 // resolved object, and song frames converted under a master playrate. Its
 // own ctest entry.
 #include <supple/audio/audio_file.h>
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <thread>
@@ -24,9 +25,17 @@ std::vector<float> leftOf(json::Value rendered) {
     return audio->channels[0];
 }
 
+// Refused, with a code the command declares (its registry entry's errors,
+// which a client walks to word refusals).
 Error refused(Project& p, const char* command, const json::Value& args) {
     auto r = p.bus->execute({command, args, kOrigin});
     REQUIRE_FALSE(r);
+    const cmd::CommandInfo* info = p.registry.find(command);
+    REQUIRE(info);
+    const std::string code = r.error().code;
+    INFO(command << " answered " << code);
+    CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                      [&](const cmd::ErrorSpec& e) { return e.code == code; }));
     return r.error();
 }
 
@@ -390,7 +399,7 @@ TEST_CASE("a removal the executors took, then its undo, is a return (round 174)"
     CHECK(playsOf(p, "tr_1") == "arrangement");
     const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
     REQUIRE(returns.size() == 1);
-    CHECK(returns[0].runningFrame == 800 * std::int64_t(kBlock));
+    CHECK(returns[0].runningFrame == 800 * std::int64_t(kBlock) - 64);  // tr_1's timeline
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
     CHECK(why == R"(["began_mid_run"])");
@@ -409,11 +418,12 @@ TEST_CASE("a plug-in that failed before the capture leaves it not as heard (roun
     REQUIRE(crash);
     REQUIRE(crash->isolated());
     REQUIRE(crash->setParam(1, 1.0));  // crash in its next process()
-    for (int i = 0; i < 2000 && !crash->failed(); ++i) {
+    // On the failure, not the clock (a crash never seen is the runner's
+    // timeout), as test_app waits.
+    while (!crash->failed()) {
         live.until((live.cycles + 1) * kBlock);  // stopped: plug-ins still run
         if (!crash->failed()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    REQUIRE(crash->failed());
     p.run("launch.capture", R"({"on": true})");
     REQUIRE(p.app->transport("play"));
     live.until(live.cycles * kBlock + 20 * kBlock);
@@ -425,4 +435,117 @@ TEST_CASE("a plug-in that failed before the capture leaves it not as heard (roun
     const std::string why = json::writeCompact(dry["not_heard_because"]);
     INFO(why);
     CHECK(why == R"(["plugin_failed"])");
+}
+
+TEST_CASE("a launch ack lost to a full ring leaves every later capture not as heard") {
+    // cl_1's ack finds the ring full: the log misses a launch that was
+    // heard. The capture running then, and one begun after, say so.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 6);
+    p.run("launch.capture", R"({"on": true})");  // from the play start
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    REQUIRE(EngineTestAccess::fillLaunchRing(*p.app->engine()) > 0);
+    p.run("launch.clip", R"({"clip": "cl_1"})");  // on bar 2, frame 96000
+    live.backend.run(760 - 20);                   // past it, with no service
+    live.cycles = 760;
+    CHECK(EngineTestAccess::launchAcksDropped(*p.app->engine()) == 1);
+    EngineTestAccess::emptyLaunchRing(*p.app->engine());  // only the filler
+    live.until(1000 * kBlock);
+    CHECK(p.app->engine()->launchLog().empty());  // the launch was not logged
+    p.run("launch.capture", R"({"on": false})");
+    json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    CHECK_FALSE(dry["as_heard"].asBool());
+    std::string why = json::writeCompact(dry["not_heard_because"]);
+    INFO(why);
+    CHECK(why == R"(["launch_unlogged"])");
+    // Begun later: still not as heard for it.
+    p.run("launch.capture", R"({"on": true})");
+    live.until(1200 * kBlock);
+    p.run("launch.capture", R"({"on": false})");
+    dry = p.run("render.dry-run", R"({"performance": "captured"})");
+    why = json::writeCompact(dry["not_heard_because"]);
+    CHECK(why.find("\"launch_unlogged\"") != std::string::npos);
+}
+
+TEST_CASE(
+    "a launched track that leaves or joins the live region while stopped is a return (round 176 "
+    "F1)") {
+    // The anticipative executor carries a node across the live region only
+    // at a continuous handoff, so a monitor change while stopped restarts
+    // tr_1 on the arrangement: the callback acks it, and launch.state and
+    // the next capture say so (cl_1 is not at its frame 0).
+    for (const bool off : {true, false}) {
+        INFO((off ? "monitor off while stopped" : "monitor on while stopped"));
+        Project p;
+        twoTracks(p);
+        const char* monitorOn =
+            R"({"track": "tr_1", "armed": true, "record_midi": "*", "monitor": "on"})";
+        if (off) p.run("track.set", monitorOn);
+        AppLive live(p, EngineOptions{.workers = 0}, kBlock, 48000 * 8);
+        REQUIRE(p.app->transport("play"));
+        live.until(live.cycles * kBlock + 20 * kBlock);
+        p.run("launch.clip", R"({"clip": "cl_1"})");
+        live.until(live.cycles * kBlock + 1000 * kBlock);
+        CHECK(playsOf(p, "tr_1") == "clip");
+        REQUIRE(p.app->transport("stop"));
+        live.until(live.cycles * kBlock + 50 * kBlock);
+        if (off)
+            p.run("track.set", R"({"track": "tr_1", "monitor": "off"})");
+        else
+            p.run("track.set", monitorOn);
+        // Stopped, until() does not wait for the renderer: on the adoption,
+        // not the clock, then cycles for the callback's handoff.
+        while (!p.app->engine()->awaitPlan()) {
+        }
+        live.until(live.cycles * kBlock + 100 * kBlock);
+        CHECK(playsOf(p, "tr_1") == "arrangement");
+        const auto returns = EngineTestAccess::launchReturns(*p.app->engine());
+        REQUIRE(returns.size() == 1);
+        CHECK(returns[0].track == id("tr_1"));
+        p.run("launch.capture", R"({"on": true})");
+        REQUIRE(p.app->transport("play"));
+        live.until(live.cycles * kBlock + 400 * kBlock);
+        p.run("launch.capture", R"({"on": false})");
+        live.until(live.cycles * kBlock + 10 * kBlock);
+        json::Value dry = p.run("render.dry-run", R"({"performance": "captured"})");
+        const std::string launches = json::writeCompact(dry["performance"]["launches"]);
+        INFO(launches);
+        CHECK(launches.find("cl_1") == std::string::npos);
+    }
+}
+
+TEST_CASE("a return on a latency-delayed track is logged on its timeline (round 176 F2)") {
+    // tr_1 is delayed 64 frames by tr_2's latent gain. Its return switches
+    // its input at stream S, which is S - 64 on its timeline, where its
+    // launches are placed: the whole log replayed equals live.
+    Project p;
+    twoTracks(p);
+    const model::Session s = p.app->head();
+    p.run("clip.add",
+          R"({"track": "tr_1", "scene": "sc_2", "notation": "voice bass; 1: D3:q r:q r:h"})");
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    const model::Session removed = p.app->head();
+    const std::int64_t frames = 48000 * 5 + 8192;
+    for (const EngineOptions& options : {kInCallback, EngineOptions{.workers = 0}}) {
+        INFO("anticipative " << options.anticipative);
+        const Step scene{20, {request("tr_1", "cl_1"), request("tr_2", "cl_2")}};
+        const Live live = playLive(s, p.app->projectDir(), options, 128, frames,
+                                   {scene, {(96000 + 20000) / 128, {}, {}, &removed}});
+        REQUIRE(live.log.size() == 3);
+        CHECK(live.log[2].track == id("tr_1"));
+        CHECK(live.log[2].action == LaunchLogEntry::Action::Arrangement);
+        InstancePool pool = makePool();
+        OfflineSettings settings;
+        settings.endSeconds = 5.0;
+        settings.projectDir = p.app->projectDir();
+        settings.launches = live.log;
+        auto all = renderOffline(s, pool, settings);
+        REQUIRE(all);
+        const auto [worst, first] =
+            compare(live.left, live.latency, all->audio.channels[0], 0, 4 * 48000);
+        INFO("first differing frame " << first << ", return at " << live.log[2].runningFrame);
+        CHECK(worst == 0.0);
+    }
 }
