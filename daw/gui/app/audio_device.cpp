@@ -546,11 +546,14 @@ void connectAudioDevice(AudioDeviceDialog& dialog, Shell& shell) {
     };
     // The engine's full error, its hint included, goes to stderr only.
     dialog.onLog = [](const std::string& detail) { std::fprintf(stderr, "%s\n", detail.c_str()); };
-    // Refresh waits for a launcher capture that is lit or kept (fd263b3d);
-    // an engine stop keeps the take, which the pane commits (ADR-0097).
-    dialog.captureHeld = [&shell, &dialog] {
-        return shell.capture().lit() || shell.capture().kept() || dialog.engineCapturing();
-    };
+    dialog.captureHeld = refreshHeldBy(shell.capture());
+}
+
+std::function<bool()> refreshHeldBy(CaptureControl& capture) {
+    // An engine stop would cut a capture short while it is armed or runs
+    // (lit: the toggle's own or another caller's). A kept take is not held:
+    // the stop keeps it, and the pane commits it (ADR-0097).
+    return [&capture] { return capture.lit(); };
 }
 
 bool AudioDeviceDialog::engineCapturing() const { return app_.launchCapturing(); }
@@ -562,8 +565,7 @@ bool AudioDeviceDialog::recording() const {
 
 std::string AudioDeviceDialog::refreshBlocked() const {
     if (recording()) return "Refresh is off while recording";
-    if (captureHeld && captureHeld())
-        return "Refresh is off while the launcher captures or keeps a capture";
+    if (captureHeld && captureHeld()) return "Refresh is off while the launcher captures";
     return {};
 }
 

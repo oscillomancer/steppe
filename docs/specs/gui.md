@@ -2365,9 +2365,21 @@ one undo step, as turning Capture off does; so is a take the app kept
 across an engine stop or a device restart. The normal prompt then covers
 it. When that commit is refused, the take is kept and the prompt asks even
 for a clean project, naming it in the GUI's own words: "The launcher take
-(bars 3–18, 2 launches) could not be committed: a locked item is in the
-way. It will be lost; Save saves the project without it." Cancel keeps it,
-so the user can fix what the refusal names. A take whose commit the user
+(bars 1–2, 1 launch) could not be committed: the item at bar 1 on Drums is
+locked. It will be lost." With nothing else unsaved there is nothing to
+save, so the buttons are the action's own verb (the title's first word:
+Quit, Open, Start, Recover) and Cancel, Cancel focused; with unsaved changes
+too, the line ends "It will be lost; Save saves the project without it." and
+the buttons are Save / Don't save / Cancel. Cancel keeps the take, so the
+user can fix what the refusal names. The refusal is worded from its code
+and path and the model, never its message or hint
+(`CaptureControl::refusalWords`): `item.locked` names the one locked item
+under the take on a track it launched on ("a locked item is in the way"
+when that is not one); `launch.commit` at a launch's `/track` or `/clip`
+says the track is gone or no longer a channel, or the clip is gone or
+changed; `launch.commit.fade` and `clip.unsupported` say their cause
+without a place; any other refusal reads "could not be written to the
+arrangement". A take whose commit the user
 undid is declined: neither committed nor counted. The decision also
 records the kept take (`CaptureControl::takeKey`), and a different one
 asks again.
@@ -3148,9 +3160,11 @@ same heights, scroll and colours.
   refused, or one an agent's capture left), the cell is dark with its dot
   drawn in outline in `armed` (`ArrangeView::setCaptureKept`,
   `CaptureControl::keptLine`). Its hint says what is kept, why and what a
-  click does: "A take is kept, not committed: bars 3–18, 2 launches. Its
-  commit was refused: a locked item is in the way. Click Capture to commit
-  it." It never shows a command name or an engine hint.
+  click does: "A take is kept, not committed: bars 1–2, 1 launch. Its
+  commit was refused: the item at bar 1 on Drums is locked. Click Capture
+  to commit it." The refusal is worded as in the unsaved-work question
+  (§4.11), from its code and path; it never shows a command name, an engine
+  message or hint.
 - **A take whose commit was undone is declined.** It is not committed
   again and not shown kept; a click arms a new capture over it. The app
   keeps it, so redo still restores it, until the new capture hears a frame;
@@ -3913,8 +3927,10 @@ Windows retain Control shortcuts. No custom native menu hierarchy is supplied.
   audio stops for a moment, which its hover hint says. A stopped engine is
   only listed for. While recording it is disabled, its hint "Refresh is off
   while recording", and refused (`audio.recording`); likewise while a
-  launcher capture is armed, running or kept uncommitted (an engine stop
-  discards it), refused with `audio.capture`. The hint is said in the status
+  launcher capture is armed or running, which the stop would cut short
+  ("Refresh is off while the launcher captures", `audio.capture`,
+  `gui::refreshHeldBy`). A kept take does not hold it: the stop keeps the
+  take, and the pane commits it. The hint is said in the status
   line on hover. A refused start shows
   why in the dialog's status and the status line, the
   engine left stopped and the dialog open with the fresh list. Every error

@@ -1577,7 +1577,9 @@ TEST_CASE(
     const std::string line = capture.keptLine();
     INFO(line);
     CHECK(line.rfind("A take is kept, not committed: bar", 0) == 0);
-    CHECK(line.find("Its commit was refused: ") != std::string::npos);
+    // In the pane's words, from the refusal's code and the model.
+    CHECK(line.find("Its commit was refused: the item at bar 1 on Drums is locked.") !=
+          std::string::npos);
     CHECK(line.find("Click Capture to commit it.") != std::string::npos);
     CHECK(line.find("item.set") == std::string::npos);  // never the hint
     // The cell: dark, its dot in outline, the line its hint.
@@ -1587,7 +1589,24 @@ TEST_CASE(
     CHECK(header.stats.captureKept);
     CHECK_FALSE(header.stats.captureLit);
     CHECK(header.hintAt(centre(header.captureRect())).name == line);
-    f.exec("engine.start", R"({"backend":"dummy"})");
+    // Refresh is not held by a kept take (the stop keeps it); it is while a
+    // capture is armed or runs (gui::refreshHeldBy, the app's hook).
+    {
+        gui::AudioDeviceSettings settings;
+        settings.backend = "dummy";
+        gui::AudioDeviceDialog audio(*f.root, *f.dispatcher, *f.app, settings, {});
+        audio.enumerate = [] {
+            return Result<std::vector<engine::AudioDevice>>(std::vector<engine::AudioDevice>{});
+        };
+        audio.captureHeld = gui::refreshHeldBy(capture);
+        REQUIRE(audio.start());  // Refresh restarts a running engine
+        CHECK(audio.refreshBlocked().empty());
+        REQUIRE(audio.rescan());
+        CHECK(f.app->engine() != nullptr);
+        capture.service();
+        CHECK(capture.kept());  // still the app's, still refused
+        CHECK(f.app->head().version == locked);
+    }
     capture.service();
     CHECK(capture.kept());
     // Still locked: refused, nothing armed, the take still the app's.
@@ -1605,10 +1624,42 @@ TEST_CASE(
     CHECK_FALSE(f.app->captureUncommitted());
     CHECK(capture.armed());
     CHECK(capture.keptLine().empty());
+    CHECK(gui::refreshHeldBy(capture)());  // armed: Refresh would cut it short
     f.view->setCaptureKept(capture.keptLine());
     f.sync();
     CHECK_FALSE(header.stats.captureKept);
     f.exec("engine.stop", "{}");
+    CHECK(f.errors.empty());
+}
+
+TEST_CASE("launcher: a kept take's refusal is worded from its code and path") {
+    // The clip it played deleted after a refused commit (the app's kept
+    // copy: the engine's own capture drops a removed clip's launches):
+    // launch.commit at /performance/launches/N/clip, said from launch N.
+    LauncherFixture f;
+    f.song();
+    f.exec("item.add",
+           R"({"track":"tr_1","bar":1,"notation":"voice d; 1: C2:w | C2:w | C2:w | C2:w"})");
+    const std::string item = f.app->head().items.begin()->id.str();
+    f.exec("item.set", R"({"item":")" + item + R"(","locked":true})");
+    gui::CaptureControl capture(*f.app, *f.dispatcher);
+    std::vector<Error> refused;
+    capture.onError = [&](const Error& e) { refused.push_back(e); };
+    f.exec("engine.start", R"({"backend":"dummy"})");
+    captureKitA(f, capture);
+    // Kept by the app across Stop audio (its commit refused by the lock).
+    f.exec("engine.stop", "{}");
+    capture.service();
+    REQUIRE(refused.size() == 1);
+    REQUIRE(capture.kept());
+    f.exec("clip.remove", R"({"clip":"cl_1"})");
+    const Status again = capture.set(true);
+    REQUIRE_FALSE(again);
+    CHECK(again.error().code == "launch.commit");
+    const std::string line = capture.keptLine();
+    INFO(line);
+    CHECK(line.find("Its commit was refused: a clip it played was deleted.") != std::string::npos);
+    CHECK(line.find("cl_1") == std::string::npos);
     CHECK(f.errors.empty());
 }
 

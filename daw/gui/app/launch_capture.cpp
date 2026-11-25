@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <optional>
+#include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "supple/model/schemas.h"
@@ -49,6 +51,69 @@ std::string CaptureControl::takeWords(const CaptureView& v) {
            ", " + std::to_string(n) + (n == 1 ? " launch" : " launches");
 }
 
+std::string CaptureControl::refusalWords(const Error& e) {
+    const model::Session& s = app_.head();
+    const auto v = app_.launchCapture();
+    // The launch a path's index names (/performance/launches/N/...).
+    const auto launchAt = [&]() -> const engine::LaunchLogEntry* {
+        const std::string key = "/launches/";
+        const auto at = e.path.find(key);
+        if (!v || at == std::string::npos) return nullptr;
+        std::size_t n = 0, i = at + key.size();
+        if (i >= e.path.size() || e.path[i] < '0' || e.path[i] > '9') return nullptr;
+        for (; i < e.path.size() && e.path[i] >= '0' && e.path[i] <= '9'; ++i)
+            n = n * 10 + std::size_t(e.path[i] - '0');
+        return n < v->capture.launches.size() ? &v->capture.launches[n] : nullptr;
+    };
+    const auto endsWith = [&](std::string_view tail) {
+        return e.path.size() >= tail.size() &&
+               e.path.compare(e.path.size() - tail.size(), tail.size(), tail) == 0;
+    };
+    if (e.code == "item.locked") {
+        // The refusal does not say which item (path /items): the one locked
+        // item under the take on a track it launched on, when there is one.
+        std::set<model::Id> tracks;
+        if (v)
+            for (const auto& l : v->capture.launches) tracks.insert(l.track);
+        const model::Item* found = nullptr;
+        int count = 0;
+        for (const auto& entry : s.items) {
+            const model::Item& item = *entry.value;
+            if (!item.locked || !tracks.contains(item.track) || !v) continue;
+            const double start = model::itemSpan(s, item).startBeat;
+            const double end = start + model::itemLengthBeats(s, item);
+            if (end <= v->startBeat || start >= v->endBeat) continue;
+            found = &item;
+            ++count;
+        }
+        if (count == 1)
+            return "the item at bar " +
+                   std::to_string(s.timeMap->barBeat(model::itemSpan(s, *found).startBeat).bar) +
+                   " on " + views::objectName(s, found->track) + " is locked";
+        return count > 1 ? "locked items are in the way" : "a locked item is in the way";
+    }
+    if (e.code == "launch.commit") {
+        // The performance's launches are the capture's, in order.
+        const engine::LaunchLogEntry* l = launchAt();
+        if (l && endsWith("/track")) {
+            if (s.tracks.find(l->track))
+                return views::objectName(s, l->track) + " is no longer a channel";
+            return "a track it played on was deleted";
+        }
+        if (l && endsWith("/clip")) {
+            if (s.clips.find(l->clip))
+                return views::objectName(s, l->clip) + " changed after it was captured";
+            return "a clip it played was deleted";
+        }
+        return {};
+    }
+    if (e.code == "launch.commit.fade")
+        return "a piece of it would start or end inside a clip's own fade";
+    if (e.code == "clip.unsupported")
+        return "a clip it played loops only part of its content, which an item cannot";
+    return {};
+}
+
 bool CaptureControl::kept() { return !keptLine().empty(); }
 
 std::string CaptureControl::keptLine() {
@@ -61,6 +126,7 @@ std::string CaptureControl::keptLine() {
                       app_.launchCapturing(),
                       lit(),
                       warned_,
+                      refused_,
                       refusal_};
     if (keptKey_ && *keptKey_ == key) return keptLine_;
     keptKey_ = key;
@@ -73,8 +139,9 @@ std::string CaptureControl::describeKept() {
     const auto v = app_.launchCapture();
     if (!pending(v)) return {};
     std::string line = "A take is kept, not committed: " + takeWords(*v) + ".";
-    if (!refusal_.empty())
-        line += " Its commit was refused: " + refusal_ + ".";
+    if (refused_)
+        line += refusal_.empty() ? std::string(" It could not be written to the arrangement.")
+                                 : " Its commit was refused: " + refusal_ + ".";
     else if (v->endedBy == CaptureEnd::EngineStop)
         line += " The engine stopped during it.";
     else if (v->endedBy == CaptureEnd::Device)
@@ -83,12 +150,14 @@ std::string CaptureControl::describeKept() {
     return line;
 }
 
-std::string CaptureControl::lostLine() {
+std::string CaptureControl::lostLine(bool saveOffered) {
     const auto v = app_.launchCapture();
     if (!pending(v)) return {};
-    std::string line = "The launcher take (" + takeWords(*v) + ") could not be committed";
-    line += refusal_.empty() ? std::string(".") : ": " + refusal_ + ".";
-    return line + " It will be lost; Save saves the project without it.";
+    std::string line = "The launcher take (" + takeWords(*v) + ")";
+    line += refusal_.empty() ? std::string(" could not be written to the arrangement.")
+                             : " could not be committed: " + refusal_ + ".";
+    return line + (saveOffered ? " It will be lost; Save saves the project without it."
+                               : " It will be lost.");
 }
 
 std::string CaptureControl::takeKey() {
@@ -100,8 +169,9 @@ std::string CaptureControl::takeKey() {
 
 Error CaptureControl::keep(Error refusal) {
     armed_ = capturing_ = false;
+    refusal_ = refusalWords(refusal);
+    refused_ = true;
     refusal = views::objectNames(app_.head(), std::move(refusal));
-    refusal_ = refusal.message;
     refusal.message += "; the performance is kept: fix that, then click Capture to commit it";
     return refusal;
 }
@@ -135,8 +205,9 @@ Status CaptureControl::set(bool on) {
         bool dropping = false;
         if (pending(view) && (view->kept || !app_.launchCapturing())) {
             if (auto st = commit(); !st) {
+                refusal_ = refusalWords(st.error());
+                refused_ = true;
                 Error refusal = views::objectNames(app_.head(), std::move(st).error());
-                refusal_ = refusal.message;
                 if (!warned_) {
                     warned_ = true;
                     refusal.message +=
@@ -158,6 +229,7 @@ Status CaptureControl::set(bool on) {
         if (dropping) app_.dropKeptCapture();
         warned_ = false;
         refusal_.clear();
+        refused_ = false;
         replacing_ = declined && !dropping;
         armed_ = true;
         ending_ = false;
@@ -217,6 +289,7 @@ Status CaptureControl::commit() {
     auto r = run("launch.commit", json::Value::object());
     if (!r) return std::move(r).error();
     refusal_.clear();
+    refused_ = false;
     warned_ = false;
     if (const auto notice =
             views::followNotice(app_.head(), "launch.commit", json::Value::object(), *r))
@@ -246,9 +319,10 @@ void CaptureControl::service() {
             replacing_ = false;
         }
     }
-    if (!refusal_.empty() || warned_)
+    if (refused_ || warned_)
         if (!pending(app_.launchCapture())) {  // committed, dropped or replaced
             refusal_.clear();
+            refused_ = false;
             warned_ = false;
         }
     if (ending_) {

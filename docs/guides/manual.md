@@ -221,7 +221,8 @@ requested action does not continue. A launcher capture is finished the same
 way: its take is written to the timeline (one step you can undo) before the
 question. If it can't be written (a locked item is in the way, say), the
 question names the take and says it will be lost, even when nothing else
-changed; Cancel keeps it, so you can fix what it names first. A take whose
+changed; then the buttons are just the action (Quit, say) and Cancel. Cancel
+keeps the take, so you can fix what it names first. A take whose
 writing you undid is left out: you turned it down. If an agent starts another recording or
 edits the current project while that question or its Save As dialog is open,
 the app stops the new recording and asks again before saving or leaving.

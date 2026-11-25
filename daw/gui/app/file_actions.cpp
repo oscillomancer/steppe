@@ -984,9 +984,14 @@ void FileActions::showDiscard(const std::string& what, std::function<void()> the
         DiscardRequest{what, std::move(then), app_.projectGeneration(), app_.head().version,
                        app_.versions().branch(), keptTake()});
     // A take whose commit was refused: what is lost, and that Cancel keeps it.
-    const std::string lost = capture_ ? capture_->lostLine() : std::string();
-    std::string text = dirty() ? "The project has unsaved changes." : "";
+    // With nothing else unsaved there is nothing to save: the question is
+    // only whether to go on and lose it, asked with the action's own verb
+    // ("Quit", "Open", "Start", "Recover"), Cancel focused.
+    const bool unsaved = dirty();
+    const std::string lost = capture_ ? capture_->lostLine(unsaved) : std::string();
+    std::string text = unsaved ? "The project has unsaved changes." : "";
     if (!lost.empty()) text += (text.empty() ? "" : " ") + lost;
+    const std::string verb = what.substr(0, what.find_first_of(" ?"));
     auto form = std::make_unique<ui::Node>("file.confirm");
     form->layout.dir = ui::Layout::Dir::Column;
     form->layout.width = ui::SizeRule::fixed(420);
@@ -1000,36 +1005,39 @@ void FileActions::showDiscard(const std::string& what, std::function<void()> the
     row.layout.height = ui::SizeRule::fixed(28);
     row.layout.gap = 8;
     // Each button copies what it needs first: closePopup destroys the button.
-    row.emplace<ui::Button>("file.confirm.save", "Save", [this, request] {
-        auto keep = request;
-        root_.closePopup();
-        if (!revalidateDiscard(keep)) return;
-        if (app_.projectPath().empty()) {
-            // Save as first; continue after the dialog answers.
-            chooseSave([this, keep](auto paths) {
-                if (!revalidateDiscard(keep)) return;
-                saveAs(paths.front());
-                if (!dirty() && revalidateDiscard(keep)) keep->then();
-            });
-            return;
-        }
-        if (exec("project.save", json::Value::object())) {
-            markSaved();
-            if (revalidateDiscard(keep)) keep->then();
-        }
-    });
-    row.emplace<ui::Button>("file.confirm.discard", "Don't save", [this, request] {
-        auto keep = request;
-        root_.closePopup();
-        if (!revalidateDiscard(keep)) return;
-        keep->then();
-    });
-    row.emplace<ui::Button>("file.confirm.cancel", "Cancel", [this, request] {
+    if (unsaved)
+        row.emplace<ui::Button>("file.confirm.save", "Save", [this, request] {
+            auto keep = request;
+            root_.closePopup();
+            if (!revalidateDiscard(keep)) return;
+            if (app_.projectPath().empty()) {
+                // Save as first; continue after the dialog answers.
+                chooseSave([this, keep](auto paths) {
+                    if (!revalidateDiscard(keep)) return;
+                    saveAs(paths.front());
+                    if (!dirty() && revalidateDiscard(keep)) keep->then();
+                });
+                return;
+            }
+            if (exec("project.save", json::Value::object())) {
+                markSaved();
+                if (revalidateDiscard(keep)) keep->then();
+            }
+        });
+    row.emplace<ui::Button>("file.confirm.discard", unsaved ? std::string("Don't save") : verb,
+                            [this, request] {
+                                auto keep = request;
+                                root_.closePopup();
+                                if (!revalidateDiscard(keep)) return;
+                                keep->then();
+                            });
+    ui::Node* cancel = &row.emplace<ui::Button>("file.confirm.cancel", "Cancel", [this, request] {
         const auto generation = request->generation;
         root_.closePopup();
         (void)currentProject(generation);
     });
     root_.openPopup(std::move(form), {}, ui::Placement::Center);
+    if (!unsaved) root_.focus(cancel);
 }
 
 }  // namespace supple::gui

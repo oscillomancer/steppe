@@ -1287,19 +1287,39 @@ TEST_CASE(
         REQUIRE(a.root->click("file.confirm.discard"));
         CHECK(quit);
     } else {
-        // Refused: nothing written, the project still clean, the take named.
+        // Refused: nothing written, the project still clean, the take named
+        // in the dialog's words (the code and the model, not the message).
+        // Nothing to save: Quit or Cancel, Cancel focused.
         CHECK(a.app->head().version == before);
         CHECK_FALSE(files.dirty());
         CHECK(text.rfind("The launcher take (bar", 0) == 0);
-        CHECK(text.find("could not be committed: ") != std::string::npos);
-        CHECK(text.find("It will be lost; Save saves the project without it.") !=
-              std::string::npos);
+        CHECK(text.find("could not be committed: the item at bar 1 on Drums is locked. It will "
+                        "be lost.") != std::string::npos);
+        CHECK(text.find("Save") == std::string::npos);
         CHECK(text.find("unsaved changes") == std::string::npos);
         CHECK(text.find(item) == std::string::npos);        // names, never ids
         CHECK(text.find("item.set") == std::string::npos);  // never the hint
+        CHECK(a.root->find("file.confirm.save") == nullptr);
+        REQUIRE(a.root->find("file.confirm.discard"));
+        CHECK(a.root->find("file.confirm.discard")->valueText() == "Quit");
+        CHECK(a.root->focused() == a.root->find("file.confirm.cancel"));
         REQUIRE(a.root->click("file.confirm.cancel"));
         CHECK_FALSE(quit);
         CHECK(a.app->captureUncommitted());
+        // With unsaved changes too, Save / Don't save / Cancel, and the
+        // take's line says Save keeps the project without it.
+        run("track.add", R"({"type":"channel","name":"Bass"})");
+        REQUIRE(a.actions->run("ui.quit"));
+        a.root->frame(false);
+        const std::string both = a.root->find("file.confirm.text")->valueText();
+        INFO(both);
+        CHECK(both.rfind("The project has unsaved changes. The launcher take (", 0) == 0);
+        CHECK(both.find("It will be lost; Save saves the project without it.") !=
+              std::string::npos);
+        REQUIRE(a.root->find("file.confirm.save"));
+        CHECK(a.root->find("file.confirm.discard")->valueText() == "Don't save");
+        REQUIRE(a.root->click("file.confirm.cancel"));
+        CHECK_FALSE(quit);
         // Unlocked meanwhile: the next Quit commits it, and asks as usual.
         run("item.set", R"({"item":")" + item + R"(","locked":false})");
         REQUIRE(a.actions->run("ui.quit"));

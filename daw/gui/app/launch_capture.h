@@ -79,8 +79,9 @@ class CaptureControl {
     // of the commit.
     Status finalize();
     // A kept take for the question: "The launcher take (bars 3–18,
-    // 2 launches) could not be committed: …"; empty when none.
-    std::string lostLine();
+    // 2 launches) could not be committed: …. It will be lost[; Save saves
+    // the project without it]."; empty when none.
+    std::string lostLine(bool saveOffered);
     // Changes when the kept take does (another take, committed, dropped), so
     // a decision about one take is not applied to another.
     std::string takeKey();
@@ -102,6 +103,10 @@ class CaptureControl {
     void settle();
     // "bars 3–18, 2 launches", on the current time map.
     std::string takeWords(const engine::EngineApp::CaptureView& v);
+    // A commit's refusal in the pane's words, from its code and path and
+    // the model (never its message or hint): "the item at bar 1 on Drums is
+    // locked". Empty for a cause it does not know.
+    std::string refusalWords(const Error& e);
     // A refused commit: the performance is kept and the toggle goes dark.
     Error keep(Error refusal);
     Result<json::Value> run(const std::string& command, json::Value args);
@@ -113,7 +118,7 @@ class CaptureControl {
     std::string describeKept();
     struct KeptKey {
         std::uint64_t project = 0, version = 0;
-        bool engine = false, capturing = false, lit = false, warned = false;
+        bool engine = false, capturing = false, lit = false, warned = false, refused = false;
         std::string refusal;
         bool operator==(const KeptKey&) const = default;
     };
@@ -123,6 +128,7 @@ class CaptureControl {
     bool warned_ = false;
     // The kept take's last refusal, in the pane's words (empty: none).
     std::string refusal_;
+    bool refused_ = false;  // its last commit was refused (refusal_ empty: an unknown cause)
     // Armed over a declined take: said once when the new capture replaces it.
     bool replacing_ = false;
 };
