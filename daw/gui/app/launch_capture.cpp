@@ -31,6 +31,7 @@ Error CaptureControl::keep(Error refusal) {
 Status CaptureControl::set(bool on) {
     if (on ? armed_ : !lit()) return {};
     if (on) {
+        bool dropping = false;
         // A kept performance belongs to its project and its engine.
         if (kept_ != Kept::None && (!app_.engine() || app_.projectGeneration() != keptGeneration_))
             kept_ = Kept::None;
@@ -46,12 +47,16 @@ Status CaptureControl::set(bool on) {
                 return refusal;
             } else {
                 kept_ = Kept::None;  // warned: dropped, and the arming replaces it
+                dropping = true;
             }
         }
         json::Value args = json::Value::object();
         args["on"] = true;
         auto r = run("launch.capture", std::move(args));  // also cancels a pending end
         if (!r) return std::move(r).error();
+        // Dropped by the user: the app keeps no copy of it for later (an
+        // engine stop's warning, the unsaved-work question; ADR-0097).
+        if (dropping) app_.dropKeptCapture();
         armed_ = true;
         ending_ = false;
         capturing_ = app_.launchCapturing();

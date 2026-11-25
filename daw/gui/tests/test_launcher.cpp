@@ -1064,7 +1064,10 @@ TEST_CASE("launcher: a refused capture commit keeps the performance; a click com
     CHECK_FALSE(capture.kept());
     CHECK(capture.armed());
     CHECK(f.app->head().version == locked);
+    // Dropped: the app keeps no copy of it either (ADR-0097, a capture kept).
+    CHECK_FALSE(f.app->captureUncommitted());
     REQUIRE(capture.set(false));
+    CHECK(f.app->head().version == locked);
     f.exec("engine.stop", "{}");
     CHECK(f.errors.empty());
 }
