@@ -2421,9 +2421,12 @@ user can fix what the refusal names. The refusal is worded from its code
 and path and the model, never its message or hint
 (`CaptureControl::refusalWords`). Each refusal's path names the launch it
 met (`/performance/launches/N`): `item.locked` names the one locked item
-under the take on that launch's track, the take reaching past its end under
-an audio clip's fade-out still sounding there ("a locked item on Drums is in
-the way" when there are several); `launch.commit` at a launch's `/track` or
+under the take on that launch's track; when the last launch on that track
+in the take is an audio clip with a fade-out, the search reaches one period
+of it past the take's end, the most the commit clears under a fade-out
+still sounding there (it does not check that the clip still sounds, so a
+harmless item there can only make the words general, never wrong). "A
+locked item on Drums is in the way" when there are several; `launch.commit` at a launch's `/track` or
 `/clip` says the track is gone or no longer a channel, or the clip is gone
 or changed; `launch.commit.fade` and `clip.unsupported` name the launch's
 clip and track ("a piece of Kit A on Drums would start or end inside its
@@ -2477,7 +2480,8 @@ next pass, never from inside the answer, so a load after it always starts
 from the plug-in's normal load. After the new decision the load runs its
 check again: a plug-in answered "separate process" or "not loaded" is asked
 about again (by design); one answered "normally" is not, because that answer
-cleared its crash reports before the load.
+settled its crash reports before the load (they stay, but no longer make it
+a suspect).
 A save (or project template)
 that comes back with warnings (a plug-in whose state could not be read keeps
 its earlier state) opens a popup listing them. Open and Save as start in the
@@ -3593,8 +3597,8 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   the project never opens overridden (`test_app.cpp`, a rig that answers
   modes and settled reports as the engine does). A refused take's words are
   driven per launch: two locked items, a locked item on another launched
-  track, a loop window, and a locked item under a fade-out's tail
-  (`test_launcher.cpp`).
+  track, a loop window, and a locked item under a fade-out's tail, also
+  when the run's first launch is another clip (`test_launcher.cpp`).
 - The pane against the engine (step E): at every step the clips drawn dimmed
   and the scenes whose ▶ is dimmed are exactly those
   `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the

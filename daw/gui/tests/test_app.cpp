@@ -5330,11 +5330,9 @@ struct SafeLoadRig {
     std::map<std::string, std::string> modes;   // the mode each plug-in was last set to
     std::string canaryId = "com.acme.canary";   // the suspect plug-in's id (a real one for F4)
     std::vector<std::function<void()>> posted;  // the app's later passes (FileActions' post)
-    // As the engine answers project.plugins: an override's mode, and no
-    // suspect once its reports are settled. Off for the tests that model
-    // each open as a new run of the app, where overrides (which hold until
-    // the app quits) are gone and remembered choices apply again.
-    bool engineModes = true;
+    // project.plugins answers as the engine does: an override's mode (it
+    // holds until the app quits), and no suspect once its reports are
+    // settled. A test of the next run clears `modes` and `settled`.
 
     explicit SafeLoadRig(int width = 1000, int height = 640,
                          const std::filesystem::path& scratch = {})
@@ -5362,7 +5360,7 @@ struct SafeLoadRig {
                 p["name"] = "Canary";
                 // As the engine answers: the mode an override set, and no
                 // suspect once its reports are settled (a "normally" answer).
-                p["mode"] = engineModes ? mode(canaryId) : std::string("normal");
+                p["mode"] = mode(canaryId);
                 p["stock"] = stock;
                 p["bridgeable"] = bridgeable;
                 auto resolved = json::Value::object();
@@ -5376,14 +5374,14 @@ struct SafeLoadRig {
                 auto incidents = json::Value::array();
                 incidents.push_back(json::Value("aa11"));
                 suspect["incidents"] = std::move(incidents);
-                if (!engineModes || !isSettled("aa11")) p["suspect"] = std::move(suspect);
+                if (!isSettled("aa11")) p["suspect"] = std::move(suspect);
                 plugins.push_back(std::move(p));
                 if (second) {
                     auto q = json::Value::object();
                     q["format"] = "clap";
                     q["id"] = "com.acme.second";
                     q["name"] = "Second";
-                    q["mode"] = engineModes ? mode("com.acme.second") : std::string("normal");
+                    q["mode"] = mode("com.acme.second");
                     q["stock"] = false;
                     q["bridgeable"] = true;
                     auto resolved2 = json::Value::object();
@@ -5396,7 +5394,7 @@ struct SafeLoadRig {
                     auto incidents2 = json::Value::array();
                     incidents2.push_back(json::Value("bb22"));
                     suspect2["incidents"] = std::move(incidents2);
-                    if (!engineModes || !isSettled("bb22")) q["suspect"] = std::move(suspect2);
+                    if (!isSettled("bb22")) q["suspect"] = std::move(suspect2);
                     plugins.push_back(std::move(q));
                 }
             }
@@ -5753,46 +5751,44 @@ TEST_CASE("safe-load: a refused second open leaves the override in the real engi
 }
 
 TEST_CASE("safe-load: an undo sets back only what this open changed (round 6c-a F1)") {
-    // A plug-in override holds until the app quits. A later open that finds the plug-in already
-    // set the way a remembered choice says changes nothing, so a refusal of that open must not
-    // put the plug-in back on the normal load: that restarts it in process under the project that
-    // is still open and loses its unsaved state.
+    // A plug-in override holds until the app quits. An open whose answer
+    // finds the plug-in already set that way (an agent's plugin.override
+    // while the question was open) changes nothing, so a refusal of that
+    // open must not put the plug-in back on the normal load: that restarts
+    // it in process under the project that is still open and loses its
+    // unsaved state.
     SafeLoadRig r;
-    r.engineModes = false;  // each open as a new run: the remembered choice applies again
-    const gui::RememberedLoad canary{"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb",
-                                     "Acme", "1.2.0",           1};
-    r.rules = {canary};
-    r.open();  // the first open applies the remembered bridge to Canary and opens
-    REQUIRE(r.name() == "Saved");
-    REQUIRE(r.overrides.size() == 1);
-    CHECK(r.overrides[0] == std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
-    SUBCASE("a second open that is refused leaves Canary on its bridge") {
+    const auto noNormal = [&] {
+        for (const auto& o : r.overrides) CHECK(o.second != "normal");
+    };
+    SUBCASE("a refused open leaves the agent's matching override") {
         r.afterCheck = [&] {  // the file changes after the check: the open is refused
             std::ofstream out(r.file, std::ios::binary | std::ios::app);
             out << "\n";
         };
-        REQUIRE(r.a.dispatcher->execute(
-            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
-        r.open();
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        REQUIRE(r.load.override_(r.canaryId, "bridge"));  // the agent, meanwhile
+        r.pick("safeload.bridge");
+        r.a.root->frame(false);
         CHECK(r.name() == "Open now");  // refused
-        for (std::size_t i = 1; i < r.overrides.size(); ++i)
-            CHECK(r.overrides[i] ==
-                  std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
-        CHECK(r.overrides.size() == 2);  // the remembered choice was applied again, never undone
+        CHECK(r.mode(r.canaryId) == "bridge");
+        noNormal();
     }
     SUBCASE("a later override that fails leaves it there too") {
         r.second = true;
         r.failFor = "com.acme.second";
-        REQUIRE(r.a.dispatcher->execute(
-            {"project.set", json::parse(R"({"name":"Open now"})").value(), {}}));
         r.ask();
         REQUIRE(r.a.root->find("safeload"));
-        r.pick("safeload.disable");
+        REQUIRE(r.load.override_(r.canaryId, "bridge"));  // the agent, meanwhile
+        r.pick("safeload.bridge");                        // Canary
         r.a.root->frame(false);
-        CHECK(r.name() == "Open now");  // the second suspect's override was refused: no open
-        for (std::size_t i = 1; i < r.overrides.size(); ++i)
-            CHECK(r.overrides[i] ==
-                  std::pair<std::string, std::string>{"com.acme.canary", "bridge"});
+        REQUIRE(r.a.root->find("safeload"));
+        r.pick("safeload.disable");  // Second: the engine refuses it, so no open
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");
+        CHECK(r.mode(r.canaryId) == "bridge");
+        noNormal();
     }
 }
 
@@ -5830,7 +5826,6 @@ TEST_CASE("safe-load: nothing suspect, nothing asked; a stock plug-in has two ch
 TEST_CASE(
     "safe-load: remembering is for an exact build, and a new crash undoes a remembered Normal") {
     SafeLoadRig r;
-    r.engineModes = false;  // each open as a new run: the remembered choice applies again
     auto ask = [&] {
         r.files->openPath(r.file);
         r.a.root->frame(false);
@@ -5853,6 +5848,8 @@ TEST_CASE(
         CHECK(r.name() == "Saved");
         r.overrides.clear();
         r.statuses.clear();
+        r.modes.clear();  // the next run: no override in force, the reports as they were
+        r.settled.clear();
         r.open();  // again: the project asks nothing
         CHECK_FALSE(r.a.root->find("safeload"));
         REQUIRE(r.overrides.size() == 1);
