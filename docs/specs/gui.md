@@ -2379,8 +2379,8 @@ under the take on that launch's track; when the last launch on that track
 in the take is an audio clip with a fade-out, the search reaches one period
 of it past the take's end, the most the commit clears under a fade-out
 still sounding there (it does not check that the clip still sounds, so a
-harmless item there can only make the words general, never wrong). "A
-locked item on Drums is in the way" when there are several; `launch.commit` at a launch's `/track` or
+harmless item there can only make the words general, never wrong), and
+reads "a locked item on Drums is in the way" when there are several; `launch.commit` at a launch's `/track` or
 `/clip` says the track is gone or no longer a channel, or the clip is gone
 or changed; `launch.commit.fade` and `clip.unsupported` name the launch's
 clip and track ("a piece of Kit A on Drums would start or end inside its

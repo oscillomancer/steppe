@@ -5772,8 +5772,34 @@ TEST_CASE("safe-load: an undo sets back only what this open changed (round 6c-a 
         r.pick("safeload.bridge");
         r.a.root->frame(false);
         CHECK(r.name() == "Open now");  // refused
+        CHECK(r.posted.empty());        // by the file check, not waiting on a re-ask
         CHECK(r.mode(r.canaryId) == "bridge");
         noNormal();
+    }
+    SUBCASE("a refused open leaves a remembered plug-in an agent set meanwhile") {
+        // The held path: Canary's remembered bridge is applied without a
+        // question while Second is asked about; the agent sets Canary to
+        // bridge before the answer, so this open changes nothing for it.
+        r.second = true;
+        r.rules = {
+            {"clap", "com.acme.canary", "0123abcd", "bridge", "Canary Verb", "Acme", "1.2.0", 1}};
+        r.afterCheck = [&] {
+            std::ofstream out(r.file, std::ios::binary | std::ios::app);
+            out << "\n";
+        };
+        r.ask();
+        REQUIRE(r.a.root->find("safeload"));
+        CHECK(r.a.root->find("safeload.title")->valueText().find("Second Verb") !=
+              std::string::npos);
+        REQUIRE(r.load.override_(r.canaryId, "bridge"));  // the agent, meanwhile
+        r.pick("safeload.disable");                       // Second
+        r.a.root->frame(false);
+        CHECK(r.name() == "Open now");  // refused
+        CHECK(r.posted.empty());
+        CHECK(r.mode(r.canaryId) == "bridge");
+        CHECK(r.mode("com.acme.second") == "normal");  // this open's own change, set back
+        for (const auto& o : r.overrides)
+            if (o.first == r.canaryId) CHECK(o.second != "normal");
     }
     SUBCASE("a later override that fails leaves it there too") {
         r.second = true;
