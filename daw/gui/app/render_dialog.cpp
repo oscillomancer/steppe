@@ -793,6 +793,7 @@ std::vector<ui::Choice> RenderDialog::presetChoices() const {
     std::vector<Choice> presets{{"", "—"}};
     if (auto list = dispatcher_.execute({"render.preset.list", json::Value::object(), kUiOrigin}))
         for (const auto& p : (*list)["presets"].asArray()) {
+            if (p.find("damaged")) continue;  // not offered yet (round 186 F1, the dialog's step)
             const std::string name = text(p.find("name"));
             presets.push_back({name, name + (flag(p.find("factory")) ? "" : " (yours)")});
         }
@@ -1696,7 +1697,7 @@ Status RenderDialog::loadPreset(const std::string& name) {
     auto list = dispatcher_.execute({"render.preset.list", json::Value::object(), kUiOrigin});
     if (!list) return std::move(list).error();
     for (const auto& p : (*list)["presets"].asArray())
-        if (text(p.find("name")) == name) {
+        if (text(p.find("name")) == name && p.find("settings")) {  // a damaged one has none
             json::Value args = *p.find("settings");
             if (!args.size()) args["source"] = text(settings_.find("source"), "mix");
             // A preset the settings refuse (a file edited by hand) is not

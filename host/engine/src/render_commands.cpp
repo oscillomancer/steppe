@@ -2115,6 +2115,13 @@ Status presetTarget(const std::optional<std::string>& name, bool isDefault) {
 json::Value presetJson(const RenderPreset& preset) {
     json::Value out = json::Value::object();
     out["name"] = preset.name;
+    if (preset.damaged) {  // {name, damaged: {code, path}} (round 186 F1)
+        json::Value damaged = json::Value::object();
+        damaged["code"] = preset.damaged->code;
+        damaged["path"] = preset.damaged->path;
+        out["damaged"] = std::move(damaged);
+        return out;
+    }
     out["factory"] = preset.factory;
     out["settings"] = rs::toJson(preset.settings);
     return out;
@@ -2173,11 +2180,13 @@ void registerSettingsCommands(cmd::Registry& registry) {
         c.summary = "Render presets, factory then user's, with settings.";
         c.description =
             "default: the user's render default, or null. Presets live in the user's data "
-            "folder (render-presets/), shared by every project.";
+            "folder (render-presets/), shared by every project. A user preset that cannot "
+            "be read is {name, damaged: {code, path}}, as render.preset.load answers it; "
+            "render.preset.delete removes it.";
         c.tags = {"render"};
         c.args = schema::object<cmd::NoArgs>("no_args").build();
         c.result = schema::any();
-        c.errors = presetErrors(true, false);  // the render default; a damaged preset is left out
+        c.errors = presetErrors(true, false);  // the render default; a damaged preset is listed
         c.errors.erase(c.errors.begin());      // no name to give
         c.examples = {{"List", obj("{}"), obj(R"({"presets":"<any>","default":null})"), "empty"}};
         c.run = [](const cmd::NoArgs&, Context& ctx) -> Result<json::Value> {
@@ -2291,6 +2300,9 @@ void registerSettingsCommands(cmd::Registry& registry) {
         c.kind = Kind::Action;
         c.exposure = cmd::Exposure::McpExec;
         c.summary = "Delete one of the user's render presets, or the user's render default.";
+        c.description =
+            "It never reads the file, so a damaged preset (render.preset.list: damaged) is "
+            "removed too.";
         c.tags = {"render"};
         c.args = schema::object<PresetNameArgs>("render_preset_delete_args")
                      .field("name", &PresetNameArgs::name, nameField())

@@ -233,7 +233,7 @@ Result<std::optional<rs::Settings>> loadRenderDefault(const EngineApp& app) {
 std::vector<RenderPreset> factoryRenderPresets() {
     std::vector<RenderPreset> list;
     auto add = [&](std::string name, rs::Settings s) {
-        list.push_back({std::move(name), true, std::move(s)});
+        list.push_back({std::move(name), true, std::move(s), std::nullopt});
     };
     {
         rs::Settings s;
@@ -332,8 +332,16 @@ Result<std::vector<RenderPreset>> listRenderPresets(const EngineApp& app) {
         const std::string name = entry.path().stem().string();
         if (!validPresetName(name) || isFactory(name)) continue;
         auto settings = readPreset(entry.path());
-        if (!settings) continue;  // a damaged file is left out, not fatal
-        user.push_back({name, false, std::move(*settings)});
+        if (!settings) {
+            // Listed with its error, so a client can show it and delete it
+            // (render.preset.delete never reads the file). The path is the
+            // one render.preset.load {name} answers, after the bus's /args.
+            auto error = std::move(settings).error();
+            markRead(error, "/args/name");
+            user.push_back({name, false, {}, std::move(error)});
+            continue;
+        }
+        user.push_back({name, false, std::move(*settings), std::nullopt});
     }
     std::sort(user.begin(), user.end(),
               [](const RenderPreset& a, const RenderPreset& b) { return a.name < b.name; });
@@ -366,6 +374,8 @@ Status deleteRenderPreset(const EngineApp& app, const std::optional<std::string>
                          "delete one of your own presets (render.preset.list)");
         SUPPLE_TRY(validPresetName(*name));
     }
+    // The file is never read, so a damaged preset is removed as any other
+    // (round 186 F1).
     const fs::path path = presetPath(app, name);
     std::error_code ec;
     if (fs::remove(path, ec)) return okStatus();

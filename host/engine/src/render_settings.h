@@ -55,8 +55,13 @@ struct RenderPreset {
     std::string name;
     bool factory = false;
     rs::Settings settings;
+    // A user preset whose file cannot be read: the error reading it, its
+    // path under /args/name as render.preset.load {name} answers it (round
+    // 186 F1). `settings` is then empty.
+    std::optional<Error> damaged;
 };
-// Factory presets (compiled in, read-only), then the user's, by name.
+// Factory presets (compiled in, read-only), then the user's, by name. A
+// damaged user preset is listed with `damaged` set, never left out.
 Result<std::vector<RenderPreset>> listRenderPresets(const EngineApp& app);
 std::vector<RenderPreset> factoryRenderPresets();
 // Removes what never belongs in a preset: stems.tracks, matrix, custom bounds.
