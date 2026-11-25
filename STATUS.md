@@ -367,9 +367,9 @@ instructions are in `docs/guides/installing.md`.
       of the track's clip chains;
     - a capture is kept across an engine stop, a device restart and a
       device failure (ended there if running) and stays committable;
-      quitting the app or replacing the project with one uncommitted
-      loses it (the GUI's unsaved-work dialog does not count it yet; a
-      headless app has none); a newer capture
+      in the GUI, quitting or replacing the project commits it first, and
+      asks about a take whose commit is refused; a headless app quitting or
+      replacing the project with one uncommitted loses it; a newer capture
       replaces it once it begins, with a warning (ADR-0097, revision
       2026-11-24); an undo of its commit makes it uncommitted again (the
       GUI treats that take as declined: it is not committed again, and a

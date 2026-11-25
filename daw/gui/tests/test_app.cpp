@@ -33,6 +33,7 @@
 #include "floating_panel.h"
 #include "help_actions.h"
 #include "history_panel.h"
+#include "launch_capture.h"
 #include "learn_dialog.h"
 #include "mixer.h"
 #include "mouse_dialog.h"
@@ -1219,6 +1220,152 @@ TEST_CASE("file actions: changed versions and branches renew the discard decisio
     a.root->frame(false);
     REQUIRE(a.root->click("file.confirm.discard"));
     CHECK(continued);
+}
+
+TEST_CASE(
+    "file actions: Quit commits the launcher's take; a refused one is named, Cancel keeps it") {
+    // The unsaved-work question finalizes a launcher capture as Stop does a
+    // recording: committed, one undo step, then the usual question. Only a
+    // take whose commit is refused is named (what is lost), even on a clean
+    // project; a take whose commit the user undid is declined, not counted.
+    App a;
+    REQUIRE(a.ok);
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    gui::CaptureControl capture(*a.app, *a.dispatcher);
+    files.setCapture(&capture);
+    bool quit = false;
+    files.registerQuit([&] { quit = true; });
+    auto run = [&](const std::string& command, const std::string& args) {
+        auto r = a.dispatcher->execute({command, json::parse(args).value(), {}});
+        INFO(command << ": " << (r ? std::string() : r.error().toString()));
+        REQUIRE(r);
+        return *r;
+    };
+    run("track.add", R"({"type":"channel","name":"Drums"})");
+    run("scene.add", R"({"name":"Intro"})");
+    run("clip.add",
+        R"({"track":"tr_1","scene":"sc_1","notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    run("item.add",
+        R"({"track":"tr_1","bar":1,"notation":"voice d; 1: C2:w | C2:w | C2:w | C2:w"})");
+    const std::string item = a.app->head().items.begin()->id.str();
+    const bool locked = [&] {
+        bool lock = false;
+        SUBCASE("committed") {}
+        SUBCASE("refused") { lock = true; }
+        return lock;
+    }();
+    if (locked) run("item.set", R"({"item":")" + item + R"(","locked":true})");
+    files.saveAs(a.dir / "capture");
+    REQUIRE_FALSE(files.dirty());
+    run("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    run("launch.clip", R"({"clip":"cl_1"})");
+    // A beat of it heard (the bound only stops an engine that never runs).
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        a.app->tick();
+        capture.service();
+        const auto c = a.app->launchCapture();
+        if (c && !c->capture.launches.empty() && c->capture.frames > 48000) break;
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const std::uint64_t before = a.app->head().version;
+    REQUIRE(a.actions->run("ui.quit"));
+    CHECK_FALSE(quit);
+    CHECK_FALSE(capture.lit());
+    a.root->frame(false);
+    REQUIRE(a.root->find("file.confirm"));
+    const std::string text = a.root->find("file.confirm.text")->valueText();
+    INFO(text);
+    if (!locked) {
+        // Committed before the question, which is the usual one.
+        CHECK(a.app->head().version == before + 1);
+        CHECK_FALSE(a.app->captureUncommitted());
+        CHECK(text == "The project has unsaved changes.");
+        REQUIRE(a.root->click("file.confirm.discard"));
+        CHECK(quit);
+    } else {
+        // Refused: nothing written, the project still clean, the take named.
+        CHECK(a.app->head().version == before);
+        CHECK_FALSE(files.dirty());
+        CHECK(text.rfind("The launcher take (bar", 0) == 0);
+        CHECK(text.find("could not be committed: ") != std::string::npos);
+        CHECK(text.find("It will be lost; Save saves the project without it.") !=
+              std::string::npos);
+        CHECK(text.find("unsaved changes") == std::string::npos);
+        CHECK(text.find(item) == std::string::npos);        // names, never ids
+        CHECK(text.find("item.set") == std::string::npos);  // never the hint
+        REQUIRE(a.root->click("file.confirm.cancel"));
+        CHECK_FALSE(quit);
+        CHECK(a.app->captureUncommitted());
+        // Unlocked meanwhile: the next Quit commits it, and asks as usual.
+        run("item.set", R"({"item":")" + item + R"(","locked":false})");
+        REQUIRE(a.actions->run("ui.quit"));
+        a.root->frame(false);
+        CHECK_FALSE(a.app->captureUncommitted());
+        CHECK(a.root->find("file.confirm.text")->valueText() == "The project has unsaved changes.");
+        REQUIRE(a.root->click("file.confirm.discard"));
+        CHECK(quit);
+    }
+    run("engine.stop", "{}");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
+}
+
+TEST_CASE("file actions: a take whose commit was undone is not counted by Quit") {
+    App a;
+    REQUIRE(a.ok);
+    gui::FileActions files(*a.root, *a.actions, *a.dispatcher, *a.app, a.ui, a.window->sdl(),
+                           [](auto task) { task(); });
+    gui::CaptureControl capture(*a.app, *a.dispatcher);
+    files.setCapture(&capture);
+    bool quit = false;
+    files.registerQuit([&] { quit = true; });
+    auto run = [&](const std::string& command, const std::string& args) {
+        auto r = a.dispatcher->execute({command, json::parse(args).value(), {}});
+        INFO(command << ": " << (r ? std::string() : r.error().toString()));
+        REQUIRE(r);
+        return *r;
+    };
+    run("track.add", R"({"type":"channel","name":"Drums"})");
+    run("scene.add", R"({"name":"Intro"})");
+    run("clip.add",
+        R"({"track":"tr_1","scene":"sc_1","notation":"voice d; 1: C2:q D2:q C2:q D2:q"})");
+    files.saveAs(a.dir / "declined");
+    run("engine.start", R"({"backend":"dummy"})");
+    REQUIRE(capture.set(true));
+    run("launch.clip", R"({"clip":"cl_1"})");
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        a.app->tick();
+        capture.service();
+        const auto c = a.app->launchCapture();
+        if (c && !c->capture.launches.empty() && c->capture.frames > 48000) break;
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(capture.set(false));
+    while (capture.lit()) {  // its quantized end, then the commit
+        a.app->tick();
+        capture.service();
+        REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::minutes(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    run("transport.stop", "{}");
+    REQUIRE_FALSE(a.app->captureUncommitted());  // committed by the toggle's end
+    run("history.undo", "{}");
+    REQUIRE(a.app->launchCapture()->commit == engine::EngineApp::CaptureCommit::Undone);
+    // Saved as undone: only the declined take could make Quit ask.
+    files.saveAs(a.dir / "declined");
+    REQUIRE(a.app->launchCapture()->commit == engine::EngineApp::CaptureCommit::Undone);
+    REQUIRE_FALSE(files.dirty());
+    const std::uint64_t undone = a.app->head().version;
+    REQUIRE(a.actions->run("ui.quit"));
+    CHECK(quit);  // no question: the project is clean and the take declined
+    CHECK(a.app->head().version == undone);
+    run("engine.stop", "{}");
+    a.root->setContent(std::make_unique<ui::Node>("detached"));
 }
 
 TEST_CASE("file actions: registered Quit shares the popup and prompt policy") {

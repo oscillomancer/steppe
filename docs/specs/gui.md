@@ -2358,6 +2358,19 @@ save / Cancel before unsaved changes are lost. Before New, Open or Quit checks
 for unsaved changes, active recording is stopped through `transport.stop`:
 recorded takes become an undoable version, then the normal prompt runs. If
 Stop fails, the error is shown and the requested action does not continue.
+The launcher's capture is finalized the same way, before the same checks
+(`CaptureControl::finalize`, the one place a question could replace the
+commit): a running or ending capture ends now and its take is committed,
+one undo step, as turning Capture off does; so is a take the app kept
+across an engine stop or a device restart. The normal prompt then covers
+it. When that commit is refused, the take is kept and the prompt asks even
+for a clean project, naming it in the GUI's own words: "The launcher take
+(bars 3–18, 2 launches) could not be committed: a locked item is in the
+way. It will be lost; Save saves the project without it." Cancel keeps it,
+so the user can fix what the refusal names. A take whose commit the user
+undid is declined: neither committed nor counted. The decision also
+records the kept take (`CaptureControl::takeKey`), and a different one
+asks again.
 **Save with undo history** (`ui.file.save_history`, after Save as…) saves
 with `project.save {history: true}` (ADR-0076): in place, or, for a project
 without a file, where the save dialog says. A refusal shows the command's
@@ -2369,9 +2382,10 @@ arrange view are told apart the same way. An imported MIDI item plays through
 its channel's instrument, so a new track needs one before it is heard.
 File > Quit, its shortcut (Cmd+Q on macOS), SDL quit and main-window close
 all dispatch the same `ui.quit` action. An open popup only gates interactive
-Quit when recording or unsaved changes require a decision; a clean, idle
-project can quit immediately. Hidden/finite runs still stop recording, even
-though they suppress the prompt and ignore the popup gate.
+Quit when recording, a lit or kept capture, or unsaved changes require a
+decision; a clean, idle project can quit immediately. Hidden/finite runs
+still stop recording and commit the capture, even though they suppress the
+prompt and ignore the popup gate.
 Discard decisions belong to the project generation that opened the prompt.
 Every button, including Cancel, checks that generation before stopping recording,
 saving or continuing. If the project was replaced, the old request is cancelled
@@ -3483,7 +3497,10 @@ and the inspector's, the piano roll's and `edit.delete`'s in their suites).
   unlocking a click commits the kept take, then arms. A take whose commit
   was undone is not shown kept; a click arms without committing it, and the
   status line says once that it was replaced when the new capture hears a
-  frame (`test_launcher.cpp`).
+  frame (`test_launcher.cpp`). Quit commits a launcher take before the
+  usual question; a refused one is named on a clean project, Cancel keeps
+  it, and after unlocking Quit commits it; a take whose commit was undone is
+  not counted (`test_app.cpp`).
 - The pane against the engine (step E): at every step the clips drawn dimmed
   and the scenes whose ▶ is dimmed are exactly those
   `EngineApp::launchRefusal` and `sceneLaunchRefusal` refuse, by the code the

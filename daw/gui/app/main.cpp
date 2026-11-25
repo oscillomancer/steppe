@@ -522,6 +522,8 @@ int frontendMain(int argc, char** argv) {
     appActions.addUi("ui.inspector", "View: inspector", [&side] { side.toggle("inspector"); });
     gui::FileActions fileActions(root, appActions, dispatcher, **app, uiState, (*window)->sdl(),
                                  [&](std::function<void()> f) { loop.post(std::move(f)); });
+    // The unsaved-work question finalizes and counts the launcher's take.
+    fileActions.setCapture(&shell.capture());
     fileActions.registerQuit([&] { quit = true; }, !o.offscreen && o.frames <= 0);
     // Unsaved projects earlier runs left behind: offered, never opened unasked
     // (ADR-0078).

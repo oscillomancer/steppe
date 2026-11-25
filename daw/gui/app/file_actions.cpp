@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <memory>
 
+#include "launch_capture.h"
 #include "safe_load.h"
 #include "supple/gui/process.h"
 #include "supple/product.h"
@@ -224,7 +225,8 @@ FileActions::FileActions(ui::Root& root, AppActions& actions, cmd::Dispatcher& d
 void FileActions::registerQuit(std::function<void()> quit, bool prompt) {
     actions_.addUi("ui.quit", "File: quit", [this, quit = std::move(quit), prompt] {
         // A popup only holds interactive quits that may need a discard decision.
-        const bool idle = !(app_.engine() && app_.engine()->recording()) && !dirty();
+        const bool idle = !(app_.engine() && app_.engine()->recording()) && !dirty() &&
+                          !(capture_ && (capture_->lit() || capture_->kept()));
         if (!prompt || idle || !root_.popupOpen()) confirmDiscard("Quit?", quit, prompt);
     });
 }
@@ -939,15 +941,30 @@ struct FileActions::DiscardRequest {
     std::function<void()> then;
     std::uint64_t generation, version;
     std::string branch;
+    std::string take;  // the kept take it was asked about (CaptureControl::takeKey)
 };
+
+bool FileActions::finalize() {
+    // Recording is not a version until Stop commits its takes, nor a launcher
+    // capture until its commit (one undo step, as the toggle's off). Decide
+    // whether anything would be lost only after them; a refused commit keeps
+    // the take, which the question then names.
+    if (app_.engine() && app_.engine()->recording() &&
+        !exec("transport.stop", json::Value::object()))
+        return false;
+    if (capture_) (void)capture_->finalize();
+    return true;
+}
+
+std::string FileActions::keptTake() { return capture_ ? capture_->takeKey() : std::string(); }
 
 bool FileActions::revalidateDiscard(const std::shared_ptr<DiscardRequest>& request) {
     // A stale request must not even stop recording in the replacement project.
     if (!currentProject(request->generation)) return false;
     const bool recording = app_.engine() && app_.engine()->recording();
-    if (recording && !exec("transport.stop", json::Value::object())) return false;
+    if (!finalize()) return false;
     if (recording || app_.head().version != request->version ||
-        app_.versions().branch() != request->branch) {
+        app_.versions().branch() != request->branch || keptTake() != request->take) {
         // The old decision did not cover these takes/edits. Ask even if an
         // intervening save made this revision clean, or capture was empty.
         showDiscard(request->what, request->then);
@@ -957,28 +974,27 @@ bool FileActions::revalidateDiscard(const std::shared_ptr<DiscardRequest>& reque
 }
 
 void FileActions::confirmDiscard(const std::string& what, std::function<void()> then, bool prompt) {
-    // Recording is not a version until Stop commits its takes. Decide whether
-    // anything would be lost only after the same command as the Stop button.
-    if (app_.engine() && app_.engine()->recording() &&
-        !exec("transport.stop", json::Value::object()))
-        return;
-    if (!prompt || !dirty()) return then();
+    if (!finalize()) return;
+    if (!prompt || (!dirty() && keptTake().empty())) return then();
     showDiscard(what, std::move(then));
 }
 
 void FileActions::showDiscard(const std::string& what, std::function<void()> then) {
     auto request = std::make_shared<DiscardRequest>(
         DiscardRequest{what, std::move(then), app_.projectGeneration(), app_.head().version,
-                       app_.versions().branch()});
+                       app_.versions().branch(), keptTake()});
+    // A take whose commit was refused: what is lost, and that Cancel keeps it.
+    const std::string lost = capture_ ? capture_->lostLine() : std::string();
+    std::string text = dirty() ? "The project has unsaved changes." : "";
+    if (!lost.empty()) text += (text.empty() ? "" : " ") + lost;
     auto form = std::make_unique<ui::Node>("file.confirm");
     form->layout.dir = ui::Layout::Dir::Column;
     form->layout.width = ui::SizeRule::fixed(420);
-    form->layout.height = ui::SizeRule::fixed(130);
+    form->layout.height = ui::SizeRule::fixed(lost.empty() ? 130 : 160);
     form->layout.padding = ui::Insets::all(14);
     form->layout.gap = 10;
     form->emplace<ui::Label>("file.confirm.title", what, ui::Font::UiBold, "body");
-    form->emplace<ui::TextBlock>("file.confirm.text", "The project has unsaved changes.",
-                                 ui::Font::Ui, "small", "ink-quiet");
+    form->emplace<ui::TextBlock>("file.confirm.text", text, ui::Font::Ui, "small", "ink-quiet");
     auto& row = form->emplace<ui::Node>("file.confirm.buttons");
     row.layout.dir = ui::Layout::Dir::Row;
     row.layout.height = ui::SizeRule::fixed(28);
