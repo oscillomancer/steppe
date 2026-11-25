@@ -15,6 +15,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <set>
 #include <thread>
 #include "test_support.h"
 
@@ -562,91 +564,63 @@ TEST_CASE("the render dialog: the launcher's Start and End are checked as one ra
     f.render->close();
 }
 
+TEST_CASE("the render dialog: every not-as-heard reason has the dialog's words") {
+    // engine.md §3.1's table of reasons: each reads in words, never as its
+    // code (the fallback for one the dialog does not know); given and
+    // from_launcher say nothing on the line.
+    using End = engine::EngineApp::CaptureEnd;
+    for (const char* reason :
+         {"began_mid_run", "edited_during", "playrate_changed", "live_input", "dropout",
+          "launch_unlogged", "plugin_failed", "ended_by_engine", "other_version"}) {
+        INFO(reason);
+        std::string asCode = reason;
+        std::replace(asCode.begin(), asCode.end(), '_', ' ');
+        const std::string words = gui::RenderDialog::reasonWords(reason, End::None);
+        CHECK_FALSE(words.empty());
+        CHECK(words != asCode);
+    }
+    CHECK(gui::RenderDialog::reasonWords("launch_unlogged", End::None).find("Restart audio") !=
+          std::string::npos);
+    CHECK(gui::RenderDialog::reasonWords("given", End::None).empty());
+    CHECK(gui::RenderDialog::reasonWords("from_launcher", End::None).empty());
+    CHECK(gui::RenderDialog::reasonWords("something_new", End::None) == "something new");
+}
+
 TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
     // Round 175 F3 (the audio device dialog's rule): from the code and the
     // path only; never the message, the hint, a path or a command name. The
-    // codes are those the render commands and the offline render return
-    // (render_commands.cpp, render_performance.cpp, render_chain.cpp,
-    // render_settings.cpp, offline.cpp; render.mix declares none in the
-    // registry). One the dialog does not know reads one plain sentence, and
-    // the full error goes to the log.
+    // codes are those the render commands declare in the registry (engine.md
+    // §3), and what reaches the dialog from elsewhere (below). One the
+    // dialog does not know reads one plain sentence, and the full error goes
+    // to the log.
     Fixture f;
     if (!f.ok) return;
     std::vector<std::string> logged;
     f.render->onLog = [&](const std::string& line) { logged.push_back(line); };
     const char* text = "engine text";
     const char* hint = "a hint for command callers";
-    const std::vector<std::pair<std::string, std::string>> codes{
-        {"launch.capture", "/performance"},
-        {"render.performance.sample_rate", "/performance/sample_rate"},
-        {"render.loop", "/performance/loop"},
-        {"render.performance.too_many", "/performance/launches"},
-        {"render.performance.launches", "/performance/launches/2/frame"},
-        {"render.performance.no_clip", "/performance/launches/2/clip"},
-        {"render.performance.clip_track", "/performance/launches/2/clip"},
-        {"track.unknown", "/performance/launches/1/track"},
-        {"track.frozen", "/performance/launches/1/clip"},
-        {"launch.playrate", "/performance/launches/1/clip"},
-        {"launch.memory", "/performance/launches/1/clip"},
-        {"clip.unknown", "/performance/launches/1/clip"},
-        {"cl.unknown", "/performance/launches/1/clip"},  // the resolver's, by id kind
-        {"tr.unknown", "/performance/launches/1/track"},
-        {"render.not_as_heard", "/performance"},
-        {"render.empty", "/performance/end_beat"},
-        {"render.empty", "/performance/frames"},
-        {"render.empty", "/end_beat"},
-        {"render.empty", "/bounds"},
-        {"render.empty", "/tracks"},
-        {"render.empty", ""},
-        {"render.args", "/seamless_loop"},
-        {"render.args", "/trim"},
-        {"render.args", "/handles_s"},
-        {"render.args", "/limit_true_peak_db"},
-        {"render.args", "/performance"},
-        {"render.args", "/start_beat"},
-        {"render.args", "/end_beat"},
-        {"render.args", "/sample_rate"},
-        {"render.path", "/pattern"},
-        {"render.pattern", "/pattern"},
-        {"render.exists", "/if_exists"},
-        {"render.normalize", "/normalize"},
-        {"render.normalize", "/limit_true_peak_db"},
-        {"render.format", "/outputs"},
-        {"render.secondary", "/secondary"},
-        {"render.budget", "/end_beat"},
-        {"render.source", "/version"},
-        {"render.masters", "/masters"},
-        {"render.stale_target", ""},
-        {"region.unknown", "/regions/0"},
-        {"track.strip_type", "/tracks/0"},
-        {"history.version", "/version"},
-        {"branch.unknown", "/branch"},
-        {"render.preset_unknown", "/name"},
-        {"render.preset_factory", "/name"},
-        {"render.preset_name", "/name"},
-        {"render.preset_write", ""},
-        {"render.queue_unknown", "/id"},
-        {"render.queue_empty", ""},
-        {"job.cancelled", ""},
-        {"engine.media_missing", ""},
-        {"engine.media_changed", ""},
-        {"engine.media_too_long", ""},
-        {"engine.blob_missing", ""},
-        {"engine.bridge_failed", ""},
-        {"engine.fx_failed", ""},
-        {"engine.patch_unpatchable", ""},
-        {"engine.start_failed", ""},
-        {"engine.process_error", ""},
-        {"file.write", ""},
-        {"file.open", ""},
-        {"file.sync", ""},
-        {"audio.write", ""},
-        {"audio.encode", ""},
-        {"engine.too_long", ""},
-        {"engine.range", ""},
-        {"engine.tail", ""},
+    // The paths a code is answered at, where its words go by path (one code,
+    // several causes); any other code is checked at no path.
+    const std::map<std::string, std::vector<std::string>> paths{
+        {"render.empty",
+         {"", "/end_beat", "/bounds", "/tracks", "/performance/end_beat", "/performance/frames"}},
+        {"render.args",
+         {"", "/seamless_loop", "/trim", "/handles_s", "/limit_true_peak_db", "/start_beat",
+          "/end_beat", "/performance"}},
+        {"render.normalize", {"", "/limit_true_peak_db"}},
+        {"render.performance.launches",
+         {"/performance/launches/2/frame", "/performance/launches/2/clip"}},
+        {"render.performance.no_clip", {"/performance/launches/2/clip"}},
+        {"render.performance.clip_track", {"/performance/launches/2/clip"}},
+        {"clip.unknown", {"/performance/launches/1/clip"}},
+        {"track.frozen", {"/performance/launches/1/clip"}},
+        {"launch.playrate", {"/performance/launches/1/clip"}},
+        {"launch.memory", {"/performance/launches/1/clip"}},
+        {"track.unknown", {"", "/performance/launches/1/track"}},
+        {"launch.capture", {"/performance"}},
+        {"render.loop", {"/performance/loop"}},
     };
-    for (const auto& [code, path] : codes) {
+    const auto check = [&](const std::string& code, const std::string& path) {
         INFO(code << " at " << path);
         const std::string words = f.render->refusalWords(Error(code, text, "/args" + path, hint));
         CHECK_FALSE(words.empty());
@@ -659,6 +633,56 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         CHECK(words.find("/args") == std::string::npos);
         if (!path.empty()) CHECK(words.find(path) == std::string::npos);
         CHECK(words != "The render could not be made.");  // each one known
+    };
+    std::set<std::string> declared;
+    for (const char* name : {"render.mix", "render.stems", "render.regions", "render.dry-run"}) {
+        const cmd::CommandInfo* command = f.registry.find(name);
+        REQUIRE(command);
+        CHECK_FALSE(command->errors.empty());
+        for (const cmd::ErrorSpec& e : command->errors) declared.insert(e.code);
+    }
+    for (const std::string& code : declared) {
+        const auto at = paths.find(code);
+        for (const std::string& path :
+             at == paths.end() ? std::vector<std::string>{""} : at->second)
+            check(code, path);
+    }
+    // The path table names declared codes only, so it cannot go stale.
+    for (const auto& [code, unused] : paths) {
+        INFO(code);
+        CHECK(declared.count(code) == 1);
+    }
+    // Not declared by the render commands, and still the dialog's to word:
+    // the offline pass and the file writers behind a job (render.job.get),
+    // the id resolver's own codes, and the other commands the dialog calls
+    // (presets, the queue, a branch).
+    for (const auto& [code, path] : std::vector<std::pair<std::string, std::string>>{
+             {"engine.media_missing", ""},
+             {"engine.media_changed", ""},
+             {"engine.media_too_long", ""},
+             {"engine.blob_missing", ""},
+             {"engine.bridge_failed", ""},
+             {"engine.fx_failed", ""},
+             {"engine.patch_unpatchable", ""},
+             {"engine.process_error", ""},
+             {"engine.range", ""},
+             {"file.write", ""},
+             {"file.open", ""},
+             {"file.sync", ""},
+             {"audio.write", ""},
+             {"audio.encode", ""},
+             {"cl.unknown", "/performance/launches/1/clip"},
+             {"tr.unknown", "/performance/launches/1/track"},
+             {"render.preset_unknown", ""},
+             {"render.preset_factory", ""},
+             {"render.preset_name", ""},
+             {"render.preset_write", ""},
+             {"render.queue_unknown", ""},
+             {"render.queue_empty", ""},
+             {"branch.unknown", ""},
+         }) {
+        CHECK(declared.count(code) == 0);  // once declared, the walk above has it
+        check(code, path);
     }
     CHECK(logged.empty());
     // A clip of another track is not "out of order", and the words say what

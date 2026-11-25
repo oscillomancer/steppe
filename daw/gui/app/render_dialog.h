@@ -148,6 +148,10 @@ class RenderDialog {
     // (gui.*) are already its words.
     std::string refusalWords(const Error& e,
                              std::string_view fallback = "The render could not be made.") const;
+    // A not-as-heard reason (engine.md §3.1) in the as-heard line's words;
+    // "" for given and from_launcher; an unknown one as its code in words.
+    static std::string reasonWords(const std::string& reason,
+                                   engine::EngineApp::CaptureEnd endedBy);
     // The "Open folder when done" preference.
     std::function<bool()> openFolderWhenDone;
     std::function<void(bool)> setOpenFolderWhenDone;

@@ -148,6 +148,11 @@ std::string notHeardWord(const std::string& reason, engine::EngineApp::CaptureEn
     if (reason == "live_input") return "live input was heard";
     if (reason == "dropout") return "audio dropped out during it";
     if (reason == "plugin_failed") return "a plug-in failed before or during it";
+    // A launch ack lost to a full ring: the log misses a launch that was
+    // heard, for this capture and every later one until the engine restarts.
+    if (reason == "launch_unlogged")
+        return "a launch was lost from the log since the audio started (Restart audio starts "
+               "clean)";
     if (reason == "ended_by_engine")
         return endedBy == engine::EngineApp::CaptureEnd::Device
                    ? "the audio device restarted during it"
@@ -2242,6 +2247,11 @@ void RenderDialog::defaultLauncherRange() {
     }
     launcherStart_ = start;
     launcherEnd_ = tm.beatOfBar(lastBar);
+}
+
+std::string RenderDialog::reasonWords(const std::string& reason,
+                                      engine::EngineApp::CaptureEnd endedBy) {
+    return notHeardWord(reason, endedBy);
 }
 
 std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback) const {

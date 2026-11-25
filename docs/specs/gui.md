@@ -2275,7 +2275,9 @@ project is drawn in the quiet ink, with "from your default" on hover.
       words (the capture began while playing; the session or a clip it
       played changed during it, an edit or a clip's return to the
       arrangement; the playback rate changed during it; live input was heard;
-      audio dropped out during it; a plug-in failed before or during it; the engine
+      audio dropped out during it; a plug-in failed before or during it; a
+      launch was lost from the log since the audio started (Restart audio
+      starts clean), `launch_unlogged`; the engine
       stopped, or the audio device restarted, during it, from the capture's
       `endedBy`; an unknown reason as its code in words). After a render
       the results start with the same line, from the render's own result,
