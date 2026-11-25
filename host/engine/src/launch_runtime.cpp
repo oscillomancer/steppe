@@ -766,6 +766,26 @@ void Engine::serviceLaunches() {
     for (auto* ring : {rendererLaunchAcks_.get(), callbackLaunchAcks_.get()}) {
         LaunchAck ack;
         while (ring->pop(ack)) {
+            if (ack.returned) {  // where the executor really returned the track
+                LaunchLogEntry r;
+                r.runningFrame = ack.stream;
+                r.track = {model::Kind::Track, static_cast<std::uint32_t>(ack.track)};
+                r.action = LaunchLogEntry::Action::Arrangement;
+                if (ack.clip != 0)
+                    r.clip = {model::Kind::Clip, static_cast<std::uint32_t>(ack.clip)};
+                r.epoch = ack.epoch;
+                LaunchClock clock;
+                r.songFrame = launchClock(clock) && clock.epoch == ack.epoch
+                                  ? unitySongBase(clock) + ack.stream
+                                  : -1;
+                const bool seen = std::any_of(ackedReturns_.begin(), ackedReturns_.end(),
+                                              [&](const LaunchLogEntry& e) {
+                                                  return e.track == r.track && e.epoch == r.epoch &&
+                                                         e.runningFrame == r.runningFrame;
+                                              });
+                if (!seen) ackedReturns_.push_back(r);
+                continue;
+            }
             added = true;
             LaunchLogEntry e;
             e.runningFrame = ack.stream;
@@ -1560,6 +1580,27 @@ void Engine::judgeUnseenReturns(const detail::Plan& next) {
         if (capture_.on && !capture_.pending && !capture_.closed) capture_.facts.uncertain = true;
         return true;
     });
+}
+
+void Engine::ackReturns(detail::Plan& next, int liveClass, bool renderer, std::uint64_t epoch,
+                        std::int64_t stream) SUPPLE_RT {
+    bool any = false;
+    for (detail::Node& n : next.nodes) {
+        if (!n.launchReturned || (liveClass >= 0 && n.live != (liveClass == 1))) continue;
+        n.launchReturned = false;
+        LaunchAck ack;
+        ack.track = n.id.n;
+        ack.clip = n.launchReturnedClip.n;
+        ack.epoch = epoch;
+        ack.action = static_cast<std::uint8_t>(LaunchLogEntry::Action::Arrangement);
+        ack.stream = stream;
+        ack.returned = true;
+        ack.generation = next.generation;
+        if (!(renderer ? rendererLaunchAcks_ : callbackLaunchAcks_)->push(ack))
+            returnAcksDropped_.fetch_add(1, std::memory_order_relaxed);
+        any = true;
+    }
+    if (any) notifyMain();
 }
 
 const LaunchLogEntry* Engine::returnFor(model::Id track, std::uint64_t after) const {

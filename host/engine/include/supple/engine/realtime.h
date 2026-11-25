@@ -1352,7 +1352,20 @@ class Engine {
         std::uint8_t action = 0;
         std::int64_t stream = 0, anchorSample = 0, songFrame = 0;
         double anchorBeat = 0;
+        // A return to the arrangement carryLaunch made at the adoption of
+        // plan `generation`, at `stream` (no slot, no song frame: the main
+        // thread works it out).
+        bool returned = false;
+        std::uint64_t generation = 0;
     };
+    // The executor adopting `next`: one ack per node of `liveClass` (-1: all)
+    // that carryLaunch returned to the arrangement, at `stream` of `epoch`.
+    void ackReturns(detail::Plan& next, int liveClass, bool renderer, std::uint64_t epoch,
+                    std::int64_t stream) SUPPLE_RT;
+    std::atomic<std::uint64_t> returnAcksDropped_{0};  // a full ring: the main thread falls back
+    // Main thread: the returns the executors acked, as log entries (round
+    // 172 follow-up, commit 1: beside the control thread's guesses).
+    std::vector<LaunchLogEntry> ackedReturns_;
     std::unique_ptr<std::array<LaunchSlot, kLaunchSlots>> launchSlots_ =
         std::make_unique<std::array<LaunchSlot, kLaunchSlots>>();
     // Slots the executors still act on (pending, committed, or applied and

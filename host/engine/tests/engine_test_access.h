@@ -184,6 +184,8 @@ struct EngineTestAccess {
         a.anchorBeat = x.anchorBeat;
         (void)e.callbackLaunchAcks_->push(a);
     }
+    static std::vector<LaunchLogEntry> ackedReturns(const Engine& e) { return e.ackedReturns_; }
+    static std::uint64_t returnAcksDropped(const Engine& e) { return e.returnAcksDropped_.load(); }
     static std::vector<LaunchLogEntry> launchReturns(const Engine& e) {
         std::vector<LaunchLogEntry> out;
         for (const auto& r : e.launchReturns_) out.push_back(r.entry);

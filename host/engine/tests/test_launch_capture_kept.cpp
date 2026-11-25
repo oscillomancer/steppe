@@ -800,3 +800,32 @@ TEST_CASE("an ack drained late does not move a removed clip's return (round 172 
     CHECK(view->capture.launches[1].action == LaunchLogEntry::Action::Arrangement);
     CHECK(view->capture.launches[1].songFrame == returns[0].songFrame);
 }
+
+TEST_CASE("the executor's return ack is at or before the control thread's guess (follow-up 1)") {
+    // In-callback: cl_1 removed at 120064 (the cycle boundary). The executor
+    // adopts the plan at the next cycle's start, 120064, and acks the return
+    // there; the guess is an immediate launch's floor, a block later.
+    Project p;
+    twoTracks(p);
+    AppLive live(p, kInCallback, kBlock, 48000 * 4);
+    REQUIRE(p.app->transport("play"));
+    live.until(20 * kBlock);
+    p.run("launch.clip", R"({"clip": "cl_1"})");
+    live.until(782 * kBlock);
+    p.run("launch.capture", R"({"on": true})");
+    live.until(938 * kBlock);
+    p.run("clip.remove", R"({"clip": "cl_1"})");
+    live.until(940 * kBlock);
+    const auto acked = EngineTestAccess::ackedReturns(*p.app->engine());
+    const auto guessed = EngineTestAccess::launchReturns(*p.app->engine());
+    REQUIRE(acked.size() == 1);
+    REQUIRE(guessed.size() == 1);
+    CHECK(acked[0].track == guessed[0].track);
+    CHECK(acked[0].clip == model::Id{model::Kind::Clip, 1});
+    CHECK(acked[0].runningFrame == 938 * std::int64_t(kBlock));
+    CHECK(acked[0].runningFrame <= guessed[0].runningFrame);
+    CHECK(guessed[0].runningFrame - acked[0].runningFrame <= std::int64_t(kBlock));
+    CHECK(guessed[0].songFrame - acked[0].songFrame ==
+          guessed[0].runningFrame - acked[0].runningFrame);
+    CHECK(EngineTestAccess::returnAcksDropped(*p.app->engine()) == 0);
+}

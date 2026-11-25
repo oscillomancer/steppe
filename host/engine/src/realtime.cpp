@@ -2161,6 +2161,7 @@ void Engine::cycleBody(const float* const* in, float* const* out, std::uint32_t 
             detail::carryLiveNotes(*plan_, *plan, false);
             detail::carryRateSources(*plan_, *plan, -1);
             detail::carryMix(*plan_, *plan, -1);
+            ackReturns(*plan, -1, false, rtEpoch_, rtStream_.load(std::memory_order_relaxed));
         }
         detail::adoptRackModules(plan_ ? &plan_->modules : nullptr, plan ? &plan->modules : nullptr,
                                  &processing_);
@@ -2870,6 +2871,9 @@ void Engine::publishRendererPlan(detail::Plan& next, std::uint64_t epoch,
         next.handEpoch = epoch;
     }
     if (queuedRate) ratePlanRequests_.consume();
+    // Its returns, before the callback can see the plan (the live nodes
+    // carried from this renderer's included).
+    ackReturns(next, -1, true, epoch, streamLocal_);
     // Queued for the callback before the adoption is reported, so a caller
     // of awaitPlan() knows the callback's next cycle takes it.
     planHandoffs_.push(&next);  // space checked before adoption
@@ -3240,6 +3244,7 @@ void Engine::anticipativeCycle(const float* const* in, float* const* out, std::u
                 // carried state is the callback's here (adoptLive).
                 adoptLive(hand,
                           !oldEpoch && playing && hand->handContinuable && here == hand->handAt);
+                ackReturns(*hand, 1, false, e, here);  // the live region's own
                 planHandoffs_.consume();
                 wakeRenderer();
                 continue;
