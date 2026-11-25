@@ -585,6 +585,25 @@ the same.*
   logged: it follows from the loop, which a replay is given. A seek, a
   loop change or a stop ends a capture, so a replay never crosses one
   (ADR-0097, revision 2026-11-20, batch 3).
+  A plan that returns a track to the arrangement because it lacks the
+  clip the track plays (the clip removed, its track frozen, or past the
+  memory budget) is a launch too: `launchReturns_` records it as an
+  arrangement launch placed where an immediate `launch.arrangement`
+  (quantize none) would land when the engine takes the plan (the app
+  services the engine right after each load). That is a bound, not the
+  frame itself: the return may be recorded up to one block after the
+  frame the plan reached the executors, which report no adoption frame.
+  Where the placement answers `launch.later` (a playrate change on its
+  way), no return is recorded and the clip's stretch runs on in the
+  capture. A capture includes each recorded return within its span, in
+  frame order with the logged launches. What each
+  track played as a capture began is judged by the resets as they stood
+  then (`CaptureState::resets`), so removing a clip later, in the capture
+  or after it, never drops what was heard: the capture keeps the clip's
+  stretch and the return, and `launch.commit` refuses the removed clip
+  with `launch.commit` at `/performance/launches/N/clip`, the capture
+  kept. Undoing the removal makes it committable as it was; the
+  capture's version rule is unchanged.
   Renders and the render dialog play the arrangement only (rendering a
   performance is specified in §3.1, not built yet), and the dialog
   says so in one line while any track is held by a clip, following
@@ -613,8 +632,9 @@ the same.*
   (`LaunchCapture::committedIn`): by first parents, or through a merge of a
   branch whose line holds it (a merge's replayed step stands for its
   source, so a merge of a merge, or one undone only in part, counts). Where
-  a history squash has folded away the source steps a replay names, the
-  walk cannot follow it and says uncommitted, the side that warns. An undo of the commit makes it uncommitted again, a redo commits it,
+  a history squash has folded away a replay (into an ordinary step, under
+  a small history budget), or the source steps it names, the walk cannot
+  follow it and says uncommitted, the side that warns. An undo of the commit makes it uncommitted again, a redo commits it,
   and an edit after the undo leaves it uncommitted (`captureUncommitted`).
   The mark is set only when the commit's transaction commits (a rolled-back
   script's launch.commit leaves none), and the app pins that version

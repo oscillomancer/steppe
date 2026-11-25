@@ -267,6 +267,7 @@ TEST_CASE("the launcher's refusals answer as launch.clip and launch.scene do, an
     p.runArgs("project.save", save);
     p.runArgs("project.open", save);
     CHECK(moved());
+    p.app->stopEngine();  // before its backend goes, declared after the project
 }
 
 TEST_CASE("a launch under a master playrate switches where the song reaches its boundary") {

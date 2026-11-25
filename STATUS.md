@@ -376,6 +376,12 @@ instructions are in `docs/guides/installing.md`.
       warnings yet, and after a device restart, or Stop audio then Start,
       the pane is disarmed: a Capture click arms over the kept take, which
       the next Play replaces (the gui-lead's change, with the quit dialog);
+    - a clip removed (or frozen, or past the memory budget) while a capture
+      runs is kept up to its track's return to the arrangement, which is
+      recorded up to one block after the plan reached the executors, or not
+      at all when a playrate change is on its way (`launch.later`): the
+      commit writes the clip's stretch to there (after the removal is
+      undone; until then it refuses the removed clip);
     - a capture ends at a seek, a loop change or a stop, by design (one
       ended with a quantize ends on its boundary unless one comes first)
       (ADR-0097, revision 2026-11-20, batch 3); the offline replay
