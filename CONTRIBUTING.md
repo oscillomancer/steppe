@@ -70,6 +70,12 @@ on Linux; nothing on Windows). A run that gates a merge uses none of them; a
 run that uses any says `ITERATION, not a merge gate` in its title, with a
 warning and a summary line naming the inputs.
 
+`-f verbose=true` makes ctest print passing tests' output too (`ctest -V`), for
+a number a test reports with `MESSAGE` or a timing the log should show: by default
+a passing test prints nothing. Use it on a narrowed run only (a handful of tests,
+`-f tests=...`); the full suite's output is far too long to read. It changes what
+is logged, not what runs, so it does not make a run an iteration run.
+
 A deliberate CI tag also starts a run:
 
 ```sh
