@@ -612,8 +612,9 @@ the same.*
   (`LaunchCapture::committedIn`): by first parents, or through a merge of a
   branch whose line holds it (a merge's replayed step stands for its
   source, so a merge of a merge, or one undone only in part, counts). Where
-  a history squash has folded away the source steps a replay names, the
-  walk cannot follow it and says uncommitted, the side that warns. An undo of the commit makes it uncommitted again, a redo commits it,
+  a history squash has folded away a replay (into an ordinary step, under
+  a small history budget), or the source steps it names, the walk cannot
+  follow it and says uncommitted, the side that warns. An undo of the commit makes it uncommitted again, a redo commits it,
   and an edit after the undo leaves it uncommitted (`captureUncommitted`).
   The mark is set only when the commit's transaction commits (a rolled-back
   script's launch.commit leaves none), and the app pins that version
