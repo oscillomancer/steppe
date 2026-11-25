@@ -2111,7 +2111,9 @@ read-only factory presets: WAV 24-bit, a streaming master (−14 LUFS, −1 dBTP
 a CD master (16-bit 44.1 kHz with noise-shaped dither, −1 dBTP), a podcast MP3
 (−16 LUFS), stems for mixing (24-bit, mono tracks as mono) and a game loop
 (Ogg Vorbis, seamless). Choosing a preset loads it into the dialog; Render
-writes it to the project. Presets and your default are kept in the data folder
+writes it to the project. A preset of yours whose file was damaged is listed as
+*(damaged)*: choose it, then **Delete preset**, or save a preset under its name
+to replace it. Presets and your default are kept in the data folder
 (`render-presets`, see *Where Steppe keeps its files*).
 
 ### Sources and ranges

@@ -801,9 +801,13 @@ std::vector<ui::Choice> RenderDialog::presetChoices(std::optional<Error>& refuse
         return presets;
     }
     for (const auto& p : (*list)["presets"].asArray()) {
-        if (p.find("damaged")) continue;  // not offered yet (round 186 F1, the dialog's step)
         const std::string name = text(p.find("name"));
-        presets.push_back({name, name + (flag(p.find("factory")) ? "" : " (yours)")});
+        // A user preset whose file cannot be read is offered too, so that it
+        // can be deleted or saved over (round 186 F1).
+        const char* mark = p.find("damaged")         ? " (damaged)"
+                           : flag(p.find("factory")) ? ""
+                                                     : " (yours)";
+        presets.push_back({name, name + mark});
     }
     return presets;
 }
@@ -1710,7 +1714,14 @@ Status RenderDialog::loadPreset(const std::string& name) {
     auto list = dispatcher_.execute({"render.preset.list", json::Value::object(), kUiOrigin});
     if (!list) return std::move(list).error();
     for (const auto& p : (*list)["presets"].asArray())
-        if (text(p.find("name")) == name && p.find("settings")) {  // a damaged one has none
+        if (text(p.find("name")) == name) {
+            if (const json::Value* damaged = p.find("damaged")) {
+                // Its file cannot be read (round 186 F1): refused as
+                // render.preset.load {name} would refuse it, and in use, so
+                // that the dropdown shows it and Delete preset removes it.
+                presetName_ = name;
+                return damagedPreset(*damaged);
+            }
             json::Value args = *p.find("settings");
             if (!args.size()) args["source"] = text(settings_.find("source"), "mix");
             // A preset the settings refuse (a file edited by hand) is not
@@ -1726,6 +1737,16 @@ Status RenderDialog::loadPreset(const std::string& name) {
         }
     return Error("render.preset_unknown", "no preset " + name, "/name",
                  "choose one from the Preset list");
+}
+
+Error RenderDialog::damagedPreset(const json::Value& damaged) {
+    // render.preset.list's {code, path}: the code and path render.preset.load
+    // {name} answers through the bus, /args/name for the file's own codes,
+    // /args/name/settings/... for a member.
+    const std::string path = text(damaged.find("path"));
+    return Error(text(damaged.find("code")), "the preset file cannot be read",
+                 path.empty() ? std::string("/args/name") : path,
+                 "delete it, or save a preset under its name");
 }
 
 Status RenderDialog::savePreset(const std::string& name) {
@@ -2369,14 +2390,18 @@ std::string RenderDialog::refusalWords(const Error& e, std::string_view fallback
                    "again.";
     }
     if (action == Action::Preset) {
-        // A named preset read (render.preset.load {name}, 7024d3b3): its
-        // file's codes at /args/name, a bad member at /args/name/settings/…,
-        // where file.open is a read. preset_name and preset_unknown answer at
+        // A named preset read (render.preset.load {name}, 7024d3b3, and a
+        // damaged preset render.preset.list reports): its file's own codes
+        // at /args/name, a bad member at /args/name/settings/…, where
+        // file.open is a read. preset_name and preset_unknown answer at
         // /args/name too: they keep their words, told apart by the code.
+        // Both remedies can be done in the dialog, where it stays chosen.
         if (e.path.starts_with("/args/name/settings"))
-            return "That preset has a setting that cannot be used. Save it again, or delete it.";
-        if (e.path == "/args/name" && (reads || c == "file.open"))
-            return "That preset cannot be read. Save it again, or delete it.";
+            return "That preset has a setting that cannot be used. Delete it, or save a preset "
+                   "under its name to replace it.";
+        if ((e.path == "/args/name" || e.path.starts_with("/args/name/")) && fileRead)
+            return "That preset cannot be read. Delete it, or save a preset under its name to "
+                   "replace it.";
         // A preset command reads a preset file only as the default or a named
         // preset, above: what it answers at no path is its write.
         if (writes)

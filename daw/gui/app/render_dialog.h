@@ -209,6 +209,9 @@ class RenderDialog {
     // "—" and render.preset.list's presets; a refused list gives "—" only and
     // its error in `refused`.
     std::vector<ui::Choice> presetChoices(std::optional<Error>& refused) const;
+    // A damaged preset render.preset.list reports, as render.preset.load
+    // {name} refuses it.
+    static Error damagedPreset(const json::Value& damaged);
     Status validate() const;
     json::Value selectors() const;
     json::Value renderArgs(bool forJob) const;

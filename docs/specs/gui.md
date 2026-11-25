@@ -2311,11 +2311,11 @@ project is drawn in the quiet ink, with "from your default" on hover.
       `/args/default/settings/…` that it "has a setting that cannot be
       used", while a code answered at `/args/default` that is not its read
       (a presets folder that cannot be written to, no default saved) keeps
-      its own words; a named preset read under Preset, its file's read codes at
-      `/args/name` and any code at `/args/name/settings/…`, is "That preset
-      cannot be read." or "That preset has a setting that cannot be used.",
-      while a preset name refused or not found at `/args/name` keeps its
-      own words, told apart by the code), never the engine's
+      its own words; a preset whose file cannot be read, chosen in the
+      dropdown, is "That preset cannot be read. Delete it, or save a preset
+      under its name to replace it.", or for a member that it "has a
+      setting that cannot be used", while a preset name refused or not
+      found keeps its own words), never the engine's
       message, its hint, a path or a command name
       (`RenderDialog::refusalWords`, the audio device dialog's rule), and
       says what plays ("A clip the launcher plays …", "A clip the capture
@@ -2342,7 +2342,11 @@ project is drawn in the quiet ink, with "from your default" on hover.
       dropdown lists the presets as they are after a save, a load, a delete,
       Save as default or a refused choice, and shows the preset in use, the
       one Delete preset acts on; "—" (or a preset in use that is no longer
-      listed) means none, and Delete preset then deletes nothing. When the
+      listed) means none, and Delete preset then deletes nothing. A user
+      preset whose file cannot be read (`render.preset.list`'s `damaged`)
+      is offered as "name (damaged)"; choosing it is refused with the
+      sentence above and leaves it chosen, with the settings before it, so
+      Delete preset removes it and Save preset… offers its name. When the
       presets cannot be listed (a render default that cannot be read), it
       offers "—" only and the red line says why; Save as default, which
       that sentence advises, lists them again, and a preview the default
