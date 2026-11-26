@@ -2278,14 +2278,6 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
     stays on its track and cannot close one.
   - No route is dropped by a move. A move in time hears its sources at its
     new time.
-- **Sends and parent sends.** An edit that would feed a rack what it
-  modulates closes a cycle too, and is refused the same way, at the
-  argument that makes the new edge (review round 195 F2): `route.add` at
-  `/to` (or `/fx` for a key route), `route.set` at `/to`, `/fx` or
-  `/from`, `track.move` at `/parent` (its parent send carried under the
-  new parent) and `track.set` at `/parent_send`, each with a hint to
-  remove the modulation route first. A module's source makes no such
-  edge: a Notes module hears notes upstream of the FX they reach.
   - `item.explode-takes {mode: tracks}` can close one (round 188 G2).
     Its new channels get the default parent send, so under a parent the
     original does not feed (its parent send off) they feed what it did
@@ -2293,6 +2285,64 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
     - The cycle refusal is the guard, and a test pins it.
     - The new channels keep the default parent send: they get no sends,
       so copying an off parent send would leave them unheard.
+- **Edits that can close a modulation cycle.** The model's cycle check
+  walks four kinds of edge: a parent send (a child feeds its parent), a
+  route (its source feeds its destination: a track, a key's FX, a rack's
+  In; a rack's Out feeds its channel), a MIDI send heard by a Notes module
+  that follows the send's destination with its source's sends on (the
+  send's source feeds the module's rack), and a modulation route (its
+  source's rack feeds the node of its target). Every command and argument
+  that can make or redirect such an edge is a row of the table below
+  (review rounds 195 F2, 198 F1, 199). Each declares `modulation.cycle` in
+  the registry, and an edit that closes a cycle is refused at the row's
+  argument with the row's hint and changes nothing. The modulation
+  commands refuse it in their own checks. A test holds the table, the rows
+  in code (`detail::kCycleRows`) and the edges the check walks (each marked
+  in session.cpp) to each other, so a new kind of edge fails it until its
+  rows are added.
+  - Not rows: a new track (`track.add`, `track.template.load`) has no edge
+    into it; a copy (`track.duplicate`, the take copies) mirrors its
+    source's edges, so only its copied modulation routes can close a
+    cycle, and the copy drops those (`modulation.not_copied`, reason
+    `cycle`); a remove takes edges away, except that `track.remove` leaves
+    the Notes modules that played the track following their rack's
+    channel (a row); undo restores a state that held. A Notes module's own
+    source track is no edge (its notes reach the rack upstream of the FX
+    they modulate); a MIDI send into that track is.
+  - When one `track.set` closes a plain cycle as well as a modulation
+    cycle, it answers the plain one, `route.cycle` at `/parent_send`,
+    whatever the order the routes were made in (round 198 N2): removing
+    the modulation would not end it.
+
+| Edge | Command | Argument | Refused at | Hint |
+|---|---|---|---|---|
+| `parent_send` | `track.move` | `parent` | `/parent` | remove the modulation route first (modulation.remove), or choose another parent |
+| `parent_send` | `track.set` | `parent_send` | `/parent_send` | remove the modulation route first (modulation.remove), or leave the parent send off |
+| `route` | `route.add` | `fx` | `/fx` | remove the modulation route first (modulation.remove), or key another plug-in |
+| `route` | `route.add` | `to` | `/to` | remove the modulation route first (modulation.remove), or send to another track |
+| `route` | `route.set` | `to` | `/to` | remove the modulation route first (modulation.remove), or keep the route's destination |
+| `route` | `route.set` | `fx` | `/fx` | remove the modulation route first (modulation.remove), or keep the route's plug-in |
+| `route` | `route.set` | `from` | `/from` | remove the modulation route first (modulation.remove), or keep the route's source |
+| `route` | `route.set` | (any) | `/route` | remove the modulation route first (modulation.remove), or leave the route as it was |
+| `route` | `track.set` | `record_rack` | `/record_rack` | remove the modulation route first (modulation.remove), or pick another rack's Out |
+| `notes_follow` | `route.add` | `to` | `/to` | remove the modulation route first (modulation.remove), or send to another track |
+| `notes_follow` | `route.set` | `to` | `/to` | remove the modulation route first (modulation.remove), or keep the route's destination |
+| `notes_follow` | `route.set` | `from` | `/from` | remove the modulation route first (modulation.remove), or keep the route's source |
+| `notes_follow` | `module.add` | `source` | `/source` | remove the modulation route first (modulation.remove), or choose another source |
+| `notes_follow` | `module.add` | (any) | `/rack` | remove the modulation route first (modulation.remove), or give the Notes module a source |
+| `notes_follow` | `module.set` | `source` | `/source` | remove the modulation route first (modulation.remove), or choose another source |
+| `notes_follow` | `module.set` | `source_sends` | `/source_sends` | remove the modulation route first (modulation.remove), or leave its source's sends off |
+| `notes_follow` | `rack.set` | `track` | `/track` | remove the modulation route first (modulation.remove), or keep the rack on its channel |
+| `notes_follow` | `track.remove` | (any) | `/track` | remove the modulation route first (modulation.remove), or give those Notes modules another source (module.set) first |
+| `modulation` | `modulation.add` | (any) | `/target` | its own check (`modulation.cycle` at `/target`) |
+| `modulation` | `modulation.set` | (any) | `/target` | its own check (`modulation.cycle` at `/target`) |
+| `modulation` | `modulate` | (any) | `/target` | its own check (`modulation.cycle` at `/target`) |
+| `modulation` | `item.move` | `track` | `/track` | remove the route, or choose another track |
+| `modulation` | `clip.move` | `track` | `/track` | remove the route, or choose another track |
+| `modulation` | `take.extract` | `track` | `/track` | remove the route, or choose another track |
+| `modulation` | `fx.move` | `track` | `/track` | remove the route, or choose another track |
+| `modulation` | `item.explode-takes` | (any) | `/item` | remove the route, or use mode serial |
+
 - **Bakes.** A bake whose result replaces modulated take FX is exact, with
   the modulation printed as it plays. There is no unmodulated stand-in and
   no refusal.
@@ -2368,8 +2418,7 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   `modulation.add`, `modulation.set` and `modulate` their route checks
   (`modulate` not `modulation.envelope`: it adds the envelope itself);
   every command that copies routes (M5) `modulation.limit`, and every one
-  that moves a take or a track-chain FX to another track, or makes a send
-  or parent send (`route.add`, `route.set`, `track.move`, `track.set`),
+  in the table of edits that can close a modulation cycle
   `modulation.cycle`, both declared by the edit wrapper that raises them;
   `item.heal` `item.heal_fx`; and the background bakes and their commits
   `item.consolidate_stale` and `item.mix_stale`. A test keeps the

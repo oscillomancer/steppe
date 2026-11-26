@@ -19,6 +19,7 @@
 #include <regex>
 #include <set>
 #include <thread>
+#include <tuple>
 
 #include <supple/audio/audio_file.h>
 #include <supple/base/files.h>
@@ -6459,11 +6460,12 @@ TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)")
     //
     // What it covers, exactly: a modulation code written as refused("…"),
     // Error("…") or code = "…" in a command file, charged to the section
-    // from one `c.name = "…"` to the next; the wrapper's codes, against its
+    // from one command's name to the next; the wrapper's codes, against its
     // lists. What it cannot see: a code a command reaches through the model
-    // (checkInvariants' modulation.cycle), which closesCycle lists by the
-    // model's edge kinds (a route, a parent send, a target's track) and this
-    // test by hand; a helper's callers (checkRoute and checkCycle:
+    // (checkInvariants' modulation.cycle), which the cycle rows
+    // (detail::kCycleRows) list by the kind of edge the model's cycle check
+    // walks, held to the walker and the spec by "the cycle rows cover every
+    // edge…"; a helper's callers (checkRoute and checkCycle:
     // modulation.add and modulation.set, and modulate through
     // modulation.add), listed by hand; a code built another way (a
     // variable, Error{…}), of which there is none.
@@ -6487,16 +6489,11 @@ TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)")
         CHECK_MESSAGE(!detail::copiedPath(name).empty(), name);
         need(name, "modulation.limit");
     }
-    for (const char* name :
-         {"item.move", "clip.move", "take.extract", "item.explode-takes", "fx.move"}) {
-        CHECK_MESSAGE(detail::movesTargets(name), name);
-        need(name, "modulation.cycle");
-    }
-    // The edits that make the model's other edges (round 195 F2): a route,
-    // a parent send.
-    for (const char* name : {"route.add", "route.set", "track.move", "track.set"}) {
-        CHECK_MESSAGE(detail::closesCycle(name), name);
-        need(name, "modulation.cycle");
+    // Every command in a cycle row declares modulation.cycle (the edit
+    // wrapper's rows; the own rows by the command's checks, below).
+    for (const detail::CycleRow& row : detail::kCycleRows) {
+        need(std::string(row.command).c_str(), "modulation.cycle");
+        if (!row.own) CHECK_MESSAGE(detail::closesCycle(row.command), row.command);
     }
     need("item.heal", "item.heal_fx");
     need("item.consolidate", "item.consolidate_stale");
@@ -6515,7 +6512,9 @@ TEST_CASE("each command declares the modulation codes it answers (ADR-0096 M5)")
                                              "modulation.telemetry", "modulation.stacked",
                                              "modulation.removed",   "modulation.not_copied"};
     std::map<std::string, std::set<std::string>> raisedBy;  // "": the helpers
-    static const std::regex name(R"re(c\.name = "([a-z.\-]+)")re");
+    // A command's name: `c.name = "…"` (or another builder's `x.name`), or
+    // rack_commands.cpp's `common(c, "…"`.
+    static const std::regex name(R"re((?:\b[a-z]+\.name = |common\(c, )"([a-z.\-]+)")re");
     static const std::regex code(R"re((refused\(|Error\(|code = )"(modulation\.[a-z_]+)")re");
     std::size_t files = 0;
     std::vector<std::string> strayHelpers;
@@ -6943,7 +6942,7 @@ TEST_CASE(
     json::Value retarget = json::Value::object();
     retarget["route"] = route;
     retarget["to"] = listened;
-    refused("route.set", retarget, "/to", "send to another track");
+    refused("route.set", retarget, "/to", "keep the route's destination");
     json::Value move = j(R"({"track": "tr_1"})");
     move["parent"] = listened;
     refused("track.move", move, "/parent", "another parent");
@@ -6953,6 +6952,249 @@ TEST_CASE(
     run("track.move", move);
     refused("track.set", j(R"({"track": "tr_1", "parent_send": true})"), "/parent_send",
             "parent send off");
+}
+
+TEST_CASE(
+    "modulation commands: a Notes module or a rack input closing a cycle is refused "
+    "(rounds 198 F1, 199)") {
+    // As round 195 F2's: a gain on tr_1 modulated by a follower of the buss
+    // Listened (rk_1), plus a channel Other. Variants 0-3: a Notes module in
+    // rk_1 that follows Other while tr_1 sends MIDI to Other hears tr_1:
+    // tr_1 -> rk_1 -> tr_1 (made following Other, its source set to Other,
+    // its sends turned on, or its rack moved onto Other). Variant 4: Synth's
+    // rack has a sourceless Notes module that tr_1's MIDI send to Synth
+    // reaches; Other sends into Listened; Synth's Out picked as Other's
+    // input closes rk_2 -> Other -> Listened -> rk_1 -> tr_1 -> rk_2. Each
+    // is refused with the declared modulation.cycle at its argument, with
+    // its row's hint, and changes nothing.
+    for (int variant = 0; variant < 5; ++variant) {
+        INFO("variant " << variant);
+        Root root;
+        auto app = makeApp(root.path);
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher d(registry, *app);
+        app->setupFixture(d, "song");
+        auto run = [&](std::string name, const json::Value& args) {
+            auto r = d.execute({std::move(name), args, kTest});
+            REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+            return *r;
+        };
+        const std::string listened =
+            run("track.add", j(R"({"name": "Listened", "type": "buss"})"))["track"].asString();
+        const std::string gain =
+            run("fx.add", j(R"({"track": "tr_1", "plugin": "com.suppleaudio.test.gain"})"))["fx"]
+                .asString();
+        json::Value modulate = j(R"({"source": "follower", "depth": 0.2})");
+        modulate["from"] = listened;
+        modulate["target"] = json::Value::object();
+        modulate["target"]["fx"] = gain;
+        modulate["target"]["param"] = "gain";
+        const std::string rack = run("modulate", modulate)["rack"].asString();
+        const std::string other = run("track.add", j(R"({"name": "Other"})"))["track"].asString();
+        const auto midiSend = [&](const std::string& to) {
+            json::Value send = j(R"({"from": "tr_1", "midi": {}})");
+            send["to"] = to;
+            run("route.add", send);
+        };
+        const auto notesIn = [&](const std::string& in, const std::string& source) {
+            json::Value notes = j(R"({"type": "notes"})");
+            notes["rack"] = in;
+            if (!source.empty()) notes["source"] = source;
+            return run("module.add", notes)["module"].asString();
+        };
+        const char* name = "";
+        const char* path = "";
+        json::Value args = json::Value::object();
+        if (variant == 0) {  // made following Other
+            midiSend(other);
+            name = "module.add";
+            path = "/source";
+            args = j(R"({"type": "notes"})");
+            args["rack"] = rack;
+            args["source"] = other;
+        } else if (variant == 1) {  // following Fourth, then Other
+            midiSend(other);
+            const std::string fourth =
+                run("track.add", j(R"({"name": "Fourth"})"))["track"].asString();
+            name = "module.set";
+            path = "/source";
+            args["module"] = notesIn(rack, fourth);
+            args["source"] = other;
+        } else if (variant == 2) {  // following Other, its sends off, then on
+            const std::string module = notesIn(rack, other);
+            json::Value offSends = j(R"({"source_sends": false})");
+            offSends["module"] = module;
+            run("module.set", offSends);
+            midiSend(other);
+            name = "module.set";
+            path = "/source_sends";
+            args["module"] = module;
+            args["source_sends"] = true;
+        } else if (variant == 3) {  // a sourceless Notes module follows its rack's channel
+            midiSend(other);
+            notesIn(rack, "");
+            name = "rack.set";
+            path = "/track";
+            args["rack"] = rack;
+            args["track"] = other;
+        } else {  // Synth's Out as Other's input (round 199 probe I)
+            const std::string synth =
+                run("track.add", j(R"({"name": "Synth"})"))["track"].asString();
+            json::Value addRack = json::Value::object();
+            addRack["track"] = synth;
+            json::Value made = run("rack.add", addRack);
+            const std::string synthRack = made["rack"].asString();
+            notesIn(synthRack, "");
+            midiSend(synth);
+            json::Value send = json::Value::object();
+            send["from"] = other;
+            send["to"] = listened;
+            run("route.add", send);
+            const std::string out = made["out"].asString();
+            name = "track.set";
+            path = "/record_rack";
+            args["track"] = other;
+            args["record_rack"] = out;
+        }
+        const cmd::CommandInfo* info = registry.find(name);
+        REQUIRE(info);
+        CHECK(std::any_of(info->errors.begin(), info->errors.end(),
+                          [](const cmd::ErrorSpec& e) { return e.code == "modulation.cycle"; }));
+        const std::string before = model::serializeProject(app->view());
+        const auto r = d.execute({name, args, kTest});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "modulation.cycle");
+        CHECK(r.error().path == std::string("/args") + path);
+        const detail::CycleRow* row = detail::cycleRow(name, args);
+        REQUIRE(row);
+        CHECK(r.error().hint == row->hint);
+        CHECK(model::serializeProject(app->view()) == before);
+    }
+}
+
+TEST_CASE(
+    "the cycle rows cover every edge the model's cycle check walks, as the spec's table "
+    "lists them (round 199)") {
+    // Each place session.cpp's cycle check adds an edge is marked with its
+    // kind; a site without a marker, or a kind without a row, fails here, so
+    // a new edge kind cannot reach the walker unrefused and undeclared. The
+    // table in session-model.md ("Edits that can close a modulation cycle")
+    // lists exactly the rows: edge, command, argument and where it points.
+    const fs::path engine = fs::path(__FILE__).parent_path().parent_path();
+    std::set<std::string> walked;
+    {
+        std::ifstream in(engine / "model" / "src" / "session.cpp");
+        REQUIRE(in);
+        static const std::regex site(R"re(\bedges\[[^\]]+\]\.push_back\()re");
+        static const std::regex marker(R"re(// cycle edge: ([a-z_]+))re");
+        std::string line;
+        int sites = 0;
+        while (std::getline(in, line)) {
+            if (!std::regex_search(line, site)) continue;
+            ++sites;
+            std::smatch m;
+            CHECK_MESSAGE(std::regex_search(line, m, marker), "an unmarked edge: " << line);
+            if (std::regex_search(line, m, marker)) walked.insert(m[1]);
+        }
+        CHECK(sites >= 4);
+    }
+    std::set<std::string> rowKinds;
+    std::set<std::tuple<std::string, std::string, std::string, std::string>> rows;
+    for (const detail::CycleRow& r : detail::kCycleRows) {
+        rowKinds.insert(std::string(r.edge));
+        rows.insert({std::string(r.edge), std::string(r.command),
+                     r.field.empty() ? std::string("(any)") : std::string(r.field),
+                     std::string(r.path)});
+        CHECK_MESSAGE((r.own || !r.hint.empty()), r.command);
+    }
+    CHECK(walked == rowKinds);
+    // The spec's table: | `edge` | `command` | `field` or (any) | `/path` | hint |
+    std::ifstream spec(engine.parent_path().parent_path() / "docs" / "specs" / "session-model.md");
+    REQUIRE(spec);
+    std::set<std::tuple<std::string, std::string, std::string, std::string>> documented;
+    std::string line;
+    bool inTable = false;
+    static const std::regex row(
+        R"re(^\| `([a-z_]+)` \| `([a-z.\-]+)` \| (`[a-z_]+`|\(any\)) \| `(/[a-z_]+)` \|)re");
+    while (std::getline(spec, line)) {
+        if (line.find("| Edge | Command | Argument | Refused at | Hint |") != std::string::npos) {
+            inTable = true;
+            continue;
+        }
+        if (!inTable) continue;
+        if (line.rfind("|", 0) != 0) break;
+        std::smatch m;
+        if (!std::regex_search(line, m, row)) continue;  // the separator
+        std::string field = m[3];
+        if (field != "(any)") field = field.substr(1, field.size() - 2);
+        documented.insert({m[1], m[2], field, m[4]});
+    }
+    for (const auto& r : rows)
+        CHECK_MESSAGE(documented.count(r),
+                      "not in the spec: " << std::get<1>(r) << " " << std::get<2>(r));
+    for (const auto& r : documented)
+        CHECK_MESSAGE(rows.count(r),
+                      "not in the code: " << std::get<1>(r) << " " << std::get<2>(r));
+}
+
+TEST_CASE(
+    "track.set: a parent send closing a plain and a modulation cycle answers the plain one "
+    "(round 198 N2)") {
+    // X, a buss under the buss P with its parent send off; a send P -> X; a
+    // follower of P modulating a gain on X. X's parent send turned on closes
+    // X -> P -> X (plain) and P -> the rack -> X -> P (modulation). Whichever
+    // was made first, the answer is route.cycle: removing the modulation
+    // would leave the plain cycle.
+    for (const bool modulationFirst : {false, true}) {
+        INFO("modulation first " << modulationFirst);
+        Root root;
+        auto app = makeApp(root.path);
+        cmd::Registry registry;
+        registerEngineCommands(registry);
+        cmd::Dispatcher d(registry, *app);
+        app->setupFixture(d, "song");
+        auto run = [&](std::string name, const json::Value& args) {
+            auto r = d.execute({std::move(name), args, kTest});
+            REQUIRE_MESSAGE(r, (r ? "" : r.error().toString()));
+            return *r;
+        };
+        const std::string p =
+            run("track.add", j(R"({"name": "P", "type": "buss"})"))["track"].asString();
+        const std::string x =
+            run("track.add", j(R"({"name": "X", "type": "buss"})"))["track"].asString();
+        json::Value off = json::Value::object();
+        off["track"] = x;
+        off["parent_send"] = false;
+        run("track.set", off);
+        json::Value move = json::Value::object();
+        move["track"] = x;
+        move["parent"] = p;
+        run("track.move", move);
+        json::Value send = json::Value::object();
+        send["from"] = p;
+        send["to"] = x;
+        const auto modulateX = [&] {
+            json::Value fx = j(R"({"plugin": "com.suppleaudio.test.gain"})");
+            fx["track"] = x;
+            json::Value m = j(R"({"source": "follower", "depth": 0.2})");
+            m["from"] = p;
+            m["target"] = json::Value::object();
+            m["target"]["fx"] = run("fx.add", fx)["fx"].asString();
+            m["target"]["param"] = "gain";
+            run("modulate", m);
+        };
+        if (modulationFirst) modulateX();
+        run("route.add", send);
+        if (!modulationFirst) modulateX();
+        json::Value on = json::Value::object();
+        on["track"] = x;
+        on["parent_send"] = true;
+        const auto r = d.execute({"track.set", on, kTest});
+        REQUIRE_FALSE(r);
+        CHECK(r.error().code == "route.cycle");
+        CHECK(r.error().path == "/args/parent_send");
+    }
 }
 
 TEST_CASE("modulation commands: exploding takes onto tracks may not close a cycle (M5, G2)") {

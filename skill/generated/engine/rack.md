@@ -902,6 +902,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 
 ```
 
+### Errors
+
+- `modulation.cycle`: on that channel the rack's Notes module would hear what the rack modulates Hint: remove the modulation route first (modulation.remove), or keep the rack on its channel
+
 ### Examples
 
 **Name it** (`song_with_rack`)

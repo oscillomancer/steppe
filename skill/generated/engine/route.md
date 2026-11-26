@@ -71,7 +71,7 @@ Kind: `edit`. Exposure: `mcp-tool`.
 - `route.endpoint`: MIDI sends need channel or note-module endpoints Hint: use from: {module: mo_N}, to: {track: tr_N}, midi: {}
 - `route.midi`: MIDI routing or audio controls do not apply to these endpoints Hint: use channel/Note Out to channel/Notes for MIDI; omit audio controls
 - `route.rack_send`: a rack send has level and mute only Hint: pan, polarity and channel routing belong in the rack or on the buss
-- `modulation.cycle`: the send feeds a rack what it modulates Hint: remove the modulation route first (modulation.remove), or send to another track
+- `modulation.cycle`: the edit would feed a rack what it modulates Hint: at /fx: remove the modulation route first (modulation.remove), or key another plug-in; at /to: remove the modulation route first (modulation.remove), or send to another track
 
 ### Examples
 
@@ -684,7 +684,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `route.midi`: audio controls do not apply to MIDI routes Hint: use mute and MIDI channel routing
 - `route.rack_send`: a rack send has level and mute only Hint: pan, polarity and channel routing belong in the rack or on the buss
 - `route.in_use`: sd_1 is tr_1's input, not a send Hint: keep sd_1 as tr_1's input; add a rack send with route.add
-- `modulation.cycle`: the send feeds a rack what it modulates Hint: remove the modulation route first (modulation.remove), or send to another track
+- `modulation.cycle`: the edit would feed a rack what it modulates Hint: at /to: remove the modulation route first (modulation.remove), or keep the route's destination; at /fx: remove the modulation route first (modulation.remove), or keep the route's plug-in; at /from: remove the modulation route first (modulation.remove), or keep the route's source; at /route: remove the modulation route first (modulation.remove), or leave the route as it was
 
 ### Examples
 

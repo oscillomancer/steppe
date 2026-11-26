@@ -43,6 +43,7 @@ Kind: `edit`. Exposure: `mcp-exec`.
 - `rack.unknown_type`: no such module type Hint: module.list
 - `rack.param`: a knob or value the type does not have Hint: module.describe
 - `rack.limit`: too many modules Hint: remove modules first
+- `modulation.cycle`: the edit would feed a rack what it modulates Hint: at /source: remove the modulation route first (modulation.remove), or choose another source; at /rack: remove the modulation route first (modulation.remove), or give the Notes module a source
 
 ### Examples
 
@@ -793,6 +794,10 @@ Kind: `edit`. Exposure: `mcp-exec`.
 {}
 
 ```
+
+### Errors
+
+- `modulation.cycle`: the edit would feed a rack what it modulates Hint: at /source: remove the modulation route first (modulation.remove), or choose another source; at /source_sends: remove the modulation route first (modulation.remove), or leave its source's sends off
 
 ### Examples
 
