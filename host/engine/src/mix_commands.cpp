@@ -43,8 +43,10 @@ auto commitSchema() {
         .build();
 }
 Error stale() {
-    return Error("item.mix_stale", "the selected items changed during the mix", "/items",
-                 "run item.mix-to-track again with the current selection");
+    return Error("item.mix_stale",
+                 "the selected items, or what the mix read (a route's source, a track feeding "
+                 "a source channel), changed during the mix",
+                 "/items", "run item.mix-to-track again with the current selection");
 }
 
 struct Plan {
@@ -131,6 +133,20 @@ Result<std::pair<model::Session, Id>> mixView(const model::Session& s, const Pla
     return std::pair{std::move(*snapshot), bussId};
 }
 
+// What the commit checks against the start (round 192 F4): the selected
+// items as before (itemEditFingerprint), and everything the mix's render
+// reads (upstreamFingerprint of its private view at its buss), so an edit
+// to a route's source, or to a track feeding a source channel, makes the
+// result stale.
+std::string bakeFingerprint(const model::Session& s, const std::vector<Id>& items) {
+    std::string out = model::itemEditFingerprint(s, items);
+    auto plan = planMix(s, items);
+    if (!plan) return out + ";" + plan.error().code;
+    auto view = mixView(s, *plan, std::set<Id>(items.begin(), items.end()));
+    if (!view) return out + ";" + view.error().code;
+    return out + ";" + upstreamFingerprint(view->first, view->second);
+}
+
 struct Artifact {
     fs::path directory, file;
     bool published = false;
@@ -201,7 +217,7 @@ Result<json::Value> publish(EngineApp& app, cmd::Dispatcher& dispatcher, Work& w
                             const cmd::Origin& origin) {
     SUPPLE_TRY(checkRenderTarget(app, work.target));
     if (app.mediaDir() != work.mediaDir ||
-        model::itemEditFingerprint(app.view(), work.commit.items) != work.commit.expected)
+        bakeFingerprint(app.view(), work.commit.items) != work.commit.expected)
         return stale();
     std::error_code ec;
     const auto output = work.mediaDir / work.artifact->file.filename();
@@ -263,7 +279,7 @@ void registerMixCommands(cmd::Registry& registry) {
         const auto s = app.view();
         auto plan = planMix(s, a.items);
         if (!plan) return plan.error();
-        if (model::itemEditFingerprint(s, a.items) != a.expected) return stale();
+        if (bakeFingerprint(s, a.items) != a.expected) return stale();
         const auto& media = a.media;
         const auto frames = time::samplesAt(a.end, s.project->sampleRate) -
                             time::samplesAt(a.start, s.project->sampleRate);
@@ -349,7 +365,7 @@ void registerMixCommands(cmd::Registry& registry) {
         work.snapshot = std::move(view->first);
         work.buss = view->second;
         work.commit.items = a.items;
-        work.commit.expected = model::itemEditFingerprint(s, a.items);
+        work.commit.expected = bakeFingerprint(s, a.items);
         work.commit.start = plan->start;
         work.commit.end = plan->end;
         work.target = renderTarget(app);

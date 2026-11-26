@@ -979,7 +979,11 @@ instructions are in `docs/guides/installing.md`.
   instead. `track.duplicate` copies every route whose target is on the
   track (before M5 it copied none). A move that would close a cycle is
   refused (`modulation.cycle`), and heal and `take.comp` join only pieces
-  whose routes match. A plug-in's offset is signal
+  whose routes match. All four bakes print the modulation exactly; a
+  consolidate or mix-to-track is refused as stale when anything its render
+  read changed before its commit, a route's source and the tracks feeding
+  it included (a freeze's hash leaves the source racks out, by design). A
+  plug-in's offset is signal
   × depth × range, held on the absolute 32-frame grid and sent as CLAP
   PARAM_MOD events that never touch the base value or automation; a mixer
   target's is linear between grid points, added after automation and

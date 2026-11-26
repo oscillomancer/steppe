@@ -136,7 +136,13 @@ changes is in engine.md §1.4.1, "Take FX targets".
   bake is modulated (`modulation.bake`). None uses an unmodulated stand-in.
   *2026-11-26 (step M5 built, review round 192):* all four are exact, each
   pinned by a test against playback, so no bake refuses and
-  `modulation.bake` was never built.
+  `modulation.bake` was never built. A background bake (consolidate,
+  mix-to-track) is refused as stale when anything its render read changed
+  before its commit, a route's source rack and the tracks feeding it
+  included. Here bakes differ from freeze (below), whose hash leaves the
+  source racks out: a bake is a one-off print that must not commit what it
+  was not rendered from, while a freeze plays its print and locks what it
+  owns, with that stated limit (the co-director's ruling, round 192 F4).
 - **Removal.** Removing a take FX, its take, or its item or clip (directly,
   or with its scene or track) removes its routes with `modulation.removed`,
   as `fx.remove` does.

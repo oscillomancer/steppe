@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include "../../../tests/file_platform.h"
 #include "supple/audio/audio_file.h"
@@ -754,6 +755,118 @@ TEST_CASE("item.consolidate.commit is stale when a route into a baked FX changed
     CHECK(json::writeCompact(*status).find("item.consolidate_stale") != std::string::npos);
     CHECK(f.app->head().items.size() == 2);
     CHECK(f.app->head().modulations.size() == 2);
+}
+
+namespace {
+// tk_1's gain modulated by `source` ("lfo", or "follower" from `from`)
+// through modulate, which makes the rack on a new channel, Modulators; plus
+// tr_3 "Elsewhere", which nothing the bakes render reads. Returns the
+// source module.
+std::string sourced(Fixture& f, const char* source, const char* from = nullptr) {
+    const auto fx = f.run("fx.add", R"({"take":"tk_1","plugin":"com.suppleaudio.test.gain"})");
+    json::Value args = json::Value::object();
+    args["target"] = json::Value::object();
+    args["target"]["fx"] = fx.find("fx")->asString();
+    args["target"]["param"] = "gain";
+    args["source"] = source;
+    if (from) args["from"] = from;
+    args["depth"] = 0.2;
+    auto made = f.bus->execute({"modulate", std::move(args), origin});
+    REQUIRE_MESSAGE(made, (made ? "" : made.error().toString()));
+    f.run("track.add", R"({"name":"Elsewhere"})");
+    return made->find("module")->asString();
+}
+// The job `job`'s status once it finished, its events flushed.
+json::Value settled(Fixture& f, const json::Value& job) {
+    {
+        std::unique_lock lock(f.mutex);
+        f.done.wait(lock, [&] { return f.finished; });
+    }
+    f.bus->flushJobEvents();
+    auto status = f.bus->jobs().status(job.find("job")->asString());
+    REQUIRE(status);
+    return *status;
+}
+// A consolidate of it_1 and its copy it_2, with `edit` made while it renders.
+json::Value consolidated(Fixture& f, const std::function<void()>& edit) {
+    f.run("item.set", R"({"item":"it_1","length":0.5})");
+    f.run("item.duplicate", R"({"item":"it_1","to":2})");
+    const auto job = f.run("item.consolidate", R"({"items":["it_1","it_2"]})");
+    if (edit) edit();
+    return settled(f, job);
+}
+}  // namespace
+
+TEST_CASE("item.consolidate is stale when the route's source changed during it (round 192 F4)") {
+    // The stale check covers what the render read, not only the route: the
+    // LFO's rate on another channel's rack changes what the gain printed.
+    for (const bool edited : {false, true}) {
+        INFO("edited " << edited);
+        Fixture f;
+        const std::string lfo = sourced(f, "lfo");
+        const auto status = consolidated(f, [&] {
+            if (!edited) return;
+            json::Value set = json::Value::object();
+            set["module"] = lfo;
+            set["params"] = *json::parse(R"({"rate": 3})");
+            REQUIRE(f.bus->execute({"module.set", std::move(set), origin}));
+        });
+        INFO(json::writeCompact(status));
+        if (edited) {
+            CHECK(status.find("status")->asString() != "done");
+            CHECK(json::writeCompact(status).find("item.consolidate_stale") != std::string::npos);
+            CHECK(f.app->head().items.size() == 2);
+        } else {
+            CHECK(status.find("status")->asString() == "done");
+        }
+    }
+}
+
+TEST_CASE("item.consolidate is stale when a followed track changed during it (round 192 F4)") {
+    // A Follower source reads tr_2's signal: an edit to tr_2 is an edit to
+    // what the render read. tr_3 is read by nothing: its edit is accepted.
+    for (const char* edit : {"followed", "elsewhere"}) {
+        INFO(edit);
+        Fixture f;
+        f.run("track.add", R"({"name":"Followed"})");  // tr_2
+        sourced(f, "follower", "tr_2");
+        const std::string elsewhere =
+            f.app->head().tracks.find(model::kMaster)->children.back().str();
+        const auto status = consolidated(f, [&] {
+            json::Value set = json::Value::object();
+            set["track"] = std::string(edit) == "followed" ? std::string("tr_2") : elsewhere;
+            set["volume_db"] = -6.0;
+            REQUIRE(f.bus->execute({"track.set", std::move(set), origin}));
+        });
+        INFO(json::writeCompact(status));
+        if (std::string(edit) == "followed") {
+            CHECK(status.find("status")->asString() != "done");
+            CHECK(json::writeCompact(status).find("item.consolidate_stale") != std::string::npos);
+        } else {
+            CHECK(status.find("status")->asString() == "done");
+        }
+    }
+}
+
+TEST_CASE("item.mix-to-track is stale when the route's source changed during it (round 192 F4)") {
+    for (const bool edited : {false, true}) {
+        INFO("edited " << edited);
+        Fixture f;
+        const std::string lfo = sourced(f, "lfo");
+        const auto job = f.run("item.mix-to-track", R"({"items":["it_1"]})");
+        if (edited) {
+            json::Value set = json::Value::object();
+            set["module"] = lfo;
+            set["params"] = *json::parse(R"({"rate": 3})");
+            REQUIRE(f.bus->execute({"module.set", std::move(set), origin}));
+        }
+        const auto status = settled(f, job);
+        INFO(json::writeCompact(status));
+        if (edited)
+            CHECK(json::writeCompact(status).find("item.mix_stale") != std::string::npos);
+        else
+            CHECK(status.find("status")->asString() == "done");
+    }
 }
 
 TEST_CASE("item.mix-to-track prints a modulated take FX as it plays (M5, F10)") {

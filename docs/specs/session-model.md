@@ -2293,13 +2293,31 @@ at the same song time. It holds exactly for `item.split`, `track.duplicate`,
   - A source with free-running state (an LFO not synced to the transport)
     renders from the bake's start, so its phase can differ from playback
     from 0; a synced or Transport-driven source cannot.
-  - **An exact bake's stale check covers the routes.** A bake that renders
-    first and commits later (`item.consolidate` through
-    `item.consolidate.commit`, and the other background bakes) is refused
-    as stale when a route into a baked FX, or its source, was added,
-    removed or changed in between.
-    - `itemEditFingerprint` gathers those routes as `freezeDependencyHash`
-      already does for a freeze.
+  - **A background bake's stale check covers what its render read**
+    (review round 192 F4, the co-director's ruling). `item.consolidate`
+    and `item.mix-to-track` render first and commit later
+    (`item.consolidate.commit`, `item.mix-to-track.commit`). Each compares,
+    at its start and at its commit:
+    - `itemEditFingerprint` of the selected items, with the routes into
+      their take FX (depth, enabled, source; not the lane);
+    - `upstreamFingerprint` of the bake's own render view (consolidate's
+      source-only capture of each audio group, the mix's view with its
+      buss) at the rendered track: the closure the offline renderer keeps
+      (the tracks feeding it, each modulating rack with its home track,
+      the tracks a kept Notes module plays, the routes among them, so a
+      Follower's or a sidechain's source track too), with their chains,
+      items, takes, sources, modules, cables, modulation routes, the
+      envelopes and automation items on those, their tracks' groups, and
+      the project, tempo, meters and harmonic context. IDs are renumbered
+      in order.
+    - So an LFO's rate on another channel, or an edit to a followed track,
+      makes it stale (`item.consolidate_stale`, `item.mix_stale`). An edit
+      to a track outside that closure does not, and a test pins both.
+    - It is broader than strictly needed (a track's name, a project
+      setting): such a bake is refused and run again.
+    - `item.apply-fx` renders and commits in one command. `track.freeze`
+      keeps its own hash, which leaves a route's source rack out on purpose
+      (Freeze, above; ADR-0096).
   - **The MIDI merge's route limit.** `item.consolidate`'s MIDI merge
     removes the merged items, and their routes, in the same transaction as
     it copies, so its net route count never grows and it cannot reach

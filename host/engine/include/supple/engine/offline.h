@@ -437,6 +437,17 @@ struct OfflineResult {
 // CLAP values. Main thread.
 Result<json::Value> instanceReadouts(host::Instance& in);
 
+// What a render of `track` (renderOffline with OfflineSettings::track)
+// reads from `session`, hashed: the closure the renderer keeps (the tracks
+// that feed it, the racks whose routes modulate any of them with their home
+// tracks, the tracks a kept rack's Notes modules play, and the routes among
+// them), with their chains, items, takes, sources, rack modules, cables and
+// modulation routes, the envelopes and automation items on any of those, the
+// groups of their tracks, and the project, tempo, meters and harmonic context.
+// IDs are renumbered in order, so an object made elsewhere changes nothing;
+// a track outside the closure is not read. A background bake compares it
+// at its start and at its commit (ADR-0096 M5, review round 192 F4).
+std::string upstreamFingerprint(const model::Session& session, model::Id track);
 Result<OfflineResult> renderOffline(const model::Session& session, InstancePool& pool,
                                     const OfflineSettings& settings);
 

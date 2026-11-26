@@ -21,11 +21,14 @@
 #include <set>
 #include <thread>
 
+#include "supple/base/sha256.h"
 #include "supple/base/thread.h"
 #include "supple/clap/semantic_params.h"
 #include "supple/diagctx/table.h"
 #include "supple/dsp/dsp.h"
 #include "supple/model/numeric.h"
+#include "supple/model/schemas.h"
+#include "supple/model/versions.h"
 #include "supple/params/params.h"
 #include "supple/time/timeline.h"
 
@@ -158,6 +161,91 @@ Session upstreamSession(const Session& source, Id target) {
     return s;
 }
 }  // namespace
+
+std::string upstreamFingerprint(const Session& source, Id target) {
+    const Session s = upstreamSession(source, target);
+    std::set<Id> ids;
+    for (const auto& e : s.tracks) {
+        ids.insert(e.id);
+        ids.insert(e.value->chain.begin(), e.value->chain.end());
+        ids.insert(e.value->inputChain.begin(), e.value->inputChain.end());
+    }
+    for (const auto& e : s.items) {
+        ids.insert(e.id);
+        for (Id takeId : e.value->takes) {
+            ids.insert(takeId);
+            if (const model::Take* take = s.takes.find(takeId)) {
+                if (take->source) ids.insert(*take->source);
+                ids.insert(take->chain.begin(), take->chain.end());
+            }
+        }
+    }
+    for (const auto& e : s.routes) ids.insert(e.id);
+    for (const auto& e : s.racks) ids.insert(e.id);
+    for (const auto& e : s.modulations) ids.insert(e.id);
+    for (const auto& e : s.modules)
+        if (ids.count(e.value->rack)) {
+            ids.insert(e.id);
+            if (e.value->fx) ids.insert(*e.value->fx);
+        }
+    for (const auto& e : s.cables)
+        if (const auto rack = model::rackOfEnd(s, e.value->from); rack && ids.count(*rack))
+            ids.insert(e.id);
+    for (const auto& e : s.groups)
+        if (std::any_of(e.value->members.begin(), e.value->members.end(),
+                        [&](Id member) { return ids.count(member) != 0; }))
+            ids.insert(e.id);
+    for (const auto& e : s.envelopes)
+        if (ids.count(e.value->target.object)) ids.insert(e.id);
+    for (const auto& e : s.autoItems)
+        if (ids.count(e.value->envelope)) ids.insert(e.id);
+    std::map<Id, Id> remap;
+    model::Counters counters;
+    for (Id id : ids) remap[id] = Id{id.kind, ++counters[id.kind]};
+    json::Value value = json::Value::object();
+    value["project"] = model::toJson(*s.project);
+    const auto every = [&](const char* key, const auto& objects) {
+        json::Value list = json::Value::array();
+        for (const auto& e : objects) list.push_back(model::toJson(*e.value));
+        value[key] = std::move(list);
+    };
+    every("tempo", s.tempo);
+    every("meters", s.meters);
+    every("context", s.context);
+    json::Value objects = json::Value::array();
+    const auto append = [&](const auto& map) {
+        using T = typename std::decay_t<decltype(*map.begin()->value)>;
+        for (const auto& e : map)
+            if (ids.count(e.id)) {
+                json::Value one = model::toJson(*e.value);
+                if constexpr (std::is_same_v<T, model::Track>) {
+                    // Its children outside the closure are not read.
+                    json::Value kept = json::Value::array();
+                    for (Id child : e.value->children)
+                        if (ids.count(child)) kept.push_back(child.str());
+                    one["children"] = std::move(kept);
+                }
+                objects.push_back(remap.at(e.id).str());
+                objects.push_back(model::remapIds(one, model::schemaOf<T>().jsonSchema(), remap));
+            }
+    };
+    append(s.tracks);
+    append(s.groups);
+    append(s.items);
+    append(s.takes);
+    append(s.media);
+    append(s.midi);
+    append(s.fx);
+    append(s.routes);
+    append(s.envelopes);
+    append(s.autoItems);
+    append(s.racks);
+    append(s.modules);
+    append(s.cables);
+    append(s.modulations);
+    value["objects"] = std::move(objects);
+    return "sha256:" + sha256Hex(json::writeCompact(value));
+}
 
 // --- instance pool ------------------------------------------------------------------
 
