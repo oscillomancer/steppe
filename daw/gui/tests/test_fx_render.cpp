@@ -18,6 +18,7 @@
 #include <map>
 #include <set>
 #include <thread>
+#include <tuple>
 #include "test_support.h"
 
 #include "app_actions.h"
@@ -675,26 +676,45 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
         const std::string stem = code.substr(0, code.size() - 1);
         return std::vector<std::string>{stem + "trailing_comma", stem + "unexpected_end"};
     };
+    // Codes only reading a preset file answers: always at the argument that
+    // named it (/args/default or /args/name, engine.md §3.1), checked there
+    // below, never at no path. A render's own reads (its media) are at no
+    // path; a preset command's at no path are its writes.
+    const auto fileReadOnly = [](Action action, const std::string& family) {
+        return family.starts_with("json.parse.") ||
+               (action == Action::Preset && (family == "file.read" || family == "file.too_large"));
+    };
     for (const auto& [action, codes] : under)
         for (const std::string& family : codes)
             for (const std::string& code : members(family)) {
+                if (fileReadOnly(action, family)) continue;
                 const auto at = paths.find(code);
                 for (const std::string& path :
                      at == paths.end() ? std::vector<std::string>{""} : at->second)
                     check(action, code, path);
             }
-    // The user's render default: every code at a path under /args/default
-    // (ec8e9cb9) speaks of the default as read, under every action, never a
-    // write or another folder (round 184 F2).
+    // The user's render default (ec8e9cb9): its file's own codes at
+    // /args/default and any code at /args/default/settings/… speak of the
+    // default as read, under every action, never a write or another folder
+    // (round 184 F2). Other codes answered at /default are not its read and
+    // keep their words (round 186 S1).
+    const std::string defaultRead =
+        "Your saved render default cannot be read. Save your settings as the default again.";
+    const auto readOfFile = [](const std::string& code) {
+        return code == "file.open" || code == "file.read" || code == "file.too_large" ||
+               code.starts_with("json.parse.") || code.starts_with("schema.");
+    };
+    CHECK(logged.empty());  // every code above has words
     for (const auto& [action, codes] : under)
         for (const std::string& family : codes)
             for (const std::string& code : members(family)) {
                 INFO(code << " at the default (action " << int(action) << ")");
                 const std::string file = f.render->refusalWords(
                     Error(code, text, "/args/default", hint), "fallback", action);
-                CHECK(file ==
-                      "Your saved render default cannot be read. Save your settings as the "
-                      "default again.");
+                if (readOfFile(code))
+                    CHECK(file == defaultRead);
+                else
+                    CHECK(file.find("render default") == std::string::npos);
                 const std::string member = f.render->refusalWords(
                     Error(code, text, "/args/default/settings/outputs/0/format", hint), "fallback",
                     action);
@@ -702,25 +722,54 @@ TEST_CASE("the render dialog: every refusal reads in the dialog's words") {
                       "Your saved render default has a setting that cannot be used. Save your "
                       "settings as the default again.");
             }
-    // A named preset read (render.preset.load {name}, 7024d3b3): its file's
-    // read codes at /args/name and any code at /args/name/settings/… are a
-    // read under Preset; preset_name and preset_unknown answer at /args/name
-    // too and keep their words (told apart by the code).
+    // A code worded by its path only (cl.unknown at a clip) has no words at
+    // /default, which never answers it: logged, as any unknown.
+    logged.clear();
+    // The schema's codes for a default file that is not a preset (not an
+    // object, no settings, another schema) are its read; delete {default}'s
+    // preset_write and load or delete {default}'s preset_unknown are not.
+    for (const auto& [code, path] :
+         {std::pair{"schema.type", "/args/default"}, std::pair{"schema.required", "/args/default"},
+          std::pair{"schema.invalid", "/args/default/schema"}}) {
+        INFO(code << " at " << path);
+        for (Action action : {Action::Preset, Action::Render})
+            CHECK(f.render->refusalWords(Error(code, text, path, hint), "fallback", action) ==
+                  defaultRead);
+    }
+    CHECK(f.render->refusalWords(Error("render.preset_write", text, "/args/default", hint),
+                                 "fallback",
+                                 Action::Preset) == "Your presets folder cannot be written to.");
+    CHECK(f.render->refusalWords(Error("render.preset_unknown", text, "/args/default", hint),
+                                 "fallback", Action::Preset) == "That preset is not found.");
+    // A named preset read (render.preset.load {name}, 7024d3b3, and a
+    // damaged preset render.preset.list reports): its file's own codes at
+    // /args/name (the schema's for a file that is not a preset too) and any
+    // code at /args/name/settings/… are a read under Preset; preset_name and
+    // preset_unknown answer at /args/name too and keep their words (told
+    // apart by the code).
+    const std::string presetRead =
+        "That preset cannot be read. Delete it, or save a preset under its name to replace it.";
     for (const std::string& family : under[Action::Preset])
         for (const std::string& code : members(family)) {
             INFO(code << " at the preset's name");
             CHECK(f.render->refusalWords(Error(code, text, "/args/name/settings/tail_s", hint),
                                          "fallback", Action::Preset) ==
-                  "That preset has a setting that cannot be used. Save it again, or delete it.");
+                  "That preset has a setting that cannot be used. Delete it, or save a preset "
+                  "under its name to replace it.");
             const std::string at = f.render->refusalWords(Error(code, text, "/args/name", hint),
                                                           "fallback", Action::Preset);
-            const bool read = code == "file.open" || code == "file.read" ||
-                              code == "file.too_large" || code.starts_with("json.parse.");
-            if (read)
-                CHECK(at == "That preset cannot be read. Save it again, or delete it.");
+            if (readOfFile(code))
+                CHECK(at == presetRead);
             else
-                CHECK(at != "That preset cannot be read. Save it again, or delete it.");
+                CHECK(at != presetRead);
         }
+    for (const auto& [code, path] :
+         {std::pair{"schema.type", "/args/name"}, std::pair{"schema.required", "/args/name"},
+          std::pair{"schema.invalid", "/args/name/schema"}}) {
+        INFO(code << " at " << path);
+        CHECK(f.render->refusalWords(Error(code, text, path, hint), "fallback", Action::Preset) ==
+              presetRead);
+    }
     CHECK(f.render->refusalWords(Error("render.preset_unknown", text, "/args/name", hint),
                                  "fallback", Action::Preset) == "That preset is not found.");
     CHECK(f.render->refusalWords(Error("render.preset_name", text, "/args/name", hint), "fallback",
@@ -1352,6 +1401,175 @@ TEST_CASE("the render dialog: a render default that cannot be read says so, as a
     f.render->close();
 }
 
+TEST_CASE("the render dialog: Save as default lists the presets a broken default hid") {
+    // Round 186 F2 (probe G4): every render.* command but a save of given
+    // settings reads the default, so with one that cannot be read
+    // render.preset.list is refused: the dropdown offers "—" only and the
+    // red line says why. Save as default, what that sentence advises, lists
+    // the presets again. The file is damaged by its content, which every
+    // platform reads alike (round 190): not JSON, at /args/default, and a
+    // member that cannot be used, at /args/default/settings/….
+    Fixture f;
+    if (!f.ok) return;
+    REQUIRE(f.dispatcher->execute(
+        {"render.preset.save", json::parse(R"({"name":"mine","settings":{"tail_s":1}})").value(),
+         kTestOrigin}));
+    f.render->open();
+    f.frame();
+    REQUIRE(f.render->saveAsDefault());
+    f.render->close();
+    std::filesystem::path file;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(f.dir))
+        if (e.path().filename() == "default.json") file = e.path();
+    REQUIRE_FALSE(file.empty());
+    const auto offered = [](const ui::Dropdown& d) {
+        std::vector<std::string> values;
+        for (const auto& c : d.choices()) values.push_back(c.value);
+        return values;
+    };
+    const std::vector<std::tuple<std::string, std::string, std::string>> damages{
+        {"X1", "{",
+         "Your saved render default cannot be read. Save your settings as the default again."},
+        {"X2",
+         R"({"schema":"supple.render-preset/1.0","name":"default","settings":{"tail_s":"x"}})",
+         "Your saved render default has a setting that cannot be used. Save your settings as the "
+         "default again."}};
+    for (const auto& [saved, content, words] : damages) {
+        INFO(content);
+        {
+            std::ofstream out(file, std::ios::trunc);
+            out << content;
+        }
+        f.render->open();
+        f.frame();
+        auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+        REQUIRE(preset);
+        CHECK(offered(*preset) == std::vector<std::string>{""});
+        CHECK(f.render->refusal() == words);
+        // A preset saved meanwhile is not listed: "—" stays, the red line
+        // says why after the save's status, and Delete deletes nothing.
+        REQUIRE(f.render->savePreset(saved));
+        f.frame();
+        CHECK(f.render->statusText() == "saved preset " + saved);
+        CHECK(f.render->refusal() == words);
+        CHECK(offered(*preset) == std::vector<std::string>{""});
+        CHECK(preset->value().empty());
+        REQUIRE(f.click("render.preset.delete"));
+        f.frame();
+        CHECK(std::filesystem::exists(file.parent_path() / (saved + ".json")));
+        // The save rebuilt the sections (the folder line marks the preview
+        // dirty): the preview answers now, refused by the default still, so
+        // that below only Save as default can make it ask again.
+        f.render->setDebounceMs(0);
+        f.render->tick();
+        REQUIRE(f.render->refusal() == words);
+        // The user does what the red line says: the presets are back, the
+        // one just saved among them, and the preview the default refused
+        // asks again.
+        REQUIRE(f.click("render.default"));
+        f.frame();
+        CHECK(f.render->statusText() == "saved as your default");
+        const auto now = offered(*preset);
+        CHECK(std::find(now.begin(), now.end(), "mine") != now.end());
+        CHECK(std::find(now.begin(), now.end(), saved) != now.end());
+        CHECK(preset->value().empty());
+        CHECK(f.render->refusal() == words);  // the preview's, until it asks again
+        // Nothing else edited: only Save as default makes it ask again.
+        f.render->tick();
+        f.frame();
+        CHECK(f.render->refusal() != words);
+        f.render->close();
+    }
+}
+
+TEST_CASE("the render dialog: a damaged preset is offered as damaged, and can be deleted") {
+    // Round 186 F1 (probe G3): render.preset.list reports a user preset
+    // whose file cannot be read as damaged. The dropdown offers it so;
+    // choosing it says it cannot be read and leaves it chosen with the
+    // settings before it, so Delete preset removes it; Save preset under its
+    // name replaces it.
+    Fixture f;
+    if (!f.ok) return;
+    for (const char* save :
+         {R"({"name":"p","settings":{"tail_s":1}})", R"({"name":"q","settings":{"tail_s":2}})"})
+        REQUIRE(
+            f.dispatcher->execute({"render.preset.save", json::parse(save).value(), kTestOrigin}));
+    std::filesystem::path folder;
+    for (const auto& e : std::filesystem::recursive_directory_iterator(f.dir))
+        if (e.path().filename() == "p.json") folder = e.path().parent_path();
+    REQUIRE_FALSE(folder.empty());
+    const auto damage = [&](const char* name) {
+        std::ofstream out(folder / (std::string(name) + ".json"), std::ios::trunc);
+        out << "{";  // not JSON
+    };
+    const auto labelOf = [](const ui::Dropdown& d, const std::string& name) {
+        for (const auto& c : d.choices())
+            if (c.value == name) return c.label;
+        return std::string();
+    };
+    const std::string words =
+        "That preset cannot be read. Delete it, or save a preset under its name to replace it.";
+    f.render->open();
+    f.frame();
+    auto* preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    CHECK(labelOf(*preset, "p") == "p (yours)");
+    preset->choose("q");
+    f.frame();
+    REQUIRE(preset->value() == "q");
+    // Damaged after the dialog listed it: chosen, refused, still offered.
+    damage("p");
+    preset->choose("p");
+    f.frame();
+    CHECK(f.render->refusal() == words);
+    CHECK(preset->value() == "p");
+    CHECK(preset->label() == "p (damaged)");
+    const json::Value* tail = f.render->settings().find("tail_s");
+    REQUIRE(tail);
+    CHECK(tail->asDouble() == doctest::Approx(2.0));  // q's, as before
+    // Delete preset removes the file it cannot read.
+    REQUIRE(f.click("render.preset.delete"));
+    f.frame();
+    CHECK(f.render->statusText() == "deleted preset p");
+    CHECK_FALSE(std::filesystem::exists(folder / "p.json"));
+    CHECK(preset->value().empty());
+    CHECK(labelOf(*preset, "p").empty());
+    f.render->close();
+    // Damaged when the dialog opens: offered as damaged; saved over, it is
+    // a preset again. One with a member that cannot be used says so, by the
+    // member's path the list gives.
+    damage("q");
+    {
+        std::ofstream out(folder / "r.json", std::ios::trunc);
+        out << R"({"schema":"supple.render-preset/1.0","name":"r","settings":{"tail_s":"x"}})";
+    }
+    f.render->open();
+    f.frame();
+    preset = dynamic_cast<ui::Dropdown*>(f.uiRoot().find("render.preset"));
+    REQUIRE(preset);
+    CHECK(labelOf(*preset, "q") == "q (damaged)");
+    preset->choose("q");
+    f.frame();
+    CHECK(f.render->refusal() == words);
+    REQUIRE(preset->value() == "q");
+    REQUIRE(f.render->savePreset("q"));
+    f.frame();
+    CHECK(f.render->statusText() == "saved preset q");
+    CHECK(preset->label() == "q (yours)");
+    preset->choose("");
+    preset->choose("q");
+    f.frame();
+    CHECK(f.render->statusText() == "loaded preset q; Render writes it to the project");
+    CHECK(labelOf(*preset, "r") == "r (damaged)");
+    preset->choose("r");
+    f.frame();
+    CHECK(f.render->refusal() ==
+          "That preset has a setting that cannot be used. Delete it, or save a preset under its "
+          "name to replace it.");
+    CHECK(preset->value() == "r");
+    f.render->close();
+}
+
 TEST_CASE("the render dialog: a preset that cannot be read says so, as a read") {
     // 7024d3b3: render.preset.load {name} answers a file it cannot open or
     // parse at /args/name; under Preset that is a preset that cannot be
@@ -1369,7 +1587,8 @@ TEST_CASE("the render dialog: a preset that cannot be read says so, as a read") 
         return f.dispatcher->execute(
             {"render.preset.load", json::parse(R"({"name":"p"})").value(), kTestOrigin});
     };
-    const std::string words = "That preset cannot be read. Save it again, or delete it.";
+    const std::string words =
+        "That preset cannot be read. Delete it, or save a preset under its name to replace it.";
     {
         std::ofstream out(file, std::ios::trunc);
         out << "{\"settings\": ";  // not JSON
